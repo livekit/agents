@@ -49,39 +49,6 @@ pub enum AgentState {
     Speaking,
 }
 
-/// A leg of the session's input: an audio channel a provider hears, a detector the session asks,
-/// or the room input a reader pulls.
-#[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Leg {
-    Stt,
-    Vad,
-    Realtime,
-    Eot,
-    Interruption,
-    Amd,
-    Keyterms,
-    AudioIn,
-    VideoIn,
-}
-
-/// The host code whose failure a session reports: a hook it asked for, or the host's own setup
-/// and close steps.
-#[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HookName {
-    OnEnter,
-    OnExit,
-    OnUserTurnCompleted,
-    OnUserTurnExceeded,
-    FillerSource,
-    FunctionToolsExecuted,
-    /// Resolving the agent's tools before it starts.
-    SetupTools,
-    /// The host's close of the session.
-    Closing,
-}
-
 // --- the session events --------------------------------------------------------------------------
 
 #[crate::host(record(
@@ -451,29 +418,6 @@ pub struct EndOfSpeechEvent {
     pub silence_duration: f64,
 }
 
-/// Which of the host's projections take an item: carried on `ItemAdded` so the host's
-/// projections decide nothing.
-#[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::Vocabulary)]
-pub enum Visibility {
-    /// The agent's context only: a host-supplied item, not in `session.history`.
-    Model,
-    /// `session.history` only: the handoff record.
-    History,
-    /// The agent's context and `session.history`: everything said, and the config records.
-    Both,
-}
-
-impl Visibility {
-    pub fn model(self) -> bool {
-        matches!(self, Visibility::Model | Visibility::Both)
-    }
-
-    pub fn history(self) -> bool {
-        matches!(self, Visibility::History | Visibility::Both)
-    }
-}
-
 /// `conversation_item_added`'s payload.
 #[crate::host(record(module = "session_wire", emit))]
 #[derive(Debug, Clone, PartialEq)]
@@ -487,7 +431,9 @@ pub struct ItemAddedWire {
     pub host_item: Option<crate::HostRef>,
     /// Which agent's frame produced it, as the opaque id the host gave the core.
     pub agent: String,
-    pub visibility: Visibility,
+    /// Which host projections take the item: `"both"` (`chat_ctx` and `session.history`) or
+    /// `"history"` (the handoff record).
+    pub visibility: String,
     /// The open run's host object when an owned speech produced it or it is the handoff
     /// record, else `None`.
     pub run: Option<crate::HostRef>,
@@ -553,32 +499,14 @@ pub struct RunStartedWire {
     pub run: Option<crate::HostRef>,
 }
 
-/// Why a run opened nothing (`run_refused`).
-#[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::Vocabulary)]
-pub enum RunRefusal {
-    /// A run is open: `RuntimeError("nested runs are not supported")`.
-    Nested,
-    Closing,
-}
-
-/// How a run ended, as `RunResult._settle` reads it.
-#[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RunOutcomeKind {
-    Completed,
-    InputRequired,
-    Failed,
-    Closed,
-}
-
 /// `run_refused`'s payload.
 #[crate::host(record(module = "session_wire", emit))]
 #[derive(Debug, Clone)]
 pub struct RunRefusedWire {
     /// The host's object for the refused run (its `RunResult`).
     pub run: Option<crate::HostRef>,
-    pub cause: RunRefusal,
+    /// `RunRefusal::as_str`: `"nested"` or `"closing"`.
+    pub cause: String,
 }
 
 /// `run_settled`'s payload: the outcome as `RunResult._settle` reads it.
@@ -589,36 +517,16 @@ pub struct RunSettledWire {
     pub input_requirements: Vec<crate::agent::run::RunInputRequirement>,
     /// The host's object for the run (its `RunResult`).
     pub run: Option<crate::HostRef>,
-    pub outcome: RunOutcomeKind,
+    /// `RunOutcome::as_str`: `"completed"`, `"input_required"`, `"failed"` or `"closed"`.
+    pub outcome: String,
     /// The output the run's last reply accepted, resolved; `None` otherwise.
     pub final_output: Option<crate::HostRef>,
     /// What an `"input_required"` run asks the person.
-    pub question: Option<RunQuestion>,
+    pub question: Option<crate::agent::run::RunQuestion>,
     /// Why the run settled without a result, as `agent.run()` raises it (a tool's retries spent).
     pub run_error: Option<crate::agent::run::RunError>,
     /// The last owned speech's `_core.SpeechHandle`; `None` when the run owned none.
     pub speech_handle: Option<std::sync::Arc<dyn crate::voice::speech_handle::Speech>>,
-}
-
-/// The question a run ends on (`InputRequired`): asked as written when `verbatim`; the person's
-/// answer goes to `answer_tool` when one is named.
-#[crate::host(record(module = "session_wire", emit, extract))]
-#[derive(Debug, Clone)]
-pub struct RunQuestion {
-    pub question: String,
-    pub verbatim: bool,
-    pub answer_tool: Option<String>,
-}
-
-/// How a speech ended.
-#[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::Vocabulary)]
-pub enum SpeechOutcome {
-    Completed,
-    /// Cut short: an interruption, `interrupt()`, or the interruption watchdog.
-    Interrupted,
-    /// A provider failed it; the handle's `exception()` carries the error.
-    Failed,
 }
 
 /// `speech_done`'s payload.
@@ -627,7 +535,8 @@ pub enum SpeechOutcome {
 pub struct SpeechDoneWire {
     /// `speech_{n}`, the handle's id.
     pub speech_id: String,
-    pub outcome: SpeechOutcome,
+    /// `SpeechOutcome::as_str`: `"completed"`, `"interrupted"` or `"failed"`.
+    pub outcome: String,
 }
 
 /// `floor_changed`'s payload. `speech_id` is `None` when the floor is free.
@@ -684,42 +593,16 @@ pub struct OverlappingSpeechWire {
     pub event: OverlappingSpeechEvent,
 }
 
-/// The leg an `ErrorEvent` names: `LLMError.type` and its siblings, which are public API. An
-/// interruption detector failure degrades to VAD silently and the EOT model's `error` is never
-/// subscribed.
-#[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, crate::Vocabulary)]
-pub enum ErrorSource {
-    #[host(rename = "stt_error")]
-    Stt,
-    #[host(rename = "llm_error")]
-    Llm,
-    #[host(rename = "tts_error")]
-    Tts,
-    #[host(rename = "realtime_model_error")]
-    Realtime,
-    /// An input audio processor; always recoverable.
-    #[host(rename = "audio_processing_error")]
-    AudioProcessing,
-}
-
-/// Where a session error was captured.
-#[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorOrigin {
-    /// Off a plugin object: the host's own exception.
-    Host,
-    Engine,
-}
-
 /// `error`'s wire payload: the ingredients of `ErrorEvent`; the host wraps `error` in the leg's
 /// class chosen by `source`.
 #[crate::host(record(module = "session_wire", emit))]
 #[derive(Debug, Clone)]
 pub struct SessionErrorWire {
-    pub source: ErrorSource,
+    /// `ErrorSource::as_str`.
+    pub source: String,
     pub recoverable: bool,
-    pub label: ErrorOrigin,
+    /// `"host"` when the error was captured off a plugin object, else `"engine"`.
+    pub label: String,
     /// The host's own exception when the provider raised one, else an `APIError`.
     pub error: crate::errors::ProviderError,
     pub speech_id: Option<String>,

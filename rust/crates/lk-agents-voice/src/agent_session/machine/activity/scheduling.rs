@@ -7,13 +7,15 @@ use crate::agent_session::machine::coordination::{PauseResult, VoiceCallback};
 use crate::events::SessionEvent;
 use crate::speech_handle::{SpeechState, SpeechUpdate};
 use crate::telemetry;
-use crate::trace::{
-    CloseAct, CloseStep, InterruptCause, InterruptStep, PauseRefusal, SpeechStep, TurnStep,
-};
+use crate::trace::{CloseAct, CloseStep, InterruptCause, InterruptStep, SpeechStep, TurnStep};
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::{AgentState, SpeechSource};
 use std::collections::{BTreeMap, VecDeque};
 use std::time::Duration;
+
+const HANDOFF: &str = "a handoff resumed scheduling before the drain completed";
+
+const CLOSING: &str = "the session is closing";
 
 use speech_scheduler::{NextSpeech, Requeue, SchedulingPass};
 pub use speech_scheduler::{SpeechScheduler, Status};
@@ -985,7 +987,7 @@ impl VoiceDriver {
     pub(crate) fn pause_scheduling(&mut self, now: Ts, cause: PauseCause) {
         self.record_trace(SpeechStep::SchedulingPaused);
         if self.session.closing_past_edge() {
-            return self.refuse_scheduling_pause(vec![cause], PauseRefusal::Closing);
+            return self.refuse_scheduling_pause(vec![cause], CLOSING);
         }
         self.activity.speech_scheduler.pause(cause);
         self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
@@ -1003,7 +1005,7 @@ impl VoiceDriver {
     pub(crate) fn resume_scheduling(&mut self, now: Ts) {
         self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
         if let Some(callers) = self.activity.speech_scheduler.resume_activity_pause() {
-            self.refuse_scheduling_pause(callers, PauseRefusal::Handoff);
+            self.refuse_scheduling_pause(callers, HANDOFF);
         }
     }
 
@@ -1023,7 +1025,7 @@ impl VoiceDriver {
         }
         self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
         if let Some(callers) = self.activity.speech_scheduler.take_pause() {
-            self.refuse_scheduling_pause(callers, PauseRefusal::Closing);
+            self.refuse_scheduling_pause(callers, CLOSING);
         }
     }
 
@@ -1085,7 +1087,7 @@ impl VoiceDriver {
 /// A pause that can no longer complete truthfully: its callers are refused and the journal has
 /// the reason.
 impl VoiceDriver {
-    fn refuse_scheduling_pause(&mut self, callers: Vec<PauseCause>, cause: PauseRefusal) {
+    fn refuse_scheduling_pause(&mut self, callers: Vec<PauseCause>, cause: &'static str) {
         for caller in callers {
             self.defer_callback(VoiceCallback::SchedulingDrainFinished(
                 caller,

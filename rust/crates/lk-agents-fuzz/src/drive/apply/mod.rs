@@ -12,7 +12,7 @@ use std::task::{Context, Poll, Waker};
 use lk_agents_abi::voice::rtc::{self, ConnectionState, DisconnectReason, RtcRoom};
 use lk_agents_abi::voice::session::{VoiceSession as _, VoiceTaskEnded};
 use lk_agents_abi::voice::session_options::{TurnHandlingKwargs, UpdateKwargs};
-use lk_agents_voice::agent_session::{Command, IvrCommand};
+use lk_agents_voice::agent_session::{Command, DrainRefused, IvrCommand};
 
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
 use lk_agents_voice::workflows::machine::dtmf::{DtmfOutcome, GetDtmfResult};
@@ -134,6 +134,15 @@ pub(super) fn ready_now<F: std::future::Future>(future: F) -> Option<F::Output> 
     match future.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
         Poll::Ready(value) => Some(value),
         Poll::Pending => None,
+    }
+}
+
+/// A `ResolvedSessionOptions` leg name, as `set_io_enabled` takes it.
+fn io_leg(leg: IoKind) -> &'static str {
+    match leg {
+        IoKind::AudioInput => "audio_input",
+        IoKind::AudioOutput => "audio_output",
+        IoKind::Transcription => "transcription",
     }
 }
 

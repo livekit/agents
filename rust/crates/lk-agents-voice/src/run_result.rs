@@ -7,8 +7,7 @@ use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::events::{
     DiagnosticEvent, RunFailure, RunId, RunOutcome, RunRef, RunRefusal, SessionEvent,
 };
-use lk_agents_abi::agent::run::{RunError, RunInputRequirement};
-use lk_agents_abi::voice::events::RunQuestion;
+use lk_agents_abi::agent::run::{RunError, RunInputRequirement, RunQuestion};
 use lk_agents_abi::voice::run_view::{VoiceRun as Contract, VoiceRunOutput};
 use lk_agents_abi::{ChatItem, Role};
 use lk_agents_abi::{HostRef, Ts};
@@ -295,11 +294,11 @@ mod tests {
         let last = SpeechId(2);
         runs.outputs.insert(
             first,
-            RunOutcome::InputRequired {
+            RunOutcome::InputRequired(RunQuestion {
                 question: "old?".into(),
                 verbatim: true,
                 answer_tool: None,
-            },
+            }),
         );
         runs.speech_ended(first, false);
         assert!(runs.outputs.contains_key(&first));
@@ -327,11 +326,11 @@ mod tests {
         let speech = SpeechId(7);
         runs.outputs.insert(
             speech,
-            RunOutcome::InputRequired {
+            RunOutcome::InputRequired(RunQuestion {
                 question: "ignored by speech error?".into(),
                 verbatim: true,
                 answer_tool: None,
-            },
+            }),
         );
         runs.speech_ended(speech, true);
         assert!(matches!(
@@ -473,19 +472,19 @@ mod tests {
         );
         driver.session.runs.outputs.insert(
             host,
-            RunOutcome::InputRequired {
+            RunOutcome::InputRequired(RunQuestion {
                 question: "owned?".into(),
                 verbatim: true,
                 answer_tool: None,
-            },
+            }),
         );
         driver.session.runs.outputs.insert(
             unrelated,
-            RunOutcome::InputRequired {
+            RunOutcome::InputRequired(RunQuestion {
                 question: "unrelated?".into(),
                 verbatim: true,
                 answer_tool: None,
-            },
+            }),
         );
         driver.release_speech(Ts::ZERO, host);
         driver.run_check();
@@ -503,7 +502,7 @@ mod tests {
             })
             .collect();
         assert!(
-            matches!(settled.as_slice(), [RunOutcome::InputRequired { question, .. }] if question == "owned?")
+            matches!(settled.as_slice(), [RunOutcome::InputRequired(ask)] if ask.question == "owned?")
         );
         assert!(driver.session.runs.outputs.is_empty());
     }

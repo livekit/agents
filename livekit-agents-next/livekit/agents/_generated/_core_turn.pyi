@@ -14,7 +14,7 @@ from .connect import APIConnectOptions
 from .keyterms import KeytermDetectionOptions, ResolvedKeytermDetection
 from .metrics import EOTInferenceMetrics
 from .rtc_frames import AudioFrame
-from .turn_events import EotPrediction, FlushReason, ThresholdOverride, TurnDetectorModel
+from .turn_events import EotPrediction, ThresholdOverride, TurnDetectorModel
 
 class InferenceEot:
     """The detector behind `inference.TurnDetector`: the user's threshold overrides over the model's
@@ -73,7 +73,7 @@ class EotStream:
     async def predict(self) -> EotPrediction:
         """The prediction over the audio so far; supersedes any in flight."""
     def cancel_inference(self, *, timed_out: bool = False) -> None: ...
-    def flush(self, reason: FlushReason | None = None) -> None:
+    def flush(self, reason: str | None = None) -> None:
         """A segment boundary, not a close."""
     def push_audio(self, frame: AudioFrame) -> None: ...
     def end_input(self) -> None: ...

@@ -557,11 +557,7 @@ impl VoiceDriver {
             Delivery::Complete(value) => self.end_voice_task(now, speech, Ok(value)),
             Delivery::Fail(reason) => self.end_voice_task(now, speech, Err(reason)),
             Delivery::Ask(ask) => {
-                let output = crate::events::RunOutcome::InputRequired {
-                    question: ask.question.clone(),
-                    verbatim: ask.verbatim,
-                    answer_tool: ask.tool.clone(),
-                };
+                let output = crate::events::RunOutcome::InputRequired(ask.clone());
                 self.session.runs.outputs.insert(speech, output.clone());
                 let asking = if ask.verbatim {
                     self.say_text(now, ask.question.clone(), voice_run)
@@ -575,7 +571,7 @@ impl VoiceDriver {
                 };
                 // `InputRequired(tool=)`: the person's next turn is a call of that tool; asked in
                 // the agent's own words, once that reply is done.
-                if let Some(tool) = &ask.tool {
+                if let Some(tool) = &ask.answer_tool {
                     let after = if ask.verbatim { None } else { asking };
                     self.activity.tools.claim =
                         Some(crate::tool_executor::Claim { tool: tool.clone(), after });
@@ -609,7 +605,7 @@ impl VoiceDriver {
         let realtime = self.realtime_says();
         if self.session.tts.is_none() && self.session.outputs.plays_audio() && !realtime {
             self.record_trace(crate::trace::SpeechStep::SayRefused {
-                why: crate::trace::SayRefusal::NoVoice,
+                why: crate::agent_session::machine::activity::speech::SAY_WITHOUT_TTS_REFUSED,
             });
             return None;
         }

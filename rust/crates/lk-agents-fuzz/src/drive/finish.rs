@@ -5,7 +5,6 @@
 //! case ends. The rules run once, over the finished recording; the only check between inputs is
 //! that the run is still moving.
 use super::*;
-use lk_agents_voice::agent_session::commands::{CommandKind, TurnCommandKind};
 
 // ==============================================================================================
 // The release phase
@@ -331,7 +330,7 @@ impl Run {
                     declared = false
                 }
                 Step::Core(CoreStep::CommandReceived { kind, .. })
-                    if *kind == CommandKind::Turn(TurnCommandKind::Clear) =>
+                    if *kind == "TurnCommand::Clear" =>
                 {
                     declared = false
                 }

@@ -2590,26 +2590,11 @@ pub mod agent_run {
                     Some(&kwargs),
                 )
             }
-            ::lk_agents_abi::agent::run::RunOutcome::InputRequired {
-                question,
-                verbatim,
-                answer_tool,
-            } => {
+            ::lk_agents_abi::agent::run::RunOutcome::InputRequired(question) => {
                 let kwargs = ::pyo3::types::PyDict::new(py);
                 kwargs.set_item(
                     "question",
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(question, py)?,
-                )?;
-                kwargs.set_item(
-                    "verbatim",
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim, py)?,
-                )?;
-                kwargs.set_item(
-                    "answer_tool",
-                    match answer_tool {
-                        None => py.None().into_bound(py),
-                        Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-                    },
+                    crate::generated::records::agent_run::run_question_to_py(py, question)?,
                 )?;
                 crate::py_calls::call(
                     RUN_OUTCOME_INPUT_REQUIRED
@@ -2631,6 +2616,60 @@ pub mod agent_run {
                 None,
             ),
         }
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
+    static RUN_QUESTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn run_question_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::agent::run::RunQuestion> {
+        let py = obj.py();
+        if !obj.is_instance(RUN_QUESTION.import(
+            py,
+            "livekit.agents._generated.agent_run",
+            "RunQuestion",
+        )?)? {
+            return Err(super::not_a(obj, "RunQuestion"));
+        }
+        Ok(::lk_agents_abi::agent::run::RunQuestion {
+            question: crate::py_values::attr_with(obj, "RunQuestion", "question", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            verbatim: crate::py_values::attr_with(obj, "RunQuestion", "verbatim", |v| {
+                v.extract::<bool>()
+            })?,
+            answer_tool: crate::py_values::attr_with(obj, "RunQuestion", "answer_tool", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+        })
+    }
+
+    pub fn run_question_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::agent::run::RunQuestion,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::agent::run::RunQuestion { question, verbatim, answer_tool } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("question", ::pyo3::IntoPyObjectExt::into_bound_py_any(question, py)?)?;
+        kwargs.set_item("verbatim", ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim, py)?)?;
+        kwargs.set_item(
+            "answer_tool",
+            match answer_tool {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        crate::py_calls::call(
+            RUN_QUESTION.import(py, "livekit.agents._generated.agent_run", "RunQuestion")?.as_any(),
+            (),
+            Some(&kwargs),
+        )
     }
 
     // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
@@ -13534,10 +13573,8 @@ pub mod session_wire {
             },
         )?;
         kwargs.set_item("agent", ::pyo3::IntoPyObjectExt::into_bound_py_any(agent, py)?)?;
-        kwargs.set_item(
-            "visibility",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(visibility.as_str(), py)?,
-        )?;
+        kwargs
+            .set_item("visibility", ::pyo3::IntoPyObjectExt::into_bound_py_any(visibility, py)?)?;
         kwargs.set_item(
             "run",
             match run {
@@ -13680,8 +13717,7 @@ pub mod session_wire {
                 Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
             },
         )?;
-        kwargs
-            .set_item("cause", ::pyo3::IntoPyObjectExt::into_bound_py_any(cause.as_str(), py)?)?;
+        kwargs.set_item("cause", ::pyo3::IntoPyObjectExt::into_bound_py_any(cause, py)?)?;
         crate::py_calls::call(
             RUN_REFUSED_WIRE
                 .import(py, "livekit.agents._generated.session_wire", "RunRefusedWire")?
@@ -13729,10 +13765,7 @@ pub mod session_wire {
                 Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
             },
         )?;
-        kwargs.set_item(
-            "outcome",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome.as_str(), py)?,
-        )?;
+        kwargs.set_item("outcome", ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome, py)?)?;
         kwargs.set_item(
             "final_output",
             match final_output {
@@ -13744,7 +13777,7 @@ pub mod session_wire {
             "question",
             match question {
                 None => py.None().into_bound(py),
-                Some(x) => crate::generated::records::session_wire::run_question_to_py(py, x)?,
+                Some(x) => crate::generated::records::agent_run::run_question_to_py(py, x)?,
             },
         )?;
         kwargs.set_item(
@@ -13765,62 +13798,6 @@ pub mod session_wire {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
-    static RUN_QUESTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn run_question_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::voice::events::RunQuestion> {
-        let py = obj.py();
-        if !obj.is_instance(RUN_QUESTION.import(
-            py,
-            "livekit.agents._generated.session_wire",
-            "RunQuestion",
-        )?)? {
-            return Err(super::not_a(obj, "RunQuestion"));
-        }
-        Ok(::lk_agents_abi::voice::events::RunQuestion {
-            question: crate::py_values::attr_with(obj, "RunQuestion", "question", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            verbatim: crate::py_values::attr_with(obj, "RunQuestion", "verbatim", |v| {
-                v.extract::<bool>()
-            })?,
-            answer_tool: crate::py_values::attr_with(obj, "RunQuestion", "answer_tool", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (v.extract::<::std::string::String>()).map(Some)
-                }
-            })?,
-        })
-    }
-
-    pub fn run_question_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::voice::events::RunQuestion,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::voice::events::RunQuestion { question, verbatim, answer_tool } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("question", ::pyo3::IntoPyObjectExt::into_bound_py_any(question, py)?)?;
-        kwargs.set_item("verbatim", ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim, py)?)?;
-        kwargs.set_item(
-            "answer_tool",
-            match answer_tool {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        crate::py_calls::call(
-            RUN_QUESTION
-                .import(py, "livekit.agents._generated.session_wire", "RunQuestion")?
-                .as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
     static SPEECH_DONE_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -13831,10 +13808,7 @@ pub mod session_wire {
         let ::lk_agents_abi::voice::events::SpeechDoneWire { speech_id, outcome } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("speech_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_id, py)?)?;
-        kwargs.set_item(
-            "outcome",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome.as_str(), py)?,
-        )?;
+        kwargs.set_item("outcome", ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome, py)?)?;
         crate::py_calls::call(
             SPEECH_DONE_WIRE
                 .import(py, "livekit.agents._generated.session_wire", "SpeechDoneWire")?
@@ -14024,14 +13998,12 @@ pub mod session_wire {
             processor_failure,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs
-            .set_item("source", ::pyo3::IntoPyObjectExt::into_bound_py_any(source.as_str(), py)?)?;
+        kwargs.set_item("source", ::pyo3::IntoPyObjectExt::into_bound_py_any(source, py)?)?;
         kwargs.set_item(
             "recoverable",
             ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable, py)?,
         )?;
-        kwargs
-            .set_item("label", ::pyo3::IntoPyObjectExt::into_bound_py_any(label.as_str(), py)?)?;
+        kwargs.set_item("label", ::pyo3::IntoPyObjectExt::into_bound_py_any(label, py)?)?;
         kwargs.set_item("error", crate::py_errors::ExceptionValue::to_exception(error, py)?)?;
         kwargs.set_item(
             "speech_id",
@@ -15115,39 +15087,6 @@ pub mod storage_class {
             (),
             Some(&kwargs),
         )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/storage/thread.rs.
-
-    pub fn run_outcome_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::storage::thread::RunOutcome> {
-        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
-        match &*value {
-            "completed" => Ok(::lk_agents_abi::storage::thread::RunOutcome::Completed),
-            "input-required" => Ok(::lk_agents_abi::storage::thread::RunOutcome::InputRequired),
-            "failed" => Ok(::lk_agents_abi::storage::thread::RunOutcome::Failed),
-            "canceled" => Ok(::lk_agents_abi::storage::thread::RunOutcome::Canceled),
-            "rejected" => Ok(::lk_agents_abi::storage::thread::RunOutcome::Rejected),
-            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
-                "RunOutcome: {other:?} is not one of 'completed', 'input-required', 'failed', 'canceled', 'rejected'"
-            ))),
-        }
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/storage/thread.rs.
-
-    pub fn task_order_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::storage::thread::TaskOrder> {
-        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
-        match &*value {
-            "updated" => Ok(::lk_agents_abi::storage::thread::TaskOrder::Updated),
-            "inserted" => Ok(::lk_agents_abi::storage::thread::TaskOrder::Inserted),
-            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
-                "TaskOrder: {other:?} is not one of 'updated', 'inserted'"
-            ))),
-        }
     }
 }
 
@@ -21105,32 +21044,6 @@ pub mod turn_events {
                 d.into_any()
             }
         })
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/turn/detector.rs.
-
-    pub fn flush_reason_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::turn::detector::FlushReason> {
-        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
-        match &*value {
-            "turn committed" => Ok(::lk_agents_abi::turn::detector::FlushReason::TurnCommitted),
-            "clear_user_turn" => Ok(::lk_agents_abi::turn::detector::FlushReason::ClearUserTurn),
-            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
-                "FlushReason: {other:?} is not one of 'turn committed', 'clear_user_turn'"
-            ))),
-        }
-    }
-
-    pub fn flush_reason_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::turn::detector::FlushReason,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let value = match value {
-            ::lk_agents_abi::turn::detector::FlushReason::TurnCommitted => "turn committed",
-            ::lk_agents_abi::turn::detector::FlushReason::ClearUserTurn => "clear_user_turn",
-        };
-        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/turn/events.rs.

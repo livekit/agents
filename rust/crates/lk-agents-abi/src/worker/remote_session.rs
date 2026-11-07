@@ -245,39 +245,3 @@ pub trait SessionHosting: Send + Sync {
     /// Drain and close once. Repeated or cancelled callers join the same cleanup.
     fn aclose(&self) -> crate::BoxFuture<'_, ()>;
 }
-
-/// The name a remote session event arrives under: its `AgentSessionEvent.event` oneof arm.
-#[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RemoteSessionEventKind {
-    AgentStateChanged,
-    UserStateChanged,
-    ConversationItemAdded,
-    UserInputTranscribed,
-    FunctionToolsExecuted,
-    Error,
-    OverlappingSpeech,
-    SessionUsageUpdated,
-    AmdPrediction,
-    EotPrediction,
-    FunctionToolsStarted,
-    DebugMessage,
-    ToolExecutionUpdated,
-    AgentFalseInterruption,
-}
-
-/// A remote session request's `SessionRequest.request` oneof arm, used in logs and client errors.
-#[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RemoteSessionRequestKind {
-    Ping,
-    GetChatHistory,
-    GetAgentInfo,
-    RunInput,
-    GetSessionState,
-    GetRtcStats,
-    GetSessionUsage,
-    GetFrameworkInfo,
-    UpdateIo,
-    FinalizeSimulation,
-}

@@ -315,7 +315,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let dtmf = dtmf
             .map(|options| {
                 use lk_agents_voice::workflows::machine::dtmf::{DtmfCollector, DtmfEvent};
-                let stop = DtmfEvent::from_wire(&options.stop_event).ok_or_else(|| {
+                let stop = DtmfEvent::parse(&options.stop_event).ok_or_else(|| {
                     CommandRefused::Invalid(format!("{:?} is not a DTMF key", options.stop_event))
                 })?;
                 let timeout = Duration::try_from_secs_f64(options.timeout)
@@ -369,7 +369,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     ) -> Result<BoxFuture<'static, Result<String, VoiceTaskEnded>>, CommandRefused> {
         use lk_agents_voice::agent_session::DtmfCommand;
         use lk_agents_voice::workflows::machine::dtmf::{DtmfCollector, DtmfEvent, DtmfOutcome};
-        let stop = DtmfEvent::from_wire(&stop_event)
+        let stop = DtmfEvent::parse(&stop_event)
             .ok_or_else(|| CommandRefused::Invalid(format!("{stop_event:?} is not a DTMF key")))?;
         let timeout = Duration::try_from_secs_f64(timeout)
             .map_err(|e| CommandRefused::Invalid(format!("timeout: {e}")))?;
@@ -672,7 +672,13 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         self.send(ActivityCommand::UpdateInstructions(Instructions::plain(instructions)))
     }
 
-    fn set_io_enabled(&self, leg: IoKind, enabled: bool) -> Result<(), CommandRefused> {
+    fn set_io_enabled(&self, leg: String, enabled: bool) -> Result<(), CommandRefused> {
+        let leg = match leg.as_str() {
+            "audio_input" => IoKind::AudioInput,
+            "audio_output" => IoKind::AudioOutput,
+            "transcription" => IoKind::Transcription,
+            other => return Err(CommandRefused::Invalid(format!("unknown io leg {other:?}"))),
+        };
         Ok(self.send(ActivityCommand::SetIoEnabled { leg, enabled })?)
     }
 
@@ -723,15 +729,15 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         }))
     }
 
-    fn drain(&self) -> Result<BoxFuture<'static, Option<DrainRefused>>, SessionRefused> {
+    fn drain(&self) -> Result<BoxFuture<'static, Option<String>>, SessionRefused> {
         let rx = self.ask(VoiceCommandOrigin::Host, Answer::drain, |call| {
             ActivityCommand::Drain { call: Some(call) }
         })?;
         Ok(Box::pin(async move {
             match rx.await {
                 Ok(Ok(())) => None,
-                Ok(Err(refused)) => Some(refused),
-                Err(_) => Some(DrainRefused::Closing),
+                Ok(Err(refused)) => Some(refused.as_str().to_owned()),
+                Err(_) => Some(DrainRefused::Closing.as_str().to_owned()),
             }
         }))
     }
@@ -907,7 +913,7 @@ impl VoiceSession {
                     if let Some(hooks) = &hooks
                         && let Err(e) = hooks.closing(&telemetry::Cx::NONE).await
                     {
-                        hooks.hook_failed(lk_agents_abi::voice::events::HookName::Closing, e.host_ref.clone());
+                        hooks.hook_failed("closing", e.host_ref.clone());
                     }
                     closing.await;
                     if let Some(eot) = eot

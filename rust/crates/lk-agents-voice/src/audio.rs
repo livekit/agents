@@ -1,11 +1,13 @@
 use crate::trace::{ChannelEndCause, InputStep};
 use lk_agents_abi::Closed;
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::voice::events::{AgentState, Leg};
+use lk_agents_abi::voice::events::AgentState;
 use std::time::Duration;
 
 /// 20 ms. What every STT and VAD in the tree is written against.
 pub const DEFAULT_FRAME_MS: u32 = 20;
+
+pub const AUDIO_IN_LEG: &str = "audio_in";
 
 /// The reads [`audio_gate`] makes. Every one is driver-owned state; none is a host call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,14 +91,14 @@ impl AudioChannel {
         matches!(self, AudioChannel::Stt | AudioChannel::Realtime | AudioChannel::Eot)
     }
 
-    pub const fn leg(self) -> Leg {
+    pub const fn label(self) -> &'static str {
         match self {
-            AudioChannel::Stt => Leg::Stt,
-            AudioChannel::Vad => Leg::Vad,
-            AudioChannel::Realtime => Leg::Realtime,
-            AudioChannel::Eot => Leg::Eot,
-            AudioChannel::Interruption => Leg::Interruption,
-            AudioChannel::Amd => Leg::Amd,
+            AudioChannel::Stt => "stt",
+            AudioChannel::Vad => "vad",
+            AudioChannel::Realtime => "realtime",
+            AudioChannel::Eot => "eot",
+            AudioChannel::Interruption => "interruption",
+            AudioChannel::Amd => "amd",
         }
     }
 }
@@ -112,7 +114,7 @@ pub struct Tagged<T> {
 /// A drain or a reader exited, sent to the loop so it is journalled there.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChannelEnd {
-    pub leg: Leg,
+    pub leg: &'static str,
     pub cause: ChannelEndCause,
     /// The sink of the stream a drain read, so the loop removes it if it is still installed.
     pub sink: Option<ResourceId>,
@@ -123,7 +125,7 @@ pub struct ChannelEnd {
 
 impl ChannelEnd {
     /// The leg whose reader or drain ended.
-    pub fn leg(&self) -> Leg {
+    pub fn leg(&self) -> &'static str {
         self.leg
     }
 
@@ -137,7 +139,7 @@ impl ChannelEnd {
 pub(super) fn on_leg_ended(end: ChannelEnd) -> Vec<InputStep> {
     let mut observations = vec![InputStep::ChannelEnded { leg: end.leg, cause: end.cause }];
     if let Some(how) = end.closed {
-        observations.push(InputStep::HostStreamClosed { leg: end.leg, how });
+        observations.push(InputStep::HostStreamClosed { label: end.leg, how });
     }
     observations
 }

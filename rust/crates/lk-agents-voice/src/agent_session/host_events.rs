@@ -8,9 +8,31 @@ use crate::telemetry;
 use lk_agents_abi::voice::events::HostWire;
 use std::sync::Arc;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookKind {
+    OnEnter,
+    OnExit,
+    OnUserTurnCompleted,
+    OnUserTurnExceeded,
+    FillerSource,
+    FunctionToolsExecuted,
+}
+
+impl HookKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HookKind::OnEnter => "on_enter",
+            HookKind::OnExit => "on_exit",
+            HookKind::OnUserTurnCompleted => "on_user_turn_completed",
+            HookKind::OnUserTurnExceeded => "on_user_turn_exceeded",
+            HookKind::FillerSource => "filler_source",
+            HookKind::FunctionToolsExecuted => "function_tools_executed",
+        }
+    }
+}
+
 /// Answered by [`Command::HookDone`](crate::agent_session::Command::HookDone); what the hook does arrives tagged `VoiceCommandOrigin::Hook`.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
-#[vocabulary(kind = HookKind)]
 pub enum HookCall {
     /// Does not gate activation or handoff. Its completion participates in an open voice run.
     /// `span`, here and below: the hook's span, current while the host runs it; set at issue.
@@ -75,6 +97,17 @@ impl HookCall {
             | HookCall::OnUserTurnExceeded { id, .. }
             | HookCall::FillerSource { id, .. }
             | HookCall::FunctionToolsExecuted { id, .. } => *id,
+        }
+    }
+
+    pub fn kind(&self) -> HookKind {
+        match self {
+            HookCall::OnEnter { .. } => HookKind::OnEnter,
+            HookCall::OnExit { .. } => HookKind::OnExit,
+            HookCall::OnUserTurnCompleted { .. } => HookKind::OnUserTurnCompleted,
+            HookCall::OnUserTurnExceeded { .. } => HookKind::OnUserTurnExceeded,
+            HookCall::FillerSource { .. } => HookKind::FillerSource,
+            HookCall::FunctionToolsExecuted { .. } => HookKind::FunctionToolsExecuted,
         }
     }
 }
@@ -224,7 +257,7 @@ impl SessionEvent {
                     item: (**item).clone(),
                     host_item: None,
                     agent: agent.clone(),
-                    visibility: *visibility,
+                    visibility: visibility.as_str().to_owned(),
                     run: run.as_ref().and_then(|r| r.host.clone()),
                 })
             }
@@ -245,9 +278,10 @@ impl SessionEvent {
                     item: (**item).clone(),
                 })
             }
-            SessionEvent::RunRefused { cause, host } => {
-                HostWire::RunRefused(w::RunRefusedWire { run: host.clone(), cause: *cause })
-            }
+            SessionEvent::RunRefused { cause, host } => HostWire::RunRefused(w::RunRefusedWire {
+                run: host.clone(),
+                cause: cause.as_str().to_owned(),
+            }),
             // What `RunResult._mark_done` reads; the binding resolves the refs off its side table.
             SessionEvent::RunSettled { run, outcome, speech, input_requirements } => {
                 let mut settled = run_settled_wire(run, outcome, input_requirements);
@@ -257,7 +291,7 @@ impl SessionEvent {
             SessionEvent::SpeechDone { speech, outcome } => {
                 HostWire::SpeechDone(w::SpeechDoneWire {
                     speech_id: speech_id(*speech),
-                    outcome: *outcome,
+                    outcome: outcome.as_str().to_owned(),
                 })
             }
             SessionEvent::FloorChanged { holder } => {
@@ -298,20 +332,13 @@ fn run_settled_wire(
     let (final_output, run_error, question) = match outcome {
         RunOutcome::Completed { final_output } => (final_output.clone(), None, None),
         RunOutcome::Failed(RunFailure::Run(err)) => (None, Some(err.clone()), None),
-        RunOutcome::InputRequired { question, verbatim, answer_tool } => {
-            let question = w::RunQuestion {
-                question: question.clone(),
-                verbatim: *verbatim,
-                answer_tool: answer_tool.clone(),
-            };
-            (None, None, Some(question))
-        }
+        RunOutcome::InputRequired(question) => (None, None, Some(question.clone())),
         RunOutcome::Failed(RunFailure::Speech) | RunOutcome::Closed => (None, None, None),
     };
     w::RunSettledWire {
         input_requirements: input_requirements.to_vec(),
         run: run.host.clone(),
-        outcome: outcome.kind(),
+        outcome: outcome.as_str().to_owned(),
         final_output,
         question,
         run_error,
@@ -323,13 +350,11 @@ impl ErrorEvent {
     /// `error`'s payload, and `close`'s for the error that closed the session.
     fn wire(&self) -> lk_agents_abi::voice::events::SessionErrorWire {
         lk_agents_abi::voice::events::SessionErrorWire {
-            source: self.source,
+            source: self.source.as_str().to_owned(),
             recoverable: self.recoverable,
             label: match &self.error {
-                lk_agents_abi::errors::ProviderError::Host { .. } => {
-                    lk_agents_abi::voice::events::ErrorOrigin::Host
-                }
-                _ => lk_agents_abi::voice::events::ErrorOrigin::Engine,
+                lk_agents_abi::errors::ProviderError::Host { .. } => "host".to_owned(),
+                _ => "engine".to_owned(),
             },
             error: self.error.clone(),
             speech_id: self.speech.map(|id| id.to_string()),

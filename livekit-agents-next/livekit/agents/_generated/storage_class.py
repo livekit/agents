@@ -4,7 +4,6 @@
 # declarations in:
 #     rust/crates/lk-agents-abi/src/storage/mod.rs
 #     rust/crates/lk-agents-abi/src/storage/rows.rs
-#     rust/crates/lk-agents-abi/src/storage/thread.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
@@ -206,11 +205,3 @@ class InboxRow:
     message: object
     """The A2A `Message`."""
     received_at: int
-
-
-RunOutcome: TypeAlias = Literal["completed", "input-required", "failed", "canceled", "rejected"]
-"""What `run_ended` records."""
-
-
-TaskOrder: TypeAlias = Literal["updated", "inserted"]
-"""How a task listing is ordered (docs/internals/storage.md#reading-thread-items-and-tasks)."""

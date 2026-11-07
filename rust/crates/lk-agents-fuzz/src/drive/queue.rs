@@ -19,7 +19,6 @@ use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Wake, Waker};
 
 use fastrand::Rng;
-use lk_agents_abi::voice::events::Leg;
 use lk_agents_abi::voice::io::InputFrame;
 use lk_agents_abi::{BoxFuture, resources::ResourceId};
 use lk_agents_voice::agent_session::VoiceEvent;
@@ -157,7 +156,7 @@ fn label(event: &VoiceRuntimeEvent) -> &'static str {
         VoiceRuntimeEvent::AudioInputRouting(_) => "AudioInputRouting",
         VoiceRuntimeEvent::LegOpened(_) => "StreamOpened",
         VoiceRuntimeEvent::Input(input) | VoiceRuntimeEvent::Awaited(input, _) => match input {
-            VoiceEvent::Host(_) => "Host",
+            VoiceEvent::Host(sent) => sent.command.kind(),
             VoiceEvent::Stt(..) => "Stt",
             VoiceEvent::Vad(_) => "Vad",
             VoiceEvent::Room(_) => "Room",
@@ -194,7 +193,7 @@ enum Item {
 enum Source {
     Host(String),
     Stt(ResourceId),
-    Leg(Leg),
+    Leg(&'static str),
     Kind(Discriminant<VoiceEvent>),
     Event(Discriminant<VoiceRuntimeEvent>),
     /// The microphone's frames channel.
@@ -217,12 +216,12 @@ impl Source {
         match input {
             VoiceEvent::Host(sent) => Source::Host(format!("{:?}", sent.origin)),
             VoiceEvent::Stt(tagged, _) => Source::Stt(tagged.stream),
-            VoiceEvent::Vad(_) => Source::Leg(Leg::Vad),
-            VoiceEvent::Eot(..) => Source::Leg(Leg::Eot),
-            VoiceEvent::Overlap(_) => Source::Leg(Leg::Interruption),
+            VoiceEvent::Vad(_) => Source::Leg("vad"),
+            VoiceEvent::Eot(..) => Source::Leg("eot"),
+            VoiceEvent::Overlap(_) => Source::Leg("interruption"),
             VoiceEvent::ChannelEnded(end) => match (end.leg(), end.sink()) {
-                (Leg::Stt, Some(stream)) => Source::Stt(stream),
-                (leg @ (Leg::Vad | Leg::Eot | Leg::Interruption), _) => Source::Leg(leg),
+                ("stt", Some(stream)) => Source::Stt(stream),
+                (leg @ ("vad" | "eot" | "interruption"), _) => Source::Leg(leg),
                 _ => Source::Kind(std::mem::discriminant(input)),
             },
             other => Source::Kind(std::mem::discriminant(other)),

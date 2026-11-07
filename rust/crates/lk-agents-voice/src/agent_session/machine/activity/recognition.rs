@@ -182,7 +182,7 @@ impl VoiceDriver {
         // stream lands the old row is the installed one.
         if self.input.live_stt != Some(stream) {
             self.record_trace(InputStep::LegItemDiscarded {
-                leg: lk_agents_abi::voice::events::Leg::Stt,
+                leg: AudioChannel::Stt.label(),
                 stream,
             });
             return;
@@ -824,15 +824,12 @@ impl super::AgentActivity {
         p: Result<lk_agents_abi::EotPrediction, lk_agents_abi::errors::ProviderError>,
         thresholds: Option<lk_agents_abi::tokenize::language::ThresholdOptions>,
     ) -> (Vec<InputStep>, Vec<crate::audio_recognition::effects::AudioRecognitionEffect>) {
+        use crate::trace::DetectorName;
         self.audio_recognition.set_thresholds(thresholds);
-        let mut observations =
-            vec![InputStep::LegVerdict { leg: lk_agents_abi::voice::events::Leg::Eot, req: req.0 }];
+        let mut observations = vec![InputStep::LegVerdict { leg: DetectorName::Eot, req: req.0 }];
         // Recoverable: the next pause asks again. The machine serves `min_delay`.
         let result = p.map_err(|_| {
-            observations.push(InputStep::LegFailed {
-                leg: lk_agents_abi::voice::events::Leg::Eot,
-                recoverable: true,
-            });
+            observations.push(InputStep::LegFailed { leg: DetectorName::Eot, recoverable: true });
         });
         let eff = self.audio_recognition.on_prediction(now, req, result);
         (observations, eff)

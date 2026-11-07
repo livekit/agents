@@ -204,13 +204,13 @@ impl VoiceDriver {
                 }));
             }
             (Ok(sink), false) => {
-                self.record_trace(InputStep::LegOpenDiscarded { leg: leg.leg() });
+                self.record_trace(InputStep::LegOpenDiscarded { leg: leg.label() });
                 self.record_effect(VoiceEffect::DiscardOpenedInput(sink));
             }
             (Ok(sink), true) => {
                 let channel = self.adopt_opened_leg(now, leg);
                 self.install_sink(channel, sink);
-                self.record_trace(InputStep::StreamOpened { leg: channel.leg() });
+                self.record_trace(InputStep::StreamOpened { leg: channel.label() });
             }
         }
     }
@@ -283,7 +283,7 @@ impl VoiceDriver {
             self.host_end_of_speech(now);
         }
         if let Some(error) = error
-            && leg == lk_agents_abi::voice::events::Leg::Stt
+            && leg == AudioChannel::Stt.label()
         {
             self.report_error(now, crate::events::ErrorSource::Stt, false, error, None);
         }

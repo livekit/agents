@@ -420,7 +420,9 @@ impl Run {
             Input::SetVideoInput { attach } => api
                 .set_video_input(attach.then(|| fakes::FakeVideoInput::new(registry) as _))
                 .ok()?,
-            Input::SetIoEnabled { leg, enabled } => api.set_io_enabled(*leg, *enabled).ok()?,
+            Input::SetIoEnabled { leg, enabled } => {
+                api.set_io_enabled(io_leg(*leg).into(), *enabled).ok()?
+            }
             Input::SetAudioOutput { attach } => api
                 .set_audio_output(attach.then(|| {
                     fakes::FakeAudioOutput::new(
@@ -529,8 +531,12 @@ impl Run {
             Input::Drain { wait } => {
                 let reply = self.api.drain().ok()?;
                 Some(if *wait {
-                    Pending::answer(AnswerWait::reply(reply, |refused| {
-                        Answer::Drain(refused.map_or(Ok(()), Err))
+                    Pending::answer(AnswerWait::reply(reply, |refused| match refused.as_deref() {
+                        None => Answer::Drain(Ok(())),
+                        Some(r) if r == DrainRefused::ActivityChanging.as_str() => {
+                            Answer::Drain(Err(DrainRefused::ActivityChanging))
+                        }
+                        Some(_) => Answer::Drain(Err(DrainRefused::Closing)),
                     }))
                 } else {
                     Pending::default()

@@ -2320,7 +2320,7 @@ impl CoreVoiceRun {
         let output =
             output.map(|v| crate::py_objects::object_ref_from_py(v.as_any())).transpose()?;
         let question = question
-            .map(|v| crate::generated::records::session_wire::run_question_from_py(v.as_any()))
+            .map(|v| crate::generated::records::agent_run::run_question_from_py(v.as_any()))
             .transpose()?;
         <CoreVoiceRunImpl as ::lk_agents_abi::voice::run_view::VoiceRun>::settle(
             &mut self.0,
@@ -3460,11 +3460,16 @@ impl VoiceSession {
     }
 
     /// `input.set_audio_enabled` / `output.set_audio_enabled` /
-    /// `output.set_transcription_enabled`.
+    /// `output.set_transcription_enabled`: `leg` is `"audio_input"`, `"audio_output"` or
+    /// `"transcription"`.
     #[pyo3(signature = (leg, enabled))]
-    fn set_io_enabled(&self, py: Python<'_>, leg: Bound<'_, PyAny>, enabled: bool) -> PyResult<()> {
+    fn set_io_enabled(
+        &self,
+        py: Python<'_>,
+        leg: ::std::string::String,
+        enabled: bool,
+    ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        let leg = crate::py_values::str_from_py(leg.as_any())?;
         py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::set_io_enabled(&self.0, leg, enabled)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
     }
@@ -3515,19 +3520,13 @@ impl VoiceSession {
     }
 
     /// `AgentSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
-    /// speech is left. Answers `None`, or why it was refused.
+    /// speech is left. Answers `None`, `"activity_changing"` or `"closing"`.
     fn drain<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let call = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::drain(&self.0, )).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         crate::py_calls::future_into_py(py, async move {
             let out = call.await;
-            Python::attach(|py| {
-                ::pyo3::IntoPyObjectExt::into_py_any(
-                    out.map(|value| ::pyo3::PyResult::Ok(crate::py_values::str_to_py(py, &value)))
-                        .transpose()?,
-                    py,
-                )
-            })
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
 
@@ -11229,11 +11228,11 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
 
     fn hook_failed(
         &self,
-        hook: ::lk_agents_abi::voice::events::HookName,
+        hook: &str,
         error: ::std::option::Option<::lk_agents_abi::errors::CapturedError>,
     ) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let hook_arg = hook;
+        let hook_arg = hook.to_owned();
         let error_arg = error;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
@@ -11243,7 +11242,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(hook_arg.as_str(), py)?,
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(hook_arg, py)?,
                     match error_arg {
                         None => py.None().into_bound(py),
                         Some(x) => crate::py_objects::captured_error_to_py(py, x)?,

@@ -496,7 +496,7 @@ impl lk_agents_abi::EotDetector for DetectorStream {
         EotStream::warn(warnings);
     }
 
-    fn flush(&self, _reason: Option<lk_agents_abi::turn::detector::FlushReason>) {
+    fn flush(&self, _reason: Option<String>) {
         let mut inner = self.0.lock();
         if let Some(mut r) = inner.resampler.take() {
             let tail = r.flush().map(<[i16]>::to_vec).unwrap_or_default();

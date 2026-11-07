@@ -42,7 +42,7 @@ impl EotDetector for FakeEot {
 
     fn cancel_inference(&self, _timed_out: bool) {}
 
-    fn flush(&self, _reason: Option<lk_agents_abi::turn::detector::FlushReason>) {}
+    fn flush(&self, _reason: Option<String>) {}
 
     fn thresholds(&self) -> Option<ThresholdOptions> {
         Some(ThresholdOptions::new(

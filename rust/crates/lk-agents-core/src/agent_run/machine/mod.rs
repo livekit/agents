@@ -24,7 +24,7 @@ use crate::tool_outcome;
 use crate::usage::{Ledger, ModelKind};
 use cancellation::Owed;
 use lk_agents_abi::agent::run::{
-    Output, RunError, RunOutcome, RunResult, StreamEvent, ValidationId,
+    Output, RunError, RunOutcome, RunQuestion, RunResult, StreamEvent, ValidationId,
 };
 use lk_agents_abi::agent::{AgentDefinition, OutputSpec};
 use lk_agents_abi::agent::{ArgumentIdentity, OutputCandidate, ReadBackAnswer};
@@ -222,14 +222,6 @@ impl From<tool_calls::ToolCallEffect> for AgentRunEffect {
             }
         }
     }
-}
-
-/// A question the invocation ends on.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Ask {
-    question: String,
-    verbatim: bool,
-    answer_tool: Option<String>,
 }
 
 pub struct AgentRun {
@@ -754,7 +746,7 @@ impl AgentRun {
         if let Purpose::Phrase(ask) = purpose {
             let text = response.text.trim();
             let question = if text.is_empty() { ask.question.clone() } else { text.to_owned() };
-            return self.asked(Ask { question, ..ask }, Some(message_id), now, fx);
+            return self.asked(RunQuestion { question, ..ask }, Some(message_id), now, fx);
         }
         if !response.text.is_empty() {
             self.record(
@@ -781,7 +773,8 @@ impl AgentRun {
             }
             // Conversational text where a typed output is expected asks the person.
             OutputSpec::Structured { .. } => {
-                self.settle_ask(Ask { question: text, verbatim: false, answer_tool: None }, fx)
+                let ask = RunQuestion { question: text, verbatim: false, answer_tool: None };
+                self.settle_ask(ask, fx)
             }
             OutputSpec::Text { validated: true } => {
                 let validation = ValidationId(self.mint());
@@ -889,7 +882,7 @@ impl AgentRun {
     /// A tool's question: worded by the facing agent in one request without tools, unless it is
     /// verbatim or another agent asked this run; then it is said as written.
     /// Coordinated, the coordinator asks it.
-    fn ask_from_tool(&mut self, ask: Ask, now: Ts, fx: &mut Vec<AgentRunEffect>) {
+    fn ask_from_tool(&mut self, ask: RunQuestion, now: Ts, fx: &mut Vec<AgentRunEffect>) {
         if self.input.opening.coordinated() {
             return self.settle_ask(ask, fx);
         }
@@ -903,7 +896,7 @@ impl AgentRun {
     /// Records the question as the reply (`message_id` when a request streamed it) and settles.
     fn asked(
         &mut self,
-        ask: Ask,
+        ask: RunQuestion,
         message_id: Option<String>,
         now: Ts,
         fx: &mut Vec<AgentRunEffect>,
@@ -913,14 +906,10 @@ impl AgentRun {
         self.settle_ask(ask, fx)
     }
 
-    fn settle_ask(&mut self, ask: Ask, fx: &mut Vec<AgentRunEffect>) {
+    fn settle_ask(&mut self, ask: RunQuestion, fx: &mut Vec<AgentRunEffect>) {
         let question = self.composed(Some(ask.question.clone())).unwrap_or_default();
         let verbatim = if ask.verbatim { Some(question.clone()) } else { self.verbatim_text() };
-        let outcome = RunOutcome::InputRequired {
-            question,
-            verbatim: ask.verbatim,
-            answer_tool: ask.answer_tool,
-        };
+        let outcome = RunOutcome::InputRequired(RunQuestion { question, ..ask });
         self.finish(Ok(self.result(outcome, verbatim)), fx)
     }
 

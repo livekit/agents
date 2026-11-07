@@ -49,7 +49,7 @@ from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 
 if TYPE_CHECKING:
-    from .._generated.session_wire import RunQuestion
+    from .._generated.agent_run import RunQuestion
     from . import Agent
     from .agent_session import VoiceSession
 

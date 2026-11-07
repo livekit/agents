@@ -11,8 +11,7 @@ pub use lk_agents_abi::worker::remote_session::{
     AgentInfo, IoUpdate, RtcStats, SessionPort, SessionState,
 };
 use lk_agents_abi::worker::remote_session::{
-    FunctionCallRef, RemoteSessionEventKind, RemoteSessionRequestKind, ToolExecutionUpdatedWire,
-    ToolUpdateWire, WireEvent,
+    FunctionCallRef, ToolExecutionUpdatedWire, ToolUpdateWire, WireEvent,
 };
 use prost::Message as _;
 
@@ -295,22 +294,26 @@ pub fn tools_executed(ev: &lk_agents_abi::voice::events::ToolsExecutedEvent) -> 
     })
 }
 
-/// One oneof arm onto the vocabulary variant of the same name.
-macro_rules! same_arm {
-    ($value:expr, $from:path => $to:ident: $($arm:ident),* $(,)?) => {{
-        use $from as From;
-        match $value { $(From::$arm(_) => $to::$arm,)* }
-    }};
-}
-
 /// The name a client emits an arriving event under: `msg.event.WhichOneof("event")`
 /// (`remote_session.py:1018`). Five of these are not in `RemoteSessionEventTypes`.
-pub fn event_kind(event: &proto::agent_session_event::Event) -> RemoteSessionEventKind {
-    same_arm!(event, proto::agent_session_event::Event => RemoteSessionEventKind:
-        AgentStateChanged, UserStateChanged, ConversationItemAdded, UserInputTranscribed,
-        FunctionToolsExecuted, Error, OverlappingSpeech, SessionUsageUpdated, AmdPrediction,
-        EotPrediction, FunctionToolsStarted, DebugMessage, ToolExecutionUpdated,
-        AgentFalseInterruption)
+pub fn event_name(event: &proto::agent_session_event::Event) -> &'static str {
+    use proto::agent_session_event::Event;
+    match event {
+        Event::AgentStateChanged(_) => "agent_state_changed",
+        Event::UserStateChanged(_) => "user_state_changed",
+        Event::ConversationItemAdded(_) => "conversation_item_added",
+        Event::UserInputTranscribed(_) => "user_input_transcribed",
+        Event::FunctionToolsExecuted(_) => "function_tools_executed",
+        Event::Error(_) => "error",
+        Event::OverlappingSpeech(_) => "overlapping_speech",
+        Event::SessionUsageUpdated(_) => "session_usage_updated",
+        Event::AmdPrediction(_) => "amd_prediction",
+        Event::EotPrediction(_) => "eot_prediction",
+        Event::FunctionToolsStarted(_) => "function_tools_started",
+        Event::DebugMessage(_) => "debug_message",
+        Event::ToolExecutionUpdated(_) => "tool_execution_updated",
+        Event::AgentFalseInterruption(_) => "agent_false_interruption",
+    }
 }
 
 /// Decode a [`DebugMessageWire`](lk_agents_abi::worker::remote_session::DebugMessageWire)'s serialized `DebugMessage` to its `Struct`; `Err` is refused.
@@ -331,10 +334,20 @@ pub fn io_update(io: &proto::session_request::UpdateIo) -> IoUpdate {
 }
 
 /// `request.WhichOneof("request")`, used in logs and client errors.
-pub fn request_kind(request: &proto::session_request::Request) -> RemoteSessionRequestKind {
-    same_arm!(request, proto::session_request::Request => RemoteSessionRequestKind:
-        Ping, GetChatHistory, GetAgentInfo, RunInput, GetSessionState, GetRtcStats,
-        GetSessionUsage, GetFrameworkInfo, UpdateIo, FinalizeSimulation)
+pub fn request_name(request: &proto::session_request::Request) -> &'static str {
+    use proto::session_request::Request as R;
+    match request {
+        R::Ping(_) => "ping",
+        R::GetChatHistory(_) => "get_chat_history",
+        R::GetAgentInfo(_) => "get_agent_info",
+        R::RunInput(_) => "run_input",
+        R::GetSessionState(_) => "get_session_state",
+        R::GetRtcStats(_) => "get_rtc_stats",
+        R::GetSessionUsage(_) => "get_session_usage",
+        R::GetFrameworkInfo(_) => "get_framework_info",
+        R::UpdateIo(_) => "update_io",
+        R::FinalizeSimulation(_) => "finalize_simulation",
+    }
 }
 
 /// The result of one remote session operation, before its protocol encoding.

@@ -851,7 +851,7 @@ fn invalid_parameters_and_changed_approval_arguments_never_start_a_child() {
     next.prepare(json!({"nights":7}));
     assert_eq!(next.turn().state.frames.len(), 1);
     assert!(
-        matches!(&next.turn().result.outcome, RunOutcome::InputRequired { question, .. } if question.contains("nights=7"))
+        matches!(&next.turn().result.outcome, RunOutcome::InputRequired(ask) if ask.question.contains("nights=7"))
     );
     let mut invalid = Driver::new(config(false, ChatHistory::Fresh, false), None, "Book");
     invalid.reply("", &[("book", json!({"nights":"invalid"}))]);

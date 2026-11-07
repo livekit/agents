@@ -405,22 +405,22 @@ impl VoiceDriver {
     }
 
     /// **Already done**, not dropped: an unattached handle would answer `done() == false` forever.
-    pub(crate) fn settle_undelivered(
-        &mut self,
-        kind: crate::agent_session::machine::activity::scheduling::SpeechKind,
-        call: Option<SpeechCall>,
-    ) {
+    pub(crate) fn settle_undelivered(&mut self, what: &str, call: Option<SpeechCall>) {
         let allow_interruptions = self.session.config.effective().turn.interruption.enabled();
         let (id, mut state) = self.new_speech(call.as_ref().map(|c| c.speech), allow_interruptions);
         state.mark_done(Some(lk_agents_abi::errors::ProviderError::Local(
             lk_agents_abi::errors::ApiError::new(format!(
-                "the session loop ended before {}() ran",
-                kind.source()
+                "the session loop ended before {what}() ran"
             )),
         )));
         self.outbox.extend(unqueued_speech(id, state));
         self.activity.retire_speech_later(id);
         // The host stream still exists, so the speech is announced and ended on it like every other.
+        let kind = if what == "say" {
+            crate::agent_session::machine::activity::scheduling::SpeechKind::Say
+        } else {
+            crate::agent_session::machine::activity::scheduling::SpeechKind::GenerateReply
+        };
         let announce = SessionEvent::SpeechCreated { speech: id, kind, user_initiated: true };
         self.emit_now(announce);
         // Born past the close's edge: the scheduling task's refusal and the close's release.

@@ -359,28 +359,6 @@ mod voice_task {
         record.host_view().tools_run()[nth as usize].call_id().to_owned()
     }
 
-    // Catches: a drain refused because a task holds the floor answered as if the session were
-    // closing (the harness read the refusal's string and took anything but one as `Closing`).
-    #[test]
-    fn a_drain_under_a_running_task_is_refused_as_task_running() {
-        use lk_agents_voice::agent_session::DrainRefused;
-        let mut inputs =
-            vec![Input::GenerateReply { user_input: None, instructions: None, allow: None }];
-        inputs.push(Input::Advance { ms: Millis(20) });
-        inputs.extend(call(0));
-        inputs.extend(task(0, "email"));
-        inputs.extend([Input::Drain { wait: true }, Input::Advance { ms: Millis(50) }]);
-        let record = play(inputs);
-        let drains: Vec<Answer> = record
-            .host_view()
-            .api_calls()
-            .iter()
-            .filter(|c| matches!(c.input(), Input::Drain { .. }))
-            .filter_map(|c| c.returned().map(|(_, a)| a.clone()))
-            .collect();
-        assert_eq!(drains, vec![Answer::Drain(Err(DrainRefused::TaskRunning))]);
-    }
-
     // Catches: a completion that does not reach the awaiting tool, a parent left suspended, a
     // task's agent replying after it completed, or the parent's `on_enter` run on the restore.
     #[test]

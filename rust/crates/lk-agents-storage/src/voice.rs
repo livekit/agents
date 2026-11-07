@@ -12,7 +12,6 @@ use crate::thread::run::{ItemRow, RunOutcome};
 use lk_agents_abi::llm::chat_context::protocol::{decode_chat_item, encode_chat_item};
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::context::ContextActivation as _;
-use lk_agents_abi::storage::thread::AbandonReason;
 use lk_agents_abi::storage::voice::{
     StorageWork, VoiceStorage, VoiceStorageCommand, VoiceStorageEvent, VoiceStore as HostVoiceStore,
 };
@@ -167,7 +166,7 @@ impl VoiceStore {
         let merged = match prepared {
             Ok(merged) => merged,
             Err(error) => {
-                let _ = run.abandon(RunOutcome::Failed, AbandonReason::VoiceLoad.as_str()).await;
+                let _ = run.abandon(RunOutcome::Failed, "voice-load").await;
                 thread.close().await;
                 return Err(error);
             }
@@ -225,10 +224,7 @@ impl VoiceStore {
                 active.run.commit(CommitOptions::default()).await.map(|committed| committed.version)
             }
             Err(error) => {
-                let _ = active
-                    .run
-                    .abandon(RunOutcome::Failed, AbandonReason::VoiceEncode.as_str())
-                    .await;
+                let _ = active.run.abandon(RunOutcome::Failed, "voice-encode").await;
                 Err(error)
             }
         };
@@ -271,8 +267,7 @@ impl VoiceStore {
         }
         let fields = self.activation.lock_managed().await;
         let mut active = state.active.take().expect("the active voice turn");
-        let result =
-            active.run.abandon(RunOutcome::Failed, AbandonReason::VoiceGeneration.as_str()).await;
+        let result = active.run.abandon(RunOutcome::Failed, "voice-generation").await;
         self.released();
         active.thread.close().await;
         self.activation.end_managed(false, fields);
@@ -385,7 +380,7 @@ impl HostVoiceStore for VoiceStore {
                     None => Err(StorageError::Invalid("the voice commit has no resolver".into())),
                 }
             } else {
-                active.run.abandon(RunOutcome::Canceled, AbandonReason::VoiceClose.as_str()).await
+                active.run.abandon(RunOutcome::Canceled, "voice-close").await
             };
             self.released();
             active.thread.close().await;

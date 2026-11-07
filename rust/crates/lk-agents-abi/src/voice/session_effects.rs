@@ -155,11 +155,7 @@ pub trait SessionHooks: Send + Sync {
     ) -> crate::BoxFuture<'a, Result<FillerReply, crate::errors::HostError>>;
     /// Hook `hook` raised `error` (the exception itself, when there is one): logged.
     #[host(notify, name = "_core_hook_failed")]
-    fn hook_failed(
-        &self,
-        hook: crate::voice::events::HookName,
-        error: Option<crate::errors::CapturedError>,
-    );
+    fn hook_failed(&self, hook: &str, error: Option<crate::errors::CapturedError>);
 }
 
 /// The session as its delivered events left it, a value that never changes: each event reaches

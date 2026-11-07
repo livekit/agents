@@ -100,9 +100,7 @@ impl ReplyRun {
                 .pop_last()
                 .map(|(_, v)| VoiceRunOutcome::Completed { final_output: Some(v) }),
             RunOutcome::NoOutput => None,
-            RunOutcome::InputRequired { question, verbatim, answer_tool } => {
-                Some(VoiceRunOutcome::InputRequired { question, verbatim, answer_tool })
-            }
+            RunOutcome::InputRequired(ask) => Some(VoiceRunOutcome::InputRequired(ask)),
         };
         (output, interrupted)
     }

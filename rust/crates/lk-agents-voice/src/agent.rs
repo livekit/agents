@@ -1,7 +1,6 @@
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::audio_recognition::TurnId;
 use crate::generation::INSTRUCTIONS_MESSAGE_ID;
-pub use lk_agents_abi::voice::events::Visibility;
 use lk_agents_abi::{ChatContext, ChatItem, Vocabulary};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -64,6 +63,52 @@ impl Source {
             | Source::ConfigUpdate
             | Source::HostCtx
             | Source::Remote { .. } => None,
+        }
+    }
+}
+
+/// Carried on `ItemAdded` so the host's projections decide nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Vocabulary)]
+pub enum Visibility {
+    /// The agent's context only: a host-supplied item, not in `session.history`.
+    Model,
+    History,
+    /// The agent's context and `session.history`: everything said, and the config records.
+    Both,
+}
+
+impl Visibility {
+    pub fn model(self) -> bool {
+        match self {
+            Visibility::Model | Visibility::Both => true,
+            Visibility::History => false,
+        }
+    }
+
+    pub fn history(self) -> bool {
+        match self {
+            Visibility::History | Visibility::Both => true,
+            Visibility::Model => false,
+        }
+    }
+
+    /// A replaced item keeps every projection it was in and gains the replacement's.
+    fn union(self, other: Visibility) -> Visibility {
+        match (self.model() || other.model(), self.history() || other.history()) {
+            (true, true) => Visibility::Both,
+            (true, false) => Visibility::Model,
+            (false, true) => Visibility::History,
+            // Unreachable: every variant is in at least one projection.
+            (false, false) => Visibility::History,
+        }
+    }
+
+    /// The wire spelling (`ItemAdded.visibility` as the host reads it).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Visibility::Model => "model",
+            Visibility::History => "history",
+            Visibility::Both => "both",
         }
     }
 }
@@ -221,14 +266,8 @@ impl SessionChatCtx {
                 .iter()
                 .position(|c| c.item.id() == id)
                 .expect("an id in the set is on the record");
-            // A replaced item keeps every projection it was in and gains the replacement's.
             let was = self.items[idx].visibility;
-            let visibility =
-                match (was.model() || visibility.model(), was.history() || visibility.history()) {
-                    (true, true) => Visibility::Both,
-                    (true, false) => Visibility::Model,
-                    (false, _) => Visibility::History,
-                };
+            let visibility = was.union(visibility);
             self.items[idx] = Committed { visibility, ..entry.clone() };
             if !was.history() && visibility.history() {
                 CommitOutcome::Added

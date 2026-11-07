@@ -3,6 +3,7 @@ use crate::agent_session::{FillerSource, HookId};
 use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle};
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::RunningToolCall;
+use lk_agents_abi::agent::run::RunQuestion;
 use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, MetricsReport, Ts};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -489,20 +490,12 @@ pub enum Delivery {
     Say(String),
     /// `InputRequired`: the question asked; the person's next message is written as the output
     /// of every call left waiting (the approval's read-back included).
-    Ask(Ask),
+    Ask(RunQuestion),
     /// A VoiceTask tool's validated `Completed(value)`: the task ends with the value, and its
     /// agent says nothing more about it.
     Complete(lk_agents_abi::HostRef),
     /// A VoiceTask tool's `Failed(reason)`: the task ends, its awaiter raising the reason.
     Fail(String),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Ask {
-    pub question: String,
-    pub verbatim: bool,
-    /// `InputRequired(tool=)`: the tool the answer goes to.
-    pub tool: Option<String>,
 }
 
 /// Constructed only as a whole.
@@ -735,7 +728,7 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
             return ToolExecution { call, output, end, raw_update, delivery: None };
         }
         ToolOutcome::InputRequired { question, verbatim, tool } => {
-            Some(Delivery::Ask(Ask { question, verbatim, tool }))
+            Some(Delivery::Ask(RunQuestion { question, verbatim, answer_tool: tool }))
         }
         other => lk_agents_core::tool_outcome::verbatim(&other)
             .map(|text| Delivery::Say(text.to_owned())),

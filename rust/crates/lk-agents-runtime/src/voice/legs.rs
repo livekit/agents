@@ -203,7 +203,7 @@ impl OpeningLeg {
                     PendingLeg::Vad(source) => source.close(deadline).await,
                 };
                 if outcome != lk_agents_abi::Closed::Clean {
-                    log::error!(target: lk_agents_abi::LOG_TARGET, "opening {} stream cleanup did not settle cleanly: {outcome:?}", channel.leg());
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "opening {} stream cleanup did not settle cleanly: {outcome:?}", channel.label());
                 }
                 resources.release(sink);
                 outcome

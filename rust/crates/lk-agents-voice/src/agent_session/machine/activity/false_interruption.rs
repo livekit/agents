@@ -458,12 +458,15 @@ impl VoiceDriver {
         _now: Ts,
         ev: lk_agents_abi::turn::detector::LegEvent<crate::audio_recognition::OverlapVerdict>,
     ) {
+        use crate::trace::DetectorName;
         use lk_agents_abi::turn::detector::LegEvent;
-        use lk_agents_abi::voice::events::Leg;
         let (req, v) = match ev {
             LegEvent::Verdict { req, verdict } => (req, verdict),
             LegEvent::Error { recoverable, .. } => {
-                self.record_trace(InputStep::LegFailed { leg: Leg::Interruption, recoverable });
+                self.record_trace(InputStep::LegFailed {
+                    leg: DetectorName::Interruption,
+                    recoverable,
+                });
                 self.restore_audio_activity_guard();
                 if !recoverable {
                     self.activity.audio_recognition.set_interruption_active(false);
@@ -472,7 +475,7 @@ impl VoiceDriver {
             }
             LegEvent::Closed => {
                 self.record_trace(InputStep::ChannelEnded {
-                    leg: Leg::Interruption,
+                    leg: "interruption",
                     cause: crate::trace::ChannelEndCause::SourceEnded,
                 });
                 self.restore_audio_activity_guard();
@@ -481,7 +484,7 @@ impl VoiceDriver {
             }
         };
         self.record_trace(InputStep::LegVerdict {
-            leg: Leg::Interruption,
+            leg: DetectorName::Interruption,
             req: req.map_or(0, |r| r.0),
         });
         self.record_trace(InterruptStep::OverlapVerdict {

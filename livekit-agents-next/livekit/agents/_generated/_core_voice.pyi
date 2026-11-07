@@ -33,6 +33,7 @@ from livekit.rtc import VideoFrame
 from .._core import SessionRecorder, Storage, VoiceAgent, _core_ContextActivation, _core_VoiceStore
 from ..types import NotGivenOr
 from .agent_nodes import NodeFrame
+from .agent_run import RunQuestion
 from .amd import AMDConfig, AmdConstants, AMDPredictionEvent
 from .avatar import AudioReceiverFrame, MediaFrame
 from .avatar_options import AvatarOptions
@@ -54,7 +55,7 @@ from .session_options import (
     UpdateKwargs,
 )
 from .session_owner import SessionJobInfo
-from .session_wire import DefaultModelPlan, ExceededTurnReply, RunQuestion, VoiceRunOutput
+from .session_wire import DefaultModelPlan, ExceededTurnReply, VoiceRunOutput
 from .stream_info import StreamInfo
 from .stt import SpeechEvent
 from .telemetry import RecordingOptions, ReportJob, SessionReport, SpanContext
@@ -714,13 +715,10 @@ class VoiceSession:
         """`AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it."""
     def update_instructions(self, instructions: str) -> None:
         """`Agent.update_instructions()` on the agent that is already driving."""
-    def set_io_enabled(
-        self,
-        leg: Literal["audio_input", "audio_output", "transcription"],
-        enabled: bool,
-    ) -> None:
+    def set_io_enabled(self, leg: str, enabled: bool) -> None:
         """`input.set_audio_enabled` / `output.set_audio_enabled` /
-        `output.set_transcription_enabled`.
+        `output.set_transcription_enabled`: `leg` is `"audio_input"`, `"audio_output"` or
+        `"transcription"`.
         """
     def tool_update(
         self,
@@ -736,9 +734,9 @@ class VoiceSession:
         """`AgentSession.interrupt(force=)`: the current and queued speeches up to the first
         uninterruptible; answers when they are done, or with the refusal.
         """
-    async def drain(self) -> Literal["closing", "activity_changing", "voice_task_running"] | None:
+    async def drain(self) -> str | None:
         """`AgentSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
-        speech is left. Answers `None`, or why it was refused.
+        speech is left. Answers `None`, `"activity_changing"` or `"closing"`.
         """
     async def wait_for_idle(self, *, hold: int | None = None) -> None:
         """`AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`)."""

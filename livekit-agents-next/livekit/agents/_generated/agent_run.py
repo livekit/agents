@@ -357,13 +357,9 @@ class RunOutcomeCompleted:
 
 @dataclass(kw_only=True, slots=True)
 class RunOutcomeInputRequired:
-    """`answer_tool` takes the person's next message as its first string parameter
-    (`InputRequired(tool=)`); the next invocation is told so.
-    """
+    """The run ends on a question for the person."""
 
-    question: str
-    verbatim: bool
-    answer_tool: str | None
+    question: RunQuestion
 
 
 @dataclass(kw_only=True, slots=True)
@@ -374,6 +370,18 @@ class RunOutcomeNoOutput:
 
 
 RunOutcome: TypeAlias = RunOutcomeCompleted | RunOutcomeInputRequired | RunOutcomeNoOutput
+
+
+@dataclass(kw_only=True, slots=True)
+class RunQuestion:
+    """The question a run ends on (`InputRequired`): asked as written when `verbatim`. The person's
+    next message goes to `answer_tool`, when one is named, as its first string parameter
+    (`InputRequired(tool=)`); the next invocation is told so.
+    """
+
+    question: str
+    verbatim: bool
+    answer_tool: str | None
 
 
 @dataclass(kw_only=True, slots=True)

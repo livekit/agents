@@ -96,7 +96,7 @@ impl Rule for DtmfReportsWhatWasPressed {
         let pressed_keys: Vec<_> = presses
             .iter()
             .map(|a| match a.input {
-                Input::Dtmf { key, .. } => DtmfEvent::from_wire(key.digit()),
+                Input::Dtmf { key, .. } => DtmfEvent::parse(key.digit()),
                 _ => unreachable!(),
             })
             .collect();
@@ -217,7 +217,7 @@ trait Press {
 
 impl Press for Authored {
     fn press(self, k: DtmfKey) -> Self {
-        let pressed = DtmfEvent::from_wire(k.digit());
+        let pressed = DtmfEvent::parse(k.digit());
         self.sent(key(k))
             .journal(Step::Room(RoomStep::Link(RoomLinkStep::KeyPressed { key: pressed })))
     }

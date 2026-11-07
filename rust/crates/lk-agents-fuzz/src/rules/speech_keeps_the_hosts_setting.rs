@@ -6,7 +6,6 @@
 //! (ef4a20f5c). An interrupted speech refuses `False`, and a tool's interruption hold restores its
 //! own value when released, so those speeches are not judged.
 use lk_agents_voice::trace::{CoreStep, Step};
-use lk_agents_voice::agent_session::commands::{CommandKind, SpeechCommandKind};
 
 use crate::{
     authored::Authored,
@@ -38,8 +37,7 @@ impl Rule for SpeechKeepsTheHostsSetting {
         }
         let held = r.journal().iter().filter_map(|(at, step)| match step {
             Step::Core(CoreStep::CommandReceived { kind, .. })
-                if *kind
-                    == CommandKind::Speech(SpeechCommandKind::HoldInterruptions) =>
+                if *kind == "SpeechCommand::HoldInterruptions" =>
             {
                 Some(*at)
             }

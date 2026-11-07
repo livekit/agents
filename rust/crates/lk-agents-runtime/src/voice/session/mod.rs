@@ -852,10 +852,7 @@ impl VoiceSession {
             let (activation, set_up) = match set_up {
                 Ok(ready) => ready,
                 Err(error) => {
-                    hooks.hook_failed(
-                        lk_agents_abi::voice::events::HookName::SetupTools,
-                        error.host_ref.clone(),
-                    );
+                    hooks.hook_failed("setup_tools", error.host_ref.clone());
                     call.reply_to.settle(failed(error));
                     return;
                 }

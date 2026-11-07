@@ -3,7 +3,6 @@
 
 use lk_agents_abi::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
 use lk_agents_abi::storage::journal::JournalEvent;
-pub use lk_agents_abi::storage::thread::TaskOrder;
 use serde_json::{Map, Value};
 
 use crate::cursor::Cursor;
@@ -29,6 +28,16 @@ pub struct TaskQuery {
     pub page_size: i64,
     /// The previous page's `next_page_token`; none for the first page.
     pub page_token: Option<String>,
+}
+
+/// How a task listing is ordered (docs/internals/storage.md#reading-thread-items-and-tasks).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TaskOrder {
+    /// Last updated first, ties by task id: A2A `tasks/list`.
+    #[default]
+    Updated,
+    /// Insertion order (`tasks.pos`), oldest first: browsing a thread.
+    Inserted,
 }
 
 /// One page of a task listing.

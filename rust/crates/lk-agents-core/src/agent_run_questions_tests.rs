@@ -33,7 +33,7 @@ fn turn(history: Vec<ChatItem>, message: &str, arguments: Value, validated: Valu
 
 fn question(d: &Driver) -> String {
     match &d.result().outcome {
-        RunOutcome::InputRequired { question, verbatim: true, .. } => question.clone(),
+        RunOutcome::InputRequired(ask) if ask.verbatim => ask.question.clone(),
         other => panic!("expected a verbatim question, got {other:?}"),
     }
 }
@@ -128,7 +128,7 @@ fn one_answer_grants_one_repeat_within_a_step() {
     let executed: Vec<CallId> = d.executes().iter().map(|(c, ..)| *c).collect();
     assert_eq!(executed, [calls[0].0]);
     d.run_tools(|_| value("cancelled"));
-    assert!(matches!(&d.result().outcome, RunOutcome::InputRequired { verbatim: true, .. }));
+    assert!(matches!(&d.result().outcome, RunOutcome::InputRequired(ask) if ask.verbatim));
 }
 
 // Catches: a read-back function's missing-detail question marked as a read-back (a later answer
@@ -236,7 +236,7 @@ fn standalone_result_retains_all_correlated_requests_after_core_is_dropped() {
         assert_eq!(output.output, format!("waiting for the person's answer to: {name}?"));
     }
     assert!(
-        matches!(result.outcome, RunOutcome::InputRequired { ref question, .. } if question == "flight?")
+        matches!(result.outcome, RunOutcome::InputRequired(ref ask) if ask.question == "flight?")
     );
     assert_eq!(result.pending_call.as_ref(), Some(&result.input_requirements[0].call));
 }

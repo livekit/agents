@@ -544,11 +544,11 @@ fn text_where_a_typed_output_is_expected_asks_the_person() {
     assert_eq!(d.requests(), 1);
     assert_eq!(
         d.result().outcome,
-        RunOutcome::InputRequired {
+        RunOutcome::InputRequired(RunQuestion {
             question: "Which day works for you?".into(),
             verbatim: false,
             answer_tool: None
-        }
+        })
     );
 }
 
@@ -573,11 +573,11 @@ fn a_tool_question_is_worded_by_the_facing_agent_only() {
     let result = d.result();
     assert_eq!(
         result.outcome,
-        RunOutcome::InputRequired {
+        RunOutcome::InputRequired(RunQuestion {
             question: "Could you send a photo of the damage?".into(),
             verbatim: false,
             answer_tool: None
-        }
+        })
     );
     assert_eq!(
         transcript(&result.all_messages).last().unwrap().1,
@@ -592,7 +592,7 @@ fn a_tool_question_is_worded_by_the_facing_agent_only() {
     d.run_tools(ask);
     assert_eq!(d.requests(), 1);
     assert!(
-        matches!(&d.result().outcome, RunOutcome::InputRequired { question, .. } if question == "photo of the damage")
+        matches!(&d.result().outcome, RunOutcome::InputRequired(ask) if ask.question == "photo of the damage")
     );
 }
 
@@ -610,13 +610,13 @@ fn an_answer_for_a_named_tool_is_handed_to_it_without_a_model_turn() {
         tool: Some("reply_expert".into()),
     });
     let first = d.result().clone();
-    let RunOutcome::InputRequired { answer_tool, .. } = &first.outcome else { panic!() };
-    assert_eq!(answer_tool.as_deref(), Some("reply_expert"));
+    let RunOutcome::InputRequired(ask) = &first.outcome else { panic!() };
+    assert_eq!(ask.answer_tool.as_deref(), Some("reply_expert"));
 
     let mut input = d.run.input.clone();
     input.history = first.all_messages.clone();
     input.opening = Opening::Message(Box::new(user("msg_2", "Gold plan")));
-    input.answer_tool = answer_tool.clone();
+    input.answer_tool = ask.answer_tool.clone();
     let mut d = Driver::with_input(text_agent(tools()), input);
     assert_eq!(d.requests(), 0);
     assert_eq!(d.prepares()[0].1, Map::from_iter([("answer".to_owned(), json!("Gold plan"))]));

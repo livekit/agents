@@ -15,8 +15,6 @@ from .storage_class import (
     ItemRow,
     LaneRow,
     LocalStorageOptions,
-    RunOutcome,
-    TaskOrder,
     TaskPage,
     TaskRecord,
     TaskState,
@@ -205,7 +203,7 @@ class Thread:
         self,
         lane: str | None = None,
         status: TaskState | None = None,
-        order: TaskOrder | None = None,
+        order: str = "updated",
         page_size: int = 50,
         page_token: str | None = None,
     ) -> TaskPage: ...
@@ -252,7 +250,7 @@ class Run:
         *,
         scope_writes: Sequence[ContextScopeWrite] | None = None,
     ) -> int: ...
-    async def abandon(self, outcome: RunOutcome, reason: str) -> None: ...
+    async def abandon(self, outcome: str, reason: str) -> None: ...
 
 class _core_ThreadHandle:
     """`ctx.thread` (docs/threads.md): one thread of a storage namespace, as the agent `agent` reads
@@ -295,7 +293,7 @@ class _core_ThreadHandle:
         *,
         agent: str | None = None,
         status: TaskState | None = None,
-        order: TaskOrder | None = None,
+        order: str = "inserted",
         page_token: str | None = None,
         limit: int = 50,
     ) -> TaskPage:

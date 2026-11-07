@@ -39,7 +39,7 @@ use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{
     Now, Sent, SpeechCommand, VoiceCommandOrigin, VoiceDriver, VoiceEvent,
 };
-use lk_agents_voice::audio::ChannelEnd;
+use lk_agents_voice::audio::{AUDIO_IN_LEG, ChannelEnd};
 use lk_agents_voice::data_plane::{
     AudioInputRouter, AudioInputRouterCommand, AudioInputRouterEffect,
 };
@@ -660,8 +660,7 @@ async fn read_audio(
             () = closing.cancelled() => break ChannelEndCause::Closing,
         }
     };
-    let leg = lk_agents_voice::trace::Leg::AudioIn;
-    let end = ChannelEnd { leg, cause, sink: None, closed: None, error: None };
+    let end = ChannelEnd { leg: AUDIO_IN_LEG, cause, sink: None, closed: None, error: None };
     let _ = queue.send(end);
 }
 

@@ -7,7 +7,7 @@ use crate::agent_session::machine::activity::false_interruption::InterruptRefusa
 use crate::agent_session::machine::activity::scheduling::{
     SpeechId, SpeechKind, VoiceRunParticipation,
 };
-use crate::agent_session::machine::activity::speech::SpeechSpec;
+use crate::agent_session::machine::activity::speech::{SAY_SHAPE_REFUSED_ON_REALTIME, SpeechSpec};
 use crate::agent_session::options::TurnDetection;
 use crate::agent_session::{Close, ClosePhase, Closing, SpeechCall, VoiceDriver};
 use crate::audio_recognition::{ServerSpeech, TurnDetectionMode};
@@ -1034,9 +1034,7 @@ impl VoiceDriver {
 
     /// The model's wire carries a string: a streamed `say` is refused by name.
     pub(crate) fn refuse_realtime_say_stream(&mut self, call: Option<SpeechCall>) {
-        self.record_trace(SpeechStep::SayRefused {
-            why: crate::trace::SayRefusal::ShapeOnRealtime,
-        });
+        self.record_trace(SpeechStep::SayRefused { why: SAY_SHAPE_REFUSED_ON_REALTIME });
         self.fail_waiter(
             call,
             SpeechKind::Say,

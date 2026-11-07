@@ -9,7 +9,7 @@ pub(super) enum Purpose {
     /// The model's next step.
     Turn,
     /// The facing agent words a question; `ask` is what it asks.
-    Phrase(super::Ask),
+    Phrase(lk_agents_abi::agent::run::RunQuestion),
 }
 
 #[derive(Debug)]

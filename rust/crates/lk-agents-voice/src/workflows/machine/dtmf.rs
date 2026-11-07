@@ -12,28 +12,49 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::{AgentState, UserState};
 use std::time::Duration;
 
-pub use lk_agents_abi::voice::workflows::dtmf::DtmfEvent;
+/// `DtmfEvent(str, Enum)` (`utils.DtmfEvent`). Declared in code order: the discriminant is
+/// [`dtmf_event_to_code`]'s answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DtmfEvent {
+    Zero,
+    One,
+    Two,
+    Three,
+    Four,
+    Five,
+    Six,
+    Seven,
+    Eight,
+    Nine,
+    Star,
+    Pound,
+    A,
+    B,
+    C,
+    D,
+}
+
+impl DtmfEvent {
+    const ALL: [DtmfEvent; 16] = {
+        use DtmfEvent::*;
+        [Zero, One, Two, Three, Four, Five, Six, Seven, Eight, Nine, Star, Pound, A, B, C, D]
+    };
+    const VALUES: [&str; 16] =
+        ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "#", "A", "B", "C", "D"];
+
+    pub fn as_str(self) -> &'static str {
+        Self::VALUES[self as usize]
+    }
+
+    /// `DtmfEvent(value)`; `None` where the reference raises `ValueError`.
+    pub fn parse(value: &str) -> Option<DtmfEvent> {
+        Self::VALUES.iter().position(|v| *v == value).map(|i| Self::ALL[i])
+    }
+}
 
 /// `dtmf_event_to_code`. The reference comment says letters are 10-15; they are 12-15 (`*` 10, `#` 11).
 pub fn dtmf_event_to_code(event: DtmfEvent) -> u8 {
-    match event {
-        DtmfEvent::Zero => 0,
-        DtmfEvent::One => 1,
-        DtmfEvent::Two => 2,
-        DtmfEvent::Three => 3,
-        DtmfEvent::Four => 4,
-        DtmfEvent::Five => 5,
-        DtmfEvent::Six => 6,
-        DtmfEvent::Seven => 7,
-        DtmfEvent::Eight => 8,
-        DtmfEvent::Nine => 9,
-        DtmfEvent::Star => 10,
-        DtmfEvent::Pound => 11,
-        DtmfEvent::A => 12,
-        DtmfEvent::B => 13,
-        DtmfEvent::C => 14,
-        DtmfEvent::D => 15,
-    }
+    event as u8
 }
 
 /// `format_dtmf` (`utils.format_dtmf`).
@@ -58,14 +79,14 @@ pub(crate) fn parse_all(
     symbols: &[String],
     refusal: impl Fn(&str) -> String,
 ) -> Result<Vec<DtmfEvent>, String> {
-    symbols.iter().map(|s| DtmfEvent::from_wire(s).ok_or_else(|| refusal(s))).collect()
+    symbols.iter().map(|s| DtmfEvent::parse(s).ok_or_else(|| refusal(s))).collect()
 }
 
 /// `dtmf_event_to_code` (`beta/workflows/utils.py:30`): digits are themselves, `*` is 10, `#` is 11
 /// and `A`-`D` are 12-15.
 pub fn dtmf_code(symbol: &str) -> Result<u8, String> {
     let event =
-        DtmfEvent::from_wire(symbol).ok_or_else(|| format!("unknown DTMF symbol {symbol:?}"))?;
+        DtmfEvent::parse(symbol).ok_or_else(|| format!("unknown DTMF symbol {symbol:?}"))?;
     Ok(dtmf_event_to_code(event))
 }
 
@@ -189,19 +210,19 @@ impl DtmfCollector {
             return DtmfAction::RunNow;
         }
 
-        let Some(event) = DtmfEvent::from_wire(digit) else { return DtmfAction::Ignored };
+        let Some(event) = DtmfEvent::parse(digit) else { return DtmfAction::Ignored };
         self.inputs.push(event);
         DtmfAction::Schedule { at: now.saturating_add(self.timeout) }
     }
 
     /// `_on_user_state_changed`.
-    pub fn on_user_state_changed(&mut self, new_state: UserState, now: Ts) -> DtmfAction {
-        self.on_state_changed(new_state == UserState::Speaking, now)
+    pub fn on_user_state_changed(&mut self, new_state: &str, now: Ts) -> DtmfAction {
+        self.on_state_changed(new_state == "speaking", now)
     }
 
     /// `_on_agent_state_changed`. Thinking counts as busy; speaking does too.
-    pub fn on_agent_state_changed(&mut self, new_state: AgentState, now: Ts) -> DtmfAction {
-        self.on_state_changed(matches!(new_state, AgentState::Speaking | AgentState::Thinking), now)
+    pub fn on_agent_state_changed(&mut self, new_state: &str, now: Ts) -> DtmfAction {
+        self.on_state_changed(matches!(new_state, "speaking" | "thinking"), now)
     }
 
     fn on_state_changed(&mut self, busy: bool, now: Ts) -> DtmfAction {
@@ -348,9 +369,11 @@ impl Dtmf {
                 match ev {
                     DtmfTaskEvent::Digit(digit) => dtmf.collector.on_sip_dtmf(&digit, now),
                     DtmfTaskEvent::AgentState(new) => {
-                        dtmf.collector.on_agent_state_changed(new, now)
+                        dtmf.collector.on_agent_state_changed(new.as_str(), now)
                     }
-                    DtmfTaskEvent::UserState(new) => dtmf.collector.on_user_state_changed(new, now),
+                    DtmfTaskEvent::UserState(new) => {
+                        dtmf.collector.on_user_state_changed(new.as_str(), now)
+                    }
                     // The read-back's end releases its guard.
                     DtmfTaskEvent::SpeechDone(speech) if dtmf.confirm == Some(speech) => {
                         dtmf.confirm = None;
@@ -512,7 +535,7 @@ impl DtmfReception {
         if num_digits == 0 {
             return Err(ReceiveDtmfError::NoDigits);
         }
-        let stop = DtmfEvent::from_wire(stop_event)
+        let stop = DtmfEvent::parse(stop_event)
             .ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(stop_event)))?;
         let gap = Duration::try_from_secs_f64(timeout.max(0.0)).unwrap_or(Duration::MAX);
         Ok(Self { num_digits, stop, gap, digits: Vec::new(), deadline: None })
@@ -528,8 +551,8 @@ impl DtmfReception {
         if digit == self.stop.as_str() {
             return Ok(true);
         }
-        let key = DtmfEvent::from_wire(digit)
-            .ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(digit)))?;
+        let key =
+            DtmfEvent::parse(digit).ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(digit)))?;
         self.digits.push(key);
         if self.digits.len() == self.num_digits {
             return Ok(true);
@@ -588,12 +611,9 @@ mod tests {
         let now = Ts::ZERO;
         let mut c = collector(2, 1.0);
         c.on_sip_dtmf("1", now);
-        assert_eq!(c.on_agent_state_changed(AgentState::Thinking, now), DtmfAction::Cancel);
+        assert_eq!(c.on_agent_state_changed("thinking", now), DtmfAction::Cancel);
         assert!(
-            matches!(
-                c.on_agent_state_changed(AgentState::Listening, now),
-                DtmfAction::Schedule { .. }
-            ),
+            matches!(c.on_agent_state_changed("listening", now), DtmfAction::Schedule { .. }),
             "and re-arms when idle"
         );
     }

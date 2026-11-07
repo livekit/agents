@@ -722,12 +722,13 @@ async fn host_arguments_are_checked_before_anything_is_sent() {
     invalid(filler(f64::NAN, None, "speech_1"));
     invalid(filler(0.5, Some(-1.0), "speech_1"));
     assert!(invalid(filler(0.5, None, "nope")).contains("nope"));
+    assert!(invalid(api.set_io_enabled("microphone".into(), true)).contains("microphone"));
     assert!(invalid(api.collect_dtmf(4, false, 4.0, "x".into())).contains("\"x\""));
     assert!(invalid(api.collect_dtmf(4, false, -1.0, "#".into())).contains("timeout"));
     assert!(api.aclose("bogus".into(), false).is_err());
     // Well-formed, but nothing runs yet.
     assert!(matches!(
-        api.set_io_enabled(lk_agents_abi::voice::session::IoKind::AudioInput, true),
+        api.set_io_enabled("audio_input".into(), true),
         Err(CommandRefused::Session(_))
     ));
 }

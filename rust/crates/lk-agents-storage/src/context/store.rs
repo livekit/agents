@@ -17,7 +17,6 @@ use crate::backends::with_thread;
 use crate::sql::{Row, Statement};
 use crate::thread::run::RunOutcome;
 use crate::{CommitOptions, RunOptions, Storage, StorageError, Thread, shortuuid};
-use lk_agents_abi::storage::thread::AbandonReason;
 
 #[derive(Clone)]
 pub struct ContextStore {
@@ -86,8 +85,7 @@ impl Database {
                     .find(|scope| scope.scope_id == write.scope.scope_id)
                     .map_or(0, |scope| scope.revision);
                 if revision != write.expected_revision {
-                    run.abandon(RunOutcome::Failed, AbandonReason::ContextVersionConflict.as_str())
-                        .await?;
+                    run.abandon(RunOutcome::Failed, "context-version-conflict").await?;
                     return Err(StorageError::VersionConflict {
                         lane: self.lane.clone(),
                         expected: write.expected_revision,

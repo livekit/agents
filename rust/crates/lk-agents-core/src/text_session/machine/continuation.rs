@@ -125,7 +125,7 @@ impl TextSession {
         frame.history = result.all_messages.clone();
         frame.pending_calls = approvals;
         frame.answer_tool = match &result.outcome {
-            RunOutcome::InputRequired { answer_tool, .. } => answer_tool.clone(),
+            RunOutcome::InputRequired(ask) => ask.answer_tool.clone(),
             _ => None,
         };
         if result.interrupted

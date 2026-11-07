@@ -230,11 +230,11 @@ fn terminal_tool_selection_and_canonical_items_follow_model_order_not_completion
         });
         assert_eq!(
             d.result().outcome,
-            RunOutcome::InputRequired {
+            RunOutcome::InputRequired(RunQuestion {
                 question: "flight?".into(),
                 verbatim: true,
                 answer_tool: Some("flight".into()),
-            }
+            })
         );
         assert_eq!(d.result().pending_call.as_ref().unwrap().call_id, selected);
         assert_eq!(d.result().input_requirements.len(), 2);

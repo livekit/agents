@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from livekit.agents.llm import ChatItem
     from livekit.agents.llm.tool_context import ToolChoice
 
-    from .agent_run import RunError, RunInputRequirement
+    from .agent_run import RunError, RunInputRequirement, RunQuestion
     from .chat_items import ChatItem, FunctionCall
     from .events import CloseReason
     from .metrics import AgentMetrics
@@ -123,7 +123,10 @@ class ItemAddedWire:
     """
     agent: str
     """Which agent's frame produced it, as the opaque id the host gave the core."""
-    visibility: Literal["model", "history", "both"]
+    visibility: str
+    """Which host projections take the item: `"both"` (`chat_ctx` and `session.history`) or
+    `"history"` (the handoff record).
+    """
     run: object | None
     """The open run's host object when an owned speech produced it or it is the handoff
     record, else `None`.
@@ -172,7 +175,8 @@ class RunRefusedWire:
 
     run: object | None
     """The host's object for the refused run (its `RunResult`)."""
-    cause: Literal["nested", "closing"]
+    cause: str
+    """`RunRefusal::as_str`: `"nested"` or `"closing"`."""
 
 
 @dataclass(kw_only=True, slots=True)
@@ -182,7 +186,8 @@ class RunSettledWire:
     input_requirements: list[RunInputRequirement] = field(default_factory=list)
     run: object | None
     """The host's object for the run (its `RunResult`)."""
-    outcome: Literal["completed", "input_required", "failed", "closed"]
+    outcome: str
+    """`RunOutcome::as_str`: `"completed"`, `"input_required"`, `"failed"` or `"closed"`."""
     final_output: object | None
     """The output the run's last reply accepted, resolved; `None` otherwise."""
     question: RunQuestion | None
@@ -194,23 +199,13 @@ class RunSettledWire:
 
 
 @dataclass(kw_only=True, slots=True)
-class RunQuestion:
-    """The question a run ends on (`InputRequired`): asked as written when `verbatim`; the person's
-    answer goes to `answer_tool` when one is named.
-    """
-
-    question: str
-    verbatim: bool
-    answer_tool: str | None
-
-
-@dataclass(kw_only=True, slots=True)
 class SpeechDoneWire:
     """`speech_done`'s payload."""
 
     speech_id: str
     """`speech_{n}`, the handle's id."""
-    outcome: Literal["completed", "interrupted", "failed"]
+    outcome: str
+    """`SpeechOutcome::as_str`: `"completed"`, `"interrupted"` or `"failed"`."""
 
 
 @dataclass(kw_only=True, slots=True)
@@ -270,9 +265,11 @@ class SessionErrorWire:
     class chosen by `source`.
     """
 
-    source: Literal["stt_error", "llm_error", "tts_error", "realtime_model_error", "audio_processing_error"]
+    source: str
+    """`ErrorSource::as_str`."""
     recoverable: bool
-    label: Literal["host", "engine"]
+    label: str
+    """`"host"` when the error was captured off a plugin object, else `"engine"`."""
     error: BaseException
     """The host's own exception when the provider raised one, else an `APIError`."""
     speech_id: str | None

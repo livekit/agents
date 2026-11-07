@@ -1,9 +1,8 @@
 use lk_agents_abi::voice::events::{AgentState, DiagnosticLevel, UserState};
 // The host records that are these events' payloads as they are.
 pub use lk_agents_abi::voice::events::{
-    AgentBackchannelOpportunityEvent, EndOfSpeechEvent, ErrorSource, OverlapInterruptionEvent,
-    PreemptiveGenerationEvent, RunRefusal, SpeechOutcome, StartOfSpeechEvent,
-    UserTurnExceededEvent,
+    AgentBackchannelOpportunityEvent, EndOfSpeechEvent, OverlapInterruptionEvent,
+    PreemptiveGenerationEvent, StartOfSpeechEvent, UserTurnExceededEvent,
 };
 use lk_agents_abi::{SpeechEvent, Ts};
 use std::sync::Arc;
@@ -39,6 +38,18 @@ impl ErrorEvent {
     }
 }
 
+/// The four legs the reference's `_on_error` names. An interruption detector failure degrades to
+/// VAD silently and the EOT model's `error` is never subscribed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, lk_agents_abi::Vocabulary)]
+pub enum ErrorSource {
+    Stt,
+    Llm,
+    Tts,
+    Realtime,
+    /// An input audio processor; always recoverable.
+    AudioProcessing,
+}
+
 impl SessionEvent {
     /// The event as the journal keeps it: a `ProviderError::Host` replaced by a `Local` copy, so
     /// the journal never pins a host exception.
@@ -71,6 +82,19 @@ fn journal_error(
             })
         }
         ProviderError::Local(api) => ProviderError::Local(api.clone()),
+    }
+}
+
+impl ErrorSource {
+    /// `LLMError.type` and its siblings: the wire strings, which are public API.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ErrorSource::Stt => "stt_error",
+            ErrorSource::Llm => "llm_error",
+            ErrorSource::Tts => "tts_error",
+            ErrorSource::Realtime => "realtime_model_error",
+            ErrorSource::AudioProcessing => "audio_processing_error",
+        }
     }
 }
 
@@ -173,6 +197,25 @@ pub mod diagnostics {
     pub const TOOL_RETRIES_EXCEEDED: &str = "tool exceeded its max retries count, ending the reply";
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
+pub enum SpeechOutcome {
+    Completed,
+    /// Cut short: a interruption, `interrupt()`, or the interruption watchdog.
+    Interrupted,
+    /// A provider failed it; the handle's `exception()` carries the error.
+    Failed,
+}
+
+impl SpeechOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SpeechOutcome::Completed => "completed",
+            SpeechOutcome::Interrupted => "interrupted",
+            SpeechOutcome::Failed => "failed",
+        }
+    }
+}
+
 /// One `session._run()`, numbered by the driver; tags what the run owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RunId(pub u64);
@@ -185,20 +228,47 @@ pub struct RunRef {
     pub host: Option<lk_agents_abi::HostRef>,
 }
 
+/// Why a `Command::Run` opened nothing (`SessionEvent::RunRefused`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
+pub enum RunRefusal {
+    /// A run is open: `RuntimeError("nested runs are not supported")`.
+    Nested,
+    Closing,
+}
+
+impl RunRefusal {
+    /// The `run_refused` event's `cause`; the host raises the reference's error for it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunRefusal::Nested => "nested",
+            RunRefusal::Closing => "closing",
+        }
+    }
+}
+
 /// How a run ended (`RunResult._mark_done`), read off the last owned speech.
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
-#[vocabulary(kind_is = lk_agents_abi::voice::events::RunOutcomeKind)]
 pub enum RunOutcome {
     /// Nothing the run owned is live. `final_output` is what accepted output got, if anything.
     Completed { final_output: Option<lk_agents_abi::HostRef> },
-    /// The run ends on a question for the person (`InputRequired`); `answer_tool` takes the
-    /// answer.
-    InputRequired { question: String, verbatim: bool, answer_tool: Option<String> },
+    /// The run ends on a question for the person (`InputRequired`).
+    InputRequired(lk_agents_abi::agent::run::RunQuestion),
     /// The run raises: the last speech failed, or a tool completed its task with an exception.
     Failed(RunFailure),
     /// The session closed under the run: `RuntimeError("session closed")`
     /// (`AgentSession._aclose_impl`).
     Closed,
+}
+
+impl RunOutcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RunOutcome::Completed { .. } => "completed",
+            RunOutcome::InputRequired { .. } => "input_required",
+            RunOutcome::Failed(_) => "failed",
+            RunOutcome::Closed => "closed",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]

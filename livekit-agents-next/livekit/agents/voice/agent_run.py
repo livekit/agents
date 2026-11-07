@@ -46,6 +46,7 @@ from .._generated.agent_run import (
     RunOutcomeCompleted,
     RunOutcomeInputRequired,
     RunOutcomeNoOutput,
+    RunQuestion,
     RunRequest,
     RunSettled,
     SerializedOutput,
@@ -347,7 +348,7 @@ def settled_result(run: _TextRun[Any], settled: RunSettled) -> RunResult[Any]:
         "input_requirements": list(result.input_requirements),
     }
     match result.outcome:
-        case RunOutcomeInputRequired(question=question):
+        case RunOutcomeInputRequired(question=RunQuestion(question=question)):
             return RunInputRequired(question=question, **common)
         case RunOutcomeCompleted(output=OutputText(text=text)):
             return RunCompleted(output=text, **common)

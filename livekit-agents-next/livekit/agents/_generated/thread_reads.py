@@ -12,7 +12,6 @@ from collections.abc import Mapping
 from .storage_class import ThreadItemPage
 from .storage_class import TaskPage
 from .storage_class import TaskState
-from .storage_class import TaskOrder
 from .storage_class import TaskRecord
 from .storage_class import EventRow
 
@@ -59,7 +58,7 @@ class ThreadReads:
         *,
         agent: str | None = None,
         status: TaskState | None = None,
-        order: TaskOrder | None = None,
+        order: str = "inserted",
         page_token: str | None = None,
         limit: int = 50,
     ) -> TaskPage:

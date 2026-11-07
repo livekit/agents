@@ -1,6 +1,6 @@
 //! The host's recorded view of one native voice run.
 
-use super::events::RunQuestion;
+use crate::agent::run::RunQuestion;
 use crate::{ChatItem, HostRef};
 
 #[crate::host(record(module = "session_wire", emit, transparent))]

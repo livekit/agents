@@ -56,16 +56,23 @@ pub enum RunOutcome {
     Completed {
         output: Output,
     },
-    /// `answer_tool` takes the person's next message as its first string parameter
-    /// (`InputRequired(tool=)`); the next invocation is told so.
-    InputRequired {
-        question: String,
-        verbatim: bool,
-        answer_tool: Option<String>,
-    },
+    /// The run ends on a question for the person.
+    #[host(field = "question")]
+    InputRequired(RunQuestion),
     /// The turn ended with no output: `StopResponse`, a tool result asking for no reply, an
     /// all-silent step or an interruption. Never `Completed`, whose output is the declared type.
     NoOutput,
+}
+
+/// The question a run ends on (`InputRequired`): asked as written when `verbatim`. The person's
+/// next message goes to `answer_tool`, when one is named, as its first string parameter
+/// (`InputRequired(tool=)`); the next invocation is told so.
+#[crate::host(record(module = "agent_run", emit, extract))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunQuestion {
+    pub question: String,
+    pub verbatim: bool,
+    pub answer_tool: Option<String>,
 }
 
 /// The accepted output of a completed invocation.

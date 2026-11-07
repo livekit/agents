@@ -653,11 +653,11 @@ mod canonical_terminal_tool_result {
                 .collect();
             assert_eq!(
                 results,
-                [RunOutcome::InputRequired {
+                [RunOutcome::InputRequired(lk_agents_abi::agent::run::RunQuestion {
                     question: QUESTION.into(),
                     verbatim: true,
                     answer_tool: Some("lookup".into()),
-                }],
+                })],
                 "the selected shared-run outcome must be the caller's result; events: {events:?}"
             );
 

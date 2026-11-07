@@ -6,9 +6,10 @@ use lk_agents_abi::agent::run::{Output, RunError};
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, Ts};
 
-use super::{AgentRun, AgentRunEffect, Ask, Phase, StepId, ValidationId};
+use super::{AgentRun, AgentRunEffect, Phase, StepId, ValidationId};
 use crate::tool_calls::Recorded;
 use crate::tool_outcome;
+use lk_agents_abi::agent::run::RunQuestion;
 
 impl AgentRun {
     /// Once every call of the step settled: record the calls and outputs in model order, then
@@ -69,7 +70,7 @@ impl AgentRun {
                         self.pending_call = Some(requirement.call.clone());
                     }
                     input_requirements.push(requirement);
-                    Some(Terminal::Ask(Ask {
+                    Some(Terminal::Ask(RunQuestion {
                         question: question.clone(),
                         verbatim: *verbatim,
                         answer_tool: tool.clone(),
@@ -179,7 +180,7 @@ pub(super) fn input_requirement(
 pub(super) enum Next {
     Fail(RunError),
     Output(ValidationId),
-    Ask(Ask),
+    Ask(RunQuestion),
     Stop,
     Continue,
 }
@@ -187,6 +188,6 @@ pub(super) enum Next {
 /// What a step ends the invocation with.
 enum Terminal {
     Output,
-    Ask(Ask),
+    Ask(RunQuestion),
     Stop,
 }

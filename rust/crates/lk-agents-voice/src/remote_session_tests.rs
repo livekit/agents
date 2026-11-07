@@ -135,7 +135,7 @@ fn tool_starts_and_debug_messages_reach_the_console() {
     });
     let Ok(Some(Event::FunctionToolsStarted(ev))) = encode_wire(started) else { panic!() };
     assert_eq!(ev.function_calls[0].call_id, "call_1");
-    assert_eq!(event_kind(&Event::FunctionToolsStarted(ev)).as_str(), "function_tools_started");
+    assert_eq!(event_name(&Event::FunctionToolsStarted(ev)), "function_tools_started");
 
     let payload = json_to_struct(&serde_json::json!({"step": "plan"}));
     let raw = proto::DebugMessage { payload: payload.clone() }.encode_to_vec();

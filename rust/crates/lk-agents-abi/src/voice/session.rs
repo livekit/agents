@@ -385,40 +385,6 @@ pub trait SessionOptions: Clone + Send + Sync + Sized + 'static {
     fn interruption_mode(&self) -> Option<crate::voice::session_options::InterruptionMode>;
 }
 
-/// A built-in model slot of the session's provider layers.
-#[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ModelSlot {
-    Llm,
-    Stt,
-    Tts,
-    Vad,
-}
-
-/// The io leg the host switches on or off. Video input is handled at the source.
-#[crate::host(wire_enum)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
-pub enum IoKind {
-    AudioInput,
-    AudioOutput,
-    Transcription,
-}
-
-/// Why `drain()` was refused.
-#[crate::host(wire_enum)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::Vocabulary)]
-pub enum DrainRefused {
-    /// The loop ended with no close to answer the drain.
-    Closing,
-    /// Scheduling was resumed under the drain's pause: the agent runs again.
-    ActivityChanging,
-    /// A `VoiceTask` holds the floor; its parent waits on it.
-    #[host(rename = "voice_task_running")]
-    TaskRunning,
-}
-
 /// `voice/agent_session.py`'s `AgentSession`: assembled at construction, started at `start()`,
 /// closed at `aclose()`; every other method is one command to its loop.
 #[crate::host(class(name = "VoiceSession"))]
@@ -706,9 +672,10 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     fn update_instructions(&self, instructions: String) -> Result<(), SessionRefused>;
 
     /// `input.set_audio_enabled` / `output.set_audio_enabled` /
-    /// `output.set_transcription_enabled`.
+    /// `output.set_transcription_enabled`: `leg` is `"audio_input"`, `"audio_output"` or
+    /// `"transcription"`.
     #[host(call)]
-    fn set_io_enabled(&self, leg: IoKind, enabled: bool) -> Result<(), CommandRefused>;
+    fn set_io_enabled(&self, leg: String, enabled: bool) -> Result<(), CommandRefused>;
 
     /// `RunContext.update()` after the first (an `update` outcome), or a detached tool's end.
     #[host(call)]
@@ -739,7 +706,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     ) -> Result<BoxFuture<'static, Result<(), NotInterruptible>>, SessionRefused>;
 
     /// `AgentSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
-    /// speech is left. Answers `None`, or why it was refused.
+    /// speech is left. Answers `None`, `"activity_changing"` or `"closing"`.
     #[host(await)]
     #[host(facade(
         module = "session_commands",
@@ -747,7 +714,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         target = "_running",
         discard
     ))]
-    fn drain(&self) -> Result<BoxFuture<'static, Option<DrainRefused>>, SessionRefused>;
+    fn drain(&self) -> Result<BoxFuture<'static, Option<String>>, SessionRefused>;
 
     /// `AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`).
     #[host(await)]

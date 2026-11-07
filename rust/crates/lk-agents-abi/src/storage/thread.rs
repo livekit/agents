@@ -187,51 +187,29 @@ pub const REASON_CALLER_CANCELED: &str = "caller-canceled";
 pub const SUBMIT_CHANNEL: &str = "submit";
 
 /// What `run_ended` records.
-#[crate::host(record(module = "storage_class", extract))]
-#[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum RunOutcome {
     Completed,
-    #[host(rename = "input-required")]
     InputRequired,
     Failed,
     Canceled,
     Rejected,
 }
 
-/// The reason codes the storage itself records when it abandons a run; a host abandons with its
-/// own text.
-#[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AbandonReason {
-    /// The voice store could not load the thread's history.
-    #[host(rename = "voice-load")]
-    VoiceLoad,
-    /// A voice item could not be encoded for the journal.
-    #[host(rename = "voice-encode")]
-    VoiceEncode,
-    /// The speech the run recorded was abandoned.
-    #[host(rename = "voice-generation")]
-    VoiceGeneration,
-    #[host(rename = "voice-close")]
-    VoiceClose,
-    /// The context save lost to a concurrent writer.
-    #[host(rename = "context-version-conflict")]
-    ContextVersionConflict,
-}
-
-/// How a task listing is ordered (docs/internals/storage.md#reading-thread-items-and-tasks).
-#[crate::host(record(module = "storage_class", extract))]
-#[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum TaskOrder {
-    /// Last updated first, ties by task id: A2A `tasks/list`.
-    #[default]
-    Updated,
-    /// Insertion order (`tasks.pos`), oldest first: browsing a thread.
-    Inserted,
+impl RunOutcome {
+    /// The outcome a host names, as the journal spells it.
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "completed" => Self::Completed,
+            "input-required" => Self::InputRequired,
+            "failed" => Self::Failed,
+            "canceled" => Self::Canceled,
+            "rejected" => Self::Rejected,
+            _ => return None,
+        })
+    }
 }
 
 /// How a run takes its lane.

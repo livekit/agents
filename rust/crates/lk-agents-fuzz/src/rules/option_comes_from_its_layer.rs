@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use lk_agents_voice::agent_session::options::{AgentSessionOptions, ConfigLayer, TurnDetection};
 use lk_agents_voice::agent_session::VoiceCommandOrigin;
-use lk_agents_voice::agent_session::commands::{ActivityCommandKind, CommandKind, TurnCommandKind};
 use lk_agents_voice::trace::{CoreStep, HandoffStep, Step};
 
 use crate::{
@@ -93,11 +92,9 @@ impl Rule for OptionComesFromItsLayer {
                 Step::Core(CoreStep::CommandReceived {
                     origin: VoiceCommandOrigin::Host,
                     kind:
-                        CommandKind::Turn(
-                            TurnCommandKind::Configure
-                            | TurnCommandKind::Override
-                            | TurnCommandKind::ReleaseOverride,
-                        ),
+                        "TurnCommand::Configure"
+                        | "TurnCommand::Override"
+                        | "TurnCommand::ReleaseOverride",
                 }) => match taken.next() {
                     Some(Taken::Configure(layer)) => session = layer.over(session),
                     Some(Taken::Override(layer)) => overrides.push(layer),
@@ -204,7 +201,7 @@ fn handoff_min_delay(ms: u64) -> Input {
     }
 }
 
-fn received(kind: CommandKind) -> Step {
+fn received(kind: &'static str) -> Step {
     Step::Core(CoreStep::CommandReceived { origin: VoiceCommandOrigin::Host, kind })
 }
 
@@ -219,8 +216,7 @@ fn installed(agent: &str) -> Step {
         agent: agent.into(),
         tools: 0,
         chat_ctx: false,
-        stt_reopened: false,
-        vad_reopened: false,
+        reopened: "",
         legs: Default::default(),
     })
 }
@@ -231,18 +227,18 @@ fn layered(agent_min_ms: u64, override_shows: u64) -> Recording {
     Authored::new()
         .journal(applied(ConfigLayer::Session, 500))
         .sent(min_delay(900))
-        .journal(received(CommandKind::Turn(TurnCommandKind::Configure)))
+        .journal(received("TurnCommand::Configure"))
         .journal(applied(ConfigLayer::Session, 900))
         .api_call(handoff_min_delay(agent_min_ms))
-        .journal(received(CommandKind::Activity(ActivityCommandKind::Update)))
+        .journal(received("ActivityCommand::Update"))
         .journal(applied(ConfigLayer::Agent, agent_min_ms))
         .journal(installed("billing"))
         .returns(Answer::Handoff(Ok(())))
         .sent(override_min_delay(300))
-        .journal(received(CommandKind::Turn(TurnCommandKind::Override)))
+        .journal(received("TurnCommand::Override"))
         .journal(applied(ConfigLayer::Override, override_shows))
         .sent(Input::ReleaseOverride { nth: crate::input::Count(0) })
-        .journal(received(CommandKind::Turn(TurnCommandKind::ReleaseOverride)))
+        .journal(received("TurnCommand::ReleaseOverride"))
         .journal(applied(ConfigLayer::Override, agent_min_ms))
         .done()
 }
@@ -262,10 +258,10 @@ fn released_override_still_set() -> Recording {
     Authored::new()
         .journal(applied(ConfigLayer::Session, 500))
         .sent(override_min_delay(300))
-        .journal(received(CommandKind::Turn(TurnCommandKind::Override)))
+        .journal(received("TurnCommand::Override"))
         .journal(applied(ConfigLayer::Override, 300))
         .sent(Input::ReleaseOverride { nth: crate::input::Count(0) })
-        .journal(received(CommandKind::Turn(TurnCommandKind::ReleaseOverride)))
+        .journal(received("TurnCommand::ReleaseOverride"))
         .journal(applied(ConfigLayer::Override, 300))
         .done()
 }
