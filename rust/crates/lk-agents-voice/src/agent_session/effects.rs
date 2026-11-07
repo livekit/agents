@@ -8,7 +8,9 @@ use crate::audio_recognition::InterruptionSignal;
 use crate::events::SessionEvent;
 use crate::trace::Step;
 use lk_agents_abi::resources::ResourceId;
+pub use lk_agents_abi::turn::detector::FlushReason;
 use lk_agents_abi::turn::detector::ReqId;
+use lk_agents_abi::voice::events::Leg;
 use std::sync::Arc;
 
 /// Where a starting speech's history lives.
@@ -265,15 +267,6 @@ pub enum DetectorCall {
     Close,
 }
 
-/// The reference's free-form `reason`, closed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FlushReason {
-    /// `audio_recognition._bounce_eou_task`: the user turn was accepted.
-    TurnCommitted,
-    /// `AudioRecognition._clear_user_turn`: the turn was dropped and its state cleared.
-    ClearUserTurn,
-}
-
 /// The outputs are named by id, as the core decided them when it raised the op: the data plane
 /// keeps no record of its own.
 #[derive(Debug)]
@@ -340,20 +333,10 @@ pub enum AudioInterruptGuard {
 }
 
 impl StreamKind {
-    pub fn label(self) -> &'static str {
+    pub fn leg(self) -> Leg {
         match self {
-            StreamKind::Stt => "stt",
-            StreamKind::Vad => "vad",
-        }
-    }
-}
-
-impl FlushReason {
-    /// So the host logs the same words the reference does.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            FlushReason::TurnCommitted => "turn committed",
-            FlushReason::ClearUserTurn => "clear_user_turn",
+            StreamKind::Stt => Leg::Stt,
+            StreamKind::Vad => Leg::Vad,
         }
     }
 }

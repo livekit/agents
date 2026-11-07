@@ -6,6 +6,18 @@ use std::time::Duration;
 use crate::EotPrediction;
 use crate::errors::ProviderError;
 
+/// Why the session flushes the detector's segment; the host logs these words.
+#[crate::host(record(module = "turn_events", extract, emit))]
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlushReason {
+    /// `audio_recognition._bounce_eou_task`: the user turn was accepted.
+    #[host(rename = "turn committed")]
+    TurnCommitted,
+    /// `AudioRecognition._clear_user_turn`: the turn was dropped and its state cleared.
+    ClearUserTurn,
+}
+
 /// Strictly increasing per session; the driver drops an answer whose id is not the outstanding one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ReqId(pub u64);
@@ -48,7 +60,7 @@ pub trait EotDetector: Send + Sync + 'static {
 
     /// `flush(reason)`: a segment boundary, not a close.
     #[host(notify, name = "stream.flush")]
-    fn flush(&self, reason: Option<String>);
+    fn flush(&self, reason: Option<FlushReason>);
     /// Ask for a prediction (`stream.predict()`).
     ///
     /// The countdown already bounds `timeout` itself, so ignoring it cannot hang a turn. An `Err`

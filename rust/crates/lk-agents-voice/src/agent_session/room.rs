@@ -139,7 +139,7 @@ impl VoiceDriver {
                 }
             }
             RoomIoEvent::KeyPressed(digit) => {
-                let key = crate::workflows::machine::dtmf::DtmfEvent::parse(digit);
+                let key = crate::workflows::machine::dtmf::DtmfEvent::from_wire(digit);
                 self.record_trace(RoomStep::Link(RoomLinkStep::KeyPressed { key }));
                 {
                     let updates = self.session.states.reset_away_timer(now, closing);

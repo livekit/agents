@@ -152,7 +152,8 @@ fn answered_while_next_agent_exits() -> Recording {
         agent: "agent".into(),
         tools: 0,
         chat_ctx: false,
-        reopened: "",
+        stt_reopened: false,
+        vad_reopened: false,
         legs: Default::default(),
     });
     drain()

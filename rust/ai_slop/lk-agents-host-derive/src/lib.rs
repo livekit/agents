@@ -91,7 +91,10 @@ fn telemetry_role(role: &str, attr: TokenStream, item: TokenStream) -> TokenStre
 ///   order, which is what the §6.1 coverage test counts and what a sampler reads.
 ///
 /// With `#[vocabulary(kind = FooKind)]` it also generates `enum FooKind` (one unit variant per
-/// variant, `Copy + Eq + Hash + Debug`) and `Foo::kind(&self) -> FooKind`.
+/// variant, `Copy + Ord + Hash + Debug`) and `Foo::kind(&self) -> FooKind`. A one-field variant
+/// marked `#[vocabulary(kind = InnerKind)]` nests: its kind is `FooKind::V(InnerKind)`, read off
+/// the field's own `kind()`. `#[vocabulary(kind_is = path::Kind)]` generates only `kind()`, onto
+/// an existing enum whose unit variants have this enum's names.
 ///
 /// `Covers` and `Coverage` live in `lk_agents_abi::utils::vocabulary`. Generics on the enum are not supported:
 /// a boundary vocabulary is a plain enum.
@@ -123,41 +126,97 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
         .iter()
         .map(|v| quote::quote!(::lk_agents_abi::utils::vocabulary::Covers<#module::#v, With = S>));
     let bounds2 = bounds.clone();
-    let mut kind = None;
+    let mut kind: Option<syn::Ident> = None;
+    let mut kind_is: Option<syn::Path> = None;
     for a in input.attrs.iter().filter(|a| a.path().is_ident("vocabulary")) {
         if let Err(e) = a.parse_nested_meta(|m| {
-            kind = Some(m.value()?.parse::<syn::Ident>()?);
             if m.path.is_ident("kind") {
+                kind = Some(m.value()?.parse()?);
+                Ok(())
+            } else if m.path.is_ident("kind_is") {
+                kind_is = Some(m.value()?.parse()?);
                 Ok(())
             } else {
-                Err(m.error("#[vocabulary] takes `kind = Name`"))
+                Err(m.error("#[vocabulary] takes `kind = Name` or `kind_is = path`"))
             }
         }) {
             return e.to_compile_error().into();
         }
     }
-    let kind = kind.map(|k| {
-        let pats = data.variants.iter().map(|v| {
-            let i = &v.ident;
-            match v.fields {
-                syn::Fields::Unit => quote::quote!(#name::#i),
-                syn::Fields::Unnamed(_) => quote::quote!(#name::#i(..)),
-                syn::Fields::Named(_) => quote::quote!(#name::#i { .. }),
-            }
-        });
-        quote::quote! {
-            #[doc = concat!("The variants of `", stringify!(#name), "`, without their payloads.")]
-            #[allow(missing_docs)]
-            #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-            #vis enum #k { #( #variants ),* }
-            impl #name {
-                #[allow(missing_docs)]
-                #vis fn kind(&self) -> #k {
-                    match self { #( #pats => #k::#variants ),* }
+    let mut nested: Vec<Option<syn::Ident>> = Vec::new();
+    for v in &data.variants {
+        let mut inner = None;
+        for a in v.attrs.iter().filter(|a| a.path().is_ident("vocabulary")) {
+            if let Err(e) = a.parse_nested_meta(|m| {
+                if !m.path.is_ident("kind") {
+                    return Err(m.error("a variant's #[vocabulary] takes `kind = InnerKind`"));
                 }
+                inner = Some(m.value()?.parse::<syn::Ident>()?);
+                Ok(())
+            }) {
+                return e.to_compile_error().into();
             }
         }
+        if inner.is_some()
+            && (kind.is_none()
+                || !matches!(&v.fields, syn::Fields::Unnamed(f) if f.unnamed.len() == 1))
+        {
+            return syn::Error::new_spanned(
+                &v.ident,
+                "a nested kind needs `#[vocabulary(kind = ..)]` on the enum and one unnamed field",
+            )
+            .to_compile_error()
+            .into();
+        }
+        nested.push(inner);
+    }
+    let pats = data.variants.iter().zip(&nested).map(|(v, inner)| {
+        let i = &v.ident;
+        match (&v.fields, inner) {
+            (_, Some(_)) => quote::quote!(#name::#i(inner)),
+            (syn::Fields::Unit, None) => quote::quote!(#name::#i),
+            (syn::Fields::Unnamed(_), None) => quote::quote!(#name::#i(..)),
+            (syn::Fields::Named(_), None) => quote::quote!(#name::#i { .. }),
+        }
     });
+    let kind = match (kind, kind_is) {
+        (Some(_), Some(path)) => {
+            return syn::Error::new_spanned(path, "`kind` and `kind_is` exclude each other")
+                .to_compile_error()
+                .into();
+        }
+        (Some(k), None) => {
+            let decls = variants.iter().zip(&nested).map(|(v, inner)| match inner {
+                Some(inner) => quote::quote!(#v(#inner)),
+                None => quote::quote!(#v),
+            });
+            let values = variants.iter().zip(&nested).map(|(v, inner)| match inner {
+                Some(_) => quote::quote!(#k::#v(inner.kind())),
+                None => quote::quote!(#k::#v),
+            });
+            Some(quote::quote! {
+                #[doc = concat!("The variants of `", stringify!(#name), "`, without their payloads.")]
+                #[allow(missing_docs)]
+                #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+                #vis enum #k { #( #decls ),* }
+                impl #name {
+                    #[allow(missing_docs)]
+                    #vis fn kind(&self) -> #k {
+                        match self { #( #pats => #values ),* }
+                    }
+                }
+            })
+        }
+        (None, Some(path)) => Some(quote::quote! {
+            impl #name {
+                #[allow(missing_docs)]
+                #vis fn kind(&self) -> #path {
+                    match self { #( #pats => #path::#variants ),* }
+                }
+            }
+        }),
+        (None, None) => None,
+    };
     let expanded = quote::quote! {
         #kind
         #[allow(non_snake_case, missing_docs)]

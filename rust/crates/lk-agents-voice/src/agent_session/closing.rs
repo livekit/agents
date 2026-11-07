@@ -348,14 +348,17 @@ impl VoiceDriver {
 
     /// A command past the hard edge: its promise is answered, nothing takes effect.
     pub(crate) fn refuse_command(&mut self, command: Command) {
-        let (what, lost, call) = match command {
-            Command::Speech(SpeechCommand::Say { call, .. }) => {
-                ("say", "a say() reached the session after it began closing: it never spoke", call)
-            }
+        use crate::agent_session::machine::activity::scheduling::SpeechKind;
+        let (kind, lost, call) = match command {
+            Command::Speech(SpeechCommand::Say { call, .. }) => (
+                SpeechKind::Say,
+                "a say() reached the session after it began closing: it never spoke",
+                call,
+            ),
             Command::Speech(SpeechCommand::GenerateReply(GenerateReplyRequest {
                 call, ..
             })) => (
-                "generate_reply",
+                SpeechKind::GenerateReply,
                 "a generate_reply() reached the session after it began closing: it never replied",
                 call,
             ),
@@ -454,7 +457,7 @@ impl VoiceDriver {
             ) => return,
         };
         self.record_trace(CoreStep::PortFailure(lost));
-        self.settle_undelivered(what, call);
+        self.settle_undelivered(kind, call);
     }
 
     /// The hard edge: scheduling stopped, timers cancelled, countdown committed or torn down, what

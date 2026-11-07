@@ -3460,16 +3460,11 @@ impl VoiceSession {
     }
 
     /// `input.set_audio_enabled` / `output.set_audio_enabled` /
-    /// `output.set_transcription_enabled`: `leg` is `"audio_input"`, `"audio_output"` or
-    /// `"transcription"`.
+    /// `output.set_transcription_enabled`.
     #[pyo3(signature = (leg, enabled))]
-    fn set_io_enabled(
-        &self,
-        py: Python<'_>,
-        leg: ::std::string::String,
-        enabled: bool,
-    ) -> PyResult<()> {
+    fn set_io_enabled(&self, py: Python<'_>, leg: Bound<'_, PyAny>, enabled: bool) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let leg = crate::py_values::str_from_py(leg.as_any())?;
         py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::set_io_enabled(&self.0, leg, enabled)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
     }
@@ -3520,13 +3515,19 @@ impl VoiceSession {
     }
 
     /// `AgentSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
-    /// speech is left. Answers `None`, `"activity_changing"` or `"closing"`.
+    /// speech is left. Answers `None`, or why it was refused.
     fn drain<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let call = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::drain(&self.0, )).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         crate::py_calls::future_into_py(py, async move {
             let out = call.await;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    out.map(|value| ::pyo3::PyResult::Ok(crate::py_values::str_to_py(py, &value)))
+                        .transpose()?,
+                    py,
+                )
+            })
         })
     }
 
@@ -11228,11 +11229,11 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
 
     fn hook_failed(
         &self,
-        hook: &str,
+        hook: ::lk_agents_abi::voice::events::HookName,
         error: ::std::option::Option<::lk_agents_abi::errors::CapturedError>,
     ) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let hook_arg = hook.to_owned();
+        let hook_arg = hook;
         let error_arg = error;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
@@ -11242,7 +11243,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(hook_arg, py)?,
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(hook_arg.as_str(), py)?,
                     match error_arg {
                         None => py.None().into_bound(py),
                         Some(x) => crate::py_objects::captured_error_to_py(py, x)?,

@@ -14,7 +14,7 @@ use lk_agents_abi::{Clock, Spawner};
 use lk_agents_net::task::TaskSet;
 use tokio::sync::oneshot;
 
-use super::{ClientSink, SessionTransport, proto, request_name};
+use super::{ClientSink, SessionTransport, proto, request_kind};
 use proto::agent_session_message::Message;
 
 /// Why a client request did not produce a response, as the exception the host raises.
@@ -172,7 +172,7 @@ impl RemoteSession {
     ) -> Result<proto::SessionResponse, RequestError> {
         let sh = &*self.shared;
         let transport = sh.state.lock().transport.clone().ok_or(RequestError::NotStarted)?;
-        let kind = request_name(&request);
+        let kind = request_kind(&request).as_str();
         let id = sh.ids.mint();
         let (tx, rx) = oneshot::channel();
         if sh.pending.lock().insert(id.clone(), tx).is_some() {
@@ -277,7 +277,7 @@ async fn client_recv_loop(
             // Emitted under `msg.event.WhichOneof("event")`; an event with no arm set is dropped.
             Some(Message::Event(e)) => {
                 if let Some(inner) = &e.event {
-                    sink.event(super::event_name(inner), &e);
+                    sink.event(super::event_kind(inner).as_str(), &e);
                 }
             }
             _ => {}

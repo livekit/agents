@@ -3,6 +3,8 @@
 
 use super::*;
 use crate::telemetry;
+use lk_agents_abi::voice::events::HookName;
+use lk_agents_voice::agent_session::HookKind;
 
 /// The host's side of the event stream: each event serialised to the host, each hook call answered.
 pub(super) struct HostDrain {
@@ -137,6 +139,18 @@ impl HostDrain {
 
 /// Runs the hook `call` asks for through `hooks` and answers it. Calls the host first, before any
 /// other await, so a caller polling it once has handed the call to the host loop in event order.
+/// The name the host logs a failed hook under.
+fn hook_name(kind: HookKind) -> HookName {
+    match kind {
+        HookKind::OnEnter => HookName::OnEnter,
+        HookKind::OnExit => HookName::OnExit,
+        HookKind::OnUserTurnCompleted => HookName::OnUserTurnCompleted,
+        HookKind::OnUserTurnExceeded => HookName::OnUserTurnExceeded,
+        HookKind::FillerSource => HookName::FillerSource,
+        HookKind::FunctionToolsExecuted => HookName::FunctionToolsExecuted,
+    }
+}
+
 pub(super) async fn answer_hook(
     hooks: Arc<dyn SessionHooks>,
     call: HookCall,
@@ -221,7 +235,7 @@ pub(super) async fn answer_hook(
     };
     // A raised hook carries its exception, which its span records.
     let outcome = outcome.unwrap_or_else(|e| {
-        hooks.hook_failed(kind.as_str(), e.host_ref.clone());
+        hooks.hook_failed(hook_name(kind), e.host_ref.clone());
         HookOutcome::Raised(Box::new(e))
     });
     let _ =

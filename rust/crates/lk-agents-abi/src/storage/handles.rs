@@ -41,7 +41,7 @@ pub trait Thread: Send + Sync + Sized + 'static {
         &self,
         #[host(default = None)] lane: Option<String>,
         #[host(default = None)] status: Option<TaskState>,
-        #[host(default = "updated")] order: String,
+        #[host(default = None)] order: Option<crate::storage::thread::TaskOrder>,
         #[host(default = 50)] page_size: i64,
         #[host(default = None)] page_token: Option<String>,
     ) -> Result<TaskPage, StorageError>;
@@ -100,7 +100,11 @@ pub trait Run: Send + Sync + Sized + 'static {
         #[host(kw, default = None)] scope_writes: Option<Vec<ContextScopeWrite>>,
     ) -> Result<i64, StorageError>;
     #[host(await)]
-    async fn abandon(&self, outcome: String, reason: String) -> Result<(), StorageError>;
+    async fn abandon(
+        &self,
+        outcome: crate::storage::thread::RunOutcome,
+        reason: String,
+    ) -> Result<(), StorageError>;
 }
 
 /// `ctx.thread` (docs/threads.md): one thread of a storage namespace, as the agent `agent` reads
@@ -164,7 +168,7 @@ pub trait ThreadHandle: Send + Sync + Sized + 'static {
         &self,
         #[host(kw, default = None)] agent: Option<String>,
         #[host(default = None)] status: Option<TaskState>,
-        #[host(default = "inserted")] order: String,
+        #[host(default = None)] order: Option<crate::storage::thread::TaskOrder>,
         #[host(default = None)] page_token: Option<String>,
         #[host(default = 50)] limit: i64,
     ) -> Result<TaskPage, StorageError>;

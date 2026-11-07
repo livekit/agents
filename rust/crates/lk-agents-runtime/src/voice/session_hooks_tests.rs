@@ -5,6 +5,7 @@ use super::settle;
 use crate::voice::VoiceRuntimeEvent;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::telemetry::record::SpanContext;
+use lk_agents_abi::voice::events::HookName;
 use lk_agents_abi::voice::session_effects::{FillerReply, SessionHooks};
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{Command, HookCall, HookId, HookOutcome};
@@ -43,7 +44,7 @@ struct ScriptedHooks {
     raise: bool,
     user_text: Option<String>,
     stop: bool,
-    failed: Mutex<Vec<String>>,
+    failed: Mutex<Vec<HookName>>,
     toolsets: ScopeRegistry,
     /// The span each hook ran under.
     under: Mutex<Vec<Option<SpanContext>>>,
@@ -166,8 +167,8 @@ impl SessionHooks for ScriptedHooks {
             })
         })
     }
-    fn hook_failed(&self, hook: &str, _: Option<lk_agents_abi::errors::CapturedError>) {
-        self.failed.lock().push(hook.to_owned());
+    fn hook_failed(&self, hook: HookName, _: Option<lk_agents_abi::errors::CapturedError>) {
+        self.failed.lock().push(hook);
     }
 }
 
@@ -305,7 +306,7 @@ async fn hook_answers_reach_the_driver_as_the_host_gave_them() {
     let raising = Arc::new(ScriptedHooks { raise: true, ..Default::default() });
     // The exception reaches the core, which records it on the hook's span.
     assert!(matches!(answered(&raising, turn("x")).await, HookOutcome::Raised(_)));
-    assert_eq!(*raising.failed.lock(), ["on_user_turn_completed"]);
+    assert_eq!(*raising.failed.lock(), [HookName::OnUserTurnCompleted]);
 }
 
 struct Instructions;

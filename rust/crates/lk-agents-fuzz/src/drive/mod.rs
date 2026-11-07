@@ -71,7 +71,7 @@ use lk_agents_voice::{
         SttGate, TurnDetection, resolve_interruption_detector,
     },
     agent_session::{
-        HoldId, HookId, IoKind, SpeechCommand, TurnCommand, VoiceCommandOrigin, VoiceHostEvent,
+        HoldId, HookId, SpeechCommand, TurnCommand, VoiceCommandOrigin, VoiceHostEvent,
     },
     events::SessionEvent,
     filler_scheduler::FillerId,

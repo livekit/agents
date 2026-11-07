@@ -16,6 +16,7 @@ pub type HeldRealtimeAudio = (Observed, u32, Vec<(u32, u64)>);
 use std::collections::BTreeSet;
 
 use lk_agents_abi::voice::events::CloseReason;
+use lk_agents_voice::agent_session::commands::{ActivityCommandKind, CommandKind};
 use lk_agents_voice::{
     agent_session::IoKind,
     agent_session::machine::activity::scheduling::SpeechKind,
@@ -185,14 +186,7 @@ impl<'a> InputsView<'a> {
     /// had when it decided reads this; a switch the loop never took stays at its call.
     fn applied(&self, switch: Switch) -> Switch {
         use lk_agents_voice::{agent_session::VoiceCommandOrigin, trace::CoreStep};
-        let kind = |input: &Input| match input {
-            Input::SetIoEnabled { .. } => Some("ActivityCommand::SetIoEnabled"),
-            Input::SetAudioInput { .. } => Some("ActivityCommand::SetAudioInput"),
-            Input::SetAudioOutput { .. } => Some("ActivityCommand::SetAudioOutput"),
-            Input::SetTranscriptionOutput { .. } => Some("ActivityCommand::SetTranscriptionOutput"),
-            _ => None,
-        };
-        let mut taken: std::collections::BTreeMap<&str, Vec<Observed>> = Default::default();
+        let mut taken: std::collections::BTreeMap<CommandKind, Vec<Observed>> = Default::default();
         for (at, kind) in self.0.journal_where(|step| match step {
             Step::Core(CoreStep::CommandReceived { origin: VoiceCommandOrigin::Host, kind }) => {
                 Some(*kind)
@@ -201,14 +195,14 @@ impl<'a> InputsView<'a> {
         }) {
             taken.entry(kind).or_default().push(at);
         }
-        let mut sent: std::collections::BTreeMap<&str, usize> = Default::default();
+        let mut sent: std::collections::BTreeMap<CommandKind, usize> = Default::default();
         let moved: std::collections::BTreeMap<Observed, Observed> = self
             .accepted()
             .filter_map(|a| {
-                let kind = kind(&a.input)?;
+                let kind = io_command(&a.input)?;
                 let n = sent.entry(kind).or_default();
                 *n += 1;
-                Some((a.at, *taken.get(kind)?.get(*n - 1)?))
+                Some((a.at, *taken.get(&kind)?.get(*n - 1)?))
             })
             .collect();
         let changes =
@@ -246,25 +240,30 @@ impl<'a> InputsView<'a> {
     /// When the driver received each accepted io command, in the order the case sent them: the
     /// n-th accepted command of a kind is the n-th `CommandReceived` of that kind.
     fn received_commands(&self) -> impl FnMut(&Input) -> Option<Observed> + 'a {
-        let mut received: std::collections::BTreeMap<&str, std::collections::VecDeque<Observed>> =
-            Default::default();
+        let mut received: std::collections::BTreeMap<
+            CommandKind,
+            std::collections::VecDeque<Observed>,
+        > = Default::default();
         for (at, kind) in self.0.journal_where(|step| match step {
             Step::Core(CoreStep::CommandReceived { kind, .. }) => Some(*kind),
             _ => None,
         }) {
             received.entry(kind).or_default().push_back(at);
         }
-        move |input| {
-            let kind = match input {
-                Input::SetIoEnabled { .. } => "ActivityCommand::SetIoEnabled",
-                Input::SetAudioInput { .. } => "ActivityCommand::SetAudioInput",
-                Input::SetAudioOutput { .. } => "ActivityCommand::SetAudioOutput",
-                Input::SetTranscriptionOutput { .. } => "ActivityCommand::SetTranscriptionOutput",
-                _ => return None,
-            };
-            received.get_mut(kind)?.pop_front()
-        }
+        move |input| received.get_mut(&io_command(input)?)?.pop_front()
     }
+}
+
+/// The command an io switch arrives as.
+fn io_command(input: &Input) -> Option<CommandKind> {
+    let kind = match input {
+        Input::SetIoEnabled { .. } => ActivityCommandKind::SetIoEnabled,
+        Input::SetAudioInput { .. } => ActivityCommandKind::SetAudioInput,
+        Input::SetAudioOutput { .. } => ActivityCommandKind::SetAudioOutput,
+        Input::SetTranscriptionOutput { .. } => ActivityCommandKind::SetTranscriptionOutput,
+        _ => return None,
+    };
+    Some(CommandKind::Activity(kind))
 }
 
 /// Whether an input gives the driver a turn.

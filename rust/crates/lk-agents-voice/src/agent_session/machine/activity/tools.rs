@@ -609,7 +609,7 @@ impl VoiceDriver {
         let realtime = self.realtime_says();
         if self.session.tts.is_none() && self.session.outputs.plays_audio() && !realtime {
             self.record_trace(crate::trace::SpeechStep::SayRefused {
-                why: crate::agent_session::machine::activity::speech::SAY_WITHOUT_TTS_REFUSED,
+                why: crate::trace::SayRefusal::NoVoice,
             });
             return None;
         }

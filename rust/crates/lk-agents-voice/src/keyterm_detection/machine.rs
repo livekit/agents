@@ -3,7 +3,7 @@ use crate::agent_session::VoiceDriver;
 use crate::agent_session::effects::Timer;
 use crate::generation::GenEvent;
 use crate::telemetry;
-use crate::trace::{DetectorName, DetectorStep, InputStep};
+use crate::trace::{DetectorStep, InputStep, Leg};
 use lk_agents_abi::metrics::base::LlmMetrics;
 use lk_agents_abi::resources::ResourceId;
 pub use lk_agents_abi::turn::keyterms::{
@@ -834,7 +834,7 @@ impl VoiceDriver {
         if failed {
             return self.keyterms_failed(now, req);
         }
-        self.record_trace(InputStep::LegVerdict { leg: DetectorName::Keyterms, req });
+        self.record_trace(InputStep::LegVerdict { leg: Leg::Keyterms, req });
         // Strict JSON; a malformed document is an empty update.
         let parsed =
             arguments.as_deref().and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok());
@@ -854,7 +854,7 @@ impl VoiceDriver {
     }
 
     fn keyterms_failed(&mut self, now: Ts, req: u64) {
-        self.record_trace(InputStep::LegFailed { leg: DetectorName::Keyterms, recoverable: true });
+        self.record_trace(InputStep::LegFailed { leg: Leg::Keyterms, recoverable: true });
         self.keyterm_span_ended(None);
         self.keyterms_step(now, KeytermIn::Failed { req });
     }
@@ -906,7 +906,7 @@ impl VoiceDriver {
         let timeout = std::time::Duration::from_secs_f64(slot.detection.timeout.max(0.0));
         let request = slot.request(prompt, self.step.wall());
         slot.inflight = Some(req);
-        self.record_trace(InputStep::LegRequested { leg: DetectorName::Keyterms, req });
+        self.record_trace(InputStep::LegRequested { leg: Leg::Keyterms, req });
         self.set_deadline(Timer::KeytermTimeout, now.saturating_add(timeout));
         let model = self.session.llm.as_ref().filter(|l| l.id == llm).map(|l| &l.provider);
         let decl = telemetry::KeytermDetection {

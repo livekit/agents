@@ -524,15 +524,11 @@ impl host::handles::Thread for Thread {
         &self,
         lane: Option<String>,
         status: Option<host::TaskState>,
-        order: String,
+        order: Option<lk_agents_abi::storage::thread::TaskOrder>,
         page_size: i64,
         page_token: Option<String>,
     ) -> Result<host::TaskPage, StorageError> {
-        let order = match order.as_str() {
-            "updated" => crate::thread::db::TaskOrder::Updated,
-            "inserted" => crate::thread::db::TaskOrder::Inserted,
-            _ => return Err(StorageError::Invalid(format!("unknown task order {order:?}"))),
-        };
+        let order = order.unwrap_or(lk_agents_abi::storage::thread::TaskOrder::Updated);
         let query =
             crate::TaskQuery { lane, status, order, page_size, page_token, updated_after: 0 };
         Ok(self.list_tasks(&query).await?.into())
@@ -643,9 +639,7 @@ impl host::handles::Run for RunHandle {
         }
         Ok(run.commit(CommitOptions::default()).await?.version)
     }
-    async fn abandon(&self, outcome: String, reason: String) -> Result<(), StorageError> {
-        let outcome = RunOutcome::parse(&outcome)
-            .ok_or_else(|| StorageError::Invalid(format!("unknown outcome {outcome}")))?;
+    async fn abandon(&self, outcome: RunOutcome, reason: String) -> Result<(), StorageError> {
         self.run.lock().await.abandon(outcome, reason).await
     }
 }
@@ -706,10 +700,11 @@ impl host::handles::ThreadHandle for ThreadHandle {
         &self,
         agent: Option<String>,
         status: Option<host::TaskState>,
-        order: String,
+        order: Option<lk_agents_abi::storage::thread::TaskOrder>,
         page_token: Option<String>,
         limit: i64,
     ) -> Result<host::TaskPage, StorageError> {
+        let order = Some(order.unwrap_or(lk_agents_abi::storage::thread::TaskOrder::Inserted));
         self.read(async |t| Reads::list_tasks(t, agent, status, order, limit, page_token).await)
             .await
     }
@@ -737,7 +732,8 @@ impl host::handles::ThreadHandle for ThreadHandle {
             Some(status) => {
                 let page = self
                     .read(async |t| {
-                        let (agent, order) = (Some(agent), "updated".to_owned());
+                        let (agent, order) =
+                            (Some(agent), Some(lk_agents_abi::storage::thread::TaskOrder::Updated));
                         Reads::list_tasks(t, agent, Some(status), order, limit, None).await
                     })
                     .await?;

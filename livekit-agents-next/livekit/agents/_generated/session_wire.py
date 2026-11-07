@@ -123,10 +123,7 @@ class ItemAddedWire:
     """
     agent: str
     """Which agent's frame produced it, as the opaque id the host gave the core."""
-    visibility: str
-    """Which host projections take the item: `"both"` (`chat_ctx` and `session.history`) or
-    `"history"` (the handoff record).
-    """
+    visibility: Literal["model", "history", "both"]
     run: object | None
     """The open run's host object when an owned speech produced it or it is the handoff
     record, else `None`.
@@ -175,8 +172,7 @@ class RunRefusedWire:
 
     run: object | None
     """The host's object for the refused run (its `RunResult`)."""
-    cause: str
-    """`RunRefusal::as_str`: `"nested"` or `"closing"`."""
+    cause: Literal["nested", "closing"]
 
 
 @dataclass(kw_only=True, slots=True)
@@ -186,8 +182,7 @@ class RunSettledWire:
     input_requirements: list[RunInputRequirement] = field(default_factory=list)
     run: object | None
     """The host's object for the run (its `RunResult`)."""
-    outcome: str
-    """`RunOutcome::as_str`: `"completed"`, `"input_required"`, `"failed"` or `"closed"`."""
+    outcome: Literal["completed", "input_required", "failed", "closed"]
     final_output: object | None
     """The output the run's last reply accepted, resolved; `None` otherwise."""
     question: RunQuestion | None
@@ -215,8 +210,7 @@ class SpeechDoneWire:
 
     speech_id: str
     """`speech_{n}`, the handle's id."""
-    outcome: str
-    """`SpeechOutcome::as_str`: `"completed"`, `"interrupted"` or `"failed"`."""
+    outcome: Literal["completed", "interrupted", "failed"]
 
 
 @dataclass(kw_only=True, slots=True)
@@ -276,11 +270,9 @@ class SessionErrorWire:
     class chosen by `source`.
     """
 
-    source: str
-    """`ErrorSource::as_str`."""
+    source: Literal["stt_error", "llm_error", "tts_error", "realtime_model_error", "audio_processing_error"]
     recoverable: bool
-    label: str
-    """`"host"` when the error was captured off a plugin object, else `"engine"`."""
+    label: Literal["host", "engine"]
     error: BaseException
     """The host's own exception when the provider raised one, else an `APIError`."""
     speech_id: str | None

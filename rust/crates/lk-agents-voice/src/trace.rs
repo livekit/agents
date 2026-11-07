@@ -5,6 +5,7 @@ use crate::agent_session::machine::activity::scheduling::{PreemptiveVerdict, Spe
 use crate::audio_recognition::UserTurnCommitVerdict;
 use crate::events::SessionEvent;
 use lk_agents_abi::Ts;
+pub use lk_agents_abi::voice::events::Leg;
 
 /// The exhaustive match in `Step::speech` makes a new variant say whether it names a speech.
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
@@ -59,7 +60,7 @@ pub enum CoreStep {
     /// A host command entered the loop: who asked and which leaf. The first step of its cycle.
     CommandReceived {
         origin: crate::agent_session::VoiceCommandOrigin,
-        kind: &'static str,
+        kind: crate::agent_session::commands::CommandKind,
     },
     TimerArmed {
         timer: TimerName,
@@ -161,7 +162,7 @@ pub enum SpeechStep {
     /// A `say()` the driver refused before asking any model or voice for it, as the reference
     /// raises at `AgentActivity.say`.
     SayRefused {
-        why: &'static str,
+        why: SayRefusal,
     },
     Authorized {
         speech: SpeechId,
@@ -197,7 +198,7 @@ pub enum SpeechStep {
     SchedulingPaused,
     SchedulingPauseSettled,
     SchedulingPauseRefused {
-        cause: &'static str,
+        cause: PauseRefusal,
     },
     /// AMD's hold went on: the queue keeps its head and stops authorizing it.
     AuthorizationPaused,
@@ -488,33 +489,33 @@ pub enum PlayoutStep {
 pub enum InputStep {
     /// A detector leg was asked (`req` correlates the answer).
     LegRequested {
-        leg: DetectorName,
+        leg: Leg,
         req: u64,
     },
     LegVerdict {
-        leg: DetectorName,
+        leg: Leg,
         req: u64,
     },
     LegFailed {
-        leg: DetectorName,
+        leg: Leg,
         recoverable: bool,
     },
     /// An audio leg was reopened on a host-given provider (the open at `start()` is not journalled).
     StreamOpened {
-        leg: &'static str,
+        leg: Leg,
     },
     /// A leg's stream came back for an open no longer waited for: closed unused.
     LegOpenDiscarded {
-        leg: &'static str,
+        leg: Leg,
     },
     /// An item from a retired stream of `leg`, dropped before anything sees it; the reference
     /// cancels the old consumer at `_update_stt`.
     LegItemDiscarded {
-        leg: &'static str,
+        leg: Leg,
         stream: lk_agents_abi::resources::ResourceId,
     },
     ChannelEnded {
-        leg: &'static str,
+        leg: Leg,
         cause: ChannelEndCause,
     },
     /// A leg's frame counters at `Closing`: frames pushed, and how many were silence.
@@ -569,7 +570,7 @@ pub enum InputStep {
     DetectorCalled(crate::agent_session::effects::DetectorCall),
     /// A host stream was closed by the driver, and how the close went (bounded on the session clock).
     HostStreamClosed {
-        label: &'static str,
+        leg: Leg,
         how: lk_agents_abi::Closed,
     },
 }
@@ -598,12 +599,13 @@ pub enum HandoffStep {
     /// Every waiter of the agent's drain was answered; `refused` is `None` on success.
     Drained { refused: Option<crate::agent_session::DrainRefused> },
 
-    /// `agent` was installed; `reopened` names the audio legs whose provider differed.
+    /// `agent` was installed; the audio legs whose provider differed were reopened.
     AgentUpdated {
         agent: String,
         tools: usize,
         chat_ctx: bool,
-        reopened: &'static str,
+        stt_reopened: bool,
+        vad_reopened: bool,
         legs: ProviderPresence,
     },
     /// `VoiceTask.run()` from `speech`'s tool: `agent` takes the floor, `parent` waits.
@@ -766,13 +768,21 @@ pub enum InterruptCause {
     VoiceTask,
 }
 
+/// Why `say()` was refused before any model or voice was asked for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DetectorName {
-    Eot,
-    Interruption,
-    Amd,
-    /// One request per `turn_interval` user items.
-    Keyterms,
+pub enum SayRefusal {
+    /// No TTS, and no realtime session that speaks text.
+    NoVoice,
+    /// A realtime session cannot speak this shape of `say()`.
+    ShapeOnRealtime,
+}
+
+/// Why a scheduling pause could not complete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PauseRefusal {
+    /// A handoff resumed scheduling before the drain completed.
+    Handoff,
+    Closing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

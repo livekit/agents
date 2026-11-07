@@ -226,7 +226,7 @@ impl VoiceRuntime {
             // A session without a turn detector asks for no flush.
             E::EotFlush(reason) => {
                 if let Some(d) = self.eot.as_ref() {
-                    d.flush(Some(reason.as_str().to_owned()));
+                    d.flush(Some(reason));
                 }
             }
             E::EotPredict { req, timeout } => self.predict_end_of_turn(req, timeout),
@@ -440,7 +440,7 @@ impl VoiceRuntime {
             return;
         }
         self.shared.journal.record(lk_agents_voice::trace::InputStep::LegRequested {
-            leg: lk_agents_voice::trace::DetectorName::Eot,
+            leg: lk_agents_voice::trace::Leg::Eot,
             req: req.0,
         });
         self.predict(req, timeout);

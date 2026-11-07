@@ -32,9 +32,6 @@ struct EndOfSpeech {
 }
 
 /// A `say(stream)` the realtime model would speak itself (no TTS): the wire carries one text item.
-pub(crate) const SAY_SHAPE_REFUSED_ON_REALTIME: &str =
-    "say(stream) on a realtime model with no TTS: the wire takes one text item";
-
 /// A text `say()` with no TTS while audio output is attached and enabled, refused before a handle
 /// exists (`AgentActivity.say`'s first `RuntimeError`).
 pub(crate) const SAY_WITHOUT_TTS_REFUSED: &str = "trying to generate speech from text without a TTS model or a RealtimeSession that supports say(); add a TTS model to AgentSession to enable say()";
@@ -211,7 +208,7 @@ impl VoiceDriver {
             && self.session.tts.is_none()
             && self.session.outputs.plays_audio()
         {
-            self.record_trace(SpeechStep::SayRefused { why: SAY_WITHOUT_TTS_REFUSED });
+            self.record_trace(SpeechStep::SayRefused { why: crate::trace::SayRefusal::NoVoice });
             self.fail_waiter(call, SpeechKind::Say, SAY_WITHOUT_TTS_REFUSED);
             return;
         }
