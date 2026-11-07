@@ -365,9 +365,15 @@ impl Playing<'_> {
             }
             AudioPlaybackEffect::FinishCut { heard, reported } => {
                 self.drain(segment);
-                // Journal the physical receipt, even if clear arrived after playback finished.
-                if let (true, Some(interrupted)) = (self.state.has_started(), reported) {
-                    self.finished(heard.position, interrupted);
+                // Journal the physical receipt, even if clear arrived after playback finished. A
+                // cut the output never reported stopped no earlier than the progress it confirmed.
+                match (self.state.has_started(), reported) {
+                    (true, Some(interrupted)) => self.finished(heard.position, interrupted),
+                    (true, None) => self.shared.report(GenEvent::PlayedTo {
+                        speech: handle.id(),
+                        position: heard.position,
+                    }),
+                    (false, _) => {}
                 }
                 AudioPlaybackEvent::CutFinished(heard)
             }
@@ -406,7 +412,7 @@ impl Playing<'_> {
     fn finished(&self, position: Duration, interrupted: bool) {
         let speech = self.handle.id();
         self.trace(PlayoutStep::PlaybackFinished { speech, position, interrupted });
-        self.shared.report(lk_agents_voice::generation::GenEvent::PlayedTo { speech, position });
+        self.shared.report(GenEvent::PlayedTo { speech, position });
     }
 
     /// The sink reported the segment played out; its `Finished` was emitted before the wait
@@ -506,8 +512,7 @@ impl Playing<'_> {
                     segment: self.state.segment_key().expect("captured audio has a playback key"),
                     position,
                 });
-                self.shared
-                    .report(lk_agents_voice::generation::GenEvent::PlayedTo { speech, position });
+                self.shared.report(GenEvent::PlayedTo { speech, position });
                 Err(DriverError::PlaybackReportTimeout(
                     self.state.segment_key().expect("captured audio has a playback key"),
                 ))
