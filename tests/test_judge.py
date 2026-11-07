@@ -9,7 +9,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from livekit.agents import llm
-from livekit.agents.evals import JudgeGroup
+from livekit.agents.evals import Evaluator, JudgeGroup, JudgmentResult, Verdict
 from livekit.agents.evals.judge import _evaluate_with_llm, safety_judge
 from livekit.agents.inference import LLM as InferenceLLM
 from livekit.agents.inference.llm import min_reasoning_effort
@@ -210,3 +210,75 @@ def test_judge_group_leaves_llm_instances_untouched() -> None:
 
     group = JudgeGroup(llm=fake_llm)
     assert group.llm is fake_llm
+
+
+class _StaticJudge:
+    """Judge that returns a fixed verdict, or raises the given exception."""
+
+    def __init__(self, name: str, outcome: Verdict | Exception) -> None:
+        self._name = name
+        self._outcome = outcome
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def evaluate(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        reference: ChatContext | None = None,
+        llm: llm.LLM | None = None,
+    ) -> JudgmentResult:
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        return JudgmentResult(verdict=self._outcome, reasoning="static")
+
+
+def _group(*judges: Evaluator) -> JudgeGroup:
+    fake_llm = _CapturingLLM(
+        FunctionToolCall(type="function", name="submit_verdict", arguments="{}", call_id="call_1")
+    )
+    return JudgeGroup(llm=fake_llm, judges=list(judges))
+
+
+async def test_judge_group_all_judges_error_is_not_a_pass() -> None:
+    # e.g. a bad API key, a rate limit, or a model that rejects tool_choice (#7410)
+    result = await _group(
+        _StaticJudge("accuracy", RuntimeError("judge LLM unavailable")),
+        _StaticJudge("safety", RuntimeError("judge LLM unavailable")),
+    ).evaluate(ChatContext())
+
+    assert not result.all_passed
+    assert not result.majority_passed
+    assert not result.none_failed
+    assert result.score == 0.0
+    assert result.judgments == {}
+    assert set(result.errors) == {"accuracy", "safety"}
+
+
+async def test_judge_group_some_judges_error_is_not_a_pass() -> None:
+    result = await _group(
+        _StaticJudge("task_completion", "pass"),
+        _StaticJudge("accuracy", RuntimeError("judge LLM unavailable")),
+    ).evaluate(ChatContext())
+
+    assert not result.all_passed
+    assert not result.majority_passed
+    assert not result.none_failed
+    assert result.score == 0.5
+    assert set(result.judgments) == {"task_completion"}
+    assert set(result.errors) == {"accuracy"}
+
+
+async def test_judge_group_without_errors_is_unchanged() -> None:
+    result = await _group(
+        _StaticJudge("task_completion", "pass"),
+        _StaticJudge("accuracy", "pass"),
+        _StaticJudge("safety", "maybe"),
+    ).evaluate(ChatContext())
+
+    assert not result.all_passed
+    assert result.majority_passed
+    assert result.none_failed
+    assert result.score == 2.5 / 3
