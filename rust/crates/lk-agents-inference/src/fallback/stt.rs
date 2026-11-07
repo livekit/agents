@@ -302,18 +302,18 @@ impl Backend for SttBackend {
         req: &Self::Req,
         conn: &ApiConnectOptions,
     ) -> Result<Self::Session, ProviderError> {
-        let stt = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
+        let (stt, clock) = (self.inner.clone(), self.clock.clone());
         match req {
-            SttReq::Batch { frames, language, cx } => {
-                Ok(SttSession::Batch(stt.recognize(cx, frames, language.as_ref()).await?))
-            }
+            SttReq::Batch { frames, language, cx } => Ok(SttSession::Batch(
+                crate::stt::recognize(stt, *conn, clock, cx, frames, language.as_ref()).await?,
+            )),
             SttReq::Stream { language, tee, offset, cx } => {
                 let offset = offset.map(|o| o.at(self.clock.now()));
-                let (sink, source) = stt
-                    .stream(cx, language.as_ref(), offset)
-                    .await?
-                    .ok_or_else(|| no_duplex(&self.inner.label()))?
-                    .split();
+                let (sink, source) =
+                    crate::stt::stream(stt, *conn, clock, cx, language.as_ref(), offset)
+                        .await?
+                        .ok_or_else(|| no_duplex(&self.inner.label()))?
+                        .split();
                 tee.set_main(sink);
                 Ok(SttSession::Stream(source))
             }
@@ -327,16 +327,17 @@ impl Backend for SttBackend {
         slot: RecoveryMode,
         stop: CancellationToken,
     ) -> Result<bool, ProviderError> {
-        let stt = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
+        let (stt, clock) = (self.inner.clone(), self.clock.clone());
         match (req, slot) {
             (SttReq::Batch { frames, language, cx }, _) => {
                 // `_try_recognize(recovering=True)`: one call, output discarded, in the job past
                 // the request it recovers for, under no span.
-                stt.recognize(&cx.clone().continuing(None), frames, language.as_ref()).await?;
+                let cx = cx.clone().continuing(None);
+                crate::stt::recognize(stt, *conn, clock, &cx, frames, language.as_ref()).await?;
                 Ok(true)
             }
             (SttReq::Stream { language, tee, cx, .. }, _) => {
-                self.probe_stream(stt.as_ref(), language.as_ref(), tee, cx, stop).await
+                self.probe_stream(stt, conn, language.as_ref(), tee, cx, stop).await
             }
         }
     }
@@ -348,17 +349,18 @@ impl SttBackend {
     /// reference leaves its offset at 0.
     async fn probe_stream(
         &self,
-        stt: &dyn Stt,
+        stt: Arc<dyn Stt>,
+        conn: &ApiConnectOptions,
         language: Option<&LanguageCode>,
         tee: &InputTee,
         cx: &telemetry::Cx,
         stop: CancellationToken,
     ) -> Result<bool, ProviderError> {
-        let (sink, mut source) = stt
-            .stream(cx, language, None)
-            .await?
-            .ok_or_else(|| no_duplex(&self.inner.label()))?
-            .split();
+        let (sink, mut source) =
+            crate::stt::stream(stt, *conn, self.clock.clone(), cx, language, None)
+                .await?
+                .ok_or_else(|| no_duplex(&self.inner.label()))?
+                .split();
         let id = tee.add_probe(sink);
         let verdict = loop {
             match probe_next(source.as_mut(), &stop).await {

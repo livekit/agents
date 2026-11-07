@@ -146,6 +146,11 @@ impl Stt for StreamAdapter {
         Some(Arc::new(self.configured(Some(*conn))))
     }
 
+    /// The wrapped STT's: what its recognitions run under.
+    fn conn_options(&self) -> Option<ApiConnectOptions> {
+        self.stt.conn_options()
+    }
+
     fn recognize(
         &self,
         cx: &telemetry::Cx,
