@@ -285,6 +285,27 @@ def _add_null_sentinel(json_schema: dict[str, Any]) -> None:
         json_schema["anyOf"] = [inner, {"type": "null"}]
 
 
+def has_open_object(json_schema: object) -> bool:
+    """Whether any object in the schema allows properties beyond its declared ones
+    (`additionalProperties` other than false), which strict mode rejects."""
+    if is_list(json_schema):
+        return any(has_open_object(entry) for entry in json_schema)
+    if not is_dict(json_schema):
+        return False
+    if json_schema.get("additionalProperties", False) is not False:
+        return True
+    for key, value in json_schema.items():
+        if key in ("const", "enum", "default", "examples"):
+            continue  # literal values, not schemas
+        if key in ("properties", "$defs", "definitions") and is_dict(value):
+            # keyed by property/definition name, which may itself be "additionalProperties"
+            if any(has_open_object(sub_schema) for sub_schema in value.values()):
+                return True
+        elif has_open_object(value):
+            return True
+    return False
+
+
 def resolve_ref(*, root: dict[str, object], ref: str) -> object:
     if not ref.startswith("#/"):
         raise ValueError(f"Unexpected $ref format {ref!r}; Does not start with #/")

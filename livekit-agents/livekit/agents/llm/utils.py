@@ -272,13 +272,32 @@ def build_legacy_openai_schema(
         }
 
 
+_non_strict_tools_logged: set[str] = set()
+
+
 def build_strict_openai_schema(
     function_tool: FunctionTool,
 ) -> dict[str, Any]:
-    """strict mode tool description"""
+    """strict mode tool description
+
+    Strict mode requires `additionalProperties: false` on every object, so it cannot express
+    a free-form mapping such as `dict[str, T]`, and providers reject the whole request when
+    one is present. Such a tool is described with the non-strict schema instead (no `strict`
+    key), leaving the other tools strict.
+    """
     model = function_arguments_to_pydantic_model(function_tool)
     info = function_tool.info
     schema = _strict.to_strict_json_schema(model, null_sentinel_for_defaults=True)
+
+    if _strict.has_open_object(schema):
+        if info.name not in _non_strict_tools_logged:
+            _non_strict_tools_logged.add(info.name)
+            logger.warning(
+                "tool has a free-form object parameter that strict mode cannot express, "
+                "sending it without strict mode",
+                extra={"function": info.name},
+            )
+        return build_legacy_openai_schema(function_tool)
 
     return {
         "type": "function",
