@@ -37,7 +37,13 @@ pub trait JoinTokens {
 // Public data contracts. Python behavior remains in its adapters.
 
 /// A pass/fail verdict for a scenario, with a human-readable reason.
-#[crate::host(record(module = "simulation", path = "livekit.agents.evals", dataclass, extract, emit))]
+#[crate::host(record(
+    module = "simulation",
+    path = "livekit.agents.evals",
+    dataclass,
+    extract,
+    emit
+))]
 pub struct SimulationVerdict {
     pub success: bool,
     pub reason: String,
