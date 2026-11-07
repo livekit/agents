@@ -368,15 +368,18 @@ async fn cartesia_words_keep_their_separators_through_a_stream() {
     );
 }
 
-// Catches: reporting a gateway `error` frame as a clean end of stream.
+// Catches: reporting a gateway `error` frame as a clean end of stream, or putting the frame's raw
+// provider text in place of its code.
 #[tokio::test]
 async fn a_gateway_error_frame_fails_the_stream() {
-    let ws =
-        Arc::new(FakeWs::new(vec![text(json!({"type": "error", "message": "voice not found"}))]));
+    let ws = Arc::new(FakeWs::new(vec![text(
+        json!({"type": "error", "code": "NOT_FOUND", "data": "voice not found"}),
+    )]));
     let tts = tts(ws);
     let mut source = tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hi").await.unwrap();
     let err = source.next().await.expect_err("the gateway said error");
-    assert!(err.message().contains("voice not found"), "{}", err.message());
+    assert!(err.message().contains("NOT_FOUND"), "{}", err.message());
+    assert!(!err.message().contains("voice not found"), "{}", err.message());
 }
 
 // Catches: `update_options(extra_kwargs=...)` replacing rather than merging.
@@ -393,12 +396,12 @@ async fn tts_update_options_merges_the_extra_kwargs() {
 async fn partial_audio_then_provider_failure_preserves_audio_and_fails() {
     let ws = Arc::new(FakeWs::new(vec![
         text(json!({"type": "output_audio", "session_id": "segment", "audio": pcm(4)})),
-        text(json!({"type": "error", "message": "synthesis failed"})),
+        text(json!({"type": "error", "code": "SERVER_ERROR", "data": "synthesis failed"})),
     ]));
     let mut source = tts(ws).synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hi").await.unwrap();
     assert_eq!(&*source.next().await.unwrap().unwrap().frame.data, &[1; 4]);
     let error = source.next().await.expect_err("partial audio is not successful completion");
-    assert!(error.message().contains("synthesis failed"));
+    assert!(error.message().contains("SERVER_ERROR"), "{}", error.message());
     assert!(source.next().await.unwrap().is_none());
 }
 
