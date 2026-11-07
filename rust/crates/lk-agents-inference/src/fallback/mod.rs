@@ -14,20 +14,18 @@ mod traced;
 mod tts;
 
 pub use chain::{
-    Attempt, AvailabilityChanged, Backend, ChainObserver, ChainOutcome, FallbackChain,
-    IgnoreEvents, NoBackends, Recovery, RecoveryMode,
+    Attempt, AvailabilityChanged, Backend, ChainObserver, FallbackChain, IgnoreEvents, RecoveryMode,
 };
 use lk_agents_abi::ApiConnectOptions;
 pub use llm::{FallbackLlm, LlmBackend};
 pub use machine::{ChainPolicy, FallbackPolicy};
 pub use realtime::{CapabilityMismatch, merge_capabilities as merge_realtime_capabilities};
 pub use stt::{
-    FallbackStt, InputTee, SttBackend, SttChainError, SttReq, SttSession,
+    FallbackStt, InputTee, SttBackend, SttReq, SttSession,
     merge_capabilities as merge_stt_capabilities,
 };
 pub use tts::{
-    FallbackTts, Token, TokenLog, TtsBackend, TtsChainError, TtsReq,
-    merge_capabilities as merge_tts_capabilities,
+    FallbackTts, Token, TokenLog, TtsBackend, TtsReq, merge_capabilities as merge_tts_capabilities,
 };
 
 #[cfg(test)]

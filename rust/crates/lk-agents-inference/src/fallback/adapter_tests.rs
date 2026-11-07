@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 
 use crate::fallback::ChainPolicy;
 use crate::fallback::llm::FallbackLlm;
-use crate::fallback::stt::{FallbackStt, SttChainError};
+use crate::fallback::stt::FallbackStt;
 
 use crate::testkit::fallback::{NO_DEADLINE, boom, parts, until, within};
 
@@ -855,11 +855,10 @@ async fn the_stt_adapter_advertises_the_merged_capabilities_and_refuses_a_batch_
         obs,
     );
     match err {
-        Err(e @ SttChainError::NotStreaming(_)) => assert_eq!(
+        Err(e) => assert_eq!(
             e.to_string(),
             "STTs do not support streaming: whisper. Wrap them with stt.StreamAdapter first."
         ),
-        Err(other) => panic!("wrong error: {other:?}"),
         Ok(_) => panic!("a batch-only entry must be refused, not silently wrapped"),
     }
 }

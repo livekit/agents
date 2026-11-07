@@ -88,17 +88,6 @@ struct Request {
     entry: CacheEntry,
 }
 
-/// What a server message means. A verdict arriving after the overlap closed is dropped, not
-/// applied late.
-#[derive(Debug, Clone, PartialEq)]
-pub enum RecvOutcome {
-    /// `session.created`, `session.closed`, an echoed client message, `inference_done`, or a
-    /// verdict outside an open overlap.
-    Ignored,
-    /// `bargein_detected` inside an open overlap, which closes it.
-    Detected(Box<OverlappingSpeechEvent>),
-}
-
 /// An `APIStatusError` raised out of the stream, plus the server's `body` text (which
 /// [`ApiError`] does not carry).
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -276,10 +265,10 @@ impl InterruptionMachine {
             return Ok(Vec::new());
         }
         match self.on_server_message(message, now, wall)? {
-            RecvOutcome::Detected(event) => {
+            Some(event) => {
                 Ok(vec![InterruptionEffect::Overlap { request: self.overlap_request, event }])
             }
-            RecvOutcome::Ignored => Ok(Vec::new()),
+            None => Ok(Vec::new()),
         }
     }
 
@@ -503,7 +492,7 @@ impl InterruptionMachine {
         msg: ServerMessage,
         now: Ts,
         wall: f64,
-    ) -> Result<RecvOutcome, StreamError> {
+    ) -> Result<Option<Box<OverlappingSpeechEvent>>, StreamError> {
         match msg {
             ServerMessage::SessionCreated { default_threshold } => {
                 // #6034: "error when no interruption threshold is known".
@@ -516,17 +505,17 @@ impl InterruptionMachine {
                         Some(false),
                     ));
                 }
-                Ok(RecvOutcome::Ignored)
+                Ok(None)
             }
             ServerMessage::SessionClosed
             | ServerMessage::EchoedSessionCreate { .. }
-            | ServerMessage::EchoedSessionClose => Ok(RecvOutcome::Ignored),
+            | ServerMessage::EchoedSessionClose => Ok(None),
             ServerMessage::Detected(v) => {
                 let Some(started_at) = self.open_overlap() else {
-                    return Ok(RecvOutcome::Ignored);
+                    return Ok(None);
                 };
                 let entry = self.apply_verdict(&v, true, started_at, now, wall);
-                let Some(entry) = entry else { return Ok(RecvOutcome::Ignored) };
+                let Some(entry) = entry else { return Ok(None) };
                 let mut event = overlapping_speech_from_cache_entry(
                     &entry,
                     true,
@@ -539,14 +528,14 @@ impl InterruptionMachine {
                 event.num_requests = self.take_num_requests();
                 // `overlap_started_at` stays set, as in the reference.
                 self.overlap_started = false;
-                Ok(RecvOutcome::Detected(Box::new(event)))
+                Ok(Some(Box::new(event)))
             }
             ServerMessage::InferenceDone(v) => {
                 let Some(started_at) = self.open_overlap() else {
-                    return Ok(RecvOutcome::Ignored);
+                    return Ok(None);
                 };
                 self.apply_verdict(&v, false, started_at, now, wall);
-                Ok(RecvOutcome::Ignored)
+                Ok(None)
             }
             ServerMessage::Error { message, code, .. } => Err(StreamError {
                 request: None,

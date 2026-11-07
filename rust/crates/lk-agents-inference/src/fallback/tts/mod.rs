@@ -4,7 +4,7 @@
 //! after output remains a failure and cannot replay delivered audio.
 
 use crate::fallback::chain::{
-    Attempt, Backend, ChainCall, ChainObserver, FallbackChain, NoBackends, Recovery, RecoveryMode,
+    Attempt, Backend, ChainCall, ChainObserver, FallbackChain, RecoveryMode,
 };
 use crate::fallback::channel::{ServeAttempt, drain_probe, next_or_stop};
 use crate::fallback::traced::{self, Traced};
@@ -303,7 +303,7 @@ impl Backend for TtsBackend {
         conn: &ApiConnectOptions,
         _slot: RecoveryMode,
         stop: CancellationToken,
-    ) -> Result<Recovery, ProviderError> {
+    ) -> Result<bool, ProviderError> {
         let tts = self.provider(conn);
         // A probe runs in the background, past the request it recovers for: in its job, under no
         // span.
@@ -314,7 +314,7 @@ impl Backend for TtsBackend {
                 let tokens = log.settled_tokens().await;
                 if tokens.is_empty() {
                     // `tts:504-506`: a probe needs text, and the request pushed none.
-                    return Ok(Recovery::NotYet);
+                    return Ok(false);
                 }
                 let (sink, source) = tts.stream(&cx, *expressive).await?.split();
                 // A private replay channel; unlike STT, the probe does not join the live leg.
@@ -332,15 +332,6 @@ impl Backend for TtsBackend {
 // ---------------------------------------------------------------------------------------------
 // The adapter
 // ---------------------------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum TtsChainError {
-    #[error("at least one TTS instance must be provided")]
-    NoBackends,
-    /// `ValueError("all TTS must have the same number of channels")` (`tts:83-84`).
-    #[error("all TTS must have the same number of channels, got {0:?}")]
-    MixedChannels(Vec<u16>),
-}
 
 /// `tts:92-95`: `streaming` is `any`, `aligned_transcript` is `all`, over the members as given.
 pub fn merge_capabilities(entries: &[TtsCapabilities]) -> TtsCapabilities {
@@ -373,20 +364,23 @@ impl FallbackTts {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
-    ) -> Result<Self, TtsChainError> {
+    ) -> Result<Self, InvalidPayload> {
         let capabilities =
             merge_capabilities(&ttss.iter().map(|t| t.capabilities()).collect::<Vec<_>>());
         let entries: Vec<Arc<TtsBackend>> =
             ttss.iter().map(|t| TtsBackend::new(t, Arc::clone(&clock))).collect();
         let channels: Vec<u16> = entries.iter().map(|b| b.inner.num_channels()).collect();
-        let Some(&num_channels) = channels.first() else { return Err(TtsChainError::NoBackends) };
+        let Some(&num_channels) = channels.first() else {
+            return Err(InvalidPayload("at least one TTS instance must be provided".into()));
+        };
         if channels.iter().any(|c| *c != num_channels) {
-            return Err(TtsChainError::MixedChannels(channels));
+            return Err(InvalidPayload(format!(
+                "all TTS must have the same number of channels, got {channels:?}"
+            )));
         }
         let entry_rates: Vec<u32> = entries.iter().map(|b| b.inner.sample_rate()).collect();
         let (target, needs_resampling) = resampling_plan(&entry_rates, sample_rate);
-        let chain = FallbackChain::new(entries, policy, clock, spawner, observer)
-            .map_err(|NoBackends| TtsChainError::NoBackends)?;
+        let chain = FallbackChain::new(entries, policy, clock, spawner, observer)?;
         Ok(FallbackTts {
             chain: Arc::new(chain),
             capabilities,
@@ -674,7 +668,6 @@ impl port::FallbackTts for FallbackTts {
         let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
         let spawner = (env.spawner)().map_err(|e| InvalidPayload(e.to_string()))?;
         FallbackTts::new(ttss, sample_rate, policy, env.clock.clone(), spawner, observer)
-            .map_err(|error| InvalidPayload(error.to_string()))
     }
     fn active_index(&self) -> usize {
         self.chain.active_index()

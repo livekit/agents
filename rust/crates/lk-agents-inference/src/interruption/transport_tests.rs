@@ -167,13 +167,15 @@ async fn an_unreachable_gateway_climbs_the_ladder_and_then_gives_up() {
     let mut recoverable = 0;
     let mut fatal = 0;
     while let Some(event) = within("the stream's errors", stream.recv_event()).await {
-        let StreamEvent::Error(e) = event else { panic!("expected an error: {event:?}") };
-        if e.recoverable {
+        let StreamEvent::Error { recoverable: retrying, request, .. } = event else {
+            panic!("expected an error: {event:?}")
+        };
+        if retrying {
             recoverable += 1;
         } else {
             fatal += 1;
         }
-        assert_eq!(e.label, "livekit.agents.inference.AdaptiveInterruptionDetector");
+        assert_eq!(request, None);
     }
     assert_eq!((recoverable, fatal), (2, 1), "two retries announced, then one give-up");
     let err = within(
@@ -200,7 +202,7 @@ async fn end_input_closes_the_input_and_further_pushes_are_rejected() {
     let mut stream = detector.stream();
 
     stream.push(InputEvent::AgentSpeechStarted).unwrap();
-    stream.end_input().unwrap();
+    stream.end_input();
     assert_eq!(stream.push(InputEvent::AgentSpeechEnded), Err(StreamClosed::InputEnded));
     assert_eq!(stream.flush(), Err(StreamClosed::InputEnded));
 }

@@ -8,7 +8,7 @@ use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamOutput, Ts};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::fallback::chain::{Attempt, Backend, ChainCall, FallbackChain, Recovery};
+use crate::fallback::chain::{Attempt, Backend, ChainCall, FallbackChain};
 use lk_agents_abi::BoxFuture;
 
 /// The task closes its member on stop rather than being aborted.
@@ -161,11 +161,11 @@ pub(crate) async fn drain_probe<T, S: StreamOutput<T> + ?Sized>(
     mut source: Box<S>,
     clock: &dyn Clock,
     stop: CancellationToken,
-) -> Result<Recovery, ProviderError> {
+) -> Result<bool, ProviderError> {
     let verdict = loop {
         match probe_next(source.as_mut(), &stop).await {
-            None => break Ok(Recovery::NotYet),
-            Some(Ok(None)) => break Ok(Recovery::Recovered),
+            None => break Ok(false),
+            Some(Ok(None)) => break Ok(true),
             Some(Ok(Some(_))) => {}
             Some(Err(e)) => break Err(e),
         }

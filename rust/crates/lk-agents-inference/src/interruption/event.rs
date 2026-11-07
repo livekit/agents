@@ -1,4 +1,3 @@
-use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::metrics::base::{InterruptionMetrics, Metadata};
 
 use crate::interruption::options::MIN_INTERRUPTION_DURATION;
@@ -105,20 +104,6 @@ pub fn interruption_metrics(
             model_provider: Some(provider.to_owned()),
         }),
     }
-}
-
-/// `InterruptionDetectionError` (`inference/interruption.py:59`). `recoverable` is `true` while
-/// the retry loop will reconnect, `false` when it gives up.
-#[derive(Debug, Clone, PartialEq)]
-pub struct InterruptionDetectionError {
-    pub timestamp: f64,
-    pub label: String,
-    pub error: ApiError,
-    pub recoverable: bool,
-}
-
-impl InterruptionDetectionError {
-    pub const TYPE: &'static str = "interruption_detection_error";
 }
 
 #[cfg(test)]

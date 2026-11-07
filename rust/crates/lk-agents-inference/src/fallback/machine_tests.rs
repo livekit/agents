@@ -93,6 +93,26 @@ fn fallback_retries_share_the_request_attempt_backoff() {
 }
 
 #[test]
+fn stale_completions_preserve_the_active_attempt_and_waiting_retry() {
+    let mut request = request(None);
+    request.handle(ChainEvent::Wake, at(0));
+    assert!(request.handle(ChainEvent::Succeeded { attempt: 99 }, at(0)).is_empty());
+    assert_eq!(
+        request.handle(fail(1), at(0)),
+        vec![FallbackChainEffect::WakeAt(Ts::from_nanos(100_000_000))]
+    );
+    assert!(request.handle(fail(1), at(0)).is_empty());
+    assert!(matches!(
+        request.handle(ChainEvent::Wake, Ts::from_nanos(100_000_000))[0],
+        FallbackChainEffect::Start { attempt: 2, index: 0, .. }
+    ));
+    assert!(matches!(
+        request.handle(ChainEvent::Succeeded { attempt: 2 }, at(1))[0],
+        FallbackChainEffect::Finished(Ok(()))
+    ));
+}
+
+#[test]
 fn a_host_error_outside_the_api_taxonomy_does_not_retry_the_same_backend() {
     let mut request = request(None);
     request.handle(ChainEvent::Wake, at(0));

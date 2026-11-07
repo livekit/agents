@@ -75,6 +75,12 @@ struct CompletedBurst {
     span_end_ms: i64,
 }
 
+enum Phase {
+    Idle,
+    Speaking { burst: Burst, deadline: Ts },
+    Failed,
+}
+
 /// Runtime actions produced by one segmenter transition.
 #[derive(Debug, Default)]
 pub struct Step {
@@ -94,7 +100,7 @@ pub struct Segmenter {
     audio_timeout: Duration,
     id_prefix: String,
     next_id: u64,
-    burst: Option<Burst>,
+    phase: Phase,
     completed: BTreeMap<i64, CompletedBurst>,
     /// The adapter's clock: output audio heard so far, which arrives at playback pace.
     audio_ms: i64,
@@ -103,11 +109,8 @@ pub struct Segmenter {
     waiting_since_ms: i64,
     /// The reply asked for: the next speech to open answers it.
     pending_reply: Option<(String, Ts)>,
-    /// The end of the frame in hand plus `audio_timeout`, while a burst is open.
-    idle_deadline: Option<Ts>,
     /// The conversation as the framework sees it: what a context update diffs against.
     chat_ctx: ChatContext,
-    failed: bool,
 }
 
 impl Segmenter {
@@ -117,16 +120,14 @@ impl Segmenter {
             audio_timeout,
             id_prefix,
             next_id: 0,
-            burst: None,
+            phase: Phase::Idle,
             completed: BTreeMap::new(),
             audio_ms: 0,
             fragments: VecDeque::new(),
             fragment_bytes: 0,
             waiting_since_ms: 0,
             pending_reply: None,
-            idle_deadline: None,
             chat_ctx: ChatContext::default(),
-            failed: false,
         }
     }
 
@@ -139,7 +140,7 @@ impl Segmenter {
     }
 
     pub fn burst_open(&self) -> bool {
-        self.burst.is_some()
+        matches!(self.phase, Phase::Speaking { .. })
     }
 
     pub fn waiting_fragments(&self) -> usize {
@@ -147,10 +148,11 @@ impl Segmenter {
     }
 
     pub fn next_deadline(&self) -> Option<Ts> {
-        [self.idle_deadline, self.pending_reply.as_ref().map(|(_, at)| *at)]
-            .into_iter()
-            .flatten()
-            .min()
+        let idle = match self.phase {
+            Phase::Speaking { deadline, .. } => Some(deadline),
+            _ => None,
+        };
+        [idle, self.pending_reply.as_ref().map(|(_, at)| *at)].into_iter().flatten().min()
     }
 
     /// One frame of the model's output. A gate that fails ends the output for good.
@@ -163,7 +165,7 @@ impl Segmenter {
         gate_open: Result<bool, String>,
     ) -> Step {
         let mut out = Step::default();
-        if self.failed {
+        if matches!(self.phase, Phase::Failed) {
             return out;
         }
         let duration_ms = (frame.duration() * 1000.0).round() as i64;
@@ -175,7 +177,6 @@ impl Segmenter {
         let open = match gate_open {
             Ok(open) => open,
             Err(message) => {
-                self.failed = true;
                 log::error!(target: lk_agents_abi::LOG_TARGET, "duplex audio stream failed: {message}");
                 out.events.push(Event::Error(RealtimeModelError {
                     timestamp: now,
@@ -187,16 +188,16 @@ impl Segmenter {
                     provider_error: None,
                 }));
                 self.close_burst(&mut out);
+                self.phase = Phase::Failed;
                 return out;
             }
         };
         let frame_duration = Duration::from_secs_f64(frame.duration());
         if open {
-            if self.burst.is_none() {
-                let burst = self.open_burst(wall, Kind::Speech, &mut out.events);
-                self.burst = Some(burst);
-            }
-            let burst = self.burst.as_mut().expect("just opened");
+            let mut burst = match std::mem::replace(&mut self.phase, Phase::Idle) {
+                Phase::Speaking { burst, .. } => burst,
+                _ => self.open_burst(wall, Kind::Speech, &mut out.events),
+            };
             out.events.push(Event::AudioDelta(AudioDelta {
                 message_id: burst.id.clone(),
                 response_id: Some(burst.id.clone()),
@@ -204,14 +205,17 @@ impl Segmenter {
             }));
             self.audio_ms += duration_ms;
             burst.heard_ms = self.audio_ms;
-            self.attach_fragments(&mut out.events);
+            self.attach_fragments(&mut burst, &mut out.events);
             // from the end of the audio just handed over, not from its arrival
-            self.idle_deadline = Some(now.saturating_add(self.audio_timeout + frame_duration));
+            self.phase = Phase::Speaking {
+                burst,
+                deadline: now.saturating_add(self.audio_timeout + frame_duration),
+            };
             return out;
         }
 
         self.audio_ms += duration_ms;
-        if self.burst.is_some() {
+        if self.burst_open() {
             self.close_burst(&mut out);
         } else if !self.fragments.is_empty()
             && self.audio_ms - self.waiting_since_ms >= UNCLAIMED_TRANSCRIPT_MS
@@ -243,7 +247,7 @@ impl Segmenter {
 
     pub fn on_transcript(&mut self, now: Ts, wall: SystemTime, fragment: Fragment) -> Step {
         let mut out = Vec::new();
-        if self.failed {
+        if matches!(self.phase, Phase::Failed) {
             return out.into();
         }
         let source = fragment.start_ms.and_then(|start| {
@@ -269,7 +273,6 @@ impl Segmenter {
         if self.fragments.len() >= MAX_TRANSCRIPT_FRAGMENTS
             || fragment.text.capacity() > MAX_TRANSCRIPT_BYTES.saturating_sub(self.fragment_bytes)
         {
-            self.failed = true;
             self.fragments.clear();
             self.fragment_bytes = 0;
             self.fail_pending_reply("duplex transcript backlog exceeded", &mut out);
@@ -287,6 +290,7 @@ impl Segmenter {
             }));
             let mut step = out.into();
             self.close_burst(&mut step);
+            self.phase = Phase::Failed;
             return step;
         }
         if self.fragments.is_empty() {
@@ -301,13 +305,13 @@ impl Segmenter {
     /// generation of its own, over as soon as it is delivered.
     pub fn on_function_call(&mut self, call: FunctionCall) -> Vec<Event> {
         let mut out = Vec::new();
-        if self.failed {
+        if matches!(self.phase, Phase::Failed) {
             return out;
         }
         self.chat_ctx.insert(ChatItem::FunctionCall(call.clone()));
         let wall = call.created_at;
         let ready = Event::FunctionCall(FunctionCallReady { call: Box::new(call) });
-        if self.burst.is_some() {
+        if self.burst_open() {
             out.push(ready);
             return out;
         }
@@ -353,7 +357,7 @@ impl Segmenter {
     /// The reply is the next speech to open; a newer ask supersedes the one waiting.
     pub fn generate_reply(&mut self, now: Ts, req_id: String) -> Vec<Event> {
         let mut out = Vec::new();
-        if self.failed {
+        if matches!(self.phase, Phase::Failed) {
             out.push(Event::GenerateReplyFailed(GenerateReplyFailed {
                 req_id,
                 error: RealtimeError::new("duplex output already ended"),
@@ -377,7 +381,7 @@ impl Segmenter {
         if self.pending_reply.as_ref().is_some_and(|(_, at)| *at <= now) {
             self.fail_pending_reply("the model did not start speaking when asked", &mut out.events);
         }
-        if self.idle_deadline.is_some_and(|at| at <= now) {
+        if matches!(self.phase, Phase::Speaking { deadline, .. } if deadline <= now) {
             // the provider stopped sending, and that absence is silence too
             self.close_burst(&mut out);
         }
@@ -386,8 +390,8 @@ impl Segmenter {
 
     pub fn close(&mut self) -> Step {
         let mut out = Step::default();
-        self.failed = true;
         self.close_burst(&mut out);
+        self.phase = Phase::Failed;
         self.fragments.clear();
         self.fragment_bytes = 0;
         self.fail_pending_reply("the session closed before the model replied", &mut out.events);
@@ -474,16 +478,15 @@ impl Segmenter {
 
     /// The first fragment anchors the span clock to the audio clock; a later one is due when the
     /// audio reaches its span, and one this burst never reaches waits for the next.
-    fn attach_fragments(&mut self, out: &mut Vec<Event>) {
-        let Some(burst) = self.burst.as_mut() else { return };
-        while let Some(f) = self.fragments.front() {
+    fn attach_fragments(&mut self, burst: &mut Burst, out: &mut Vec<Event>) {
+        while let Some(f) = self.fragments.pop_front() {
             if let Some(start) = f.start_ms {
                 let anchor = *burst.anchor_ms.get_or_insert(start - burst.audio_start_ms);
                 if start - anchor > burst.heard_ms + ATTACH_LEAD_MS {
+                    self.fragments.push_front(f);
                     break;
                 }
             }
-            let f = self.fragments.pop_front().expect("peeked");
             self.fragment_bytes -= f.text.capacity();
             Self::attach(burst, f, out);
         }
@@ -524,12 +527,13 @@ impl Segmenter {
     }
 
     fn close_burst(&mut self, out: &mut Step) {
-        self.idle_deadline = None;
         out.deactivate_gate = true;
-        if self.burst.is_some() {
-            self.attach_fragments(&mut out.events);
-            let burst = self.burst.take().expect("checked");
-            self.finish(burst, &mut out.events);
+        match std::mem::replace(&mut self.phase, Phase::Idle) {
+            Phase::Speaking { mut burst, .. } => {
+                self.attach_fragments(&mut burst, &mut out.events);
+                self.finish(burst, &mut out.events);
+            }
+            phase => self.phase = phase,
         }
         self.waiting_since_ms = self.audio_ms;
     }

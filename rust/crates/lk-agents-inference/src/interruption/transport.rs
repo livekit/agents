@@ -5,7 +5,7 @@
 
 use crate::effects::InterruptionEffect;
 use crate::headers::{HeaderProvider, Headers, gateway_headers};
-use crate::interruption::event::{InterruptionDetectionError, OverlappingSpeechEvent};
+use crate::interruption::event::OverlappingSpeechEvent;
 use crate::interruption::machine::{
     InputEvent, InterruptionEvent, InterruptionMachine, RequestIdentity, StreamError,
 };
@@ -18,7 +18,6 @@ use lk_agents_abi::AudioFrame;
 use lk_agents_abi::Clock;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::turn::detector::ReqId;
-use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_core::attempts::RequestPolicy;
@@ -134,10 +133,8 @@ impl AdaptiveInterruptionDetector {
 /// explains why none came, so the session can hand interruption back to the VAD (I-24).
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
-    Overlap(Box<OverlappingSpeechEvent>),
-    CorrelatedOverlap { request: ReqId, event: Box<OverlappingSpeechEvent> },
-    Error(Box<InterruptionDetectionError>),
-    CorrelatedError { request: ReqId, error: Box<InterruptionDetectionError> },
+    Overlap { request: Option<ReqId>, event: Box<OverlappingSpeechEvent> },
+    Error { request: Option<ReqId>, error: ApiError, recoverable: bool },
 }
 
 #[derive(Clone)]
@@ -170,10 +167,7 @@ impl StreamContext {
 
     fn emit_overlap(&self, request: Option<ReqId>, ev: OverlappingSpeechEvent) {
         let event = Box::new(ev);
-        let _ = self.stream_events.send(match request {
-            Some(request) => StreamEvent::CorrelatedOverlap { request, event },
-            None => StreamEvent::Overlap(event),
-        });
+        let _ = self.stream_events.send(StreamEvent::Overlap { request, event });
     }
 
     fn emit_effect(&self, effect: InterruptionEffect) -> Option<(RequestIdentity, Vec<i16>)> {
@@ -190,17 +184,7 @@ impl StreamContext {
 
     /// The `"error"` channel, and the same failure on the stream's own channel.
     fn emit_error(&self, request: Option<ReqId>, error: ApiError, recoverable: bool) {
-        let err = Box::new(InterruptionDetectionError {
-            timestamp: self.wall(),
-            label: NativeLabel::InterruptionDetector.as_str().to_owned(),
-            error,
-            recoverable,
-        });
-        let event = match request {
-            Some(request) => StreamEvent::CorrelatedError { request, error: err },
-            None => StreamEvent::Error(err),
-        };
-        let _ = self.stream_events.send(event);
+        let _ = self.stream_events.send(StreamEvent::Error { request, error, recoverable });
     }
 }
 
@@ -327,19 +311,18 @@ impl InterruptionStream {
 
     /// Close input after all accepted events, for this stream and every [`sender`](Self::sender)
     /// clone. The core's flush is a no-op, so EOF does not take another queue entry.
-    pub fn end_input(&mut self) -> Result<(), StreamClosed> {
+    pub fn end_input(&mut self) {
         if let Some(input) = self.input_tx.take() {
             input.end();
         }
-        Ok(())
     }
 
-    /// The next verdict, or `None` once finished. Failures and span writes are skipped (as
-    /// `async for ev in stream`); [`recv_event`](Self::recv_event) yields all three.
+    /// The next verdict, or `None` once finished. Failures are skipped (as `async for ev in
+    /// stream`); [`recv_event`](Self::recv_event) yields verdicts and failures.
     pub async fn recv(&mut self) -> Option<OverlappingSpeechEvent> {
         loop {
             match self.event_rx.recv().await? {
-                StreamEvent::Overlap(event) | StreamEvent::CorrelatedOverlap { event, .. } => {
+                StreamEvent::Overlap { event, .. } => {
                     return Some(*event);
                 }
                 _ => {}
@@ -359,13 +342,13 @@ impl InterruptionStream {
     /// `__anext__`'s tail (`inference/interruption.py:527`): once the events are exhausted, the
     /// task's exception belongs to the caller.
     pub async fn finish(mut self) -> Result<(), ApiError> {
-        let _ = self.end_input();
+        self.end_input();
         join_task(self.task).await?
     }
 
     /// `aclose()` -- cancel immediately, without waiting for the gateway to close back.
     pub async fn aclose(mut self) -> Result<(), ApiError> {
-        let _ = self.end_input();
+        self.end_input();
         self.task.cancel();
         join_task(self.task).await.map(|_| ())
     }
@@ -788,8 +771,8 @@ mod tests {
         )
         .await
         .expect("a stuck input must reach the caller without waiting for connect timeout");
-        assert!(matches!(event, Some(StreamEvent::Error(error))
-            if !error.recoverable && error.error.message.contains("stopped draining")));
+        assert!(matches!(event, Some(StreamEvent::Error { error, recoverable: false, .. })
+            if error.message.contains("stopped draining")));
         assert!(stream.finish().await.is_err());
     }
 
@@ -824,7 +807,7 @@ mod tests {
         .expect("10 s of head drains within a second");
         eprintln!("interruption: 10.0 s head drained in {:?}", began.elapsed());
         assert!(measured < 1.0, "{measured}");
-        stream.end_input().unwrap();
+        stream.end_input();
     }
 
     #[tokio::test]
@@ -850,7 +833,7 @@ mod tests {
         for _ in 2..media_queue::MAX_EVENTS {
             stream.flush().unwrap();
         }
-        stream.end_input().unwrap();
+        stream.end_input();
         lk_agents_abi::timeout(
             &lk_agents_net::clock::RealClock::new(),
             Duration::from_secs(1),

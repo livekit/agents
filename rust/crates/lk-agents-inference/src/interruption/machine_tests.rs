@@ -60,7 +60,7 @@ fn verdict(
     prediction_duration: f64,
     probabilities: &[f32],
     at: f64,
-) -> RecvOutcome {
+) -> Option<Box<OverlappingSpeechEvent>> {
     let v = Verdict {
         created_at: ts(sent).as_nanos(),
         prediction_duration,
@@ -261,7 +261,7 @@ fn a_detected_verdict_closes_the_overlap_so_the_end_sentinel_emits_nothing() {
     c.record_request(ts(1.0), vec![5]);
 
     let out = verdict(&mut c, true, 1.0, 0.03, &[0.9, 0.8, 0.1], 1.15);
-    let RecvOutcome::Detected(event) = out else { panic!("expected Detected") };
+    let Some(event) = out else { panic!("expected a verdict") };
     assert!(event.is_interruption);
     assert_eq!(event.num_requests, 1);
     assert_eq!(event.probability, 0.8_f32 as f64);
@@ -281,7 +281,7 @@ fn a_verdict_arriving_after_the_overlap_closed_is_ignored() {
     end_overlap(&mut c, 1.1, false, 1.1);
 
     let out = verdict(&mut c, true, 1.0, 0.03, &[0.9, 0.9], 1.2);
-    assert_eq!(out, RecvOutcome::Ignored);
+    assert_eq!(out, None);
 }
 
 #[test]
@@ -294,10 +294,10 @@ fn interruption_verdict_identity_rejects_previous_overlap_and_unknown_requests()
     start_overlap(&mut c, 0.0, 1.2);
     c.record_request(ts(1.2), vec![2]);
 
-    assert_eq!(verdict(&mut c, true, 1.0, 0.1, &[0.9, 0.9], 1.3), RecvOutcome::Ignored);
-    assert_eq!(verdict(&mut c, true, 99.0, 0.1, &[0.9, 0.9], 1.3), RecvOutcome::Ignored);
+    assert_eq!(verdict(&mut c, true, 1.0, 0.1, &[0.9, 0.9], 1.3), None);
+    assert_eq!(verdict(&mut c, true, 99.0, 0.1, &[0.9, 0.9], 1.3), None);
     assert_eq!(c.cache.iter().count(), 1, "unknown echoes must not create requests");
-    assert!(matches!(verdict(&mut c, true, 1.2, 0.1, &[0.9, 0.9], 1.4), RecvOutcome::Detected(_)));
+    assert!(verdict(&mut c, true, 1.2, 0.1, &[0.9, 0.9], 1.4).is_some());
 }
 
 #[test]
@@ -307,7 +307,7 @@ fn interruption_verdict_identity_accepts_each_request_once() {
     start_overlap(&mut c, 0.0, 1.0);
     c.record_request(ts(1.0), vec![1]);
     verdict(&mut c, false, 1.0, 0.1, &[0.1, 0.1], 1.1);
-    assert_eq!(verdict(&mut c, true, 1.0, 0.1, &[0.9, 0.9], 1.2), RecvOutcome::Ignored);
+    assert_eq!(verdict(&mut c, true, 1.0, 0.1, &[0.9, 0.9], 1.2), None);
     assert!(c.overlap_started, "duplicate verdict must leave current overlap alone");
 }
 
@@ -323,12 +323,9 @@ fn a_session_created_with_no_threshold_anywhere_is_fatal() {
 
     // Either source alone is enough.
     let user = ServerMessage::SessionCreated { default_threshold: None };
-    assert_eq!(
-        core_with(Some(0.9)).on_server_message(user, ts(0.0), 0.0),
-        Ok(RecvOutcome::Ignored)
-    );
+    assert_eq!(core_with(Some(0.9)).on_server_message(user, ts(0.0), 0.0), Ok(None));
     let server = ServerMessage::SessionCreated { default_threshold: Some(0.5) };
-    assert_eq!(core().on_server_message(server, ts(0.0), 0.0), Ok(RecvOutcome::Ignored));
+    assert_eq!(core().on_server_message(server, ts(0.0), 0.0), Ok(None));
 }
 
 // Answered windows cannot extend another request's absolute deadline.
@@ -361,7 +358,7 @@ fn interruption_inference_deadline_cannot_affect_a_later_speech() {
     assert_eq!(c.next_deadline(), None);
     c.on_input(InputEvent::AgentSpeechStarted, 2.0).unwrap();
     start_overlap(&mut c, 0.0, 2.0);
-    assert_eq!(verdict(&mut c, true, 1.0, 0.1, &[0.9, 0.9], 2.1), RecvOutcome::Ignored);
+    assert_eq!(verdict(&mut c, true, 1.0, 0.1, &[0.9, 0.9], 2.1), None);
     assert!(c.overlap_started);
 }
 
@@ -420,7 +417,7 @@ fn interruption_verdict_identity_rejects_other_connections_and_speeches() {
     c.on_input(InputEvent::AgentSpeechStarted, 1.5).unwrap();
     start_overlap(&mut c, 0.0, 1.5);
     assert!(!c.request_eligible(identity));
-    assert_eq!(verdict(&mut c, true, 1.4, 0.1, &[0.9, 0.9], 1.6), RecvOutcome::Ignored);
+    assert_eq!(verdict(&mut c, true, 1.4, 0.1, &[0.9, 0.9], 1.6), None);
     assert!(c.overlap_started);
 }
 

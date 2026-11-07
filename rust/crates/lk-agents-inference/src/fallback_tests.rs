@@ -21,8 +21,7 @@ use tokio::sync::Semaphore;
 
 use crate::fallback::ChainPolicy;
 use crate::fallback::chain::{
-    Attempt, AvailabilityChanged, Backend, ChainObserver, ChainOutcome, FallbackChain, Recovery,
-    RecoveryMode,
+    Attempt, AvailabilityChanged, Backend, ChainObserver, FallbackChain, RecoveryMode,
 };
 
 const LIMIT: Duration = Duration::from_secs(5);
@@ -92,7 +91,7 @@ struct Fake {
     script: Mutex<VecDeque<Step>>,
     opened: Mutex<Vec<ApiConnectOptions>>,
     probes: Mutex<Vec<(RecoveryMode, ApiConnectOptions)>>,
-    probe_verdict: Mutex<VecDeque<Recovery>>,
+    probe_verdict: Mutex<VecDeque<bool>>,
     /// A probe on slot `i` waits here. Starts saturated, so probes complete immediately unless a
     /// test closes the gate.
     gate: [Arc<Semaphore>; 2],
@@ -119,7 +118,7 @@ impl Fake {
         })
     }
 
-    fn recovers(self: &Arc<Self>, verdicts: &[Recovery]) -> Arc<Self> {
+    fn recovers(self: &Arc<Self>, verdicts: &[bool]) -> Arc<Self> {
         *self.probe_verdict.lock() = verdicts.iter().copied().collect();
         Arc::clone(self)
     }
@@ -179,7 +178,7 @@ impl Backend for Fake {
         conn: &ApiConnectOptions,
         slot: RecoveryMode,
         _stop: tokio_util::sync::CancellationToken,
-    ) -> Result<Recovery, ProviderError> {
+    ) -> Result<bool, ProviderError> {
         self.probes.lock().push((slot, *conn));
         self.probes_entered.fetch_add(1, Ordering::SeqCst);
         let _permit = self.gate[slot as usize].acquire().await.expect("gate is never closed");
@@ -226,10 +225,7 @@ fn caller() -> ApiConnectOptions {
 
 /// Runs one request, recording which entries drained; the drain calls `mark_serving` on first
 /// output, as a real adapter does.
-async fn run_once(
-    rig: &Rig,
-    slot: RecoveryMode,
-) -> (Result<ChainOutcome<usize>, ProviderError>, Vec<usize>) {
+async fn run_once(rig: &Rig, slot: RecoveryMode) -> (Result<usize, ProviderError>, Vec<usize>) {
     let mut drained: Vec<usize> = Vec::new();
     let chain = Arc::clone(&rig.chain);
     let out = rig
@@ -269,13 +265,13 @@ async fn run_once(
 #[tokio::test]
 async fn recovery_returns_traffic_to_an_earlier_entry() {
     let primary = Fake::new("primary", &[Step::FailCold, Step::Serve])
-        .recovers(&[Recovery::Recovered])
+        .recovers(&[true])
         .shut(RecoveryMode::OneShot);
     let backup = Fake::new("backup", &[Step::Serve]);
     let rig = rig(vec![Arc::clone(&primary), backup], ChainPolicy::llm_defaults());
 
     let (out, drained) = run_once(&rig, RecoveryMode::OneShot).await;
-    assert_eq!(out.expect("the backup serves"), ChainOutcome::Served(1));
+    assert_eq!(out.expect("the backup serves"), 1);
     assert_eq!(drained, vec![0, 1], "the primary is tried first, then the backup");
     assert!(!rig.chain.is_available(0));
 
@@ -283,7 +279,7 @@ async fn recovery_returns_traffic_to_an_earlier_entry() {
     until("the primary's probe to succeed", || rig.chain.is_available(0)).await;
 
     let (out, drained) = run_once(&rig, RecoveryMode::OneShot).await;
-    assert_eq!(out.expect("the primary serves again"), ChainOutcome::Served(0));
+    assert_eq!(out.expect("the primary serves again"), 0);
     assert_eq!(drained, vec![0], "the backup must not be reached once the primary is back");
     assert_eq!(rig.chain.active_index(), 0);
     assert_eq!(rig.rec.transitions(), vec![(0, false), (0, true)]);
@@ -292,7 +288,7 @@ async fn recovery_returns_traffic_to_an_earlier_entry() {
 // Catches: a caller's `conn_options` leaking to the wrapped provider; also pins the probe's hard 0.
 #[tokio::test]
 async fn the_rewritten_conn_options_reach_the_provider_on_both_paths() {
-    let primary = Fake::new("primary", &[Step::FailCold]).recovers(&[Recovery::NotYet]);
+    let primary = Fake::new("primary", &[Step::FailCold]).recovers(&[false]);
     let rig = rig(vec![Arc::clone(&primary)], ChainPolicy::tts_defaults());
 
     let _ = run_once(&rig, RecoveryMode::Streaming).await;
@@ -311,7 +307,7 @@ async fn the_rewritten_conn_options_reach_the_provider_on_both_paths() {
 #[tokio::test]
 async fn the_two_recovery_slots_do_not_suppress_or_clobber_each_other() {
     let primary = Fake::new("primary", &[Step::FailCold])
-        .recovers(&[Recovery::NotYet, Recovery::NotYet])
+        .recovers(&[false, false])
         .shut(RecoveryMode::OneShot)
         .shut(RecoveryMode::Streaming);
     let rig = rig(vec![Arc::clone(&primary)], ChainPolicy::stt_defaults());
@@ -338,8 +334,8 @@ async fn the_two_recovery_slots_do_not_suppress_or_clobber_each_other() {
 // Catches: failing fast when every entry is down instead of the `all_failed` pass.
 #[tokio::test]
 async fn when_everything_is_unavailable_every_entry_is_tried_anyway() {
-    let a = Fake::new("a", &[Step::FailCold, Step::Serve]).recovers(&[Recovery::NotYet]);
-    let b = Fake::new("b", &[Step::FailCold]).recovers(&[Recovery::NotYet]);
+    let a = Fake::new("a", &[Step::FailCold, Step::Serve]).recovers(&[false]);
+    let b = Fake::new("b", &[Step::FailCold]).recovers(&[false]);
     let rig = rig(vec![Arc::clone(&a), b], ChainPolicy::llm_defaults());
 
     let (out, drained) = run_once(&rig, RecoveryMode::OneShot).await;
@@ -348,7 +344,7 @@ async fn when_everything_is_unavailable_every_entry_is_tried_anyway() {
     assert_eq!(rig.rec.all_unavailable.load(Ordering::SeqCst), 0, "not yet: they were up on entry");
 
     let (out, drained) = run_once(&rig, RecoveryMode::OneShot).await;
-    assert_eq!(out.expect("a recovered on the retry-everything pass"), ChainOutcome::Served(0));
+    assert_eq!(out.expect("a recovered on the retry-everything pass"), 0);
     assert_eq!(drained, vec![0], "a serves, so b is never reached");
     assert_eq!(rig.rec.all_unavailable.load(Ordering::SeqCst), 1);
 }
@@ -356,7 +352,7 @@ async fn when_everything_is_unavailable_every_entry_is_tried_anyway() {
 // Catches: probing only the entry that just failed, never a skipped unavailable one.
 #[tokio::test]
 async fn a_skipped_entry_is_still_probed() {
-    let a = Fake::new("a", &[Step::FailCold]).recovers(&[Recovery::NotYet, Recovery::NotYet]);
+    let a = Fake::new("a", &[Step::FailCold]).recovers(&[false, false]);
     let b = Fake::new("b", &[Step::Serve]);
     let rig = rig(vec![Arc::clone(&a), b], ChainPolicy::llm_defaults());
 
@@ -373,7 +369,7 @@ async fn a_skipped_entry_is_still_probed() {
 // Catches: a probe started after `aclose` (`tts:155-159`).
 #[tokio::test]
 async fn aclose_refuses_later_probes() {
-    let a = Fake::new("a", &[Step::FailCold]).recovers(&[Recovery::NotYet]);
+    let a = Fake::new("a", &[Step::FailCold]).recovers(&[false]);
     let rig = rig(vec![Arc::clone(&a)], ChainPolicy::llm_defaults());
 
     rig.chain.aclose();
@@ -385,7 +381,7 @@ async fn aclose_refuses_later_probes() {
 // Catches: reading wall time for the exhaustion error's elapsed figure.
 #[tokio::test]
 async fn the_exhaustion_error_measures_the_injected_clock() {
-    let a = Fake::new("a", &[Step::OpenErr]).recovers(&[Recovery::NotYet]);
+    let a = Fake::new("a", &[Step::OpenErr]).recovers(&[false]);
     let rig = rig(vec![Arc::clone(&a)], ChainPolicy::llm_defaults());
 
     let mut drained: Vec<usize> = Vec::new();
@@ -421,7 +417,7 @@ async fn the_exhaustion_error_measures_the_injected_clock() {
 // Catches: dropping the `if st.available != available` guard (repeated events under `all_failed`).
 #[tokio::test]
 async fn a_provider_that_fails_again_while_already_down_emits_nothing() {
-    let verdicts = [Recovery::NotYet; 6];
+    let verdicts = [false; 6];
     let a = Fake::new("a", &[Step::FailCold]).recovers(&verdicts);
     let b = Fake::new("b", &[Step::FailCold]).recovers(&verdicts);
     let rig = rig(vec![a, b], ChainPolicy::llm_defaults());
@@ -446,9 +442,8 @@ async fn a_provider_that_fails_again_while_already_down_emits_nothing() {
 // Catches: dropping the `if !st.available` guard on recovery (the second slot re-announcing).
 #[tokio::test]
 async fn a_probe_that_finds_the_provider_already_back_announces_nothing() {
-    let primary = Fake::new("primary", &[Step::FailCold])
-        .recovers(&[Recovery::Recovered, Recovery::Recovered])
-        .shut(RecoveryMode::OneShot);
+    let primary =
+        Fake::new("primary", &[Step::FailCold]).recovers(&[true, true]).shut(RecoveryMode::OneShot);
     let backup = Fake::new("backup", &[Step::Serve]);
     let rig = rig(vec![Arc::clone(&primary), backup], ChainPolicy::stt_defaults());
 
@@ -535,7 +530,7 @@ async fn a_task_that_ignores_the_stop_is_aborted_and_reported_timed_out() {
 async fn cancellation_is_not_a_backend_health_penalty() {
     let primary = Fake::new("primary", &[Step::Serve]);
     let rig = rig(vec![primary.clone()], ChainPolicy::llm_defaults());
-    let out: Result<ChainOutcome<()>, _> = rig
+    let out: Result<(), _> = rig
         .chain
         .run(&"req".to_string(), &caller(), RecoveryMode::OneShot, &mut (), |_, _, _, _| {
             Box::pin(async {
@@ -607,9 +602,8 @@ async fn recovery_probes_inherit_the_remaining_operation_deadline() {
 
 #[tokio::test]
 async fn a_recovery_result_after_its_request_deadline_cannot_restore_health() {
-    let primary = Fake::new("primary", &[Step::FailCold])
-        .recovers(&[Recovery::Recovered])
-        .shut(RecoveryMode::OneShot);
+    let primary =
+        Fake::new("primary", &[Step::FailCold]).recovers(&[true]).shut(RecoveryMode::OneShot);
     let backup = Fake::new("backup", &[Step::Serve]);
     let rig = rig(vec![primary.clone(), backup], ChainPolicy::tts_defaults());
     let caller = ApiConnectOptions { total_timeout: Some(1.0), ..caller() };

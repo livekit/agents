@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::fallback::ChainPolicy;
 use crate::fallback::chain::{
-    Attempt, Backend, ChainCall, ChainObserver, FallbackChain, NoBackends, Recovery, RecoveryMode,
+    Attempt, Backend, ChainCall, ChainObserver, FallbackChain, RecoveryMode,
 };
 use crate::fallback::channel::{ServeAttempt, drain_probe, forward};
 use crate::fallback::traced::{self, Traced};
@@ -104,7 +104,7 @@ impl Backend for LlmBackend {
         conn: &lk_agents_abi::ApiConnectOptions,
         _slot: RecoveryMode,
         stop: CancellationToken,
-    ) -> Result<Recovery, ProviderError> {
+    ) -> Result<bool, ProviderError> {
         // Drain and discard: reaching the end without an error is LLM's recovery signal.
         drain_probe(self.request(req, conn, true).await?, self.clock.as_ref(), stop).await
     }
@@ -123,7 +123,7 @@ impl FallbackLlm {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
-    ) -> Result<Self, NoBackends> {
+    ) -> Result<Self, InvalidPayload> {
         let entries =
             llms.into_iter().map(|llm| LlmBackend::new(llm, Arc::clone(&clock))).collect();
         let chain = FallbackChain::new(entries, policy, clock, spawner, observer)?;
@@ -198,7 +198,6 @@ impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
             (env.spawner)().map_err(|e| InvalidPayload(e.to_string()))?,
             observer,
         )
-        .map_err(|error| InvalidPayload(error.to_string()))
     }
 
     /// Which entry most recently served, as a position in the host's list (the reference's

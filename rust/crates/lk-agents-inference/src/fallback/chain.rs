@@ -19,6 +19,7 @@ use lk_agents_abi::OwnedTask;
 use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ApiErrorKind;
 use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use lk_agents_net::task::{TaskId, TaskSet};
@@ -44,7 +45,7 @@ pub trait Backend: Send + Sync + 'static {
         conn: &ApiConnectOptions,
     ) -> Result<Self::Session, ProviderError>;
 
-    /// `Ok(Recovery::NotYet)` is a clean decline (`stt/fallback_adapter.py:465-466`), not an error.
+    /// `Ok(false)` is a clean decline (`stt/fallback_adapter.py:465-466`).
     /// `stop` is cancelled when the adapter closes: a probe then closes what it opened and returns
     /// (the reference cancels the probe task, whose `async with stream` closes the stream).
     async fn recover(
@@ -53,13 +54,7 @@ pub trait Backend: Send + Sync + 'static {
         conn: &ApiConnectOptions,
         slot: RecoveryMode,
         stop: CancellationToken,
-    ) -> Result<Recovery, ProviderError>;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Recovery {
-    Recovered,
-    NotYet,
+    ) -> Result<bool, ProviderError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -82,11 +77,6 @@ pub enum Attempt<T> {
         /// Whether anything reached the consumer before the failure; prevents replay.
         produced_output: bool,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ChainOutcome<T> {
-    Served(T),
 }
 
 pub use lk_agents_abi::llm::fallback::{AvailabilityChanged, ChainObserver};
@@ -132,17 +122,6 @@ impl StreamTask {
     }
 }
 
-/// `ValueError("at least one … instance must be provided.")`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NoBackends;
-
-impl std::fmt::Display for NoBackends {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("at least one backend instance must be provided")
-    }
-}
-impl std::error::Error for NoBackends {}
-
 pub struct FallbackChain<B: Backend> {
     entries: Vec<Arc<B>>,
     labels: Vec<String>,
@@ -170,9 +149,9 @@ impl<B: Backend> FallbackChain<B> {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
-    ) -> Result<Self, NoBackends> {
+    ) -> Result<Self, InvalidPayload> {
         if entries.is_empty() {
-            return Err(NoBackends);
+            return Err(InvalidPayload("at least one backend instance must be provided".into()));
         }
         let labels = entries.iter().map(|b| b.label()).collect();
         let status: Vec<Status> = entries
@@ -253,7 +232,7 @@ impl<B: Backend> FallbackChain<B> {
         slot: RecoveryMode,
         state: &mut S,
         attempt: F,
-    ) -> Result<ChainOutcome<T>, ProviderError>
+    ) -> Result<T, ProviderError>
     where
         S: Clone + Send + 'static,
         T: Send + 'static,
@@ -286,7 +265,7 @@ impl<B: Backend> FallbackChain<B> {
         state: &mut S,
         cancel: CancellationToken,
         attempt: F,
-    ) -> Result<ChainOutcome<T>, ProviderError>
+    ) -> Result<T, ProviderError>
     where
         S: Clone + Send + 'static,
         T: Send + 'static,
@@ -542,7 +521,7 @@ struct ChainRun<'c, B: Backend, T, S> {
 }
 
 impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T, S> {
-    async fn drive<F>(mut self, state: &mut S, attempt: F) -> Result<ChainOutcome<T>, ProviderError>
+    async fn drive<F>(mut self, state: &mut S, attempt: F) -> Result<T, ProviderError>
     where
         F: for<'a> Fn(
                 usize,
@@ -636,17 +615,14 @@ impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T
         ChainEvent::Failed { attempt: active.id, error, produced_output }
     }
 
-    fn finish(
-        &mut self,
-        result: Result<(), ProviderError>,
-    ) -> Result<ChainOutcome<T>, ProviderError> {
+    fn finish(&mut self, result: Result<(), ProviderError>) -> Result<T, ProviderError> {
         result?;
         let (value, index, attempt_id) =
             self.served.take().expect("the machine succeeds only after an attempt served");
         self.chain.mark_serving(index);
         self.chain.select(index, attempt_id);
         self.chain.observe_result(index, Ok(()));
-        Ok(ChainOutcome::Served(value))
+        Ok(value)
     }
 
     async fn sleep_until(&mut self, at: Ts) {
@@ -801,14 +777,14 @@ impl<B: Backend> RecoveryProbe<B> {
             return;
         }
         // `NotYet` and an error are both "still down"; the next request schedules another probe.
-        if let Ok(Recovery::Recovered) = outcome {
+        if let Ok(true) = outcome {
             self.mark_recovered();
         }
     }
 
     /// The probe's verdict, or `None` when the deadline or the chain's close came first: the
     /// probe is then told to stop and awaited, bounded, to close what it opened.
-    async fn until_interrupted(&mut self) -> Option<Result<Recovery, ProviderError>> {
+    async fn until_interrupted(&mut self) -> Option<Result<bool, ProviderError>> {
         use futures_util::future::{Either, select};
         let stop = CancellationToken::new();
         let recovery = self.backend.recover(&self.req, &self.conn, self.slot, stop.clone());

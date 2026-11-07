@@ -186,8 +186,8 @@ pub enum ChainEvent {
 #[derive(Debug)]
 enum Phase {
     Ready,
-    Active(u64),
-    Waiting,
+    Active { attempt: u64, attempts: Attempts, id: u32 },
+    Waiting(Attempts),
     Finished,
 }
 
@@ -195,7 +195,6 @@ enum Phase {
 pub struct ChainRequest {
     entries: Vec<(usize, ResourceId, String)>,
     cursor: usize,
-    attempts: Option<Attempts>,
     next_attempt: u64,
     phase: Phase,
     policy: ChainPolicy,
@@ -219,7 +218,6 @@ impl ChainRequest {
         Self {
             entries,
             cursor: 0,
-            attempts: None,
             next_attempt: 0,
             phase: Phase::Ready,
             policy,
@@ -251,44 +249,38 @@ impl ChainRequest {
             .into())));
             return effects;
         }
-        match event {
-            ChainEvent::Wake => match self.phase {
-                Phase::Ready => self.launch(now),
-                Phase::Waiting => self.retry(now),
-                _ => Vec::new(),
-            },
-            ChainEvent::Succeeded { attempt } if matches!(self.phase, Phase::Active(id) if id == attempt) =>
-            {
-                if let Some(attempts) = &mut self.attempts
-                    && let Some(id) = attempts.current()
-                {
-                    attempts.succeeded(id, now);
-                    attempts.closed(id, now, &mut Vec::new());
-                }
+        let phase = std::mem::replace(&mut self.phase, Phase::Finished);
+        match (event, phase) {
+            (ChainEvent::Wake, Phase::Ready) => self.launch(now),
+            (ChainEvent::Wake, Phase::Waiting(attempts)) => self.retry(attempts, now),
+            (
+                ChainEvent::Succeeded { attempt },
+                Phase::Active { attempt: active, mut attempts, id },
+            ) if active == attempt => {
+                attempts.succeeded(id, now);
+                attempts.closed(id, now, &mut Vec::new());
                 self.phase = Phase::Finished;
                 vec![FallbackChainEffect::Finished(Ok(()))]
             }
-            ChainEvent::Failed { attempt, error, produced_output } if matches!(self.phase, Phase::Active(id) if id == attempt) =>
-            {
+            (
+                ChainEvent::Failed { attempt, error, produced_output },
+                Phase::Active { attempt: active, mut attempts, id },
+            ) if active == attempt => {
                 let cancelled = error.api_kind() == Some(ApiErrorKind::Cancelled);
                 self.failures.push(error.clone());
                 if produced_output || cancelled {
                     self.phase = Phase::Finished;
                     return vec![FallbackChainEffect::Finished(Err(error.into_final()))];
                 }
-                let attempts = self.attempts.as_mut().expect("active backend attempts");
-                let id = attempts.current().expect("active attempt");
                 let mut steps = Vec::new();
                 let api_error = error.attempt_error();
                 attempts.failed_error(id, api_error, now, &mut steps);
                 attempts.closed(id, now, &mut steps);
-                if steps.iter().any(|step| matches!(step, AttemptStep::Retry { .. })) {
-                    let at = attempts.wake_at(None).expect("retry wake");
-                    self.phase = Phase::Waiting;
+                if let Some(at) = attempts.wake_at(None) {
+                    self.phase = Phase::Waiting(attempts);
                     return vec![FallbackChainEffect::WakeAt(at)];
                 }
                 self.cursor += 1;
-                self.attempts = None;
                 if self.cursor >= self.entries.len() {
                     self.phase = Phase::Finished;
                     let detail = self
@@ -314,27 +306,37 @@ impl ChainRequest {
                 self.phase = Phase::Ready;
                 vec![FallbackChainEffect::WakeAt(now)]
             }
-            _ => Vec::new(),
+            (_, phase) => {
+                self.phase = phase;
+                Vec::new()
+            }
         }
     }
 
     fn cancel_active(&mut self, now: Ts) -> Vec<FallbackChainEffect> {
-        if let Some(attempts) = &mut self.attempts {
-            attempts.cancel(now, &mut Vec::new());
-        }
-        match self.phase {
-            Phase::Active(attempt) => vec![FallbackChainEffect::Cancel { attempt }],
+        match &mut self.phase {
+            Phase::Active { attempt, attempts, .. } => {
+                attempts.cancel(now, &mut Vec::new());
+                vec![FallbackChainEffect::Cancel { attempt: *attempt }]
+            }
+            Phase::Waiting(attempts) => {
+                attempts.cancel(now, &mut Vec::new());
+                Vec::new()
+            }
             _ => Vec::new(),
         }
     }
 
-    fn retry(&mut self, now: Ts) -> Vec<FallbackChainEffect> {
-        let attempts = self.attempts.as_mut().expect("waiting backend attempts");
+    fn retry(&mut self, mut attempts: Attempts, now: Ts) -> Vec<FallbackChainEffect> {
         let mut steps = Vec::new();
         attempts.wake(now, None, &mut steps);
-        if steps.iter().any(|step| matches!(step, AttemptStep::Launch(_))) {
-            self.launch_effect()
+        if let Some(id) = steps.into_iter().find_map(|step| match step {
+            AttemptStep::Launch(id) => Some(id),
+            _ => None,
+        }) {
+            self.launch_effect(attempts, id)
         } else {
+            self.phase = Phase::Waiting(attempts);
             Vec::new()
         }
     }
@@ -348,13 +350,19 @@ impl ChainRequest {
             max_retry: self.policy.max_retry_per_backend,
             retry_interval: Duration::from_secs_f64(self.policy.retry_interval.unwrap_or(0.0)),
         };
-        let mut attempts = Attempts::start(policy, now, &mut Vec::new());
+        let mut steps = Vec::new();
+        let mut attempts = Attempts::start(policy, now, &mut steps);
         attempts.constrain_deadline(self.deadline);
-        self.attempts = Some(attempts);
-        self.launch_effect()
+        for step in steps {
+            if let AttemptStep::Launch(id) = step {
+                return self.launch_effect(attempts, id);
+            }
+        }
+        self.phase = Phase::Waiting(attempts);
+        Vec::new()
     }
 
-    fn launch_effect(&mut self) -> Vec<FallbackChainEffect> {
+    fn launch_effect(&mut self, attempts: Attempts, id: u32) -> Vec<FallbackChainEffect> {
         let Some((index, backend, _)) = self.entries.get(self.cursor).cloned() else {
             self.phase = Phase::Finished;
             return vec![FallbackChainEffect::Finished(Err(ApiError::connection(Some(
@@ -364,7 +372,7 @@ impl ChainRequest {
         };
         self.next_attempt += 1;
         let attempt = self.next_attempt;
-        self.phase = Phase::Active(attempt);
+        self.phase = Phase::Active { attempt, attempts, id };
         vec![FallbackChainEffect::Start { attempt, index, backend }]
     }
 }

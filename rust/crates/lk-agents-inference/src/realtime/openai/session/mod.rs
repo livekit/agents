@@ -482,7 +482,7 @@ impl Pump {
     async fn run_loop(&self, mut commands: media_queue::AudioReceiver<Cmd>) {
         let mut connection = RealtimeConnection::new(&self.connect.conn, self.clock.now());
         let mut effects = connection.start(self.clock.now());
-        let mut attempt = ConnectAttempt::First;
+        let mut reconnect = false;
         loop {
             let mut follow_up = Vec::new();
             for effect in effects {
@@ -490,21 +490,21 @@ impl Pump {
                     RealtimeConnectionEffect::Connect { generation } => {
                         let run = self.connect_and_run(
                             &mut commands,
-                            attempt,
+                            reconnect,
                             &mut connection,
                             generation,
                         );
                         let outcome = run.await;
-                        attempt = ConnectAttempt::Reconnect;
+                        reconnect = true;
                         self.settle_connection(outcome, &mut connection, generation, &mut follow_up)
                             .await
                     }
                     RealtimeConnectionEffect::Retry { error } => {
-                        self.emit_error(error, Recovery::Retrying);
+                        self.emit_error(error, true);
                         ControlFlow::Continue(())
                     }
                     RealtimeConnectionEffect::Failed { error } => {
-                        self.emit_error(error, Recovery::GivenUp);
+                        self.emit_error(error, false);
                         self.close().await;
                         ControlFlow::Break(())
                     }
@@ -589,7 +589,7 @@ impl Pump {
     async fn connect_and_run(
         &self,
         commands: &mut media_queue::AudioReceiver<Cmd>,
-        attempt: ConnectAttempt,
+        reconnect: bool,
         connection: &mut RealtimeConnection,
         generation: u64,
     ) -> Result<Outcome, ApiError> {
@@ -621,10 +621,7 @@ impl Pump {
         let step = {
             let mut m = self.shared.machine.lock().await;
             let now = self.clock.now();
-            match attempt {
-                ConnectAttempt::First => m.open(now),
-                ConnectAttempt::Reconnect => m.reconnect(now),
-            }
+            if reconnect { m.reconnect(now) } else { m.open(now) }
         };
         if !connection.connected(generation, self.clock.now()) {
             self.close_sender(sender, generation).await;
@@ -859,12 +856,12 @@ impl Pump {
         }
     }
 
-    fn emit_error(&self, err: ApiError, recovery: Recovery) {
+    fn emit_error(&self, err: ApiError, recoverable: bool) {
         let event = Event::Error(lk_agents_abi::llm::realtime::RealtimeModelError {
             timestamp: self.clock.now(),
             label: self.label.clone(),
             message: err.message.clone(),
-            recoverable: matches!(recovery, Recovery::Retrying),
+            recoverable,
             req_id: None,
             code: None,
             provider_error: Some(err.clone()),
@@ -924,20 +921,6 @@ fn record_receipts(
     while let Ok(sent) = receipts.try_recv() {
         machine.response_sent(sent.generation, sent.at, &sent.req_id, sent.kind);
     }
-}
-
-/// Whether a connection opens the session or replays it after a lost one.
-#[derive(Debug, Clone, Copy)]
-enum ConnectAttempt {
-    First,
-    Reconnect,
-}
-
-/// Whether the session retries after a connection error or has given up.
-#[derive(Debug, Clone, Copy)]
-enum Recovery {
-    Retrying,
-    GivenUp,
 }
 
 enum Outcome {

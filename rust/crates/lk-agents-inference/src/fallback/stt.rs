@@ -26,8 +26,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::fallback::ChainPolicy;
 use crate::fallback::chain::{
-    Attempt, Backend, ChainCall, ChainObserver, ChainOutcome, FallbackChain, NoBackends, Recovery,
-    RecoveryMode,
+    Attempt, Backend, ChainCall, ChainObserver, FallbackChain, RecoveryMode,
 };
 use crate::fallback::channel::{ServeAttempt, forward, probe_next};
 
@@ -327,14 +326,14 @@ impl Backend for SttBackend {
         conn: &ApiConnectOptions,
         slot: RecoveryMode,
         stop: CancellationToken,
-    ) -> Result<Recovery, ProviderError> {
+    ) -> Result<bool, ProviderError> {
         let stt = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
         match (req, slot) {
             (SttReq::Batch { frames, language, cx }, _) => {
                 // `_try_recognize(recovering=True)`: one call, output discarded, in the job past
                 // the request it recovers for, under no span.
                 stt.recognize(&cx.clone().continuing(None), frames, language.as_ref()).await?;
-                Ok(Recovery::Recovered)
+                Ok(true)
             }
             (SttReq::Stream { language, tee, cx, .. }, _) => {
                 self.probe_stream(stt.as_ref(), language.as_ref(), tee, cx, stop).await
@@ -345,7 +344,7 @@ impl Backend for SttBackend {
 
 impl SttBackend {
     /// A probe stream joined to the live tee, read until a non-empty final transcript; a clean
-    /// drain with none is `NotYet` (`stt:465-466`). A probe's timestamps are never read, and the
+    /// drain with none returns false (`stt:465-466`). A probe's timestamps are never read, and the
     /// reference leaves its offset at 0.
     async fn probe_stream(
         &self,
@@ -354,7 +353,7 @@ impl SttBackend {
         tee: &InputTee,
         cx: &telemetry::Cx,
         stop: CancellationToken,
-    ) -> Result<Recovery, ProviderError> {
+    ) -> Result<bool, ProviderError> {
         let (sink, mut source) = stt
             .stream(cx, language, None)
             .await?
@@ -363,12 +362,12 @@ impl SttBackend {
         let id = tee.add_probe(sink);
         let verdict = loop {
             match probe_next(source.as_mut(), &stop).await {
-                None | Some(Ok(None)) => break Ok(Recovery::NotYet),
+                None | Some(Ok(None)) => break Ok(false),
                 Some(Ok(Some(ev)))
                     if ev.kind == SpeechEventType::FinalTranscript
                         && ev.alternatives.first().is_some_and(|a| !a.text.is_empty()) =>
                 {
-                    break Ok(Recovery::Recovered);
+                    break Ok(true);
                 }
                 Some(Ok(Some(_))) => {}
                 Some(Err(e)) => break Err(e),
@@ -383,15 +382,6 @@ impl SttBackend {
 // ---------------------------------------------------------------------------------------------
 // The adapter
 // ---------------------------------------------------------------------------------------------
-
-/// The caller wraps non-streaming entries in `StreamAdapter` (the reference does it, `stt:64-77`).
-#[derive(Debug, thiserror::Error)]
-pub enum SttChainError {
-    #[error(transparent)]
-    NoBackends(NoBackends),
-    #[error("STTs do not support streaming: {}. Wrap them with stt.StreamAdapter first.", .0.join(", "))]
-    NotStreaming(Vec<String>),
-}
 
 /// `stt:79-93`, field for field; `offline_recognize` is not merged, as in the reference.
 pub fn merge_capabilities(entries: &[SttCapabilities]) -> SttCapabilities {
@@ -444,7 +434,7 @@ impl FallbackStt {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
-    ) -> Result<Self, SttChainError> {
+    ) -> Result<Self, InvalidPayload> {
         let entries: Vec<Arc<SttBackend>> =
             stts.iter().map(|s| SttBackend::new(s, Arc::clone(&clock))).collect();
         let not_streaming: Vec<String> = entries
@@ -453,12 +443,14 @@ impl FallbackStt {
             .map(|b| b.inner.label())
             .collect();
         if !not_streaming.is_empty() {
-            return Err(SttChainError::NotStreaming(not_streaming));
+            return Err(InvalidPayload(format!(
+                "STTs do not support streaming: {}. Wrap them with stt.StreamAdapter first.",
+                not_streaming.join(", ")
+            )));
         }
         let capabilities =
             merge_capabilities(&entries.iter().map(|b| b.inner.capabilities()).collect::<Vec<_>>());
-        let chain = FallbackChain::new(entries, policy, clock, Arc::clone(&spawner), observer)
-            .map_err(SttChainError::NoBackends)?;
+        let chain = FallbackChain::new(entries, policy, clock, Arc::clone(&spawner), observer)?;
         Ok(FallbackStt {
             chain: Arc::new(chain),
             spawner,
@@ -509,7 +501,6 @@ impl lk_agents_abi::stt::fallback::FallbackStt for FallbackStt {
             (env.spawner)().map_err(|e| InvalidPayload(e.to_string()))?,
             observer,
         )
-        .map_err(|error| InvalidPayload(error.to_string()))
     }
 
     fn active_index(&self) -> usize {
@@ -605,8 +596,7 @@ impl Stt for FallbackStt {
         Box::pin(async move {
             let req = SttReq::Batch { frames: Arc::from(buffer), language: language.clone(), cx };
             let mut unused = ();
-            let ChainOutcome::Served(ev) = self
-                .chain
+            self.chain
                 .run(
                     &req,
                     &self.caller_conn,
@@ -614,8 +604,7 @@ impl Stt for FallbackStt {
                     &mut unused,
                     |_i, _b, session, _s| Box::pin(std::future::ready(session.into_batch())),
                 )
-                .await?;
-            Ok(ev)
+                .await
         })
     }
 

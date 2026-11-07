@@ -73,21 +73,13 @@ impl InterruptionPort for InterruptionLeg {
         Box::pin(async move {
             let mut stream = self.stream.lock().await;
             match stream.recv_event().await {
-                Some(StreamEvent::Overlap(ev)) => {
-                    LegEvent::Verdict { req: None, verdict: verdict(&ev, self.anchor) }
+                Some(StreamEvent::Overlap { request, event }) => {
+                    LegEvent::Verdict { req: request, verdict: verdict(&event, self.anchor) }
                 }
-                Some(StreamEvent::CorrelatedOverlap { request, event }) => {
-                    LegEvent::Verdict { req: Some(request), verdict: verdict(&event, self.anchor) }
-                }
-                Some(StreamEvent::CorrelatedError { request, error }) => LegEvent::Error {
-                    req: Some(request),
-                    recoverable: error.recoverable,
-                    err: lk_agents_abi::errors::ProviderError::Local(error.error),
-                },
-                Some(StreamEvent::Error(e)) => LegEvent::Error {
-                    req: None,
-                    recoverable: e.recoverable,
-                    err: lk_agents_abi::errors::ProviderError::Local(e.error),
+                Some(StreamEvent::Error { request, error, recoverable }) => LegEvent::Error {
+                    req: request,
+                    recoverable,
+                    err: lk_agents_abi::errors::ProviderError::Local(error),
                 },
                 None => LegEvent::Closed,
             }

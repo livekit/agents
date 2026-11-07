@@ -34,6 +34,32 @@ struct RemoteItem<T> {
     next: Option<Arc<str>>,
 }
 
+#[derive(Debug, Clone, Default)]
+enum Ends {
+    #[default]
+    Empty,
+    Linked {
+        head: Arc<str>,
+        tail: Arc<str>,
+    },
+}
+
+impl Ends {
+    fn head(&self) -> Option<&Arc<str>> {
+        match self {
+            Self::Empty => None,
+            Self::Linked { head, .. } => Some(head),
+        }
+    }
+
+    fn tail(&self) -> Option<&Arc<str>> {
+        match self {
+            Self::Empty => None,
+            Self::Linked { tail, .. } => Some(tail),
+        }
+    }
+}
+
 /// The native realtime conversation; the generic history also retains host-owned items.
 pub type RemoteChatContext = RemoteHistory<ChatItem>;
 
@@ -42,8 +68,7 @@ pub type RemoteChatContext = RemoteHistory<ChatItem>;
 pub struct RemoteHistory<T> {
     nodes: BTreeMap<Arc<str>, RemoteItem<T>>,
     calls: BTreeMap<String, usize>,
-    head: Option<Arc<str>>,
-    tail: Option<Arc<str>>,
+    ends: Ends,
     revision: u64,
 }
 
@@ -88,7 +113,7 @@ impl<T> ExactSizeIterator for RemoteItems<'_, T> {}
 
 impl<T> Default for RemoteHistory<T> {
     fn default() -> Self {
-        Self { nodes: BTreeMap::new(), calls: BTreeMap::new(), head: None, tail: None, revision: 0 }
+        Self { nodes: BTreeMap::new(), calls: BTreeMap::new(), ends: Ends::Empty, revision: 0 }
     }
 }
 
@@ -118,8 +143,8 @@ impl<T: RemoteValue> RemoteHistory<T> {
     pub fn items(&self) -> RemoteItems<'_, T> {
         RemoteItems {
             context: self,
-            front: self.head.as_deref(),
-            back: self.tail.as_deref(),
+            front: self.ends.head().map(AsRef::as_ref),
+            back: self.ends.tail().map(AsRef::as_ref),
             remaining: self.nodes.len(),
         }
     }
@@ -142,11 +167,11 @@ impl<T: RemoteValue> RemoteHistory<T> {
     }
 
     pub fn tail_id(&self) -> Option<&str> {
-        self.tail.as_deref()
+        self.ends.tail().map(AsRef::as_ref)
     }
 
     pub(crate) fn first_id(&self) -> Option<&str> {
-        self.head.as_deref()
+        self.ends.head().map(AsRef::as_ref)
     }
 
     pub(crate) fn previous_id(&self, id: &str) -> Option<&str> {
@@ -171,19 +196,23 @@ impl<T: RemoteValue> RemoteHistory<T> {
                     .clone(),
             ),
         };
-        let next =
-            previous.as_deref().map_or_else(|| self.head.clone(), |id| self.nodes[id].next.clone());
+        let next = previous
+            .as_deref()
+            .map_or_else(|| self.ends.head().cloned(), |id| self.nodes[id].next.clone());
         let id: Arc<str> = Arc::from(item.id());
-        if let Some(previous) = previous.as_deref() {
-            self.nodes.get_mut(previous).unwrap().next = Some(id.clone());
-        } else {
-            self.head = Some(id.clone());
+        if let Some(previous) = previous.as_deref().and_then(|id| self.nodes.get_mut(id)) {
+            previous.next = Some(id.clone());
         }
-        if let Some(next) = next.as_deref() {
-            self.nodes.get_mut(next).unwrap().previous = Some(id.clone());
-        } else {
-            self.tail = Some(id.clone());
+        if let Some(next) = next.as_deref().and_then(|id| self.nodes.get_mut(id)) {
+            next.previous = Some(id.clone());
         }
+        self.ends = match &self.ends {
+            Ends::Empty => Ends::Linked { head: id.clone(), tail: id.clone() },
+            Ends::Linked { head, tail } => Ends::Linked {
+                head: if previous.is_none() { id.clone() } else { head.clone() },
+                tail: if next.is_none() { id.clone() } else { tail.clone() },
+            },
+        };
         if let Some(call_id) = item.call_id() {
             *self.calls.entry(call_id.to_owned()).or_default() += 1;
         }
@@ -197,16 +226,22 @@ impl<T: RemoteValue> RemoteHistory<T> {
             .nodes
             .remove(item_id)
             .ok_or_else(|| RemoteError::UnknownItem(item_id.to_owned()))?;
-        if let Some(previous) = node.previous.as_deref() {
-            self.nodes.get_mut(previous).unwrap().next = node.next.clone();
-        } else {
-            self.head = node.next.clone();
+        if let Some(previous) = node.previous.as_deref().and_then(|id| self.nodes.get_mut(id)) {
+            previous.next = node.next.clone();
         }
-        if let Some(next) = node.next.as_deref() {
-            self.nodes.get_mut(next).unwrap().previous = node.previous;
-        } else {
-            self.tail = node.previous;
+        if let Some(next) = node.next.as_deref().and_then(|id| self.nodes.get_mut(id)) {
+            next.previous = node.previous.clone();
         }
+        self.ends = match (&self.ends, node.previous, node.next) {
+            (_, None, None) => Ends::Empty,
+            (Ends::Linked { tail, .. }, None, Some(head)) => {
+                Ends::Linked { head, tail: tail.clone() }
+            }
+            (Ends::Linked { head, .. }, Some(tail), None) => {
+                Ends::Linked { head: head.clone(), tail }
+            }
+            (ends, _, _) => ends.clone(),
+        };
         if let Some(call_id) = node.item.call_id()
             && let Some(count) = self.calls.get_mut(call_id)
         {
@@ -278,5 +313,24 @@ mod tests {
     fn deleting_an_absent_id_is_an_error() {
         let mut c = RemoteChatContext::new();
         assert_eq!(c.delete("ghost"), Err(RemoteError::UnknownItem("ghost".into())));
+    }
+
+    #[test]
+    fn deleting_endpoints_and_reinserting_preserves_both_iteration_directions() {
+        let mut c = RemoteChatContext::new();
+        c.insert(None, msg("b", "middle")).unwrap();
+        c.insert(None, msg("a", "head")).unwrap();
+        c.insert(Some("b"), msg("c", "tail")).unwrap();
+        assert_eq!(c.items().rev().map(ChatItem::id).collect::<Vec<_>>(), ["c", "b", "a"]);
+        c.delete("a").unwrap();
+        assert_eq!(c.first_id(), Some("b"));
+        c.delete("c").unwrap();
+        assert_eq!(c.tail_id(), Some("b"));
+        c.delete("b").unwrap();
+        assert_eq!((c.first_id(), c.tail_id()), (None, None));
+        assert_eq!(c.items().next_back(), None);
+        c.insert(None, msg("d", "new")).unwrap();
+        assert_eq!((c.first_id(), c.tail_id()), (Some("d"), Some("d")));
+        assert_eq!(ids(&c), ["d"]);
     }
 }
