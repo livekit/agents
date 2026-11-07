@@ -302,6 +302,7 @@ fn a_provider_key_string_resolves_to_its_dialect() {
         ("inworld", Provider::Inworld),
         ("xai", Provider::Xai),
         ("fishaudio", Provider::FishAudio),
+        ("fishaudio_drama", Provider::FishAudioDrama),
         ("gemini", Provider::Gemini),
     ] {
         let m = Markup::from_provider_key(key);
@@ -429,6 +430,30 @@ fn fish_emphasis_is_a_prefix_marker_on_the_stressed_word() {
     assert_eq!(f.convert(r#"<emphasis class="x">ninth</emphasis>"#), "[emphasis] ninth");
     // `([^<]*)` cannot cross a `<`, so an unclosed one is left for the transcript stripper
     assert_eq!(f.convert("<emphasis>ninth"), "<emphasis>ninth");
+}
+
+#[test]
+fn fish_drama_keeps_free_form_directions_and_scopes_prosody_to_the_words() {
+    let drama = Markup::from_provider_key("fishaudio_drama");
+    assert_eq!(
+        drama.convert(
+            r#"<expr type="expression" label="a little sheepish, apologetic"/> I am <expr type="prosody" label="whispering">sorry</expr>. <expr type="sound" label="sigh"/>"#,
+        ),
+        "[a little sheepish, apologetic] I am <whisper>sorry</whisper>. [sighing]",
+    );
+    assert_eq!(
+        drama.convert(r#"<expr type="prosody" label="hurried">Your total</expr> is <expr type="prosody" label="emphasis">nine</expr>."#),
+        "<fast>Your total</fast> is <emphasis>nine</emphasis>.",
+    );
+    assert_eq!(
+        drama.convert(r#"A <break time="500ms"/> B <break time="2s"/> C"#),
+        "A [short pause] B [pause] C"
+    );
+    let instructions = drama.llm_instructions(None).unwrap();
+    assert!(instructions.contains("a free-form direction"));
+    assert!(instructions.contains("whisper, soft, slow, fast, emphasis"));
+    assert!(!instructions.contains("regretful, hopeful, happy"));
+    assert_eq!(strip_all_markup("<whisper>just</whisper> <stress>nine</stress>"), "just nine");
 }
 
 #[test]

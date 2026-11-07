@@ -41,6 +41,8 @@ __all__ = [
     "GoogleOptions",
     "InworldModels",
     "InworldOptions",
+    "OpenAIModels",
+    "OpenAIOptions",
     "SpeechmaticsModels",
     "SpeechmaticsOptions",
     "XaiModels",
@@ -76,13 +78,14 @@ class STT(InferenceSttHost, stt.STT):
             language: The language to transcribe; overrides the model string's.
             base_url: The gateway URL; ``LIVEKIT_INFERENCE_URL`` or the cloud gateway by default.
             encoding: The audio encoding sent to the gateway.
-            sample_rate: The sample rate sent to the gateway.
+            sample_rate: The sample rate sent to the gateway. Defaults to 24000 for OpenAI,
+                16000 for other providers.
             api_key: ``LIVEKIT_INFERENCE_API_KEY`` or ``LIVEKIT_API_KEY`` by default.
             api_secret: ``LIVEKIT_INFERENCE_API_SECRET`` or ``LIVEKIT_API_SECRET`` by default.
             extra_kwargs: Provider options passed through to the gateway.
             fallback: Fallback models, names or ``FallbackModel`` entries, run by the gateway.
             conn_options: The connection timeout, and the retries the gateway runs server-side.
-            vad: A VAD whose end of speech finalizes the transcript (Speechmatics only).
+            vad: A VAD whose end of speech finalizes the transcript (Speechmatics and OpenAI).
         """
         if isinstance(model, str):
             model, parsed_language = _core.stt_parse_model_string(model)
@@ -92,12 +95,18 @@ class STT(InferenceSttHost, stt.STT):
         self._model: str | None = model if is_given(model) else None
         self._language = LanguageCode(language) if is_given(language) else None
         self._encoding = encoding if is_given(encoding) else "pcm_s16le"
-        self._sample_rate = sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE
         self._extra_kwargs = dict(extra_kwargs) if is_given(extra_kwargs) else {}
         self._fallback = [
             _core.stt_normalize_fallback_str(f) if isinstance(f, str) else f.copy()
             for f in fallbacks
         ]
+        models = [self._model or "", *(f["model"] for f in self._fallback)]
+        default_sample_rate = (
+            24000
+            if any(model.partition("/")[0] == "openai" for model in models)
+            else DEFAULT_SAMPLE_RATE
+        )
+        self._sample_rate = sample_rate if is_given(sample_rate) else default_sample_rate
         self._conn_options = conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS
         credentials = Credentials.resolve(base_url, api_key, api_secret)
         self._base_url, self._api_key, self._api_secret = dataclasses.astuple(credentials)
@@ -125,7 +134,15 @@ class STT(InferenceSttHost, stt.STT):
         )
 
     def _resolve_vad(self, vad: vad_mod.VAD | None) -> vad_mod.VAD | None:
-        match _core.stt_resolve_vad_for_model(self._model, has_vad=vad is not None):
+        model = next(
+            (
+                model
+                for model in [self._model, *(f["model"] for f in self._fallback)]
+                if _core.stt_resolve_vad_for_model(model, has_vad=False) == "create_default"
+            ),
+            self._model,
+        )
+        match _core.stt_resolve_vad_for_model(model, has_vad=vad is not None):
             case "drop_and_warn":
                 logger.warning(
                     "`vad` will be ignored: model %r handles endpointing server-side.", self._model

@@ -72,9 +72,14 @@ class FishAudioOptions(TypedDict, total=False):
     early_stop_threshold: float
 
 
+class AssemblyaiOptions(TypedDict, total=False):
+    word_timestamps: bool
+
+
 CartesiaOptions.__module__ = "livekit.agents.inference.tts"
 DeepgramOptions.__module__ = "livekit.agents.inference.tts"
 RimeOptions.__module__ = "livekit.agents.inference.tts"
 InworldOptions.__module__ = "livekit.agents.inference.tts"
 XaiOptions.__module__ = "livekit.agents.inference.tts"
 FishAudioOptions.__module__ = "livekit.agents.inference.tts"
+AssemblyaiOptions.__module__ = "livekit.agents.inference.tts"

@@ -113,11 +113,10 @@ impl SttStreamExecutor {
     /// One connection. `Ok` when the stream ended, the caller gone or the input finished.
     async fn attempt(&mut self) -> Result<(), ApiError> {
         let (headers, request_id) = self.connection_headers()?;
-        let url = format!(
-            "{}/stt?model={}",
-            to_ws_url(&self.opts.base_url),
-            self.opts.model.as_deref().unwrap_or("")
-        );
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("model", self.opts.model.as_deref().unwrap_or(""))
+            .finish();
+        let url = format!("{}/stt?{}", to_ws_url(&self.opts.base_url), query,);
         // `_speech_duration`: written by send, read by recv.
         let machine = Arc::new(Mutex::new(SttStream::new(
             0,
@@ -211,12 +210,24 @@ impl SttStreamExecutor {
             }
         };
         let outcome = tokio::select! {
+            biased;
             () = self.stop.cancelled() => Ok(()),
             r = settle => r,
             r = send => r,
             r = recv => r,
             r = finalize => r,
         };
+        if !machine.lock().server_closed() && !sender.is_closed() {
+            let close = sender.send_text(wire::session_close().to_string());
+            if let Err(error) =
+                within(&*self.clock, self.opts.conn_options.write_deadline(self.clock.now()), close)
+                    .await
+            {
+                log::debug!(target: lk_agents_abi::LOG_TARGET,
+                    error = error.to_string().as_str(); "STT session close failed"
+                );
+            }
+        }
         sender.close().await;
         if let Some(source) = vad_source {
             let deadline = self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
@@ -533,7 +544,11 @@ impl RecvCtx {
                         return Some(Ok(()));
                     }
                 }
-                SttStreamEffect::EndOfSpeech => self.send_deferred_update(),
+                SttStreamEffect::EndOfSpeech => {
+                    if let Err(error) = self.send_deferred_update() {
+                        return Some(Err(error));
+                    }
+                }
                 SttStreamEffect::Finished(result) => return Some(result),
                 _ => {}
             }
@@ -555,13 +570,21 @@ impl RecvCtx {
     }
 
     /// An end of speech releases the options update deferred until it.
-    fn send_deferred_update(&self) {
+    fn send_deferred_update(&self) -> Result<(), ApiError> {
         let extra = self.deferred.pending.lock().take();
-        if let Some(extra) = extra
-            && let Some(frame) = wire::session_update(None, None, Some(&extra))
-        {
-            let _ = self.update_tx.send(frame);
+        if let Some(extra) = extra {
+            let options = self.deferred.options.lock();
+            if let Some(frame) = wire::session_update(
+                options.model.as_deref().unwrap_or(""),
+                options.language.as_deref(),
+                None,
+                None,
+                Some(&extra),
+            )? {
+                let _ = self.update_tx.send(frame);
+            }
         }
+        Ok(())
     }
 }
 

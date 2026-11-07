@@ -78,6 +78,15 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
 
 // Public data contracts. Python behavior remains in its adapters.
 
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CartesiaSpeedPreset {
+    Slow,
+    Normal,
+    Fast,
+}
+
 #[crate::host(record(
     module = "tts_provider_options",
     path = "livekit.agents.inference.tts",
@@ -135,9 +144,11 @@ pub struct RimeOptions {
 
 /// `InworldOptions.delivery_mode`.
 #[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InworldDeliveryMode {
     #[host(rename = "DELIVERY_MODE_UNSPECIFIED")]
+    #[serde(rename = "DELIVERY_MODE_UNSPECIFIED")]
     Unspecified,
     #[host(rename = "STABLE")]
     Stable,
@@ -149,9 +160,11 @@ pub enum InworldDeliveryMode {
 
 /// `InworldOptions.timestamp_type`.
 #[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InworldTimestampType {
     #[host(rename = "TIMESTAMP_TYPE_UNSPECIFIED")]
+    #[serde(rename = "TIMESTAMP_TYPE_UNSPECIFIED")]
     Unspecified,
     #[host(rename = "WORD")]
     Word,
@@ -161,9 +174,11 @@ pub enum InworldTimestampType {
 
 /// `InworldOptions.apply_text_normalization`.
 #[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InworldTextNormalization {
     #[host(rename = "APPLY_TEXT_NORMALIZATION_UNSPECIFIED")]
+    #[serde(rename = "APPLY_TEXT_NORMALIZATION_UNSPECIFIED")]
     Unspecified,
     #[host(rename = "ON")]
     On,
@@ -202,7 +217,8 @@ pub struct XaiOptions {
 
 /// `FishAudioOptions.latency`.
 #[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FishAudioLatency {
     Normal,
     Balanced,
@@ -239,4 +255,14 @@ pub struct FishAudioOptions {
     pub condition_on_previous_chunks: crate::Maybe<bool>,
     #[host(annotation = "float")]
     pub early_stop_threshold: crate::Maybe<f64>,
+}
+
+#[crate::host(record(
+    module = "tts_provider_options",
+    path = "livekit.agents.inference.tts",
+    typed_dict
+))]
+pub struct AssemblyaiOptions {
+    #[host(annotation = "bool")]
+    pub word_timestamps: crate::Maybe<bool>,
 }

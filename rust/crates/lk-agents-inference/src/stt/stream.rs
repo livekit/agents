@@ -9,6 +9,13 @@ use super::*;
 pub(super) struct DeferredExtra {
     pub(super) speaking: std::sync::atomic::AtomicBool,
     pub(super) pending: Mutex<Option<serde_json::Map<String, serde_json::Value>>>,
+    pub(super) options: Mutex<LiveOptions>,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct LiveOptions {
+    pub(super) model: Option<String>,
+    pub(super) language: Option<String>,
 }
 
 pub struct RecognitionInput {
@@ -49,9 +56,31 @@ impl StreamControl {
             // An explicit `extra` clears any deferred keyterm change (`_pending_extra = None`).
             *self.deferred.pending.lock() = None;
         }
-        if let Some(frame) = wire::session_update(model, language, extra) {
-            // A stream already gone has nothing to update.
-            let _ = self.updates.send(frame);
+        let frame = {
+            let mut options = self.deferred.options.lock();
+            if let Some(model) = model {
+                options.model = Some(model.to_owned());
+            }
+            if let Some(language) = language {
+                options.language = Some(language.to_owned());
+            }
+            wire::session_update(
+                options.model.as_deref().unwrap_or(""),
+                options.language.as_deref(),
+                model,
+                language,
+                extra,
+            )
+        };
+        match frame {
+            Ok(Some(frame)) => {
+                let _ = self.updates.send(frame);
+            }
+            Err(error) => {
+                self.failure.send_replace(Some(error));
+                self.stop.token().cancel();
+            }
+            Ok(None) => {}
         }
     }
 

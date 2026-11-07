@@ -127,6 +127,127 @@ fn each_synthesis_reports_the_connection_it_acquired() {
     });
 }
 
+#[tokio::test(start_paused = true)]
+async fn gateway_error_codes_and_retry_policy_reach_the_public_audio_source_without_provider_text()
+{
+    for (code, retryable, status) in
+        [("BAD_REQUEST", false, 400), ("RATE_LIMITED", false, 429), ("RATE_LIMITED", true, 429)]
+    {
+        let gateway = Arc::new(FrameGateway {
+            connects: AtomicU32::new(0),
+            frames: vec![
+                serde_json::json!({
+                    "type": "error", "code": code,
+                    "data": "private provider text containing credentials",
+                    "retryable": retryable,
+                })
+                .to_string(),
+            ],
+        });
+        let voice = GatewayTts::new(
+            TtsOptions {
+                model: "cartesia/sonic-3".into(),
+                base_url: "https://gateway.fake/v1".into(),
+                api_key: "k".into(),
+                api_secret: "s".into(),
+                ..Default::default()
+            },
+            gateway.clone(),
+            Arc::new(TokioSpawner::current()),
+            Arc::new(SimClock::new()),
+        );
+        let mut audio =
+            voice.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Hello.").await.unwrap();
+        let error = audio.next().await.expect_err("a gateway refusal must reach the caller");
+        assert_eq!(error.status_code(), Some(status));
+        assert_eq!(error.retryable(), retryable);
+        assert_eq!(error.message(), format!("LiveKit Inference TTS returned {code}"));
+        assert!(!error.message().contains("private provider text"));
+        assert!(!error.message().contains("{\"type\""));
+        assert!(audio.next().await.unwrap().is_none());
+        assert_eq!(gateway.connects.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn gateway_fallback_notification_keeps_the_replys_audio_playable() {
+    let pcm = base64::engine::general_purpose::STANDARD.encode(vec![0u8; 4800]);
+    let gateway = Arc::new(FrameGateway {
+        connects: AtomicU32::new(0),
+        frames: vec![
+            serde_json::json!({
+                "type": "fallback_activated", "session_id": "sess",
+                "fallback_type": "system_default", "provider": "inworld",
+                "model": "inworld-tts-2", "voice": "ashley", "cause": "provider_error",
+            })
+            .to_string(),
+            serde_json::json!({"type": "output_audio", "session_id": "sess", "audio": pcm})
+                .to_string(),
+            serde_json::json!({"type": "done", "session_id": "sess"}).to_string(),
+        ],
+    });
+    let voice = GatewayTts::new(
+        TtsOptions {
+            model: "cartesia/sonic-3".into(),
+            base_url: "https://gateway.fake/v1".into(),
+            api_key: "k".into(),
+            api_secret: "s".into(),
+            ..Default::default()
+        },
+        gateway.clone(),
+        Arc::new(TokioSpawner::current()),
+        Arc::new(SimClock::new()),
+    );
+    let mut audio = voice.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Hello.").await.unwrap();
+    let frame = audio.next().await.unwrap().expect("the fallback voice remains audible");
+    let mut samples = frame.frame.samples_per_channel;
+    while let Some(frame) = audio.next().await.unwrap() {
+        samples += frame.frame.samples_per_channel;
+    }
+    assert_eq!(samples, 2400);
+    assert_eq!(gateway.connects.load(Ordering::SeqCst), 1);
+}
+
+struct FrameGateway {
+    connects: AtomicU32,
+    frames: Vec<String>,
+}
+
+#[async_trait::async_trait]
+impl WsTransport for FrameGateway {
+    async fn connect(
+        &self,
+        _url: &str,
+        _headers: lk_agents_inference::headers::Headers,
+    ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
+        self.connects.fetch_add(1, Ordering::SeqCst);
+        let (to_server, mut from_client) = mpsc::unbounded_channel::<String>();
+        let (to_client, from_server) = mpsc::unbounded_channel();
+        let frames = self.frames.clone();
+        tokio::spawn(async move {
+            let mut frames = Some(frames);
+            while let Some(frame) = from_client.recv().await {
+                let frame: serde_json::Value = serde_json::from_str(&frame).unwrap();
+                match frame["type"].as_str() {
+                    Some("session.create") => {
+                        assert_eq!(frame["sample_rate"], 24_000);
+                        let _ = to_client.send(WsMessage::Text(
+                            r#"{"type":"session.created","session_id":"sess"}"#.into(),
+                        ));
+                    }
+                    Some("session.flush") => {
+                        for frame in frames.take().unwrap_or_default() {
+                            let _ = to_client.send(WsMessage::Text(frame));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        Ok((Arc::new(Sender(Mutex::new(Some(to_server)))), Box::new(Receiver(from_server))))
+    }
+}
+
 struct Shared {
     rng: Mutex<fastrand::Rng>,
     connects: AtomicU32,

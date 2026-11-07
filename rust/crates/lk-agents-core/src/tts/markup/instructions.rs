@@ -2,7 +2,8 @@
 
 use crate::tts::markup::prompts::*;
 use crate::tts::markup::provider::{
-    FISHAUDIO_EMOTIONS, FISHAUDIO_TONES, GEMINI_SOUNDS, Provider, XAI_INLINE, XAI_WRAPPING,
+    FISHAUDIO_DRAMA_SPANS, FISHAUDIO_EMOTIONS, FISHAUDIO_TONES, GEMINI_SOUNDS, Provider,
+    XAI_INLINE, XAI_WRAPPING,
 };
 use crate::tts::markup::provider::{
     NonverbalField, ProviderExt, nonverbal_prosody_labels, nonverbal_sound_labels, sound_usage_hint,
@@ -138,6 +139,42 @@ fn fishaudio(sounds: &[&str], disfluencies: bool) -> String {
     parts.join("\n\n")
 }
 
+fn fishaudio_drama(sounds: &[&str], disfluencies: bool) -> String {
+    let mut sections = vec![FISH_DRAMA_DELIVERY.to_string()];
+    if !sounds.is_empty() {
+        sections.push(fill(FISH_SOUNDS_TMPL, &[sounds[0], &sounds.join(", ")]));
+    }
+    sections.push(FISH_PAUSES.to_string());
+    sections.push(fill(FISH_DRAMA_SPANS_TMPL, &[&FISHAUDIO_DRAMA_SPANS.join(", ")]));
+    let mut parts = vec![
+        EXPR_PREAMBLE.to_string(),
+        numbered_sections(&sections),
+        FISH_WRITE_FOR_EAR.to_string(),
+        FISH_LABELS_IN_ENGLISH.to_string(),
+    ];
+    let mut register = vec![
+        "At heavy moments keep directions soft, steady, and caring - never bright or \
+         playful against hard news; bright directions belong to bright moments.",
+        "Whisper and soft spans belong to gentle or conspiratorial beats.",
+    ];
+    if ["laughing", "chuckling"].iter().any(|s| sounds.contains(s)) {
+        register.push(FISH_REGISTER_LAUGHTER);
+    }
+    if disfluencies {
+        register.push(FISH_REGISTER_FILLERS);
+    }
+    parts.push(register.join(" "));
+    let mut pool = FISH_DRAMA_EXAMPLES.to_vec();
+    if disfluencies {
+        pool.extend_from_slice(&FISH_DRAMA_DISFLUENT_EXAMPLES);
+    }
+    let examples = sound_examples(&pool, sounds, &crate::tts::markup::provider::FISHAUDIO_SOUNDS);
+    if !examples.is_empty() {
+        parts.push(examples_block(&examples));
+    }
+    parts.join("\n\n")
+}
+
 /// The `expression` label becomes the part's `speech_metadata.style`, so its label space is
 /// Gemini's own natural-language style prompt, not a vocabulary of ours.
 fn gemini(sounds: &[&str]) -> String {
@@ -177,6 +214,10 @@ pub(crate) fn llm_instructions(
         Provider::FishAudio => fishaudio(
             &allowed_sounds(provider, steering),
             // `steering.get("disfluencies", True)` — absent means on
+            steering.and_then(|s| s.disfluencies).unwrap_or(true),
+        ),
+        Provider::FishAudioDrama => fishaudio_drama(
+            &allowed_sounds(provider, steering),
             steering.and_then(|s| s.disfluencies).unwrap_or(true),
         ),
         Provider::Gemini => gemini(&allowed_sounds(provider, steering)),

@@ -201,10 +201,8 @@ pub struct DeepgramOptions {
     pub channels: crate::Maybe<i64>,
     #[host(annotation = "str")]
     pub version: crate::Maybe<String>,
-    #[host(annotation = "str")]
-    pub callback: crate::Maybe<String>,
-    #[host(annotation = "str")]
-    pub callback_method: crate::Maybe<String>,
+    #[host(annotation = "str | list[str]")]
+    pub language_hint: crate::Maybe<serde_json::Value>,
     #[host(annotation = "str")]
     pub extra: crate::Maybe<String>,
 }
@@ -227,13 +225,14 @@ pub struct DeepgramFluxOptions {
     pub mip_opt_out: crate::Maybe<bool>,
     #[host(annotation = "str | list[str]")]
     pub tag: crate::Maybe<serde_json::Value>,
-    #[host(annotation = "bool")]
-    pub detect_language: crate::Maybe<bool>,
+    #[host(annotation = "str | list[str]")]
+    pub language_hint: crate::Maybe<serde_json::Value>,
 }
 
 /// `AssemblyaiOptions.voice_focus`.
 #[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum AssemblyaiVoiceFocus {
     #[host(rename = "near-field")]
     NearField,
@@ -243,7 +242,8 @@ pub enum AssemblyaiVoiceFocus {
 
 /// `AssemblyaiOptions.mode`.
 #[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AssemblyaiMode {
     MinLatency,
     Balanced,
@@ -341,7 +341,8 @@ pub struct XaiOptions {
 
 /// `InworldOptions.audio_encoding`.
 #[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InworldAudioEncoding {
     #[host(rename = "LINEAR16")]
     Linear16,
@@ -384,4 +385,49 @@ pub struct GoogleOptions {
     pub language_codes: crate::Maybe<Vec<String>>,
     #[host(annotation = "list[str]")]
     pub custom_vocabulary: crate::Maybe<Vec<String>>,
+}
+
+/// The latency/accuracy tradeoff of OpenAI live transcription.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenaiDelay {
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+}
+
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenaiNoiseReduction {
+    NearField,
+    FarField,
+}
+
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeepgramFluxRedact {
+    Numbers,
+    AggressiveNumbers,
+}
+
+#[crate::host(record(
+    module = "stt_provider_options",
+    path = "livekit.agents.inference.stt",
+    name = "OpenAIOptions",
+    typed_dict
+))]
+pub struct OpenaiOptions {
+    #[host(annotation = "list[str]")]
+    pub languages: crate::Maybe<Vec<String>>,
+    #[host(annotation = "str")]
+    pub prompt: crate::Maybe<String>,
+    #[host(annotation = "list[str]")]
+    pub keywords: crate::Maybe<Vec<String>>,
+    pub delay: crate::Maybe<OpenaiDelay>,
+    pub noise_reduction: crate::Maybe<OpenaiNoiseReduction>,
 }

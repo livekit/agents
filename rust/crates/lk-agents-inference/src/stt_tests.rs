@@ -34,6 +34,82 @@ fn stt_once(ws: Arc<FakeWs>) -> GatewayStt {
     GatewayStt::new(opts, ws, spawner, Arc::new(lk_agents_net::clock::RealClock::new()))
 }
 
+#[tokio::test]
+async fn invalid_gateway_audio_is_reported_once_without_retry_or_customer_text() {
+    let ws = Arc::new(
+        FakeWs::new(vec![text(json!({
+            "type": "error", "code": 2004, "message": "customer audio contents"
+        }))])
+        .keep_open(),
+    );
+    let mut options = opts();
+    options.conn_options.retry_interval = 0.0;
+    let client = GatewayStt::new(
+        options,
+        ws.clone(),
+        Arc::new(TokioSpawner::current()),
+        Arc::new(lk_agents_net::clock::RealClock::new()),
+    );
+    let (_sink, mut source) = client.stream_native(None, 0.0).unwrap().split();
+    let error = source.next().await.expect_err("invalid input must reach the caller");
+    let ProviderError::Local(error) = error else { panic!("native error") };
+    assert_eq!(error.status_code, Some(2004));
+    assert!(!error.retryable);
+    assert!(!error.message.contains("customer"));
+    assert_eq!(ws.connect_count(), 1);
+    Box::new(source).close(lk_agents_abi::Ts::from_nanos(u64::MAX)).await;
+}
+
+#[tokio::test]
+async fn rejected_updates_and_truncated_transcripts_reach_the_caller() {
+    for (frame, diagnostic) in [
+        (json!({"type":"session.updated", "success": false}), "update was rejected"),
+        (json!({"type":"session.finalized", "truncated": true}), "transcript was truncated"),
+        (json!({"type":"session.closed", "truncated": true}), "transcript was truncated"),
+    ] {
+        let ws = Arc::new(
+            FakeWs::new(vec![text(json!({"type":"session.created"})), text(frame)]).keep_open(),
+        );
+        let (_sink, mut source) = stt(ws.clone()).stream_native(None, 0.0).unwrap().split();
+        let error = source.next().await.expect_err("server refusal must reach the caller");
+        assert!(error.message().contains(diagnostic), "{}", error.message());
+        assert!(!error.retryable());
+        assert_eq!(ws.connect_count(), 1);
+        Box::new(source).close(lk_agents_abi::Ts::from_nanos(u64::MAX)).await;
+    }
+}
+
+#[tokio::test]
+async fn closing_recognition_sends_the_gateway_close_frame_before_socket_close() {
+    let ws = Arc::new(FakeWs::new(vec![text(json!({"type":"session.created"}))]).keep_open());
+    let (_sink, source) = stt(ws.clone()).stream_native(None, 0.0).unwrap().split();
+    until("created the gateway session", || ws.connect_count() == 1 && !ws.sent_json().is_empty())
+        .await;
+    Box::new(source).close(lk_agents_abi::Ts::from_nanos(u64::MAX)).await;
+    assert_eq!(ws.sent_json().last(), Some(&json!({"type":"session.close"})));
+}
+
+#[test]
+fn openai_stt_refuses_a_rate_the_server_cannot_accept_before_connecting() {
+    let ws = Arc::new(FakeWs::new(vec![]));
+    let mut options = opts();
+    options.model = Some("openai/gpt-live-transcribe".into());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let _entered = runtime.enter();
+    let client = GatewayStt::new(
+        options,
+        ws.clone(),
+        Arc::new(TokioSpawner::current()),
+        Arc::new(lk_agents_net::clock::RealClock::new()),
+    );
+    let Err(error) = client.stream_native(None, 0.0) else {
+        panic!("invalid OpenAI rate accepted")
+    };
+    assert!(error.message().contains("24000"));
+    assert!(!error.retryable());
+    assert_eq!(ws.connect_count(), 0);
+}
+
 // Catches: a failed connection ending the stream instead of reconnecting under
 // `conn_options`, or the exhausted error not naming the attempts.
 #[tokio::test]
@@ -243,7 +319,9 @@ async fn the_handshake_carries_the_model_in_the_url_and_a_bearer_token() {
         stt.stream(&lk_agents_abi::telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
     tokio::task::yield_now().await;
     let (url, headers) = ws.last_connect().expect("connected");
-    assert_eq!(url, "wss://gw/v1/stt?model=deepgram/nova-3");
+    let url = url::Url::parse(&url).unwrap();
+    assert_eq!(url.as_str().split('?').next(), Some("wss://gw/v1/stt"));
+    assert_eq!(url.query_pairs().collect::<Vec<_>>(), [("model".into(), "deepgram/nova-3".into())]);
     let auth = headers.iter().find(|(k, _)| k == "Authorization").unwrap();
     assert!(auth.1.starts_with("Bearer ey"), "{}", auth.1);
 }

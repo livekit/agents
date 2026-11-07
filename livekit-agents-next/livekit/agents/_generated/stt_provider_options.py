@@ -50,8 +50,7 @@ class DeepgramOptions(TypedDict, total=False):
     tag: str | list[str]
     channels: int
     version: str
-    callback: str
-    callback_method: str
+    language_hint: str | list[str]
     extra: str
 
 
@@ -62,7 +61,7 @@ class DeepgramFluxOptions(TypedDict, total=False):
     keyterm: str | list[str]
     mip_opt_out: bool
     tag: str | list[str]
-    detect_language: bool
+    language_hint: str | list[str]
 
 
 class AssemblyaiOptions(TypedDict, total=False):
@@ -124,6 +123,14 @@ class GoogleOptions(TypedDict, total=False):
     custom_vocabulary: list[str]
 
 
+class OpenAIOptions(TypedDict, total=False):
+    languages: list[str]
+    prompt: str
+    keywords: list[str]
+    delay: Literal["minimal", "low", "medium", "high", "xhigh"]
+    noise_reduction: Literal["near_field", "far_field"]
+
+
 CartesiaOptions.__module__ = "livekit.agents.inference.stt"
 DeepgramOptions.__module__ = "livekit.agents.inference.stt"
 DeepgramFluxOptions.__module__ = "livekit.agents.inference.stt"
@@ -132,3 +139,4 @@ SpeechmaticsOptions.__module__ = "livekit.agents.inference.stt"
 XaiOptions.__module__ = "livekit.agents.inference.stt"
 InworldOptions.__module__ = "livekit.agents.inference.stt"
 GoogleOptions.__module__ = "livekit.agents.inference.stt"
+OpenAIOptions.__module__ = "livekit.agents.inference.stt"

@@ -430,6 +430,94 @@ pub(crate) const GEMINI_DELIVERY: &str = concat!(
     "     reading back a total, date, or code: \"Measured, Clear\"",
 );
 
+pub(crate) const FISH_DRAMA_DELIVERY: &str = concat!(
+    "Delivery - a free-form direction for how a sentence sounds. Self-closing; place ",
+    "at the START of EVERY sentence.\n",
+    "   <expr type=\"expression\" label=\"DIRECTION\"/>\n",
+    "   The label is free-form, written like a note to a voice actor: the feeling, the ",
+    "intent, the energy and pace, who you're talking to.\n",
+    "   Write every direction fresh for THIS call. Draw on what the caller just said, how ",
+    "they seem to feel, and what you're about to tell them: \"glad the refund finally came ",
+    "through\" says more than \"happy\", and \"patient, they've explained this twice\" more than ",
+    "\"calm\". The quoted directions in this prompt only show the shape; never copy them word ",
+    "for word, and don't fall back on a few stock phrases.\n",
+    "   Describe the voice and the intent behind it, never what the speaker is doing or ",
+    "what the scene looks like (\"nodding\", \"leaning in\", \"in a busy cafe\"), and never ",
+    "production words like \"cinematic\" or \"announcer\".\n",
+    "   Be concrete: \"deadpan, completely unimpressed\" lands where \"dry\" doesn't. Keep it ",
+    "to a short phrase of two to six words whose descriptors agree; clashing ones (\"calm, ",
+    "excited\") cancel out.\n",
+    "   Set the strength with a softener (\"a little\", \"slightly\", \"gently\", \"quietly\"). ",
+    "Most moments call for a shade, not the extreme; save the strongest directions for ",
+    "true peaks.\n",
+    "   A direction covers its own sentence. Repeat it to carry a feeling into the next ",
+    "sentence, or write a new one where the feeling shifts. Describe one state, never an ",
+    "arc (\"starting calm, getting angry\"); put a fresh direction where the change happens.\n",
+    "   Match the direction's energy to the sentence's punctuation. An exclamation needs a ",
+    "bright direction; a calm one flattens the \"!\".\n",
+    "   Put each question in its own sentence so it gets its own direction instead of ",
+    "inheriting the statement's. Never write \"questioning\" in a direction; the question ",
+    "mark carries the intonation.\n",
+    "   Carry your persona into the directions, so they sound like this character and not ",
+    "generic stage notes. A relaxed persona writes \"easygoing, a little playful\"; a formal ",
+    "concierge writes \"courteous and composed\" for the same sentence.\n",
+    "   Keep the pace neutral by default, and save slow, clear delivery for the line that ",
+    "needs it (a total, date, address, or confirmation code).\n",
+    "   Never put brackets, quotes, or parentheses inside a direction, and never reuse ",
+    "the same direction two turns in a row.",
+);
+
+pub(crate) const FISH_DRAMA_SPANS_TMPL: &str = concat!(
+    "Spans - a few words delivered differently from the rest of the sentence.\n",
+    "   <expr type=\"prosody\" label=\"whisper\">don't tell anyone yet</expr>\n",
+    "   Labels are a fixed vocabulary: {}.\n",
+    "   Wrap the smallest run of words that needs it, inside one sentence; the rest of the ",
+    "sentence keeps its direction. \"emphasis\" stresses exactly ONE word: Are you ",
+    "<expr type=\"prosody\" label=\"emphasis\">sure</expr> about this? Most sentences need no ",
+    "span. Never nest spans, and always close the tag with </expr>.",
+);
+
+pub(crate) const FISH_DRAMA_EXAMPLES: [&str; 5] = [
+    concat!(
+        "<expr type=\"expression\" label=\"sheepish, owning the mix-up\"/> That one's on us. ",
+        "<expr type=\"expression\" label=\"quietly sure I can fix it\"/> Let me see what I can do.",
+    ),
+    concat!(
+        "<expr type=\"expression\" label=\"soft, sorry their week was rough\"/> I'm really ",
+        "sorry, that sounds exhausting. <expr type=\"sound\" label=\"sighing\"/> ",
+        "<expr type=\"expression\" label=\"steady, here to help\"/> We'll get it sorted.",
+    ),
+    concat!(
+        "<expr type=\"expression\" label=\"playful, setting up the joke\"/> Okay, why did the ",
+        "burger go to the gym? <expr type=\"expression\" label=\"smug, landing the punchline\"/> ",
+        "Because it wanted better buns! <expr type=\"sound\" label=\"chuckling\"/>",
+    ),
+    concat!(
+        "<expr type=\"expression\" label=\"glad the new date works\"/> You're all set for ",
+        "<expr type=\"break\" label=\"500ms\"/> Thursday the <expr type=\"prosody\" ",
+        "label=\"emphasis\">ninth</expr>. <expr type=\"expression\" label=\"slow, reading the code ",
+        "back\"/> Your code is B 4 J 7.",
+    ),
+    concat!(
+        "<expr type=\"expression\" label=\"giddy, sharing good news early\"/> <expr ",
+        "type=\"prosody\" label=\"whisper\">Okay, don't tell anyone yet</expr> but I think we ",
+        "actually pulled it off!",
+    ),
+];
+
+pub(crate) const FISH_DRAMA_DISFLUENT_EXAMPLES: [&str; 2] = [
+    concat!(
+        "<expr type=\"expression\" label=\"caught off guard by the news\"/> Um, uh... really? ",
+        "<expr type=\"expression\" label=\"gentle, genuinely sorry\"/> Well, I'm really sorry ",
+        "to hear that.",
+    ),
+    concat!(
+        "<expr type=\"expression\" label=\"rueful, wishing I'd called\"/> I really wish I'd, ",
+        "um, called sooner. <expr type=\"expression\" label=\"softly hopeful we can talk\"/> ",
+        "But I'm here now if, if you want to talk.",
+    ),
+];
+
 pub(crate) const GEMINI_ACCENT: &str = concat!(
     "Accent - OPTIONAL last descriptor, written \"<PLACE> accent\" (\"American accent\", ",
     "\"British accent\", \"Irish accent\").\n",

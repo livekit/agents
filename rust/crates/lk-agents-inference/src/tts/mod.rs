@@ -42,6 +42,7 @@ use wire::FallbackModel;
 pub mod emitter;
 pub mod machine;
 pub mod pacing;
+mod provider_options;
 mod pump;
 pub mod sentence_adapter;
 pub mod sentences;
@@ -232,8 +233,11 @@ impl GatewayTts {
         let headers = gateway_headers(identification.as_ref(), None, None, &token);
         let (ws, clock, connections) =
             (self.ws.clone(), self.clock.clone(), self.connections.clone());
-        let url = format!("{}/tts?model={}", to_ws_url(&opts.base_url), opts.model);
-        let create_frame = wire::session_create(&opts);
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("model", &opts.model)
+            .finish();
+        let url = format!("{}/tts?{query}", to_ws_url(&opts.base_url));
+        let Ok(create_frame) = wire::session_create(&opts) else { return };
         let configuration = connection_configuration(&create_frame, &headers);
         self.tasks.spawn(self.spawner.as_ref(), "tts prewarm", async move {
             let opened = open_ws(
@@ -339,18 +343,21 @@ impl GatewayTts {
         let headers = gateway_headers(identification, None, None, &token);
         let session_id = Some(crate::ids::shortuuid(crate::ids::SESSION_ID_PREFIX));
 
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("model", &opts.model)
+            .finish();
         let pump = Pump {
             connections: self.connections.clone(),
             session_id,
             ws: self.ws.clone(),
-            url: format!("{}/tts?model={}", to_ws_url(&opts.base_url), opts.model),
+            url: format!("{}/tts?{query}", to_ws_url(&opts.base_url)),
             headers,
             clock: clock.clone(),
             accepted_at,
             stopped: stop.clone(),
             done: Some(done),
             failure,
-            create_frame: wire::session_create(&opts),
+            create_frame: wire::session_create(&opts)?,
             sample_rate: opts.sample_rate,
             opts,
             provider,

@@ -14,12 +14,16 @@ pub enum InferenceProvider {
     Moonshotai,
     Zai,
     Deepgram,
+    Deepgramflux,
     Assemblyai,
     Cartesia,
     Speechmatics,
     Inworld,
     Rime,
     Fishaudio,
+    Elevenlabs,
+    Gradium,
+    Soniox,
 }
 
 impl InferenceProvider {
@@ -139,6 +143,16 @@ pub enum SttGoogleModel {
     Gemini35TranscribeLive,
 }
 
+#[crate::host(record(
+    module = "inference_stt",
+    path = "livekit.agents.inference.stt",
+    name = "OpenAIModels"
+))]
+pub enum SttOpenAiModel {
+    #[host(rename = "openai/gpt-live-transcribe")]
+    GptLiveTranscribe,
+}
+
 /// The gateway picks the model.
 #[crate::host(record(
     module = "inference_stt",
@@ -165,6 +179,7 @@ pub enum SttModel {
     Speechmatics(SttSpeechmaticsModel),
     Inworld(SttInworldModel),
     Google(SttGoogleModel),
+    OpenAi(SttOpenAiModel),
     Auto(SttAutoModel),
 }
 
@@ -308,6 +323,18 @@ pub enum TtsFishAudioModel {
     S21ProFree,
     #[host(rename = "fishaudio/s2-pro")]
     S2Pro,
+    #[host(rename = "fishaudio/drama-3")]
+    Drama3,
+}
+
+#[crate::host(record(
+    module = "inference_tts",
+    path = "livekit.agents.inference.tts",
+    name = "AssemblyAIModels"
+))]
+pub enum TtsAssemblyAiModel {
+    #[host(rename = "assemblyai/assemblyai-tts-1")]
+    AssemblyaiTts1,
 }
 
 #[crate::host(record(
@@ -323,6 +350,7 @@ pub enum TtsModel {
     Inworld(TtsInworldModel),
     Xai(TtsXaiModel),
     FishAudio(TtsFishAudioModel),
+    AssemblyAi(TtsAssemblyAiModel),
 }
 
 #[crate::host(record(

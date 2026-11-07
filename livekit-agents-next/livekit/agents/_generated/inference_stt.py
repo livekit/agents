@@ -54,6 +54,9 @@ InworldModels: TypeAlias = Literal["inworld/inworld-stt-1"]
 GoogleModels: TypeAlias = Literal["google/gemini-3.5-transcribe-live"]
 
 
+OpenAIModels: TypeAlias = Literal["openai/gpt-live-transcribe"]
+
+
 AutoModels: TypeAlias = Literal["auto"]
 """The gateway picks the model."""
 
@@ -73,5 +76,6 @@ STTModels: TypeAlias = (
     | SpeechmaticsModels
     | InworldModels
     | GoogleModels
+    | OpenAIModels
     | AutoModels
 )

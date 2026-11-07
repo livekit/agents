@@ -225,7 +225,13 @@ impl Pump {
     ) -> Vec<TtsSynthesisEffect> {
         let (text, sent) = match input {
             Outbound::Transcript(text) => {
-                (wire::input_transcript(&text, &self.opts).to_string(), SentInput::Transcript)
+                let frame = match wire::input_transcript(&text, &self.opts) {
+                    Ok(frame) => frame,
+                    Err(error) => {
+                        return core.handle(TtsSynthesisEvent::Failed(error), self.clock.now());
+                    }
+                };
+                (frame.to_string(), SentInput::Transcript)
             }
             Outbound::FinalFlush => (wire::session_flush().to_string(), SentInput::FinalFlush),
         };

@@ -11,6 +11,7 @@ from .inference_stt import (
     DeepgramModels as DeepgramModels,
     GoogleModels as GoogleModels,
     InworldModels as InworldModels,
+    OpenAIModels as OpenAIModels,
     STTEncoding as STTEncoding,
     STTLanguages as STTLanguages,
     STTModels as STTModels,
@@ -24,6 +25,7 @@ from .stt_provider_options import (
     DeepgramOptions as DeepgramOptions,
     GoogleOptions as GoogleOptions,
     InworldOptions as InworldOptions,
+    OpenAIOptions as OpenAIOptions,
     SpeechmaticsOptions as SpeechmaticsOptions,
     XaiOptions as XaiOptions,
 )
@@ -37,6 +39,7 @@ __all__ = [
     "SpeechmaticsModels",
     "InworldModels",
     "GoogleModels",
+    "OpenAIModels",
     "AutoModels",
     "STTModels",
     "STTLanguages",
@@ -49,4 +52,5 @@ __all__ = [
     "XaiOptions",
     "InworldOptions",
     "GoogleOptions",
+    "OpenAIOptions",
 ]

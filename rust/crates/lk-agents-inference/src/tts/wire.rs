@@ -1,11 +1,13 @@
-//! The TTS gateway's JSON protocol. It differs from STT's on purpose (`"type"` first; fallback
-//! extra defaults to `{}`), so the two are not shared.
+//! The TTS gateway protocol, separate from the STT session protocol.
 
 use super::TtsOptions;
 use lk_agents_abi::TranscriptChunk;
+use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::inference::models::InferenceProvider;
+pub use lk_agents_abi::inference::tts_wire::{ErrorCode, FallbackCause, FallbackType};
 use lk_agents_abi::tts::markup::Provider as MarkupProvider;
-use serde_json::{Map, Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 pub const DEFAULT_ENCODING: &str = "pcm_s16le";
 pub const DEFAULT_SAMPLE_RATE: u32 = 24_000;
@@ -38,6 +40,9 @@ pub fn has_aligned_transcript(model: &str, extra_kwargs: &Map<String, Value>) ->
             extra_kwargs.get("timestamp_type").and_then(Value::as_str),
             Some("WORD") | Some("CHARACTER")
         ),
+        Some(InferenceProvider::Assemblyai) => {
+            extra_kwargs.get("word_timestamps") != Some(&Value::Bool(false))
+        }
         _ => false,
     }
 }
@@ -52,92 +57,153 @@ pub fn markup_provider(model: &str) -> Option<MarkupProvider> {
         InferenceProvider::Cartesia => Some(MarkupProvider::Cartesia),
         InferenceProvider::Inworld if model.contains("tts-2") => Some(MarkupProvider::Inworld),
         InferenceProvider::Xai => Some(MarkupProvider::Xai),
+        InferenceProvider::Fishaudio if model.contains("drama") => {
+            Some(MarkupProvider::FishAudioDrama)
+        }
         InferenceProvider::Fishaudio => Some(MarkupProvider::FishAudio),
         _ => None,
     }
 }
 
-/// The opening `session.create` frame. `"type"` first, unlike STT's.
-pub fn session_create(opts: &TtsOptions) -> Value {
-    let mut params = Map::new();
-    params.insert("type".into(), json!("session.create"));
-    params.insert("sample_rate".into(), json!(opts.sample_rate.to_string()));
-    params.insert("encoding".into(), json!(opts.encoding));
-    params.insert("extra".into(), Value::Object(opts.extra_kwargs.clone()));
+#[derive(Serialize)]
+#[serde(tag = "type")]
+enum ClientMessage<'a> {
+    #[serde(rename = "session.create")]
+    SessionCreate {
+        sample_rate: u32,
+        encoding: &'a str,
+        extra: super::provider_options::Options,
+        #[serde(flatten)]
+        generation: GenerationConfig<'a>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fallback: Option<Fallback<'a>>,
+        connection: crate::extra::Connection,
+    },
+    #[serde(rename = "input_transcript")]
+    InputTranscript {
+        transcript: String,
+        generation_config: GenerationConfig<'a>,
+        extra: super::provider_options::Options,
+    },
+    #[serde(rename = "session.flush")]
+    SessionFlush,
+}
 
-    // An empty voice / model / language sends no key.
-    if let Some(voice) = opts.voice.as_deref()
-        && !voice.is_empty()
-    {
-        params.insert("voice".into(), json!(voice));
+#[derive(Serialize)]
+struct GenerationConfig<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    voice: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    language: Option<&'a str>,
+}
+
+impl<'a> From<&'a TtsOptions> for GenerationConfig<'a> {
+    fn from(opts: &'a TtsOptions) -> Self {
+        Self {
+            voice: opts.voice.as_deref().filter(|s| !s.is_empty()),
+            model: (!opts.model.is_empty()).then_some(opts.model.as_str()),
+            language: opts.language.as_deref().filter(|s| !s.is_empty()),
+        }
     }
-    if !opts.model.is_empty() {
-        params.insert("model".into(), json!(opts.model));
-    }
-    if let Some(language) = opts.language.as_deref()
-        && !language.is_empty()
-    {
-        params.insert("language".into(), json!(language));
-    }
-    if !opts.fallback.is_empty() {
-        let models: Vec<Value> = opts
-            .fallback
-            .iter()
-            .map(|f| {
-                json!({
-                    "model": f.model,
-                    "voice": f.voice,
-                    // `m.get("extra_kwargs", {})` -- **with** a default here, unlike STT's.
-                    "extra": f.extra_kwargs.clone().map(Value::Object).unwrap_or_else(|| json!({})),
-                })
+}
+
+#[derive(Serialize)]
+struct Fallback<'a> {
+    models: Vec<FallbackEntry<'a>>,
+}
+
+#[derive(Serialize)]
+struct FallbackEntry<'a> {
+    model: &'a str,
+    voice: &'a str,
+    extra: super::provider_options::Options,
+}
+
+fn invalid_options(_: serde_json::Error) -> ApiError {
+    let mut error = ApiError::new("Invalid LiveKit Inference TTS provider options");
+    error.retryable = false;
+    error
+}
+
+pub fn session_create(opts: &TtsOptions) -> Result<Value, ApiError> {
+    let models = opts
+        .fallback
+        .iter()
+        .map(|f| {
+            Ok(FallbackEntry {
+                model: &f.model,
+                voice: &f.voice,
+                extra: super::provider_options::Options::parse(
+                    &f.model,
+                    f.extra_kwargs.clone().unwrap_or_default(),
+                )
+                .map_err(invalid_options)?,
             })
-            .collect();
-        params.insert("fallback".into(), json!({"models": models}));
-    }
-    params.insert("connection".into(), crate::extra::connection(&opts.conn_options));
-    Value::Object(params)
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    serde_json::to_value(ClientMessage::SessionCreate {
+        sample_rate: opts.sample_rate,
+        encoding: &opts.encoding,
+        extra: super::provider_options::Options::parse(&opts.model, opts.extra_kwargs.clone())
+            .map_err(invalid_options)?,
+        generation: opts.into(),
+        fallback: (!models.is_empty()).then_some(Fallback { models }),
+        connection: crate::extra::Connection::from(&opts.conn_options),
+    })
+    .map_err(invalid_options)
 }
 
-/// One sentence of input. The trailing space matters: the gateway concatenates transcripts.
-pub fn input_transcript(text: &str, opts: &TtsOptions) -> Value {
-    let mut generation_config = Map::new();
-    if let Some(voice) = opts.voice.as_deref()
-        && !voice.is_empty()
-    {
-        generation_config.insert("voice".into(), json!(voice));
-    }
-    if !opts.model.is_empty() {
-        generation_config.insert("model".into(), json!(opts.model));
-    }
-    if let Some(language) = opts.language.as_deref()
-        && !language.is_empty()
-    {
-        generation_config.insert("language".into(), json!(language));
-    }
-
-    let mut pkt = Map::new();
-    pkt.insert("type".into(), json!("input_transcript"));
-    pkt.insert("transcript".into(), json!(format!("{text} ")));
-    pkt.insert("generation_config".into(), Value::Object(generation_config));
-    pkt.insert("extra".into(), Value::Object(opts.extra_kwargs.clone()));
-    Value::Object(pkt)
+/// The trailing space matters: the gateway concatenates transcripts.
+pub fn input_transcript(text: &str, opts: &TtsOptions) -> Result<Value, ApiError> {
+    serde_json::to_value(ClientMessage::InputTranscript {
+        transcript: format!("{text} "),
+        generation_config: opts.into(),
+        extra: super::provider_options::Options::parse(&opts.model, opts.extra_kwargs.clone())
+            .map_err(invalid_options)?,
+    })
+    .map_err(invalid_options)
 }
 
-/// `{"type": "session.flush"}` -- sent once the sentence stream ends, including when the input was
-/// empty.
 pub fn session_flush() -> Value {
-    json!({"type": "session.flush"})
+    serde_json::to_value(ClientMessage::SessionFlush).expect("a unit message serializes")
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Incoming {
-    SessionCreated { session_id: Option<String> },
-    OutputAudio { session_id: Option<String>, audio: String },
-    OutputAlignment { session_id: Option<String>, tokens: Vec<TranscriptChunk> },
-    Done { session_id: Option<String> },
-    Error { raw: String },
-    Malformed { detail: String },
-    Unknown { session_id: Option<String> },
+    SessionCreated {
+        session_id: Option<String>,
+    },
+    OutputAudio {
+        session_id: Option<String>,
+        audio: String,
+    },
+    OutputAlignment {
+        session_id: Option<String>,
+        tokens: Vec<TranscriptChunk>,
+    },
+    Done {
+        session_id: Option<String>,
+    },
+    Error {
+        code: ErrorCode,
+        retryable: Option<bool>,
+    },
+    FallbackActivated {
+        session_id: Option<String>,
+        fallback_type: FallbackType,
+        provider: String,
+        model: String,
+        voice: String,
+        cause: FallbackCause,
+    },
+    Malformed {
+        detail: String,
+    },
+    Unknown {
+        session_id: Option<String>,
+    },
 }
 
 /// Decode one text frame. `provider` selects Cartesia's re-added trailing space on word alignment
@@ -146,23 +212,31 @@ pub fn decode(text: &str, provider: Option<InferenceProvider>) -> Option<Incomin
     if text.len() > MAX_FRAME_BYTES {
         return Some(Incoming::Malformed { detail: "TTS gateway frame exceeds its limit".into() });
     }
-    let value: Value = serde_json::from_str(text).ok()?;
-    let obj = value.as_object()?;
-    obj.get("type")?.as_str()?;
-    if obj.get("session_id").is_some_and(|id| !id.is_null() && !id.is_string()) {
-        return Some(Incoming::Malformed { detail: "TTS session_id must be a string".into() });
-    }
-    let session_id = obj.get("session_id").and_then(Value::as_str).map(str::to_owned);
-
-    Some(match obj.get("type").and_then(Value::as_str) {
-        Some("session.created") => Incoming::SessionCreated { session_id },
-        Some("output_audio") => output_audio(obj, session_id),
-        Some("output_alignment") => match alignment_tokens(obj, provider) {
-            Some(tokens) => Incoming::OutputAlignment { session_id, tokens },
-            None => Incoming::Malformed { detail: "TTS returned malformed alignment".into() },
-        },
-        Some("done") => Incoming::Done { session_id },
-        Some("error") => Incoming::Error { raw: text.to_owned() },
+    let envelope: MessageType = serde_json::from_str(text).ok()?;
+    envelope.kind?;
+    let frame: ServerFrame = match serde_json::from_str(text) {
+        Ok(frame) => frame,
+        Err(_) => {
+            return Some(Incoming::Malformed {
+                detail: "TTS returned a malformed gateway frame".into(),
+            });
+        }
+    };
+    let session_id = frame.session_id;
+    Some(match frame.message {
+        ServerMessage::SessionCreated => Incoming::SessionCreated { session_id },
+        ServerMessage::OutputAudio { audio } => Incoming::OutputAudio { session_id, audio },
+        ServerMessage::OutputAlignment { words, chars } => {
+            match alignment_tokens(words, chars, provider) {
+                Some(tokens) => Incoming::OutputAlignment { session_id, tokens },
+                None => Incoming::Malformed { detail: "TTS returned malformed alignment".into() },
+            }
+        }
+        ServerMessage::Done => Incoming::Done { session_id },
+        ServerMessage::Error { code, retryable } => Incoming::Error { code, retryable },
+        ServerMessage::FallbackActivated { fallback_type, provider, model, voice, cause } => {
+            Incoming::FallbackActivated { session_id, fallback_type, provider, model, voice, cause }
+        }
         _ => Incoming::Unknown { session_id },
     })
 }
@@ -170,58 +244,116 @@ pub fn decode(text: &str, provider: Option<InferenceProvider>) -> Option<Incomin
 /// The largest gateway frame decoded; a larger one is malformed.
 const MAX_FRAME_BYTES: usize = 1024 * 1024;
 
-fn output_audio(obj: &Map<String, Value>, session_id: Option<String>) -> Incoming {
-    match obj.get("audio").and_then(Value::as_str) {
-        Some(audio) => Incoming::OutputAudio { session_id, audio: audio.to_owned() },
-        None => Incoming::Malformed { detail: "TTS output_audio requires an audio string".into() },
+#[derive(Deserialize)]
+struct MessageType {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ServerFrame {
+    session_id: Option<String>,
+    #[serde(flatten)]
+    message: ServerMessage,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum ServerMessage {
+    #[serde(rename = "session.created")]
+    SessionCreated,
+    #[serde(rename = "output_audio")]
+    OutputAudio { audio: String },
+    #[serde(rename = "output_alignment")]
+    OutputAlignment { words: Option<Vec<Word>>, chars: Option<Vec<Character>> },
+    #[serde(rename = "done")]
+    Done,
+    #[serde(rename = "error")]
+    Error { code: ErrorCode, retryable: Option<bool> },
+    #[serde(rename = "fallback_activated")]
+    FallbackActivated {
+        fallback_type: FallbackType,
+        provider: String,
+        model: String,
+        voice: String,
+        cause: FallbackCause,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Deserialize)]
+struct Word {
+    word: String,
+    #[serde(flatten)]
+    time: AlignmentTime,
+}
+
+#[derive(Deserialize)]
+struct Character {
+    char: String,
+    #[serde(flatten)]
+    time: AlignmentTime,
+}
+
+#[derive(Deserialize)]
+struct AlignmentTime {
+    start: Option<f64>,
+    end: Option<f64>,
+}
+
+impl AlignmentTime {
+    fn token(self, text: String) -> Option<TranscriptChunk> {
+        if self.start.into_iter().chain(self.end).any(|t| !t.is_finite() || t < 0.0) {
+            return None;
+        }
+        Some(TranscriptChunk {
+            text,
+            start_time: self.start,
+            end_time: self.end,
+            confidence: None,
+            start_time_offset: None,
+            speaker_id: None,
+        })
     }
 }
 
 fn alignment_tokens(
-    obj: &Map<String, Value>,
+    words: Option<Vec<Word>>,
+    chars: Option<Vec<Character>>,
     provider: Option<InferenceProvider>,
 ) -> Option<Vec<TranscriptChunk>> {
-    let words = match obj.get("words") {
-        None => None,
-        Some(value) => Some(value.as_array()?),
-    };
-    let chars = match obj.get("chars") {
-        None => None,
-        Some(value) => Some(value.as_array()?),
-    };
-    let (items, key, trailing_space) = match (words, chars) {
-        (Some(words), _) if !words.is_empty() => {
-            (words, "word", provider == Some(InferenceProvider::Cartesia))
-        }
-        (_, Some(chars)) => (chars, "char", false),
-        (Some(words), _) => (words, "word", false),
-        _ => return None,
-    };
-    items
-        .iter()
-        .map(|item| {
-            let text = item.get(key)?.as_str()?;
-            let time = |key| match item.get(key) {
-                None | Some(Value::Null) => Some(None),
-                Some(value) => {
-                    value.as_f64().filter(|time| time.is_finite() && *time >= 0.0).map(Some)
-                }
-            };
-            Some(TranscriptChunk {
-                text: if trailing_space { format!("{text} ") } else { text.to_owned() },
-                start_time: time("start")?,
-                end_time: time("end")?,
-                confidence: None,
-                start_time_offset: None,
-                speaker_id: None,
+    if let Some(words) = words.as_ref().filter(|w| !w.is_empty()) {
+        return words
+            .iter()
+            .map(|w| {
+                let text = if provider == Some(InferenceProvider::Cartesia) {
+                    format!("{} ", w.word)
+                } else {
+                    w.word.clone()
+                };
+                AlignmentTime { start: w.time.start, end: w.time.end }.token(text)
             })
-        })
-        .collect()
+            .collect();
+    }
+    if let Some(chars) = chars {
+        return chars.into_iter().map(|c| c.time.token(c.char)).collect();
+    }
+    words.map(|_| Vec::new())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn session_create(opts: &TtsOptions) -> Value {
+        super::session_create(opts).unwrap()
+    }
+
+    fn input_transcript(text: &str, opts: &TtsOptions) -> Value {
+        super::input_transcript(text, opts).unwrap()
+    }
 
     // Catches: R2b on the empty voice.
     #[test]
@@ -347,5 +479,25 @@ mod tests {
         assert_eq!(markup_provider("inworld/inworld-tts-2"), Some(MarkupProvider::Inworld));
         assert_eq!(markup_provider("inworld/inworld-tts-1.5"), None);
         assert_eq!(markup_provider("cartesia/sonic-3"), Some(MarkupProvider::Cartesia));
+    }
+
+    #[test]
+    fn gateway_options_have_numeric_sample_rates_and_keep_new_provider_fields() {
+        let opts = TtsOptions {
+            model: "assemblyai/assemblyai-tts-1".into(),
+            extra_kwargs: serde_json::from_value(
+                json!({"word_timestamps": true, "future_option": 4}),
+            )
+            .unwrap(),
+            ..Default::default()
+        };
+        let create = session_create(&opts);
+        assert_eq!(create["sample_rate"], 24_000);
+        assert_eq!(create["extra"]["future_option"], 4);
+        assert!(has_aligned_transcript(&opts.model, &opts.extra_kwargs));
+        let mut extra = opts.extra_kwargs;
+        extra.insert("word_timestamps".into(), Value::Bool(false));
+        assert!(!has_aligned_transcript(&opts.model, &extra));
+        assert_eq!(markup_provider("fishaudio/drama-3"), Some(MarkupProvider::FishAudioDrama));
     }
 }

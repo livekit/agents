@@ -22,6 +22,8 @@ __all__ = [
     "TTSEncoding",
     "FallbackModel",
     "FallbackModelType",
+    "AssemblyAIModels",
+    "AssemblyaiOptions",
     "CartesiaModels",
     "CartesiaOptions",
     "DeepgramModels",

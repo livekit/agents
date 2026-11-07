@@ -30,6 +30,7 @@ impl ProviderExt for Provider {
             Provider::Xai => XAI_TAGS.as_slice(),
             // Fish's native dialect is brackets; these names catch hallucinated XML natives.
             Provider::FishAudio => &FISHAUDIO_TAGS,
+            Provider::FishAudioDrama => &FISHAUDIO_DRAMA_TAGS,
             Provider::Gemini => GEMINI_TAGS.as_slice(),
         }
     }
@@ -39,7 +40,7 @@ impl ProviderExt for Provider {
         match self {
             Provider::Inworld => &INWORLD_SOUNDS,
             Provider::Xai => &XAI_INLINE,
-            Provider::FishAudio => &FISHAUDIO_SOUNDS,
+            Provider::FishAudio | Provider::FishAudioDrama => &FISHAUDIO_SOUNDS,
             Provider::Gemini => &GEMINI_SOUNDS,
             Provider::Cartesia => &[],
         }
@@ -61,7 +62,7 @@ impl ProviderExt for Provider {
             // well under xAI's 15,000-char request limit; sized as an expressive batch target
             Provider::Xai => Some(1000),
             // Fish markers are sentence-scoped, so per-sentence emission keeps TTFA low.
-            Provider::FishAudio | Provider::Gemini => None,
+            Provider::FishAudio | Provider::FishAudioDrama | Provider::Gemini => None,
         }
     }
 
@@ -70,7 +71,7 @@ impl ProviderExt for Provider {
         match self {
             Provider::Cartesia => &["emotion", "speed", "volume", "break"],
             Provider::Inworld => &["expression", "sound", "break"],
-            Provider::FishAudio => &["expression", "sound", "break"],
+            Provider::FishAudio | Provider::FishAudioDrama => &["expression", "sound", "break"],
             Provider::Xai | Provider::Gemini => &[],
         }
     }
@@ -165,6 +166,19 @@ pub(crate) const FISHAUDIO_SOUNDS: [&str; 8] = [
 /// Neutral prefix markers, never steering-filtered.
 pub(crate) const FISHAUDIO_TONES: [&str; 4] = ["whispering", "soft", "shouting", "hurried"];
 pub(crate) const FISHAUDIO_TAGS: [&str; 4] = ["expression", "sound", "break", "emphasis"];
+pub(crate) const FISHAUDIO_DRAMA_SPANS: [&str; 5] = ["whisper", "soft", "slow", "fast", "emphasis"];
+pub(crate) const FISHAUDIO_DRAMA_TAGS: [&str; 10] = [
+    "expression",
+    "sound",
+    "break",
+    "whisper",
+    "soft",
+    "slow",
+    "fast",
+    "emphasis",
+    "stress",
+    "forceful",
+];
 
 // Gemini's direction rides two channels: an `expression` marker becomes the part's
 // `speech_metadata.style` (the plugin lifts it out), while sounds, breaks and emphasis lower to
@@ -192,6 +206,7 @@ pub(crate) static ALL_MARKUP_TAGS: LazyLock<Vec<&str>> = LazyLock::new(|| {
         Provider::Inworld,
         Provider::Xai,
         Provider::FishAudio,
+        Provider::FishAudioDrama,
         Provider::Gemini,
     ];
     let tags: BTreeSet<&str> =
@@ -223,7 +238,7 @@ pub(crate) fn nonverbal_sound_labels(
             (MouthSounds, &["tsk", "tongue-click", "lip-smack"]),
             (ReflexSounds, &[]), // xAI has no cough/yawn sounds
         ],
-        Provider::FishAudio => &[
+        Provider::FishAudio | Provider::FishAudioDrama => &[
             (Laughing, &["laughing", "chuckling"]),
             (Breathing, &["gasping"]),
             (Sighing, &["sighing"]),

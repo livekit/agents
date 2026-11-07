@@ -7,7 +7,7 @@ use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::metrics::base::ConnectionAcquired;
 use lk_agents_abi::{SynthesizedAudio, Ts};
 
-use super::wire::Incoming;
+use super::wire::{ErrorCode, Incoming};
 
 pub enum TtsSynthesisEvent {
     Start,
@@ -179,8 +179,49 @@ impl TtsSynthesis {
                 }
                 Vec::new()
             }
-            TtsSynthesisEvent::Received(Incoming::Error { raw }) => {
-                self.fail(ApiError::new(format!("LiveKit Inference TTS returned error: {raw}")))
+            TtsSynthesisEvent::Received(Incoming::Error { code, retryable }) => {
+                let message = format!("LiveKit Inference TTS returned {}", code.as_str());
+                let status = match code {
+                    ErrorCode::AuthenticationError => Some(401),
+                    ErrorCode::RegionRestricted => Some(403),
+                    ErrorCode::NotFound => Some(404),
+                    ErrorCode::RateLimited => Some(429),
+                    ErrorCode::ServerError => Some(500),
+                    ErrorCode::UnsupportedMessageType
+                    | ErrorCode::MissingMessageType
+                    | ErrorCode::SessionNotCreated
+                    | ErrorCode::SessionAlreadyCreated
+                    | ErrorCode::InvalidData
+                    | ErrorCode::BadRequest => Some(400),
+                    _ => None,
+                };
+                let error = match status {
+                    Some(status) => ApiError::status(message, status, None, retryable),
+                    None => {
+                        let mut error = ApiError::new(message);
+                        error.retryable =
+                            retryable.unwrap_or(matches!(code, ErrorCode::InactivityTimeout));
+                        error
+                    }
+                };
+                self.fail(error)
+            }
+            TtsSynthesisEvent::Received(Incoming::FallbackActivated {
+                session_id,
+                fallback_type,
+                provider,
+                model,
+                voice: _,
+                cause,
+            }) => {
+                if let Err(error) = self.segment(session_id) {
+                    return self.fail(error);
+                }
+                log::info!(target: lk_agents_abi::LOG_TARGET,
+                    fallback_type = fallback_type.as_str(), provider = provider.as_str(),
+                    model = model.as_str(), cause = cause.as_str();
+                    "TTS gateway activated fallback");
+                Vec::new()
             }
             TtsSynthesisEvent::Received(Incoming::Malformed { detail }) => {
                 self.fail(ApiError::new(detail))
@@ -311,7 +352,10 @@ mod tests {
         }
         assert!(matches!(
             core.handle(
-                TtsSynthesisEvent::Received(Incoming::Error { raw: "provider failed".into() }),
+                TtsSynthesisEvent::Received(Incoming::Error {
+                    code: ErrorCode::ServerError,
+                    retryable: Some(true)
+                }),
                 Ts::ZERO
             )
             .as_slice(),

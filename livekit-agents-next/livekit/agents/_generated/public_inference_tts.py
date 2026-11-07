@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from .inference_tts import (
+    AssemblyAIModels as AssemblyAIModels,
     CartesiaModels as CartesiaModels,
     DeepgramModels as DeepgramModels,
     FishAudioModels as FishAudioModels,
@@ -14,6 +15,7 @@ from .inference_tts import (
     XaiModels as XaiModels,
 )
 from .tts_provider_options import (
+    AssemblyaiOptions as AssemblyaiOptions,
     CartesiaOptions as CartesiaOptions,
     DeepgramOptions as DeepgramOptions,
     FishAudioOptions as FishAudioOptions,
@@ -29,6 +31,7 @@ __all__ = [
     "InworldModels",
     "XaiModels",
     "FishAudioModels",
+    "AssemblyAIModels",
     "TTSModels",
     "TTSEncoding",
     "CartesiaOptions",
@@ -37,4 +40,5 @@ __all__ = [
     "InworldOptions",
     "XaiOptions",
     "FishAudioOptions",
+    "AssemblyaiOptions",
 ]

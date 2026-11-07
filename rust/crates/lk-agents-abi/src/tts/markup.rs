@@ -91,6 +91,8 @@ pub enum Provider {
     Xai,
     #[host(rename = "fishaudio")]
     FishAudio,
+    #[host(rename = "fishaudio_drama")]
+    FishAudioDrama,
     Gemini,
 }
 

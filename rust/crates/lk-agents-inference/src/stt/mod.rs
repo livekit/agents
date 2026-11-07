@@ -8,6 +8,7 @@ pub(crate) mod gaps;
 pub(crate) mod input;
 pub mod machine;
 pub mod options;
+mod provider_options;
 pub mod retrying;
 mod stream;
 pub mod stream_adapter;
@@ -317,6 +318,21 @@ impl GatewayStt {
     ) -> Result<lk_agents_abi::DuplexStream<RecognitionInput, RecognitionOutput>, ProviderError>
     {
         let opts = self.sanitize(language);
+        if opts
+            .model
+            .as_deref()
+            .into_iter()
+            .chain(opts.fallback.iter().map(|entry| entry.model.as_str()))
+            .any(|model| {
+                lk_agents_abi::inference::models::InferenceProvider::of_model(model)
+                    == Some(lk_agents_abi::inference::models::InferenceProvider::Openai)
+            })
+            && opts.sample_rate != 24_000
+        {
+            return Err(ApiError::new("OpenAI STT requires a sample rate of 24000 Hz")
+                .with_retryable(false)
+                .into());
+        }
         opts.conn_options
             .validate()
             .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
@@ -333,7 +349,13 @@ impl GatewayStt {
             stop: Arc::clone(&stop_guard),
             failure,
             updates: update_tx.clone(),
-            deferred: Arc::new(DeferredExtra::default()),
+            deferred: Arc::new(DeferredExtra {
+                options: Mutex::new(stream::LiveOptions {
+                    model: opts.model.clone(),
+                    language: opts.language.clone(),
+                }),
+                ..Default::default()
+            }),
         });
         self.shared.live.lock().push(Arc::downgrade(&control));
 
@@ -341,7 +363,7 @@ impl GatewayStt {
             ws: self.shared.ws.clone(),
             identification: self.identity.for_connection(),
             clock: self.shared.clock.clone(),
-            create_frame: wire::session_create(&opts, &keyterms),
+            create_frame: wire::session_create(&opts, &keyterms)?,
             vad: self.shared.vad.lock().clone(),
             offset: start_time_offset,
             opts,

@@ -2,8 +2,8 @@
 //! patterns are `tts/_provider_format.py`'s, transcribed as `strip.rs` describes.
 
 use crate::tts::markup::provider::{
-    FISHAUDIO_TONES, GEMINI_PAUSE, GEMINI_SOUNDS, Provider, ProviderExt, XAI_WRAPPING,
-    cartesia_prosody, fishaudio_sound_alias, gemini_sound_alias, xai_sound_alias,
+    FISHAUDIO_DRAMA_SPANS, FISHAUDIO_TONES, GEMINI_PAUSE, GEMINI_SOUNDS, Provider, ProviderExt,
+    XAI_WRAPPING, cartesia_prosody, fishaudio_sound_alias, gemini_sound_alias, xai_sound_alias,
 };
 use crate::tts::markup::strip::{
     Captures, EXPRESSION_RE, LEADING_WS, WORD_BOUNDARY as B, compile, convert_expression_tags,
@@ -131,6 +131,18 @@ fn wrapping_marker(provider: Provider, m: &Captures) -> String {
             format!("[{label}] {inner}")
         }
         Provider::FishAudio => inner.to_string(),
+        Provider::FishAudioDrama => {
+            let span = match label.as_str() {
+                "whispering" => "whisper",
+                "hurried" => "fast",
+                label => label,
+            };
+            if FISHAUDIO_DRAMA_SPANS.contains(&span) {
+                format!("<{span}>{inner}</{span}>")
+            } else {
+                inner.to_string()
+            }
+        }
         // capitalizing is Gemini's one in-text stress control
         Provider::Gemini if label == EMPHASIS => inner.to_uppercase(),
         Provider::Gemini => inner.to_string(),
@@ -171,7 +183,9 @@ fn expression_marker(provider: Provider, label: &str) -> String {
     match provider {
         // Cartesia's discrete emotion vocabulary (instructions list it)
         Provider::Cartesia => format!("<emotion value=\"{label}\"/>"),
-        Provider::Inworld | Provider::FishAudio => format!("<expression value=\"{label}\"/>"),
+        Provider::Inworld | Provider::FishAudio | Provider::FishAudioDrama => {
+            format!("<expression value=\"{label}\"/>")
+        }
         // xAI has no free-form delivery descriptions
         Provider::Xai | Provider::Gemini => String::new(),
     }
@@ -185,7 +199,7 @@ fn sound_marker(provider: Provider, label: String) -> String {
             let l = xai_sound_alias(&label.to_lowercase()).map_or(label, str::to_string);
             format!("<sound value=\"{l}\"/>")
         }
-        Provider::FishAudio => {
+        Provider::FishAudio | Provider::FishAudioDrama => {
             let l = fishaudio_sound_alias(&label.to_lowercase()).map_or(label, str::to_string);
             format!("<sound value=\"{l}\"/>")
         }
@@ -271,7 +285,7 @@ fn close_unclosed_native(provider: Provider, text: &str) -> String {
     let re = match provider {
         Provider::Cartesia => &CARTESIA,
         Provider::Inworld => &INWORLD,
-        Provider::FishAudio => &FISHAUDIO,
+        Provider::FishAudio | Provider::FishAudioDrama => &FISHAUDIO,
         Provider::Xai | Provider::Gemini => return text.to_string(),
     };
     sub(re, text, |m| format!("<{}{}/>", &m[1], &m[2]))
@@ -294,6 +308,10 @@ pub(crate) fn convert_markup(provider: Option<Provider>, text: &str) -> String {
         text = convert_expression_tags(&text);
         text = sub(&BREAK_RE, &text, |m| break_to_bracket(&m[1], "[break]", "[long-break]"));
         text = sub(&FISHAUDIO_EMPHASIS_RE, &text, |m| format!("[emphasis] {}", py_strip(&m[1])));
+    }
+    if provider == Provider::FishAudioDrama {
+        text = convert_expression_tags(&text);
+        text = sub(&BREAK_RE, &text, |m| break_to_bracket(&m[1], "[short pause]", "[pause]"));
     }
     // `<break>` is otherwise passed through unchanged: Inworld accepts it as native SSML.
     text

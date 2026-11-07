@@ -35,6 +35,7 @@ pub struct SttStream {
     started: bool,
     input_ended: bool,
     finished: bool,
+    server_closed: bool,
 }
 
 impl SttStream {
@@ -56,11 +57,16 @@ impl SttStream {
             started: false,
             input_ended: false,
             finished: false,
+            server_closed: false,
         }
     }
 
     pub fn is_speaking(&self) -> bool {
         self.transcript.is_speaking()
+    }
+
+    pub fn server_closed(&self) -> bool {
+        self.server_closed
     }
 
     /// A reconnect sends only new audio, so it repeats no delivered transcript; once the input
@@ -101,41 +107,49 @@ impl SttStream {
                 self.finalization_deadline = Some(now.saturating_add(self.finalization_timeout));
                 vec![SttStreamEffect::SttFinalize { stream_id: self.stream_id }]
             }
-            SttStreamEvent::Message(message) => {
-                let message = *message;
-                let quiet = match &message {
-                    Incoming::SessionClosed => {
-                        return self.fail("STT session closed before transcript completion");
-                    }
-                    Incoming::FinalTranscript(_) => FINAL_TRANSCRIPT_QUIET,
-                    Incoming::InterimTranscript(_) | Incoming::PreflightTranscript(_) => {
-                        self.finalization_timeout
-                    }
-                    _ => Duration::ZERO,
-                };
-                if self.input_ended && !quiet.is_zero() {
-                    self.finalization_deadline = Some(now.saturating_add(quiet));
-                }
-                let acknowledged =
-                    self.input_ended && matches!(message, Incoming::SessionFinalized);
-                let processed = self.transcript.process(message);
-                let mut effects: Vec<_> =
-                    processed.events.into_iter().map(SttStreamEffect::Deliver).collect();
-                if processed.end_of_speech {
-                    effects.push(SttStreamEffect::EndOfSpeech);
-                }
-                if let Some(error) = processed.error {
-                    self.finished = true;
-                    effects.push(SttStreamEffect::Finished(Err(error)));
-                } else if acknowledged {
-                    self.finished = true;
-                    effects.push(SttStreamEffect::Finished(Ok(())));
-                }
-                effects
-            }
+            SttStreamEvent::Message(message) => self.message(*message, now),
             SttStreamEvent::ServerEof => self.fail("STT server EOF before transcript completion"),
             _ => Vec::new(),
         }
+    }
+
+    fn message(&mut self, message: Incoming, now: Ts) -> Vec<SttStreamEffect> {
+        let quiet = match &message {
+            Incoming::SessionClosed { truncated } => {
+                self.server_closed = true;
+                if *truncated {
+                    Duration::ZERO
+                } else if self.input_ended {
+                    self.finished = true;
+                    return vec![SttStreamEffect::Finished(Ok(()))];
+                } else {
+                    return self.fail("STT session closed before transcript completion");
+                }
+            }
+            Incoming::FinalTranscript(_) => FINAL_TRANSCRIPT_QUIET,
+            Incoming::InterimTranscript(_) | Incoming::PreflightTranscript(_) => {
+                self.finalization_timeout
+            }
+            _ => Duration::ZERO,
+        };
+        if self.input_ended && !quiet.is_zero() {
+            self.finalization_deadline = Some(now.saturating_add(quiet));
+        }
+        let acknowledged = self.input_ended && matches!(message, Incoming::SessionFinalized { .. });
+        let processed = self.transcript.process(message);
+        let mut effects: Vec<_> =
+            processed.events.into_iter().map(SttStreamEffect::Deliver).collect();
+        if processed.end_of_speech {
+            effects.push(SttStreamEffect::EndOfSpeech);
+        }
+        if let Some(error) = processed.error {
+            self.finished = true;
+            effects.push(SttStreamEffect::Finished(Err(error)));
+        } else if acknowledged {
+            self.finished = true;
+            effects.push(SttStreamEffect::Finished(Ok(())));
+        }
+        effects
     }
 
     fn fail(&mut self, message: &str) -> Vec<SttStreamEffect> {
@@ -192,7 +206,10 @@ mod tests {
         let mut stream = make();
         stream.handle(SttStreamEvent::InputEnded, now);
         assert_eq!(
-            stream.handle(SttStreamEvent::Message(Box::new(Incoming::SessionFinalized)), now),
+            stream.handle(
+                SttStreamEvent::Message(Box::new(Incoming::SessionFinalized { truncated: false })),
+                now
+            ),
             vec![SttStreamEffect::Finished(Ok(()))]
         );
 

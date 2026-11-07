@@ -47,12 +47,21 @@ InworldModels: TypeAlias = Literal["inworld", "inworld/inworld-tts-2", "inworld/
 XaiModels: TypeAlias = Literal["xai/tts-1"]
 
 
-FishAudioModels: TypeAlias = Literal["fishaudio", "fishaudio/s2.1-pro", "fishaudio/s2.1-pro-free", "fishaudio/s2-pro"]
+FishAudioModels: TypeAlias = Literal["fishaudio", "fishaudio/s2.1-pro", "fishaudio/s2.1-pro-free", "fishaudio/s2-pro", "fishaudio/drama-3"]
+
+
+AssemblyAIModels: TypeAlias = Literal["assemblyai/assemblyai-tts-1"]
 
 
 TTSEncoding: TypeAlias = Literal["pcm_s16le"]
 
 
 TTSModels: TypeAlias = (
-    CartesiaModels | DeepgramModels | RimeModels | InworldModels | XaiModels | FishAudioModels
+    CartesiaModels
+    | DeepgramModels
+    | RimeModels
+    | InworldModels
+    | XaiModels
+    | FishAudioModels
+    | AssemblyAIModels
 )

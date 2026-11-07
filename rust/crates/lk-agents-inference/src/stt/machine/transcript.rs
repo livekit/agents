@@ -63,8 +63,28 @@ impl TranscriptMachine {
                     "LiveKit Inference STT returned an error",
                     code,
                     None,
-                    None,
+                    lk_agents_abi::inference::stt_wire::SttErrorCode::from_wire(&code.to_string())
+                        .map(|code| code.retryable()),
                 )),
+                ..Default::default()
+            },
+            Incoming::SessionUpdated { success: false } => Processed {
+                error: Some(
+                    lk_agents_abi::errors::ApiError::new(
+                        "LiveKit Inference STT session update was rejected",
+                    )
+                    .with_retryable(false),
+                ),
+                ..Default::default()
+            },
+            Incoming::SessionFinalized { truncated: true }
+            | Incoming::SessionClosed { truncated: true } => Processed {
+                error: Some(
+                    lk_agents_abi::errors::ApiError::new(
+                        "LiveKit Inference STT transcript was truncated",
+                    )
+                    .with_retryable(false),
+                ),
                 ..Default::default()
             },
             // `session.created`, `session.finalized`, `session.closed` and anything unrecognised

@@ -3,7 +3,7 @@
 
 use lk_agents_abi::inference::models::InferenceProvider;
 use lk_agents_abi::{AlignedTranscript, SttCapabilities};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 /// Models verified to carry word timings. Unknown models stay disabled until verified.
 const WORD_ALIGNED_MODELS: &[&str] = &[
@@ -82,30 +82,29 @@ pub fn keyterms_extra_for_model(
     let key = match InferenceProvider::of_model(model)? {
         _ if model == SPEECHMATICS_SERVER_TURNS => return None,
         InferenceProvider::Deepgram => "keyterm",
+        InferenceProvider::Cartesia if model == "cartesia/ink-2" => "keyterm",
         InferenceProvider::Assemblyai => "keyterms_prompt",
+        InferenceProvider::Openai => "keywords",
         InferenceProvider::Speechmatics => {
             // Keep existing entries as-is (they may carry `sounds_like` etc.) and append new terms.
-            let existing: Vec<Value> = extra
+            let mut existing: Vec<super::provider_options::Vocabulary> = extra
                 .get("additional_vocab")
-                .and_then(Value::as_array)
                 .cloned()
+                .and_then(|value| serde_json::from_value(value).ok())
                 .unwrap_or_default();
-            let seen: Vec<&str> =
-                existing.iter().filter_map(|v| v.get("content").and_then(Value::as_str)).collect();
-            // The reference's `set(...) - seen` has unspecified order; kept in input order here.
-            let mut additions: Vec<Value> = Vec::new();
-            let mut added: Vec<&str> = Vec::new();
             for term in session_keyterms {
-                if seen.contains(&term.as_str()) || added.contains(&term.as_str()) {
+                if existing.iter().any(|entry| &entry.content == term) {
                     continue;
                 }
-                added.push(term);
-                additions.push(json!({"content": term}));
+                existing.push(super::provider_options::Vocabulary {
+                    content: term.clone(),
+                    ..Default::default()
+                });
             }
             let mut out = Map::new();
             out.insert(
                 "additional_vocab".into(),
-                Value::Array(existing.into_iter().chain(additions).collect()),
+                serde_json::to_value(existing).expect("STT vocabulary serialization"),
             );
             return Some(out);
         }
@@ -113,11 +112,12 @@ pub fn keyterms_extra_for_model(
     };
 
     // Deepgram's `keyterm` may be a bare string; it must become a one-element list.
-    let mut merged: Vec<String> = match extra.get(key) {
-        Some(Value::String(s)) => vec![s.clone()],
-        Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect(),
-        _ => Vec::new(),
-    };
+    let mut merged: Vec<String> =
+        match extra.get(key).cloned().and_then(|value| serde_json::from_value(value).ok()) {
+            Some(super::provider_options::OneOrMany::One(term)) => vec![term],
+            Some(super::provider_options::OneOrMany::Many(terms)) => terms,
+            _ => Vec::new(),
+        };
     // `dict.fromkeys([...])`: order-preserving deduplication.
     for term in session_keyterms {
         if !merged.contains(term) {
@@ -172,12 +172,15 @@ pub use lk_agents_abi::inference::VadResolution;
 
 /// `_resolve_vad_for_model`: what the host does with the caller's VAD for this model.
 pub fn resolve_vad_for_model(model: Option<&str>, has_vad: bool) -> VadResolution {
-    let is_speechmatics =
-        model.is_some_and(|m| m.starts_with("speechmatics/") && m != SPEECHMATICS_SERVER_TURNS);
-    if has_vad && !is_speechmatics {
+    let needs_client_vad = model.is_some_and(|model| {
+        matches!(InferenceProvider::of_model(model), Some(InferenceProvider::Openai))
+            || (InferenceProvider::of_model(model) == Some(InferenceProvider::Speechmatics)
+                && model != SPEECHMATICS_SERVER_TURNS)
+    });
+    if has_vad && !needs_client_vad {
         return VadResolution::DropAndWarn;
     }
-    if is_speechmatics && !has_vad {
+    if needs_client_vad && !has_vad {
         return VadResolution::CreateDefault;
     }
     if has_vad { VadResolution::Keep } else { VadResolution::None }
@@ -186,6 +189,7 @@ pub fn resolve_vad_for_model(model: Option<&str>, has_vad: bool) -> VadResolutio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn map(pairs: &[(&str, Value)]) -> Map<String, Value> {
         pairs.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect()
@@ -328,7 +332,15 @@ mod tests {
 
     // Catches: ignoring a caller-supplied VAD, or constructing one for a server-endpointing model.
     #[test]
-    fn only_speechmatics_uses_a_client_side_vad() {
+    fn speechmatics_and_openai_use_a_client_side_vad() {
+        assert_eq!(
+            resolve_vad_for_model(Some("openai/gpt-live-transcribe"), false),
+            VadResolution::CreateDefault
+        );
+        assert_eq!(
+            resolve_vad_for_model(Some("openai/gpt-live-transcribe"), true),
+            VadResolution::Keep
+        );
         assert_eq!(
             resolve_vad_for_model(Some("speechmatics/enhanced"), false),
             VadResolution::CreateDefault
@@ -358,5 +370,16 @@ mod tests {
             normalize_fallback_str("deepgram/nova-3:fr"),
             FallbackModel { model: "deepgram/nova-3".into(), extra_kwargs: None }
         );
+    }
+
+    #[test]
+    fn keyterms_reach_openai_and_cartesia_turns_with_the_server_key() {
+        for (model, key) in
+            [("openai/gpt-live-transcribe", "keywords"), ("cartesia/ink-2", "keyterm")]
+        {
+            let extra = keyterms_extra_for_model(Some(model), None, &["LiveKit".into()]).unwrap();
+            assert_eq!(extra[key], json!(["LiveKit"]));
+            assert!(capabilities(Some(model), &[], None).keyterms);
+        }
     }
 }

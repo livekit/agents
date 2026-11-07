@@ -1,14 +1,17 @@
 //! The gateway session's `connection` block every client sends.
 
 use lk_agents_abi::ApiConnectOptions;
-use serde_json::{Value, json};
+use serde::Serialize;
 
-/// The session-create `connection` block: the gateway retries its provider connection `retries`
-/// times, each try bounded by `timeout` (our `connect_timeout`; absent, the gateway's default).
-pub fn connection(conn_options: &ApiConnectOptions) -> Value {
-    let mut block = json!({"retries": conn_options.max_retry});
-    if let Some(timeout) = conn_options.connect_timeout {
-        block["timeout"] = json!(timeout);
+#[derive(Serialize)]
+pub struct Connection {
+    retries: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout: Option<f64>,
+}
+
+impl From<&ApiConnectOptions> for Connection {
+    fn from(options: &ApiConnectOptions) -> Self {
+        Self { retries: options.max_retry, timeout: options.connect_timeout }
     }
-    block
 }
