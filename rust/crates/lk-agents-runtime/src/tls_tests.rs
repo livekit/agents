@@ -118,7 +118,7 @@ async fn probe() {
         socket.send(websocket::Message::Text("ready".into())).await.unwrap();
         socket.close(None).await.unwrap();
     });
-    let mut socket = websocket::connect_with_limit(&url, vec![], None).await.unwrap();
+    let mut socket = websocket::connect_with_limit(&url, Default::default(), None).await.unwrap();
     assert_eq!(socket.next().await.unwrap().unwrap(), websocket::Message::Text("ready".into()));
     drop(socket);
     server.await.unwrap();
@@ -175,7 +175,9 @@ async fn reject_certificate(cert: CertificateDer<'static>, key: &[u8]) {
                 assert!(storage.list_threads("scope".into(), None, None).await.is_err());
                 storage.aclose().await;
             }
-            _ => assert!(websocket::connect_with_limit(&url, vec![], None).await.is_err()),
+            _ => assert!(
+                websocket::connect_with_limit(&url, Default::default(), None).await.is_err()
+            ),
         }
         server.await.unwrap();
     }

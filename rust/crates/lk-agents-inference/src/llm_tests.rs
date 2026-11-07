@@ -31,6 +31,7 @@ enum Reply {
     /// Hang before the response head.
     Silent,
     Status(u16, &'static str),
+    StatusHeaders(u16, &'static str, &'static str),
 }
 
 struct Peer {
@@ -101,14 +102,20 @@ async fn serve(
         };
         match reply {
             Reply::Silent => return hang(socket, released).await,
-            Reply::Status(status, body) => {
-                let head =
-                    format!("HTTP/1.1 {status} Nope\r\ncontent-length: {}\r\n\r\n", body.len());
+            Reply::Status(status, body) | Reply::StatusHeaders(status, body, _) => {
+                let headers = match reply {
+                    Reply::StatusHeaders(_, _, headers) => headers,
+                    _ => "",
+                };
+                let head = format!(
+                    "HTTP/1.1 {status} Nope\r\ncontent-length: {}\r\n{headers}\r\n",
+                    body.len()
+                );
                 let _ = socket.write_all(head.as_bytes()).await;
                 let _ = socket.write_all(body.as_bytes()).await;
             }
             Reply::Sse(parts) => {
-                let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n";
+                let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nX-LiveKit-Request-Id: stream-id\r\ntransfer-encoding: chunked\r\n\r\n";
                 let _ = socket.write_all(head.as_bytes()).await;
                 for part in parts {
                     match part {
@@ -233,10 +240,63 @@ async fn a_rejected_attempt_is_retried_and_the_retry_answers() {
     assert_eq!(peer.requests.load(Ordering::SeqCst), 1);
 }
 
-// Catches: a retry replaying the failed attempt's gateway session: each attempt is its own
-// session, so the gateway never joins a retry to the request it already failed.
 #[tokio::test(flavor = "multi_thread")]
-async fn each_attempt_opens_a_fresh_gateway_session() {
+async fn a_terminal_quota_rejection_is_not_retried_and_explains_the_credit_limit() {
+    let peer = Peer::start(vec![
+        Reply::StatusHeaders(429,
+            r#"{"type":"inference_quota_exceeded","error":"Project out of credits","hint":"Add credits to continue."}"#,
+            "X-Should-Retry: false\r\nX-LiveKit-Request-Id: quota-id\r\n"),
+        Reply::Sse(vec![Part::Bytes(b"data: [DONE]\n\n")]),
+    ]).await;
+    let llm = llm(&peer);
+    let error = text(&mut open(&llm, policy(3, 2_000))).await.unwrap_err();
+    assert_eq!(
+        (error.kind, error.status_code, error.retryable),
+        (ApiErrorKind::Status, Some(429), false)
+    );
+    assert!(error.message.contains("Project out of credits"), "{error}");
+    assert!(error.message.contains("Add credits to continue."), "{error}");
+    assert_eq!(error.request_id.as_deref(), Some("quota-id"));
+    assert_eq!(peer.requests.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_inband_gateway_error_surfaces_its_status_and_message() {
+    for (frame, status, message) in [
+        (b"data: {\"error\":{\"message\":\"Service Unavailable\",\"type\":\"server_error\",\"code\":503}}\n\n".as_slice(), 503, "Service Unavailable"),
+        (b"data: {\"error\":{\"message\":\"Gateway Timeout\",\"type\":\"server_error\",\"code\":504}}\n\n".as_slice(), 504, "Gateway Timeout"),
+    ] {
+        let peer = Peer::start(vec![Reply::Sse(vec![
+            Part::Bytes(b"data: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n"),
+            Part::Bytes(frame),
+        ])]).await;
+        let llm = llm(&peer);
+        let mut chunks = open(&llm, policy(3, 2_000));
+        assert_eq!(chunks.next().await.unwrap().unwrap().delta.unwrap().content.as_deref(), Some("Hello"));
+        let error = text(&mut chunks).await.unwrap_err();
+        assert_eq!((error.kind, error.status_code, error.retryable), (ApiErrorKind::Status, Some(status), false));
+        assert!(error.message.contains(message), "{error}");
+        assert_eq!(error.request_id.as_deref(), Some("stream-id"));
+        assert_eq!(peer.requests.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_gateway_rejection_uses_the_livekit_request_id() {
+    let peer = Peer::start(vec![Reply::StatusHeaders(
+        401,
+        r#"{"error":{"message":"bad key"}}"#,
+        "X-LiveKit-Request-Id: livekit-id\r\nX-Request-Id: unrelated-id\r\n",
+    )])
+    .await;
+    let llm = llm(&peer);
+    let error = text(&mut open(&llm, policy(0, 2_000))).await.unwrap_err();
+    assert_eq!(error.request_id.as_deref(), Some("livekit-id"));
+    assert!(error.message.contains("bad key"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn requests_omit_the_unused_gateway_session_header() {
     let busy = Reply::Status(503, "{\"error\":{\"message\":\"busy\"}}");
     let ok = Reply::Sse(vec![Part::Bytes(
         b"data: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n",
@@ -250,10 +310,8 @@ async fn each_attempt_opens_a_fresh_gateway_session() {
         .unwrap();
     assert_eq!(text(&mut chunks).await.unwrap(), "hi");
     let sessions = peer.sessions.lock().clone();
-    assert_eq!(sessions.len(), 3, "{sessions:?}");
-    assert!(sessions.iter().all(|s| s.starts_with("inference_")), "{sessions:?}");
-    let distinct: std::collections::BTreeSet<_> = sessions.iter().collect();
-    assert_eq!(distinct.len(), 3, "one session per attempt: {sessions:?}");
+    assert!(sessions.is_empty(), "unused session header leaked: {sessions:?}");
+    assert_eq!(peer.requests.load(Ordering::SeqCst), 3);
 }
 
 // Catches: a stalled stream waited on forever, a read timeout reported without its phase or as

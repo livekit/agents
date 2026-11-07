@@ -4,7 +4,7 @@
 //! `.await`.
 
 use crate::effects::InterruptionEffect;
-use crate::headers::HeaderProvider;
+use crate::headers::{HeaderProvider, Headers, gateway_headers};
 use crate::interruption::event::{InterruptionDetectionError, OverlappingSpeechEvent};
 use crate::interruption::machine::{
     InputEvent, InterruptionEvent, InterruptionMachine, RequestIdentity, StreamError,
@@ -28,7 +28,7 @@ use lk_agents_net::task::TokioSpawner;
 use lk_agents_net::telemetry;
 use lk_agents_net::token::{INFERENCE_TOKEN_TTL, inference_bearer_with_ttl};
 use lk_agents_net::transport::{
-    TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status,
+    TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status, connect_error,
 };
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,8 +49,7 @@ pub struct ConnectionConfig {
     /// The socket: the native one, or the caller's own (`AdaptiveInterruptionDetector(
     /// http_session=..)`, whose `ws_connect` the reference dials through).
     pub transport: Arc<dyn WsTransport>,
-    /// `get_inference_headers()`, called per connection as `_connect_ws` does (§1.9), so each
-    /// connection has its own session id. `Authorization` is added here and must not be in it.
+    /// Job identification, read per connection. Authentication is added by the gateway builder.
     pub headers: HeaderProvider,
     pub token_ttl_secs: u64,
 }
@@ -60,7 +59,7 @@ impl Default for ConnectionConfig {
         ConnectionConfig {
             conn_options: ApiConnectOptions::default(),
             transport: Arc::new(lk_agents_net::websocket::TungsteniteTransport),
-            headers: Arc::new(Vec::new),
+            headers: Arc::new(Headers::new),
             token_ttl_secs: INFERENCE_TOKEN_TTL.as_secs(),
         }
     }
@@ -159,7 +158,7 @@ impl StreamContext {
         let mut failure = self.input_failure.subscribe();
         loop {
             if let Some(error) = failure.borrow_and_update().clone() {
-                return StreamError { request: None, error, body: None };
+                return error.into();
             }
             let _ = failure.changed().await;
         }
@@ -574,11 +573,7 @@ fn send_outcome(
     match joined {
         Ok(Ok(())) => Ok(ConnectionEnd::InputEnded),
         Ok(Err(e)) => Err(e),
-        Err(e) => Err(StreamError {
-            request: None,
-            error: ApiError::new(format!("interruption send task panicked: {e}")),
-            body: None,
-        }),
+        Err(e) => Err(ApiError::new(format!("interruption send task panicked: {e}")).into()),
     }
 }
 
@@ -603,27 +598,25 @@ fn handle_incoming(
             return if closing.load(Ordering::Acquire) {
                 Ok(Incoming::Closed)
             } else {
-                Err(closed_unexpectedly(close_status, "", ""))
+                Err(StreamError::closed_unexpectedly(close_status, "", ""))
             };
         }
         Ok(WsMessage::Binary(_) | WsMessage::Other) => return Ok(Incoming::Continue),
         Err(e) => {
-            return Err(StreamError {
-                request: None,
-                error: ApiError::connection(Some(format!(
-                    "LiveKit Adaptive Interruption connection error: {e}"
-                ))),
-                body: None,
-            });
+            return Err(ApiError::connection(Some(format!(
+                "LiveKit Adaptive Interruption connection error: {e}"
+            )))
+            .into());
         }
     };
 
     // An unknown `type` is a `ValidationError` in the reference and takes the connection down.
-    let parsed: ServerMessage = serde_json::from_str(&msg).map_err(|e| StreamError {
-        request: None,
-        error: ApiError::new(format!("failed to parse LiveKit Adaptive Interruption message: {e}"))
-            .with_retryable(false),
-        body: Some(msg.to_string()),
+    let parsed: ServerMessage = serde_json::from_str(&msg).map_err(|e| {
+        StreamError::from(
+            ApiError::new(format!("failed to parse LiveKit Adaptive Interruption message: {e}"))
+                .with_retryable(false),
+        )
+        .with_body(msg.to_string())
     })?;
 
     let now = ctx.clock.now();
@@ -661,14 +654,8 @@ async fn send_task(
     Ok(())
 }
 
-fn send_failed(e: TransportError) -> StreamError {
-    StreamError {
-        request: None,
-        error: ApiError::connection(Some(format!(
-            "failed to send to LiveKit Adaptive Interruption: {e}"
-        ))),
-        body: None,
-    }
+fn send_failed(e: TransportError) -> ApiError {
+    ApiError::connection(Some(format!("failed to send to LiveKit Adaptive Interruption: {e}")))
 }
 
 /// `_connect_ws` (`inference/interruption.py:977`).
@@ -695,55 +682,35 @@ async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
         &api_secret,
         Duration::from_secs(ctx.config.token_ttl_secs),
     )
-    .map_err(|e| StreamError {
-        request: None,
-        error: ApiError::new(format!("failed to mint an inference access token: {e}"))
-            .with_retryable(false),
-        body: None,
+    .map_err(|e| {
+        ApiError::new(format!("failed to mint an inference access token: {e}"))
+            .with_retryable(false)
     })?;
 
     // An unusable URL is the caller's mistake, which no retry fixes.
     {
         use lk_agents_net::websocket::tungstenite::client::IntoClientRequest as _;
         if let Err(e) = url.as_str().into_client_request() {
-            return Err(StreamError {
-                request: None,
-                error: ApiError::new(format!("invalid inference base_url {url:?}: {e}"))
-                    .with_retryable(false),
-                body: None,
-            });
+            return Err(ApiError::new(format!("invalid inference base_url {url:?}: {e}"))
+                .with_retryable(false)
+                .into());
         }
     }
-    let mut headers: Vec<(String, String)> = (ctx.config.headers)()
-        .into_iter()
-        .filter(|(name, _)| !name.eq_ignore_ascii_case("authorization"))
-        .collect();
-    headers.push(("Authorization".to_owned(), format!("Bearer {token}")));
+    let headers = gateway_headers(Some(&(ctx.config.headers)()), None, None, &token);
 
     let deadline = ctx.config.conn_options.connect_deadline(ctx.clock.now());
     let connect = ctx.config.transport.connect(&url, headers);
     let (sender, receiver) =
         match while_input_open(ctx, lk_agents_abi::before(&*ctx.clock, deadline, connect)).await? {
-            Err(_) | Ok(Err(TransportError::Timeout)) => {
-                return Err(StreamError {
-                    request: None,
-                    error: connect_error(ConnectFailure::Timeout),
-                    body: None,
-                });
+            Err(_) => {
+                return Err(connect_error(
+                    "LiveKit Adaptive Interruption",
+                    TransportError::Timeout,
+                )
+                .into());
             }
-            Ok(Err(TransportError::Status { status, .. })) => {
-                return Err(StreamError {
-                    request: None,
-                    error: connect_error(ConnectFailure::Http { status }),
-                    body: None,
-                });
-            }
-            Ok(Err(_other)) => {
-                return Err(StreamError {
-                    request: None,
-                    error: connect_error(ConnectFailure::Transport),
-                    body: None,
-                });
+            Ok(Err(error)) => {
+                return Err(connect_error("LiveKit Adaptive Interruption", error).into());
             }
             Ok(Ok(halves)) => halves,
         };
@@ -751,15 +718,12 @@ async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
     let create = ClientMessage::SessionCreate { settings };
     let json = serde_json::to_string(&create)
         .expect("SessionCreateSettings is plain data with no non-finite defaults");
-    match while_input_open(ctx, sender.send_text(json)).await {
-        Ok(Ok(())) => {}
-        outcome => {
-            sender.close().await;
-            return Err(match outcome {
-                Err(error) => error,
-                _ => StreamError { request: None, error: session_create_failed(), body: None },
-            });
-        }
+    let written = while_input_open(ctx, sender.send_text(json)).await.and_then(|outcome| {
+        outcome.map_err(|error| connect_error("LiveKit Adaptive Interruption", error).into())
+    });
+    if let Err(error) = written {
+        sender.close().await;
+        return Err(error);
     }
     Ok(Socket { sender, receiver })
 }
@@ -902,74 +866,5 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&sent[2]).unwrap()["type"],
             serde_json::json!("session.close")
         );
-    }
-}
-
-/// How the WebSocket handshake failed, at the granularity `_connect_ws` distinguishes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConnectFailure {
-    /// `asyncio.TimeoutError` from the `wait_for` around `ws_connect`.
-    Timeout,
-    /// `aiohttp.ClientResponseError` -- the server answered the upgrade with a status.
-    Http { status: i64 },
-    /// `aiohttp.ClientConnectorError` and everything else.
-    Transport,
-}
-
-/// `_connect_ws`'s except block (`inference/interruption.py:1008`). A 429 and a handshake timeout
-/// are not retryable; a plain connector error is.
-pub fn connect_error(failure: ConnectFailure) -> ApiError {
-    match failure {
-        ConnectFailure::Http { status: 429 } => {
-            ApiError::status("LiveKit Adaptive Interruption quota exceeded", 429, None, Some(false))
-        }
-        ConnectFailure::Timeout => ApiError::connection(Some(
-            "failed to connect to LiveKit Adaptive Interruption: timeout".to_owned(),
-        ))
-        .with_retryable(false),
-        ConnectFailure::Http { .. } | ConnectFailure::Transport => ApiError::connection(Some(
-            "failed to connect to LiveKit Adaptive Interruption".to_owned(),
-        )),
-    }
-}
-
-/// `recv_task`'s unexpected-close branch (`inference/interruption.py:836`), `status` the
-/// [`close_status`](lk_agents_net::transport::close_status).
-pub fn closed_unexpectedly(status: i64, data: &str, extra: &str) -> StreamError {
-    StreamError {
-        request: None,
-        error: ApiError::status(
-            format!("LiveKit Adaptive Interruption connection closed unexpectedly: {data}"),
-            status,
-            None,
-            None,
-        ),
-        // `f"{ws_msg.data=} {ws_msg.extra=}"` uses `repr`; `{:?}` on a `&str` matches it.
-        body: Some(format!("ws_msg.data={data:?} ws_msg.extra={extra:?}")),
-    }
-}
-
-/// `_connect_ws`'s post-handshake failure (`inference/interruption.py:1030`): the socket opened but
-/// `session.create` could not be written. Retryable, unlike the handshake failures above.
-pub fn session_create_failed() -> ApiError {
-    ApiError::connection(Some(
-        "failed to send session.create message to LiveKit Adaptive Interruption".to_owned(),
-    ))
-}
-
-#[cfg(test)]
-mod connection_error_tests {
-    use super::*;
-
-    // Catches: a handshake timeout or a 429 marked retryable.
-    #[test]
-    fn a_handshake_timeout_is_not_retryable_but_a_connector_error_is() {
-        assert!(!connect_error(ConnectFailure::Timeout).retryable);
-        assert!(!connect_error(ConnectFailure::Http { status: 429 }).retryable);
-        assert!(connect_error(ConnectFailure::Transport).retryable);
-        // A non-429 HTTP answer takes the generic connection path, message and all.
-        let other = connect_error(ConnectFailure::Http { status: 503 });
-        assert_eq!(other.message, "failed to connect to LiveKit Adaptive Interruption");
-        assert_eq!(other.status_code, None);
     }
 }

@@ -185,7 +185,7 @@ impl WsTransport for Gateway {
     async fn connect(
         &self,
         _url: &str,
-        _headers: Vec<(String, String)>,
+        _headers: lk_agents_inference::headers::Headers,
     ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
         tokio::time::sleep(CONNECT).await;
         self.0.connects.fetch_add(1, Ordering::SeqCst);

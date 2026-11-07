@@ -7,6 +7,7 @@ use crate::fallback::chain::{
     Attempt, Backend, ChainCall, ChainObserver, FallbackChain, NoBackends, Recovery, RecoveryMode,
 };
 use crate::fallback::channel::{ServeAttempt, drain_probe, next_or_stop};
+use crate::fallback::traced::{self, Traced};
 use crate::fallback::{ChainPolicy, resampling_plan};
 use crate::telemetry;
 use crate::tts::sentence_adapter::StreamAdapter;
@@ -18,10 +19,9 @@ use lk_agents_abi::llm::fallback as port;
 use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::tts::stream_adapter::{SplitterFactory, TextProcessorFactory};
 use lk_agents_abi::types::provider::NativeLabel;
-use lk_agents_abi::utils::stream::{ProviderStream, StreamOutput};
+use lk_agents_abi::utils::stream::ProviderStream;
 use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
-use lk_agents_abi::{Closed, Ts};
 use lk_agents_abi::{StreamInput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 use lk_agents_media::{AudioFormat, AudioResampler, Quality};
 use lk_agents_net::env::ProcessEnv;
@@ -194,7 +194,7 @@ impl TtsReq {
     }
 
     /// The text the request synthesized: all of it for a one-shot, what was pushed for a stream.
-    fn spoken(&self) -> String {
+    pub(super) fn spoken(&self) -> String {
         match self {
             TtsReq::OneShot { text, .. } => text.to_string(),
             TtsReq::Stream { log, .. } => (log.snapshot().0.into_iter())
@@ -282,9 +282,10 @@ impl Backend for TtsBackend {
             }
         };
         match (opened, request) {
-            (Ok(source), Some(request)) => {
-                Ok(Box::new(Traced { source, req: req.clone(), request: Some(request), run }))
-            }
+            (Ok(source), Some(request)) => Ok(Box::new(Traced {
+                source,
+                trace: Some(traced::Tts { trace: request, req: req.clone(), run }),
+            })),
             (Ok(source), None) => Ok(source),
             (Err(error), request) => {
                 if let Some(mut request) = request {
@@ -328,80 +329,18 @@ impl Backend for TtsBackend {
     }
 }
 
-/// An instance's stream, ending its `tts_request` with the stream: at its end with the text the
-/// adapter was given, on its error, or as cancelled when closed before either.
-struct Traced {
-    source: TtsSource,
-    req: TtsReq,
-    /// `None` once ended.
-    request: Option<telemetry::TtsTrace>,
-    run: Option<telemetry::ScopedSpan<telemetry::TtsRequestRun>>,
-}
-
-impl StreamOutput<SynthesizedAudio> for Traced {
-    fn next(&mut self) -> BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
-        Box::pin(async move {
-            let next = self.source.next().await;
-            match &next {
-                Ok(Some(audio)) => {
-                    if let Some(request) = &mut self.request {
-                        request.observe(audio);
-                    }
-                }
-                Ok(None) => {
-                    if let Some(mut request) = self.request.take() {
-                        request.end_attempt(self.run.take(), None);
-                        request.end(self.req.spoken(), None);
-                    }
-                }
-                Err(error) => {
-                    if let Some(mut request) = self.request.take() {
-                        request.end_attempt(self.run.take(), Some(error));
-                        request.fail(error);
-                    }
-                }
-            }
-            next
-        })
-    }
-
-    fn cancel_safe(&self) -> bool {
-        self.source.cancel_safe()
-    }
-
-    fn close(self: Box<Self>, deadline: Ts) -> BoxFuture<'static, Closed> {
-        self.source.close(deadline)
-    }
-}
-
-impl ProviderStream<SynthesizedAudio> for Traced {
-    fn started_time(&self) -> Option<f64> {
-        self.source.started_time()
-    }
-}
-
 // ---------------------------------------------------------------------------------------------
 // The adapter
 // ---------------------------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TtsChainError {
+    #[error("at least one TTS instance must be provided")]
     NoBackends,
     /// `ValueError("all TTS must have the same number of channels")` (`tts:83-84`).
+    #[error("all TTS must have the same number of channels, got {0:?}")]
     MixedChannels(Vec<u16>),
 }
-
-impl std::fmt::Display for TtsChainError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TtsChainError::NoBackends => f.write_str("at least one TTS instance must be provided"),
-            TtsChainError::MixedChannels(c) => {
-                write!(f, "all TTS must have the same number of channels, got {c:?}")
-            }
-        }
-    }
-}
-impl std::error::Error for TtsChainError {}
 
 /// `tts:92-95`: `streaming` is `any`, `aligned_transcript` is `all`, over the members as given.
 pub fn merge_capabilities(entries: &[TtsCapabilities]) -> TtsCapabilities {

@@ -14,7 +14,7 @@ pub mod stream_adapter;
 pub mod wire;
 
 use crate::abi::{AudioFrame, StreamInput, StreamOutput, Stt, SttCapabilities};
-use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
+use crate::headers::{BoundIdentity, Headers, gateway_headers};
 use crate::telemetry;
 use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
 use lk_agents_net::task::TaskSet;

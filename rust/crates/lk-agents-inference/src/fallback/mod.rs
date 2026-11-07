@@ -10,6 +10,7 @@ mod llm;
 pub mod machine;
 pub mod realtime;
 mod stt;
+mod traced;
 mod tts;
 
 pub use chain::{

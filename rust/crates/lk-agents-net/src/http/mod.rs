@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::task::{Context, Poll};
 
-use crate::transport::HttpRequest;
+use crate::transport::{Headers, HttpRequest};
 use futures_util::StreamExt;
 use lk_agents_abi::{Clock, Ts};
 use lk_agents_core::attempts::AttemptFailure;
@@ -127,7 +127,7 @@ impl GatewayHttp {
     }
 
     /// A GET whose response is read to its end, so its connection stays pooled (`prewarm()`).
-    pub async fn warm(&self, url: String, headers: Vec<(String, String)>) {
+    pub async fn warm(&self, url: String, headers: Headers) {
         let mut builder = self.client.get(url);
         for (name, value) in headers {
             builder = builder.header(name, value);
@@ -263,7 +263,12 @@ async fn rejected(response: reqwest::Response) -> AttemptFailure {
     let status = i64::from(response.status().as_u16());
     let header =
         |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned);
-    let request_id = header("x-request-id");
+    let request_id = header("X-LiveKit-Request-Id");
+    let retryable = match header("X-Should-Retry").as_deref() {
+        Some("false") => Some(false),
+        Some("true") => Some(true),
+        _ => None,
+    };
     if status == 429 {
         let quota =
             extract_quota_usage(|name| response.headers().get(name).and_then(|v| v.to_str().ok()));
@@ -278,17 +283,43 @@ async fn rejected(response: reqwest::Response) -> AttemptFailure {
         Ok(body) => error_message(&String::from_utf8_lossy(&body)).unwrap_or_default(),
         Err(error) => format!("cannot read HTTP error response: {error:?}"),
     };
-    AttemptFailure::Rejected { status, message, request_id }
+    AttemptFailure::Rejected { status, message, request_id, retryable }
 }
 
-/// OpenAI's `{"error": {"message": ..}}`, a top-level `message`, or the trimmed text itself
+/// The gateway's flat error, OpenAI's nested message, or the trimmed text itself
 /// (a plain `404 page not found` must survive).
-fn error_message(body: &str) -> Option<String> {
+pub(crate) fn error_message(body: &str) -> Option<String> {
     let text = || Some(body.trim().chars().take(512).collect::<String>()).filter(|t| !t.is_empty());
-    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) else { return text() };
-    let message =
-        parsed.get("error").and_then(|e| e.get("message")).or_else(|| parsed.get("message"));
-    message.and_then(|m| m.as_str()).map(str::to_owned).or_else(text)
+    match serde_json::from_str::<ErrorBody>(body) {
+        Ok(ErrorBody::OpenAi { error }) => Some(error.message),
+        Ok(ErrorBody::Gateway { error, hint }) => Some(match hint.filter(|h| !h.is_empty()) {
+            Some(hint) => format!("{error} {hint}"),
+            None => error,
+        }),
+        Ok(ErrorBody::Message { message }) => Some(message),
+        Err(_) => text(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum ErrorBody {
+    OpenAi {
+        error: ErrorMessage,
+    },
+    Gateway {
+        error: String,
+        #[serde(default)]
+        hint: Option<String>,
+    },
+    Message {
+        message: String,
+    },
+}
+
+#[derive(serde::Deserialize)]
+struct ErrorMessage {
+    message: String,
 }
 
 pub fn error_chain(err: &dyn std::error::Error) -> String {
@@ -387,7 +418,7 @@ mod tests {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut request = [0; 1024];
                 socket.read(&mut request).await.unwrap();
-                socket.write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 65537\r\nX-Request-Id: test-id\r\nConnection: close\r\n\r\n").await.unwrap();
+                socket.write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 65537\r\nX-LiveKit-Request-Id: test-id\r\nConnection: close\r\n\r\n").await.unwrap();
                 if oversized {
                     socket.write_all(&vec![b'x'; ERROR_BODY_LIMIT + 1]).await.unwrap();
                 } else {
@@ -401,7 +432,8 @@ mod tests {
                 .send()
                 .await
                 .unwrap();
-            let AttemptFailure::Rejected { status, message, request_id } = rejected(response).await
+            let AttemptFailure::Rejected { status, message, request_id, .. } =
+                rejected(response).await
             else {
                 panic!("must preserve the rejected status");
             };

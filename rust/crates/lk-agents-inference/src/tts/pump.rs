@@ -86,8 +86,7 @@ impl Pump {
                 .await?;
                 let now = self.clock.now();
                 let id = self.connections.lock().opened(now.as_secs_f64());
-                let session_id = self.session_id.clone();
-                let connection = Connection { sender, receiver, session_id, configuration };
+                let connection = Connection { sender, receiver, configuration };
                 let acquire_time = now.saturating_duration_since(acquiring).as_secs_f64();
                 return Ok(((id, connection), ConnectionAcquired { acquire_time, reused: false }));
             };
@@ -127,9 +126,9 @@ impl Pump {
     async fn reuse_connection(&self, configuration: &str) -> Option<(u64, Connection)> {
         let (mut reused, mut expired) =
             self.connections.lock().take(self.clock.now().as_secs_f64());
-        if let Some((id, connection)) = reused.take_if(|(_, connection)| {
-            connection.configuration != configuration || connection.session_id != self.session_id
-        }) {
+        if let Some((id, connection)) =
+            reused.take_if(|(_, connection)| connection.configuration != configuration)
+        {
             self.connections.lock().forget(id);
             expired.push(connection);
         }

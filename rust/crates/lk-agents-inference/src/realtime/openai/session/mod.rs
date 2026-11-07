@@ -16,7 +16,7 @@ use lk_agents_net::telemetry;
 use lk_agents_net::transport::{TransportError, WsMessage, WsTransport};
 use tokio::sync::{Mutex, mpsc};
 
-use crate::headers::BoundIdentity;
+use crate::headers::{BoundIdentity, Headers, gateway_headers};
 use crate::realtime::dialect::{Dialect, Protocol, TurnDetection};
 use crate::realtime::machine::connection::RealtimeConnection;
 use crate::realtime::machine::{OptionsPatch, RealtimeMachine, SessionOptions, Step};
@@ -68,36 +68,33 @@ impl Connect {
     }
 
     /// `_create_ws_url_and_headers`.
-    fn headers(&self) -> Result<Vec<(String, String)>, ApiError> {
-        let ua = ("User-Agent".to_owned(), "LiveKit Agents".to_owned());
+    fn headers(&self) -> Result<Headers, ApiError> {
         Ok(match &self.auth {
-            Auth::Bearer(key) => vec![ua, ("Authorization".to_owned(), format!("Bearer {key}"))],
+            Auth::Bearer(key) => {
+                let mut headers = Headers::new();
+                headers.set("User-Agent", "LiveKit Agents");
+                headers.set("Authorization", format!("Bearer {key}"));
+                headers
+            }
             Auth::Azure { api_key, entra_token } => {
-                let mut h = vec![ua];
+                let mut h = Headers::new();
+                h.set("User-Agent", "LiveKit Agents");
                 if let Some(token) = entra_token {
-                    h.push(("Authorization".to_owned(), format!("Bearer {token}")));
+                    h.set("Authorization", format!("Bearer {token}"));
                 }
                 if let Some(key) = api_key {
-                    h.push(("api-key".to_owned(), key.clone()));
+                    h.set("api-key", key.clone());
                 }
                 h
             }
             Auth::Inference { api_key, api_secret, provider, inference_class, identity } => {
-                // `get_inference_headers()` as the host bound it; unbound, the job-less half.
-                let mut h = identity.for_connection().unwrap_or_else(|| {
-                    let mut h = crate::headers::Headers::new();
-                    h.set("User-Agent", crate::headers::user_agent(env!("CARGO_PKG_VERSION")));
-                    if let Some(class) = inference_class {
-                        h.set(crate::headers::HEADER_INFERENCE_PRIORITY, class.clone());
-                    }
-                    h
-                });
                 let token = lk_agents_net::token::inference_bearer(api_key, api_secret)?;
-                h.set("Authorization", format!("Bearer {token}"));
-                if let Some(p) = provider {
-                    h.set(crate::headers::HEADER_INFERENCE_PROVIDER, p.clone());
-                }
-                h.into_vec()
+                gateway_headers(
+                    identity.for_connection().as_ref(),
+                    inference_class.as_deref(),
+                    provider.as_deref(),
+                    &token,
+                )
             }
         })
     }
@@ -176,7 +173,7 @@ impl OpenAIRealtime {
     }
 
     /// `get_inference_headers()` of the job the model now serves; every later connection carries
-    /// them, with a fresh session id. A no-op off the gateway.
+    /// them. A no-op off the gateway.
     pub fn bind_identification(&self, headers: crate::headers::Headers) {
         if let Auth::Inference { identity, .. } = &self.connect.auth {
             identity.bind(headers);

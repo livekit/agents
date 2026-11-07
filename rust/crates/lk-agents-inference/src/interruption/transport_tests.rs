@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures_util::{SinkExt, StreamExt};
 use lk_agents_abi::ApiConnectOptions;
-use lk_agents_inference::headers::HEADER_SESSION_ID;
 use lk_agents_inference::interruption::{
     AUDIO_PREFIX_DURATION, AdaptiveInterruptionDetector, ConnectionConfig, DETECTION_INTERVAL,
     InputEvent, InterruptionOptions, MAX_AUDIO_DURATION, MIN_INTERRUPTION_DURATION,
@@ -40,7 +39,7 @@ fn options(base_url: String, threshold: Option<f64>) -> InterruptionOptions {
 }
 
 /// Accepts connections forever, forwarding each `session.create` it receives with the
-/// connection's `X-LiveKit-Session-ID`.
+/// connection's test marker.
 async fn recording_gateway() -> (u16, mpsc::UnboundedReceiver<(String, String)>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -57,7 +56,7 @@ async fn recording_gateway() -> (u16, mpsc::UnboundedReceiver<(String, String)>)
                 let record = |req: &Request, resp| {
                     session_id = req
                         .headers()
-                        .get(HEADER_SESSION_ID)
+                        .get("X-Test-Connection")
                         .map(|v| v.to_str().unwrap().to_owned())
                         .unwrap_or_default();
                     Ok(resp)
@@ -104,7 +103,7 @@ async fn dead_port() -> u16 {
 // the reconnect -- drop the notify (or invert `run`'s "reconnect or finish" branch) and the
 // session keeps running at the old sensitivity for the rest of the call, silently. Also catches
 // headers read once rather than per connection (`_connect_ws`): every reconnect would reuse the
-// first session id.
+// first connection marker.
 #[tokio::test]
 async fn update_options_forces_a_reconnect_that_carries_the_new_settings() {
     let (port, mut creates) = recording_gateway().await;
@@ -112,7 +111,7 @@ async fn update_options_forces_a_reconnect_that_carries_the_new_settings() {
     let config = ConnectionConfig {
         headers: Arc::new(move || {
             let n = connections.fetch_add(1, Ordering::SeqCst);
-            vec![(HEADER_SESSION_ID.to_owned(), format!("inference_{n}"))]
+            [("X-Test-Connection".to_owned(), format!("inference_{n}"))].into_iter().collect()
         }),
         ..Default::default()
     };

@@ -138,7 +138,7 @@ impl SttStreamExecutor {
         let (sender, mut receiver) = open_ws(
             self.ws.as_ref(),
             &url,
-            headers.into_vec(),
+            headers,
             &*self.clock,
             &self.opts.conn_options,
             WHAT,
@@ -229,26 +229,12 @@ impl SttStreamExecutor {
         })
     }
 
-    /// The connection's gateway headers under a fresh session id, and the request id. The
-    /// reference reads the session id back out of the header map (a job's `inference_headers`
-    /// cannot override it) and uses it as the request id.
+    /// Gateway headers and the client's request identity, independent of gateway correlation.
     fn connection_headers(&self) -> Result<(Headers, String), ApiError> {
-        let identification = self.identification.as_ref().map(|h| {
-            let mut h = h.clone();
-            h.set(HEADER_SESSION_ID, crate::ids::shortuuid(crate::ids::SESSION_ID_PREFIX));
-            h
-        });
-        let headers = gateway_headers(
-            identification.as_ref(),
-            None,
-            None,
-            &self.opts.api_key,
-            &self.opts.api_secret,
-        )?;
-        let request_id = headers
-            .get(HEADER_SESSION_ID)
-            .map(str::to_owned)
-            .unwrap_or_else(|| crate::ids::shortuuid(crate::ids::STT_REQUEST_ID_PREFIX));
+        let token =
+            lk_agents_net::token::inference_bearer(&self.opts.api_key, &self.opts.api_secret)?;
+        let headers = gateway_headers(self.identification.as_ref(), None, None, &token);
+        let request_id = crate::ids::shortuuid(crate::ids::STT_REQUEST_ID_PREFIX);
         Ok((headers, request_id))
     }
 

@@ -111,9 +111,11 @@ impl lk_agents_abi::inference::InferenceCredentials for Credentials {
             job_id,
             agent_sid,
             worker_token: env("LIVEKIT_WORKER_TOKEN"),
-            headers,
+            headers: headers.into_iter().collect(),
         });
-        crate::headers::identity_headers(&user_agent, inference_class.as_deref(), job).into_vec()
+        crate::headers::identity_headers(&user_agent, inference_class.as_deref(), job)
+            .into_iter()
+            .collect()
     }
 }
 

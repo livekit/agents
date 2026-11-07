@@ -21,6 +21,7 @@ use crate::fallback::chain::{
     Attempt, Backend, ChainCall, ChainObserver, FallbackChain, NoBackends, Recovery, RecoveryMode,
 };
 use crate::fallback::channel::{ServeAttempt, drain_probe, forward};
+use crate::fallback::traced::{self, Traced};
 use crate::telemetry;
 use lk_agents_net::env::ProcessEnv;
 
@@ -58,7 +59,7 @@ impl LlmBackend {
         };
         let run = trace.attempt();
         match llm.chat(trace.cx(), &attempt).await {
-            Ok(stream) => Ok(Box::new(TracedStream { stream, trace: Some((trace, run)) })),
+            Ok(source) => Ok(Box::new(Traced { source, trace: Some(traced::Llm { trace, run }) })),
             Err(error) => {
                 trace.end_attempt(run, Some(&error));
                 trace.fail(&error);
@@ -67,51 +68,6 @@ impl LlmBackend {
         }
     }
 }
-
-/// An entry's stream, ending its `llm_request` with the stream: at its end, on its error, or as
-/// cancelled when closed before either.
-struct TracedStream {
-    stream: LlmStream,
-    trace: Option<(telemetry::LlmTrace, Option<telemetry::ScopedSpan<telemetry::LlmRequestRun>>)>,
-}
-
-impl StreamOutput<LlmChunk> for TracedStream {
-    fn next(&mut self) -> BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
-        Box::pin(async move {
-            let next = self.stream.next().await;
-            match &next {
-                Ok(Some(chunk)) => {
-                    if let Some((trace, _)) = &mut self.trace {
-                        trace.observe(chunk);
-                    }
-                }
-                Ok(None) => {
-                    if let Some((mut trace, run)) = self.trace.take() {
-                        trace.end_attempt(run, None);
-                        trace.end(Default::default());
-                    }
-                }
-                Err(error) => {
-                    if let Some((mut trace, run)) = self.trace.take() {
-                        trace.end_attempt(run, Some(error));
-                        trace.fail(error);
-                    }
-                }
-            }
-            next
-        })
-    }
-
-    fn cancel_safe(&self) -> bool {
-        self.stream.cancel_safe()
-    }
-
-    fn close(self: Box<Self>, deadline: Ts) -> BoxFuture<'static, Closed> {
-        self.stream.close(deadline)
-    }
-}
-
-impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for TracedStream {}
 
 /// What the chain replays to each entry: the whole request, because recovery replays it
 /// (`llm:174-200`), and the adapter span its `llm_request` spans open under.

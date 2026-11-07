@@ -1,6 +1,6 @@
 //! The real WebSocket transport, over `tokio-tungstenite`.
 
-use crate::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
+use crate::transport::{Headers, TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
@@ -15,7 +15,7 @@ pub type RawWebSocket =
 /// The caller owns its connection deadline and the returned socket's lifecycle.
 pub async fn connect_with_limit(
     url: &str,
-    headers: Vec<(String, String)>,
+    headers: Headers,
     max_message_size: Option<usize>,
 ) -> Result<RawWebSocket, TransportError> {
     use tungstenite::client::IntoClientRequest;
@@ -67,7 +67,7 @@ impl WsTransport for TungsteniteTransport {
     async fn connect(
         &self,
         url: &str,
-        headers: Vec<(String, String)>,
+        headers: Headers,
     ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
         let stream = connect_with_limit(url, headers, None).await?;
         let (sink, source) = stream.split();
@@ -87,7 +87,7 @@ pub fn classify_tungstenite(err: tokio_tungstenite::tungstenite::Error) -> Trans
     match err {
         Error::Http(response) => {
             let status = i64::from(response.status().as_u16());
-            let headers: Vec<(String, String)> = response
+            let headers: Headers = response
                 .headers()
                 .iter()
                 .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_owned(), v.to_owned())))
@@ -186,7 +186,7 @@ mod tests {
             socket.get_mut().write_all(&[0x82, 126, 0, 129]).await.unwrap();
             let _ = hold.await;
         });
-        let mut socket = connect_with_limit(&url, vec![], Some(128)).await.unwrap();
+        let mut socket = connect_with_limit(&url, Headers::new(), Some(128)).await.unwrap();
         let result = tokio::time::timeout(Duration::from_secs(1), socket.next()).await;
         let _ = release.send(());
         server.await.unwrap();

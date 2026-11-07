@@ -38,7 +38,7 @@ impl AudioEot {
     /// The gateway for `turn-detector-v1`, else the linked native mini model or the host's.
     fn transports(
         &self,
-        headers: Vec<(String, String)>,
+        headers: crate::headers::Headers,
         conn_options: ApiConnectOptions,
     ) -> TransportFactory {
         let cloud = CloudOptions {
@@ -164,7 +164,7 @@ impl lk_agents_abi::turn::inference::InferenceEot for AudioEot {
         })?;
         let model = self.table().model();
         let session = EotSession::new(model, Arc::clone(&self.thresholds), self.local_fallback);
-        let make = self.transports(headers, conn_options);
+        let make = self.transports(headers.into_iter().collect(), conn_options);
         let on_metrics = self.on_metrics.clone();
         Ok(EotStream::open(
             session,

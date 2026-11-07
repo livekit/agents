@@ -32,9 +32,13 @@ impl WorkerTransport for WebSocketTransport {
             return Err(TransportError::Io("heartbeat must be positive".into()));
         }
         let url = super::agent_url(url, worker_token, false);
-        let ws = connect_with_limit(&url, headers, Some(super::MAX_CONTROL_MESSAGE))
-            .await
-            .map_err(|error| TransportError::Io(error.to_string()))?;
+        let ws = connect_with_limit(
+            &url,
+            headers.into_iter().collect(),
+            Some(super::MAX_CONTROL_MESSAGE),
+        )
+        .await
+        .map_err(|error| TransportError::Io(error.to_string()))?;
         let (write, read) = ws.split();
         let write = Arc::new(Mutex::new(write));
 

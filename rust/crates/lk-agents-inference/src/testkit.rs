@@ -8,7 +8,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 /// A recorded `connect` call: the URL and its headers.
-pub type ConnectRecord = (String, Vec<(String, String)>);
+pub type ConnectRecord = (String, lk_agents_net::transport::Headers);
 
 /// An [`ImageResolver`](lk_agents_abi::llm::provider_format::ImageResolver) that refuses every image.
 pub struct NoImages;
@@ -110,7 +110,7 @@ impl WsTransport for FakeWs {
     async fn connect(
         &self,
         url: &str,
-        headers: Vec<(String, String)>,
+        headers: lk_agents_net::transport::Headers,
     ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
         self.connects.lock().push((url.to_owned(), headers));
         if let Some(err) = self.connect_error.clone() {

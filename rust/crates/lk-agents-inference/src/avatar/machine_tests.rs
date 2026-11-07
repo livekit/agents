@@ -112,8 +112,12 @@ fn a_second_caller_is_refused_and_the_first_creation_is_untouched() {
 #[test]
 fn a_failed_creation_releases_its_reservation() {
     let mut avatar = creating();
-    let rejected =
-        AttemptFailure::Rejected { status: 400, message: "bad image".into(), request_id: None };
+    let rejected = AttemptFailure::Rejected {
+        status: 400,
+        message: "bad image".into(),
+        request_id: None,
+        retryable: None,
+    };
     let effects = avatar.handle(
         AvatarSessionEvent::Failed { request: AvatarRequestId(1), attempt: 0, failure: rejected },
         at(1),
@@ -290,7 +294,12 @@ fn close_terminates_the_held_session_and_a_failure_keeps_it_held() {
     avatar.handle(AvatarSessionEvent::Adopted, at(1));
     avatar.handle(closed(1, 0), at(1));
     assert_eq!(avatar.handle(AvatarSessionEvent::Close, at(2)), vec![terminate(2, &s)]);
-    let rejected = AttemptFailure::Rejected { status: 403, message: "no".into(), request_id: None };
+    let rejected = AttemptFailure::Rejected {
+        status: 403,
+        message: "no".into(),
+        request_id: None,
+        retryable: None,
+    };
     let effects = avatar.handle(
         AvatarSessionEvent::Failed { request: AvatarRequestId(2), attempt: 0, failure: rejected },
         at(3),

@@ -1,7 +1,7 @@
 //! The `chat.completions.create` request, over the shared agent core's formatting algorithms:
 //! to the LiveKit Inference gateway, or straight to a provider with its own key.
 
-use crate::headers::{Headers, identification_headers};
+use crate::headers::{Headers, gateway_headers};
 use crate::llm::request::ChatArgs;
 use crate::llm::{Auth, BodyEncoding, LlmOptions, models, request};
 use lk_agents_abi::errors::ApiError;
@@ -82,11 +82,13 @@ pub fn build_request(
     if let Auth::Gateway { .. } = opts.auth {
         let class = args.inference_class.as_deref().or(opts.inference_class.as_deref());
         for (name, value) in
-            identification_headers(identification, class, opts.provider.as_deref()).into_vec()
+            gateway_headers(identification, class, opts.provider.as_deref(), bearer)
         {
             headers.set(name, value);
         }
+        headers.remove("X-LiveKit-Session-ID");
     }
+    headers.remove("Authorization");
     headers.set("Authorization", format!("Bearer {bearer}"));
     let body = encode_body(&Value::Object(body), opts.body, &mut headers)?;
 
@@ -95,7 +97,7 @@ pub fn build_request(
     if let Some(Value::Object(query)) = extra_query {
         url.query_pairs_mut().extend_pairs(query.into_iter().map(|(k, v)| (k, text(v))));
     }
-    Ok(HttpRequest { url: url.into(), headers: headers.into_vec(), body })
+    Ok(HttpRequest { url: url.into(), headers, body })
 }
 
 /// The body's bytes as `encoding` asks, with the headers that name it.
@@ -208,7 +210,7 @@ mod tests {
         assert_eq!(header(&request, "X-LiveKit-Room-ID"), Some("RM_1"));
         assert_eq!(header(&request, "X-LiveKit-Job-ID"), Some("AJ_1"));
         assert_eq!(header(&request, "X-LiveKit-Agent-ID"), Some("PA_1"));
-        assert_eq!(header(&request, "X-LiveKit-Session-ID"), Some("inference_abc"));
+        assert_eq!(header(&request, "X-LiveKit-Session-ID"), None);
         assert_eq!(header(&request, "User-Agent"), Some("LiveKit Agents/1 (python 3)"));
         assert_eq!(
             header(&request, "X-LiveKit-Inference-Priority"),

@@ -357,7 +357,7 @@ impl Sim {
             let refused = TransportError::Status {
                 status: 503,
                 message: "Service Unavailable".into(),
-                headers: Vec::new(),
+                headers: Default::default(),
                 body: None,
             };
             let error = connect_error(INFERENCE.provider_label, refused);

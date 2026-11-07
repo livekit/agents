@@ -24,7 +24,7 @@ mod transport;
 #[path = "../eot_tests.rs"]
 mod tests;
 
-pub use cloud::{CloudOptions, CloudTransport, HEADER_SESSION_ID, HeaderProvider};
+pub use cloud::{CloudOptions, CloudTransport, HeaderProvider};
 pub use detector::{AudioEot, select};
 pub use local::{
     AudioRingBuffer, CLIENT_BUFFER_SAMPLES, CLIENT_BUFFER_SECONDS, LocalEotModel, LocalTransport,

@@ -33,8 +33,7 @@ pub use options::{
     SAMPLE_RATE, min_frames_for,
 };
 pub use transport::{
-    AdaptiveInterruptionDetector, ConnectFailure, ConnectionConfig, InterruptionStream,
-    StreamClosed, StreamEvent, connect_error,
+    AdaptiveInterruptionDetector, ConnectionConfig, InterruptionStream, StreamClosed, StreamEvent,
 };
 
 /// `AdaptiveInterruptionDetector.model`.

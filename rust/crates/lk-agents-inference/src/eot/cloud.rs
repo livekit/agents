@@ -27,9 +27,6 @@ use crate::eot::{EotRequestId, EotWarning};
 /// A prediction on old audio is a wrong one: past 500 ms of lag the gateway restarts on the newest.
 const INPUT_POLICY: Policy = Policy::Now(std::time::Duration::from_millis(500));
 
-/// `HEADER_SESSION_ID` (`_utils.py:21`): one per connection, and the request-id prefix.
-pub const HEADER_SESSION_ID: &str = "X-LiveKit-Session-ID";
-
 pub use crate::headers::HeaderProvider;
 
 /// `_CloudTransportOptions` (`transports.py:63`), apart so the local transport never sees them.
@@ -205,14 +202,11 @@ impl CloudTransport {
     }
 
     async fn connect(&self) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), ApiError> {
-        let mut headers = (self.opts.headers)();
+        let identification = (self.opts.headers)();
         let token =
             lk_agents_net::token::inference_bearer(&self.opts.api_key, &self.opts.api_secret)?;
-        headers.push(("Authorization".to_owned(), format!("Bearer {token}")));
-        let session_id = headers
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(HEADER_SESSION_ID))
-            .map(|(_, value)| value.clone());
+        let headers = crate::headers::gateway_headers(Some(&identification), None, None, &token);
+        let session_id = Some(crate::ids::shortuuid(crate::ids::SESSION_ID_PREFIX));
 
         let url = eot_url(&self.opts.base_url);
         let connect = self.transport.connect(&url, headers);
@@ -431,7 +425,10 @@ mod tests {
     #[tokio::test]
     async fn an_unusable_header_fails_the_connection_rather_than_being_skipped() {
         let error = TungsteniteTransport
-            .connect("ws://localhost", vec![("invalid\nheader".into(), "value".into())])
+            .connect(
+                "ws://localhost",
+                [("invalid\nheader".into(), "value".into())].into_iter().collect(),
+            )
             .await
             .map(|_| ())
             .map_err(socket_error)

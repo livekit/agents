@@ -16,7 +16,7 @@ use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, 
 use parking_lot::Mutex;
 use prost::Message as _;
 
-use crate::eot::cloud::{CloudOptions, CloudTransport, HEADER_SESSION_ID};
+use crate::eot::cloud::{CloudOptions, CloudTransport};
 use crate::eot::local::{AudioRingBuffer, LocalEotModel, LocalTransport};
 use crate::eot::proto;
 use crate::eot::session::{
@@ -378,7 +378,7 @@ impl WsSender for FakeSink {
 
 /// One connection's inbound frames, and the headers it was opened with.
 type Incoming = tokio::sync::mpsc::UnboundedReceiver<Result<Vec<u8>, TransportError>>;
-type Headers = Arc<Mutex<Vec<Vec<(String, String)>>>>;
+type Headers = Arc<Mutex<Vec<crate::headers::Headers>>>;
 
 struct FakeStream {
     incoming: Incoming,
@@ -408,7 +408,7 @@ impl WsTransport for FakeConnector {
     async fn connect(
         &self,
         url: &str,
-        headers: Vec<(String, String)>,
+        headers: crate::headers::Headers,
     ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
         self.urls.lock().push(url.to_owned());
         self.headers.lock().push(headers);
@@ -461,7 +461,9 @@ fn cloud_options() -> CloudOptions {
         api_secret: "secret".to_owned(),
         conn_options: ApiConnectOptions::default(),
         sample_rate: 16_000,
-        headers: Arc::new(|| vec![(HEADER_SESSION_ID.to_owned(), "inference_abc".to_owned())]),
+        headers: Arc::new(|| {
+            [("X-LiveKit-Session-ID".to_owned(), "inference_abc".to_owned())].into_iter().collect()
+        }),
     }
 }
 
@@ -849,22 +851,19 @@ async fn a_ten_second_head_heard_before_the_connection_reaches_the_gateway_in_fu
 // Catches: an `https://` gateway URL, rewriting more than the scheme, losing the bearer token, or
 // minting it with the wrong grant, `sub`, `iss` or a TTL other than `ttl=600`.
 #[tokio::test]
-async fn the_handshake_uses_a_ws_url_a_bearer_token_and_the_hosts_session_id() {
+async fn the_handshake_uses_a_ws_url_a_bearer_token_and_a_local_session_id() {
     let sink = Arc::new(RecordingSink::default());
     let fixture = cloud_fixture(sink);
     let transport = fixture.transport.clone();
     let running = tokio::spawn(async move { transport.run().await });
     until("the handshake", || fixture.transport.session_id().is_some()).await;
-    assert_eq!(
-        fixture.transport.session_id().as_deref(),
-        Some("inference_abc"),
-        "taken from the host's headers, and it prefixes every request id"
-    );
+    assert!(fixture.transport.session_id().unwrap().starts_with("inference_"));
     drop(fixture.server);
     let _ = within("the transport", running).await;
 
     assert_eq!(fixture.urls.lock()[0], "wss://gateway.example/v1/eot");
     let headers = fixture.headers.lock()[0].clone();
+    assert_eq!(headers.get("X-LiveKit-Session-ID"), None);
     let token = headers
         .iter()
         .find_map(|(name, value)| (name == "Authorization").then(|| value.strip_prefix("Bearer ")))

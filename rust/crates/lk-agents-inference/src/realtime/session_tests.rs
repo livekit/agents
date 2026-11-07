@@ -87,8 +87,8 @@ async fn opening_a_session_connects_and_configures_it() {
 
     let (url, headers) = ws.last_connect().expect("connected");
     assert_eq!(url, "wss://api.openai.com/v1/realtime?model=gpt-realtime");
-    assert!(headers.contains(&("Authorization".to_owned(), "Bearer sk-test".to_owned())));
-    assert!(headers.contains(&("User-Agent".to_owned(), "LiveKit Agents".to_owned())));
+    assert_eq!(headers.get("Authorization"), Some("Bearer sk-test"));
+    assert_eq!(headers.get("User-Agent"), Some("LiveKit Agents"));
 
     session.aclose().await;
 }
@@ -351,7 +351,7 @@ async fn azure_gets_its_url_and_header() {
     frames(&ws, 1).await;
     let (url, headers) = ws.last_connect().unwrap();
     assert_eq!(url, "wss://res.openai.azure.com/openai/v1/realtime?model=gpt-rt");
-    assert!(headers.contains(&("api-key".to_owned(), "az-key".to_owned())));
+    assert_eq!(headers.get("api-key"), Some("az-key"));
     assert!(!headers.iter().any(|(k, _)| k == "Authorization"));
 
     // a beta event name reads as the GA one
@@ -399,7 +399,7 @@ async fn voice_live_connects_through_azure_and_sends_the_beta_session() {
         url,
         "wss://res.services.ai.azure.com/voice-live/realtime?api-version=2026-04-10&model=gpt-realtime"
     );
-    assert!(headers.contains(&("api-key".to_owned(), "az-key".to_owned())));
+    assert_eq!(headers.get("api-key"), Some("az-key"));
     assert!(!realtime.capabilities().message_truncation);
     session.aclose().await;
 }
@@ -416,7 +416,7 @@ async fn livekit_inference_signs_each_connection_and_drops_the_session_model() {
             api_key: "APIkey".into(),
             api_secret: "secret".into(),
             provider: Some("openai".into()),
-            inference_class: None,
+            inference_class: Some(String::new()),
             identity: Default::default(),
         },
         conn: Default::default(),
@@ -430,7 +430,12 @@ async fn livekit_inference_signs_each_connection_and_drops_the_session_model() {
     assert_eq!(url, "wss://agent-gateway.livekit.cloud/v1/realtime?model=gpt-realtime");
     let auth = headers.iter().find(|(k, _)| k == "Authorization").expect("a bearer").1.clone();
     assert!(auth.starts_with("Bearer ey"), "a JWT, not the key: {auth}");
-    assert!(headers.contains(&("X-LiveKit-Inference-Provider".to_owned(), "openai".to_owned())));
+    assert_eq!(headers.get("X-LiveKit-Inference-Provider"), Some("openai"));
+    assert_eq!(
+        headers.get("User-Agent"),
+        Some(lk_agents_inference::headers::user_agent(env!("CARGO_PKG_VERSION")).as_str())
+    );
+    assert_eq!(headers.get("X-LiveKit-Inference-Priority"), None);
     session.aclose().await;
 }
 
@@ -698,7 +703,7 @@ async fn realtime_stalled_close_keeps_ownership_until_the_transport_releases() {
         async fn connect(
             &self,
             url: &str,
-            headers: Vec<(String, String)>,
+            headers: lk_agents_inference::headers::Headers,
         ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
             let (sender, receiver) = self.socket.connect(url, headers).await?;
             let sender: Arc<dyn WsSender> = Arc::new(StalledClose {

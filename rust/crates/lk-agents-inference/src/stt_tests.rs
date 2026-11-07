@@ -248,8 +248,7 @@ async fn the_handshake_carries_the_model_in_the_url_and_a_bearer_token() {
     assert!(auth.1.starts_with("Bearer ey"), "{}", auth.1);
 }
 
-// Catches: the host's identification headers not reaching the socket, or the transcript
-// request id not taken from the host's session id.
+// Catches: job identification missing from the socket, or the unused session header leaking.
 #[tokio::test]
 async fn the_hosts_identification_headers_ride_on_the_handshake() {
     let ws = Arc::new(FakeWs::new(vec![]));
@@ -273,9 +272,7 @@ async fn the_hosts_identification_headers_ride_on_the_handshake() {
     let get = |name: &str| headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
     assert_eq!(get("X-LiveKit-Room-ID"), Some("RM_1"));
     assert_eq!(get("X-LiveKit-Job-ID"), Some("AJ_1"));
-    // A fresh session id per connection, as the reference mints one per call.
-    let session = get("X-LiveKit-Session-ID").expect("a session id");
-    assert!(session.starts_with("inference_") && session != "inference_abc", "{session}");
+    assert_eq!(get("X-LiveKit-Session-ID"), None);
     assert!(get("Authorization").is_some());
 
     // No job: no `X-LiveKit-*` header.
@@ -297,7 +294,7 @@ async fn a_rejected_handshake_surfaces_as_an_error_not_an_empty_stream() {
     let ws = Arc::new(FakeWs::failing(TransportError::Status {
         status: 401,
         message: "Unauthorized".into(),
-        headers: vec![],
+        headers: Default::default(),
         body: None,
     }));
     let stt = stt(ws);
@@ -648,7 +645,7 @@ async fn stt_pump_close_saturation_joins_or_retains_incomplete_cleanup() {
         async fn connect(
             &self,
             url: &str,
-            headers: Vec<(String, String)>,
+            headers: Headers,
         ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
             let (inner, receiver) = self.inner.connect(url, headers).await?;
             Ok((

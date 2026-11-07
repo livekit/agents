@@ -166,8 +166,12 @@ fn only_actionable_output_blocks_a_retry() {
 // Catches: status retry rules lost in the machine: a 401 retried, a 429 not.
 #[test]
 fn a_rejection_is_retried_only_when_its_status_is_transient() {
-    let reject =
-        |status| AttemptFailure::Rejected { status, message: "no".into(), request_id: None };
+    let reject = |status| AttemptFailure::Rejected {
+        status,
+        message: "no".into(),
+        request_id: None,
+        retryable: None,
+    };
     let mut request = start(policy());
     let effects =
         request.handle(LlmRequestEvent::Failed { attempt: 0, failure: reject(429) }, at(0));

@@ -110,12 +110,36 @@ pub struct StreamError {
 }
 
 impl StreamError {
+    pub(super) fn with_body(mut self, body: String) -> Self {
+        self.body = Some(body);
+        self
+    }
+
+    pub(super) fn closed_unexpectedly(status: i64, data: &str, extra: &str) -> Self {
+        Self {
+            request: None,
+            error: ApiError::status(
+                format!("LiveKit Adaptive Interruption connection closed unexpectedly: {data}"),
+                status,
+                None,
+                None,
+            ),
+            body: Some(format!("ws_msg.data={data:?} ws_msg.extra={extra:?}")),
+        }
+    }
+
     fn status(message: String, status_code: i64, retryable: Option<bool>) -> Self {
         StreamError {
             request: None,
             error: ApiError::status(message, status_code, None, retryable),
             body: None,
         }
+    }
+}
+
+impl From<ApiError> for StreamError {
+    fn from(error: ApiError) -> Self {
+        Self { request: None, error, body: None }
     }
 }
 

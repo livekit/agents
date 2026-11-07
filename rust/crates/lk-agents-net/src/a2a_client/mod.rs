@@ -340,7 +340,7 @@ impl Inner {
             },
             HttpRequest {
                 url: request.url.clone(),
-                headers: request.headers.clone(),
+                headers: request.headers.clone().into_iter().collect(),
                 body: request.body.clone(),
             },
             &self.options,

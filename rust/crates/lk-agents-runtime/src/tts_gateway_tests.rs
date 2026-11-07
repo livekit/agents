@@ -284,7 +284,7 @@ async fn a_stream_opened_with_identification_connects_with_those_headers() {
     let get = |name: &str| headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
     assert_eq!(get("X-LiveKit-Room-ID"), Some("RM_1"));
     assert_eq!(get("X-LiveKit-Job-ID"), Some("AJ_1"));
-    assert_eq!(get("X-LiveKit-Session-ID"), Some("inference_abc"));
+    assert_eq!(get("X-LiveKit-Session-ID"), None);
     assert_eq!(get("User-Agent"), Some("LiveKit Agents/1 (python 3)"), "the host's, not ours");
     assert!(get("Authorization").is_some_and(|v| v.starts_with("Bearer ")));
 
@@ -354,7 +354,11 @@ async fn cartesia_words_keep_their_separators_through_a_stream() {
     sink.end_input();
     let mut words = Vec::new();
     while let Some(audio) = source.next().await.unwrap() {
-        assert!(audio.request_id.starts_with("inference_connection_tts_"), "{}", audio.request_id);
+        assert!(
+            audio.request_id.starts_with("inference_") && audio.request_id.contains("_tts_"),
+            "{}",
+            audio.request_id
+        );
         words
             .extend(audio.timed_transcript.into_iter().map(|t| (t.text, t.start_time, t.end_time)));
     }

@@ -1,65 +1,19 @@
-//! `inference/_utils.py`'s header/URL half. A job-less caller passes `None`, the reference's
-//! `except RuntimeError: pass`.
+//! Shared gateway identification, authentication and inference URL selection.
 
-/// How the host builds the identification headers for one connection: a closure, because
-/// `get_inference_headers()` (`_utils.py:76`) mints a fresh session id on every call.
-pub type HeaderProvider = std::sync::Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
-
-/// An ordered header map with Python `dict` semantics: replacing a key keeps its position.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Headers(Vec<(String, String)>);
-
-impl Headers {
-    pub fn new() -> Self {
-        Headers(Vec::new())
-    }
-
-    /// Replace in place if present (case-sensitive, like a dict).
-    pub fn set(&mut self, name: impl Into<String>, value: impl Into<String>) {
-        let name = name.into();
-        let value = value.into();
-        match self.0.iter_mut().find(|(k, _)| *k == name) {
-            Some(slot) => slot.1 = value,
-            None => self.0.push((name, value)),
-        }
-    }
-
-    pub fn get(&self, name: &str) -> Option<&str> {
-        self.0.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.0.iter().map(|(k, v)| (k.as_str(), v.as_str()))
-    }
-
-    pub fn into_vec(self) -> Vec<(String, String)> {
-        self.0
-    }
-}
-
-/// A host's `dict.items()`, in order; a repeated name keeps its first position, as `set` does.
-impl FromIterator<(String, String)> for Headers {
-    fn from_iter<I: IntoIterator<Item = (String, String)>>(pairs: I) -> Self {
-        let mut headers = Headers::new();
-        for (name, value) in pairs {
-            headers.set(name, value);
-        }
-        headers
-    }
-}
+pub type HeaderProvider = std::sync::Arc<dyn Fn() -> Headers + Send + Sync>;
+pub use lk_agents_net::transport::Headers;
 
 pub const DEFAULT_INFERENCE_URL: &str = "https://agent-gateway.livekit.cloud/v1";
 pub const STAGING_INFERENCE_URL: &str = "https://agent-gateway.staging.livekit.cloud/v1";
 
 pub const HEADER_USER_AGENT: &str = "User-Agent";
-pub const HEADER_SESSION_ID: &str = "X-LiveKit-Session-ID";
 pub const HEADER_INFERENCE_PROVIDER: &str = "X-LiveKit-Inference-Provider";
 pub const HEADER_INFERENCE_PRIORITY: &str = "X-LiveKit-Inference-Priority";
 
 pub use lk_agents_net::http::{QUOTA_HEADER_FIELDS, extract_quota_usage};
 
 /// [`extract_quota_usage`] over a response's header pairs, names matched case-insensitively.
-pub fn quota_usage(headers: Vec<(String, String)>) -> Vec<(&'static str, String)> {
+pub fn quota_usage(headers: Headers) -> Vec<(&'static str, String)> {
     extract_quota_usage(|name| {
         headers
             .iter()
@@ -106,11 +60,11 @@ pub struct JobIdentity {
     /// `LIVEKIT_WORKER_TOKEN`.
     pub worker_token: Option<String>,
     /// The job's `inference_headers`, which override the ones above.
-    pub headers: Vec<(String, String)>,
+    pub headers: Headers,
 }
 
 /// `get_inference_headers()`: [`native_headers`] under the host's `user_agent`, then in a job its
-/// identity, its own headers and a fresh session id.
+/// identity and its own headers.
 pub fn identity_headers(
     user_agent: &str,
     inference_class: Option<&str>,
@@ -134,7 +88,6 @@ pub fn identity_headers(
     for (name, value) in job.headers {
         headers.set(name, value);
     }
-    headers.set(HEADER_SESSION_ID, crate::ids::shortuuid(crate::ids::SESSION_ID_PREFIX));
     headers
 }
 
@@ -145,30 +98,29 @@ pub fn identification_headers(
     inference_class: Option<&str>,
     provider: Option<&str>,
 ) -> Headers {
-    let base = match identification {
+    let base = match identification.filter(|headers| headers.iter().next().is_some()) {
         Some(headers) => headers.clone(),
         None => native_headers(&user_agent(env!("CARGO_PKG_VERSION")), inference_class),
     };
     crate::llm::request::request_headers(base, provider)
 }
 
-/// [`identification_headers`] and the bearer minted from the key pair.
+/// All gateway clients use the same identification and bearer headers.
 pub fn gateway_headers(
     identification: Option<&Headers>,
     inference_class: Option<&str>,
     provider: Option<&str>,
-    api_key: &str,
-    api_secret: &str,
-) -> Result<Headers, lk_agents_abi::errors::ApiError> {
+    bearer: &str,
+) -> Headers {
     let mut headers = identification_headers(identification, inference_class, provider);
-    let token = lk_agents_net::token::inference_bearer(api_key, api_secret)?;
-    headers.set("Authorization", format!("Bearer {token}"));
-    Ok(headers)
+    headers.remove("X-LiveKit-Session-ID");
+    headers.remove("Authorization");
+    headers.set("Authorization", format!("Bearer {bearer}"));
+    headers
 }
 
 /// The job's identification headers (`get_inference_headers()`), bound once by the host that
-/// hands the client to a session. Each connection carries them with a fresh session id, as the
-/// reference mints one per call; unbound, the native headers.
+/// hands the client to a session. Unbound clients use the native headers.
 #[derive(Debug, Default)]
 pub struct BoundIdentity(parking_lot::Mutex<Option<Headers>>);
 
@@ -178,9 +130,7 @@ impl BoundIdentity {
     }
 
     pub fn for_connection(&self) -> Option<Headers> {
-        let mut headers = self.0.lock().clone()?;
-        headers.set(HEADER_SESSION_ID, crate::ids::shortuuid(crate::ids::SESSION_ID_PREFIX));
-        Some(headers)
+        self.0.lock().clone()
     }
 }
 
@@ -240,19 +190,18 @@ mod tests {
 
     // Catches: job headers outside a job, an empty id sent, or the job's own headers not winning.
     #[test]
-    fn a_job_adds_its_nonempty_identity_its_headers_and_a_session_id() {
+    fn a_job_adds_its_nonempty_identity_and_its_headers() {
         let job = JobIdentity {
             room_sid: Some("RM_1".into()),
             job_id: Some(String::new()),
             agent_sid: Some("PA_1".into()),
             worker_token: None,
-            headers: vec![
-                ("X-LiveKit-Room-ID".into(), "RM_2".into()),
-                ("X-Extra".into(), "1".into()),
-            ],
+            headers: [("X-LiveKit-Room-ID".into(), "RM_2".into()), ("X-Extra".into(), "1".into())]
+                .into_iter()
+                .collect(),
         };
         let h = identity_headers("ua", Some("low"), Some(job));
-        let names: Vec<&str> = h.iter().map(|(k, _)| k).collect();
+        let names: Vec<&str> = h.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(
             names,
             [
@@ -261,11 +210,9 @@ mod tests {
                 "X-LiveKit-Room-ID",
                 "X-LiveKit-Agent-ID",
                 "X-Extra",
-                HEADER_SESSION_ID
             ]
         );
         assert_eq!(h.get("X-LiveKit-Room-ID"), Some("RM_2"));
-        assert!(h.get(HEADER_SESSION_ID).is_some_and(|id| id.starts_with("inference_")));
         assert_eq!(identity_headers("ua", None, None).iter().count(), 1);
     }
 

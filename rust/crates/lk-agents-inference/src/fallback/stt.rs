@@ -385,25 +385,13 @@ impl SttBackend {
 // ---------------------------------------------------------------------------------------------
 
 /// The caller wraps non-streaming entries in `StreamAdapter` (the reference does it, `stt:64-77`).
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum SttChainError {
+    #[error(transparent)]
     NoBackends(NoBackends),
+    #[error("STTs do not support streaming: {}. Wrap them with stt.StreamAdapter first.", .0.join(", "))]
     NotStreaming(Vec<String>),
 }
-
-impl std::fmt::Display for SttChainError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SttChainError::NoBackends(e) => e.fmt(f),
-            SttChainError::NotStreaming(labels) => write!(
-                f,
-                "STTs do not support streaming: {}. Wrap them with stt.StreamAdapter first.",
-                labels.join(", ")
-            ),
-        }
-    }
-}
-impl std::error::Error for SttChainError {}
 
 /// `stt:79-93`, field for field; `offline_recognize` is not merged, as in the reference.
 pub fn merge_capabilities(entries: &[SttCapabilities]) -> SttCapabilities {

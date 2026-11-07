@@ -9,7 +9,7 @@ use self::stream::TtsStream;
 use crate::abi::{
     StreamInput, StreamOutput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
 };
-use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
+use crate::headers::{BoundIdentity, Headers, gateway_headers};
 use crate::ids::{RequestKind, create_inference_request_id};
 use crate::telemetry;
 use futures_util::future::{Either, select};
@@ -119,11 +119,10 @@ pub struct TtsClient {
     connections: Arc<Mutex<Connections>>,
 }
 
-/// One configured gateway socket, and the session id it was opened under.
+/// One configured gateway socket.
 struct Connection {
     sender: Arc<dyn WsSender>,
     receiver: Box<dyn WsReceiver>,
-    session_id: Option<String>,
     configuration: String,
 }
 
@@ -226,17 +225,15 @@ impl GatewayTts {
     pub fn prewarm_identified(&self, identification: Option<Headers>) {
         let opts = self.opts.lock().clone();
         let identification = identification.or_else(|| self.identity.for_connection());
-        let Ok(headers) =
-            gateway_headers(identification.as_ref(), None, None, &opts.api_key, &opts.api_secret)
+        let Ok(token) = lk_agents_net::token::inference_bearer(&opts.api_key, &opts.api_secret)
         else {
             return;
         };
-        let session_id = headers.get(HEADER_SESSION_ID).map(str::to_owned);
+        let headers = gateway_headers(identification.as_ref(), None, None, &token);
         let (ws, clock, connections) =
             (self.ws.clone(), self.clock.clone(), self.connections.clone());
         let url = format!("{}/tts?model={}", to_ws_url(&opts.base_url), opts.model);
         let create_frame = wire::session_create(&opts);
-        let headers = headers.into_vec();
         let configuration = connection_configuration(&create_frame, &headers);
         self.tasks.spawn(self.spawner.as_ref(), "tts prewarm", async move {
             let opened = open_ws(
@@ -251,13 +248,12 @@ impl GatewayTts {
             if let Ok((sender, receiver)) = opened.await {
                 let mut connections = connections.lock();
                 let id = connections.opened(clock.now().as_secs_f64());
-                connections
-                    .give_back(id, Connection { sender, receiver, session_id, configuration });
+                connections.give_back(id, Connection { sender, receiver, configuration });
             }
         });
     }
 
-    /// Headers are per stream, not a client field: each synthesis gets its own session id.
+    /// Identification is supplied per stream.
     /// `None`: the identity a session bound, else no job, the native headers.
     /// `expressive`: this synthesis batches sentences for markup and drops bracket cues from the
     /// alignment.
@@ -339,15 +335,16 @@ impl GatewayTts {
         let clock = self.clock.clone();
         let accepted_at = clock.now();
 
-        let headers = gateway_headers(identification, None, None, &opts.api_key, &opts.api_secret)?;
-        let session_id = headers.get(HEADER_SESSION_ID).map(str::to_owned);
+        let token = lk_agents_net::token::inference_bearer(&opts.api_key, &opts.api_secret)?;
+        let headers = gateway_headers(identification, None, None, &token);
+        let session_id = Some(crate::ids::shortuuid(crate::ids::SESSION_ID_PREFIX));
 
         let pump = Pump {
             connections: self.connections.clone(),
             session_id,
             ws: self.ws.clone(),
             url: format!("{}/tts?model={}", to_ws_url(&opts.base_url), opts.model),
-            headers: headers.into_vec(),
+            headers,
             clock: clock.clone(),
             accepted_at,
             stopped: stop.clone(),
@@ -659,7 +656,7 @@ struct Pump {
     session_id: Option<String>,
     ws: Arc<dyn WsTransport>,
     url: String,
-    headers: Vec<(String, String)>,
+    headers: Headers,
     clock: Arc<dyn Clock>,
     accepted_at: Ts,
     stopped: CancellationToken,
@@ -674,7 +671,7 @@ struct Pump {
     audio_tx: mpsc::Sender<Result<SynthesizedAudio, ApiError>>,
 }
 
-fn connection_configuration(frame: &serde_json::Value, headers: &[(String, String)]) -> String {
+fn connection_configuration(frame: &serde_json::Value, headers: &Headers) -> String {
     let identity: Vec<_> =
         headers.iter().filter(|(name, _)| !name.eq_ignore_ascii_case("authorization")).collect();
     format!("{frame}|{}", serde_json::to_string(&identity).expect("string headers serialize"))

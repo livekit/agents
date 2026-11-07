@@ -10,7 +10,7 @@ use lk_agents_abi::inference::avatar_session::AvatarError;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use crate::headers::{HEADER_INFERENCE_PROVIDER, Headers};
+use crate::headers::{Headers, gateway_headers};
 use lk_agents_core::attempts::AttemptFailure;
 use lk_agents_net::transport::HttpRequest;
 pub use machine::ProviderSession;
@@ -127,12 +127,11 @@ fn request(
     mut headers: Headers,
     bearer: &str,
 ) -> HttpRequest {
-    headers.set("Authorization", format!("Bearer {bearer}"));
-    headers.set(HEADER_INFERENCE_PROVIDER, opts.provider.clone());
+    headers = gateway_headers(Some(&headers), None, Some(&opts.provider), bearer);
     headers.set("Content-Type", "application/json");
     HttpRequest {
         url: format!("{}{path}", opts.base_url.trim_end_matches('/')),
-        headers: headers.into_vec(),
+        headers,
         body: body.to_string().into_bytes(),
     }
 }

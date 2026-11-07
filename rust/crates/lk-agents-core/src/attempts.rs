@@ -131,7 +131,7 @@ pub fn terminal_failure(
 #[derive(Debug, Clone, PartialEq)]
 pub enum AttemptFailure {
     /// A non-2xx response, its message read from the body.
-    Rejected { status: i64, message: String, request_id: Option<String> },
+    Rejected { status: i64, message: String, request_id: Option<String>, retryable: Option<bool> },
     /// Launch, connection or mid-body transport failure.
     Connection(String),
     /// The response is not the declared wire shape.
@@ -141,8 +141,12 @@ pub enum AttemptFailure {
 impl AttemptFailure {
     pub fn into_error(self) -> ApiError {
         match self {
-            AttemptFailure::Rejected { status, message, request_id } => {
-                ApiError::from_http(&message, status, request_id)
+            AttemptFailure::Rejected { status, message, request_id, retryable } => {
+                let error = ApiError::from_http(&message, status, request_id);
+                match retryable {
+                    Some(retryable) => error.with_retryable(retryable),
+                    None => error,
+                }
             }
             AttemptFailure::Connection(message) => ApiError::connection(Some(message)),
             AttemptFailure::Malformed(message) => {

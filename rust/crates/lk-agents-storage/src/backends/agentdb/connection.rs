@@ -392,7 +392,7 @@ impl Conn {
         let mut url = url::Url::parse(&self.0.opts.url)
             .map_err(|e| WsdbError::Io(format!("dial {}: {e}", self.0.opts.url)))?;
         url.query_pairs_mut().append_pair("access_token", &token);
-        let dial = connect_with_limit(url.as_str(), Vec::new(), Some(MAX_FRAME));
+        let dial = connect_with_limit(url.as_str(), Default::default(), Some(MAX_FRAME));
         let ws = tokio::time::timeout_at(deadline, dial)
             .await
             .map_err(|_| WsdbError::Timeout)?

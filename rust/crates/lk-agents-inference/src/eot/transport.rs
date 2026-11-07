@@ -41,7 +41,7 @@ pub trait PredictionListener: Send + Sync {
 /// audio ended; `Err`: transport died); the other methods post to a queue.
 #[async_trait]
 pub trait EotTransport: Send + Sync {
-    /// The gateway's `X-LiveKit-Session-ID` for this connection; `None` for the local model.
+    /// The client's request-id prefix for this connection; `None` for the local model.
     fn session_id(&self) -> Option<String>;
 
     /// `run_inference` (`base.py:52`): ask for a prediction under this id.

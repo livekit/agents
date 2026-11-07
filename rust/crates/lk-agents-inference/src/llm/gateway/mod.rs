@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 
-use crate::headers::{Headers, identification_headers};
+use crate::headers::{Headers, gateway_headers};
 use crate::llm::machine::{LlmRequest, LlmRequestEvent, LlmRequestId, RequestPolicy};
 use crate::llm::request::ChatArgs;
 use crate::llm::{Auth, BodyEncoding, LlmOptions, models};
@@ -273,15 +273,18 @@ impl Llm for GatewayLlm {
         let Ok(bearer) = opts.auth.bearer() else {
             return;
         };
-        let mut headers = match opts.auth {
-            Auth::Gateway { .. } => identification_headers(self.identity.as_ref(), None, None),
-            Auth::ProviderKey(_) => Headers::new(),
+        let headers = match opts.auth {
+            Auth::Gateway { .. } => gateway_headers(self.identity.as_ref(), None, None, &bearer),
+            Auth::ProviderKey(_) => {
+                let mut headers = Headers::new();
+                headers.set("Authorization", format!("Bearer {bearer}"));
+                headers
+            }
         };
-        headers.set("Authorization", format!("Bearer {bearer}"));
         let (http, url) =
             (self.http.clone(), format!("{}/models", opts.base_url.trim_end_matches('/')));
         let task = TokioSpawner::new(self.runtime.clone())
-            .spawn(async move { http.warm(url, headers.into_vec()).await });
+            .spawn(async move { http.warm(url, headers).await });
         *self.prewarm.lock() = Some(task);
     }
 
@@ -314,19 +317,6 @@ impl Llm for GatewayLlm {
 struct Exchange {
     http: Arc<GatewayHttp>,
     request: HttpRequest,
-}
-
-impl Exchange {
-    /// Each attempt is its own gateway session: a job's session id is minted afresh per attempt.
-    fn attempt(&self) -> HttpRequest {
-        let mut request = self.request.clone();
-        for (name, value) in &mut request.headers {
-            if name.eq_ignore_ascii_case(crate::headers::HEADER_SESSION_ID) {
-                *value = crate::ids::shortuuid(crate::ids::SESSION_ID_PREFIX);
-            }
-        }
-        request
-    }
 }
 
 /// What accepts the request at its first pull.
@@ -477,7 +467,7 @@ impl LlmChunks {
         let (exchange, reporter) = (self.exchange.clone(), self.reporter.clone());
         let closed = self.reporter.clone();
         let work = async move {
-            send_attempt(&exchange.http, exchange.attempt(), attempt, reporter).await
+            send_attempt(&exchange.http, exchange.request.clone(), attempt, reporter).await
         };
         let settle = move |outcome| async move {
             if outcome == TaskOutcome::Panicked {
@@ -551,6 +541,11 @@ async fn read_events(
     attempt: u32,
     reporter: &Reporter<LlmRequestEvent>,
 ) -> Option<AttemptFailure> {
+    let request_id = response
+        .headers()
+        .get("X-LiveKit-Request-Id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     let mut decoder = SseDecoder::new();
     let mut bytes = response.bytes_stream();
     let mut events = Vec::new();
@@ -576,12 +571,37 @@ async fn read_events(
                 reporter.report(LlmRequestEvent::Ended { attempt }).await;
                 return None;
             }
-            match serde_json::from_str::<WireChunk>(&event.data) {
-                Ok(chunk) => reporter.report(LlmRequestEvent::Chunk { attempt, chunk }).await,
+            match serde_json::from_str::<CompletionEvent>(&event.data) {
+                Ok(CompletionEvent::Error { error }) => {
+                    return Some(AttemptFailure::Rejected {
+                        status: i64::from(error.code),
+                        message: error.message,
+                        request_id,
+                        retryable: None,
+                    });
+                }
+                Ok(CompletionEvent::Chunk(chunk)) => {
+                    reporter.report(LlmRequestEvent::Chunk { attempt, chunk }).await
+                }
                 Err(err) => {
                     return Some(AttemptFailure::Malformed(format!("undecodable chunk: {err}")));
                 }
             }
         }
     }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum CompletionEvent {
+    Error { error: InbandError },
+    Chunk(WireChunk),
+}
+
+#[derive(serde::Deserialize)]
+struct InbandError {
+    message: String,
+    #[serde(rename = "type")]
+    _kind: String,
+    code: u16,
 }
