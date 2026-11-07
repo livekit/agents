@@ -6,6 +6,7 @@ at the endpoint."""
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
@@ -37,6 +38,7 @@ from livekit.agents.llm.tool_context import CUT_OFF_KEY
 from livekit.agents.storage import AgentDBStorage, StorageUnavailable
 from livekit.agents.storage.resolve import Thread
 
+from . import fake_agentstore
 from .a2a_driver import (
     AGENT,
     API_SECRET,
@@ -45,6 +47,7 @@ from .a2a_driver import (
     Door,
     Reply,
     ScriptedLLM,
+    Sent,
     call,
     http_client,
     make_server,
@@ -59,7 +62,9 @@ from .a2a_driver import (
     user_message,
     wire,
 )
+from .agentdb_fixture import ON_PROJECT
 from .fake_llm import FakeLLM, FakeLLMResponse
+from .test_live_inbox import until
 
 pytestmark = [pytest.mark.unit]
 
@@ -399,6 +404,73 @@ async def test_a_resent_message_id_returns_the_existing_task(door: Callable[...,
     assert again.answer == "reply to: hi"
     assert [t["id"] for t in await desk.list_tasks(ctx_id)] == [first.task["id"]]
     assert runs == ["hi"], "nothing runs twice"
+
+
+ACQUIRE = "UPDATE lanes SET lease_holder"
+"""How an acquire batch takes the lease (lk-agents-storage, ``ACQUIRE``)."""
+
+
+def count_acquires(monkeypatch: pytest.MonkeyPatch) -> Callable[[], int]:
+    """How many acquire batches the fake has answered since this call."""
+    answered: list[None] = []
+    answer = fake_agentstore.Database.answer
+
+    def counted(self: fake_agentstore.Database, msg: Any) -> list[Any]:
+        out = answer(self, msg)
+        batch = msg.batch.statements if msg.WhichOneof("message") == "batch" else []
+        if any(s.sql.startswith(ACQUIRE) for s in batch):
+            answered.append(None)
+        return out
+
+    monkeypatch.setattr(fake_agentstore.Database, "answer", counted)
+    return lambda: len(answered)
+
+
+@pytest.mark.rule("R3")
+@pytest.mark.skipif(ON_PROJECT, reason="the test counts the acquires the fake answers")
+@pytest.mark.no_concurrent  # count_acquires patches the fake that every test shares
+async def test_a_message_id_resent_while_its_turn_runs_returns_the_existing_task(
+    door: Callable[..., Door], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+    model = ScriptedLLM(Reply("Room 12 is booked."))
+    front = Agent(instructions="front desk", llm=model)
+    runs: list[str] = []
+
+    async def holds_the_lane(ctx: A2ASessionContext[Any]) -> str | None:
+        runs.append(ctx.message.text_content or "")
+        entered.set()
+        await release.wait()
+        return (await front.run(ctx.message, message_history=ctx.message_history)).output
+
+    acquires = count_acquires(monkeypatch)
+    desk = door(holds_the_lane)
+    thread = await desk.thread()
+    message_id = uuid.uuid4().hex
+    first = asyncio.create_task(desk.send("book room 12", context_id=thread, message_id=message_id))
+    await asyncio.wait_for(entered.wait(), 5)
+    held = acquires()
+    # the same messageId again, on a run of its own: its acquire finds the lease held, and so
+    # does its first retry, by when a run that marks itself the lane's waiter has done so
+    message = wire("book room 12", message_id, context_id=thread)
+    resent = asyncio.create_task(rpc(desk.http, "message/stream", {"message": message}))
+
+    async def retried() -> bool:
+        return acquires() >= held + 2
+
+    await until(retried, "the resend retrying the acquire")
+    release.set()
+
+    sent = await first
+    frames = [r["result"] for r in sse_results(await resent) if "result" in r]
+    acked = frames[0]["task"]["id"]
+    got = (await rpc(desk.http, "tasks/get", {"id": acked, "contextId": thread})).json()
+    # the first send is not interrupted, and the resend is acked under its task and runs nothing
+    assert sent.state == "completed", sent.metadata.get(INTERRUPTION_REASON)
+    assert "result" in got, f"tasks/get cannot find {acked}: {got.get('error')}"
+    again = Sent(frames, got["result"])
+    assert again.task["id"] == sent.task["id"] and again.answer == sent.answer
+    assert runs == ["book room 12"] and len(model.requests) == 1, "nothing runs twice"
 
 
 async def test_resubscribe_replays_after_the_first_stream_is_dropped(
