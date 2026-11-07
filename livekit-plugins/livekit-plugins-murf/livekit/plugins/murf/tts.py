@@ -175,7 +175,12 @@ class TTS(tts.TTS):
             f"/v1/speech/stream-input?sample_rate={self._opts.sample_rate}&format={self._opts.encoding}&model={self._opts.model}"
         )
         headers = {API_AUTH_HEADER: self._opts.api_key}
-        return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
+        return await asyncio.wait_for(
+            # the monitor sends its own pings and handles the pongs, so aiohttp
+            # must not answer them itself or they stop counting as activity.
+            session.ws_connect(url, headers=headers, autoping=False),
+            timeout,
+        )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
@@ -348,8 +353,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             current_segment_id: str | None = None
             await input_sent_event.wait()
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
