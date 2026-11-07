@@ -567,7 +567,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             whether anything is still pending instead of waiting for a message that never comes)."""
             if sender_done.is_set():
                 return await ws.receive(timeout=self._conn_options.timeout)
-            recv = asyncio.ensure_future(ws.receive(timeout=self._conn_options.timeout))
+            # while an utterance is pending the server owes us a message within the timeout;
+            # with nothing pending the pause is the LLM's (or the user's), not the server's
+            timeout = self._conn_options.timeout if pending else None
+            recv = asyncio.ensure_future(ws.receive(timeout=timeout))
             done_waiter = asyncio.ensure_future(sender_done.wait())
             try:
                 await asyncio.wait({recv, done_waiter}, return_when=asyncio.FIRST_COMPLETED)

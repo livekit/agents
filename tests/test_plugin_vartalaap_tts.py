@@ -366,3 +366,27 @@ def test_a_rejected_update_leaves_the_options_untouched():
         tts.update_options(speed=3.0, voice="sahil")
     assert tts._opts.speed == 1.2
     assert tts._opts.voice == "saanvi"
+
+
+@pytest.mark.asyncio
+async def test_a_pause_in_the_input_longer_than_the_timeout_does_not_fail_the_stream():
+    """The first sentence has been spoken and the LLM pauses for longer than the connection
+    timeout before the next one: nothing is pending, so nothing is owed by the server."""
+    from livekit.plugins.vartalaap import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY)
+    ws = _FakeWS()
+    tts._pool = _FakePool(ws)  # type: ignore[assignment]
+
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.3))
+    stream.push_text("First sentence of the reply, long enough. ")
+    stream.push_text("Second sentence of the reply, long enough. ")  # releases the first
+    async with asyncio.timeout(5):
+        while not ws.sent:
+            await asyncio.sleep(0.01)
+    await asyncio.sleep(1.0)  # the LLM thinks; longer than the 0.3 s timeout
+    stream.push_text("Third sentence of the reply, long enough.")
+    stream.end_input()
+
+    frames = [bytes(ev.frame.data) async for ev in stream]
+    assert len(ws.sent) == 3 and len(b"".join(frames)) == 6 * 3840
