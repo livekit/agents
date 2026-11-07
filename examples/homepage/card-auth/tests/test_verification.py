@@ -44,7 +44,7 @@ def in_days(days: int) -> str:
 
 async def test_any_name_and_birthday_with_the_demo_card_verify(agent, published):
     assert await verify(agent) == {"verified": True}
-    assert published["status_history"] == ["authenticating", "authenticated"]
+    assert published["status_history"] == ["authenticated"]
     assert published["card"]["holder"] == "Sam Ortiz"
     assert published["attempts"] == [
         {

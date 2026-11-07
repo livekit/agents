@@ -313,7 +313,7 @@ def _sample_caller(bank_line: str) -> str:
 def outbound_caller_script(bank: Bank) -> str | None:
     """What the person Avery called knows and wants right now, for the suggested replies."""
     alert = bank.alert
-    if alert is None or bank.state == "authenticating":
+    if alert is None:
         return None
     back = _today() + timedelta(days=14)
     on_file = _sample_caller(
@@ -345,9 +345,7 @@ def outbound_caller_script(bank: Bank) -> str | None:
 
 
 def caller_script(bank: Bank) -> str | None:
-    """What the caller knows and wants right now, for the suggested replies; nothing while a check runs."""
-    if bank.state == "authenticating":
-        return None
+    """What the caller knows and wants right now, for the suggested replies."""
     on_file = _sample_caller(
         f"The caller is trying out Avery's demo of {BANK_NAME} card services."
     )

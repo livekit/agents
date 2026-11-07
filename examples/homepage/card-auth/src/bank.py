@@ -15,7 +15,7 @@ DECLINED_CARD = "0000"
 MAX_ATTEMPTS = 3
 EARLIEST_BIRTH_DATE = date(1900, 1, 1)
 
-AuthState = Literal["unauthenticated", "authenticating", "authenticated"]
+AuthState = Literal["unauthenticated", "authenticated"]
 CardState = Literal["active", "locked"]
 
 
@@ -97,7 +97,7 @@ class Alert:
     caller doesn't recognize. `checks` are the outbound call's identity checks."""
 
     purchase: FlaggedPurchase = FLAGGED
-    checks: list[bool | None] = field(default_factory=list)
+    checks: list[bool] = field(default_factory=list)
     made_by_cardholder: bool | None = None
 
     def to_json(self) -> dict[str, Any]:
@@ -128,19 +128,14 @@ class Bank:
         """Inbound: checks the caller against the demo's test cards. Three misses lock them out."""
         if self.locked_out:
             raise BankError("This caller is locked out after too many failed checks.")
-        attempt: dict[str, Any] = {
-            "submitted": claimed.to_json(),
-            "authenticated": None,
-        }
-        self.attempts.append(attempt)
-        await self.publish("attempts", self.attempts)
-        await self._set_state("authenticating")
         verified = claimed.last_four == VERIFIED_CARD
-        attempt["authenticated"] = verified
+        self.attempts.append(
+            {"submitted": claimed.to_json(), "authenticated": verified}
+        )
         await self.publish("attempts", self.attempts)
         if verified:
             await self._verify_holder(claimed.name)
-        elif sum(a["authenticated"] is False for a in self.attempts) >= MAX_ATTEMPTS:
+        elif sum(not a["authenticated"] for a in self.attempts) >= MAX_ATTEMPTS:
             self.locked_out = True
             await self.publish("lockedOut", True)
         await self._set_state("authenticated" if verified else "unauthenticated")
@@ -156,10 +151,7 @@ class Bank:
         """Outbound: confirms whoever picked up as the cardholder. Nothing is on file in the demo, so
         any name and real date of birth will do; the check is there to show the step."""
         alert = self._require_alert()
-        alert.checks.append(None)
-        await self._publish_alert()
-        await self._set_state("authenticating")
-        alert.checks[-1] = True
+        alert.checks.append(True)
         await self._publish_alert()
         await self._verify_holder(name)
         await self._set_state("authenticated")
