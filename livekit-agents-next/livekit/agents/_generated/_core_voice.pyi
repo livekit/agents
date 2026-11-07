@@ -715,10 +715,13 @@ class VoiceSession:
         """`AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it."""
     def update_instructions(self, instructions: str) -> None:
         """`Agent.update_instructions()` on the agent that is already driving."""
-    def set_io_enabled(self, leg: str, enabled: bool) -> None:
+    def set_io_enabled(
+        self,
+        leg: Literal["audio_input", "audio_output", "transcription"],
+        enabled: bool,
+    ) -> None:
         """`input.set_audio_enabled` / `output.set_audio_enabled` /
-        `output.set_transcription_enabled`: `leg` is `"audio_input"`, `"audio_output"` or
-        `"transcription"`.
+        `output.set_transcription_enabled`.
         """
     def tool_update(
         self,
@@ -734,9 +737,9 @@ class VoiceSession:
         """`AgentSession.interrupt(force=)`: the current and queued speeches up to the first
         uninterruptible; answers when they are done, or with the refusal.
         """
-    async def drain(self) -> str | None:
+    async def drain(self) -> Literal["closing", "activity_changing", "voice_task_running"] | None:
         """`AgentSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
-        speech is left. Answers `None`, `"activity_changing"` or `"closing"`.
+        speech is left. Answers `None`, or why it was refused.
         """
     async def wait_for_idle(self, *, hold: int | None = None) -> None:
         """`AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`)."""

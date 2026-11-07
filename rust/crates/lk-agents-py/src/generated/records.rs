@@ -13573,8 +13573,10 @@ pub mod session_wire {
             },
         )?;
         kwargs.set_item("agent", ::pyo3::IntoPyObjectExt::into_bound_py_any(agent, py)?)?;
-        kwargs
-            .set_item("visibility", ::pyo3::IntoPyObjectExt::into_bound_py_any(visibility, py)?)?;
+        kwargs.set_item(
+            "visibility",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(visibility.as_str(), py)?,
+        )?;
         kwargs.set_item(
             "run",
             match run {
@@ -13717,7 +13719,8 @@ pub mod session_wire {
                 Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
             },
         )?;
-        kwargs.set_item("cause", ::pyo3::IntoPyObjectExt::into_bound_py_any(cause, py)?)?;
+        kwargs
+            .set_item("cause", ::pyo3::IntoPyObjectExt::into_bound_py_any(cause.as_str(), py)?)?;
         crate::py_calls::call(
             RUN_REFUSED_WIRE
                 .import(py, "livekit.agents._generated.session_wire", "RunRefusedWire")?
@@ -13765,7 +13768,10 @@ pub mod session_wire {
                 Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
             },
         )?;
-        kwargs.set_item("outcome", ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome, py)?)?;
+        kwargs.set_item(
+            "outcome",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome.as_str(), py)?,
+        )?;
         kwargs.set_item(
             "final_output",
             match final_output {
@@ -13808,7 +13814,10 @@ pub mod session_wire {
         let ::lk_agents_abi::voice::events::SpeechDoneWire { speech_id, outcome } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("speech_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_id, py)?)?;
-        kwargs.set_item("outcome", ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome, py)?)?;
+        kwargs.set_item(
+            "outcome",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome.as_str(), py)?,
+        )?;
         crate::py_calls::call(
             SPEECH_DONE_WIRE
                 .import(py, "livekit.agents._generated.session_wire", "SpeechDoneWire")?
@@ -13998,12 +14007,14 @@ pub mod session_wire {
             processor_failure,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("source", ::pyo3::IntoPyObjectExt::into_bound_py_any(source, py)?)?;
+        kwargs
+            .set_item("source", ::pyo3::IntoPyObjectExt::into_bound_py_any(source.as_str(), py)?)?;
         kwargs.set_item(
             "recoverable",
             ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable, py)?,
         )?;
-        kwargs.set_item("label", ::pyo3::IntoPyObjectExt::into_bound_py_any(label, py)?)?;
+        kwargs
+            .set_item("label", ::pyo3::IntoPyObjectExt::into_bound_py_any(label.as_str(), py)?)?;
         kwargs.set_item("error", crate::py_errors::ExceptionValue::to_exception(error, py)?)?;
         kwargs.set_item(
             "speech_id",
@@ -15087,6 +15098,39 @@ pub mod storage_class {
             (),
             Some(&kwargs),
         )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/storage/thread.rs.
+
+    pub fn run_outcome_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::storage::thread::RunOutcome> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "completed" => Ok(::lk_agents_abi::storage::thread::RunOutcome::Completed),
+            "input-required" => Ok(::lk_agents_abi::storage::thread::RunOutcome::InputRequired),
+            "failed" => Ok(::lk_agents_abi::storage::thread::RunOutcome::Failed),
+            "canceled" => Ok(::lk_agents_abi::storage::thread::RunOutcome::Canceled),
+            "rejected" => Ok(::lk_agents_abi::storage::thread::RunOutcome::Rejected),
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "RunOutcome: {other:?} is not one of 'completed', 'input-required', 'failed', 'canceled', 'rejected'"
+            ))),
+        }
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/storage/thread.rs.
+
+    pub fn task_order_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::storage::thread::TaskOrder> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "updated" => Ok(::lk_agents_abi::storage::thread::TaskOrder::Updated),
+            "inserted" => Ok(::lk_agents_abi::storage::thread::TaskOrder::Inserted),
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "TaskOrder: {other:?} is not one of 'updated', 'inserted'"
+            ))),
+        }
     }
 }
 
@@ -21044,6 +21088,32 @@ pub mod turn_events {
                 d.into_any()
             }
         })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/turn/detector.rs.
+
+    pub fn flush_reason_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::turn::detector::FlushReason> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "turn committed" => Ok(::lk_agents_abi::turn::detector::FlushReason::TurnCommitted),
+            "clear_user_turn" => Ok(::lk_agents_abi::turn::detector::FlushReason::ClearUserTurn),
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "FlushReason: {other:?} is not one of 'turn committed', 'clear_user_turn'"
+            ))),
+        }
+    }
+
+    pub fn flush_reason_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::turn::detector::FlushReason,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::turn::detector::FlushReason::TurnCommitted => "turn committed",
+            ::lk_agents_abi::turn::detector::FlushReason::ClearUserTurn => "clear_user_turn",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/turn/events.rs.
