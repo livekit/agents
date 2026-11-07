@@ -18,13 +18,14 @@ See https://docs.livekit.io/agents/integrations/stt/assemblyai/ for more informa
 """
 
 from .log import logger
-from .stt import STT, SpeechStream
+from .stt import STT, PIIRedactionSubstitution, SpeechStream
 from .tts import TTS, SynthesizeStream
 from .version import __version__
 
 __all__ = [
     "STT",
     "SpeechStream",
+    "PIIRedactionSubstitution",
     "TTS",
     "SynthesizeStream",
     "logger",
