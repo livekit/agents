@@ -252,7 +252,12 @@ async fn run_body(
         _guard: guard,
     };
     site.bodies.spawn(speech, "host tool body", body.run(span, progress, tx));
-    rx.await.unwrap_or_else(|_| ToolOutcome::Cancelled.into())
+    // The close cancels the body, which owns its cleanup from there: a body refusing its
+    // cancellation runs to the close's bound on its own, its call answered as cancelled.
+    tokio::select! { biased;
+        report = rx => report.unwrap_or_else(|_| ToolOutcome::Cancelled.into()),
+        () = shared.closing.cancelled() => ToolOutcome::Cancelled.into(),
+    }
 }
 
 /// Ends the body's progress tracking once the body has finished, on every path.

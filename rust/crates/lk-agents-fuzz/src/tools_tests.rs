@@ -1124,6 +1124,20 @@ mod host_body_close_ownership {
         assert!(!outcome.stopped_early, "{:?}", outcome.ending);
     }
 
+    // Catches: a host body refusing the close's cancellation held the call that awaited it past
+    // the close's cleanup bound as well, though only the body owns its cleanup: the call's task
+    // was cancelled there (survey seed 5901 TaskBridge, every_task_finishes).
+    #[test]
+    fn a_body_refusing_the_close_alone_runs_to_the_bound() {
+        use lk_agents_fuzz::{drive::Policy, search};
+        let seed = 5901;
+        let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
+        let dials = search::Dials::of(seed);
+        let outcome = search::explore_with(setup, seed, 3000, dials, Policy::TaskBridge);
+        let failed: Vec<_> = outcome.failures.iter().map(|f| f.contract.to_string()).collect();
+        assert!(!failed.iter().any(|c| c == "every_task_finishes"), "{failed:?}");
+    }
+
     #[test]
     fn a_host_refusing_close_cancellation_still_obeys_the_existing_cleanup_bound() {
         let outcome = run(case(true));
