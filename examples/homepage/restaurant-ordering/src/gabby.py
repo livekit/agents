@@ -507,19 +507,6 @@ class DeliveryUpdate(Gabby):
             "comparedToBefore": compared(self._pos.balance()),
         }
 
-    def _unfinished(self) -> str | None:
-        pos = self._pos
-        d = pos.delivery
-        assert d is not None
-        if d.ended_early or (pos.order and pos.order.cancelled):
-            return None
-        if pos.sold_out_unresolved():
-            swaps = " or ".join(pos.same_price_swaps())
-            return f"ask whether they'd like a {swaps} instead of the {pos.ran_out_line().label}, or to take it off."
-        if d.read_back_revision != pos.revision:
-            return "call read_back_changes and tell them what changed and what's due."
-        return None
-
 
 def delivery_opener(pos: Pizzeria) -> str:
     d = pos.delivery

@@ -100,7 +100,6 @@ PickupRide = Literal["shuttle", "self"]
 EndedEarly = Literal["wrong_person", "call_back_later"]
 
 MENU: dict[str, dict[str, Any]] = SEED["menu"]
-PRICED_SERVICES = ("oil_change", "tire_rotation", "diagnostic")
 
 
 class ServiceDeskError(Exception):

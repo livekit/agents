@@ -231,7 +231,7 @@ class Bank:
 
 
 def card_digits(text: str) -> str:
-    """The card's last four digits as the backend model gave them, like "1111" or "11 11"."""
+    """The card's last four digits as the model gave them, like "1111" or "11 11"."""
     digits = "".join(c for c in text if c.isdecimal())
     if len(digits) != 4:
         raise BankError(f"Ask for the card's last four digits, got {text!r}.")
@@ -239,7 +239,7 @@ def card_digits(text: str) -> str:
 
 
 def birth_date(text: str, today: date) -> date:
-    """A date of birth as the backend model gave it, YYYY-MM-DD, if it could be someone's."""
+    """A date of birth as the model gave it, YYYY-MM-DD, if it could be someone's."""
     try:
         born = date.fromisoformat(text.strip())
     except ValueError as e:
