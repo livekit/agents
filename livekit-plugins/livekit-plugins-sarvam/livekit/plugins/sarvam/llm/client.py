@@ -34,6 +34,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.plugins.openai.llm import LLM as OpenAILLM
 
+from ..log import logger
 from .models import SarvamLLMModels
 
 SARVAM_API_BASE = "https://api.sarvam.ai"
@@ -67,6 +68,11 @@ _REASONING_EFFORT_MODELS: set[str] = {
     "gemma4",
     "sarvam-105b",
     "glm5.2",
+}
+
+# Models that reason before every answer on /v2, whatever ``reasoning_effort`` is set to
+_ALWAYS_REASONING_MODELS: set[str] = {
+    "sarvam-105b",
 }
 
 # Models that support wiki_grounding
@@ -117,6 +123,15 @@ def _validate_model(model: str) -> str:
     return model
 
 
+def _warn_if_always_reasoning(model: str) -> None:
+    if model in _ALWAYS_REASONING_MODELS:
+        logger.warning(
+            "%s reasons before every answer on /v2, even with reasoning_effort unset or None, "
+            "which adds seconds to the first token; for voice agents prefer gemma4",
+            model,
+        )
+
+
 def _get_api_key(key: NotGivenOr[str]) -> str:
     sarvam_api_key = key if is_given(key) else os.environ.get("SARVAM_API_KEY")
     if not sarvam_api_key:
@@ -148,7 +163,8 @@ class LLM(OpenAILLM):
     Supports four models:
 
     * ``gemma4`` — vision-capable, ``/v2`` endpoint
-    * ``sarvam-105b`` — text-only, ``/v2`` endpoint
+    * ``sarvam-105b`` — text-only, ``/v2`` endpoint; always reasons before answering,
+      so first tokens take seconds. Prefer ``gemma4`` for voice agents
     * ``glm5.2`` — text-only, ``/v2`` endpoint
     * ``sarvam-105b-conversations`` — multi-turn optimized, ``/v1`` endpoint
 
@@ -190,6 +206,10 @@ class LLM(OpenAILLM):
 
         # Resolve base URL: explicit > model-derived
         resolved_base_url = base_url if is_given(base_url) else _resolve_base_url(validated_model)
+        # with an explicit base_url the caller chose the endpoint, so don't warn about /v2
+        self._sarvam_endpoint_pinned = is_given(base_url)
+        if not self._sarvam_endpoint_pinned:
+            _warn_if_always_reasoning(validated_model)
 
         # ---- Merge auth / telemetry headers (always enforced) ----
         merged_headers: dict[str, str] = {}
@@ -277,6 +297,8 @@ class LLM(OpenAILLM):
 
         new_model = _validate_model(model)
         new_version = _api_version(new_model)
+        if new_model != self._opts.model and not self._sarvam_endpoint_pinned:
+            _warn_if_always_reasoning(new_model)
 
         if new_version != self._sarvam_api_version:
             # Endpoint changed — recreate the client pointing at the new URL
