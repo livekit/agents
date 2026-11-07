@@ -942,6 +942,12 @@ impl<'a> SpeechTrace<'a> {
         self.first(|s| matches!(s, Step::Interrupt(InterruptStep::Interrupted { .. })))
     }
 
+    /// When the interruption watchdog ended it: its aborted tasks never report its turn, so its
+    /// lane is released after the speech is done (voice-session.md: "within 30 seconds").
+    pub fn timed_out_at(&self) -> Option<Observed> {
+        self.first(|s| matches!(s, Step::Interrupt(InterruptStep::InterruptionTimedOut { .. })))
+    }
+
     /// When the turn authorized it to play.
     pub fn authorized_at(&self) -> Option<Observed> {
         self.first(|s| matches!(s, Step::Speech(SpeechStep::Authorized { .. })))
