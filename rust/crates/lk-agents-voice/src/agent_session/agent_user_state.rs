@@ -13,7 +13,7 @@ use crate::events::SessionEvent;
 /// the driver's timer table or callback queue.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum AgentUserStateUpdate {
-    PublishSessionEvent(SessionEvent),
+    PublishSessionEvent(Box<SessionEvent>),
     SetAwayDeadline(Ts),
     ClearAwayDeadline,
 }
@@ -83,11 +83,9 @@ impl AgentUserState {
             return eff;
         }
         let old = std::mem::replace(&mut self.user, next);
-        eff.push(AgentUserStateUpdate::PublishSessionEvent(SessionEvent::UserStateChanged {
-            old,
-            new: next,
-            at,
-        }));
+        eff.push(AgentUserStateUpdate::PublishSessionEvent(Box::new(
+            SessionEvent::UserStateChanged { old, new: next, at },
+        )));
         eff
     }
 

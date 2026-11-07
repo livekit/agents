@@ -66,7 +66,7 @@ pub fn encode(
 fn session_update(event_id: &str, config: SessionConfig, dialect: &Dialect) -> ClientEvent {
     ClientEvent::SessionUpdate {
         event_id: event_id.to_owned(),
-        session: Session::new(config, dialect.provider, dialect.protocol),
+        session: Box::new(Session::new(config, dialect.provider, dialect.protocol)),
     }
 }
 

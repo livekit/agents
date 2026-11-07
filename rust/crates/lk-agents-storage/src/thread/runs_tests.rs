@@ -100,8 +100,8 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     run1.history_mut().push(message("sys", ChatRole::System, "be nice"));
     run1.set_state(json!({"patient": "Ann"}));
     run1.events().append(JournalEvent::Error { error: "boom".into() });
-    let mut usage = lk_agents_abi::usage::Usage::default();
-    usage.requests = 1;
+    let mut usage =
+        lk_agents_abi::usage::Usage { requests: 1, ..lk_agents_abi::usage::Usage::default() };
     usage.tokens.input_tokens = 10;
     run1.set_usage(usage);
     let request = run1.writes(CommitOptions::default()).unwrap();

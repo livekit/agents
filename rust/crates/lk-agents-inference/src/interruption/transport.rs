@@ -321,11 +321,8 @@ impl InterruptionStream {
     /// stream`); [`recv_event`](Self::recv_event) yields verdicts and failures.
     pub async fn recv(&mut self) -> Option<OverlappingSpeechEvent> {
         loop {
-            match self.event_rx.recv().await? {
-                StreamEvent::Overlap { event, .. } => {
-                    return Some(*event);
-                }
-                _ => {}
+            if let StreamEvent::Overlap { event, .. } = self.event_rx.recv().await? {
+                return Some(*event);
             }
         }
     }

@@ -869,10 +869,10 @@ impl VoiceDriver {
         for update in updates {
             match update {
                 AgentUserStateUpdate::PublishSessionEvent(event) => {
-                    if let SessionEvent::UserStateChanged { old, new, at } = &event {
+                    if let SessionEvent::UserStateChanged { old, new, at } = &*event {
                         self.user_state_span_event(*old, *new, *at);
                     }
-                    self.publish_event(event)
+                    self.publish_event(*event)
                 }
                 AgentUserStateUpdate::SetAwayDeadline(at) => self.set_deadline(Timer::UserAway, at),
                 AgentUserStateUpdate::ClearAwayDeadline => self.clear_deadline(Timer::UserAway),

@@ -8,7 +8,7 @@ use serde::Serialize;
 #[serde(tag = "type")]
 pub enum ClientEvent {
     #[serde(rename = "session.update")]
-    SessionUpdate { event_id: String, session: Session },
+    SessionUpdate { event_id: String, session: Box<Session> },
     #[serde(rename = "conversation.item.create")]
     ItemCreate {
         event_id: String,
