@@ -41,7 +41,7 @@ pub trait Thread: Send + Sync + Sized + 'static {
         &self,
         #[host(default = None)] lane: Option<String>,
         #[host(default = None)] status: Option<TaskState>,
-        #[host(default = None)] order: Option<crate::storage::thread::TaskOrder>,
+        #[host(default = "updated")] order: crate::storage::thread::TaskOrder,
         #[host(default = 50)] page_size: i64,
         #[host(default = None)] page_token: Option<String>,
     ) -> Result<TaskPage, StorageError>;
@@ -168,7 +168,7 @@ pub trait ThreadHandle: Send + Sync + Sized + 'static {
         &self,
         #[host(kw, default = None)] agent: Option<String>,
         #[host(default = None)] status: Option<TaskState>,
-        #[host(default = None)] order: Option<crate::storage::thread::TaskOrder>,
+        #[host(default = "inserted")] order: crate::storage::thread::TaskOrder,
         #[host(default = None)] page_token: Option<String>,
         #[host(default = 50)] limit: i64,
     ) -> Result<TaskPage, StorageError>;

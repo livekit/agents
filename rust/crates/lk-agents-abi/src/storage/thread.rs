@@ -171,17 +171,29 @@ impl From<TaskRow> for TaskWrite {
     }
 }
 
-/// The `livekit/reason` codes of a failed task (server.md "Tasks on the wire").
-pub const REASON_WORKER_LOST: &str = "worker-lost";
-pub const REASON_LEASE_TIMEOUT: &str = "lease-timeout";
-pub const REASON_THREAD_NOT_FOUND: &str = "thread-not-found";
-pub const REASON_STORAGE_UNAVAILABLE: &str = "storage-unavailable";
-/// An answer whose task row this worker did not write.
-pub const REASON_NOT_WRITTEN: &str = "not-written";
-/// A run a client canceled with `tasks/cancel`.
-pub const REASON_CLIENT_CANCEL: &str = "client-cancel";
-/// A remote task canceled because its caller exited or its exchange failed.
-pub const REASON_CALLER_CANCELED: &str = "caller-canceled";
+/// The `livekit/reason` codes the framework writes on a task it fails or cancels (server.md
+/// "Tasks on the wire"). A host's own cancel reason is its text.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskReason {
+    #[host(rename = "worker-lost")]
+    WorkerLost,
+    #[host(rename = "lease-timeout")]
+    LeaseTimeout,
+    #[host(rename = "thread-not-found")]
+    ThreadNotFound,
+    #[host(rename = "storage-unavailable")]
+    StorageUnavailable,
+    /// An answer whose task row this worker did not write.
+    #[host(rename = "not-written")]
+    NotWritten,
+    /// A run a client canceled with `tasks/cancel`.
+    #[host(rename = "client-cancel")]
+    ClientCancel,
+    /// A remote task canceled because its caller exited or its exchange failed.
+    #[host(rename = "caller-canceled")]
+    CallerCanceled,
+}
 
 /// The channel of the append-only run that writes a task's `submitted` row before the lease.
 pub const SUBMIT_CHANNEL: &str = "submit";

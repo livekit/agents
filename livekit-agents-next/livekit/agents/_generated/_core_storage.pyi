@@ -205,7 +205,7 @@ class Thread:
         self,
         lane: str | None = None,
         status: TaskState | None = None,
-        order: TaskOrder | None = None,
+        order: TaskOrder = "updated",
         page_size: int = 50,
         page_token: str | None = None,
     ) -> TaskPage: ...
@@ -295,7 +295,7 @@ class _core_ThreadHandle:
         *,
         agent: str | None = None,
         status: TaskState | None = None,
-        order: TaskOrder | None = None,
+        order: TaskOrder = "inserted",
         page_token: str | None = None,
         limit: int = 50,
     ) -> TaskPage:

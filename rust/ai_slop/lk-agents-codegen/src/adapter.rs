@@ -753,6 +753,7 @@ fn signature(params: &[Param]) -> String {
                 parts.push(format!("{} = crate::py_values::Omittable::NOT_GIVEN", p.name))
             }
             None => parts.push(p.name.clone()),
+            Some(_) if object_default(p).is_some() => parts.push(format!("{} = None", p.name)),
             Some(d) => parts.push(format!("{} = {}", p.name, rust_literal(d, &p.ty))),
         }
     }
@@ -813,6 +814,16 @@ fn contains_number(ty: &Ty) -> bool {
     }
 }
 
+/// The wire string an object-converted parameter defaults to: omitted, it is parsed in Rust
+/// (`FromStr` of the wire vocabulary), so the signature's default is `None`.
+fn object_default(p: &Param) -> Option<&str> {
+    match (&p.default, &p.ty) {
+        (_, Ty::Optional(_) | Ty::Maybe(_) | Ty::List(_)) => None,
+        (Some(Literal::Str(wire)), ty) if p.shape_error.is_some() || !native(ty) => Some(wire),
+        _ => None,
+    }
+}
+
 /// The adapter's parameter type, and the conversion (an expression of the parameter) when it is
 /// taken as an object.
 fn input(at: &str, p: &Param) -> Result<(String, Option<String>), String> {
@@ -851,9 +862,21 @@ fn input(at: &str, p: &Param) -> Result<(String, Option<String>), String> {
             ))
         }
         ty => {
+            if let Some(wire) = object_default(p) {
+                let convert =
+                    crate::shape_error::convert("v", ty, &path, at, p.shape_error.as_ref())?;
+                return Ok((
+                    "Option<Bound<'_, PyAny>>".into(),
+                    Some(format!(
+                        "match {n} {{ Some(v) => {convert}?, None => {wire:?}.parse::<{rust}>().map_err(|e| ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(&e)))? }}",
+                        n = p.name,
+                        rust = ty.rust(),
+                    )),
+                ));
+            }
             if p.default.is_some() {
                 return Err(format!(
-                    "{at}({}): an object-converted parameter has no default",
+                    "{at}({}): an object-converted parameter defaults only to a wire string",
                     p.name
                 ));
             }

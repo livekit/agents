@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use lk_agents_abi::storage::TaskState;
-use lk_agents_abi::storage::thread::REASON_WORKER_LOST;
+use lk_agents_abi::storage::thread::TaskReason;
 
 use super::{
     Access, Completion, Finish, LeaseAfterCommit, Operation, Path, Phase, RunStep, TaskMachine,
@@ -72,7 +72,7 @@ impl TaskMachine {
                 // a dead holder's: the pickup took it, it fails worker-lost
                 let task_id = row.task_id.clone();
                 self.phase = Phase::Run { path: Path::Drain, step: RunStep::Orphan };
-                return Ok(Some(self.failed(REASON_WORKER_LOST, vec![task_id])));
+                return Ok(Some(self.failed(TaskReason::WorkerLost, vec![task_id])));
             }
             Some(_) => {
                 // the receipt's id stays apart from the client's continuation target

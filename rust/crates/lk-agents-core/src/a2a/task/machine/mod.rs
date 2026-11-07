@@ -18,8 +18,7 @@ use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::{
-    InboxRow, LanePoll, REASON_LEASE_TIMEOUT, REASON_NOT_WRITTEN, REASON_STORAGE_UNAVAILABLE,
-    REASON_WORKER_LOST, RunOutcome, TaskData, TaskRow, TaskWrite,
+    InboxRow, LanePoll, RunOutcome, TaskData, TaskReason, TaskRow, TaskWrite,
 };
 use serde_json::Value;
 
@@ -75,7 +74,7 @@ pub enum Operation {
     ReadWorking,
     /// Ends each named `working` task `failed` with its status message, which names `reason`.
     FailOrphans {
-        reason: &'static str,
+        reason: TaskReason,
         failed: Vec<(String, a2a::Message)>,
     },
     /// The pending question a turn answers, in the open run: the task `named` while it still
@@ -235,7 +234,7 @@ pub struct Answer {
     pub task: Option<TaskRow>,
     /// When the row is missing: the reason it failed, or `None` for a commit still resolving
     /// (the task stays `working`; never a failure nobody observed).
-    pub reason: Option<&'static str>,
+    pub reason: Option<TaskReason>,
     /// The committed turn's reply and the task that carries it.
     pub output: Option<Value>,
     pub answered_by: Option<String>,
@@ -243,7 +242,7 @@ pub struct Answer {
 }
 
 impl Answer {
-    fn row(task_id: String, task: Option<TaskRow>, reason: Option<&'static str>) -> Self {
+    fn row(task_id: String, task: Option<TaskRow>, reason: Option<TaskReason>) -> Self {
         Self { task_id, task, reason, output: None, answered_by: None, run_id: None }
     }
 }
@@ -289,7 +288,7 @@ enum Phase {
     RunFailed,
     Resolve,
     Answer {
-        reason: Option<&'static str>,
+        reason: Option<TaskReason>,
     },
     Observe,
     Poll {
@@ -401,7 +400,7 @@ pub struct TaskMachine {
 /// ended, or a dead holder's `working` rows but `skip`. `then` takes the `Done` that ends it.
 #[derive(Debug)]
 struct Failing {
-    reason: &'static str,
+    reason: TaskReason,
     then: Phase,
     target: FailTarget,
 }
@@ -633,7 +632,7 @@ impl TaskMachine {
     }
 
     /// Answers with the task as it now stands; `reason` when it cannot be read.
-    fn answer_task(&mut self, reason: Option<&'static str>) -> Operation {
+    fn answer_task(&mut self, reason: Option<TaskReason>) -> Operation {
         self.phase = Phase::Answer { reason };
         Operation::ReadTask(self.answering())
     }
@@ -651,12 +650,12 @@ impl TaskMachine {
     fn resolve_later(&mut self) -> Operation {
         self.phase = Phase::Resolve;
         let task_id = self.task_id.clone();
-        let failed = failed_message(&task_id, REASON_STORAGE_UNAVAILABLE, self.mint("msg"));
+        let failed = failed_message(&task_id, TaskReason::StorageUnavailable, self.mint("msg"));
         Operation::ResolveLater { task_id, failed }
     }
 
     /// Fails `task_id` `reason` unless it already ended; `then` follows.
-    fn fail_task(&mut self, task_id: String, reason: &'static str, then: Phase) -> Operation {
+    fn fail_task(&mut self, task_id: String, reason: TaskReason, then: Phase) -> Operation {
         self.phase = Phase::Failing;
         let target = FailTarget::Named(task_id.clone());
         self.failing = Some(Failing { reason, then, target });
@@ -672,27 +671,27 @@ impl TaskMachine {
         let picked: Vec<String> =
             std::mem::take(&mut self.task_ids).into_iter().filter(|t| *t != own).collect();
         if picked.is_empty() {
-            return self.fail_task(own, REASON_STORAGE_UNAVAILABLE, Phase::RunFailed);
+            return self.fail_task(own, TaskReason::StorageUnavailable, Phase::RunFailed);
         }
         self.phase = Phase::Failing;
         self.failing = Some(Failing {
-            reason: REASON_STORAGE_UNAVAILABLE,
+            reason: TaskReason::StorageUnavailable,
             then: Phase::FailRun,
             target: FailTarget::Orphans { skip: Vec::new() },
         });
-        self.failed(REASON_STORAGE_UNAVAILABLE, picked)
+        self.failed(TaskReason::StorageUnavailable, picked)
     }
 
     /// Fails a dead holder's `working` rows `worker-lost`, but `skip`; `then` follows.
     fn fail_orphans(&mut self, skip: Vec<String>, then: Phase) -> Operation {
         self.phase = Phase::Failing;
         let target = FailTarget::Orphans { skip };
-        self.failing = Some(Failing { reason: REASON_WORKER_LOST, then, target });
+        self.failing = Some(Failing { reason: TaskReason::WorkerLost, then, target });
         Operation::ReadWorking
     }
 
     /// Fails each of `task_ids`, each with its status message.
-    fn failed(&mut self, reason: &'static str, task_ids: Vec<String>) -> Operation {
+    fn failed(&mut self, reason: TaskReason, task_ids: Vec<String>) -> Operation {
         let failed = task_ids
             .into_iter()
             .map(|task_id| {
@@ -949,7 +948,7 @@ impl TaskMachine {
             // still `submitted` with the lane free: its waiter died before the lane
             Path::Recovery(Recovery::StaleSubmitted) => {
                 let then = Phase::Run { path, step: RunStep::Orphan };
-                self.fail_task(self.task_id.clone(), REASON_WORKER_LOST, then)
+                self.fail_task(self.task_id.clone(), TaskReason::WorkerLost, then)
             }
             Path::Recovery(Recovery::Orphans) => {
                 self.fail_orphans(Vec::new(), Phase::Run { path, step: RunStep::Recover })
@@ -973,7 +972,7 @@ impl TaskMachine {
             output,
             answered_by: Some(task_id.clone()),
             run_id: Some(run_id),
-            ..Answer::row(task_id, task, Some(REASON_NOT_WRITTEN))
+            ..Answer::row(task_id, task, Some(TaskReason::NotWritten))
         }))
     }
 
@@ -989,10 +988,10 @@ impl TaskMachine {
                     self.phase = Phase::Abandon(AfterAbandon::AnswerFailedTask);
                     Operation::Abandon { outcome, reason }
                 }
-                None => self.answer_task(Some(REASON_STORAGE_UNAVAILABLE)),
+                None => self.answer_task(Some(TaskReason::StorageUnavailable)),
             },
             Phase::Abandon(AfterAbandon::AnswerFailedTask) => {
-                self.answer_task(Some(REASON_STORAGE_UNAVAILABLE))
+                self.answer_task(Some(TaskReason::StorageUnavailable))
             }
             Phase::Abandon(AfterAbandon::RaiseError) => {
                 return Err(Finish::Error(self.error.take().unwrap_or_else(|| {
@@ -1030,7 +1029,8 @@ impl TaskMachine {
     ) -> Result<Option<Operation>, Finish> {
         let row = match completion {
             Completion::Task(Some(row)) if answered(&row) => {
-                let answer = Answer::row(row.task_id.clone(), Some(row), Some(REASON_NOT_WRITTEN));
+                let answer =
+                    Answer::row(row.task_id.clone(), Some(row), Some(TaskReason::NotWritten));
                 return Err(Finish::Answer(Box::new(Answer {
                     run_id: self.run_id.take(),
                     ..answer
@@ -1119,8 +1119,8 @@ impl TaskMachine {
                 StorageError::Rejected { .. },
             ) => {
                 // the lane was not released within the wait
-                let then = Phase::Answer { reason: Some(REASON_LEASE_TIMEOUT) };
-                self.fail_task(self.task_id.clone(), REASON_LEASE_TIMEOUT, then)
+                let then = Phase::Answer { reason: Some(TaskReason::LeaseTimeout) };
+                self.fail_task(self.task_id.clone(), TaskReason::LeaseTimeout, then)
             }
             (Phase::Release, StorageError::LeaseLost(_)) => {
                 // the kept lease lapsed and another holder took the lane: it drains what is

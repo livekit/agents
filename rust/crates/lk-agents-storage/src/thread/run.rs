@@ -28,8 +28,8 @@ pub use lk_agents_abi::a2a::options::LEASE_WAIT_TIMEOUT;
 
 pub use lk_agents_abi::storage::TaskState;
 pub use lk_agents_abi::storage::thread::{
-    REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE, REASON_THREAD_NOT_FOUND, REASON_WORKER_LOST,
-    RunOutcome, SUBMIT_CHANNEL, TaskPatch, WaitOptions, agent_message, merge_write, wait_patch,
+    RunOutcome, SUBMIT_CHANNEL, TaskPatch, TaskReason, WaitOptions, agent_message, merge_write,
+    wait_patch,
 };
 
 /// Everything a run commits, as staged by its owner.

@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::transport::HttpRequest;
 use a2a::{AgentCard, JsonRpcId, Message};
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::storage::thread::REASON_CALLER_CANCELED;
+use lk_agents_abi::storage::thread::TaskReason;
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, StreamOutput, Ts};
 use lk_agents_core::a2a::client::{
     Client, ClientError, HttpMethod, ReplyState, Request, TaskUpdate,
@@ -369,7 +369,9 @@ impl Inner {
     }
 
     async fn cancel_owned(&self, task: &TaskRef) {
-        if let Err(error) = self.cancel_remote(task, Some(REASON_CALLER_CANCELED)).await {
+        if let Err(error) =
+            self.cancel_remote(task, Some(TaskReason::CallerCanceled.as_str())).await
+        {
             self.observe(CleanupObservation::CancelUncertain {
                 task: task.clone(),
                 error: error.to_string(),

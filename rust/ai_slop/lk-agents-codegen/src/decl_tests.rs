@@ -1125,7 +1125,21 @@ fn declared_classes_consume_string_enums_with_native_error_expressions() {
         "{}",
         stubs[0].out.text
     );
-    // A default names one of its wire strings.
+    // A default names one of its wire strings: the stub shows it, and an omitted argument is
+    // parsed from it in Rust, so the signature's own default is `None`.
+    let defaulted =
+        source.replace("fn new(kind: Kind)", "fn new(#[host(default = \"stream\")] kind: Kind)");
+    let decls = read(&defaulted).expect("a wire-string default resolves");
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let llm = &out.iter().find(|o| o.path == "llm.rs").unwrap().text;
+    assert!(llm.contains("#[pyo3(signature = (kind = None))]"), "{llm}");
+    assert!(llm.contains("None => \"stream\".parse::<"), "{llm}");
+    let stubs = crate::class_stub::emit(&decls).expect("stubs");
+    assert!(
+        stubs[0].out.text.contains(r#"kind: Literal["batch", "stream"] = "stream""#),
+        "{}",
+        stubs[0].out.text
+    );
     let source =
         source.replace("fn new(kind: Kind)", "fn new(#[host(default = \"bulk\")] kind: Kind)");
     assert!(read(&source).unwrap_err().contains("is not a value of"));

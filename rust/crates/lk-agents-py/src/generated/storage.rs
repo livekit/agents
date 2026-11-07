@@ -968,9 +968,16 @@ impl Thread {
         let status = status
             .map(|v| crate::generated::records::storage_class::task_state_from_py(v.as_any()))
             .transpose()?;
-        let order = order
-            .map(|v| crate::generated::records::storage_class::task_order_from_py(v.as_any()))
-            .transpose()?;
+        let order = match order {
+            Some(v) => crate::generated::records::storage_class::task_order_from_py(v.as_any())?,
+            None => {
+                "updated".parse::<::lk_agents_abi::storage::thread::TaskOrder>().map_err(|e| {
+                    ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(
+                        &e,
+                    ))
+                })?
+            }
+        };
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::list_tasks(&this, lane, status, order, page_size, page_token)
@@ -1460,9 +1467,16 @@ impl CoreThreadHandle {
         let status = status
             .map(|v| crate::generated::records::storage_class::task_state_from_py(v.as_any()))
             .transpose()?;
-        let order = order
-            .map(|v| crate::generated::records::storage_class::task_order_from_py(v.as_any()))
-            .transpose()?;
+        let order = match order {
+            Some(v) => crate::generated::records::storage_class::task_order_from_py(v.as_any())?,
+            None => {
+                "inserted".parse::<::lk_agents_abi::storage::thread::TaskOrder>().map_err(|e| {
+                    ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(
+                        &e,
+                    ))
+                })?
+            }
+        };
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let out = <CoreThreadHandleImpl as ::lk_agents_abi::storage::handles::ThreadHandle>::list_tasks(&this, agent, status, order, page_token, limit)

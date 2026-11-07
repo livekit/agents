@@ -370,7 +370,7 @@ impl Turn {
     async fn fail_orphans(
         &self,
         lane: &Lane,
-        reason: &str,
+        reason: lk_agents_abi::storage::thread::TaskReason,
         failed: Vec<(String, a2a::Message)>,
     ) -> Result<Completion, StorageError> {
         for (task_id, message) in failed {

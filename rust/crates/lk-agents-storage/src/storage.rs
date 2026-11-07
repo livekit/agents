@@ -524,11 +524,10 @@ impl host::handles::Thread for Thread {
         &self,
         lane: Option<String>,
         status: Option<host::TaskState>,
-        order: Option<lk_agents_abi::storage::thread::TaskOrder>,
+        order: lk_agents_abi::storage::thread::TaskOrder,
         page_size: i64,
         page_token: Option<String>,
     ) -> Result<host::TaskPage, StorageError> {
-        let order = order.unwrap_or(lk_agents_abi::storage::thread::TaskOrder::Updated);
         let query =
             crate::TaskQuery { lane, status, order, page_size, page_token, updated_after: 0 };
         Ok(self.list_tasks(&query).await?.into())
@@ -700,11 +699,10 @@ impl host::handles::ThreadHandle for ThreadHandle {
         &self,
         agent: Option<String>,
         status: Option<host::TaskState>,
-        order: Option<lk_agents_abi::storage::thread::TaskOrder>,
+        order: lk_agents_abi::storage::thread::TaskOrder,
         page_token: Option<String>,
         limit: i64,
     ) -> Result<host::TaskPage, StorageError> {
-        let order = Some(order.unwrap_or(lk_agents_abi::storage::thread::TaskOrder::Inserted));
         self.read(async |t| Reads::list_tasks(t, agent, status, order, limit, page_token).await)
             .await
     }
@@ -733,7 +731,7 @@ impl host::handles::ThreadHandle for ThreadHandle {
                 let page = self
                     .read(async |t| {
                         let (agent, order) =
-                            (Some(agent), Some(lk_agents_abi::storage::thread::TaskOrder::Updated));
+                            (Some(agent), lk_agents_abi::storage::thread::TaskOrder::Updated);
                         Reads::list_tasks(t, agent, Some(status), order, limit, None).await
                     })
                     .await?;

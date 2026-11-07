@@ -18,7 +18,7 @@ from .usage import TokenUsage
 async def encode_image(
     frame: VideoFrame,
     *,
-    format: Literal["JPEG", "PNG"],
+    format: Literal["JPEG", "PNG"] = "JPEG",
     quality: int | None = None,
     resize_width: int | None = None,
     resize_height: int | None = None,

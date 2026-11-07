@@ -9,7 +9,7 @@ use a2a::{Message, Part, Role};
 use lk_agents_abi::a2a::metadata::KIND_KEY;
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::storage::TaskState;
-use lk_agents_abi::storage::thread::REASON_CALLER_CANCELED;
+use lk_agents_abi::storage::thread::TaskReason;
 use serde::{Deserialize, Serialize};
 
 use crate::a2a::caller_history::CallerHistory;
@@ -97,7 +97,7 @@ pub struct InteractionState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CancelTask {
     pub task: TaskRef,
-    pub reason: &'static str,
+    pub reason: TaskReason,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -333,7 +333,7 @@ impl RemoteInteraction {
                 id: self.state.pending_task_id.clone()?,
                 context_id: self.state.context_id.clone()?,
             },
-            reason: REASON_CALLER_CANCELED,
+            reason: TaskReason::CallerCanceled,
         };
         self.state.cancellation_sent = true;
         Some(effect)

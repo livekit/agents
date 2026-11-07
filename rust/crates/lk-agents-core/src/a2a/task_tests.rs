@@ -157,7 +157,7 @@ fn storage_failure_in_the_turn_fails_the_receipt_before_releasing_the_lane() {
     assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{pickup:?}");
     assert!(matches!(
         step(&mut m, Completion::Picked(Some(TaskState::Working))),
-        Operation::FailOrphans { reason: REASON_STORAGE_UNAVAILABLE, failed }
+        Operation::FailOrphans { reason: TaskReason::StorageUnavailable, failed }
             if failed.len() == 1 && failed[0].0 == "receipt"
     ));
     let abandon = step(&mut m, Completion::Done);
@@ -188,7 +188,7 @@ fn a_refused_save_in_the_handler_fails_the_receipt() {
         assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{class}: {pickup:?}");
         assert!(matches!(
             step(&mut m, Completion::Picked(Some(TaskState::Working))),
-            Operation::FailOrphans { reason: REASON_STORAGE_UNAVAILABLE, failed }
+            Operation::FailOrphans { reason: TaskReason::StorageUnavailable, failed }
                 if failed.len() == 1 && failed[0].0 == "receipt"
         ));
         let abandon = step(&mut m, Completion::Done);
@@ -237,7 +237,7 @@ fn recovery_fails_exactly_the_orphans_and_never_an_ended_task() {
     let rows = vec![working("receipt"), working("dead"), answered];
     let fail = step(&mut m, Completion::Tasks(rows));
     assert!(
-        matches!(&fail, Operation::FailOrphans { reason: REASON_WORKER_LOST, failed }
+        matches!(&fail, Operation::FailOrphans { reason: TaskReason::WorkerLost, failed }
             if failed.iter().map(|f| f.0.as_str()).eq(["dead"])),
         "{fail:?}"
     );
@@ -293,7 +293,7 @@ fn every_typed_storage_error_on_the_lane_claim_has_its_outcome() {
     assert!(matches!(operation(at(&mut m, Duration::ZERO, Err(rejected))), Operation::Pickup(_)));
     assert!(matches!(
         step(&mut m, Completion::Picked(Some(TaskState::Submitted))),
-        Operation::FailOrphans { reason: REASON_LEASE_TIMEOUT, .. }
+        Operation::FailOrphans { reason: TaskReason::LeaseTimeout, .. }
     ));
     // anything else ends the request with its typed error
     for error in [
@@ -343,7 +343,7 @@ fn a_submitted_task_whose_waiter_died_is_failed_once_the_wait_ran_out() {
     assert!(matches!(step(&mut m, opened(false, false)), Operation::Pickup(_)));
     assert!(matches!(
         step(&mut m, Completion::Picked(Some(TaskState::Submitted))),
-        Operation::FailOrphans { reason: REASON_WORKER_LOST, .. }
+        Operation::FailOrphans { reason: TaskReason::WorkerLost, .. }
     ));
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadWorking));
     assert!(matches!(step(&mut m, Completion::Tasks(Vec::new())), Operation::CloseRun));
@@ -492,7 +492,7 @@ fn a_rejected_continuation_fails_its_own_task_and_leaves_the_question_pending() 
         assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{pickup:?}");
         let fail = step(&mut m, Completion::Picked(Some(TaskState::Working)));
         assert!(
-            matches!(&fail, Operation::FailOrphans { reason: REASON_STORAGE_UNAVAILABLE, .. }),
+            matches!(&fail, Operation::FailOrphans { reason: TaskReason::StorageUnavailable, .. }),
             "{fail:?}"
         );
         assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(t) if t == "receipt"));
@@ -517,7 +517,7 @@ fn a_refused_drain_commit_fails_the_rows_it_picked_up() {
     let refused = StorageError::Unavailable("sqlite: disk I/O error".into());
     let fail = operation(at(&mut m, Duration::ZERO, Err(refused)));
     assert!(
-        matches!(&fail, Operation::FailOrphans { reason: REASON_STORAGE_UNAVAILABLE, failed }
+        matches!(&fail, Operation::FailOrphans { reason: TaskReason::StorageUnavailable, failed }
             if failed.len() == 1 && failed[0].0 == "drained"),
         "{fail:?}"
     );
@@ -538,7 +538,7 @@ fn a_refused_close_fails_the_task_storage_unavailable() {
     assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{pickup:?}");
     assert!(matches!(
         step(&mut m, Completion::Picked(Some(TaskState::Submitted))),
-        Operation::FailOrphans { reason: REASON_STORAGE_UNAVAILABLE, failed }
+        Operation::FailOrphans { reason: TaskReason::StorageUnavailable, failed }
             if failed.len() == 1 && failed[0].0 == "receipt"
     ));
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(t) if t == "receipt"));

@@ -294,6 +294,7 @@ pub struct TurnResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lk_agents_abi::storage::thread::TaskReason;
     use serde_json::json;
     use std::time::Duration;
 
@@ -445,7 +446,7 @@ mod tests {
 
     #[test]
     fn failed_messages_and_reasons_shape_as_the_python() {
-        let f = failed_message("AST_1", "worker-lost", "msg_X".into());
+        let f = failed_message("AST_1", TaskReason::WorkerLost, "msg_X".into());
         assert_eq!(
             serde_json::to_value(&f).unwrap(),
             json!({"messageId": "msg_X", "taskId": "AST_1", "role": "ROLE_AGENT",

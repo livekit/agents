@@ -264,7 +264,7 @@ fn progress_eof_never_becomes_an_answer_and_local_cancel_keeps_uncertain_effects
     assert_eq!(remote.ended(), Err(DelegationError::MissingOutcome));
     let effect = remote.cancel().unwrap();
     assert_eq!(effect.task, TaskRef { id: "task".into(), context_id: "context".into() });
-    assert_eq!(effect.reason, "caller-canceled");
+    assert_eq!(effect.reason, TaskReason::CallerCanceled);
     assert_eq!(remote.cancel(), None);
     let late =
         remote.update(&update(TaskState::Completed, "context", "task", "late answer")).unwrap();
@@ -286,7 +286,7 @@ fn cancel_before_ack_still_emits_cancellation_once_the_remote_task_is_known() {
     let effect =
         remote.cancel().expect("the accepted remote task still owes cancellation delivery");
     assert_eq!(effect.task, TaskRef { id: "late-task".into(), context_id: "late-context".into() });
-    assert_eq!(effect.reason, "caller-canceled");
+    assert_eq!(effect.reason, TaskReason::CallerCanceled);
     assert_eq!(remote.cancel(), None);
 }
 

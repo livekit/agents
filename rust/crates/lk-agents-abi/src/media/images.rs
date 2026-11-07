@@ -79,7 +79,7 @@ pub trait ImageFunctions {
     async fn encode_image(
         env: &Self::Env,
         frame: Arc<dyn RtcVideoFrame>,
-        #[host(kw)] format: ImageFormat,
+        #[host(kw, default = "JPEG")] format: ImageFormat,
         #[host(default = None)] quality: Option<u8>,
         #[host(default = None)] resize_width: Option<u32>,
         #[host(default = None)] resize_height: Option<u32>,
