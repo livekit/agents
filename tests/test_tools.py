@@ -349,11 +349,11 @@ def test_end_call_tool_ignore_on_enter_flag():
         ("say goodbye to the user", None),  # cleared by on_tool_completed
     ],
 )
-async def test_end_call_tool_waits_for_a_reply_only_if_it_asks_for_one(
+async def test_end_call_tool_skips_reply_wait_when_turn_already_spoke(
     monkeypatch, end_instructions, output
 ):
-    # a None result asks for no reply; GPT-Live answers it anyway, and when the answer
-    # was silent the call stayed open for the 5 s tool reply timeout
+    # When the model already spoke in the tool-call turn (GPT-Live / Gemini Live),
+    # waiting for a tool reply only adds a second goodbye or a 5s timeout (#8010).
     from livekit.agents.beta import EndCallTool
     from livekit.agents.beta.tools import end_call
 
@@ -380,8 +380,35 @@ async def test_end_call_tool_waits_for_a_reply_only_if_it_asks_for_one(
         session.on("close", lambda _: events.append("close"))
 
     await run_realtime_tool_turn(agent, tool_executed=called, on_session=on_session)
-    # a tool that asked for a reply is still waiting for it when the session closes
-    assert events[0] == ("shutdown" if output is None else "close")
+    # spoken turn: shut down as soon as that speech is done, even if a reply was asked for
+    assert events[0] == "shutdown"
+
+
+async def test_end_call_tool_waits_for_a_reply_when_turn_was_silent(monkeypatch):
+    # Tool-only turn with end_instructions still waits for the auto tool reply.
+    from livekit.agents.beta import EndCallTool
+    from livekit.agents.beta.tools import end_call
+
+    monkeypatch.setattr(end_call, "get_job_context", MagicMock)
+    called = asyncio.Event()
+
+    async def on_tool_called(_: Toolset.ToolCalledEvent) -> None:
+        called.set()
+
+    tool = EndCallTool(
+        end_instructions="say goodbye to the user",
+        on_tool_called=on_tool_called,
+    )
+    agent = Agent(instructions="test", tools=tool.tools)
+    events: list[str] = []
+
+    def on_session(session: Any) -> None:
+        shutdown = session.shutdown
+        session.shutdown = lambda **kw: (events.append("shutdown"), shutdown(**kw))
+        session.on("close", lambda _: events.append("close"))
+
+    await run_realtime_tool_turn(agent, tool_executed=called, speak=False, on_session=on_session)
+    assert events[0] == "close"
 
 
 class TestToolExecution:
