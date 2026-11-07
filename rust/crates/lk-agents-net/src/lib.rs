@@ -1,7 +1,7 @@
 //! `lk-agents-net`: the shared async transport of the I/O crates.
 //!
 //! - [`clock`]: the process's clocks, on Tokio time.
-//! - [`http`]: HTTPS exchanges reporting transport observations, under `lk_agents_core::attempts`.
+//! - [`http`]: HTTPS exchanges reporting transport observations, under `lk_agents_core::request`.
 //! - [`audio_drops`]: a media queue consumer's dropped audio, as the `audio_dropped` metric.
 //! - [`source`]: a native source as one host consumer pulls and closes it.
 //! - [`a2a_auth`]: endpoint and thread credentials over LiveKit tokens.

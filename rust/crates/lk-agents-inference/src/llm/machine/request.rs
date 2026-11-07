@@ -1,5 +1,5 @@
 //! One chat completion request as a synchronous machine: accepted at a supplied instant, it owns
-//! its [`Attempts`], the response assembly and the replay guard. The runtime performs the HTTP
+//! its [`Request`], the response assembly and the replay guard. The runtime performs the HTTP
 //! exchange an [`LlmRequestEffect::LlmRequestStart`] asks for and reports what the transport
 //! observed.
 //!
@@ -11,8 +11,8 @@ use crate::effects::LlmRequestEffect;
 use lk_agents_abi::Ts;
 use lk_agents_abi::resources::ResourceId;
 
-pub use lk_agents_core::attempts::{AttemptFailure, RequestPolicy};
-use lk_agents_core::attempts::{AttemptStep, Attempts};
+pub use lk_agents_core::request::{AttemptFailure, Policy};
+use lk_agents_core::request::{Request, Step};
 
 use crate::llm::parse::{ChoiceAccumulator, TagFilter, WireChunk, usage_chunk};
 
@@ -71,7 +71,7 @@ pub struct LlmRequest {
     id: LlmRequestId,
     llm: ResourceId,
     think_tags: (&'static str, &'static str),
-    attempts: Attempts,
+    attempts: Request,
     assembly: Assembly,
     /// Since when the consumer has been waiting, if it is.
     demand: Option<Ts>,
@@ -82,12 +82,12 @@ impl LlmRequest {
     pub fn start(
         id: LlmRequestId,
         llm: ResourceId,
-        policy: RequestPolicy,
+        policy: Policy,
         think_tags: (&'static str, &'static str),
         now: Ts,
     ) -> (Self, Vec<LlmRequestEffect>) {
         let mut steps = Vec::new();
-        let attempts = Attempts::start(policy, now, &mut steps);
+        let attempts = Request::start(policy, now, &mut steps);
         let mut request = LlmRequest {
             id,
             llm,
@@ -147,11 +147,11 @@ impl LlmRequest {
         effects
     }
 
-    fn apply(&mut self, steps: Vec<AttemptStep>, effects: &mut Vec<LlmRequestEffect>) {
+    fn apply(&mut self, steps: Vec<Step>, effects: &mut Vec<LlmRequestEffect>) {
         let request_id = self.id;
         for step in steps {
             effects.push(match step {
-                AttemptStep::Launch(attempt) => {
+                Step::Launch(attempt) => {
                     let (open, close) = self.think_tags;
                     self.assembly = Assembly {
                         choices: ChoiceAccumulator::new(),
@@ -159,18 +159,16 @@ impl LlmRequest {
                     };
                     LlmRequestEffect::LlmRequestStart { request_id, attempt, llm: self.llm }
                 }
-                AttemptStep::Stop(attempt) => {
-                    LlmRequestEffect::LlmRequestCancel { request_id, attempt }
-                }
-                AttemptStep::Retry { attempt, error } => {
+                Step::Stop(attempt) => LlmRequestEffect::LlmRequestCancel { request_id, attempt },
+                Step::Retry { attempt, error } => {
                     LlmRequestEffect::AttemptFailed { attempt, error }
                 }
-                AttemptStep::GiveUp(error) => LlmRequestEffect::Finished(Err(error)),
-                AttemptStep::CleanupIncomplete(attempt) => {
+                Step::GiveUp(error) => LlmRequestEffect::Finished(Err(error)),
+                Step::CleanupIncomplete(attempt) => {
                     LlmRequestEffect::CleanupIncomplete { request_id, attempt }
                 }
                 // A generation is never retired: its consumer's cancel ends it.
-                AttemptStep::Unresolved => continue,
+                Step::Unresolved => continue,
             });
         }
     }

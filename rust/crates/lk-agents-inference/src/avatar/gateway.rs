@@ -22,7 +22,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::inference::avatar_session::{AvatarError, InferenceAvatar};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, Extra, Ts};
-use lk_agents_core::attempts::RequestPolicy;
+use lk_agents_core::request::Policy;
 use lk_agents_net::transport::HttpRequest;
 use tokio::sync::{mpsc, oneshot};
 
@@ -78,7 +78,7 @@ impl GatewayAvatar {
     pub fn new(
         opts: AvatarOptions,
         credentials: (String, String),
-        policy: RequestPolicy,
+        policy: Policy,
         http: Arc<GatewayHttp>,
         runtime: &tokio::runtime::Handle,
         clock: Arc<dyn Clock>,
@@ -184,7 +184,7 @@ impl InferenceAvatar for GatewayAvatar {
         )?;
         let runtime = (env.runtime)().map_err(ApiError::from)?;
         let http = (env.http)().map_err(ApiError::from)?;
-        let policy = RequestPolicy::from_options(&conn_options);
+        let policy = Policy::from_options(&conn_options);
         Ok(GatewayAvatar::new(
             opts,
             (api_key, api_secret),
@@ -510,7 +510,7 @@ impl Driver {
     }
 
     fn failed_launch(&mut self, request: AvatarRequestId, attempt: u32, error: ApiError) {
-        let failure = lk_agents_core::attempts::AttemptFailure::Connection(error.message);
+        let failure = lk_agents_core::request::AttemptFailure::Connection(error.message);
         self.queued.push(AvatarSessionEvent::Failed { request, attempt, failure });
         self.queued.push(AvatarSessionEvent::AttemptClosed { request, attempt });
     }

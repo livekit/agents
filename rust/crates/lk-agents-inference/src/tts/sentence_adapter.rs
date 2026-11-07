@@ -198,7 +198,6 @@ impl StreamAdapter {
             cx: cx.clone(),
             budget: self.budget,
             sentence: None,
-            sentence_audio: false,
             report: None,
             clock: Arc::clone(&self.clock),
             sentences,
@@ -272,9 +271,7 @@ struct AdapterSource {
     cx: telemetry::Cx,
     budget: lk_agents_abi::ApiConnectOptions,
     /// The sentence being synthesized and its failed attempts: what a retry synthesizes again.
-    sentence: Option<(String, u32)>,
-    /// The current sentence delivered audio, so a failure can no longer be retried (F-10).
-    sentence_audio: bool,
+    sentence: Option<String>,
     /// Who hears of each retried sentence (the engine's error event and journal).
     report: Option<lk_agents_abi::utils::stream::RetryReport>,
     clock: Arc<dyn Clock>,
@@ -363,8 +360,7 @@ impl AdapterSource {
             if text.is_empty() {
                 continue;
             }
-            self.sentence = Some((text, 0));
-            self.sentence_audio = false;
+            self.sentence = Some(text);
             self.open_sentence().await?;
         }
     }
@@ -374,7 +370,6 @@ impl AdapterSource {
         let Some(current) = self.current.as_mut() else { return Ok(None) };
         match current.next().await {
             Ok(Some(audio)) => {
-                self.sentence_audio = true;
                 let clock = Arc::clone(&self.clock);
                 if let Some(call) = self.ledger().call.as_mut() {
                     let start = call.start;
@@ -392,8 +387,7 @@ impl AdapterSource {
             Err(error) => {
                 self.ledger().call = None;
                 self.close_current().await;
-                self.retry_sentence(error).await?;
-                Ok(None)
+                Err(error.into_final())
             }
         }
     }
@@ -410,48 +404,33 @@ impl AdapterSource {
 
     /// The current sentence's synthesis, retried while its open fails within the budget.
     async fn open_sentence(&mut self) -> Result<(), ProviderError> {
-        loop {
-            let Some((text, _)) = self.sentence.clone() else { return Ok(()) };
-            let start = lk_agents_abi::unix_secs(self.clock.wall());
-            match self.tts.synthesize(&self.cx, &text).await {
-                Ok(source) => {
-                    self.current = Some(source);
-                    let id = self.tts.id();
-                    let fold = TtsMetricState::new(false, id.label.clone(), Some(id.metadata()));
-                    self.ledger().call = Some(Call { text, start, fold });
-                    return Ok(());
+        let Some(text) = self.sentence.clone() else { return Ok(()) };
+        let start = lk_agents_abi::unix_secs(self.clock.wall());
+        let (report, clock, tts) = (self.report.clone(), self.clock.clone(), self.tts.clone());
+        let observer: crate::retry::Observer = Arc::new(move |error, retry, attempt| {
+            if let lk_agents_core::request::Retry::At(at) = retry {
+                tts.failed(error.clone(), true);
+                if let Some(report) = &report {
+                    report(error.clone(), attempt, at.saturating_duration_since(clock.now()));
                 }
-                Err(e) => self.retry_sentence(e).await?,
             }
-        }
-    }
-
-    /// `Ok` once the wait before the sentence's next attempt is over, and that attempt opened; the
-    /// failure, final, when the sentence's budget is spent or it may not be retried.
-    async fn retry_sentence(&mut self, error: ProviderError) -> Result<(), ProviderError> {
-        let Some((_, retries)) = self.sentence.as_mut() else { return Err(error) };
-        let eligible = error.api_kind().is_some()
-            && error.retryable()
-            && !error.cancelled()
-            && !self.sentence_audio;
-        let policy = lk_agents_core::attempts::RequestPolicy::from_options(&self.budget);
-        let Some(wait) = policy.retry_delay(*retries, eligible) else {
-            return Err(error.into_final());
-        };
-        let delay = wait.as_secs_f64();
-        *retries += 1;
-        log::warn!(
-            target: lk_agents_abi::LOG_TARGET,
-            "{}: failed to synthesize speech: {error}, retrying in {delay}s (attempt {retries})",
-            self.tts.label()
+        });
+        let open = super::request::synthesis(self.tts.clone(), &self.cx, &text, self.budget);
+        self.current = Some(
+            crate::retry::stream(
+                &self.budget,
+                self.clock.clone(),
+                open,
+                |_| true,
+                observer,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await,
         );
-        if let Some(report) = &self.report {
-            report(error.clone(), *retries, wait);
-        }
-        self.tts.failed(error, true);
-        let at = self.clock.now().saturating_add(wait);
-        self.clock.wait_until(at).await;
-        Box::pin(self.open_sentence()).await
+        let id = self.tts.id();
+        let fold = TtsMetricState::new(false, id.label.clone(), Some(id.metadata()));
+        self.ledger().call = Some(Call { text, start, fold });
+        Ok(())
     }
 
     /// The inner frame as this stream's: its duration counted, then input drained (and paced

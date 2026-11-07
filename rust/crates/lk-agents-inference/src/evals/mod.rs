@@ -278,7 +278,9 @@ impl Judges {
         };
         let mut trace = telemetry::LlmTrace::start(cx, llm.as_ref(), &req);
         let attempt = trace.attempt();
-        let read = match llm.chat(trace.cx(), &req).await {
+        let read = match crate::llm::chat(llm.clone(), trace.cx(), &req, self.clock.clone(), None)
+            .await
+        {
             Ok(mut stream) => {
                 let read = first_call(stream.as_mut(), &mut trace).await;
                 let _ = stream.close(self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;

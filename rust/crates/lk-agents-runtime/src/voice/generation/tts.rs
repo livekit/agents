@@ -1,7 +1,7 @@
 //! `perform_tts_inference`: one segment's duplex synthesis, retried, and its buffered playout.
 
 use super::forward::{PlaybackGate, TextLeg, capture, drain_segment_text, take_text};
-use super::llm::{Retried, report_metrics, retry};
+use super::llm::{report_metrics, retry_observer};
 use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_forwarding, unheard};
 use crate::telemetry;
 use crate::voice::session::SessionShared;
@@ -12,10 +12,10 @@ use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::generation::SpeechSegmentEvent;
 use lk_agents_voice::generation::effects::{AlignedTranscriptEffect, StreamingTtsEffect};
 pub(super) use lk_agents_voice::generation::machine::tts::Lost;
+use lk_agents_voice::generation::machine::tts::SynthesisAttempt;
 use lk_agents_voice::generation::machine::tts::{
     AlignedTranscript, MAX_BUFFERED_TTS_FRAMES, Read, StreamingTts, SynthesisMetrics,
 };
-use lk_agents_voice::generation::machine::tts::{AttemptFailure, RetryOutcome, SynthesisAttempt};
 use lk_agents_voice::generation::{GenEvent, TurnAccumulator};
 use lk_agents_voice::trace::{GenerationStep, ProviderKind};
 use lk_agents_voice::transcription::Heard;
@@ -39,7 +39,7 @@ pub(super) struct TtsInference<'a, 'b, 'p> {
     pub(super) shared: &'a Arc<SessionShared>,
     pub(super) handle: &'a Arc<SpeechHandle>,
     pub(super) acc: &'a mut TurnAccumulator,
-    pub(super) tts: &'a dyn Tts,
+    pub(super) tts: &'a Arc<dyn Tts>,
     /// The reply carries expressive markup; each synthesis is opened with it.
     pub(super) expressive: bool,
     /// The segment's index in the step.
@@ -56,60 +56,39 @@ impl TtsInference<'_, '_, '_> {
     /// the voice.
     pub(super) async fn run(mut self, first: Visible) -> Result<Heard, Box<Lost>> {
         let (shared, handle, tts) = (self.shared, self.handle, self.tts);
-        let mut state =
-            SynthesisAttempt::new(&shared.conn.tts.unwrap_or_default(), first, shared.time.now());
+        let mut state = SynthesisAttempt::new(first);
         // The segment's `tts_request`, one `tts_request_run` per open. A registered `tts_node`
         // runs under the node span and makes its own request, if any.
-        let mut trace = telemetry::TtsTrace::start(self.node.cx(shared), tts, true);
-        loop {
-            if let Some(lost) =
-                state.before_open(handle.interrupted(), shared.closing.is_cancelled())
-            {
-                return Err(Box::new(lost));
-            }
-            // The driver's TTS always streams (`tts_leg` adapts one that does not). A duplex
-            // open's `Err` is a failed attempt, never a downgrade. What the words leg already
-            // closed is fed at the open, so a preemptive generation's whole segment goes in at
-            // authorization; a live segment streams the rest.
-            if !state.input_done {
-                let opening = &mut state.opening;
-                state.input_done = take_text(self.rx, opening, self.text_out, false).await;
-            }
-            let id = tts.id();
-            shared.report(GenEvent::RequestStarted {
-                speech: handle.id(),
-                kind: lk_agents_core::usage::ModelKind::Tts,
-                provider: id.provider,
-                model: id.model,
-            });
-            let attempt = trace.attempt();
-            let (error, produced) = match self.attempt(&mut state, &mut trace, attempt).await {
-                Ok((heard, done)) => {
-                    trace.end(done.text, done.metrics.as_ref());
-                    return Ok(heard);
-                }
-                Err(failed) => failed,
-            };
-            let error = match state.failed(error, produced) {
-                AttemptFailure::Retry(error) => error,
-                AttemptFailure::Stop(lost) => {
-                    fail(&mut trace, &lost);
-                    return Err(Box::new(lost));
-                }
-            };
-            let failed = |e, r| tts.failed(e, r);
-            let retried =
-                retry(shared, handle, &mut state.retry, ProviderKind::Tts, &error, &failed).await;
-            let outcome = match retried {
-                Retried::Again => RetryOutcome::Again,
-                Retried::Interrupted => RetryOutcome::Interrupted,
-                Retried::GiveUp => RetryOutcome::Exhausted,
-            };
-            if let Some(lost) = state.after_retry(outcome) {
-                fail(&mut trace, &lost);
-                return Err(Box::new(lost));
-            }
+        let mut trace = telemetry::TtsTrace::start(self.node.cx(shared), tts.as_ref(), true);
+        if let Some(lost) = state.before_open(handle.interrupted(), shared.closing.is_cancelled()) {
+            return Err(Box::new(lost));
         }
+        // The driver's TTS always streams (`tts_leg` adapts one that does not). A duplex
+        // open's `Err` is a failed attempt, never a downgrade. What the words leg already
+        // closed is fed at the open, so a preemptive generation's whole segment goes in at
+        // authorization; a live segment streams the rest.
+        if !state.input_done {
+            let opening = &mut state.opening;
+            state.input_done = take_text(self.rx, opening, self.text_out, false).await;
+        }
+        let id = tts.id();
+        shared.report(GenEvent::RequestStarted {
+            speech: handle.id(),
+            kind: lk_agents_core::usage::ModelKind::Tts,
+            provider: id.provider,
+            model: id.model,
+        });
+        let attempt = trace.attempt();
+        let (error, produced) = match self.attempt(&mut state, &mut trace, attempt).await {
+            Ok((heard, done)) => {
+                trace.end(done.text, done.metrics.as_ref());
+                return Ok(heard);
+            }
+            Err(failed) => failed,
+        };
+        let lost = state.failed(error, produced);
+        fail(&mut trace, &lost);
+        Err(Box::new(lost))
     }
 
     /// One open and its synthesis, its `tts_request_run` ended either way. On success, what it
@@ -123,7 +102,16 @@ impl TtsInference<'_, '_, '_> {
         let (shared, handle) = (self.shared, self.handle);
         // An adapter's own requests open under this attempt.
         let context = attempt.as_ref().map_or(trace.cx(), |a| a.cx()).clone();
-        let stream = match self.tts.stream(&context, self.expressive).await {
+        let stream = match lk_agents_inference::tts::stream(
+            self.tts.clone(),
+            &context,
+            self.expressive,
+            shared.conn.tts.unwrap_or_default(),
+            shared.time.clock(),
+            Some(retry_observer(shared, handle, ProviderKind::Tts)),
+        )
+        .await
+        {
             Ok(stream) => stream,
             Err(error) => {
                 trace.end_attempt(attempt, Some(&error));

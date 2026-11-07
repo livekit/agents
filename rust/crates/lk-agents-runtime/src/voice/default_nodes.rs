@@ -14,7 +14,6 @@ use lk_agents_abi::{
     HOST_TEARDOWN_TIMEOUT, HostRef, Llm, LlmChunk, SpawnerExt as _, SpeechEvent, StreamOutput, Stt,
     SynthesizedAudio, ToolChoice, ToolSpec, Tts, Vad,
 };
-use lk_agents_core::attempts::{AttemptStep, Attempts};
 use lk_agents_core::metrics::provider::TtsMetricState;
 use lk_agents_net::env::ProcessEnv;
 use parking_lot::Mutex;
@@ -132,7 +131,15 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
         Ok(pumped(env, async move {
             // One `tts_request`: the provider's own retries are its attempts, below it.
             let synthesis = Synthesis::start(&cx, tts.as_ref());
-            let opened = tts.stream(synthesis.attempt_cx(), expressive).await;
+            let opened = lk_agents_inference::tts::stream(
+                tts.clone(),
+                synthesis.attempt_cx(),
+                expressive,
+                conn_options,
+                clock.clone(),
+                None,
+            )
+            .await;
             if let (Ok(stream), Some(calls)) = (&opened, &calls) {
                 calls.record(stream.output().call_ledger());
             }
@@ -169,7 +176,7 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
         let calls = node_calls(calls);
         Ok(pumped(env, async move {
             let label = stt.label();
-            let opened = stt.stream(&telemetry::Cx::NONE, None, None).await.and_then(|opened| {
+            let opened = lk_agents_inference::stt::stream(stt.clone(), conn_options, clock.clone(), &telemetry::Cx::NONE, None, None).await.and_then(|opened| {
                 opened.ok_or_else(|| {
                     lk_agents_abi::errors::ApiError::new(format!(
                         "the STT ({label}) does not stream: add a VAD, or wrap it in an stt.StreamAdapter"
@@ -208,49 +215,24 @@ async fn complete(
     tx: mpsc::Sender<Result<LlmChunk, ProviderError>>,
 ) {
     let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &req);
-    let mut attempts = Attempts::retrying(&req.conn_options, clock.now());
-    loop {
-        let attempt = trace.attempt();
-        let result = match llm.chat(trace.cx(), &req).await {
-            Err(error) => Err((error, false)),
-            Ok(stream) => forward_chunks(stream, &tx, &mut trace, clock.as_ref()).await,
-        };
-        let (error, produced) = match result {
-            Err(failed) => failed,
-            Ok(end) => {
-                trace.end_attempt(attempt, None);
-                trace.end(telemetry::LlmEnd {
-                    interrupted: matches!(end, CompletionEnd::Cut),
-                    ..Default::default()
-                });
-                return;
-            }
-        };
-        trace.end_attempt(attempt, Some(&error));
-        if produced {
-            attempts.delivered();
+    let attempt = trace.attempt();
+    let opened = lk_agents_inference::llm::chat(llm, trace.cx(), &req, clock.clone(), None).await;
+    let result = match opened {
+        Err(error) => Err(error),
+        Ok(stream) => forward_chunks(stream, &tx, &mut trace, clock.as_ref()).await,
+    };
+    trace.end_attempt(attempt, result.as_ref().err());
+    match result {
+        Ok(end) => {
+            trace.end(telemetry::LlmEnd {
+                interrupted: matches!(end, CompletionEnd::Cut),
+                ..Default::default()
+            });
         }
-        let (now, mut steps) = (clock.now(), Vec::new());
-        if let Some(attempt) = attempts.current() {
-            attempts.failed_error(attempt, error.attempt_error(), now, &mut steps);
-            attempts.closed(attempt, now, &mut steps);
-        }
-        let retried = steps.iter().any(|step| matches!(step, AttemptStep::Retry { .. }));
-        let at = retried.then(|| attempts.wake_at(None)).flatten();
-        llm.failed(error.clone(), at.is_some());
-        let Some(at) = at else {
+        Err(error) => {
             trace.fail(&error);
             trace.end(Default::default());
             let _ = tx.send(Err(error)).await;
-            return;
-        };
-        tokio::select! {
-            biased;
-            () = tx.closed() => {
-                trace.end(telemetry::LlmEnd { interrupted: true, ..Default::default() });
-                return;
-            }
-            () = clock.wait_until(at) => attempts.wake(at, None, &mut steps),
         }
     }
 }
@@ -270,8 +252,7 @@ async fn forward_chunks(
     tx: &mpsc::Sender<Result<LlmChunk, ProviderError>>,
     trace: &mut telemetry::LlmTrace,
     clock: &dyn Clock,
-) -> Result<CompletionEnd, (ProviderError, bool)> {
-    let mut produced = false;
+) -> Result<CompletionEnd, ProviderError> {
     let ended = loop {
         let next = tokio::select! {
             biased;
@@ -281,13 +262,12 @@ async fn forward_chunks(
         match next {
             Ok(Some(chunk)) => {
                 trace.observe(&chunk);
-                produced |= chunk.has_response();
                 if tx.send(Ok(chunk)).await.is_err() {
                     break Ok(CompletionEnd::Cut);
                 }
             }
             Ok(None) => break Ok(CompletionEnd::Finished),
-            Err(error) => break Err((error, produced)),
+            Err(error) => break Err(error),
         }
     };
     let _ = stream.close(clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;

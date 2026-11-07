@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use lk_agents_abi::{ChatContext, Role};
 use lk_agents_inference::llm::gateway::GatewayLlm;
-use lk_agents_inference::llm::machine::RequestPolicy;
+use lk_agents_inference::llm::machine::Policy;
 use lk_agents_inference::llm::{Auth, LlmOptions};
 use lk_agents_net::clock::RealClock;
 use lk_agents_net::http::GatewayHttp;
@@ -51,9 +51,9 @@ fn llm(model: &str) -> Option<GatewayLlm> {
     Some(GatewayLlm::new(opts, http, tokio::runtime::Handle::current(), Arc::new(RealClock::new())))
 }
 
-fn policy() -> RequestPolicy {
+fn policy() -> Policy {
     let limit = Some(Duration::from_secs(20));
-    RequestPolicy {
+    Policy {
         connect_timeout: limit,
         write_timeout: limit,
         read_timeout: limit,

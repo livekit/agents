@@ -312,12 +312,7 @@ impl Generation<'_> {
         let text = super::tts::transformed(self.shared, &words);
         let segment = idx as u32;
         self.shared.trace(GenerationStep::TtsRequested { speech: self.handle.id(), segment, text });
-        // Opened as the pipeline's synthesis is: a failed open is retried on the same budget.
-        let mut attempts = lk_agents_core::attempts::Attempts::retrying(
-            &self.shared.conn.tts.unwrap_or_default(),
-            self.shared.time.now(),
-        );
-        let (sink, mut source) = loop {
+        let (sink, mut source) = {
             let id = tts.id();
             self.shared.report(GenEvent::RequestStarted {
                 speech: self.handle.id(),
@@ -326,19 +321,22 @@ impl Generation<'_> {
                 model: id.model,
             });
             let expressive = self.ctx.plan.request.expressive;
-            let error = match tts.stream(&self.ctx.turn_cx(self.shared), expressive).await {
-                Ok(stream) => break stream.split(),
-                Err(error) => error,
-            };
-            let kind = lk_agents_voice::trace::ProviderKind::Tts;
-            let failed = |e, r| tts.failed(e, r);
-            match super::llm::retry(self.shared, self.handle, &mut attempts, kind, &error, &failed)
-                .await
-            {
-                super::llm::Retried::Again => {}
-                super::llm::Retried::Interrupted => return Ok(()),
-                super::llm::Retried::GiveUp => return Err(DriverError::from(error)),
-            }
+            let observer = super::llm::retry_observer(
+                self.shared,
+                self.handle,
+                lk_agents_voice::trace::ProviderKind::Tts,
+            );
+            lk_agents_inference::tts::stream(
+                tts,
+                &self.ctx.turn_cx(self.shared),
+                expressive,
+                self.shared.conn.tts.unwrap_or_default(),
+                self.shared.time.clock(),
+                Some(observer),
+            )
+            .await
+            .map_err(DriverError::from)?
+            .split()
         };
         super::tts::report_retries(self.shared, self.handle, &mut source);
         let shared = self.shared;

@@ -995,14 +995,10 @@ impl ::lk_agents_abi::Stt for SttProxy {
         &self,
         conn: &::lk_agents_abi::ApiConnectOptions,
     ) -> ::std::option::Option<::std::sync::Arc<dyn ::lk_agents_abi::Stt>> {
-        Some(::lk_agents_runtime::inference::stt::retrying::RetryingStt::bound(
-            ::std::sync::Arc::new(Self {
-                conn: Some(::std::clone::Clone::clone(conn)),
-                ..::std::clone::Clone::clone(self)
-            }),
-            conn,
-            ::lk_agents_runtime::process::host_clock(),
-        ))
+        Some(::std::sync::Arc::new(Self {
+            conn: Some(::std::clone::Clone::clone(conn)),
+            ..::std::clone::Clone::clone(self)
+        }))
     }
 
     fn conn_options(&self) -> ::std::option::Option<::lk_agents_abi::ApiConnectOptions> {

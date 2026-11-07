@@ -10,6 +10,7 @@ pub mod machine;
 pub mod options;
 mod provider_options;
 pub mod retrying;
+pub use retrying::{recognize, stream};
 mod stream;
 pub mod stream_adapter;
 pub mod wire;
@@ -17,7 +18,7 @@ pub mod wire;
 use crate::abi::{AudioFrame, StreamInput, StreamOutput, Stt, SttCapabilities};
 use crate::headers::{BoundIdentity, Headers, gateway_headers};
 use crate::telemetry;
-use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
+use lk_agents_core::request::{Policy, Request, Step};
 use lk_agents_net::task::TaskSet;
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsSender, WsTransport, connect_error, open_ws, stream_closed,
@@ -567,7 +568,9 @@ impl Stt for GatewayStt {
         let cx = cx.clone();
         Box::pin(async move {
             let offset = start_time_offset.unwrap_or(0.0);
-            self.stream_native(language.as_ref().map(|l| l.as_str()), offset).map(|stream| {
+            let options = self.conn_options.unwrap_or_else(|| self.shared.opts.lock().conn_options);
+            let provider = self.configured(Some(ApiConnectOptions { max_retry: 0, ..options }));
+            provider.stream_native(language.as_ref().map(|l| l.as_str()), offset).map(|stream| {
                 let (sink, source) = stream.split();
                 sink.audio.observe(cx);
                 Some(lk_agents_abi::DuplexStream::new(

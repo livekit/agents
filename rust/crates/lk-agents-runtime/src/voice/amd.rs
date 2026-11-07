@@ -473,7 +473,16 @@ impl AmdSystem {
                 return;
             }
             // Let an admitted host open settle so its successful result can acquire ownership.
-            let result = stt.stream(&telemetry::Cx::NONE, None, None).await;
+            let options = stt.conn_options().unwrap_or_default();
+            let result = lk_agents_inference::stt::stream(
+                stt,
+                options,
+                peer.time.clock(),
+                &telemetry::Cx::NONE,
+                None,
+                None,
+            )
+            .await;
             let outcome = match result {
                 Ok(Some(pair)) => {
                     let (sink, source) = pair.split();
@@ -689,16 +698,19 @@ async fn classify(
 ) {
     let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &request);
     let mut attempt = Some(trace.attempt());
-    let mut stream = match llm.chat(trace.cx(), &request).await {
-        Ok(s) => s,
-        Err(error) => {
-            trace.end_attempt(attempt.take().flatten(), Some(&error));
-            trace.fail(&error);
-            let (calls, metrics) = (Vec::new(), None);
-            let _ = tx.send(Msg::Answer { req, transcript, calls, failed: true, metrics });
-            return;
-        }
-    };
+    let mut stream =
+        match lk_agents_inference::llm::chat(llm.clone(), trace.cx(), &request, time.clock(), None)
+            .await
+        {
+            Ok(s) => s,
+            Err(error) => {
+                trace.end_attempt(attempt.take().flatten(), Some(&error));
+                trace.fail(&error);
+                let (calls, metrics) = (Vec::new(), None);
+                let _ = tx.send(Msg::Answer { req, transcript, calls, failed: true, metrics });
+                return;
+            }
+        };
     let mut calls: Vec<FunctionToolCall> = Vec::new();
     let mut failed = false;
     let mut aborted = false;

@@ -72,10 +72,16 @@ impl lk_agents_abi::stt::stream_adapter::SttStreamAdapter for StreamAdapter {
         language: Option<LanguageCode>,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<SpeechEvent, ProviderError> {
-        self.configured(conn_options)
-            .stt
-            .recognize(&telemetry::Cx::NONE, &frames, language.as_ref())
-            .await
+        let view = self.configured(conn_options);
+        super::recognize(
+            view.stt.clone(),
+            view.stt.conn_options().unwrap_or_default(),
+            view.clock.clone(),
+            &telemetry::Cx::NONE,
+            &frames,
+            language.as_ref(),
+        )
+        .await
     }
 
     async fn stream(
@@ -147,7 +153,17 @@ impl Stt for StreamAdapter {
         language: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
         let (cx, buffer, language) = (cx.clone(), buffer.to_vec(), language.cloned());
-        Box::pin(async move { self.stt.recognize(&cx, &buffer, language.as_ref()).await })
+        Box::pin(async move {
+            super::recognize(
+                self.stt.clone(),
+                self.stt.conn_options().unwrap_or_default(),
+                self.clock.clone(),
+                &cx,
+                &buffer,
+                language.as_ref(),
+            )
+            .await
+        })
     }
 
     fn stream(
@@ -199,8 +215,16 @@ impl StreamOutput<SpeechEvent> for AdapterSource {
         Box::pin(async move {
             loop {
                 if let Some(frames) = self.utterance.take() {
-                    let event =
-                        self.stt.recognize(&self.cx, &frames, self.language.as_ref()).await?;
+                    let event = super::recognize(
+                        self.stt.clone(),
+                        self.stt.conn_options().unwrap_or_default(),
+                        self.clock.clone(),
+                        &self.cx,
+                        &frames,
+                        self.language.as_ref(),
+                    )
+                    .await
+                    .map_err(ProviderError::into_final)?;
                     if let Some(mut transcript) = recognized(event) {
                         transcript.speech_end_time = transcript.speech_end_time.or(self.speech_end);
                         return Ok(Some(transcript));

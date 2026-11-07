@@ -10,6 +10,45 @@ pub mod parse;
 pub mod request;
 pub mod thinking;
 
+/// Open a completion whose single stream owns all retry decisions. A fallback chain's terminal
+/// errors are final, so its own loop is never replayed by this request.
+pub async fn chat(
+    llm: std::sync::Arc<dyn lk_agents_abi::Llm>,
+    cx: &crate::telemetry::Cx,
+    req: &lk_agents_abi::ChatRequest,
+    clock: std::sync::Arc<dyn lk_agents_abi::Clock>,
+    observer: Option<crate::retry::Observer>,
+) -> Result<lk_agents_abi::LlmStream, lk_agents_abi::errors::ProviderError> {
+    let options = req.conn_options;
+    options.validate().map_err(|error| {
+        lk_agents_abi::errors::ApiError::new(error.to_string()).with_retryable(false)
+    })?;
+    let mut attempt = req.clone();
+    attempt.conn_options.max_retry = 0;
+    let provider = llm.with_conn_options(&attempt.conn_options).unwrap_or_else(|| llm.clone());
+    let cx = cx.clone();
+    let open = std::sync::Arc::new(move || {
+        let (provider, attempt, cx) = (provider.clone(), attempt.clone(), cx.clone());
+        Box::pin(async move { provider.chat(&cx, &attempt).await })
+            as lk_agents_abi::BoxFuture<'static, _>
+    });
+    let report: crate::retry::Observer = std::sync::Arc::new(move |error, retry, attempt| {
+        llm.failed(error.clone(), matches!(retry, lk_agents_core::request::Retry::At(_)));
+        if let Some(observer) = &observer {
+            observer(error, retry, attempt);
+        }
+    });
+    Ok(crate::retry::stream(
+        &options,
+        clock,
+        open,
+        lk_agents_abi::LlmChunk::has_response,
+        report,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await)
+}
+
 /// `_LLMOptions`.
 #[derive(Debug, Clone)]
 pub struct LlmOptions {

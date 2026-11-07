@@ -10,7 +10,7 @@ use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::{ApiConnectOptions, Clock, Ts};
-use lk_agents_core::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
+use lk_agents_core::request::{AttemptFailure, Policy, Request, Step};
 use tokio::sync::mpsc;
 
 use super::{GatewayHttp, Reporter, Sent, Stamped, error_chain};
@@ -34,7 +34,7 @@ pub enum ResponsePolicy {
 }
 
 pub struct Exchange {
-    core: Attempts,
+    core: Request,
     http: Arc<GatewayHttp>,
     request: HttpRequest,
     method: reqwest::Method,
@@ -80,7 +80,7 @@ impl Exchange {
         let now = clock.now();
         let (tx, observations) = mpsc::channel(2);
         let mut steps = Vec::new();
-        let core = Attempts::start(RequestPolicy::from_options(options), now, &mut steps);
+        let core = Request::start(Policy::from_options(options), now, &mut steps);
         let mut exchange = Self {
             core,
             http,
@@ -276,14 +276,14 @@ impl Exchange {
         self.apply(steps);
     }
 
-    fn apply(&mut self, steps: Vec<AttemptStep>) {
+    fn apply(&mut self, steps: Vec<Step>) {
         for step in steps {
             match step {
-                AttemptStep::Launch(attempt) => self.launch(attempt),
-                AttemptStep::Stop(attempt) => self.stop(attempt),
-                AttemptStep::GiveUp(error) => self.error = Some(error),
-                AttemptStep::Retry { .. } => {}
-                AttemptStep::CleanupIncomplete(_) | AttemptStep::Unresolved => {
+                Step::Launch(attempt) => self.launch(attempt),
+                Step::Stop(attempt) => self.stop(attempt),
+                Step::GiveUp(error) => self.error = Some(error),
+                Step::Retry { .. } => {}
+                Step::CleanupIncomplete(_) | Step::Unresolved => {
                     unreachable!("directly owned HTTP exchanges release synchronously")
                 }
             }

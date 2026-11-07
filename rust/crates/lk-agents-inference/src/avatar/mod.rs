@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::headers::{Headers, gateway_headers};
-use lk_agents_core::attempts::AttemptFailure;
+use lk_agents_core::request::AttemptFailure;
 use lk_agents_net::transport::HttpRequest;
 pub use machine::ProviderSession;
 

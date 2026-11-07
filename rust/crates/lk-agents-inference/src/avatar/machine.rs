@@ -18,7 +18,7 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::resources::ResourceId;
 
-use lk_agents_core::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
+use lk_agents_core::request::{self, AttemptFailure, Policy, Step};
 
 /// How long a create no caller takes keeps asking the gateway for the session it may have made.
 pub const RETIREMENT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -138,7 +138,7 @@ enum Kind {
 #[derive(Debug)]
 struct Request {
     kind: Kind,
-    attempts: Attempts,
+    attempts: request::Request,
 }
 
 /// A create in flight; `caller` is owed its outcome until it stops waiting.
@@ -154,7 +154,7 @@ const EXPECTING: Option<Ts> = Some(Ts::ZERO);
 #[derive(Debug)]
 pub struct AvatarSessionLifecycle {
     avatar: ResourceId,
-    policy: RequestPolicy,
+    policy: Policy,
     next_request: u64,
     /// Every request whose outcome is undecided or whose attempts still owe their release.
     requests: BTreeMap<AvatarRequestId, Request>,
@@ -169,7 +169,7 @@ pub struct AvatarSessionLifecycle {
 }
 
 impl AvatarSessionLifecycle {
-    pub fn new(avatar: ResourceId, policy: RequestPolicy) -> Self {
+    pub fn new(avatar: ResourceId, policy: Policy) -> Self {
         AvatarSessionLifecycle {
             avatar,
             policy,
@@ -281,7 +281,7 @@ impl AvatarSessionLifecycle {
         let request = self.reserve();
         self.creating = Some(Creating { request, caller: true });
         let mut steps = Vec::new();
-        let attempts = Attempts::start(self.policy, now, &mut steps);
+        let attempts = request::Request::start(self.policy, now, &mut steps);
         self.requests.insert(request, Request { kind: Kind::Create, attempts });
         self.apply(request, steps, now, effects);
     }
@@ -386,7 +386,7 @@ impl AvatarSessionLifecycle {
         let request = self.reserve();
         self.terminating.insert(request, session);
         let mut steps = Vec::new();
-        let attempts = Attempts::start(self.policy, now, &mut steps);
+        let attempts = request::Request::start(self.policy, now, &mut steps);
         self.requests.insert(request, Request { kind: Kind::Terminate, attempts });
         self.apply(request, steps, now, effects);
     }
@@ -402,7 +402,7 @@ impl AvatarSessionLifecycle {
         request: AvatarRequestId,
         now: Ts,
         effects: &mut Vec<AvatarSessionEffect>,
-        f: impl FnOnce(&mut Attempts, &mut Vec<AttemptStep>),
+        f: impl FnOnce(&mut request::Request, &mut Vec<Step>),
     ) {
         let Some(r) = self.requests.get_mut(&request) else { return };
         let mut steps = Vec::new();
@@ -414,29 +414,29 @@ impl AvatarSessionLifecycle {
     fn apply(
         &mut self,
         request: AvatarRequestId,
-        steps: Vec<AttemptStep>,
+        steps: Vec<Step>,
         now: Ts,
         effects: &mut Vec<AvatarSessionEffect>,
     ) {
         let Some(kind) = self.requests.get(&request).map(|r| r.kind) else { return };
         for step in steps {
             match step {
-                AttemptStep::Launch(attempt) => {
+                Step::Launch(attempt) => {
                     effects.push(self.launch_effect(request, kind, attempt));
                 }
-                AttemptStep::Stop(attempt) => {
+                Step::Stop(attempt) => {
                     effects.push(AvatarSessionEffect::AvatarRequestCancel { request, attempt })
                 }
-                AttemptStep::Retry { attempt, error } => {
+                Step::Retry { attempt, error } => {
                     effects.push(AvatarSessionEffect::AttemptFailed { request, attempt, error });
                 }
-                AttemptStep::CleanupIncomplete(attempt) => {
+                Step::CleanupIncomplete(attempt) => {
                     effects.push(AvatarSessionEffect::CleanupIncomplete { request, attempt });
                 }
-                AttemptStep::Unresolved => {
+                Step::Unresolved => {
                     effects.push(AvatarSessionEffect::RetirementIncomplete { request })
                 }
-                AttemptStep::GiveUp(error) => self.give_up(request, kind, error, now, effects),
+                Step::GiveUp(error) => self.give_up(request, kind, error, now, effects),
             }
         }
     }

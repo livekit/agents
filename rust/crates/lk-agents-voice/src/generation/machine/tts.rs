@@ -4,8 +4,8 @@ use crate::generation::effects::{
     AlignedTranscriptEffect, DrainedText, StreamingTtsEffect, SynthesisLossEffect,
 };
 use crate::transcription::{Heard, Visible};
+use lk_agents_abi::TranscriptChunk;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::{TranscriptChunk, Ts};
 
 /// About five seconds of speculative 20 ms frames. Runtime backpressures the provider at this bound.
 pub const MAX_BUFFERED_TTS_FRAMES: usize = 256;
@@ -207,38 +207,17 @@ pub struct Lost {
     pub heard: Heard,
 }
 
-/// The accumulated input of a synthesis attempt, preserved for a retry.
+/// The input and playout accumulated during one synthesis.
 pub struct SynthesisAttempt {
-    /// The reply's outer retry of its synthesis, on the session's TTS connection options.
-    pub retry: lk_agents_core::attempts::Attempts,
     pub opening: Visible,
     pub input_done: bool,
     synchronized: Option<String>,
     heard: Heard,
-    produced: bool,
-}
-
-pub enum AttemptFailure {
-    Retry(ProviderError),
-    Stop(Lost),
-}
-
-pub enum RetryOutcome {
-    Again,
-    Interrupted,
-    Exhausted,
 }
 
 impl SynthesisAttempt {
-    pub fn new(options: &lk_agents_abi::ApiConnectOptions, opening: Visible, now: Ts) -> Self {
-        Self {
-            retry: lk_agents_core::attempts::Attempts::retrying(options, now),
-            opening,
-            input_done: false,
-            synchronized: None,
-            heard: Heard::default(),
-            produced: false,
-        }
+    pub fn new(opening: Visible) -> Self {
+        Self { opening, input_done: false, synchronized: None, heard: Heard::default() }
     }
 
     pub fn before_open(&self, interrupted: bool, closing: bool) -> Option<Lost> {
@@ -258,42 +237,17 @@ impl SynthesisAttempt {
         self.heard = heard.unwrap_or_default();
     }
 
-    pub fn failed(
-        &mut self,
-        error: crate::agent_session::DriverError,
-        produced: bool,
-    ) -> AttemptFailure {
-        self.produced = produced;
-        match error {
-            crate::agent_session::DriverError::Provider(error) => {
-                if produced {
-                    self.retry.delivered();
-                }
-                AttemptFailure::Retry(error)
-            }
-            error => AttemptFailure::Stop(Lost {
-                failure: Some(error),
-                lost: false,
-                opening: self.opening.clone(),
-                synchronized: self.synchronized.clone(),
-                played: produced,
-                heard: self.heard.clone(),
-            }),
-        }
-    }
-
-    pub fn after_retry(&self, outcome: RetryOutcome) -> Option<Lost> {
-        match outcome {
-            RetryOutcome::Again => None,
-            RetryOutcome::Interrupted => Some(self.stopped()),
-            RetryOutcome::Exhausted => Some(Lost {
-                failure: None,
-                lost: true,
-                opening: self.opening.clone(),
-                synchronized: self.synchronized.clone(),
-                played: self.produced,
-                heard: self.heard.clone(),
-            }),
+    pub fn failed(&mut self, error: crate::agent_session::DriverError, produced: bool) -> Lost {
+        Lost {
+            lost: matches!(error, crate::agent_session::DriverError::Provider(_)),
+            failure: match error {
+                crate::agent_session::DriverError::Provider(_) => None,
+                error => Some(error),
+            },
+            opening: self.opening.clone(),
+            synchronized: self.synchronized.clone(),
+            played: produced,
+            heard: self.heard.clone(),
         }
     }
 

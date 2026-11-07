@@ -719,7 +719,11 @@ impl PendingOpen {
     ) -> Result<Opened, ProviderError> {
         let (channel, sink, source) = match self {
             PendingOpen::Stt(stt, cx) => {
-                let Some(stream) = stt.stream(&cx, None, None).await? else {
+                let options = stt.conn_options().unwrap_or_default();
+                let Some(stream) =
+                    lk_agents_inference::stt::stream(stt, options, time.clock(), &cx, None, None)
+                        .await?
+                else {
                     return Err(ProviderError::Local(ApiError::new(
                         "the new agent's STT does not stream",
                     )));

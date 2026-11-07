@@ -15,8 +15,8 @@ fn at(ms: u64) -> Ts {
     Ts::from_nanos(ms * 1_000_000)
 }
 
-fn policy() -> RequestPolicy {
-    RequestPolicy {
+fn policy() -> Policy {
+    Policy {
         connect_timeout: Some(Duration::from_secs(10)),
         write_timeout: Some(Duration::from_secs(10)),
         read_timeout: Some(Duration::from_secs(10)),
@@ -26,7 +26,7 @@ fn policy() -> RequestPolicy {
     }
 }
 
-fn start(policy: RequestPolicy) -> LlmRequest {
+fn start(policy: Policy) -> LlmRequest {
     let (request, effects) = LlmRequest::start(ID, LLM, policy, ("<think>", "</think>"), at(0));
     assert_eq!(effects, vec![started(0)]);
     request
@@ -190,7 +190,7 @@ fn a_rejection_is_retried_only_when_its_status_is_transient() {
 // silence, or one not restarted by progress.
 #[test]
 fn the_read_limit_counts_remote_silence_only_while_the_consumer_waits() {
-    let mut request = start(RequestPolicy { max_retry: 0, ..policy() });
+    let mut request = start(Policy { max_retry: 0, ..policy() });
     reading(&mut request, 0, at(0));
     request.handle(LlmRequestEvent::Chunk { attempt: 0, chunk: text("a") }, at(9_000));
     assert_eq!(request.wake_at(), Some(at(19_000)), "progress restarts the limit");
@@ -209,8 +209,7 @@ fn the_read_limit_counts_remote_silence_only_while_the_consumer_waits() {
 // Catches: one timer for the whole exchange, or a timeout reported without its phase.
 #[test]
 fn connect_and_write_limits_report_their_own_phase() {
-    let mut request =
-        start(RequestPolicy { write_timeout: Some(Duration::from_secs(3)), ..policy() });
+    let mut request = start(Policy { write_timeout: Some(Duration::from_secs(3)), ..policy() });
     let effects = request.handle(LlmRequestEvent::Wake, at(10_000));
     assert_eq!(effects[0], cancelled(0));
     assert!(
@@ -228,8 +227,7 @@ fn connect_and_write_limits_report_their_own_phase() {
 // Catches: a total deadline reset by retries or progress, or an attempt launched after it.
 #[test]
 fn the_total_limit_spans_every_attempt_and_stops_the_request() {
-    let mut request =
-        start(RequestPolicy { total_timeout: Some(Duration::from_secs(3)), ..policy() });
+    let mut request = start(Policy { total_timeout: Some(Duration::from_secs(3)), ..policy() });
     request.handle(LlmRequestEvent::Failed { attempt: 0, failure: failure() }, at(0));
     request.handle(LlmRequestEvent::Wake, at(100));
     reading(&mut request, 1, at(100));
@@ -301,7 +299,7 @@ fn a_missed_cleanup_deadline_is_reported_once() {
 // waiting forever.
 #[test]
 fn an_attempt_closed_without_an_outcome_fails() {
-    let mut request = start(RequestPolicy { max_retry: 0, ..policy() });
+    let mut request = start(Policy { max_retry: 0, ..policy() });
     let effects = request.handle(LlmRequestEvent::AttemptClosed { attempt: 0 }, at(5));
     assert_eq!(finished(&effects).unwrap().clone().unwrap_err().kind, ApiErrorKind::Connection);
     assert!(request.is_settled());
@@ -312,7 +310,7 @@ fn an_expired_acceptance_budget_never_authorizes_the_first_exchange() {
     let (_request, effects) = LlmRequest::start(
         ID,
         LLM,
-        RequestPolicy { total_timeout: Some(Duration::ZERO), ..policy() },
+        Policy { total_timeout: Some(Duration::ZERO), ..policy() },
         ("<think>", "</think>"),
         at(0),
     );

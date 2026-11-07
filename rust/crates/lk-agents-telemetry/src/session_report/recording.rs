@@ -10,7 +10,7 @@ use livekit_protocol::MetricsRecordingHeader;
 use lk_agents_abi::Clock;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::telemetry::report::RecordingHeader;
-use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
+use lk_agents_core::request::{Policy, Request, Step};
 use lk_agents_core::telemetry::report::RecordingUpload;
 use prost::Message;
 
@@ -21,7 +21,7 @@ use crate::otlp::cloud::PostError;
 const CHUNK_BYTES: usize = 64 * 1024;
 /// Four attempts, bounded together by the caller's limit; a `RetryInfo` delay overrides the
 /// jittered backoff.
-const ATTEMPTS: RequestPolicy = RequestPolicy {
+const ATTEMPTS: Policy = Policy {
     connect_timeout: None,
     write_timeout: None,
     read_timeout: None,
@@ -40,14 +40,14 @@ pub(crate) async fn upload(
 ) -> Result<(), PostError> {
     let _permit = ReportAdmission::process().upload().await;
     let mut steps = Vec::new();
-    let mut attempts = Attempts::start(ATTEMPTS, clock.now(), &mut steps);
+    let mut attempts = Request::start(ATTEMPTS, clock.now(), &mut steps);
     let mut failure = PostError::Setup("no upload attempt was made".into());
     loop {
         let mut launched = None;
         for step in steps.drain(..) {
             match step {
-                AttemptStep::Launch(attempt) => launched = Some(attempt),
-                AttemptStep::GiveUp(_) => return Err(failure),
+                Step::Launch(attempt) => launched = Some(attempt),
+                Step::GiveUp(_) => return Err(failure),
                 _ => {}
             }
         }

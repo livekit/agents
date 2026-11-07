@@ -20,7 +20,7 @@ use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
-use lk_agents_core::attempts::RequestPolicy;
+use lk_agents_core::request::{Request, Retry};
 use lk_agents_media::media_queue::{self, AudioSender, Item, Policy};
 use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::task::TokioSpawner;
@@ -376,28 +376,26 @@ async fn main_task(ctx: StreamContext, input_rx: InputRx) -> Result<(), ApiError
 }
 
 async fn main_task_inner(ctx: &StreamContext, mut input_rx: InputRx) -> Result<(), ApiError> {
-    let policy = RequestPolicy::from_options(&ctx.config.conn_options);
-    let mut num_retries = 0u32;
+    let mut request = Request::retrying(&ctx.config.conn_options, ctx.clock.now());
     loop {
         let err = match run(ctx, &mut input_rx).await {
             Ok(()) => return Ok(()),
             Err(e) => e,
         };
-        if let Some(delay) = policy.retry_delay(num_retries, err.error.retryable) {
+        if let Retry::At(resume) = request.attempt_failed(err.error.clone(), ctx.clock.now()) {
             ctx.emit_error(err.request, err.error, true);
-            let resume = ctx.clock.now().saturating_add(delay);
             if let Err(error) = while_input_open(ctx, ctx.clock.wait_until(resume)).await {
                 ctx.emit_error(error.request, error.error.clone(), false);
                 return Err(error.error);
             }
-            num_retries += 1;
+            request.wake(ctx.clock.now(), None, &mut Vec::new());
         } else {
             ctx.emit_error(err.request, err.error.clone(), false);
-            return match lk_agents_core::attempts::terminal_failure(
+            return match lk_agents_core::request::terminal_failure(
                 RequestKind::Interruption,
                 &err.error,
                 ctx.config.conn_options.max_retry,
-                num_retries,
+                request.retries(),
             ) {
                 RetryDecision::Exhausted(message) => Err(ApiError::connection(Some(message))),
                 _ => Err(err.error),

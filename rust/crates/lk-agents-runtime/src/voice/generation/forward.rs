@@ -268,7 +268,7 @@ impl Pump<'_> {
                     shared,
                     handle: self.handle,
                     acc: self.acc,
-                    tts: tts.as_ref(),
+                    tts: &tts,
                     expressive: self.expressive,
                     segment: *idx,
                     rx: &mut self.rx,

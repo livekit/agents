@@ -525,7 +525,7 @@ async fn stream_request(
     let opened = tokio::select! {
         biased;
         () = cancelled.cancelled() => None,
-        opened = llm.chat(trace.cx(), &req) => Some(opened),
+        opened = lk_agents_inference::llm::chat(llm.clone(), trace.cx(), &req, clock.clone(), None) => Some(opened),
     };
     let mut stream = match opened {
         None => {

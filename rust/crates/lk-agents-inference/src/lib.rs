@@ -13,6 +13,7 @@ pub mod headers;
 pub mod ids;
 pub mod images;
 pub mod provider;
+pub mod retry;
 // The two model-backed detectors: same credentials and transport as the providers below.
 pub mod eot;
 pub mod interruption;

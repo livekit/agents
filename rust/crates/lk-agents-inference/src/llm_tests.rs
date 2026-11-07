@@ -9,7 +9,7 @@ use std::time::Duration;
 use lk_agents_abi::errors::{ApiErrorKind, TimeoutPhase};
 use lk_agents_abi::{ChatContext, Clock, Closed};
 use lk_agents_inference::llm::gateway::{GatewayLlm, LlmChunks};
-use lk_agents_inference::llm::machine::RequestPolicy;
+use lk_agents_inference::llm::machine::Policy;
 use lk_agents_inference::llm::{Auth, LlmOptions};
 use lk_agents_net::clock::RealClock;
 use lk_agents_net::http::GatewayHttp;
@@ -136,9 +136,9 @@ async fn serve(
     }
 }
 
-fn policy(max_retry: u32, read_ms: u64) -> RequestPolicy {
+fn policy(max_retry: u32, read_ms: u64) -> Policy {
     let limit = Some(Duration::from_secs(5));
-    RequestPolicy {
+    Policy {
         connect_timeout: limit,
         write_timeout: limit,
         read_timeout: Some(Duration::from_millis(read_ms)),
@@ -164,7 +164,7 @@ fn llm(peer: &Peer) -> GatewayLlm {
     GatewayLlm::new(opts, http, tokio::runtime::Handle::current(), Arc::new(RealClock::new()))
 }
 
-fn open(llm: &GatewayLlm, policy: RequestPolicy) -> LlmChunks {
+fn open(llm: &GatewayLlm, policy: Policy) -> LlmChunks {
     llm.chat(&ChatContext::new(Vec::new()), &[], Default::default(), policy, None).unwrap()
 }
 
@@ -394,7 +394,7 @@ async fn closing_at_every_await_point_releases_the_attempt() {
     let peer = Peer::start(vec![Reply::Status(503, "busy"), Reply::Status(503, "busy")]).await;
     let llm = llm(&peer);
     let mut chunks =
-        open(&llm, RequestPolicy { retry_interval: Duration::from_secs(5), ..policy(3, 10_000) });
+        open(&llm, Policy { retry_interval: Duration::from_secs(5), ..policy(3, 10_000) });
     let _ = tokio::time::timeout(Duration::from_millis(400), chunks.next()).await;
     assert_eq!(
         peer.requests.load(Ordering::SeqCst),

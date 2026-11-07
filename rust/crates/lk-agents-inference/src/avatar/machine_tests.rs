@@ -13,8 +13,8 @@ fn at(ms: u64) -> Ts {
     Ts::from_nanos(ms * 1_000_000)
 }
 
-fn policy() -> RequestPolicy {
-    RequestPolicy {
+fn policy() -> Policy {
+    Policy {
         connect_timeout: Some(Duration::from_secs(10)),
         write_timeout: Some(Duration::from_secs(10)),
         read_timeout: Some(Duration::from_secs(10)),
@@ -339,8 +339,7 @@ fn a_session_without_terminate_identity_is_released_with_a_report() {
 // gateway still makes the session and nobody ends it (DST avatar_sessions_are_never_leaked, seed 0).
 #[test]
 fn a_received_create_cut_by_its_timeout_after_close_is_asked_again_and_retired() {
-    let read =
-        RequestPolicy { read_timeout: Some(Duration::from_secs(2)), max_retry: 0, ..policy() };
+    let read = Policy { read_timeout: Some(Duration::from_secs(2)), max_retry: 0, ..policy() };
     let mut avatar = AvatarSessionLifecycle::new(AVATAR, read);
     avatar.handle(AvatarSessionEvent::Create, at(0));
     written(&mut avatar, 1, 0, 10);
@@ -379,8 +378,7 @@ fn a_received_create_cut_by_its_timeout_after_close_is_asked_again_and_retired()
 // caller and forgetting the operation, so the session the gateway made bills on.
 #[test]
 fn a_create_failed_after_it_was_received_is_retired_once_its_caller_has_the_error() {
-    let mut avatar =
-        AvatarSessionLifecycle::new(AVATAR, RequestPolicy { max_retry: 0, ..policy() });
+    let mut avatar = AvatarSessionLifecycle::new(AVATAR, Policy { max_retry: 0, ..policy() });
     avatar.handle(AvatarSessionEvent::Create, at(0));
     written(&mut avatar, 1, 0, 10);
     let effects = avatar.handle(
@@ -451,7 +449,7 @@ fn a_retirement_unanswered_by_its_deadline_is_reported_once() {
 // the gateway made leaks (DST avatar_sessions_are_never_leaked, seed 428).
 #[test]
 fn a_silent_retirement_replay_without_caller_limits_is_asked_again_within_the_window() {
-    let unbounded = RequestPolicy {
+    let unbounded = Policy {
         connect_timeout: None,
         write_timeout: None,
         read_timeout: None,

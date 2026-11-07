@@ -3,4 +3,4 @@
 
 mod request;
 
-pub use request::{AttemptFailure, LlmRequest, LlmRequestEvent, LlmRequestId, RequestPolicy};
+pub use request::{AttemptFailure, LlmRequest, LlmRequestEvent, LlmRequestId, Policy};

@@ -14,7 +14,7 @@ use std::task::{Context, Poll};
 use crate::transport::{Headers, HttpRequest};
 use futures_util::StreamExt;
 use lk_agents_abi::{Clock, Ts};
-use lk_agents_core::attempts::AttemptFailure;
+use lk_agents_core::request::AttemptFailure;
 use tokio::sync::{Notify, mpsc};
 
 /// The host's `APIError` helpers: an HTTP status's message as the native client words it.

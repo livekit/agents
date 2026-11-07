@@ -1,7 +1,7 @@
 //! The attempts of one gateway request, as a synchronous machine on supplied time: the attempt
 //! currently running and its phase deadline, the retry decision and its backoff, the total
 //! deadline and the cleanup every launched attempt still owes. Its owner (a request lifecycle)
-//! turns the [`AttemptStep`]s into its own resource's effects and reports the transport's
+//! turns the [`Step`]s into its own resource's effects and reports the transport's
 //! observations back by attempt.
 //!
 //! Timeouts follow `APIConnectOptions`: connect runs from launch until the transport has a
@@ -18,160 +18,13 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use super::{AttemptFailure, Policy, Retry, Step};
 use lk_agents_abi::errors::{ApiError, ApiErrorKind, TimeoutPhase};
-use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
-use lk_agents_abi::{ApiConnectOptions, ApiConnectOptionsError, HOST_TEARDOWN_TIMEOUT, Ts};
-
-/// The host's `APIConnectOptions` rules: its boundary check and its retry interval.
-pub struct ConnectOptionsRules;
-
-impl lk_agents_abi::types::connect::ConnectOptionsFunctions for ConnectOptionsRules {
-    fn api_connect_options_check(
-        max_retry: i64,
-        retry_interval: f64,
-        pool_timeout: Option<f64>,
-        connect_timeout: Option<f64>,
-        write_timeout: Option<f64>,
-        read_timeout: Option<f64>,
-        total_timeout: Option<f64>,
-    ) -> Result<(), ApiConnectOptionsError> {
-        let max_retry = u32::try_from(max_retry).map_err(|_| ApiConnectOptionsError {
-            field: "max_retry",
-            requirement: "must be an integer >= 0",
-        })?;
-        ApiConnectOptions {
-            max_retry,
-            retry_interval,
-            pool_timeout,
-            connect_timeout,
-            write_timeout,
-            read_timeout,
-            total_timeout,
-        }
-        .validate()
-    }
-
-    fn api_retry_interval(retry_interval: f64, num_retries: u32) -> f64 {
-        ApiConnectOptions { retry_interval, ..ApiConnectOptions::default() }
-            .interval_for_retry(num_retries)
-    }
-}
+use lk_agents_abi::{ApiConnectOptions, HOST_TEARDOWN_TIMEOUT, Ts};
 
 /// A retiring request's phases are bounded so it asks at least this many times inside its window:
 /// a silent attempt never holds the whole window, even when the caller set no limits.
 const RETIREMENT_ATTEMPTS: u32 = 3;
-
-/// The resolved per-request policy. `None` disables a limit. There is no pool limit: the
-/// gateway transport has no pool capacity, so a request never waits for a connection slot.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RequestPolicy {
-    pub connect_timeout: Option<Duration>,
-    pub write_timeout: Option<Duration>,
-    pub read_timeout: Option<Duration>,
-    pub total_timeout: Option<Duration>,
-    /// Attempts after the first.
-    pub max_retry: u32,
-    pub retry_interval: Duration,
-}
-
-impl RequestPolicy {
-    /// The shared retry allowance and delay; the owner supplies whether replay is eligible.
-    pub fn retry_delay(&self, retries: u32, retryable: bool) -> Option<Duration> {
-        if !retryable || retries >= self.max_retry {
-            return None;
-        }
-        Some(if retries == 0 {
-            Duration::from_secs_f64(lk_agents_abi::types::connect::FIRST_RETRY_INTERVAL)
-        } else {
-            self.retry_interval
-        })
-    }
-
-    /// The phase limits of validated options; `pool_timeout` bounds no wait of this transport and
-    /// the legacy `timeout` is not read.
-    pub fn from_options(options: &ApiConnectOptions) -> Self {
-        let limit = |seconds: Option<f64>| seconds.map(Duration::from_secs_f64);
-        RequestPolicy {
-            connect_timeout: limit(options.connect_timeout),
-            write_timeout: limit(options.write_timeout),
-            read_timeout: limit(options.read_timeout),
-            total_timeout: limit(options.total_timeout),
-            max_retry: options.max_retry,
-            retry_interval: Duration::from_secs_f64(options.retry_interval),
-        }
-    }
-}
-
-/// The attempt owner gave up. Timeouts keep their class/phase and caller-owned cause; other
-/// exhausted recognition/completion allowances carry one shared diagnostic.
-pub fn terminal_failure(
-    kind: RequestKind,
-    error: &ApiError,
-    max_retry: u32,
-    retries: u32,
-) -> RetryDecision {
-    if max_retry == 0 || !error.retryable || error.kind == ApiErrorKind::Timeout {
-        return RetryDecision::Raise;
-    }
-    let action = match kind {
-        RequestKind::Llm => "generate LLM completion",
-        RequestKind::SttBatch | RequestKind::SttStream => "recognize speech",
-        RequestKind::Interruption => "detect interruption",
-        RequestKind::TtsBatch | RequestKind::TtsStream | RequestKind::Avatar => {
-            return RetryDecision::Raise;
-        }
-    };
-    RetryDecision::Exhausted(format!(
-        "failed to {action} after {} attempts",
-        u64::from(retries) + 1
-    ))
-}
-
-/// Why an attempt failed, as the transport saw it.
-#[derive(Debug, Clone, PartialEq)]
-pub enum AttemptFailure {
-    /// A non-2xx response, its message read from the body.
-    Rejected { status: i64, message: String, request_id: Option<String>, retryable: Option<bool> },
-    /// Launch, connection or mid-body transport failure.
-    Connection(String),
-    /// The response is not the declared wire shape.
-    Malformed(String),
-}
-
-impl AttemptFailure {
-    pub fn into_error(self) -> ApiError {
-        match self {
-            AttemptFailure::Rejected { status, message, request_id, retryable } => {
-                let error = ApiError::from_http(&message, status, request_id);
-                match retryable {
-                    Some(retryable) => error.with_retryable(retryable),
-                    None => error,
-                }
-            }
-            AttemptFailure::Connection(message) => ApiError::connection(Some(message)),
-            AttemptFailure::Malformed(message) => {
-                ApiError::connection(Some(format!("malformed response: {message}")))
-            }
-        }
-    }
-}
-
-/// What the owner performs or reports, in order.
-#[derive(Debug, Clone, PartialEq)]
-pub enum AttemptStep {
-    /// Start this attempt's exchange.
-    Launch(u32),
-    /// Stop this attempt's exchange; its release is still reported.
-    Stop(u32),
-    /// The attempt failed and the request will retry after its backoff.
-    Retry { attempt: u32, error: ApiError },
-    /// The request failed: no attempt follows.
-    GiveUp(ApiError),
-    /// A retiring request's outcome was still unknown at its deadline; no attempt follows.
-    Unresolved,
-    /// The attempt missed its cleanup deadline; the runtime still owns it.
-    CleanupIncomplete(u32),
-}
 
 #[derive(Debug, Clone, Copy)]
 enum Phase {
@@ -196,8 +49,8 @@ enum Stage {
 }
 
 #[derive(Debug)]
-pub struct Attempts {
-    policy: RequestPolicy,
+pub struct Request {
+    policy: Policy,
     total_deadline: Option<Ts>,
     phase: Phase,
     /// The outcome would repeat something visible: no further attempt.
@@ -212,10 +65,10 @@ pub struct Attempts {
     open: BTreeMap<u32, Option<Ts>>,
 }
 
-impl Attempts {
+impl Request {
     /// Accepts the request at `now` and launches its first attempt.
-    pub fn start(policy: RequestPolicy, now: Ts, steps: &mut Vec<AttemptStep>) -> Self {
-        let mut attempts = Attempts {
+    pub fn start(policy: Policy, now: Ts, steps: &mut Vec<Step>) -> Self {
+        let mut attempts = Request {
             policy,
             total_deadline: policy.total_timeout.map(|t| now.saturating_add(t)),
             phase: Phase::Settled,
@@ -227,9 +80,8 @@ impl Attempts {
             open: BTreeMap::new(),
         };
         if attempts.total_deadline.is_some_and(|deadline| deadline <= now) {
-            steps.push(AttemptStep::GiveUp(
-                ApiError::timed_out(TimeoutPhase::Total).with_retryable(false),
-            ));
+            steps
+                .push(Step::GiveUp(ApiError::timed_out(TimeoutPhase::Total).with_retryable(false)));
         } else {
             attempts.launch(0, now, steps);
         }
@@ -240,14 +92,31 @@ impl Attempts {
     /// requests enforce their own phase and total limits (a voice reply's model and synthesis).
     /// The first attempt is running.
     pub fn retrying(options: &ApiConnectOptions, now: Ts) -> Self {
-        let policy = RequestPolicy {
+        let policy = Policy {
             connect_timeout: None,
             write_timeout: None,
             read_timeout: None,
             total_timeout: None,
-            ..RequestPolicy::from_options(options)
+            ..Policy::from_options(options)
         };
-        Attempts::start(policy, now, &mut Vec::new())
+        Request::start(policy, now, &mut Vec::new())
+    }
+
+    /// The provider finished this attempt and released it. Cancellation never retries, even
+    /// when a provider incorrectly marked its error retryable.
+    pub fn attempt_failed(&mut self, error: ApiError, now: Ts) -> Retry {
+        let Some(attempt) = self.current() else { return Retry::GiveUp(error) };
+        let mut steps = Vec::new();
+        self.failed_error(attempt, error, now, &mut steps);
+        self.closed(attempt, now, &mut steps);
+        for step in steps {
+            match step {
+                Step::Retry { .. } => return Retry::At(self.wake_at(None).expect("retry wake")),
+                Step::GiveUp(error) => return Retry::GiveUp(error),
+                _ => {}
+            }
+        }
+        unreachable!("a current attempt's failure decides whether to retry")
     }
 
     /// The attempt whose outcome is the request's, while one runs.
@@ -279,7 +148,7 @@ impl Attempts {
         self.replay_unsafe = true;
     }
 
-    /// The earliest instant [`Attempts::wake`] has work to do; `expecting` is since when the
+    /// The earliest instant [`Request::wake`] has work to do; `expecting` is since when the
     /// owner expects a response (`None`: not now, so no read timer runs).
     pub fn wake_at(&self, expecting: Option<Ts>) -> Option<Ts> {
         let phase = match self.phase {
@@ -330,7 +199,7 @@ impl Attempts {
         attempt: u32,
         failure: AttemptFailure,
         now: Ts,
-        steps: &mut Vec<AttemptStep>,
+        steps: &mut Vec<Step>,
     ) {
         if self.current() == Some(attempt) {
             // A final rejection answers the operation (a replay gets it too); a retryable one
@@ -348,13 +217,7 @@ impl Attempts {
 
     /// A provider already adapted its failure at the boundary. Preserve its retryability and
     /// phase rather than converting it back through a transport failure.
-    pub fn failed_error(
-        &mut self,
-        attempt: u32,
-        error: ApiError,
-        now: Ts,
-        steps: &mut Vec<AttemptStep>,
-    ) {
+    pub fn failed_error(&mut self, attempt: u32, error: ApiError, now: Ts, steps: &mut Vec<Step>) {
         if self.current() != Some(attempt) {
             return;
         }
@@ -370,7 +233,7 @@ impl Attempts {
         error: ApiError,
         retry_after: Duration,
         now: Ts,
-        steps: &mut Vec<AttemptStep>,
+        steps: &mut Vec<Step>,
     ) {
         if self.current() != Some(attempt) {
             return;
@@ -405,7 +268,7 @@ impl Attempts {
 
     /// The attempt's transport resources are released. Closed before reporting an outcome: the
     /// transport lost it.
-    pub fn closed(&mut self, attempt: u32, now: Ts, steps: &mut Vec<AttemptStep>) {
+    pub fn closed(&mut self, attempt: u32, now: Ts, steps: &mut Vec<Step>) {
         self.open.remove(&attempt);
         if self.current() == Some(attempt) {
             self.unresolved |= self.sent();
@@ -415,7 +278,7 @@ impl Attempts {
     }
 
     /// The consumer gave up: the running attempt is stopped and no outcome follows.
-    pub fn cancel(&mut self, now: Ts, steps: &mut Vec<AttemptStep>) {
+    pub fn cancel(&mut self, now: Ts, steps: &mut Vec<Step>) {
         self.unresolved |= self.sent();
         if let Some(attempt) = self.current() {
             self.stop(attempt, now, steps);
@@ -425,9 +288,9 @@ impl Attempts {
 
     /// No caller takes the outcome any more. A request that may have taken effect keeps asking
     /// under its identity, retrying every retryable failure, until an attempt answers or
-    /// `deadline` ([`AttemptStep::Unresolved`]); any other request stops now. Every phase,
+    /// `deadline` ([`Step::Unresolved`]); any other request stops now. Every phase,
     /// including the running attempt's, is bounded to a share of the window.
-    pub fn retire(&mut self, now: Ts, deadline: Ts, steps: &mut Vec<AttemptStep>) {
+    pub fn retire(&mut self, now: Ts, deadline: Ts, steps: &mut Vec<Step>) {
         if self.retiring {
             return;
         }
@@ -452,7 +315,7 @@ impl Attempts {
         }
     }
 
-    pub fn wake(&mut self, now: Ts, expecting: Option<Ts>, steps: &mut Vec<AttemptStep>) {
+    pub fn wake(&mut self, now: Ts, expecting: Option<Ts>, steps: &mut Vec<Step>) {
         let expired: Vec<u32> = self
             .open
             .iter()
@@ -462,7 +325,7 @@ impl Attempts {
         for attempt in expired {
             // Reported once; the runtime keeps owning the attempt.
             self.open.remove(&attempt);
-            steps.push(AttemptStep::CleanupIncomplete(attempt));
+            steps.push(Step::CleanupIncomplete(attempt));
         }
         if self.is_decided() {
             return;
@@ -470,9 +333,9 @@ impl Attempts {
         if self.total_deadline.is_some_and(|d| d <= now) {
             self.cancel(now, steps);
             steps.push(if self.retiring {
-                AttemptStep::Unresolved
+                Step::Unresolved
             } else {
-                AttemptStep::GiveUp(ApiError::timed_out(TimeoutPhase::Total).with_retryable(false))
+                Step::GiveUp(ApiError::timed_out(TimeoutPhase::Total).with_retryable(false))
             });
             return;
         }
@@ -491,11 +354,11 @@ impl Attempts {
         }
     }
 
-    fn launch(&mut self, attempt: u32, now: Ts, steps: &mut Vec<AttemptStep>) {
+    fn launch(&mut self, attempt: u32, now: Ts, steps: &mut Vec<Step>) {
         self.open.insert(attempt, None);
         self.next_attempt = attempt + 1;
         self.phase = Phase::Attempting { attempt, stage: Stage::Connecting { since: now } };
-        steps.push(AttemptStep::Launch(attempt));
+        steps.push(Step::Launch(attempt));
     }
 
     /// The attempt's transport task ends on its own after a terminal report or a stop; it still
@@ -506,10 +369,10 @@ impl Attempts {
         }
     }
 
-    fn stop(&mut self, attempt: u32, now: Ts, steps: &mut Vec<AttemptStep>) {
+    fn stop(&mut self, attempt: u32, now: Ts, steps: &mut Vec<Step>) {
         if self.open.contains_key(&attempt) {
             self.close_attempt(attempt, now);
-            steps.push(AttemptStep::Stop(attempt));
+            steps.push(Step::Stop(attempt));
         }
     }
 
@@ -538,17 +401,18 @@ impl Attempts {
         error: ApiError,
         at_least: Duration,
         now: Ts,
-        steps: &mut Vec<AttemptStep>,
+        steps: &mut Vec<Step>,
     ) {
-        let retryable = error.retryable && !self.replay_unsafe;
+        let retryable =
+            error.retryable && error.kind != ApiErrorKind::Cancelled && !self.replay_unsafe;
         if let Some(delay) = self.policy.retry_delay(self.failures, retryable) {
             let delay = delay.max(at_least);
             self.failures += 1;
             self.phase = Phase::Waiting { attempt: attempt + 1, at: now.saturating_add(delay) };
-            steps.push(AttemptStep::Retry { attempt, error });
+            steps.push(Step::Retry { attempt, error });
         } else {
             self.phase = Phase::Settled;
-            steps.push(AttemptStep::GiveUp(error.with_retryable(retryable)));
+            steps.push(Step::GiveUp(error.with_retryable(retryable)));
         }
     }
 
@@ -571,16 +435,27 @@ impl Attempts {
 
 #[cfg(test)]
 mod tests {
-    use lk_agents_abi::types::connect::ConnectOptionsFunctions as _;
+    use super::*;
 
-    use super::ConnectOptionsRules;
-
-    // Catches: a negative retry count wrapping into a huge budget instead of naming its field.
     #[test]
-    fn a_negative_max_retry_is_refused_by_name() {
-        let err =
-            ConnectOptionsRules::api_connect_options_check(-1, 2.0, None, None, None, None, None)
-                .unwrap_err();
-        assert_eq!(err.to_string(), "conn_options.max_retry must be an integer >= 0");
+    fn cancellation_kind_stops_even_when_marked_retryable() {
+        let mut request = Request::retrying(&ApiConnectOptions::default(), Ts::ZERO);
+        let error = ApiError::cancelled("cancelled").with_retryable(true);
+        assert!(matches!(
+            request.attempt_failed(error, Ts::ZERO),
+            Retry::GiveUp(ApiError { kind: ApiErrorKind::Cancelled, retryable: false, .. })
+        ));
+        assert!(request.is_settled());
+    }
+
+    #[test]
+    fn a_delivered_request_cannot_replay() {
+        let mut request = Request::retrying(&ApiConnectOptions::default(), Ts::ZERO);
+        request.delivered();
+        assert!(matches!(
+            request.attempt_failed(ApiError::connection(None), Ts::ZERO),
+            Retry::GiveUp(ApiError { retryable: false, .. })
+        ));
+        assert!(request.is_settled());
     }
 }

@@ -8,7 +8,7 @@ use std::time::Duration;
 use lk_agents_abi::Closed;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::inference::avatar_session::AvatarError;
-use lk_agents_core::attempts::RequestPolicy;
+use lk_agents_core::request::Policy;
 use lk_agents_inference::avatar::gateway::GatewayAvatar;
 use lk_agents_inference::avatar::{AvatarOptions, AvatarRoom};
 use lk_agents_inference::headers::Headers;
@@ -104,7 +104,7 @@ fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
 fn avatar(url: String, read_ms: u64) -> GatewayAvatar {
     let options = serde_json::json!({"prompt": "hi", "custom": 1}).as_object().unwrap().clone();
     let opts = AvatarOptions::new("lemonslice/agent_1", None, None, options, url).unwrap();
-    let policy = RequestPolicy {
+    let policy = Policy {
         connect_timeout: Some(Duration::from_secs(10)),
         write_timeout: Some(Duration::from_secs(10)),
         read_timeout: Some(Duration::from_millis(read_ms)),

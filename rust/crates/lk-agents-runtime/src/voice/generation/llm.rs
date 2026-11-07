@@ -8,7 +8,6 @@ use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::{ChatRequest, FunctionCall, LlmStream};
-use lk_agents_core::attempts::{AttemptStep, Attempts};
 use lk_agents_core::usage::ModelKind;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::events::SessionEvent;
@@ -136,62 +135,45 @@ impl LlmInference<'_> {
         // wire.
         let llm = self.ctx.resources.llm.clone().ok_or(DriverError::Missing("llm"))?;
         let req = chat_request(shared, handle, self.ctx).await;
-        // The engine owns the budget; the request carries the same options.
-        let mut attempts = Attempts::retrying(&req.conn_options, shared.time.now());
         // The step's `llm_node`, one `llm_request` in it, its attempts each an `llm_request_run`.
         // A registered `llm_node` runs under the node span and makes its own request, if any.
         let node = LlmNodeTrace::start(shared, self.ctx.span, &req);
         let mut trace = telemetry::LlmTrace::start(node.cx(shared), llm.as_ref(), &req);
-        loop {
-            let attempt = trace.attempt();
-            let mut data = self.announce_request(&req, llm.as_ref());
-            // One `LlmRequestFinished` per `ChatRequested`, a request that never became a stream
-            // included.
-            let (error, data) = match llm.chat(trace.cx(), &req).await {
-                Err(error) => {
-                    trace.end_attempt(attempt, Some(&error));
-                    self.request_finished(Some(&error));
-                    (error, None)
-                }
-                Ok(mut stream) => {
-                    let ended = self.read_stream(&mut stream, &mut data, &mut trace).await;
-                    trace.end_attempt(attempt, ended.as_ref().err().map(|(error, _)| error));
-                    let ended = self.settle_attempt(stream, &data, ended).await;
-                    let end = telemetry::LlmEnd {
-                        interrupted: handle.interrupted(),
-                        speech_id: Some(handle.speech_id()),
-                    };
-                    let Err((error, produced)) = ended else {
-                        node.end(&trace, llm.as_ref(), None);
-                        trace.end(end);
-                        return Ok(data);
-                    };
-                    if produced {
-                        attempts.delivered();
-                    }
-                    (error, Some(data))
-                }
-            };
-            let failed = |e, r| llm.failed(e, r);
-            match retry(shared, handle, &mut attempts, ProviderKind::Llm, &error, &failed).await {
-                Retried::Again => continue,
-                // What an interrupted retry reports: this stream's metrics, or none if it never
-                // opened.
-                Retried::Interrupted => {
-                    node.end(&trace, llm.as_ref(), None);
-                    trace.end(telemetry::LlmEnd {
-                        interrupted: true,
-                        speech_id: Some(handle.speech_id()),
-                    });
-                    let empty =
-                        || LlmGenerationData::new(shared.time.wall_secs(), String::new(), None);
-                    return Ok(data.unwrap_or_else(empty));
-                }
-                Retried::GiveUp => {
-                    trace.fail(&error);
-                    node.end(&trace, llm.as_ref(), Some(&error));
-                    return Err(DriverError::from(error));
-                }
+        let attempt = trace.attempt();
+        let mut data = self.announce_request(&req, llm.as_ref());
+        let observer = retry_observer(shared, handle, ProviderKind::Llm);
+        let opened = lk_agents_inference::llm::chat(
+            llm.clone(),
+            trace.cx(),
+            &req,
+            shared.time.clock(),
+            Some(observer),
+        )
+        .await;
+        let ended = match opened {
+            Err(error) => {
+                self.request_finished(Some(&error));
+                Err(error)
+            }
+            Ok(mut stream) => {
+                let ended = self.read_stream(&mut stream, &mut data, &mut trace).await;
+                self.settle_attempt(stream, &data, ended).await
+            }
+        };
+        trace.end_attempt(attempt, ended.as_ref().err());
+        match ended {
+            Ok(()) => {
+                node.end(&trace, llm.as_ref(), None);
+                trace.end(telemetry::LlmEnd {
+                    interrupted: handle.interrupted(),
+                    speech_id: Some(handle.speech_id()),
+                });
+                Ok(data)
+            }
+            Err(error) => {
+                trace.fail(&error);
+                node.end(&trace, llm.as_ref(), Some(&error));
+                Err(DriverError::from(error))
             }
         }
     }
@@ -239,9 +221,9 @@ impl LlmInference<'_> {
         &self,
         stream: LlmStream,
         data: &LlmGenerationData,
-        ended: Result<(), (ProviderError, bool)>,
-    ) -> Result<(), (ProviderError, bool)> {
-        self.request_finished(ended.as_ref().err().map(|(error, _)| error));
+        ended: Result<(), ProviderError>,
+    ) -> Result<(), ProviderError> {
+        self.request_finished(ended.as_ref().err());
         report_llm_metrics(data, ended.is_err(), self.shared, self.handle);
         // Always, on every path: dropping does not cancel a host stream, and `close` consumes it.
         let deadline = self.shared.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
@@ -249,14 +231,13 @@ impl LlmInference<'_> {
         ended
     }
 
-    /// Tool calls are dispatched on arrival. `Err` carries whether output came first, which
-    /// forbids a retry.
+    /// Tool calls are dispatched on arrival; the inference stream guards against replay.
     async fn read_stream(
         &mut self,
         stream: &mut LlmStream,
         data: &mut LlmGenerationData,
         trace: &mut telemetry::LlmTrace,
-    ) -> Result<(), (ProviderError, bool)> {
+    ) -> Result<(), ProviderError> {
         let (shared, handle, tx) = (self.shared, self.handle, self.tx);
         let ended = loop {
             let read = before_read(handle.interrupted(), tx.is_closed(), stream.cancel_safe());
@@ -272,7 +253,7 @@ impl LlmInference<'_> {
             };
             let chunk = match next {
                 Ok(None) => break Ok(()),
-                Err(error) => break Err((error, data.produced)),
+                Err(error) => break Err(error),
                 Ok(Some(chunk)) => chunk,
             };
             trace.observe(&chunk);
@@ -315,51 +296,23 @@ fn mint_call(shared: &Arc<SessionShared>, raw: &lk_agents_abi::FunctionToolCall)
     }
 }
 
-pub(super) enum Retried {
-    Again,
-    /// The speech was interrupted during the wait: stop, and report what was heard.
-    Interrupted,
-    GiveUp,
-}
-
-/// A failed attempt of a speech leg, decided by the shared attempt policy: on a retry, waits out
-/// its backoff, raced against the interruption.
-pub(super) async fn retry(
+pub(super) fn retry_observer(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
-    attempts: &mut Attempts,
     leg: ProviderKind,
-    error: &ProviderError,
-    provider: &(dyn Fn(ProviderError, bool) + Sync),
-) -> Retried {
-    let (now, mut steps) = (shared.time.now(), Vec::new());
-    if let Some(attempt) = attempts.current() {
-        attempts.failed_error(attempt, error.attempt_error(), now, &mut steps);
-        // The failed request is over: nothing of it is left to release.
-        attempts.closed(attempt, now, &mut steps);
-    }
-    let failed = steps.iter().find_map(|step| match step {
-        AttemptStep::Retry { attempt, .. } => Some(*attempt),
-        _ => None,
-    });
-    let at = failed.and(attempts.wake_at(None));
-    provider(error.clone(), at.is_some());
-    shared.report(GenEvent::ProviderFailed {
-        speech: handle.id(),
-        leg,
-        recoverable: at.is_some(),
-        error: Box::new(error.clone()),
-    });
-    let (Some(failed), Some(at)) = (failed, at) else { return Retried::GiveUp };
-    shared.trace(GenerationStep::RetryArmed { speech: handle.id(), leg, attempt: failed + 1, at });
-    // Raced against the interruption; a Rust-native wait, safe to drop.
-    match until_interrupted(handle, shared.time.wait_until(at)).await {
-        Some(()) => {
-            attempts.wake(at, None, &mut steps);
-            Retried::Again
+) -> lk_agents_inference::retry::Observer {
+    let (shared, handle) = (shared.clone(), handle.clone());
+    Arc::new(move |error, retry, attempt| {
+        shared.report(GenEvent::ProviderFailed {
+            speech: handle.id(),
+            leg,
+            recoverable: matches!(retry, lk_agents_core::request::Retry::At(_)),
+            error: Box::new(error.clone()),
+        });
+        if let lk_agents_core::request::Retry::At(at) = retry {
+            shared.trace(GenerationStep::RetryArmed { speech: handle.id(), leg, attempt, at: *at });
         }
-        None => Retried::Interrupted,
-    }
+    })
 }
 
 pub(crate) async fn until_interrupted<T>(

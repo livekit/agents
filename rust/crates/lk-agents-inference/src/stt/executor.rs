@@ -40,14 +40,14 @@ impl SttStreamExecutor {
     /// audio pushed meanwhile still queued. An attempt that outlived the connect limit had
     /// connected, so the budget restarts.
     pub(super) async fn run(mut self) {
-        let mut policy = RequestPolicy::from_options(&self.opts.conn_options);
+        let mut policy = Policy::from_options(&self.opts.conn_options);
         // The socket adapter observes phase progress within each attempt. Reopening it has one
         // retry owner and retains the operation's original acceptance deadline.
         policy.connect_timeout = None;
         policy.write_timeout = None;
         policy.read_timeout = None;
         let mut steps = Vec::new();
-        let mut attempts = Attempts::start(policy, self.accepted, &mut steps);
+        let mut attempts = Request::start(policy, self.accepted, &mut steps);
         let mut last_start = self.clock.now();
         loop {
             if self.stop.is_cancelled() {
@@ -57,7 +57,7 @@ impl SttStreamExecutor {
             let started = self.clock.now();
             attempts.wake(started, None, &mut steps);
             if let Some(error) = steps.iter().find_map(|step| match step {
-                AttemptStep::GiveUp(error) => Some(error.clone()),
+                Step::GiveUp(error) => Some(error.clone()),
                 _ => None,
             }) {
                 self.failed(error).await;
@@ -83,8 +83,8 @@ impl SttStreamExecutor {
             steps.clear();
             attempts.failed_error(id, error.clone(), now, &mut steps);
             attempts.closed(id, now, &mut steps);
-            if !steps.iter().any(|step| matches!(step, AttemptStep::Retry { .. })) {
-                let error = match lk_agents_core::attempts::terminal_failure(
+            if !steps.iter().any(|step| matches!(step, Step::Retry { .. })) {
+                let error = match lk_agents_core::request::terminal_failure(
                     lk_agents_abi::types::retry::RequestKind::SttStream,
                     &error,
                     self.opts.conn_options.max_retry,

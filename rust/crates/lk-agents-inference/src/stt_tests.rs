@@ -125,8 +125,7 @@ async fn a_failed_connection_is_retried_then_reported_with_its_attempts() {
         spawner,
         Arc::new(lk_agents_net::clock::RealClock::new()),
     );
-    let (_sink, mut source) =
-        stt.stream(&lk_agents_abi::telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
+    let (_sink, mut source) = stt.stream_native(None, 0.0).unwrap().split();
     let err = lk_agents_abi::timeout(
         &lk_agents_net::clock::RealClock::new(),
         Duration::from_secs(5),
@@ -867,12 +866,8 @@ async fn a_session_dropped_before_the_input_ends_reconnects_after_delivered_tran
     for drop in dropped {
         let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "session.created"}))]).keep_open());
         let stt = stt(ws.clone());
-        let (sink, mut source) = stt
-            .stream(&lk_agents_abi::telemetry::Cx::NONE, None, None)
-            .await
-            .unwrap()
-            .unwrap()
-            .split();
+        let (sink, source) = stt.stream_native(None, 0.0).unwrap().split();
+        let mut source: crate::abi::SttSource = Box::new(source);
         sink.push(frame(800)).unwrap();
         ws.feed(text(json!({"type": "final_transcript", "transcript": "first"})));
         drain_until(source.as_mut(), SpeechEventType::FinalTranscript).await;

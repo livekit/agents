@@ -3,12 +3,12 @@
 use crate::effects::RealtimeConnectionEffect;
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, Ts};
-use lk_agents_core::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
+use lk_agents_core::request::{Policy, Request, Step};
 use std::collections::BTreeMap;
 
 #[derive(Debug)]
 pub struct RealtimeConnection {
-    policy: RequestPolicy,
+    policy: Policy,
     phase: Phase,
     retired: Vec<Acquisition>,
     total_deadline: Option<Ts>,
@@ -31,7 +31,7 @@ enum Socket {
 
 #[derive(Debug)]
 struct Acquisition {
-    attempts: Attempts,
+    attempts: Request,
     generations: BTreeMap<u32, u64>,
 }
 
@@ -69,7 +69,7 @@ impl Phase {
 
 impl RealtimeConnection {
     pub fn new(options: &ApiConnectOptions, now: Ts) -> Self {
-        let mut policy = RequestPolicy::from_options(options);
+        let mut policy = Policy::from_options(options);
         let total_deadline = policy.total_timeout.map(|limit| now.saturating_add(limit));
         policy.total_timeout = None;
         Self {
@@ -91,9 +91,9 @@ impl RealtimeConnection {
         self.acquire(self.policy, now)
     }
 
-    fn acquire(&mut self, policy: RequestPolicy, now: Ts) -> Vec<RealtimeConnectionEffect> {
+    fn acquire(&mut self, policy: Policy, now: Ts) -> Vec<RealtimeConnectionEffect> {
         let mut steps = Vec::new();
-        let attempts = Attempts::start(policy, now, &mut steps);
+        let attempts = Request::start(policy, now, &mut steps);
         self.phase = Phase::Running {
             acquisition: Acquisition { attempts, generations: BTreeMap::new() },
             socket: Socket::Waiting,
@@ -163,12 +163,7 @@ impl RealtimeConnection {
             &mut self.phase
         {
             if let Socket::Connecting { attempt, .. } = *socket {
-                acquisition.attempts.failed(
-                    attempt,
-                    AttemptFailure::Connection(error.message.clone()),
-                    now,
-                    &mut steps,
-                );
+                acquisition.attempts.failed_error(attempt, error.clone(), now, &mut steps);
                 acquisition.attempts.closed(attempt, now, &mut steps);
             }
             *socket = Socket::Waiting;
@@ -233,7 +228,7 @@ impl RealtimeConnection {
             let mut steps = Vec::new();
             retired.attempts.wake(now, None, &mut steps);
             for step in steps {
-                if let AttemptStep::CleanupIncomplete(attempt) = step {
+                if let Step::CleanupIncomplete(attempt) = step {
                     effects.push(RealtimeConnectionEffect::CleanupIncomplete {
                         generation: retired.generations[&attempt],
                     });
@@ -273,18 +268,18 @@ impl RealtimeConnection {
         effects
     }
 
-    fn translate(&mut self, steps: Vec<AttemptStep>) -> Vec<RealtimeConnectionEffect> {
+    fn translate(&mut self, steps: Vec<Step>) -> Vec<RealtimeConnectionEffect> {
         let mut effects = Vec::new();
         for step in steps {
             match step {
-                AttemptStep::Launch(attempt) => {
+                Step::Launch(attempt) => {
                     let Phase::Running { acquisition, socket } = &mut self.phase else { continue };
                     self.generation += 1;
                     *socket = Socket::Connecting { attempt, generation: self.generation };
                     acquisition.generations.insert(attempt, self.generation);
                     effects.push(RealtimeConnectionEffect::Connect { generation: self.generation });
                 }
-                AttemptStep::Stop(attempt) => {
+                Step::Stop(attempt) => {
                     let Some(acquisition) = self.phase.acquisition() else { continue };
                     effects.push(RealtimeConnectionEffect::Close {
                         generation: acquisition.generations[&attempt],
@@ -295,20 +290,20 @@ impl RealtimeConnection {
                         *socket = Socket::Waiting;
                     }
                 }
-                AttemptStep::Retry { error, .. } => {
+                Step::Retry { error, .. } => {
                     effects.push(RealtimeConnectionEffect::Retry { error })
                 }
-                AttemptStep::GiveUp(error) => {
+                Step::GiveUp(error) => {
                     let _socket = self.phase.close();
                     effects.push(RealtimeConnectionEffect::Failed { error });
                 }
-                AttemptStep::CleanupIncomplete(attempt) => {
+                Step::CleanupIncomplete(attempt) => {
                     let Some(acquisition) = self.phase.acquisition() else { continue };
                     effects.push(RealtimeConnectionEffect::CleanupIncomplete {
                         generation: acquisition.generations[&attempt],
                     });
                 }
-                AttemptStep::Unresolved => unreachable!("realtime acquisitions are never retired"),
+                Step::Unresolved => unreachable!("realtime acquisitions are never retired"),
             }
         }
         effects

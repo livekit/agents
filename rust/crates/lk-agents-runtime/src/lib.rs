@@ -12,12 +12,12 @@ pub mod cores {
     pub use lk_agents_core::a2a::card::CardBuilder;
     pub use lk_agents_core::a2a::handler::HandlerOutcomes;
     pub use lk_agents_core::agent_authoring::{AgentConfig, ToolNames};
-    pub use lk_agents_core::attempts::ConnectOptionsRules;
     pub use lk_agents_core::llm::chat_dict::ChatDict;
     pub use lk_agents_core::llm::ctx_diff::ChatDiffs;
     pub use lk_agents_core::llm::history::ChatPlans;
     pub use lk_agents_core::metrics::provider::{LlmMetricState, ProviderMetrics, TtsMetricState};
     pub use lk_agents_core::metrics::records::MetricsRecords;
+    pub use lk_agents_core::request::ConnectOptionsRules;
     pub use lk_agents_core::text::Languages;
     pub use lk_agents_core::tokenize::{
         BasicSentenceTokenizer, BasicWordTokenizer, BufferedTokenStream, HostTokenizer,

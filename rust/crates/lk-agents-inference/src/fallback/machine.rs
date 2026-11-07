@@ -9,7 +9,7 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError, TimeoutPhase};
 use lk_agents_abi::resources::ResourceId;
 
-use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
+use lk_agents_core::request::{Policy, Request, Step};
 
 /// The `conn_options` fields the chain rewrites before handing a request to a child.
 /// Visible output always forbids replay. `max_retry` defaults per modality (LLM 0, STT 1, TTS 2); the hard 0s
@@ -186,8 +186,8 @@ pub enum ChainEvent {
 #[derive(Debug)]
 enum Phase {
     Ready,
-    Active { attempt: u64, attempts: Attempts, id: u32 },
-    Waiting(Attempts),
+    Active { attempt: u64, attempts: Request, id: u32 },
+    Waiting(Request),
     Finished,
 }
 
@@ -327,11 +327,11 @@ impl ChainRequest {
         }
     }
 
-    fn retry(&mut self, mut attempts: Attempts, now: Ts) -> Vec<FallbackChainEffect> {
+    fn retry(&mut self, mut attempts: Request, now: Ts) -> Vec<FallbackChainEffect> {
         let mut steps = Vec::new();
         attempts.wake(now, None, &mut steps);
         if let Some(id) = steps.into_iter().find_map(|step| match step {
-            AttemptStep::Launch(id) => Some(id),
+            Step::Launch(id) => Some(id),
             _ => None,
         }) {
             self.launch_effect(attempts, id)
@@ -342,7 +342,7 @@ impl ChainRequest {
     }
 
     fn launch(&mut self, now: Ts) -> Vec<FallbackChainEffect> {
-        let policy = RequestPolicy {
+        let policy = Policy {
             connect_timeout: None,
             write_timeout: None,
             read_timeout: None,
@@ -351,10 +351,10 @@ impl ChainRequest {
             retry_interval: Duration::from_secs_f64(self.policy.retry_interval.unwrap_or(0.0)),
         };
         let mut steps = Vec::new();
-        let mut attempts = Attempts::start(policy, now, &mut steps);
+        let mut attempts = Request::start(policy, now, &mut steps);
         attempts.constrain_deadline(self.deadline);
         for step in steps {
-            if let AttemptStep::Launch(id) = step {
+            if let Step::Launch(id) = step {
                 return self.launch_effect(attempts, id);
             }
         }
@@ -362,7 +362,7 @@ impl ChainRequest {
         Vec::new()
     }
 
-    fn launch_effect(&mut self, attempts: Attempts, id: u32) -> Vec<FallbackChainEffect> {
+    fn launch_effect(&mut self, attempts: Request, id: u32) -> Vec<FallbackChainEffect> {
         let Some((index, backend, _)) = self.entries.get(self.cursor).cloned() else {
             self.phase = Phase::Finished;
             return vec![FallbackChainEffect::Finished(Err(ApiError::connection(Some(

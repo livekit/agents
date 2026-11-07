@@ -45,6 +45,8 @@ impl RefRegistry for Registry {
 /// One scripted model response.
 enum Reply {
     Text(&'static str),
+    Fail(lk_agents_abi::errors::ApiError),
+    TextThenFail(&'static str),
     Call(&'static str, Value),
     /// Never ends until closed.
     Hang,
@@ -59,6 +61,7 @@ struct Scripted {
     chunks: VecDeque<LlmChunk>,
     hang: bool,
     closed: Arc<AtomicUsize>,
+    fail: bool,
 }
 
 impl StreamOutput<LlmChunk> for Scripted {
@@ -66,6 +69,10 @@ impl StreamOutput<LlmChunk> for Scripted {
         Box::pin(async move {
             match self.chunks.pop_front() {
                 Some(chunk) => Ok(Some(chunk)),
+                None if self.fail => Err(lk_agents_abi::errors::ApiError::connection(Some(
+                    "cut after output".into(),
+                ))
+                .into()),
                 None if self.hang => std::future::pending().await,
                 None => Ok(None),
             }
@@ -106,8 +113,11 @@ impl Llm for ScriptedLlm {
                 flush: false,
                 node_text: false,
             };
+            let fail = matches!(&reply, Reply::TextThenFail(_));
             let (chunks, hang) = match reply {
                 Reply::Text(text) => (vec![delta(Some(text), vec![])], false),
+                Reply::TextThenFail(text) => (vec![delta(Some(text), vec![])], false),
+                Reply::Fail(error) => return Err(error.into()),
                 Reply::Call(name, arguments) => {
                     let call = FunctionToolCall {
                         name: name.into(),
@@ -119,8 +129,14 @@ impl Llm for ScriptedLlm {
                 }
                 Reply::Hang => (vec![delta(Some("Thinking"), vec![])], true),
             };
-            Ok(Box::new(Scripted { chunks: chunks.into(), hang, closed: self.closed.clone() })
-                as LlmStream)
+            Ok(
+                Box::new(Scripted {
+                    chunks: chunks.into(),
+                    hang,
+                    closed: self.closed.clone(),
+                    fail,
+                }) as LlmStream,
+            )
         })
     }
 }
@@ -423,6 +439,51 @@ fn finished(updates: &[RunUpdate]) -> Result<&RunSettled, &RunError> {
         Some(RunUpdate::Failed { error, .. }) => Err(error),
         other => panic!("the last update is not the result: {other:?}"),
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn agent_run_retries_a_retryable_llm_failure() {
+    let mut s = setup(
+        vec![
+            Reply::Fail(lk_agents_abi::errors::ApiError::connection(Some("temporary".into()))),
+            Reply::Text("Recovered"),
+        ],
+        Body::Reports,
+        OutputSpec::Text { validated: false },
+        Arc::new(Registry::default()),
+    );
+    let updates = drain(&mut s.updates).await;
+    assert!(finished(&updates).is_ok(), "{updates:?}");
+    assert_eq!(s.closed.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn agent_run_does_not_replay_delivered_output() {
+    let mut s = setup(
+        vec![Reply::TextThenFail("Already delivered")],
+        Body::Reports,
+        OutputSpec::Text { validated: false },
+        Arc::new(Registry::default()),
+    );
+    let updates = drain(&mut s.updates).await;
+    assert!(finished(&updates).is_err(), "{updates:?}");
+    assert_eq!(s.closed.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn agent_run_honors_a_gateway_retry_refusal() {
+    let mut s = setup(
+        vec![Reply::Fail(
+            lk_agents_abi::errors::ApiError::from_http("project out of credits", 429, None)
+                .with_retryable(false),
+        )],
+        Body::Reports,
+        OutputSpec::Text { validated: false },
+        Arc::new(Registry::default()),
+    );
+    let updates = drain(&mut s.updates).await;
+    assert!(finished(&updates).is_err(), "{updates:?}");
+    assert!(format!("{updates:?}").contains("project out of credits"));
 }
 
 // Catches: a tool body's `ctx.update` that never reaches the stream, or one attributed to the

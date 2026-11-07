@@ -690,15 +690,7 @@ struct RealtimeStart {
     resolved: lk_agents_voice::audio_recognition::TurnDetectionMode,
 }
 
-/// A host provider is attempted once per call with the leg's timeout: the engine's `Attempt`
-/// loop owns the LLM's and the TTS's retries (on `SessionShared::conn`), and two loops would
-/// multiply.
-fn one_attempt(conn: &lk_agents_abi::ApiConnectOptions) -> lk_agents_abi::ApiConnectOptions {
-    lk_agents_abi::ApiConnectOptions { max_retry: 0, ..*conn }
-}
-
-/// A host STT spends its budget in its `RetryingStt`; a recognize-only one is adapted by the
-/// executor over `vad`.
+/// A recognize-only STT is adapted over `vad`.
 pub fn stt_leg(
     stt: Arc<dyn Stt>,
     adapter: &SttAdapter,
@@ -711,7 +703,7 @@ pub fn stt_leg(
 }
 
 pub fn llm_leg(llm: Arc<dyn Llm>, conn: Option<lk_agents_abi::ApiConnectOptions>) -> Arc<dyn Llm> {
-    llm.with_conn_options(&one_attempt(&conn.unwrap_or_default())).unwrap_or(llm)
+    llm.with_conn_options(&conn.unwrap_or_default()).unwrap_or(llm)
 }
 
 /// One attempt per call, adapted by the executor when it has no duplex path.
@@ -722,7 +714,7 @@ pub fn tts_leg(
     conn: Option<lk_agents_abi::ApiConnectOptions>,
 ) -> Arc<dyn Tts> {
     let conn = conn.or_else(|| tts.conn_options()).unwrap_or_default();
-    adapter(tts.with_conn_options(&one_attempt(&conn)).unwrap_or(tts), clock, conn)
+    adapter(tts.with_conn_options(&conn).unwrap_or(tts), clock, conn)
 }
 
 /// Startup owns its registrations and admitted tasks until it installs Running. A dropped or

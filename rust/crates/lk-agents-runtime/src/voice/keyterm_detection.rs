@@ -23,7 +23,15 @@ pub async fn detection_pass(
     };
     let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &request);
     let attempt = trace.attempt();
-    let mut stream = match llm.chat(trace.cx(), &request).await {
+    let mut stream = match lk_agents_inference::llm::chat(
+        llm.clone(),
+        trace.cx(),
+        &request,
+        shared.time.clock(),
+        None,
+    )
+    .await
+    {
         Ok(stream) => stream,
         Err(error) => {
             trace.end_attempt(attempt, Some(&error));

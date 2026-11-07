@@ -17,7 +17,7 @@ use lk_agents_abi::types::connect::{ApiConnectOptions, ApiConnectOptionsError};
 use lk_agents_abi::types::provider::{AttemptHost, ProviderAttempts as Port, ResponseObservation};
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{SpeechEvent, SpeechEventType, Ts};
-use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy, terminal_failure};
+use lk_agents_core::request::{Policy, Request, Retry, Step, terminal_failure};
 
 /// The decisions of one request's attempts, on supplied time.
 #[derive(Debug)]
@@ -26,7 +26,7 @@ pub struct AttemptMachine {
     options: ApiConnectOptions,
     attempt_started: Ts,
     interrupted: Option<ApiError>,
-    attempts: Attempts,
+    attempts: Request,
     permit: bool,
     expecting: Option<Ts>,
     input_ended: bool,
@@ -41,7 +41,7 @@ impl AttemptMachine {
         now_ns: u64,
     ) -> Result<Self, ApiConnectOptionsError> {
         conn_options.validate()?;
-        let mut policy = RequestPolicy::from_options(&conn_options);
+        let mut policy = Policy::from_options(&conn_options);
         // A host callback does not expose its SDK's connect/write progress. Its total deadline
         // still covers those phases; read is observable only while a response is owed.
         policy.connect_timeout = None;
@@ -57,7 +57,7 @@ impl AttemptMachine {
         }
         let now = Ts::from_nanos(now_ns);
         let mut steps = Vec::new();
-        let attempts = Attempts::start(policy, now, &mut steps);
+        let attempts = Request::start(policy, now, &mut steps);
         let mut result = Self {
             kind,
             options: conn_options,
@@ -111,29 +111,26 @@ impl AttemptMachine {
         {
             self.attempts.reset_retries();
         }
-        if matches!(self.kind, RequestKind::Llm | RequestKind::TtsBatch | RequestKind::TtsStream)
-            && error.kind == ApiErrorKind::Cancelled
-        {
-            self.cancel(now_ns);
-            return Ok(RetryDecision::Stop);
-        }
-        let Some(attempt) = self.attempts.current() else {
+        if self.attempts.current().is_none() {
             return Ok(RetryDecision::Raise);
-        };
+        }
         if produced_output && self.kind != RequestKind::SttStream {
             self.attempts.delivered();
         }
-        let mut steps = Vec::new();
-        self.attempts.failed_error(attempt, error.clone(), now, &mut steps);
-        self.attempts.closed(attempt, now, &mut steps);
-        let retried = steps.iter().any(|step| matches!(step, AttemptStep::Retry { .. }));
-        self.apply(steps, now);
-        if retried {
-            return Ok(RetryDecision::Retry(self.retry_delay(now)));
+        match self.attempts.attempt_failed(error, now) {
+            Retry::At(at) => {
+                Ok(RetryDecision::Retry(at.saturating_duration_since(now).as_secs_f64()))
+            }
+            Retry::GiveUp(error) if error.kind == ApiErrorKind::Cancelled => {
+                Ok(RetryDecision::Stop)
+            }
+            Retry::GiveUp(error) => Ok(terminal_failure(
+                self.kind,
+                &error,
+                self.options.max_retry,
+                self.attempts.retries(),
+            )),
         }
-        // The callback still owns the original exception; it supplies the terminal cause.
-        let error = self.error.take().expect("the attempt owner gave up");
-        Ok(terminal_failure(self.kind, &error, self.options.max_retry, self.attempts.retries()))
     }
 
     pub fn wake_at(&self) -> Option<u64> {
@@ -243,18 +240,18 @@ impl AttemptMachine {
         }
     }
 
-    fn apply(&mut self, steps: Vec<AttemptStep>, now: Ts) {
-        let stopped = steps.iter().any(|step| matches!(step, AttemptStep::Stop(_)));
+    fn apply(&mut self, steps: Vec<Step>, now: Ts) {
+        let stopped = steps.iter().any(|step| matches!(step, Step::Stop(_)));
         for step in steps {
             match step {
-                AttemptStep::Launch(_) => {
+                Step::Launch(_) => {
                     self.permit = true;
                     self.attempt_started = now;
                     self.reading(now);
                 }
                 // The provider consumed the whole input and never answered: a reconnect has
                 // nothing left to send, so the transcript is lost rather than retried.
-                AttemptStep::Retry { error, .. }
+                Step::Retry { error, .. }
                     if stopped
                         && error.kind == ApiErrorKind::Timeout
                         && self.input_ended
@@ -264,16 +261,14 @@ impl AttemptMachine {
                     self.attempts.cancel(now, &mut Vec::new());
                     self.error = Some(error.with_retryable(false));
                 }
-                AttemptStep::Retry { error, .. }
-                    if stopped && error.kind == ApiErrorKind::Timeout =>
-                {
+                Step::Retry { error, .. } if stopped && error.kind == ApiErrorKind::Timeout => {
                     self.interrupted = Some(error);
                 }
-                AttemptStep::GiveUp(error) => {
+                Step::GiveUp(error) => {
                     self.permit = false;
                     self.error = Some(error);
                 }
-                AttemptStep::Stop(attempt) => {
+                Step::Stop(attempt) => {
                     self.attempts.closed(attempt, now, &mut Vec::new());
                 }
                 _ => {}

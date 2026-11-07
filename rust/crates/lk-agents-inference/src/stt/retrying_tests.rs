@@ -1,5 +1,6 @@
 use super::*;
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
+use lk_agents_abi::stt::types::SttCapabilities;
 use parking_lot::Mutex;
 
 /// Each attempt's offset and the frames it heard; the first attempt fails when read.
@@ -101,9 +102,36 @@ impl Stt for Flaky {
     }
 }
 
-fn retrying(inner: Arc<Flaky>, max_retry: u32) -> RetryingStt {
+struct Recognition {
+    inner: Arc<dyn Stt>,
+    options: ApiConnectOptions,
+    clock: Arc<dyn Clock>,
+}
+
+impl Recognition {
+    async fn recognize(
+        &self,
+        cx: &telemetry::Cx,
+        frames: &[AudioFrame],
+        language: Option<&LanguageCode>,
+    ) -> Result<SpeechEvent, ProviderError> {
+        super::recognize(self.inner.clone(), self.options, self.clock.clone(), cx, frames, language)
+            .await
+    }
+    async fn stream(
+        &self,
+        cx: &telemetry::Cx,
+        language: Option<&LanguageCode>,
+        offset: Option<f64>,
+    ) -> Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError> {
+        super::stream(self.inner.clone(), self.options, self.clock.clone(), cx, language, offset)
+            .await
+    }
+}
+
+fn retrying(inner: Arc<Flaky>, max_retry: u32) -> Recognition {
     let clock: Arc<dyn Clock> = Arc::new(lk_agents_net::clock::SimClock::new());
-    RetryingStt {
+    Recognition {
         inner,
         options: ApiConnectOptions { max_retry, ..ApiConnectOptions::default() },
         clock,
@@ -225,11 +253,11 @@ impl Stt for Dropping {
     }
 }
 
-fn dropping(uptime_secs: u64, options: ApiConnectOptions) -> (RetryingStt, Arc<dyn Clock>) {
+fn dropping(uptime_secs: u64, options: ApiConnectOptions) -> (Recognition, Arc<dyn Clock>) {
     let clock: Arc<dyn Clock> = Arc::new(lk_agents_net::clock::SimClock::new());
     let uptime = std::time::Duration::from_secs(uptime_secs);
     let inner = Arc::new(Dropping { uptime, clock: Arc::clone(&clock) });
-    (RetryingStt { inner, options, clock: Arc::clone(&clock) }, clock)
+    (Recognition { inner, options, clock: Arc::clone(&clock) }, clock)
 }
 
 // Catches: an idle provider socket closed every ~3 minutes (Cartesia) exhausting the budget
@@ -367,7 +395,7 @@ async fn a_live_sink_refusal_terminates_a_stalled_host_attempt_instead_of_losing
         closed: closed.clone(),
     });
     let clock: Arc<dyn Clock> = Arc::new(lk_agents_net::clock::SimClock::new());
-    let stt = RetryingStt {
+    let stt = Recognition {
         inner: Arc::new(StalledHost(host)),
         options: ApiConnectOptions { max_retry: 0, ..Default::default() },
         clock,
@@ -441,7 +469,7 @@ async fn a_refused_held_frame_terminates_the_reopened_attempt_instead_of_disappe
         closed: closed.clone(),
     });
     let clock: Arc<dyn Clock> = Arc::new(lk_agents_net::clock::SimClock::new());
-    let stt = RetryingStt {
+    let stt = Recognition {
         inner: Arc::new(ReplayRefuses { opened: std::sync::atomic::AtomicUsize::new(0), state }),
         options: ApiConnectOptions { max_retry: 1, ..Default::default() },
         clock,
@@ -568,7 +596,7 @@ async fn a_slow_attempt_gets_a_gap_and_its_later_words_stay_on_call_time() {
         events: Mutex::new(Some(events)),
     };
     let clock: Arc<dyn Clock> = Arc::new(lk_agents_net::clock::SimClock::new());
-    let stt = RetryingStt { inner: Arc::new(slow), options: ApiConnectOptions::default(), clock };
+    let stt = Recognition { inner: Arc::new(slow), options: ApiConnectOptions::default(), clock };
     let (sink, mut source) =
         stt.stream(&lk_agents_abi::telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
     let frame = || AudioFrame::new(vec![0; 3200], 16_000, 1, 1600);

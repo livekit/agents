@@ -128,6 +128,42 @@ fn llm_chain(entries: Vec<Arc<dyn Llm>>) -> FallbackLlm {
     FallbackLlm::new(entries, ChainPolicy::llm_defaults(), clock, spawner, obs).expect("entries")
 }
 
+#[tokio::test(start_paused = true)]
+async fn the_retrying_chat_entry_does_not_retry_a_fallback_chain_twice() {
+    let primary = FakeLlm::new("primary", None);
+    let backup = FakeLlm::new("backup", None);
+    let (_, spawner, observer) = parts();
+    let clock: Arc<dyn lk_agents_abi::Clock> = Arc::new(lk_agents_net::clock::SimClock::new());
+    let policy = ChainPolicy { max_retry_per_backend: 1, ..ChainPolicy::llm_defaults() };
+    let chain = FallbackLlm::new(
+        vec![primary.clone(), backup.clone()],
+        policy,
+        clock.clone(),
+        spawner,
+        observer,
+    )
+    .unwrap();
+    let mut stream = crate::llm::chat(
+        Arc::new(chain),
+        &crate::telemetry::Cx::NONE,
+        &ChatRequest::default(),
+        clock,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(stream.next().await.is_err());
+    // Each backend gets two attempts and their two recovery probes. A replay of the chain
+    // would start another set after these failures.
+    until("the recovery probes to finish", || {
+        primary.seen.lock().len() == 4 && backup.seen.lock().len() == 4
+    })
+    .await;
+    assert_eq!(primary.seen.lock().len(), 4);
+    assert_eq!(backup.seen.lock().len(), 4);
+    stream.close(NO_DEADLINE).await;
+}
+
 // Catches: `sticky` going back to a recovered primary instead of the entry that served
 // (`llm:96-105`), or the default leaving a recovered primary behind.
 #[tokio::test]

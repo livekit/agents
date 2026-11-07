@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::Mutex;
 
 use crate::headers::{Headers, gateway_headers};
-use crate::llm::machine::{LlmRequest, LlmRequestEvent, LlmRequestId, RequestPolicy};
+use crate::llm::machine::{LlmRequest, LlmRequestEvent, LlmRequestId, Policy};
 use crate::llm::request::ChatArgs;
 use crate::llm::{Auth, BodyEncoding, LlmOptions, models};
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -30,7 +30,7 @@ use tokio::sync::mpsc;
 use crate::llm::parse::WireChunk;
 use futures_util::StreamExt;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
-use lk_agents_core::attempts::AttemptFailure;
+use lk_agents_core::request::AttemptFailure;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, error_chain};
 use lk_agents_net::sse::SseDecoder;
@@ -108,7 +108,7 @@ impl GatewayLlm {
         chat_ctx: &ChatContext,
         tools: &[ToolSpec],
         args: ChatArgs,
-        policy: RequestPolicy,
+        policy: Policy,
         identification: Option<&Headers>,
     ) -> Result<LlmChunks, ApiError> {
         let opts = self.options();
@@ -224,7 +224,7 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
             inference_class: None,
         };
         let identification = headers;
-        let policy = RequestPolicy::from_options(&conn_options);
+        let policy = Policy::from_options(&conn_options);
         GatewayLlm::chat(
             self,
             &ChatContext::new(items),
@@ -298,8 +298,7 @@ impl Llm for GatewayLlm {
             req.conn_options
                 .validate()
                 .map_err(|e| ApiError::new(e.to_string()).with_retryable(false))?;
-            let policy =
-                RequestPolicy { max_retry: 0, ..RequestPolicy::from_options(&req.conn_options) };
+            let policy = Policy::from_options(&req.conn_options);
             let args = ChatArgs {
                 extra_kwargs: req.extra.clone(),
                 parallel_tool_calls: req.parallel_tool_calls,
@@ -322,7 +321,7 @@ struct Exchange {
 struct Start {
     id: LlmRequestId,
     llm: ResourceId,
-    policy: RequestPolicy,
+    policy: Policy,
     think_tags: (&'static str, &'static str),
 }
 
