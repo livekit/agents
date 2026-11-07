@@ -414,8 +414,10 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let peer = tokio::spawn(async move {
                 let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = [0; 1024];
-                socket.read(&mut request).await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(socket.read_u8().await.unwrap());
+                }
                 socket.write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 65537\r\nX-LiveKit-Request-Id: test-id\r\nConnection: close\r\n\r\n").await.unwrap();
                 if oversized {
                     socket.write_all(&vec![b'x'; ERROR_BODY_LIMIT + 1]).await.unwrap();

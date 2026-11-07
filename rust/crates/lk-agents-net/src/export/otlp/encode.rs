@@ -284,16 +284,16 @@ impl Body {
     }
 }
 
+/// `message` encoded, gzipped when asked; a body gzip fails on is sent uncompressed.
 pub(crate) fn body(message: &impl prost::Message, gzip: bool) -> Body {
     let bytes = message.encode_to_vec();
-    let bytes = if gzip {
+    if gzip {
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-        // Writing into a `Vec` cannot fail.
-        encoder.write_all(&bytes).and_then(|()| encoder.finish()).expect("gzip into memory")
-    } else {
-        bytes
-    };
-    Body { bytes, gzip }
+        if let Ok(gzipped) = encoder.write_all(&bytes).and_then(|()| encoder.finish()) {
+            return Body { bytes: gzipped, gzip: true };
+        }
+    }
+    Body { bytes, gzip: false }
 }
 
 /// The retained bytes a queued record is charged: its strings and values, plus overhead.
