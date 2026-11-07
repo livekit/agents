@@ -101,3 +101,26 @@ async def test_tee_empty_iterator():
     for peer in tee:
         result = [item async for item in peer]
         assert result == []
+
+
+@pytest.mark.parametrize("started_peers", [0, 1, 2])
+async def test_tee_closes_upstream_once(started_peers):
+    class Source:
+        close_count = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            return 1
+
+        async def aclose(self):
+            self.close_count += 1
+
+    source = Source()
+    tee = Tee(source)
+    for peer in tee[:started_peers]:
+        assert await anext(peer) == 1
+    await tee.aclose()
+    await tee.aclose()
+    assert source.close_count == 1
