@@ -616,7 +616,7 @@ pub enum HandoffStep {
     /// The task ended `how`; `restored` is the parent installed again, without its hooks.
     TaskEnded {
         task: crate::agent_session::machine::activity::voice_task::VoiceTaskId,
-        how: crate::agent_session::machine::activity::voice_task::TaskEnd,
+        how: Result<(), lk_agents_abi::voice::session::VoiceTaskEnded>,
         restored: String,
     },
     /// `VoiceTask.run()` refused before the task started.

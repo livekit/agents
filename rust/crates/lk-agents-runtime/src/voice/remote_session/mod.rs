@@ -60,7 +60,7 @@ pub fn reply<'a>(
                 SessionReply::AgentInfo(port.agent_info(&telemetry::Cx::NONE).await?)
             }
             RequestPlan::RunInput(text) => {
-                SessionReply::RunInput(port.run_input(&telemetry::Cx::NONE, text).await?)
+                SessionReply::RunInput(port.run_input(&telemetry::Cx::NONE, text).await)
             }
             RequestPlan::SessionState => {
                 SessionReply::SessionState(port.session_state(&telemetry::Cx::NONE).await?)
@@ -80,7 +80,7 @@ pub fn reply<'a>(
                 SessionReply::UpdateIo
             }
             RequestPlan::FinalizeSimulation(provisional) => SessionReply::FinalizeSimulation(
-                port.finalize_simulation(&telemetry::Cx::NONE, provisional).await?,
+                port.finalize_simulation(&telemetry::Cx::NONE, provisional).await,
             ),
         };
         Ok(Some(answer))

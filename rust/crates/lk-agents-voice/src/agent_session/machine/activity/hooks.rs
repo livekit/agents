@@ -181,7 +181,7 @@ impl VoiceDriver {
             HookOutcome::Failed | HookOutcome::Raised(_) => HookEnd::Failed,
             HookOutcome::Turn(edits) => HookEnd::Returned { edits: edits.len() },
             HookOutcome::Returned
-            | HookOutcome::Filler { .. }
+            | HookOutcome::Filler(_)
             | HookOutcome::FunctionToolsExecuted { .. } => HookEnd::Returned { edits: 0 },
         };
         self.accept_hook_completion(now, id, how, outcome);
@@ -301,7 +301,7 @@ impl VoiceDriver {
                 HookKind::OnExit | HookKind::OnEnter | HookKind::OnUserTurnExceeded,
                 Returned | Failed
             ) | (HookKind::OnUserTurnCompleted, Turn(_) | Returned | Failed)
-                | (HookKind::FillerSource, Filler { .. } | Returned | Failed)
+                | (HookKind::FillerSource, Filler(_) | Returned | Failed)
                 | (
                     HookKind::FunctionToolsExecuted,
                     FunctionToolsExecuted { .. } | Returned | Failed
@@ -337,11 +337,9 @@ impl VoiceDriver {
                 let edits = match outcome {
                     Turn(edits) => edits,
                     Failed if fits => vec![TurnEdit::StopResponse],
-                    Failed
-                    | Returned
-                    | Filler { .. }
-                    | FunctionToolsExecuted { .. }
-                    | Raised(_) => Vec::new(),
+                    Failed | Returned | Filler(_) | FunctionToolsExecuted { .. } | Raised(_) => {
+                        Vec::new()
+                    }
                 };
                 // Matched to its parked turn; a late answer is dropped.
                 if let Some(pending) = self.activity.pending_turn.take_if(|p| p.hook == Some(id)) {
@@ -356,9 +354,11 @@ impl VoiceDriver {
             // raised or its bound passed.
             HookKind::FillerSource => {
                 let answered = match outcome {
-                    Filler { text, spoke } => Some((text, spoke)),
+                    Filler(reply) => Some(reply),
                     Failed | Raised(_) => None,
-                    Returned | Turn(_) | FunctionToolsExecuted { .. } => Some((None, false)),
+                    Returned | Turn(_) | FunctionToolsExecuted { .. } => {
+                        Some(lk_agents_abi::voice::session_effects::FillerReply::Declined)
+                    }
                 };
                 self.on_filler_source(now, id, answered)
             }
@@ -366,7 +366,7 @@ impl VoiceDriver {
             HookKind::FunctionToolsExecuted => {
                 let left = match outcome {
                     FunctionToolsExecuted { reply_required } => Some(reply_required),
-                    Failed | Raised(_) | Returned | Turn(_) | Filler { .. } => None,
+                    Failed | Raised(_) | Returned | Turn(_) | Filler(_) => None,
                 };
                 self.on_tools_executed_handled(id, left)
             }

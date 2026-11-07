@@ -12,7 +12,7 @@ use std::task::{Context, Poll, Waker};
 use lk_agents_abi::voice::rtc::{self, ConnectionState, DisconnectReason, RtcRoom};
 use lk_agents_abi::voice::session::{VoiceSession as _, VoiceTaskEnded};
 use lk_agents_abi::voice::session_options::{TurnHandlingKwargs, UpdateKwargs};
-use lk_agents_voice::agent_session::{Command, CommitSuperseded, DrainRefused, IvrCommand};
+use lk_agents_voice::agent_session::{Command, DrainRefused, IvrCommand};
 
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
 use lk_agents_voice::workflows::machine::dtmf::{DtmfOutcome, GetDtmfResult};
@@ -356,7 +356,9 @@ impl Run {
                 HookOutcome::Turn(vec![TurnEdit::UpdateInstructions(text)])
             }
             HookAnswer::TurnStop => HookOutcome::Turn(vec![TurnEdit::StopResponse]),
-            HookAnswer::Filler => HookOutcome::Filler { text: Some(text), spoke: false },
+            HookAnswer::Filler => {
+                HookOutcome::Filler(lk_agents_abi::voice::session_effects::FillerReply::Text(text))
+            }
         };
         self.api.send(Command::HookDone { id, outcome }).is_ok()
     }

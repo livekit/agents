@@ -52,7 +52,7 @@ impl Rule for ApiCallsReturn {
                         began_closing.is_some_and(|began| call.called_at() > began);
                     (speaks && after_closing_began).then_some(()).ok_or("its future was dropped")
                 }
-                Some((_, Answer::CommitSuperseded)) => r
+                Some((_, Answer::Commit(Err(_)))) => r
                     .internal_view()
                     .commit_superseded_after(call.called_at())
                     .then_some(())
@@ -87,7 +87,7 @@ fn returned() -> Recording {
 fn refused_after_closing_began() -> Recording {
     Authored::new()
         .api_call(Input::Drain { wait: true })
-        .returns(Answer::DrainOk)
+        .returns(Answer::Drain(Ok(())))
         .api_call(say())
         .returns(Answer::Lost)
         .driver_finished()
@@ -108,8 +108,8 @@ fn commit_superseded() -> Recording {
         .api_call(commit())
         .api_call(commit())
         .journal(Step::Turn(TurnStep::CommitSuperseded))
-        .result(0, Answer::CommitSuperseded)
-        .returns(Answer::Committed("hello".into()))
+        .result(0, Answer::Commit(Err(lk_agents_abi::voice::session::CommitSuperseded)))
+        .returns(Answer::Commit(Ok("hello".into())))
         .driver_finished()
         .done()
 }
@@ -121,7 +121,11 @@ fn dropped_before_closing_began() -> Recording {
 
 /// A `commit_user_turn` answered superseded with no newer commit.
 fn superseded_by_nothing() -> Recording {
-    Authored::new().api_call(commit()).returns(Answer::CommitSuperseded).driver_finished().done()
+    Authored::new()
+        .api_call(commit())
+        .returns(Answer::Commit(Err(lk_agents_abi::voice::session::CommitSuperseded)))
+        .driver_finished()
+        .done()
 }
 
 /// The driver exited and the `say` never got a result.

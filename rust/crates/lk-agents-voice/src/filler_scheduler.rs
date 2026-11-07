@@ -28,16 +28,6 @@ pub enum FillerError {
     NegativeInterval,
 }
 
-impl FillerError {
-    /// The reference's messages, verbatim -- they are what a user sees from `with_filler`.
-    pub fn message(self) -> &'static str {
-        match self {
-            FillerError::NegativeDelay => "delay must be non-negative",
-            FillerError::NegativeInterval => "interval must be non-negative when set",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     WaitingForIdle,

@@ -15,7 +15,7 @@ use lk_agents_abi::voice::rtc::{
 use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, Ts};
 use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::avatar::machine::output::{
-    AfterClear, Finish, OutputState, Reply, after_clear, check_caller, report_routes,
+    AfterClear, Finish, OutputState, Reject, after_clear, check_caller, report_routes,
     unacknowledged_clear,
 };
 use lk_agents_voice::avatar::machine::queue::Queue;
@@ -193,18 +193,18 @@ impl Inner {
             let target = Arc::downgrade(self);
             let key = segment.key;
             let handler = RpcHandler::new(move |caller, payload| {
-                let Some(inner) = target.upgrade() else { return Reply::Retired.wire() };
+                let Some(inner) = target.upgrade() else { return Reject::Retired.wire() };
                 if let Err(reply) = check_caller(caller, &inner.destination) {
                     return reply.wire();
                 }
                 let reply = if base == RPC_PLAYBACK_FINISHED {
                     inner.on_playback_finished(key, payload)
                 } else if continued || inner.tracker.playback_started(key, inner.clock.now()) {
-                    Reply::Ok
+                    Ok(())
                 } else {
-                    Reply::Stale
+                    Err(Reject::Stale)
                 };
-                reply.wire()
+                reply.map_or_else(Reject::wire, |()| "ok".into())
             });
             self.room.local().register_rpc_method(method.clone(), handler)?;
             let retained = self.segment.lock().core.contains(segment.key);
@@ -217,18 +217,22 @@ impl Inner {
         Ok(continued)
     }
 
-    fn on_playback_finished(&self, key: PlaybackSegment, payload: &str) -> Reply {
+    fn on_playback_finished(
+        &self,
+        key: PlaybackSegment,
+        payload: &str,
+    ) -> std::result::Result<(), Reject> {
         let finish = self.segment.lock().core.report_finished(key, payload);
         let event = match finish {
-            Err(reply) => return reply,
+            Err(reply) => return Err(reply),
             Ok(Finish::Continue { route }) => {
                 self.reopen_segment(key, route);
-                return Reply::Ok;
+                return Ok(());
             }
             Ok(Finish::Done(event)) => event,
         };
         if !self.tracker.playback_finished(key, event) {
-            return Reply::Stale;
+            return Err(Reject::Stale);
         }
         let timer = {
             let mut timer = self.clear_timer.lock();
@@ -242,7 +246,7 @@ impl Inner {
             self.tasks.cancel(timer);
         }
         self.retire_segment(key);
-        Reply::Ok
+        Ok(())
     }
 
     fn retire_segment(&self, key: PlaybackSegment) {

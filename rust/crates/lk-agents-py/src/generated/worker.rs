@@ -2109,10 +2109,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
         ::std::result::Result<
-            (
-                ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>,
-                ::std::option::Option<::std::string::String>,
-            ),
+            ::std::vec::Vec<::lk_agents_abi::ChatItem>,
             ::lk_agents_abi::errors::HostError,
         >,
     > {
@@ -2144,7 +2141,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "SessionPort._core_run_input"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((if item_0.is_none() { Ok(None) } else { (item_0.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(item.as_any()) }).collect::<PyResult<Vec<_>>>())).map(Some) })?, (if item_1.is_none() { Ok(None) } else { (item_1.extract::<::std::string::String>()).map(Some) })?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(item.as_any()) }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -2338,14 +2335,11 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
     fn finalize_simulation(
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,
-        provisional: (bool, ::std::string::String),
+        provisional: ::lk_agents_abi::worker::SimulationVerdict,
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
-            (
-                ::std::option::Option<(bool, ::std::string::String)>,
-                ::std::option::Option<::std::string::String>,
-            ),
+            ::std::option::Option<::lk_agents_abi::worker::SimulationVerdict>,
             ::lk_agents_abi::errors::HostError,
         >,
     > {
@@ -2359,7 +2353,10 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [::pyo3::IntoPyObjectExt::into_bound_py_any(provisional_arg, py)?];
+                    [crate::generated::records::simulation::simulation_verdict_to_py(
+                        py,
+                        provisional_arg,
+                    )?];
                 Ok((
                     host.bind(py).getattr("_core_finalize_simulation")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
@@ -2377,7 +2374,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "SessionPort._core_finalize_simulation"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((if item_0.is_none() { Ok(None) } else { ((|| -> ::pyo3::PyResult<_> { let tuple = item_0.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "SessionPort._core_finalize_simulation"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((item_0.extract::<bool>())?, (item_1.extract::<::std::string::String>())?,)) })()).map(Some) })?, (if item_1.is_none() { Ok(None) } else { (item_1.extract::<::std::string::String>()).map(Some) })?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::simulation::simulation_verdict_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

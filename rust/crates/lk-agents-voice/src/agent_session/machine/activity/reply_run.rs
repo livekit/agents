@@ -7,9 +7,8 @@ use crate::agent::Source;
 use crate::agent_session::effects::VoiceEffect;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{Answer, RequestId, VoiceDriver};
-use crate::events::SessionEvent;
+use crate::events::{RunFailure, RunOutcome as VoiceRunOutcome, SessionEvent};
 use crate::generation::{PlanSpec, PlannedReply};
-use crate::run_result::RunOutput;
 use crate::tool_executor::{
     APPROVAL_KEY, AgentFrame, CallId, HostedTool, NextReply, Rendering, StepEnd, StepNext, ToolGo,
     Toolset,
@@ -75,29 +74,34 @@ impl std::fmt::Debug for ReplyRun {
 impl ReplyRun {
     /// The finished run's output, taken from the values the agent accepted, and whether the
     /// person cut it.
-    fn take_output(&mut self, result: Result<RunResult, RunError>) -> (Option<RunOutput>, bool) {
+    fn take_output(
+        &mut self,
+        result: Result<RunResult, RunError>,
+    ) -> (Option<VoiceRunOutcome>, bool) {
         let RunResult { outcome, interrupted, .. } = match result {
             Ok(result) => result,
             Err(
                 error @ (RunError::ToolRetriesExceeded { .. }
                 | RunError::OutputRetriesExceeded { .. }
                 | RunError::Host(_)),
-            ) => return (Some(RunOutput::Failed(error)), false),
+            ) => return (Some(VoiceRunOutcome::Failed(RunFailure::Run(error))), false),
             // The session reports a model's failure on the speech; a cancelled run is the
             // person's cut.
             Err(_) => return (None, false),
         };
         let output = match outcome {
-            RunOutcome::Completed { output: Output::Validated(v) } => {
-                self.accepted.remove(&v).map(RunOutput::Value)
-            }
+            RunOutcome::Completed { output: Output::Validated(v) } => self
+                .accepted
+                .remove(&v)
+                .map(|v| VoiceRunOutcome::Completed { final_output: Some(v) }),
             // A validated text: the agent's accepted value, the last validation's.
-            RunOutcome::Completed { output: Output::Text(_) } => {
-                self.accepted.pop_last().map(|(_, v)| RunOutput::Value(v))
-            }
+            RunOutcome::Completed { output: Output::Text(_) } => self
+                .accepted
+                .pop_last()
+                .map(|(_, v)| VoiceRunOutcome::Completed { final_output: Some(v) }),
             RunOutcome::NoOutput => None,
             RunOutcome::InputRequired { question, verbatim, answer_tool } => {
-                Some(RunOutput::Ask { question, verbatim, answer_tool })
+                Some(VoiceRunOutcome::InputRequired { question, verbatim, answer_tool })
             }
         };
         (output, interrupted)
@@ -626,11 +630,7 @@ impl VoiceDriver {
             self.answer(Some(go), Answer::ToolGo(ToolGo::Gone));
         }
         match output {
-            Some(RunOutput::Failed(error)) => self.run_failed(speech, error),
-            // A question a tool asked was delivered with its output: it stays the run's.
-            Some(output @ RunOutput::Ask { .. }) => {
-                self.session.runs.outputs.insert(speech, output);
-            }
+            Some(VoiceRunOutcome::Failed(RunFailure::Run(error))) => self.run_failed(speech, error),
             Some(output) => {
                 self.session.runs.outputs.insert(speech, output);
             }

@@ -174,9 +174,7 @@ impl Run {
             Input::Interrupt { force, wait } => {
                 let reply = api.interrupt(*force).ok()?;
                 Some(if *wait {
-                    Pending::answer(AnswerWait::reply(reply, |r| {
-                        r.map_or(Answer::InterruptRefused, |()| Answer::InterruptOk)
-                    }))
+                    Pending::answer(AnswerWait::reply(reply, Answer::Interrupt))
                 } else {
                     Pending::default()
                 })
@@ -200,9 +198,7 @@ impl Run {
                 let reply = api
                     .commit_user_turn(secs(*transcript_timeout), secs(*stt_flush), *skip_reply)
                     .ok()?;
-                return Some(Pending::answer(AnswerWait::reply(reply, |r| {
-                    r.map_or_else(|CommitSuperseded| Answer::CommitSuperseded, Answer::Committed)
-                })));
+                return Some(Pending::answer(AnswerWait::reply(reply, Answer::Commit)));
             }
             Input::WaitForIdle { hold } => {
                 let hold = match hold {
@@ -210,15 +206,11 @@ impl Run {
                     None => None,
                 };
                 let reply = api.wait_for_idle(hold).ok()?;
-                return Some(Pending::answer(AnswerWait::reply(reply, |r| {
-                    r.map_or_else(Answer::IdleRefused, |()| Answer::IdleOk)
-                })));
+                return Some(Pending::answer(AnswerWait::reply(reply, Answer::Idle)));
             }
             Input::WaitForIdleAndHold {} => {
                 let reply = api.wait_for_idle_and_hold(None).ok()?;
-                return Some(Pending::answer(AnswerWait::reply(reply, |r| {
-                    r.map_or_else(Answer::IdleRefused, Answer::Hold)
-                })));
+                return Some(Pending::answer(AnswerWait::reply(reply, Answer::Hold)));
             }
             Input::ReleaseIdleHold { hold } => {
                 api.release_idle_hold(self.hold_id(*hold)?.0);
@@ -345,7 +337,7 @@ impl Run {
                     });
                 return Some(Pending::answer(AnswerWait::reply(
                     api.update_agent(args).ok()?,
-                    |ok| if ok { Answer::HandoffOk } else { Answer::HandoffRefused },
+                    |ok| Answer::Handoff(ok.then_some(()).ok_or(())),
                 )));
             }
             Input::UpdateInstructions { text: AgentText(text) } => {
@@ -540,11 +532,11 @@ impl Run {
                 let reply = self.api.drain().ok()?;
                 Some(if *wait {
                     Pending::answer(AnswerWait::reply(reply, |refused| match refused.as_deref() {
-                        None => Answer::DrainOk,
+                        None => Answer::Drain(Ok(())),
                         Some(r) if r == DrainRefused::ActivityChanging.as_str() => {
-                            Answer::DrainRefused(DrainRefused::ActivityChanging)
+                            Answer::Drain(Err(DrainRefused::ActivityChanging))
                         }
-                        Some(_) => Answer::DrainRefused(DrainRefused::Closing),
+                        Some(_) => Answer::Drain(Err(DrainRefused::Closing)),
                     }))
                 } else {
                     Pending::default()

@@ -24,17 +24,6 @@ pub struct RunSpec {
     pub host: Option<HostRef>,
 }
 
-/// What a speech's reply settled on, for the run ending on the speech.
-#[derive(Debug, Clone, PartialEq)]
-pub enum RunOutput {
-    /// The output the reply's agent accepted.
-    Value(HostRef),
-    /// The reply ended on a framework outcome (retries spent, a validator failed).
-    Failed(RunError),
-    /// A tool asked the person (`InputRequired`).
-    Ask { question: String, verbatim: bool, answer_tool: Option<String> },
-}
-
 struct OpenRun {
     run: RunRef,
     participated: bool,
@@ -61,7 +50,7 @@ pub(super) struct Runs {
     open: Option<OpenRun>,
     next: u64,
     /// accepted output's value by the speech whose tool called it, until that speech ends.
-    pub(crate) outputs: BTreeMap<SpeechId, RunOutput>,
+    pub(crate) outputs: BTreeMap<SpeechId, RunOutcome>,
 }
 
 impl Runs {
@@ -137,12 +126,7 @@ impl Runs {
         let outcome = match (failed, output) {
             // `__last_speech_handle._error` (`run_result.RunResult._mark_done`).
             (true, _) => RunOutcome::Failed(RunFailure::Speech),
-            // `isinstance(final_output, BaseException)` (`.resolve_expressive_options`).
-            (false, Some(RunOutput::Failed(e))) => RunOutcome::Failed(RunFailure::Run(e)),
-            (false, Some(RunOutput::Value(v))) => RunOutcome::Completed { final_output: Some(v) },
-            (false, Some(RunOutput::Ask { question, verbatim, answer_tool })) => {
-                RunOutcome::InputRequired { question, verbatim, answer_tool }
-            }
+            (false, Some(outcome)) => outcome,
             (false, None) => RunOutcome::Completed { final_output: None },
         };
         let run = r.run.clone();
@@ -214,7 +198,7 @@ impl VoiceDriver {
                 .with("speech_id", speech.0.to_string());
             self.publish_event(SessionEvent::Diagnostic(d));
         }
-        self.session.runs.outputs.insert(speech, RunOutput::Failed(error));
+        self.session.runs.outputs.insert(speech, RunOutcome::Failed(RunFailure::Run(error)));
     }
 
     /// The run an item belongs to: the open run for its own speeches and the handoff record. The
@@ -311,7 +295,11 @@ mod tests {
         let last = SpeechId(2);
         runs.outputs.insert(
             first,
-            RunOutput::Ask { question: "old?".into(), verbatim: true, answer_tool: None },
+            RunOutcome::InputRequired {
+                question: "old?".into(),
+                verbatim: true,
+                answer_tool: None,
+            },
         );
         runs.speech_ended(first, false);
         assert!(runs.outputs.contains_key(&first));
@@ -326,7 +314,7 @@ mod tests {
     #[test]
     fn close_releases_all_result_references_and_settles_once() {
         let mut runs = capture();
-        runs.outputs.insert(SpeechId(1), RunOutput::Failed(RunError::Cancelled));
+        runs.outputs.insert(SpeechId(1), RunOutcome::Failed(RunFailure::Run(RunError::Cancelled)));
         assert!(runs.close().is_some());
         assert!(runs.outputs.is_empty());
         assert!(runs.close().is_none());
@@ -339,7 +327,7 @@ mod tests {
         let speech = SpeechId(7);
         runs.outputs.insert(
             speech,
-            RunOutput::Ask {
+            RunOutcome::InputRequired {
                 question: "ignored by speech error?".into(),
                 verbatim: true,
                 answer_tool: None,
@@ -485,11 +473,19 @@ mod tests {
         );
         driver.session.runs.outputs.insert(
             host,
-            RunOutput::Ask { question: "owned?".into(), verbatim: true, answer_tool: None },
+            RunOutcome::InputRequired {
+                question: "owned?".into(),
+                verbatim: true,
+                answer_tool: None,
+            },
         );
         driver.session.runs.outputs.insert(
             unrelated,
-            RunOutput::Ask { question: "unrelated?".into(), verbatim: true, answer_tool: None },
+            RunOutcome::InputRequired {
+                question: "unrelated?".into(),
+                verbatim: true,
+                answer_tool: None,
+            },
         );
         driver.release_speech(Ts::ZERO, host);
         driver.run_check();

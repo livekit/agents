@@ -90,18 +90,6 @@ pub enum VoiceTaskCommand {
 
 pub use lk_agents_abi::voice::session::VoiceTaskEnded;
 
-/// How a task ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskEnd {
-    /// A tool of the task's agent returned a validated `Completed(value)`.
-    Completed,
-    /// A tool of the task's agent returned `Failed(reason)`.
-    Failed,
-    /// Its awaiter went away, its awaiting speech ended, or the task that started it ended.
-    Cancelled,
-    Closing,
-}
-
 /// The tasks running, innermost last.
 #[derive(Default)]
 pub(crate) struct VoiceTasks {
@@ -143,7 +131,7 @@ impl VoiceDriver {
             VoiceTaskCommand::Cancel { call } => {
                 let tasks = &self.activity.voice_tasks.stack;
                 if let Some(i) = tasks.iter().position(|t| t.call == call) {
-                    self.end_voice_tasks(now, i, TaskEnd::Cancelled, None);
+                    self.end_voice_tasks(now, i, None, Err(VoiceTaskEnded::Cancelled));
                 }
             }
         }
@@ -270,8 +258,12 @@ impl VoiceDriver {
         let Some(agent) = self.activity.speech_agent(speech) else { return };
         let tasks = &self.activity.voice_tasks.stack;
         if let Some(i) = tasks.iter().rposition(|t| t.agent == agent) {
-            let how = if end.is_ok() { TaskEnd::Completed } else { TaskEnd::Failed };
-            self.end_voice_tasks(now, i, how, Some((Some(speech), end.map(VoiceTaskValue::Value))));
+            self.end_voice_tasks(
+                now,
+                i,
+                Some(speech),
+                end.map(VoiceTaskValue::Value).map_err(VoiceTaskEnded::Failed),
+            );
         }
     }
 
@@ -279,51 +271,45 @@ impl VoiceDriver {
     pub(crate) fn voice_task_speech_released(&mut self, now: Ts, speech: SpeechId) {
         let tasks = &self.activity.voice_tasks.stack;
         if let Some(i) = tasks.iter().position(|t| t.awaiting == speech) {
-            self.end_voice_tasks(now, i, TaskEnd::Cancelled, None);
+            self.end_voice_tasks(now, i, None, Err(VoiceTaskEnded::Cancelled));
         }
     }
 
     /// The close ends every task before its `on_exit`: the agent it exits is the root one.
     pub(crate) fn close_voice_tasks(&mut self, now: Ts) {
         if self.activity.voice_tasks.running() {
-            self.end_voice_tasks(now, 0, TaskEnd::Closing, None);
+            self.end_voice_tasks(now, 0, None, Err(VoiceTaskEnded::Closing));
         }
     }
 
     /// Tasks `from..` end, innermost first: each one's speeches stop, its parent is installed
-    /// again (no hooks), and its awaiter is answered. `how` is the last one's; a task ended with
-    /// it is cancelled, unless the session closes. `ended` is the speech that completed or failed
-    /// the last one, which ends on its own, and its value or reason.
+    /// again (no hooks), and its awaiter is answered. A task ended with the last one is cancelled,
+    /// unless the session closes. `speech` is the speech that completed or failed the last one.
     fn end_voice_tasks(
         &mut self,
         now: Ts,
         from: usize,
-        how: TaskEnd,
-        ended: Option<(Option<SpeechId>, Result<VoiceTaskValue, String>)>,
+        speech: Option<SpeechId>,
+        end: Result<VoiceTaskValue, VoiceTaskEnded>,
     ) {
-        let (speech, mut end) = ended.map_or((None, None), |(s, e)| (s, Some(e)));
+        let closing = matches!(end, Err(VoiceTaskEnded::Closing));
+        let mut end = Some(end);
         while self.activity.voice_tasks.stack.len() > from {
             let task = self.activity.voice_tasks.stack.pop().expect("stack longer than from");
             if task.dtmf {
                 self.dtmf_step(crate::workflows::machine::dtmf::DtmfTaskEvent::Stop);
             }
             let last = self.activity.voice_tasks.stack.len() == from;
-            let how = match how {
-                TaskEnd::Completed | TaskEnd::Failed if !last => TaskEnd::Cancelled,
-                other => other,
-            };
-            let answer = match how {
-                TaskEnd::Completed | TaskEnd::Failed => match end.take() {
-                    Some(Ok(value)) => Ok(value),
-                    Some(Err(reason)) => Err(VoiceTaskEnded::Failed(reason)),
-                    None => Err(VoiceTaskEnded::Cancelled),
-                },
-                TaskEnd::Cancelled => Err(VoiceTaskEnded::Cancelled),
-                TaskEnd::Closing => Err(VoiceTaskEnded::Closing),
+            let answer = if last {
+                end.take().expect("last task consumes its result once")
+            } else if closing {
+                Err(VoiceTaskEnded::Closing)
+            } else {
+                Err(VoiceTaskEnded::Cancelled)
             };
             self.record_trace(HandoffStep::TaskEnded {
                 task: task.id,
-                how,
+                how: answer.as_ref().map(|_| ()).map_err(Clone::clone),
                 restored: task.parent.agent.clone(),
             });
             self.cut_speeches_of(now, &task.agent, speech);
@@ -343,13 +329,11 @@ impl VoiceDriver {
         let Some(index) = self.activity.voice_tasks.stack.iter().rposition(|task| task.dtmf) else {
             return;
         };
-        let (how, result) = match outcome {
-            DtmfOutcome::Complete(result) => {
-                (TaskEnd::Completed, Ok(VoiceTaskValue::Digits(result.user_input)))
-            }
-            DtmfOutcome::Incomplete { message } => (TaskEnd::Failed, Err(message)),
+        let result = match outcome {
+            DtmfOutcome::Complete(result) => Ok(VoiceTaskValue::Digits(result.user_input)),
+            DtmfOutcome::Incomplete { message } => Err(VoiceTaskEnded::Failed(message)),
             DtmfOutcome::Stopped => return,
         };
-        self.end_voice_tasks(now, index, how, Some((None, result)));
+        self.end_voice_tasks(now, index, None, result);
     }
 }

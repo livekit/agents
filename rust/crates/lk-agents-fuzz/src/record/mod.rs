@@ -535,19 +535,12 @@ pub struct AvatarFrameLabel {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Answer {
     Speech(u64),
-    InterruptOk,
-    /// `NotInterruptible`: the host learns that it was refused, not why.
-    InterruptRefused,
-    IdleOk,
-    IdleRefused(IdleRefused),
-    Hold(u64),
-    Committed(String),
-    CommitSuperseded,
-    HandoffOk,
-    /// `update_agent` answered `False`.
-    HandoffRefused,
-    DrainOk,
-    DrainRefused(lk_agents_voice::agent_session::DrainRefused),
+    Interrupt(Result<(), lk_agents_abi::voice::session::NotInterruptible>),
+    Idle(Result<(), IdleRefused>),
+    Hold(Result<u64, IdleRefused>),
+    Commit(Result<String, lk_agents_abi::voice::session::CommitSuperseded>),
+    Handoff(Result<(), ()>),
+    Drain(Result<(), lk_agents_voice::agent_session::DrainRefused>),
     /// What a driver-run DTMF collection answered its `Start` with.
     Dtmf(lk_agents_voice::workflows::machine::dtmf::DtmfOutcome),
     /// What `VoiceTask.run()` returned: its value's host object, or why it has none.

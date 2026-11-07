@@ -85,7 +85,7 @@ async fn host_waits_on_a_speech_never_created_raise_why() {
     assert_eq!(HostSpeech::wait_for_playout(&detached, None).await, Ok(()));
     assert_eq!(
         HostSpeech::wait_until_created(&detached).await,
-        Err(refused(CreationError::Consumed))
+        Err(refused(SpeechRefused::Detached))
     );
     assert_eq!(HostSpeech::hold_interruptions(&detached), Err(refused(SpeechRefused::Detached)));
     assert_eq!(HostSpeech::release_interruptions(&detached), Err(refused(SpeechRefused::Detached)));
@@ -109,10 +109,10 @@ async fn host_waits_on_a_speech_never_created_raise_why() {
     HostSpeech::interrupt(&*lost, false).unwrap();
     assert!(HostSpeech::interrupted(&*lost));
     lost.answered(false);
-    assert_eq!(HostSpeech::wait_for_interrupted(&*lost).await, Err(refused(CreationError::Ended)));
+    assert_eq!(HostSpeech::wait_for_interrupted(&*lost).await, Err(refused(SpeechRefused::Ended)));
     assert_eq!(
         HostSpeech::wait_for_generation(&*lost, None).await,
-        Err(refused(CreationError::Ended))
+        Err(refused(SpeechRefused::Ended))
     );
 }
 

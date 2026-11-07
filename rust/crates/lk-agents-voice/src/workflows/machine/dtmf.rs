@@ -143,12 +143,11 @@ pub enum DtmfAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DtmfReply {
-    /// `self.complete(ToolError(message))`: the timeout fired before `num_digits` arrived.
-    Incomplete(String),
-    /// `self.complete(GetDtmfResult(...))`.
-    Complete(GetDtmfResult),
+    Finished(DtmfOutcome),
     /// `generate_reply(user_input=...)`, then [`DtmfCollector::finish_reply`].
-    Confirm { user_input: String },
+    Confirm {
+        user_input: String,
+    },
 }
 
 /// What a driver-run collection came to. `Complete` completes with the result, `Incomplete` with a
@@ -247,18 +246,20 @@ impl DtmfCollector {
 
         // if input not fully received (i.e. timeout), return None
         if self.inputs.len() != self.num_digits {
-            return DtmfReply::Incomplete(render(
-                NOT_FULLY_RECEIVED,
-                &[
-                    ("expected", &self.num_digits.to_string()),
-                    ("got", &self.inputs.len().to_string()),
-                ],
-            ));
+            return DtmfReply::Finished(DtmfOutcome::Incomplete {
+                message: render(
+                    NOT_FULLY_RECEIVED,
+                    &[
+                        ("expected", &self.num_digits.to_string()),
+                        ("got", &self.inputs.len().to_string()),
+                    ],
+                ),
+            });
         }
 
         // if not asking for confirmation, return the DTMF inputs
         if !self.ask_for_confirmation {
-            return DtmfReply::Complete(dtmf_result(&self.inputs));
+            return DtmfReply::Finished(DtmfOutcome::Complete(dtmf_result(&self.inputs)));
         }
 
         DtmfReply::Confirm {
@@ -428,8 +429,7 @@ impl Dtmf {
         let Some(dtmf) = &mut self.running else { return };
         out.push(DtmfTaskOutcome::Interrupt);
         let outcome = match dtmf.collector.generate_reply() {
-            DtmfReply::Incomplete(message) => DtmfOutcome::Incomplete { message },
-            DtmfReply::Complete(result) => DtmfOutcome::Complete(result),
+            DtmfReply::Finished(outcome) => outcome,
             DtmfReply::Confirm { user_input } => {
                 return out.push(DtmfTaskOutcome::ReadBack(user_input));
             }
@@ -664,7 +664,9 @@ mod tests {
         let mut c = collector(3, 1.0);
         c.on_sip_dtmf("1", now);
         c.on_sip_dtmf("2", now);
-        let DtmfReply::Incomplete(e) = c.generate_reply() else { panic!("expected an error") };
+        let DtmfReply::Finished(DtmfOutcome::Incomplete { message: e }) = c.generate_reply() else {
+            panic!("expected an error")
+        };
         assert!(e.contains('3') && e.contains('2'), "got {e:?}");
         assert!(c.reply_running(), "and the guard is held until finish_reply");
         c.finish_reply();

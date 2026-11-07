@@ -14355,6 +14355,52 @@ pub mod session_wire {
     }
 }
 
+pub mod simulation {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/mod.rs.
+    static SIMULATION_VERDICT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn simulation_verdict_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::worker::SimulationVerdict> {
+        let py = obj.py();
+        if !obj.is_instance(SIMULATION_VERDICT.import(
+            py,
+            "livekit.agents._generated.simulation",
+            "SimulationVerdict",
+        )?)? {
+            return Err(super::not_a(obj, "SimulationVerdict"));
+        }
+        Ok(::lk_agents_abi::worker::SimulationVerdict {
+            success: crate::py_values::attr_with(obj, "SimulationVerdict", "success", |v| {
+                v.extract::<bool>()
+            })?,
+            reason: crate::py_values::attr_with(obj, "SimulationVerdict", "reason", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+        })
+    }
+
+    pub fn simulation_verdict_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::worker::SimulationVerdict,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::worker::SimulationVerdict { success, reason } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("success", ::pyo3::IntoPyObjectExt::into_bound_py_any(success, py)?)?;
+        kwargs.set_item("reason", ::pyo3::IntoPyObjectExt::into_bound_py_any(reason, py)?)?;
+        crate::py_calls::call(
+            SIMULATION_VERDICT
+                .import(py, "livekit.agents._generated.simulation", "SimulationVerdict")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+}
+
 pub mod storage_class {
     use pyo3::prelude::*;
 

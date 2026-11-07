@@ -55,6 +55,7 @@ from .room_io import Room as _RtcRoom, RoomOptions
 if TYPE_CHECKING:
     from .._core import VoiceAgent as _NativeAgent
     from .._generated.session_options import SessionLegs
+    from ..evals import SimulationVerdict
     from ..storage import Thread
     from .agent_session import VoiceSession
     from .io import EndpointingOptions, TurnDetectionMode
@@ -562,13 +563,10 @@ class RemoteSessionAccess:
         tools = list(llm.ToolContext(agent.tools).function_tools)
         return agent.name, agent._config.instructions, tools, self.session.history.items
 
-    async def _core_run_input(self, text: str) -> tuple[list[llm.ChatItem] | None, str | None]:
-        try:
-            await self.session.interrupt(force=True)
-            result = await self.session._run(user_input=text)
-        except Exception as e:
-            return None, str(e)
-        return result.new_messages(), None
+    async def _core_run_input(self, text: str) -> list[llm.ChatItem]:
+        await self.session.interrupt(force=True)
+        result = await self.session._run(user_input=text)
+        return result.new_messages()
 
     async def _core_session_state(self) -> tuple[str, str, str, dict[str, str], float | None]:
         options = self.session.options
@@ -603,25 +601,14 @@ class RemoteSessionAccess:
             self.session.output.set_transcription_enabled(transcription)
 
     async def _core_finalize_simulation(
-        self, provisional: tuple[bool, str]
-    ) -> tuple[tuple[bool, str] | None, str | None]:
-
-        from ..evals import SimulationVerdict
-
+        self, provisional: SimulationVerdict
+    ) -> SimulationVerdict | None:
         job_ctx = get_job_context(required=False)
         sim_ctx = job_ctx.simulation_context if job_ctx is not None else None
         if job_ctx is None or sim_ctx is None:
-            return None, None
-        try:
-            success, reason = provisional
-            sim_ctx._begin_finalize(
-                simulator_verdict=SimulationVerdict(success=success, reason=reason),
-            )
-            if (fnc := job_ctx._simulation_end_fnc) is not None:
-                if asyncio.iscoroutine(out := fnc(sim_ctx)):
-                    await out
-        except Exception as e:
-            logger.exception("error while executing the on_simulation_end callback")
-            return None, str(e)
-        verdict = sim_ctx.user_verdict
-        return ((verdict.success, verdict.reason) if verdict else None), None
+            return None
+        sim_ctx._begin_finalize(simulator_verdict=provisional)
+        if (fnc := job_ctx._simulation_end_fnc) is not None:
+            if asyncio.iscoroutine(out := fnc(sim_ctx)):
+                await out
+        return sim_ctx.user_verdict

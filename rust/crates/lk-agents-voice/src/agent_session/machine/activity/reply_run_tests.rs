@@ -207,7 +207,7 @@ fn shared_run_cleanup_deadline_wakes_voice_without_a_domain_timer() {
     assert!(matches!(driver.activity.tools.replies[&speech].next, Some(StepNext::Done)));
     assert_eq!(
         driver.session.runs.outputs.get(&speech),
-        Some(&RunOutput::Failed(RunError::Host("validator failed".into())))
+        Some(&VoiceRunOutcome::Failed(RunFailure::Run(RunError::Host("validator failed".into()))))
     );
 }
 

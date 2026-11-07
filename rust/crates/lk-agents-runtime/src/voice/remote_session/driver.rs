@@ -380,10 +380,7 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::super::client::{ReadyError, RemoteSession, RequestError};
-    use super::super::{
-        AgentInfo, ClientSink, IoUpdate, RtcStats, RunOutcome, SessionState, SimulationVerdict,
-        VerdictOutcome,
-    };
+    use super::super::{AgentInfo, ClientSink, IoUpdate, RtcStats, SessionState};
     use super::*;
     use lk_agents_abi::secs;
     use lk_agents_abi::{ChatItem, Clock};
@@ -465,11 +462,14 @@ mod tests {
         fn run_input<'a>(
             &'a self,
             _cx: &crate::telemetry::Cx,
-            _text: &'a str,
-        ) -> lk_agents_abi::BoxFuture<'a, Result<RunOutcome, HostError>> {
+            text: &'a str,
+        ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<lk_agents_abi::ChatItem>, HostError>> {
             Box::pin(async move {
+                if text == "fail" {
+                    return Err(HostError::new("input failed"));
+                }
                 self.release.notified().await;
-                Ok((Some(vec![]), None))
+                Ok(vec![])
             })
         }
         fn session_state(
@@ -511,9 +511,18 @@ mod tests {
         fn finalize_simulation(
             &self,
             _cx: &crate::telemetry::Cx,
-            _p: SimulationVerdict,
-        ) -> lk_agents_abi::BoxFuture<'_, Result<VerdictOutcome, HostError>> {
-            Box::pin(async move { Ok((None, None)) })
+            provisional: lk_agents_abi::worker::SimulationVerdict,
+        ) -> lk_agents_abi::BoxFuture<
+            '_,
+            Result<Option<lk_agents_abi::worker::SimulationVerdict>, HostError>,
+        > {
+            Box::pin(async move {
+                if provisional.reason == "fail" {
+                    Err(HostError::new("simulation failed"))
+                } else {
+                    Ok(Some(provisional))
+                }
+            })
         }
     }
 
@@ -618,6 +627,40 @@ mod tests {
         };
         let Some(Message::Response(reply)) = reply.message else { panic!("response expected") };
         assert_eq!(reply.error.as_deref(), Some("empty run_input text"));
+    }
+
+    #[tokio::test]
+    async fn input_and_simulation_failures_are_response_errors() {
+        use proto::session_request::{FinalizeSimulation, Request, RunInput};
+        use proto::session_response::Response;
+        let (clock, _) = rt();
+        let host = SessionHost::new(
+            Arc::new(Port { release: Arc::new(Notify::new()) }),
+            Timebase::of_clock(clock),
+        );
+        for (request, expected) in [
+            (Request::RunInput(RunInput { text: "fail".into() }), "input failed"),
+            (
+                Request::FinalizeSimulation(FinalizeSimulation {
+                    provisional_success: false,
+                    provisional_reason: "fail".into(),
+                }),
+                "simulation failed",
+            ),
+        ] {
+            let request =
+                proto::SessionRequest { request_id: "failed".into(), request: Some(request) };
+            let reply = host.handle_request(&request).await.unwrap().unwrap();
+            let Some(Message::Response(reply)) = reply.message else { panic!("response expected") };
+            assert_eq!(reply.error.as_deref(), Some(expected));
+            match reply.response.unwrap() {
+                Response::RunInput(input) => assert!(input.items.is_empty()),
+                Response::FinalizeSimulation(simulation) => {
+                    assert!(simulation.user_verdict.is_none())
+                }
+                other => panic!("unexpected response {other:?}"),
+            }
+        }
     }
 
     // Catches: a failing port read left unanswered, or the exception text leaking to the peer.

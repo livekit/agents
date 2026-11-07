@@ -160,8 +160,8 @@ impl remote_session::SessionPort for FakeConsolePort {
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
         _text: &'a str,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<remote_session::RunOutcome, HostError>> {
-        Box::pin(async move { Ok((Some(Vec::new()), None)) })
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<lk_agents_abi::ChatItem>, HostError>> {
+        Box::pin(async move { Ok(Vec::new()) })
     }
     fn session_state(
         &self,
@@ -200,8 +200,11 @@ impl remote_session::SessionPort for FakeConsolePort {
     fn finalize_simulation(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        _provisional: remote_session::SimulationVerdict,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<remote_session::VerdictOutcome, HostError>> {
-        Box::pin(async move { Ok((None, None)) })
+        _provisional: lk_agents_abi::worker::SimulationVerdict,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::worker::SimulationVerdict>, HostError>,
+    > {
+        Box::pin(async move { Ok(None) })
     }
 }

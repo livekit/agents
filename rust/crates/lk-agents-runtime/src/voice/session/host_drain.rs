@@ -213,14 +213,10 @@ pub(super) async fn answer_hook(
         }
         // Unanswered: the reference's templates.
         HookCall::FillerSource { source: None, .. } => {
-            Ok(HookOutcome::Filler { text: None, spoke: false })
+            Ok(HookOutcome::Filler(FillerReply::Declined))
         }
         HookCall::FillerSource { source: Some(source), step, .. } => {
-            hooks.filler_source(&session, &source, step).await.map(|reply| match reply {
-                FillerReply::Text(text) => HookOutcome::Filler { text: Some(text), spoke: false },
-                FillerReply::Spoke => HookOutcome::Filler { text: None, spoke: true },
-                FillerReply::Declined => HookOutcome::Filler { text: None, spoke: false },
-            })
+            hooks.filler_source(&session, &source, step).await.map(HookOutcome::Filler)
         }
     };
     // A raised hook carries its exception, which its span records.

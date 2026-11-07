@@ -632,7 +632,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         origin: Option<VoiceCommandOrigin>,
     ) -> Result<u64, CommandRefused> {
         use lk_agents_voice::filler_scheduler::FillerError;
-        let invalid = |e: FillerError| CommandRefused::Invalid(e.message().to_owned());
+        let invalid = |e: FillerError| CommandRefused::Invalid(e.to_string());
         if delay < 0.0 || delay.is_nan() {
             return Err(invalid(FillerError::NegativeDelay));
         }

@@ -634,7 +634,7 @@ mod idle_after_untranscribed_turn {
             .filter(|c| matches!(c.input(), Input::WaitForIdle { .. }))
             .map(|c| c.returned().map(|(_, a)| a.clone()))
             .collect();
-        assert_eq!(answers, [Some(Answer::IdleOk)]);
+        assert_eq!(answers, [Some(Answer::Idle(Ok(())))]);
     }
 }
 

@@ -49,7 +49,7 @@ impl Rule for OptionComesFromItsLayer {
         // installs nothing.
         let mut handoffs = (r.host_view().api_calls().into_iter()).filter_map(|call| {
             match (call.input(), call.returned()) {
-                (_, Some((_, Answer::HandoffRefused))) => None,
+                (_, Some((_, Answer::Handoff(Err(()))))) => None,
                 (Input::Handoff { turn, .. }, _) => {
                     Some(turn.map_or_else(Leaves::default, |t| said(t.knob, t.mode, t.ms)))
                 }
@@ -233,7 +233,7 @@ fn layered(agent_min_ms: u64, override_shows: u64) -> Recording {
         .journal(received("ActivityCommand::Update"))
         .journal(applied(ConfigLayer::Agent, agent_min_ms))
         .journal(installed("billing"))
-        .returns(Answer::HandoffOk)
+        .returns(Answer::Handoff(Ok(())))
         .sent(override_min_delay(300))
         .journal(received("TurnCommand::Override"))
         .journal(applied(ConfigLayer::Override, override_shows))

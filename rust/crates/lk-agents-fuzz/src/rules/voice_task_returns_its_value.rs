@@ -5,7 +5,7 @@
 //! completed call reported, a call answered `Completed` before the value came back, each such
 //! value is returned at most once, and a value comes back exactly when a task ended completed:
 //! a task ended any other way returns none.
-use lk_agents_voice::agent_session::machine::activity::voice_task::TaskEnd;
+use lk_agents_abi::voice::session::VoiceTaskEnded;
 use lk_agents_voice::trace::{HandoffStep, Step};
 
 use crate::{
@@ -89,9 +89,7 @@ impl Rule for VoiceTaskReturnsItsValue {
             .internal_view()
             .steps()
             .iter()
-            .filter(|(_, s)| {
-                matches!(s, Step::Handoff(HandoffStep::TaskEnded { how: TaskEnd::Completed, .. }))
-            })
+            .filter(|(_, s)| matches!(s, Step::Handoff(HandoffStep::TaskEnded { how: Ok(()), .. })))
             .count();
         let abandoned = r
             .host_view()
@@ -129,7 +127,7 @@ fn entered() -> Step {
     })
 }
 
-fn ended(how: TaskEnd) -> Step {
+fn ended(how: Result<(), VoiceTaskEnded>) -> Step {
     Step::Handoff(HandoffStep::TaskEnded {
         task: lk_agents_voice::agent_session::machine::activity::voice_task::VoiceTaskId(1),
         how,
@@ -145,7 +143,7 @@ fn returned() -> Recording {
         .journal(entered())
         .tool_call("call_task", 2)
         .sent(complete())
-        .journal(ended(TaskEnd::Completed))
+        .journal(ended(Ok(())))
         .result(0, Answer::VoiceTask(Ok(completion_value("call_task"))))
         .done()
 }
@@ -157,7 +155,7 @@ fn made_up() -> Recording {
         .journal(entered())
         .tool_call("call_task", 2)
         .sent(complete())
-        .journal(ended(TaskEnd::Completed))
+        .journal(ended(Ok(())))
         .result(0, Answer::VoiceTask(Ok(7)))
         .done()
 }
@@ -171,7 +169,7 @@ fn returned_twice() -> Recording {
         .journal(entered())
         .tool_call("call_task", 2)
         .sent(complete())
-        .journal(ended(TaskEnd::Completed))
+        .journal(ended(Ok(())))
         .result(0, Answer::VoiceTask(Ok(completion_value("call_task"))))
         .result(1, Answer::VoiceTask(Ok(completion_value("call_task"))))
         .done()
@@ -179,14 +177,13 @@ fn returned_twice() -> Recording {
 
 /// The task ended completed, but `run()` got no value.
 fn completed_without_value() -> Recording {
-    use lk_agents_voice::agent_session::machine::activity::voice_task::VoiceTaskEnded;
     Authored::new()
         .tool_call("call_parent", 1)
         .api_call(task_input())
         .journal(entered())
         .tool_call("call_task", 2)
         .sent(complete())
-        .journal(ended(TaskEnd::Completed))
+        .journal(ended(Ok(())))
         .result(0, Answer::VoiceTask(Err(VoiceTaskEnded::Cancelled)))
         .done()
 }

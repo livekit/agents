@@ -144,9 +144,8 @@ pub enum WireEvent {
 
 /// What `SessionHost` asks of the session it hosts: the port the reference's reach-ins into
 /// `AgentSession` become (`voice/remote_session.py`'s `RemoteSessionAccess`). An `Err` is a host
-/// failure (answered `"internal error"`); a `(value, error)` row's error becomes the response's
-/// `error` verbatim. The rows are the host's tuples, so each crosses as it is. Its `session` is the
-/// `VoiceSession`, read on the session's loop.
+/// failure (answered `"internal error"`), except input and simulation errors, which become the
+/// response's `error` verbatim. Its `session` is the `VoiceSession`, read on the session's loop.
 #[crate::host(proxy(host = "livekit.agents.voice._session_bindings.RemoteSessionAccess"))]
 pub trait SessionPort: Send + Sync {
     /// `session.history.items`.
@@ -170,7 +169,7 @@ pub trait SessionPort: Send + Sync {
         &'a self,
         cx: &crate::telemetry::Cx,
         text: &'a str,
-    ) -> crate::BoxFuture<'a, Result<RunOutcome, crate::errors::HostError>>;
+    ) -> crate::BoxFuture<'a, Result<Vec<ChatItem>, crate::errors::HostError>>;
 
     #[host(await, name = "_core_session_state")]
     fn session_state(
@@ -205,21 +204,21 @@ pub trait SessionPort: Send + Sync {
     ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 
     /// Hand the agent the simulator's provisional verdict; return the agent's own
-    /// (`on_simulation_end`). `(None, None)`: no simulation or no verdict.
+    /// (`on_simulation_end`). `None`: no simulation or no verdict.
     #[host(await, name = "_core_finalize_simulation")]
     fn finalize_simulation(
         &self,
         cx: &crate::telemetry::Cx,
-        provisional: SimulationVerdict,
-    ) -> crate::BoxFuture<'_, Result<VerdictOutcome, crate::errors::HostError>>;
+        provisional: crate::worker::SimulationVerdict,
+    ) -> crate::BoxFuture<
+        '_,
+        Result<Option<crate::worker::SimulationVerdict>, crate::errors::HostError>,
+    >;
 }
 
 /// `(id, instructions, tool names, chat_ctx items)`. `None` instructions differ from `""`; tools are
 /// flattened across `Toolset`s, names only.
 pub type AgentInfo = (String, Option<String>, Vec<String>, Vec<ChatItem>);
-
-/// `(items, None)` or `(None, error)`.
-pub type RunOutcome = (Option<Vec<ChatItem>>, Option<String>);
 
 /// `(agent_state, user_state, agent_id, options, started_at)` as the host holds them: an unknown
 /// state word answers `AS_IDLE` / `US_LISTENING`; `options` keys are `STATE_OPTION_FIELDS`;
@@ -233,12 +232,6 @@ pub type RtcStats = (Vec<serde_json::Value>, Vec<serde_json::Value>);
 /// `(input audio, input video, output audio, output video, output transcription)`; `None` leaves
 /// the channel alone.
 pub type IoUpdate = (Option<bool>, Option<bool>, Option<bool>, Option<bool>, Option<bool>);
-
-/// `(success, reason)`.
-pub type SimulationVerdict = (bool, String);
-
-/// `(verdict, None)` or `(None, error)`.
-pub type VerdictOutcome = (Option<SimulationVerdict>, Option<String>);
 
 /// The runtime-owned remote host attached to one live voice session.
 pub trait SessionHosting: Send + Sync {

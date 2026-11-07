@@ -223,31 +223,9 @@ impl TransferPlan {
     }
 }
 
-/// Only settled user-visible outcomes are retained, never live host exceptions or resources.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TransferFailure {
-    Dial,
-    Declined(String),
-    Voicemail,
-    RoomClosed(String),
-    Host(String),
-}
+pub use lk_agents_abi::voice::workflows::warm_transfer::TransferFailed;
 
-impl From<TransferFailure> for lk_agents_abi::voice::workflows::warm_transfer::TransferFailed {
-    fn from(failure: TransferFailure) -> Self {
-        match failure {
-            TransferFailure::Dial => Self::Dial,
-            TransferFailure::Declined(reason) => Self::Declined(reason),
-            TransferFailure::Voicemail => Self::Voicemail,
-            TransferFailure::RoomClosed(reason) => Self::RoomClosed(reason),
-            TransferFailure::Host(message) => {
-                Self::Host(lk_agents_abi::errors::HostError::new(message))
-            }
-        }
-    }
-}
-
-pub type TransferOutcome = Result<String, TransferFailure>;
+pub type TransferOutcome = Result<String, TransferFailed>;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 enum Phase {
@@ -319,10 +297,10 @@ impl Transfer {
                 Some(TransferToolEffect::MoveParticipant)
             }
             TransferTool::Decline(reason) => {
-                self.settle(Err(TransferFailure::Declined(reason))).map(TransferToolEffect::Settled)
+                self.settle(Err(TransferFailed::Declined(reason))).map(TransferToolEffect::Settled)
             }
             TransferTool::Voicemail => {
-                self.settle(Err(TransferFailure::Voicemail)).map(TransferToolEffect::Settled)
+                self.settle(Err(TransferFailed::Voicemail)).map(TransferToolEffect::Settled)
             }
         }
     }
@@ -352,7 +330,7 @@ impl Transfer {
         if self.phase == Phase::Merging {
             return None;
         }
-        self.settle(Err(TransferFailure::RoomClosed(reason)))
+        self.settle(Err(TransferFailed::RoomClosed(reason)))
     }
 
     pub fn settle(&mut self, outcome: TransferOutcome) -> Option<TransferEffects> {
@@ -521,7 +499,7 @@ mod tests {
         assert_eq!(cleanup.close_human, Some(true));
         assert_eq!(
             transfer.take_outcome(),
-            Some(Err(TransferFailure::RoomClosed("disconnected".to_owned())))
+            Some(Err(TransferFailed::RoomClosed("disconnected".to_owned())))
         );
     }
 }

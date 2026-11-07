@@ -79,10 +79,7 @@ pub enum HookOutcome {
     Returned,
     /// `StopResponse` is one of them.
     Turn(Vec<crate::agent::TurnEdit>),
-    Filler {
-        text: Option<String>,
-        spoke: bool,
-    },
+    Filler(lk_agents_abi::voice::session_effects::FillerReply),
     /// `function_tools_executed` handled: each output's `reply_required`, in order, as the
     /// handlers left them.
     FunctionToolsExecuted {

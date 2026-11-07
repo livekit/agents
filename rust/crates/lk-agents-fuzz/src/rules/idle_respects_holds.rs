@@ -43,7 +43,7 @@ impl Rule for IdleRespectsHolds {
         let mut calls: Vec<_> = host
             .api_calls()
             .into_iter()
-            .filter(|c| matches!(c.returned(), Some((_, Answer::IdleOk))))
+            .filter(|c| matches!(c.returned(), Some((_, Answer::Idle(Ok(()))))))
             .filter(|c| matches!(c.input(), Input::WaitForIdle { .. }))
             .collect();
         calls.sort_by_key(|c| c.called_at());
@@ -105,7 +105,7 @@ fn idle_after_release() -> Recording {
         .sent(Input::ReleaseIdleHold { hold: Ref::new(0) })
         .closed(Kind::Hold, 0)
         .sent_opening(Input::WaitForIdle { hold: None }, &[(Kind::Answer, Detail::None)])
-        .result(0, Answer::IdleOk)
+        .result(0, Answer::Idle(Ok(())))
         .done()
 }
 
@@ -114,7 +114,7 @@ fn idle_while_held() -> Recording {
     Authored::new()
         .sent_opening(Input::WaitForIdleAndHold {}, &[(Kind::Hold, Detail::None)])
         .sent_opening(Input::WaitForIdle { hold: None }, &[(Kind::Answer, Detail::None)])
-        .result(0, Answer::IdleOk)
+        .result(0, Answer::Idle(Ok(())))
         .done()
 }
 
@@ -132,7 +132,7 @@ fn admitted_before_the_grant() -> Recording {
         .sent_opening(Input::WaitForIdle { hold: None }, &[(Kind::Answer, Detail::None)])
         .journal(admitted())
         .sent_opening(Input::WaitForIdleAndHold {}, &[(Kind::Hold, Detail::None)])
-        .result(0, Answer::IdleOk)
+        .result(0, Answer::Idle(Ok(())))
         .done()
 }
 
@@ -142,6 +142,6 @@ fn admitted_while_held() -> Recording {
         .sent_opening(Input::WaitForIdleAndHold {}, &[(Kind::Hold, Detail::None)])
         .sent_opening(Input::WaitForIdle { hold: None }, &[(Kind::Answer, Detail::None)])
         .journal(admitted())
-        .result(0, Answer::IdleOk)
+        .result(0, Answer::Idle(Ok(())))
         .done()
 }

@@ -40,7 +40,7 @@ impl Rule for DrainAnswersOnceSettled {
             if !matches!(call.input(), Input::Drain { .. }) {
                 continue;
             }
-            let Some((at, Answer::DrainOk)) = call.returned() else { continue };
+            let Some((at, Answer::Drain(Ok(())))) = call.returned() else { continue };
 
             // The step the call was decided at: the last `Drained{None}` before the call arrived.
             let steps = internal.steps();
@@ -141,7 +141,7 @@ fn settled_then_answered() -> Recording {
         .journal(exit_issued(2))
         .journal(exit_finished())
         .journal(drained())
-        .result(0, Answer::DrainOk)
+        .result(0, Answer::Drain(Ok(())))
         .done()
 }
 
@@ -161,13 +161,13 @@ fn answered_while_next_agent_exits() -> Recording {
         .journal(exit_issued(4))
         .journal(exit_finished())
         .journal(drained())
-        .result(0, Answer::DrainOk)
+        .result(0, Answer::Drain(Ok(())))
         .done()
 }
 
 /// An `Ok` the driver never decided.
 fn answered_without_step() -> Recording {
-    drain().journal(exit_issued(2)).result(0, Answer::DrainOk).done()
+    drain().journal(exit_issued(2)).result(0, Answer::Drain(Ok(()))).done()
 }
 
 /// A speech announced and never announced done, yet the drain says the frame is quiet.
@@ -182,13 +182,13 @@ fn answered_while_speaking() -> Recording {
         .journal(announced)
         .journal(exit_finished())
         .journal(drained())
-        .result(0, Answer::DrainOk)
+        .result(0, Answer::Drain(Ok(())))
         .done()
 }
 
 /// Drained while its own `on_exit` never ended.
 fn answered_before_exit() -> Recording {
-    drain().journal(exit_issued(2)).journal(drained()).result(0, Answer::DrainOk).done()
+    drain().journal(exit_issued(2)).journal(drained()).result(0, Answer::Drain(Ok(()))).done()
 }
 
 /// Prerequisite: a drain asked while a `say()` is still being spoken, on a session whose host runs

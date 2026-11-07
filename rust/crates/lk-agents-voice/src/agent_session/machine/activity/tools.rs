@@ -557,7 +557,7 @@ impl VoiceDriver {
             Delivery::Complete(value) => self.end_voice_task(now, speech, Ok(value)),
             Delivery::Fail(reason) => self.end_voice_task(now, speech, Err(reason)),
             Delivery::Ask(ask) => {
-                let output = crate::run_result::RunOutput::Ask {
+                let output = crate::events::RunOutcome::InputRequired {
                     question: ask.question.clone(),
                     verbatim: ask.verbatim,
                     answer_tool: ask.tool.clone(),
@@ -837,13 +837,19 @@ impl VoiceDriver {
         &mut self,
         now: Ts,
         hook: HookId,
-        answered: Option<(Option<String>, bool)>,
+        answered: Option<lk_agents_abi::voice::session_effects::FillerReply>,
     ) {
         let Some((id, step)) = self.activity.tools.filler_answered(hook) else { return };
         // The reference's loop dies on the callable's exception, which ends the filler.
-        let Some((text, spoke)) = answered else {
+        let Some(reply) = answered else {
             self.end_filler(id, FillerEnd::Refused);
             return;
+        };
+        use lk_agents_abi::voice::session_effects::FillerReply;
+        let (text, spoke) = match reply {
+            FillerReply::Text(text) => (Some(text), false),
+            FillerReply::Spoke => (None, true),
+            FillerReply::Declined => (None, false),
         };
         self.fire_filler(now, id, step, text, spoke);
     }

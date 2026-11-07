@@ -21,8 +21,8 @@ use tokio::sync::{mpsc, watch};
 pub enum SpeechRefused {
     #[error(transparent)]
     Speech(#[from] SpeechError),
-    #[error(transparent)]
-    Creation(#[from] CreationError),
+    #[error("the session ended before this speech was created, so it will never run")]
+    Ended,
     #[error(
         "this SpeechHandle was constructed directly, so no speech is behind it. In this port the \
          driver creates the speech; use `session.say()` or `session.generate_reply()`, which return \
@@ -39,17 +39,6 @@ pub enum SpeechRefused {
     SelfWait { name: String },
 }
 
-/// Why a handle has no speech to wait on. Each `Display` is the message a host raises.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum CreationError {
-    /// The session closed before the loop handled the command.
-    #[error("the session ended before this speech was created, so it will never run")]
-    Ended,
-    /// A handle constructed directly: no loop will ever create its speech.
-    #[error("this speech handle's promise was consumed without being fulfilled")]
-    Consumed,
-}
-
 /// Whether the host's call was answered: `say()` and `generate_reply()` return before the loop
 /// creates the speech, and a handle constructed directly never gets one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,11 +51,11 @@ enum Creation {
 }
 
 impl Creation {
-    fn result(self) -> Result<(), CreationError> {
+    fn result(self) -> Result<(), SpeechRefused> {
         match self {
             Self::Created => Ok(()),
-            Self::Lost => Err(CreationError::Ended),
-            Self::Pending | Self::Detached => Err(CreationError::Consumed),
+            Self::Lost => Err(SpeechRefused::Ended),
+            Self::Pending | Self::Detached => Err(SpeechRefused::Detached),
         }
     }
 }
@@ -302,7 +291,7 @@ impl SpeechHandle {
     }
 
     /// The created speech, or why there is none to wait on.
-    async fn wait_created(&self) -> Result<(), CreationError> {
+    async fn wait_created(&self) -> Result<(), SpeechRefused> {
         let mut rx = self.creation.subscribe();
         let creation = *rx.wait_for(|c| *c != Creation::Pending).await.expect("held by self");
         creation.result()

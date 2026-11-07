@@ -8,8 +8,7 @@ use lk_agents_abi::usage::{ModelUsage, Usage};
 use lk_agents_abi::voice::amd::AmdCategory;
 use lk_agents_abi::voice::events::{AgentState, ToolEndStatus, ToolReplyStatus};
 pub use lk_agents_abi::worker::remote_session::{
-    AgentInfo, IoUpdate, RtcStats, RunOutcome, SessionPort, SessionState, SimulationVerdict,
-    VerdictOutcome,
+    AgentInfo, IoUpdate, RtcStats, SessionPort, SessionState,
 };
 use lk_agents_abi::worker::remote_session::{
     FunctionCallRef, ToolExecutionUpdatedWire, ToolUpdateWire, WireEvent,
@@ -356,13 +355,15 @@ pub enum SessionReply {
     Pong,
     ChatHistory(Vec<ChatItem>),
     AgentInfo(AgentInfo),
-    RunInput(RunOutcome),
+    RunInput(Result<Vec<ChatItem>, lk_agents_abi::errors::HostError>),
     SessionState(SessionState),
     RtcStats(Option<RtcStats>),
     SessionUsage(Usage),
     FrameworkInfo(String, String),
     UpdateIo,
-    FinalizeSimulation(VerdictOutcome),
+    FinalizeSimulation(
+        Result<Option<lk_agents_abi::worker::SimulationVerdict>, lk_agents_abi::errors::HostError>,
+    ),
 }
 
 /// One requested port operation, or an answer that needs no session operation.
@@ -376,7 +377,7 @@ pub enum RequestPlan<'a> {
     SessionUsage,
     FrameworkInfo,
     UpdateIo(IoUpdate),
-    FinalizeSimulation(SimulationVerdict),
+    FinalizeSimulation(lk_agents_abi::worker::SimulationVerdict),
 }
 
 /// Unknown requests receive no response. Empty input never enters or interrupts the session.
@@ -386,19 +387,23 @@ pub fn plan_request(request: &proto::SessionRequest) -> Option<RequestPlan<'_>> 
         Request::Ping(_) => RequestPlan::Reply(Box::new(SessionReply::Pong)),
         Request::GetChatHistory(_) => RequestPlan::ChatHistory,
         Request::GetAgentInfo(_) => RequestPlan::AgentInfo,
-        Request::RunInput(input) if input.text.is_empty() => RequestPlan::Reply(Box::new(
-            SessionReply::RunInput((None, Some("empty run_input text".to_owned()))),
-        )),
+        Request::RunInput(input) if input.text.is_empty() => {
+            RequestPlan::Reply(Box::new(SessionReply::RunInput(Err(
+                lk_agents_abi::errors::HostError::new("empty run_input text"),
+            ))))
+        }
         Request::RunInput(input) => RequestPlan::RunInput(&input.text),
         Request::GetSessionState(_) => RequestPlan::SessionState,
         Request::GetRtcStats(_) => RequestPlan::RtcStats,
         Request::GetSessionUsage(_) => RequestPlan::SessionUsage,
         Request::GetFrameworkInfo(_) => RequestPlan::FrameworkInfo,
         Request::UpdateIo(io) => RequestPlan::UpdateIo(io_update(io)),
-        Request::FinalizeSimulation(input) => RequestPlan::FinalizeSimulation((
-            input.provisional_success,
-            input.provisional_reason.clone(),
-        )),
+        Request::FinalizeSimulation(input) => {
+            RequestPlan::FinalizeSimulation(lk_agents_abi::worker::SimulationVerdict {
+                success: input.provisional_success,
+                reason: input.provisional_reason.clone(),
+            })
+        }
     })
 }
 
@@ -407,7 +412,7 @@ const UNSET_STARTED_AT: f64 = 0.0;
 
 /// The user's simulation verdict: whether it succeeded, and why.
 fn encode_verdict(
-    (success, reason): (bool, String),
+    lk_agents_abi::worker::SimulationVerdict { success, reason }: lk_agents_abi::worker::SimulationVerdict,
 ) -> proto::session_response::finalize_simulation_response::SimulationVerdict {
     proto::session_response::finalize_simulation_response::SimulationVerdict { success, reason }
 }
@@ -436,8 +441,11 @@ pub fn encode_session_reply(
                 chat_ctx: chat_ctx.iter().map(encode_chat_item).collect(),
             }),
         ),
-        SessionReply::RunInput((items, error)) => {
-            let items = if error.is_some() { Vec::new() } else { items.unwrap_or_default() };
+        SessionReply::RunInput(result) => {
+            let (items, error) = match result {
+                Ok(items) => (items, None),
+                Err(error) => (Vec::new(), Some(error.to_string())),
+            };
             (
                 error,
                 Response::RunInput(proto::session_response::RunInputResponse {
@@ -488,8 +496,11 @@ pub fn encode_session_reply(
         SessionReply::UpdateIo => {
             (None, Response::UpdateIo(proto::session_response::UpdateIoResponse {}))
         }
-        SessionReply::FinalizeSimulation((verdict, error)) => {
-            let verdict = if error.is_some() { None } else { verdict };
+        SessionReply::FinalizeSimulation(result) => {
+            let (verdict, error) = match result {
+                Ok(verdict) => (verdict, None),
+                Err(error) => (None, Some(error.to_string())),
+            };
             (
                 error,
                 Response::FinalizeSimulation(proto::session_response::FinalizeSimulationResponse {

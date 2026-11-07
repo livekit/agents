@@ -277,7 +277,7 @@ mod voice_task {
     use lk_agents_fuzz::fakes::completion_value;
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs};
     use lk_agents_fuzz::record::{Answer, Detail, Kind, Recording};
-    use lk_agents_voice::agent_session::machine::activity::voice_task::{TaskEnd, VoiceTaskEnded};
+    use lk_agents_voice::agent_session::machine::activity::voice_task::VoiceTaskEnded;
     use lk_agents_voice::trace::{HandoffStep, Step};
 
     fn call(chat: u32) -> [Input; 3] {
@@ -332,13 +332,13 @@ mod voice_task {
         run.record
     }
 
-    fn ends(record: &Recording) -> Vec<(TaskEnd, String)> {
+    fn ends(record: &Recording) -> Vec<(Result<(), VoiceTaskEnded>, String)> {
         record
             .journal()
             .iter()
             .filter_map(|(_, s)| match s {
                 Step::Handoff(HandoffStep::TaskEnded { how, restored, .. }) => {
-                    Some((*how, restored.clone()))
+                    Some((how.clone(), restored.clone()))
                 }
                 _ => None,
             })
@@ -373,7 +373,7 @@ mod voice_task {
         inputs.extend(answer(0, ToolAnswer::Value)); // the parent's tool returns
         inputs.extend(say(2)); // and the parent replies to it
         let record = play(inputs);
-        assert_eq!(ends(&record), vec![(TaskEnd::Completed, "agent".to_owned())]);
+        assert_eq!(ends(&record), vec![(Ok(()), "agent".to_owned())]);
         let value = completion_value(&tool_call_id(&record, 1));
         assert_eq!(task_answers(&record), vec![Answer::VoiceTask(Ok(value))]);
         // The request after the completion is the parent's reply to its own tool, on its speech.
@@ -401,13 +401,7 @@ mod voice_task {
         inputs.extend(answer(2, ToolAnswer::Completed));
         inputs.extend(answer(1, ToolAnswer::Completed));
         let record = play(inputs);
-        assert_eq!(
-            ends(&record),
-            vec![
-                (TaskEnd::Completed, "email".to_owned()),
-                (TaskEnd::Completed, "agent".to_owned())
-            ]
-        );
+        assert_eq!(ends(&record), vec![(Ok(()), "email".to_owned()), (Ok(()), "agent".to_owned())]);
     }
 
     // Catches: a task outliving its awaiter: the parent's tool body ended (its await dropped) and
@@ -422,7 +416,7 @@ mod voice_task {
         inputs.extend(say(1));
         inputs.extend(answer(0, ToolAnswer::Error));
         let record = play(inputs);
-        assert_eq!(ends(&record), vec![(TaskEnd::Cancelled, "agent".to_owned())]);
+        assert_eq!(ends(&record), vec![(Err(VoiceTaskEnded::Cancelled), "agent".to_owned())]);
         assert_eq!(task_answers(&record), vec![Answer::Abandoned]);
     }
 
@@ -437,7 +431,7 @@ mod voice_task {
         inputs.extend(task(0, "email"));
         inputs.extend(say(1));
         let record = play(inputs);
-        assert_eq!(ends(&record), vec![(TaskEnd::Closing, "agent".to_owned())]);
+        assert_eq!(ends(&record), vec![(Err(VoiceTaskEnded::Closing), "agent".to_owned())]);
         assert_eq!(task_answers(&record), vec![Answer::VoiceTask(Err(VoiceTaskEnded::Closing))]);
     }
 

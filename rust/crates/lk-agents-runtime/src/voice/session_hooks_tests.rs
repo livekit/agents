@@ -286,19 +286,19 @@ async fn hook_answers_reach_the_driver_as_the_host_gave_them() {
     };
     assert!(matches!(
         answered(&hooks, filler(0, Some(host_ref(2)))).await,
-        HookOutcome::Filler { text: Some(_), spoke: false }
+        HookOutcome::Filler(FillerReply::Text(_))
     ));
     assert!(matches!(
         answered(&hooks, filler(1, Some(host_ref(2)))).await,
-        HookOutcome::Filler { text: None, spoke: true }
+        HookOutcome::Filler(FillerReply::Spoke)
     ));
     assert!(matches!(
         answered(&hooks, filler(2, Some(host_ref(2)))).await,
-        HookOutcome::Filler { text: None, spoke: false }
+        HookOutcome::Filler(FillerReply::Declined)
     ));
     assert!(matches!(
         answered(&hooks, filler(0, None)).await,
-        HookOutcome::Filler { text: None, spoke: false }
+        HookOutcome::Filler(FillerReply::Declined)
     ));
     assert!(hooks.failed.lock().is_empty());
 

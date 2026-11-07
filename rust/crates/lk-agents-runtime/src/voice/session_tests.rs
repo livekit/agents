@@ -885,10 +885,7 @@ impl lk_agents_abi::worker::remote_session::SessionPort for UnusedRemotePort {
         &'a self,
         _cx: &Cx,
         _text: &'a str,
-    ) -> lk_agents_abi::BoxFuture<
-        'a,
-        Result<lk_agents_abi::worker::remote_session::RunOutcome, HostError>,
-    > {
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<lk_agents_abi::ChatItem>, HostError>> {
         Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }
     fn session_state(
@@ -928,10 +925,10 @@ impl lk_agents_abi::worker::remote_session::SessionPort for UnusedRemotePort {
     fn finalize_simulation(
         &self,
         _cx: &Cx,
-        _verdict: lk_agents_abi::worker::remote_session::SimulationVerdict,
+        _verdict: lk_agents_abi::worker::SimulationVerdict,
     ) -> lk_agents_abi::BoxFuture<
         '_,
-        Result<lk_agents_abi::worker::remote_session::VerdictOutcome, HostError>,
+        Result<Option<lk_agents_abi::worker::SimulationVerdict>, HostError>,
     > {
         Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }

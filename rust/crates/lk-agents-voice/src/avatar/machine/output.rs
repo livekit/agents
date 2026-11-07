@@ -17,8 +17,7 @@ pub enum OutputError {
 
 /// The agent's answer to an avatar's playback report RPC.
 #[derive(Debug, PartialEq)]
-pub enum Reply {
-    Ok,
+pub enum Reject {
     /// The report names a segment that already finished or retired.
     Stale,
     UnexpectedCaller,
@@ -27,14 +26,13 @@ pub enum Reply {
     BadPayload(String),
 }
 
-impl Reply {
+impl Reject {
     pub fn wire(self) -> String {
         match self {
-            Reply::Ok => "ok".into(),
-            Reply::Stale => "reject: stale playback segment".into(),
-            Reply::UnexpectedCaller => "reject: unexpected participant".into(),
-            Reply::Retired => "reject: retired output".into(),
-            Reply::BadPayload(error) => format!("reject: {error}"),
+            Reject::Stale => "reject: stale playback segment".into(),
+            Reject::UnexpectedCaller => "reject: unexpected participant".into(),
+            Reject::Retired => "reject: retired output".into(),
+            Reject::BadPayload(error) => format!("reject: {error}"),
         }
     }
 }
@@ -50,16 +48,16 @@ pub fn report_routes(wait_playback_start: bool) -> &'static [&'static str] {
 }
 
 /// Only the avatar the output streams to reports its playback.
-pub fn check_caller(caller: &str, destination: &str) -> Result<(), Reply> {
-    if caller == destination { Ok(()) } else { Err(Reply::UnexpectedCaller) }
+pub fn check_caller(caller: &str, destination: &str) -> Result<(), Reject> {
+    if caller == destination { Ok(()) } else { Err(Reject::UnexpectedCaller) }
 }
 
 /// `lk.playback_finished`'s payload as the stream's finish.
-fn finished_report(payload: &str) -> Result<PlaybackFinished, Reply> {
+fn finished_report(payload: &str) -> Result<PlaybackFinished, Reject> {
     let report = serde_json::from_str::<FinishedPayload>(payload)
-        .map_err(|error| Reply::BadPayload(error.to_string()))?;
+        .map_err(|error| Reject::BadPayload(error.to_string()))?;
     let playback_position = Duration::try_from_secs_f64(report.playback_position)
-        .map_err(|error| Reply::BadPayload(error.to_string()))?;
+        .map_err(|error| Reject::BadPayload(error.to_string()))?;
     Ok(PlaybackFinished {
         playback_position,
         interrupted: report.interrupted,
@@ -183,9 +181,9 @@ impl OutputState {
         &mut self,
         key: PlaybackSegment,
         payload: &str,
-    ) -> Result<Finish, Reply> {
+    ) -> Result<Finish, Reject> {
         let report = finished_report(payload)?;
-        self.finished(key, report).ok_or(Reply::Stale)
+        self.finished(key, report).ok_or(Reject::Stale)
     }
 
     /// The avatar finished `key`'s stream; `None` for a segment already retired. Only an

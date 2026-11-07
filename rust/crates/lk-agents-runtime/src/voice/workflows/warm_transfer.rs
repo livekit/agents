@@ -27,8 +27,8 @@ use std::time::Duration;
 
 use super::twilio as twilio_http;
 use lk_agents_voice::workflows::machine::warm_transfer::{
-    Origination, Transfer, TransferFailure, TransferOutcome, TransferPlan, TransferTool,
-    ends_merged_call, human_agent_room_name, transfer_tools,
+    Origination, Transfer, TransferOutcome, TransferPlan, TransferTool, ends_merged_call,
+    human_agent_room_name, transfer_tools,
 };
 use lk_agents_voice::workflows::twilio::{self, TwilioError};
 
@@ -230,7 +230,7 @@ impl TransferRun {
                 if let Err(err) = dialled {
                     log::error!(target: lk_agents_abi::LOG_TARGET, "could not dial human agent: {err}");
                     self.abort_dial(&host).await;
-                    self.settle(Err(TransferFailure::Dial));
+                    self.settle(Err(TransferFailed::Dial));
                 }
             }
             _ = &mut settled => {}
@@ -240,7 +240,7 @@ impl TransferRun {
             let mut settled = std::pin::pin!(settled);
             settled.as_mut().enable();
             if let Some(outcome) = self.lock().core.take_outcome() {
-                return outcome.map_err(TransferFailed::from);
+                return outcome;
             }
             settled.await;
         }
@@ -414,7 +414,7 @@ impl TransferRun {
                 Ok(Some(event)) => event,
                 Ok(None) => return,
                 Err(error) => {
-                    self.settle(Err(TransferFailure::Host(error.to_string())));
+                    self.settle(Err(TransferFailed::Host(HostError::new(error.to_string()))));
                     return;
                 }
             };
