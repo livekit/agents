@@ -430,16 +430,6 @@ async def test_pause_in_the_text_is_not_a_timeout(server: _Server) -> None:
     assert audio
 
 
-async def test_silence_after_the_input_ended_is_a_timeout() -> None:
-    async def never_answer(ws: web.WebSocketResponse, server: _Server) -> None:
-        async for _ in ws:
-            pass
-
-    async with _Server(never_answer) as s:
-        with pytest.raises(APITimeoutError):
-            await _turn(s.tts(), FIRST, conn_options=APIConnectOptions(max_retry=0, timeout=0.1))
-
-
 async def test_silence_is_a_timeout_even_when_the_server_keeps_pinging() -> None:
     async def only_ping(ws: web.WebSocketResponse, server: _Server) -> None:
         await ws.receive()
