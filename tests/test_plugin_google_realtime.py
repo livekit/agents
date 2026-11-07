@@ -651,19 +651,24 @@ async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
         assert [r.functions for r in warnings] == [["lookup"], ["search"]]  # type: ignore[attr-defined]
 
 
+@pytest.mark.parametrize("supports_scheduling", [None, False, True])
 @pytest.mark.parametrize("vertexai", [False, True])
-def test_function_response_scheduling_only_for_gemini_api(vertexai: bool) -> None:
-    """Vertex AI rejects `scheduling`, so it is set only for the Gemini API."""
+def test_function_response_scheduling_only_for_gemini_api(
+    vertexai: bool, supports_scheduling: bool | None
+) -> None:
+    """Vertex AI 2.5 drops `scheduling`, whereas Gemini API and Vertex 3.8 (`supports_scheduling=True`) forward it."""
     res = create_function_response(
         _tool_output(),
         vertexai=vertexai,
+        supports_scheduling=supports_scheduling,
         tool_response_scheduling=types.FunctionResponseScheduling.SILENT,
     )
 
-    if vertexai:
-        assert res.scheduling is None
-    else:
+    expected = (not vertexai) if supports_scheduling is None else supports_scheduling
+    if expected:
         assert res.scheduling == types.FunctionResponseScheduling.SILENT
+    else:
+        assert res.scheduling is None
 
 
 @pytest.mark.parametrize("vertexai", [False, True])
@@ -735,11 +740,12 @@ async def test_tool_response_omits_a_locally_made_call_id(
 def test_vertex_scheduling_warns(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """An explicitly set scheduling is dropped on Vertex AI, so say so instead of ignoring it."""
+    """An explicitly set scheduling is dropped on Vertex AI 2.5, so say so instead of ignoring it."""
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
 
     with caplog.at_level(logging.WARNING):
         RealtimeModel(
+            model="gemini-live-2.5-flash-native-audio",
             vertexai=True,
             project="p",
             location="us-central1",
@@ -1534,5 +1540,404 @@ async def test_failed_resume_context_update_keeps_pending_chat_ctx(
         await asyncio.sleep(0.05)
         assert opened[1].sent[0][0] == "context_update"
         assert session._chat_ctx.get_by_id(msg.id) is not None
+    finally:
+        await session.aclose()
+
+
+async def test_vertex_gemini_3_8_supports_silent_and_explicit_scheduling(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Vertex AI gemini-3.8-live does not warn on scheduling and forwards both SILENT and explicit scheduling."""
+    with caplog.at_level(logging.WARNING):
+        RealtimeModel(
+            model="gemini-3.8-live",
+            vertexai=True,
+            project="test-project",
+            location="us-central1",
+            tool_response_scheduling=types.FunctionResponseScheduling.WHEN_IDLE,
+        )
+    assert not any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
+
+    async with _make_connected_session(monkeypatch) as session:
+        session._opts.model = "gemini-3.8-live"
+        session._opts.vertexai = True
+        session._opts.tool_behavior = types.Behavior.NON_BLOCKING
+        session._opts.tool_response_scheduling = types.FunctionResponseScheduling.WHEN_IDLE
+
+        with caplog.at_level(logging.WARNING):
+            session.update_options(
+                tool_response_scheduling=types.FunctionResponseScheduling.INTERRUPT
+            )
+        assert not any(
+            "tool_response_scheduling is not supported" in r.message for r in caplog.records
+        )
+        session._opts.tool_response_scheduling = types.FunctionResponseScheduling.WHEN_IDLE
+
+        # 1) reply_required=False sends SILENT without warning on Vertex 3.8 NON_BLOCKING
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call(call_id="fc_silent"))
+        await _drain_sent(session)
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output(call_id="fc_silent", reply_required=False))
+        await session.update_chat_ctx(chat_ctx)
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1
+        assert responses[0].function_responses is not None
+        assert (
+            responses[0].function_responses[0].scheduling == types.FunctionResponseScheduling.SILENT
+        )
+
+        # 2) reply_required=True sends explicit tool_response_scheduling (WHEN_IDLE) on Vertex 3.8
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call(call_id="fc_idle"))
+        await _drain_sent(session)
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output(call_id="fc_idle", reply_required=True))
+        await session.update_chat_ctx(chat_ctx)
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1
+        assert responses[0].function_responses is not None
+        assert (
+            responses[0].function_responses[0].scheduling
+            == types.FunctionResponseScheduling.WHEN_IDLE
+        )
+
+
+async def test_non_blocking_when_idle_tool_continuation_preserves_filler_and_resets_on_cancel_or_barge_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A NON_BLOCKING WHEN_IDLE/None tool continuation skips input_speech_started once, while INTERRUPT, SILENT, barge-in, and cancellation do not."""
+    from google.genai.live import AsyncLive
+
+    fake = _FakeLiveSession()
+
+    @asynccontextmanager
+    async def _connect(
+        self: AsyncLive, *, config: types.LiveConnectConfig, **kwargs: object
+    ) -> AsyncIterator[_FakeLiveSession]:
+        yield fake
+
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    model = RealtimeModel(
+        model="gemini-3.8-live",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+    )
+    session = model.session()
+    speech_started_count = 0
+
+    def _on_speech_started(_ev: object) -> None:
+        nonlocal speech_started_count
+        speech_started_count += 1
+
+    session.on("input_speech_started", _on_speech_started)
+    try:
+        while session._active_session is None:
+            await asyncio.sleep(0.01)
+
+        # 1) Initial model turn + tool call starts generation normally (emits input_speech_started)
+        session._start_new_generation()
+        assert speech_started_count == 1
+        session._handle_tool_calls(_tool_call(call_id="fc_1"))
+
+        # Send WHEN_IDLE tool response through _send_task
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output(call_id="fc_1", reply_required=True))
+        await session.update_chat_ctx(chat_ctx)
+        while len(fake.sent) < 1:
+            await asyncio.sleep(0.01)
+        assert session._pending_tool_continuation is True
+
+        # Follow-up generation for the tool continuation consumes the flag and does NOT emit input_speech_started
+        session._start_new_generation()
+        assert speech_started_count == 1
+        assert session._pending_tool_continuation is False
+        session._mark_current_generation_done()
+
+        # Subsequent normal generation DOES emit input_speech_started
+        session._start_new_generation()
+        assert speech_started_count == 2
+        session._mark_current_generation_done()
+
+        # 2) SILENT tool response does NOT set _pending_tool_continuation
+        session._start_new_generation()
+        assert speech_started_count == 3
+        session._handle_tool_calls(_tool_call(call_id="fc_silent"))
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output(call_id="fc_silent", reply_required=False))
+        await session.update_chat_ctx(chat_ctx)
+        while len(fake.sent) < 2:
+            await asyncio.sleep(0.01)
+        assert session._pending_tool_continuation is False
+
+        # 3) Server tool_call_cancellation resets _pending_tool_continuation
+        session._pending_tool_continuation = True
+        session._handle_tool_call_cancellation(
+            types.LiveServerToolCallCancellation(ids=["fc_cancel"])
+        )
+        assert session._pending_tool_continuation is False
+
+        # 4) User barge-in (_handle_input_speech_started) resets _pending_tool_continuation
+        session._pending_tool_continuation = True
+        session._handle_input_speech_started()
+        assert session._pending_tool_continuation is False
+
+        # 5) A mixed batch containing INTERRUPT and WHEN_IDLE does NOT set _pending_tool_continuation
+        session._send_client_event(
+            types.LiveClientToolResponse(
+                function_responses=[
+                    types.FunctionResponse(
+                        id="fc_idle_mix",
+                        name="lookup",
+                        response={"output": "ok"},
+                        scheduling=types.FunctionResponseScheduling.WHEN_IDLE,
+                    ),
+                    types.FunctionResponse(
+                        id="fc_int_mix",
+                        name="lookup",
+                        response={"output": "urgent"},
+                        scheduling=types.FunctionResponseScheduling.INTERRUPT,
+                    ),
+                ]
+            )
+        )
+        while len(fake.sent) < 3:
+            await asyncio.sleep(0.01)
+        assert session._pending_tool_continuation is False
+    finally:
+        await session.aclose()
+
+
+async def test_vertex_gemini_3_8_fresh_connect_replay_preserves_tool_scheduling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Open tool results replayed onto a fresh Vertex 3.8 socket keep SILENT and explicit scheduling."""
+    from google.genai.live import AsyncLive
+
+    sockets = [_FakeLiveSession(), _FakeLiveSession()]
+    opened: list[_FakeLiveSession] = []
+
+    @asynccontextmanager
+    async def _connect(
+        self: AsyncLive, *, config: types.LiveConnectConfig, **kwargs: object
+    ) -> AsyncIterator[_FakeLiveSession]:
+        fake = sockets[len(opened)]
+        opened.append(fake)
+        yield fake
+
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    model = RealtimeModel(
+        model="gemini-3.8-live",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+        tool_response_scheduling=types.FunctionResponseScheduling.INTERRUPT,
+    )
+    session = model.session()
+    try:
+        await _wait_for_socket(opened, 1)
+        session._open_call_ids.update({"call_silent", "call_interrupt"})
+
+        chat_ctx = llm.ChatContext.empty()
+        chat_ctx.add_message(role="user", content="check status")
+        chat_ctx.items.append(
+            llm.FunctionCall(call_id="call_silent", name="log_event", arguments="{}")
+        )
+        chat_ctx.items.append(_tool_output(call_id="call_silent", reply_required=False))
+        chat_ctx.items.append(
+            llm.FunctionCall(call_id="call_interrupt", name="alert", arguments="{}")
+        )
+        chat_ctx.items.append(_tool_output(call_id="call_interrupt", reply_required=True))
+
+        session.update_options(voice="Aoede")
+        session._pending_chat_ctx = chat_ctx
+        await _wait_for_socket(opened, 2)
+
+        replayed = [
+            (r.id, r.scheduling)  # type: ignore[attr-defined]
+            for kind, responses in opened[1].sent
+            if kind == "tool_response"
+            for r in responses  # type: ignore[attr-defined]
+        ]
+        assert replayed == [
+            ("call_silent", types.FunctionResponseScheduling.SILENT),
+            ("call_interrupt", types.FunctionResponseScheduling.INTERRUPT),
+        ]
+    finally:
+        await session.aclose()
+
+
+async def test_pending_tool_continuation_does_not_leak_across_empty_turn_generate_reply_rejection_or_user_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_pending_tool_continuation clears on empty continuations, generate_reply, rejected tool calls, and user speech."""
+    from google.genai.live import AsyncLive
+
+    opened: list[_FakeLiveSession] = []
+
+    @asynccontextmanager
+    async def _connect(
+        self: AsyncLive, *, config: types.LiveConnectConfig, **kwargs: object
+    ) -> AsyncIterator[_FakeLiveSession]:
+        sock = _FakeLiveSession()
+        opened.append(sock)
+        yield sock
+
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    model = RealtimeModel(
+        model="gemini-3.8-live",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+    )
+    session = model.session()
+    speech_started_count = 0
+
+    def _on_speech_started(_ev: object) -> None:
+        nonlocal speech_started_count
+        speech_started_count += 1
+
+    session.on("input_speech_started", _on_speech_started)
+    try:
+        await _wait_for_socket(opened, 1)
+
+        async def _arm_when_idle_continuation(
+            call_id: str, *, complete_tool_turn_first: bool = False
+        ) -> None:
+            session._start_new_generation()
+            session._handle_tool_calls(_tool_call(call_id=call_id))
+            if complete_tool_turn_first:
+                session._handle_server_content(types.LiveServerContent(turn_complete=True))
+            active_sock = opened[-1]
+            sent_before = len(active_sock.sent)
+            chat_ctx = session.chat_ctx.copy()
+            chat_ctx.items.append(_tool_output(call_id=call_id, reply_required=True))
+            await session.update_chat_ctx(chat_ctx)
+            while len(active_sock.sent) <= sent_before:
+                await asyncio.sleep(0.01)
+
+        # 0) An open filler generation's own turn_complete keeps the flag alive for the continuation
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call(call_id="fc_filler_open"))
+        session._start_new_generation()  # open filler speech generation
+        sent_before = len(opened[-1].sent)
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output(call_id="fc_filler_open", reply_required=True))
+        await session.update_chat_ctx(chat_ctx)
+        while len(opened[-1].sent) <= sent_before:
+            await asyncio.sleep(0.01)
+        assert session._pending_tool_continuation is True
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        assert session._pending_tool_continuation is True
+        before = speech_started_count
+        session._start_new_generation()
+        assert speech_started_count == before
+        assert session._pending_tool_continuation is False
+        session._mark_current_generation_done()
+
+        # 0b) Delayed turn_complete of the tool-call turn (arriving after a fast WHEN_IDLE tool
+        # response) keeps the flag alive so the ensuing continuation preserves filler audio
+        await _arm_when_idle_continuation("fc_delayed_tc", complete_tool_turn_first=False)
+        assert session._pending_tool_continuation is True
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        assert session._pending_tool_continuation is True
+        before = speech_started_count
+        session._start_new_generation()
+        assert speech_started_count == before
+        assert session._pending_tool_continuation is False
+        session._mark_current_generation_done()
+
+        # 1a) Empty continuation turn after a fast WHEN_IDLE tool response:
+        # 1st turn_complete closes the tool-call turn (keeps flag), 2nd closes the empty continuation
+        await _arm_when_idle_continuation("fc_empty_fast", complete_tool_turn_first=False)
+        assert session._pending_tool_continuation is True
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        assert session._pending_tool_continuation is True
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        assert session._pending_tool_continuation is False
+        before = speech_started_count
+        session._start_new_generation()
+        assert speech_started_count == before + 1
+        session._mark_current_generation_done()
+
+        # 1b) Empty continuation turn after a slow WHEN_IDLE tool response (tool-call turn already
+        # received turn_complete before the tool response was sent): next bare turn_complete clears
+        await _arm_when_idle_continuation("fc_empty_slow", complete_tool_turn_first=True)
+        assert session._pending_tool_continuation is True
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        assert session._pending_tool_continuation is False
+        before = speech_started_count
+        session._start_new_generation()
+        assert speech_started_count == before + 1
+        session._mark_current_generation_done()
+
+        # 1c) Socket teardown / reconnect after tool_call (before tool-turn turn_complete) marks
+        # _turn_complete so a bare turn_complete on the reconnected socket clears an empty continuation
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call(call_id="fc_reconnect"))
+        session._mark_restart_needed()
+        await _wait_for_socket(opened, 2)
+        sent_before = len(opened[-1].sent)
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output(call_id="fc_reconnect", reply_required=True))
+        await session.update_chat_ctx(chat_ctx)
+        while len(opened[-1].sent) <= sent_before:
+            await asyncio.sleep(0.01)
+        assert session._pending_tool_continuation is True
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        assert session._pending_tool_continuation is False
+        before = speech_started_count
+        session._start_new_generation()
+        assert speech_started_count == before + 1
+        session._mark_current_generation_done()
+
+        # 2) generate_reply() consuming the next generation clears the flag for subsequent turns
+        await _arm_when_idle_continuation("fc_gen_reply")
+        assert session._pending_tool_continuation is True
+        fut = session.generate_reply()
+        session._start_new_generation()
+        await asyncio.sleep(0)
+        assert fut.done() and not fut.cancelled()
+        assert session._pending_tool_continuation is False
+        session._mark_current_generation_done()
+        before = speech_started_count
+        session._start_new_generation()
+        assert speech_started_count == before + 1
+        session._mark_current_generation_done()
+
+        # 3) tool_choice='none' rejected tool calls never arm _pending_tool_continuation
+        session.update_options(tool_choice="none")
+        fut = session.generate_reply()
+        sent_before = len(opened[-1].sent)
+        session._reject_tool_calls([types.FunctionCall(id="rej_1", name="lookup", args={})])
+        while len(opened[-1].sent) <= sent_before:
+            await asyncio.sleep(0.01)
+        assert session._pending_tool_continuation is False
+        session.update_options(tool_choice="auto")
+        session._start_new_generation()
+        await asyncio.sleep(0)
+        assert fut.done()
+        assert session._pending_tool_continuation is False
+        session._mark_current_generation_done()
+        before = speech_started_count
+        session._start_new_generation()
+        assert speech_started_count == before + 1
+        session._mark_current_generation_done()
+
+        # 4) User speech (user_speech=True from input_transcription) interrupts and clears the flag
+        await _arm_when_idle_continuation("fc_user_turn")
+        assert session._pending_tool_continuation is True
+        before = speech_started_count
+        session._start_new_generation(user_speech=True)
+        assert speech_started_count == before + 1
+        assert session._pending_tool_continuation is False
+        session._mark_current_generation_done()
     finally:
         await session.aclose()
