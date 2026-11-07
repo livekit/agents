@@ -21,6 +21,7 @@ import inspect
 import math
 import multiprocessing as mp
 import os
+import re
 import sys
 import threading
 import time
@@ -66,6 +67,57 @@ HEARTBEAT_INTERVAL = 30
 HEALTH_RECONNECT_GRACE_PERIOD = 30.0
 WORKER_PROTOCOL_VERSION = 1
 DRAIN_TIMEOUT = 3600  # 1hr
+
+
+# prometheus_client writes one mmap file per metric type per process, named "<type>_<pid>.db"
+_MULTIPROC_FILE_RE = re.compile(r"^(?P<type>[a-z_]+)_(?P<pid>\d+)\.db$")
+
+
+def _multiproc_file_pid(filename: str) -> int | None:
+    """The pid that owns a prometheus multiprocess file, or None when the name is not one of ours."""
+    match = _MULTIPROC_FILE_RE.fullmatch(filename)
+    return int(match.group("pid")) if match else None
+
+
+def _process_is_alive(pid: int) -> bool:
+    """Best-effort liveness probe for a pid, conservative where the platform cannot probe."""
+    if pid == os.getpid():
+        return True
+    if os.name == "nt":
+        # os.kill cannot be used as a probe on Windows (it terminates the target), so keep the file
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _clean_prometheus_multiproc_dir(path: str) -> None:
+    """Remove multiprocess metric files left behind by processes that no longer run.
+
+    prometheus_client opens one file per metric type per process and keeps it in a module-level cache, so
+    deleting the files of a live process (this one included) makes it keep writing to an unlinked file and
+    silently drops its metrics from /metrics.
+
+    A file only carries its writer's pid, so a pid the OS has since handed to another process keeps a dead
+    writer's file, and its series stay in the scrape until that directory is cleared some other way.
+    Telling the two apart would need the process start time, which has no portable source, and expiry by
+    file age would drop writers that are alive but idle -- the case this function exists to protect.
+    """
+    for filename in os.listdir(path):
+        file_path = os.path.join(path, filename)
+        if not os.path.isfile(file_path):
+            continue
+        pid = _multiproc_file_pid(filename)
+        if pid is not None and _process_is_alive(pid):
+            continue
+        try:
+            os.unlink(file_path)
+        except Exception as e:
+            logger.warning(f"failed to remove {file_path}", exc_info=e)
 
 
 def _default_setup_fnc(proc: JobProcess) -> Any:
@@ -734,13 +786,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     "cleaning prometheus multiprocess directory",
                     extra={"path": self._prometheus_multiproc_dir},
                 )
-                for filename in os.listdir(self._prometheus_multiproc_dir):
-                    file_path = os.path.join(self._prometheus_multiproc_dir, filename)
-                    try:
-                        if os.path.isfile(file_path):
-                            os.unlink(file_path)
-                    except Exception as e:
-                        logger.warning(f"failed to remove {file_path}", exc_info=e)
+                _clean_prometheus_multiproc_dir(self._prometheus_multiproc_dir)
 
             if self._ws_url:
                 os.environ["LIVEKIT_URL"] = self._ws_url
