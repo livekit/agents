@@ -175,6 +175,9 @@ class TTS(tts.TTS):
 
         speaker_map = dict(speakers) if is_given(speakers) else None
         current_speaker = speaker if is_given(speaker) else None
+        if current_speaker is not None and speaker_map is None:
+            # with a single voice there is no speaker table for the name to pick from
+            raise ValueError("`speaker` needs `speakers`")
         if speaker_map is not None:
             # not "up to two": the API rejects any other count outright, with
             # "the number of speaker_voice_configs must equal 2"
