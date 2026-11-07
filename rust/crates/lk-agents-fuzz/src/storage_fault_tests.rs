@@ -152,3 +152,16 @@ fn a_turn_reported_before_the_watchdog_fires_waits_for_its_receipt() {
     }
     assert!(straddled, "no seed committed the turn across the watchdog");
 }
+
+// Catches: a realtime reply whose server audio was already arriving held back until its speech
+// reloaded the voice lane, so the person waited on storage for the first word
+// (`first_audio_is_prompt`, campaign seeds 9850, 27056 and 27623, with storage lost).
+#[test]
+fn a_realtime_reply_plays_while_its_lane_reloads() {
+    for seed in [9850, 27056, 27623] {
+        let setup = lk_agents_fuzz::search::sample_setup(&mut fastrand::Rng::with_seed(seed));
+        let outcome = lk_agents_fuzz::search::explore(setup, seed, 3000);
+        let late = outcome.failures.iter().any(|f| f.contract == "first_audio_is_prompt");
+        assert!(!late, "seed {seed}: the reply's first audio waited on the lane");
+    }
+}
