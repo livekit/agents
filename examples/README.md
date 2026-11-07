@@ -24,9 +24,13 @@ session = AgentSession(
 
 ### 🏠 [Homepage](./homepage/)
 
-A product knowledge agent demonstrating progressive disclosure with a Markdown-backed
-knowledge base, generated tool schemas, centralized prompt templates, session behaviors,
-streaming TTS filters, and a split unit/eval test suite.
+The agents behind the livekit.io homepage demos, one directory each:
+
+- [`livekit-expert/`](./homepage/livekit-expert/): a product knowledge agent demonstrating progressive disclosure with a Markdown-backed knowledge base, generated tool schemas, centralized prompt templates, session behaviors, streaming TTS filters, and a split unit/eval test suite.
+- [`frontdesk/`](./homepage/frontdesk/): Juniper Health, an AI receptionist that books and moves appointments on a clinic calendar.
+- [`card-auth/`](./homepage/card-auth/): Kestrel Bank card verification, a yes/no identity check before the agent touches an account.
+- [`restaurant-ordering/`](./homepage/restaurant-ordering/): Zappi's Pizzeria, phone ordering against a point of sale.
+- [`vehicle-service/`](./homepage/vehicle-service/): Bayside BMW service desk, books visits and calls back about repairs.
 
 ### 🎙️ [Voice Agents](./voice_agents/)
 
