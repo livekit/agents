@@ -48,16 +48,25 @@ impl Run {
         // speech the run saw created, so its waits are the speech's own.
         let waited = handle.clone();
         let done = self.drive(Some(self.budget()), async move {
-            let _ = waited.wait_for_latest_generation().await;
-            waited.wait_for_playout().await
+            let generation = waited.wait_for_latest_generation().await;
+            waited.wait_for_playout().await;
+            generation
         });
-        if done.await.is_none() {
-            return false;
-        }
-        let _ =
-            (HostSpeech::id(&*handle), handle.num_steps(), handle.chat_items(), handle.scheduled());
-        let _ = (HostSpeech::interrupted(&*handle), HostSpeech::allow_interruptions(&*handle));
-        let _ = HostSpeech::exception(&*handle);
+        let Some(generation) = done.await else { return false };
+        self.record.record_boundary(
+            self.stamps.next(),
+            crate::record::BoundaryOutcome {
+                operation: crate::record::BoundaryOperation::SpeechWaitGeneration,
+                error: generation.err().map(|e| e.to_string()),
+            },
+        );
+        self.record.record_boundary(
+            self.stamps.next(),
+            crate::record::BoundaryOutcome {
+                operation: crate::record::BoundaryOperation::SpeechException,
+                error: HostSpeech::exception(&*handle).err().map(|e| e.to_string()),
+            },
+        );
 
         true
     }
@@ -75,7 +84,7 @@ impl Run {
         let exited = self.session.is_none();
         // The player goes with the session (`BackgroundAudioPlayer.aclose()`).
         if exited && let Some(player) = self.background.take() {
-            player.0.close().await;
+            player.audio.0.close().await;
         }
         if exited && let Some(worker) = self.avatar.take() {
             worker.close().await;

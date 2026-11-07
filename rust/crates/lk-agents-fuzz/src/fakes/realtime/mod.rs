@@ -192,7 +192,7 @@ impl Realtime for FakeRealtime {
                 Detail::None,
                 Control::Realtime(socket.clone()),
             );
-            let _ = socket.slot.set(slot);
+            assert!(socket.slot.set(slot).is_ok(), "realtime socket registered twice");
             socket.state.lock().unwrap().server = socket.new_server(1);
             let pump = socket.clone();
             let pump = self.spawner.spawn(async move { pump.run().await });

@@ -238,7 +238,7 @@ async fn text_from_an_earlier_attachment_cannot_drive_the_new_attachment() {
     let io = room_io(room.clone(), clock, config);
     let (mut events, _) = io.events().unwrap();
     io.clone().start(lk_agents_abi::telemetry::Cx::NONE);
-    let _ = io.wait_for_ready().await;
+    io.wait_for_ready().await.expect("room io ready");
     while events.try_recv().is_ok() {}
     let chunks = room.open_chat();
     chunks.send("old attachment".into()).await.unwrap();

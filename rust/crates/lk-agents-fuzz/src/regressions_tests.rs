@@ -68,6 +68,8 @@ mod session_state;
 mod speech_completion;
 #[path = "speech_playback_tests.rs"]
 mod speech_playback;
+#[path = "storage_fault_tests.rs"]
+mod storage_fault;
 #[path = "telephony_tests.rs"]
 mod telephony;
 #[path = "tools_tests.rs"]

@@ -131,7 +131,7 @@ impl Realtime for FakeDuplex {
                 ready: tokio::sync::Notify::new(),
             });
             let slot = self.registry.register(Kind::Realtime, Detail::None, Control::Generation);
-            let _ = model.slot.set(slot);
+            assert!(model.slot.set(slot).is_ok(), "duplex model registered twice");
             let pump = model.clone();
             let abort = self.spawner.spawn(async move { pump.run().await });
             Ok(Arc::new(Session { model, abort }) as Arc<dyn RealtimeSession>)

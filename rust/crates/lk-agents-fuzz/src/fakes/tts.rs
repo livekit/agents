@@ -16,19 +16,15 @@ use lk_agents_abi::{
 };
 use tokio::sync::mpsc;
 
-use super::{
-    Control, Measured, Registry, SAMPLE_RATE, SAMPLES_PER_CHUNK, Slot, Timing, delay, measured,
-};
+use super::{Control, Registry, SAMPLE_RATE, SAMPLES_PER_CHUNK, Slot, Timing, delay, measured};
 use crate::{
     drive::TtsAlignment,
     input::Input,
     record::{Detail, Kind, Tag},
 };
 
-// A real voice as measured (`calibration.json`, `tts/cartesia/sonic-3/<name>`): its time to
-// first audio in ms, and its pace in ms a word.
-const FIRST_AUDIO: Measured = [183, 190, 196, 200, 205, 214, 217, 227, 240, 250, 658];
-pub const MS_PER_WORD: Measured = [197, 233, 248, 258, 274, 295, 311, 348, 415, 462, 557];
+use crate::calibration::tts::FIRST_AUDIO;
+pub use crate::calibration::tts::MS_PER_WORD;
 
 /// The longest frame the voice sends, as a streaming voice sends audio in short frames.
 const FRAME_MS: usize = 100;
@@ -48,17 +44,16 @@ pub struct FakeTts {
     alignment: TtsAlignment,
 }
 
+pub struct TtsOptions {
+    pub latency: Option<u64>,
+    pub timing: Timing,
+    pub streaming: bool,
+    pub alignment: TtsAlignment,
+}
+
 impl FakeTts {
-    /// `latency`: a voice that takes as long to start as a real one does, drawn from this seed
-    /// against `timing`. `streaming` off, the voice only synthesizes whole texts: the session adapts it
-    /// sentence by sentence.
-    pub fn new(
-        registry: Arc<Registry>,
-        latency: Option<u64>,
-        timing: Timing,
-        streaming: bool,
-        alignment: TtsAlignment,
-    ) -> Arc<Self> {
+    pub fn new(registry: Arc<Registry>, options: TtsOptions) -> Arc<Self> {
+        let TtsOptions { latency, timing, streaming, alignment } = options;
         let latency = latency.map(|seed| Mutex::new(fastrand::Rng::with_seed(seed)));
         Arc::new(FakeTts { registry, latency, timing, streaming, alignment })
     }
@@ -155,9 +150,11 @@ impl Synthesis {
             }
             Input::TtsFail { .. } => {
                 if let Some(sender) = state.sender.take() {
-                    let _ = sender.send(Err(ProviderError::Local(ApiError::new(
-                        "injected synthesis failure",
-                    ))));
+                    return sender
+                        .send(Err(ProviderError::Local(ApiError::new(
+                            "injected synthesis failure",
+                        ))))
+                        .is_ok();
                 }
             }
             _ => return false,
@@ -244,7 +241,7 @@ impl Tts for FakeTts {
             });
             let slot =
                 self.registry.register(Kind::Tts, Detail::None, Control::Tts(synthesis.clone()));
-            let _ = synthesis.slot.set(slot);
+            assert!(synthesis.slot.set(slot).is_ok(), "synthesis registered twice");
             // Each stream speaks at a pace a real voice has: its milliseconds a word, over the
             // characters a word of the agent's lines takes.
             let mut pace = fastrand::Rng::with_seed(u64::from(slot.nth) ^ 0x7061_6365);

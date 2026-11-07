@@ -215,32 +215,15 @@ pub struct Response {
     pub source: Option<u32>,
 }
 
-// What the real server was measured doing, in ms: `calibration.json`'s `realtime/<name>` in
-// lower case. These executable constants are maintained manually from that reference data;
-// editing calibration.json alone does not change a simulation.
-pub const SPEECH_STARTED_LAG_SEMANTIC: Measured =
-    [238, 278, 299, 316, 329, 335, 345, 385, 404, 451, 1327];
-pub const SPEECH_STARTED_LAG_SERVER: Measured =
-    [262, 307, 319, 335, 365, 398, 1704, 1803, 2409, 2693, 2728];
-pub const SPEECH_STOPPED_LAG_SEMANTIC: Measured =
-    [671, 729, 737, 759, 787, 828, 1168, 1421, 1668, 1853, 3450];
-pub const SPEECH_STOPPED_LAG_SERVER: Measured =
-    [582, 614, 628, 632, 653, 686, 725, 1606, 3016, 3820, 5682];
-const CANCEL_AFTER_SPEECH_STARTED: Measured = [3, 8, 9, 13, 17, 24, 27, 29, 35, 39, 246];
-const CREATED_AFTER_STOPPED: Measured = [0, 4, 6, 6, 7, 7, 8, 9, 9, 10, 15];
-const CREATED_AFTER_CREATE: Measured = [104, 105, 107, 111, 118, 120, 129, 134, 134, 148, 345];
-const TRANSCRIPTION_AFTER_COMMITTED: Measured =
-    [278, 340, 362, 383, 391, 408, 453, 513, 599, 683, 3248];
-const ITEM_AFTER_CREATED: Measured = [164, 214, 290, 349, 386, 419, 475, 536, 572, 723, 1463];
-const FIRST_AUDIO_AFTER_ITEM: Measured = [62, 209, 235, 248, 268, 305, 317, 329, 345, 401, 1482];
-const AUDIO_GAP: Measured = [0, 23, 53, 60, 65, 70, 74, 81, 104, 159, 1108];
-const DONE_AFTER_LAST_AUDIO: Measured = [0, 28, 30, 33, 36, 38, 42, 44, 73, 187, 568];
-const ERROR_AFTER_CLIENT: Measured = [83, 88, 89, 90, 91, 93, 96, 99, 100, 103, 110];
-const DONE_AFTER_CANCEL: Measured = [115, 120, 124, 128, 131, 133, 135, 138, 144, 150, 156];
-/// The audio a character of the reply takes (`audio_ms_per_char`): a pace, never stray.
-const AUDIO_MS_PER_CHAR: Measured = [27, 40, 48, 50, 52, 56, 58, 58, 60, 61, 75];
-/// Responses that called a tool, of all measured (`function_call_share`).
-const FUNCTION_CALL_SHARE: (u64, u64) = (8, 94);
+use crate::calibration::realtime::{
+    AUDIO_GAP, AUDIO_MS_PER_CHAR, CANCEL_AFTER_SPEECH_STARTED, CREATED_AFTER_CREATE,
+    CREATED_AFTER_STOPPED, DONE_AFTER_CANCEL, DONE_AFTER_LAST_AUDIO, ERROR_AFTER_CLIENT,
+    FIRST_AUDIO_AFTER_ITEM, FUNCTION_CALL_SHARE, ITEM_AFTER_CREATED, TRANSCRIPTION_AFTER_COMMITTED,
+};
+pub use crate::calibration::realtime::{
+    SPEECH_STARTED_LAG_SEMANTIC, SPEECH_STARTED_LAG_SERVER, SPEECH_STOPPED_LAG_SEMANTIC,
+    SPEECH_STOPPED_LAG_SERVER,
+};
 
 /// One connection's server: its conversation, input buffer and responses.
 pub struct Server {

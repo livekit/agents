@@ -55,7 +55,7 @@ pub mod vocabulary;
 pub use avatar::FakeAvatarWorker;
 pub use eot::{FakeEot, THRESHOLD as EOT_THRESHOLD};
 pub use interruption::{FakeInterruption, FakeInterruptionSource};
-pub use llm::{COMPLETION_TOKENS, FakeLlm, request_of};
+pub use llm::{COMPLETION_TOKENS, FakeLlm};
 pub use nodes::FakeNodes;
 pub use output::{
     FakeAudioInput, FakeAudioOutput, FakeRecorder, FakeSoundStream, FakeTextOutput, FakeVideoInput,
@@ -65,7 +65,7 @@ pub use realtime::{FakeDuplex, FakeRealtime, RealtimeDelays, ServerSetup, Vad as
 pub use storage::FakeVoiceStorage;
 pub use stt::FakeStt;
 pub use tools::{FakeTools, TEMPLATED_REPLY, TEMPLATED_TOOL, completion_value, frame};
-pub use tts::{FakeTts, MS_PER_WORD};
+pub use tts::{FakeTts, MS_PER_WORD, TtsOptions};
 pub use vad::FakeVad;
 
 pub const SAMPLE_RATE: u32 = 24_000;
@@ -74,7 +74,7 @@ pub const SAMPLES_PER_CHUNK: usize = (SAMPLE_RATE / 100) as usize;
 
 /// A provider quantity by its deciles as real providers showed it: the least, p10 to p90, the
 /// most. The crate's `calibration.json` holds what was measured from real providers through
-/// LiveKit Inference; it is reference only, and nothing reads it.
+/// LiveKit Inference; build.rs generates the distributions from it.
 pub type Measured = [u64; 11];
 
 /// What a run's provider delays are drawn against: the share of draws that stray from the
@@ -173,6 +173,14 @@ impl Control {
 /// builds is still the happens-before order. Nothing has to be observed while it happens, and so
 /// nothing has to share a lock with the thing observing it.
 pub enum Record {
+    Boundary {
+        at: Observed,
+        outcome: crate::record::BoundaryOutcome,
+    },
+    Storage {
+        at: Observed,
+        step: crate::record::StorageStep,
+    },
     /// An invocation a fake opened, with the control side for the harness to keep. Outputs carry
     /// no control: nothing is ever delivered to one.
     Opened {
@@ -350,6 +358,7 @@ pub struct Registry {
     /// When each synthesis with a voice latency will hand over its first audio, until it has: work
     /// the fake owes on its own clock, which no answer of the case's releases.
     voice_due: std::sync::Mutex<BTreeMap<u32, tokio::time::Instant>>,
+    chat_responses: std::sync::Mutex<BTreeMap<String, u32>>,
 }
 
 impl Registry {
@@ -369,6 +378,7 @@ impl Registry {
             refuse_cancel: std::sync::atomic::AtomicBool::new(false),
             session: std::sync::OnceLock::new(),
             voice_due: std::sync::Mutex::default(),
+            chat_responses: std::sync::Mutex::default(),
         };
         (Arc::new(registry), receiver)
     }
@@ -396,9 +406,39 @@ impl Registry {
         self.write(Record::CancelRefused { at, call_id });
     }
 
+    fn record_storage(&self, step: crate::record::StorageStep) {
+        self.write(Record::Storage { at: self.stamps.next(), step });
+    }
+
+    pub(super) fn record_boundary(
+        &self,
+        operation: crate::record::BoundaryOperation,
+        error: Option<String>,
+    ) {
+        self.write(Record::Boundary {
+            at: self.stamps.next(),
+            outcome: crate::record::BoundaryOutcome { operation, error },
+        });
+    }
+
     /// The session was built: what running tool bodies call.
     pub fn attach_session(&self, session: Arc<VoiceSession>) {
-        let _ = self.session.set(session);
+        assert!(self.session.set(session).is_ok(), "session attached twice");
+    }
+
+    pub fn request_of(&self, response_id: &str) -> Option<u32> {
+        self.chat_responses.lock().unwrap().get(response_id).copied()
+    }
+
+    fn response_id(&self, nth: u32) -> String {
+        let mut responses = self.chat_responses.lock().unwrap();
+        if let Some((id, _)) = responses.iter().find(|(_, chat)| **chat == nth) {
+            return id.clone();
+        }
+        // An opaque wire id; correlation uses the registry, never its spelling.
+        let id = format!("{:016x}", u64::from(nth).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        responses.insert(id.clone(), nth);
+        id
     }
 
     /// The session's instant, for what a fake stamps on the driver's clock.
@@ -570,7 +610,8 @@ impl Registry {
         let serial = self.tool_serial.fetch_add(1, Ordering::SeqCst);
         match control {
             Control::Chat(sender) => {
-                let accepted = llm::deliver(&sender, slot.nth, input, serial);
+                let accepted =
+                    llm::deliver(&sender, slot.nth, self.response_id(slot.nth), input, serial);
                 let done = matches!(input, Input::LlmEnd { .. } | Input::LlmFail { .. });
                 (accepted, (!done).then_some(Control::Chat(sender)))
             }

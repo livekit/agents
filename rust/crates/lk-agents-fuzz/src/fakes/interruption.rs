@@ -47,7 +47,7 @@ impl FakeInterruption {
             Detail::None,
             Control::Interruption(port.clone()),
         );
-        let _ = port.slot.set(slot);
+        assert!(port.slot.set(slot).is_ok(), "interruption port registered twice");
         port
     }
 

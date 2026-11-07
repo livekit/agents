@@ -27,6 +27,9 @@ prost.workspace = true
 serde_json.workspace = true
 fastrand = "2"
 
+[build-dependencies]
+serde_json.workspace = true
+
 [[test]]
 name = "build_registration"
 path = "build_registration.rs"

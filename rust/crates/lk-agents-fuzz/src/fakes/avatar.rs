@@ -672,7 +672,7 @@ impl FakeAvatarWorker {
             avatar: avatar.to_owned(),
             relaying: Mutex::default(),
         });
-        let _ = worker.set(Arc::downgrade(&me));
+        assert!(worker.set(Arc::downgrade(&me)).is_ok(), "avatar worker set twice");
         // what either side sends crosses as it is sent
         let relaying = {
             let weak = Arc::downgrade(&me);
@@ -694,8 +694,24 @@ impl FakeAvatarWorker {
         };
         *me.relaying.lock().unwrap() = Some(relaying);
         // `AvatarRunner.start()`: the receiver's own start, then the runner's
-        let _ = rx.start().await;
-        let _ = me.runner.start().await;
+        let error = rx.start().await.err().map(|e| e.to_string());
+        record(
+            &me.log,
+            &me.stamps,
+            AvatarStep::Boundary(crate::record::BoundaryOutcome {
+                operation: crate::record::BoundaryOperation::AvatarReceiverStart,
+                error,
+            }),
+        );
+        let error = me.runner.start().await.err().map(|e| e.to_string());
+        record(
+            &me.log,
+            &me.stamps,
+            AvatarStep::Boundary(crate::record::BoundaryOutcome {
+                operation: crate::record::BoundaryOperation::AvatarRunnerStart,
+                error,
+            }),
+        );
         me
     }
 
@@ -732,7 +748,15 @@ impl FakeAvatarWorker {
                 Sent::StreamChunk(index, chunk) => {
                     let tx = self.relay.lock().unwrap().streams.get(&index).cloned();
                     if let Some(tx) = tx {
-                        let _ = tx.send(chunk).await;
+                        let error = tx.send(chunk).await.err().map(|e| e.to_string());
+                        record(
+                            &self.log,
+                            &self.stamps,
+                            AvatarStep::Boundary(crate::record::BoundaryOutcome {
+                                operation: crate::record::BoundaryOperation::AvatarStreamChunk,
+                                error,
+                            }),
+                        );
                     }
                 }
                 Sent::StreamClosed(index) => {
@@ -775,7 +799,15 @@ impl FakeAvatarWorker {
     /// `AvatarRunner.aclose()`, then what is left of it.
     pub async fn close(&self) {
         record(&self.log, &self.stamps, AvatarStep::CloseAsked);
-        let _ = self.runner.aclose().await;
+        let error = self.runner.aclose().await.err().map(|e| e.to_string());
+        record(
+            &self.log,
+            &self.stamps,
+            AvatarStep::Boundary(crate::record::BoundaryOutcome {
+                operation: crate::record::BoundaryOperation::AvatarRunnerClose,
+                error,
+            }),
+        );
         if let Some(relaying) = self.relaying.lock().unwrap().take() {
             relaying.cancel();
         }

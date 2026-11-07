@@ -18,21 +18,6 @@ use crate::{
     record::{Detail, Kind},
 };
 
-/// The id this fake puts on every chunk of a request's response. The driver copies it into the
-/// metrics it reports for that request, which is how the harness learns, from the driver itself,
-/// which speech a request was made for.
-const RESPONSE: &str = "response-";
-
-/// The chat a response id names, if this fake minted it.
-pub fn request_of(response_id: &str) -> Option<u32> {
-    response_id.strip_prefix(RESPONSE)?.parse().ok()
-}
-
-/// The response id for the n-th chat.
-pub(super) fn response_id(nth: u32) -> String {
-    format!("{RESPONSE}{nth}")
-}
-
 pub struct FakeLlm {
     registry: Arc<Registry>,
 }
@@ -113,10 +98,10 @@ pub const COMPLETION_TOKENS: u64 = 10;
 pub(super) fn deliver(
     sender: &mpsc::UnboundedSender<Result<LlmChunk, ProviderError>>,
     nth: u32,
+    response_id: String,
     what: &Input,
     serial: u32,
 ) -> bool {
-    let response_id = response_id(nth);
     let assistant = || lk_agents_abi::ChoiceDelta {
         role: Some(lk_agents_abi::Role::Assistant),
         ..Default::default()

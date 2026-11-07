@@ -102,6 +102,7 @@ use crate::{
 use lk_agents_abi::voice::session_options::{EndpointingMode, InterruptionMode, TextTransformSet};
 
 mod apply;
+mod background;
 mod collect;
 mod executor;
 mod finish;
@@ -763,7 +764,7 @@ pub struct Run {
     /// The next console request's id.
     next_request: u64,
     /// The background audio player, as `background_audio.py` runs it beside the session.
-    background: Option<BackgroundAudio>,
+    background: Option<background::Background>,
     /// The avatar worker the agent's voice streams to, in its own room.
     avatar: Option<Arc<fakes::FakeAvatarWorker>>,
     /// The agent's sink streaming to it, whose give-up timer after a clear is a deadline.

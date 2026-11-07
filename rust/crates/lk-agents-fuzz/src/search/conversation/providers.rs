@@ -2,11 +2,7 @@
 
 use super::*;
 
-// A real model's stream as measured (`calibration.json`, `llm/openai/gpt-4.1-mini/<name>`): its
-// first chunk's delay and the gap between chunks in ms, the characters in a chunk.
-const LLM_FIRST_CHUNK: Measured = [372, 445, 479, 519, 547, 597, 694, 746, 769, 999, 3117];
-const LLM_CHUNK_GAP: Measured = [0, 0, 0, 2, 4, 6, 8, 11, 18, 27, 172];
-const LLM_CHARS_PER_CHUNK: Measured = [1, 2, 3, 4, 4, 5, 6, 7, 8, 8, 18];
+use crate::calibration::llm::{LLM_CHARS_PER_CHUNK, LLM_CHUNK_GAP, LLM_FIRST_CHUNK};
 
 /// A real recogniser as measured (`calibration.json`, `stt/<name>/<field>`): its delays in ms, how
 /// it cuts a turn, and its quirks. A quantity a model never showed is all zeros and never drawn.
@@ -25,45 +21,7 @@ pub struct SttModel {
     pub empty_finals: bool,
 }
 
-/// The recognisers a setup's `stt_model` picks from.
-pub const STT_MODELS: [SttModel; 3] = [
-    SttModel {
-        name: "deepgram/nova-3",
-        first_after_onset: [660, 761, 774, 782, 817, 829, 836, 1016, 1391, 1738, 1903],
-        interim_gap: [802, 950, 968, 970, 972, 978, 984, 996, 1020, 1020, 1023],
-        final_after_end: [57, 245, 270, 281, 306, 325, 332, 344, 353, 365, 546],
-        finals_per_utterance: [1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 4],
-        preflights_per_utterance: [0; 11],
-        final_after_preflight: [0; 11],
-        duplicate_share: (3, 28),
-        duplicate_final_after: [82, 101, 120, 140, 159, 178, 185, 193, 200, 208, 215],
-        empty_finals: true,
-    },
-    SttModel {
-        name: "assemblyai/universal-streaming",
-        first_after_onset: [765, 836, 880, 898, 922, 1023, 1032, 1133, 1186, 1572, 1823],
-        interim_gap: [40, 46, 92, 103, 138, 180, 218, 269, 349, 554, 967],
-        final_after_end: [357, 370, 376, 499, 826, 930, 945, 981, 1031, 1046, 1073],
-        finals_per_utterance: [1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2],
-        preflights_per_utterance: [0; 11],
-        final_after_preflight: [0; 11],
-        duplicate_share: (5, 22),
-        duplicate_final_after: [138, 139, 140, 149, 168, 187, 200, 213, 221, 225, 229],
-        empty_finals: false,
-    },
-    SttModel {
-        name: "deepgram/flux-general-en",
-        first_after_onset: [425, 506, 588, 607, 626, 736, 845, 866, 886, 977, 1068],
-        interim_gap: [747, 751, 755, 758, 762, 766, 799, 832, 864, 897, 930],
-        final_after_end: [154, 184, 213, 239, 265, 386, 507, 734, 960, 983, 1006],
-        finals_per_utterance: [1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2],
-        preflights_per_utterance: [1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 4],
-        final_after_preflight: [0, 0, 2, 6, 12, 19, 56, 121, 240, 312, 359],
-        duplicate_share: (0, 7),
-        duplicate_final_after: [0; 11],
-        empty_finals: false,
-    },
-];
+include!(concat!(env!("OUT_DIR"), "/stt_calibration.rs"));
 
 /// The model's side: every chat request is answered on the model's own clock, as a real one
 /// answers -- the first chunk after a while, then token-sized pieces a few milliseconds apart,

@@ -33,6 +33,8 @@ use lk_agents_voice::{
 use crate::input::Input;
 
 mod resources;
+mod storage;
+pub use storage::{BoundaryOperation, BoundaryOutcome, StorageOperation, StorageStep};
 mod views;
 
 #[cfg(test)]
@@ -473,6 +475,7 @@ pub enum Breach {
 /// receiver from zero; a frame's `from` is when the earliest audio in it was received.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AvatarStep {
+    Boundary(BoundaryOutcome),
     /// The worker started: its generator's frame period and latency, and its synchronizer's
     /// audio queue.
     Started {
@@ -677,6 +680,8 @@ pub struct Recording {
     forwarded: Vec<(Observed, Kind, u32, Vec<Tag>)>,
     /// Each node the session opened, and the agent whose override it is.
     nodes: Vec<(Observed, String, NodeUse)>,
+    storage: Vec<(Observed, StorageStep)>,
+    boundary_outcomes: Vec<(Observed, BoundaryOutcome)>,
     /// Each input processor's failing span the room stream handed its reader: the processor's
     /// host object and label.
     processor_spans: Vec<(Observed, u64, String)>,
@@ -1022,6 +1027,14 @@ impl Recording {
 
     pub fn record_node(&mut self, at: Observed, agent: String, node: NodeUse) {
         self.nodes.push((at, agent, node));
+    }
+
+    pub fn record_storage(&mut self, at: Observed, step: StorageStep) {
+        self.storage.push((at, step));
+    }
+
+    pub fn record_boundary(&mut self, at: Observed, outcome: BoundaryOutcome) {
+        self.boundary_outcomes.push((at, outcome));
     }
 
     pub fn record_produced(

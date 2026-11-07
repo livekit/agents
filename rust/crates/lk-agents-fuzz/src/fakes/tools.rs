@@ -392,7 +392,12 @@ impl FakeTools {
                     operation: invocation.operation,
                     call_id: call.call_id.clone(),
                 };
-                let _ = HostSpeech::wait_for_playout(handle, Some(origin)).await;
+                let error = HostSpeech::wait_for_playout(handle, Some(origin))
+                    .await
+                    .err()
+                    .map(|e| e.to_string());
+                self.registry
+                    .record_boundary(crate::record::BoundaryOperation::ToolWaitForPlayout, error);
                 answer
             }
             Err(_) => ToolOutcome::Cancelled,

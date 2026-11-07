@@ -27,6 +27,9 @@
 //! `VOICE_SEED=<n>` reruns one.
 
 pub mod authored;
+mod calibration {
+    include!(concat!(env!("OUT_DIR"), "/calibration.rs"));
+}
 pub mod boundary;
 pub mod check;
 pub mod drive;

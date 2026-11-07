@@ -3,6 +3,7 @@
 //! rule is adding a file. The generated code is `include!`d by `src/rules/mod.rs`.
 use std::{env, fs, path::Path};
 
+mod build_calibration;
 mod build_registration;
 
 fn capitalised(word: &str) -> String {
@@ -13,6 +14,7 @@ fn capitalised(word: &str) -> String {
 fn main() {
     let root = env::var("CARGO_MANIFEST_DIR").unwrap();
     let root = Path::new(&root);
+    build_calibration::generate(root);
     build_registration::check_test_modules(root);
     let rules = root.join("src/rules");
     println!("cargo:rerun-if-changed={}", rules.display());

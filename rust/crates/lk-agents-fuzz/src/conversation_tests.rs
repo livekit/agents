@@ -70,8 +70,10 @@ mod agent_state_written_on_connect {
                         while let Some(event) = runner.next_host_event().await {
                             if let VoiceHostEvent::Hook(call) = event {
                                 let outcome = HookOutcome::Returned;
-                                let _ =
-                                    runner.api().send(Command::HookDone { id: call.id(), outcome });
+                                runner
+                                    .api()
+                                    .send(Command::HookDone { id: call.id(), outcome })
+                                    .expect("active runner accepts hook answer");
                             }
                         }
                     })

@@ -39,7 +39,19 @@ impl Run {
             {
                 let thinking = *new == lk_agents_abi::voice::events::AgentState::Thinking;
                 let sound = fakes::FakeSoundStream::sound(5);
-                let _ = player.on_agent_state(vec![sound], fakes::HALF, thinking, true);
+                let error = player.on_agent_state(super::background::StateOptions {
+                    sounds: vec![sound],
+                    draw: fakes::HALF,
+                    thinking,
+                    choose: true,
+                });
+                self.record.record_boundary(
+                    self.stamps.next(),
+                    crate::record::BoundaryOutcome {
+                        operation: crate::record::BoundaryOperation::BackgroundState,
+                        error,
+                    },
+                );
             }
             self.record.record_host(at, seen);
         }
@@ -107,6 +119,8 @@ impl Run {
     fn sync_fakes(&mut self) {
         while let Ok(record) = self.records.try_recv() {
             match record {
+                Record::Boundary { at, outcome } => self.record.record_boundary(at, outcome),
+                Record::Storage { at, step } => self.record.record_storage(at, step),
                 Record::Opened { at, slot, detail, control } => {
                     if let Some(control) = control {
                         self.controls.insert(slot, control);
@@ -348,7 +362,7 @@ impl Run {
                 continue;
             };
             let AgentMetrics::Llm(metrics) = &**metrics else { continue };
-            let Some(chat) = fakes::request_of(&metrics.request_id) else { continue };
+            let Some(chat) = self.registry.request_of(&metrics.request_id) else { continue };
             let speech = speech.0;
             self.record.attribute_chat(chat, speech);
         }

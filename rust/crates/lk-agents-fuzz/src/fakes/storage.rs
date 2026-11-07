@@ -1,6 +1,6 @@
 //! The voice lane's storage at the port the voice executor consumes: every turn commits and every
-//! abandon lands at once, until the lease is lost at the setup's `lost_at`-th of them. That one
-//! reports the loss with its answer, every speech watching the lease hears it, and every later
+//! abandon gets a seeded delay and outcome, until the setup's `lost_at`-th receipt loses the lease.
+//! It reports the loss with its answer, every speech watching the lease hears it, and every later
 //! acquire is refused, as a real store's lease stays lost. Between voice turns a text turn takes
 //! the lane now and then, at a cadence the seed draws: an acquire after it reloads what that turn
 //! left, the person's text and the agent's answer appended, an earlier answer of the agent's
@@ -8,11 +8,15 @@
 //! Storage's own lease, renewal and fenced commit are covered by storage and runtime tests.
 use std::sync::{Arc, Mutex};
 
+use super::Registry;
+use crate::record::{StorageOperation, StorageStep};
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::voice::{
     StorageWork, VoiceStorage, VoiceStorageCommand, VoiceStorageEvent,
 };
 use lk_agents_abi::{ChatItem, ChatMessage, Role, StreamInput};
+use lk_agents_abi::{Clock, SpawnerExt};
+use std::time::Duration;
 use std::time::UNIX_EPOCH;
 
 type Events = Arc<dyn StreamInput<VoiceStorageEvent>>;
@@ -22,11 +26,12 @@ pub struct FakeVoiceStorage {
     /// Every this many acquires, a text turn moved the lane before it.
     text_turn_every: u32,
     state: Mutex<State>,
+    registry: Arc<Registry>,
+    clock: Arc<dyn Clock>,
 }
 
-#[derive(Default)]
 struct State {
-    rng: Option<fastrand::Rng>,
+    rng: fastrand::Rng,
     answered: u32,
     acquired: u32,
     lost: bool,
@@ -34,11 +39,56 @@ struct State {
 }
 
 impl FakeVoiceStorage {
-    pub fn new(lost_at: u32, seed: u64) -> Arc<Self> {
+    pub fn new(
+        lost_at: u32,
+        seed: u64,
+        registry: Arc<Registry>,
+        clock: Arc<dyn Clock>,
+    ) -> Arc<Self> {
         let mut rng = fastrand::Rng::with_seed(seed ^ 0x6c61_6e65);
         let text_turn_every = rng.u32(2..=6);
-        let state = State { rng: Some(rng), ..State::default() };
-        Arc::new(Self { lost_at, text_turn_every, state: Mutex::new(state) })
+        let state = State { rng, answered: 0, acquired: 0, lost: false, watching: Vec::new() };
+        Arc::new(Self { lost_at, text_turn_every, state: Mutex::new(state), registry, clock })
+    }
+
+    fn draw(state: &mut State) -> (Result<(), StorageError>, Duration) {
+        // Stress frequencies, not measured provider failure rates: each fault is rare and
+        // independent of the occasional long commit. Both remain functions of the case seed.
+        let result = match state.rng.u32(0..128) {
+            0 => Err(StorageError::Unavailable("seeded storage outage".into())),
+            1 => Err(StorageError::VersionConflict {
+                lane: "voice".into(),
+                expected: state.answered.into(),
+            }),
+            _ => Ok(()),
+        };
+        let ms = if state.rng.u32(0..32) == 0 {
+            state.rng.u64(250..=1500)
+        } else {
+            state.rng.u64(0..=5)
+        };
+        (result, Duration::from_millis(ms))
+    }
+
+    fn deliver(&self, events: &Events, event: VoiceStorageEvent) {
+        let (speech, operation, result) = match &event {
+            VoiceStorageEvent::Settled { speech, result, .. } => {
+                (*speech, StorageOperation::Settle, result.clone())
+            }
+            VoiceStorageEvent::Abandoned { speech, result } => {
+                (*speech, StorageOperation::Abandon, result.clone())
+            }
+            VoiceStorageEvent::LeaseLost { speech } => {
+                (*speech, StorageOperation::ObserveLoss, Ok(()))
+            }
+        };
+        let delivered = events.push(event).is_ok();
+        self.registry.record_storage(StorageStep::Answered {
+            speech,
+            operation,
+            result,
+            delivered,
+        });
     }
 }
 
@@ -53,7 +103,7 @@ impl VoiceStorage for FakeVoiceStorage {
             VoiceStorageCommand::ObserveLoss { speech } => {
                 if state.lost {
                     drop(state);
-                    let _ = events.push(VoiceStorageEvent::LeaseLost { speech });
+                    self.deliver(&events, VoiceStorageEvent::LeaseLost { speech });
                 } else {
                     state.watching.push((speech, events));
                 }
@@ -68,31 +118,59 @@ impl VoiceStorage for FakeVoiceStorage {
         state.lost |= losing;
         let watching = if losing { std::mem::take(&mut state.watching) } else { Vec::new() };
         let lease_lost = state.lost;
+        let (result, latency) = Self::draw(&mut state);
         drop(state);
         let answer = match command {
             VoiceStorageCommand::Settle { .. } => {
-                VoiceStorageEvent::Settled { speech, result: Ok(()), lease_lost }
+                VoiceStorageEvent::Settled { speech, result, lease_lost }
             }
-            _ => VoiceStorageEvent::Abandoned { speech, result: Ok(()) },
+            _ => VoiceStorageEvent::Abandoned { speech, result },
         };
-        let _ = events.push(answer);
+        let operation = match command {
+            VoiceStorageCommand::Settle { .. } => StorageOperation::Settle,
+            _ => StorageOperation::Abandon,
+        };
+        self.registry.record_storage(StorageStep::Requested { speech, operation });
         for (speech, events) in watching {
-            let _ = events.push(VoiceStorageEvent::LeaseLost { speech });
+            self.deliver(&events, VoiceStorageEvent::LeaseLost { speech });
         }
+        let until = self.clock.now().saturating_add(latency);
+        // The storage request outlives a cancelled caller, just as an issued commit does.
+        let world = self.registry.world.clone();
+        world.spawn_detached(async move {
+            self.clock.wait_until(until).await;
+            self.deliver(&events, answer);
+        });
         Ok(())
     }
 
-    fn acquire(&self, _speech: u64, mut local: Vec<ChatItem>) -> StorageWork<'_, Vec<ChatItem>> {
+    fn acquire(&self, speech: u64, mut local: Vec<ChatItem>) -> StorageWork<'_, Vec<ChatItem>> {
         let mut state = self.state.lock().unwrap();
         let lost = state.lost;
         state.acquired += 1;
         let turn = state.acquired;
-        let what = state.rng.as_mut().expect("a seeded store").u32(0..4);
+        let what = state.rng.u32(0..4);
+        let (result, latency) = Self::draw(&mut state);
         drop(state);
+        self.registry.record_storage(StorageStep::Requested {
+            speech,
+            operation: StorageOperation::Acquire,
+        });
+        let until = self.clock.now().saturating_add(latency);
         Box::pin(async move {
-            if lost {
-                return Err(StorageError::LeaseLost("the voice lane lease was lost".into()));
-            }
+            self.clock.wait_until(until).await;
+            let result = if lost {
+                Err(StorageError::LeaseLost("the voice lane lease was lost".into()))
+            } else {
+                result
+            };
+            self.registry.record_storage(StorageStep::Answered {
+                speech,
+                operation: StorageOperation::Acquire,
+                result: result.clone(),
+                delivered: true,
+            });
+            result?;
             if turn.is_multiple_of(self.text_turn_every) {
                 text_turn(&mut local, turn, what);
             }

@@ -349,6 +349,15 @@ impl Window {
 pub struct HostView<'a>(&'a Recording);
 
 impl<'a> HostView<'a> {
+    /// Requests and answers observed at the storage boundary.
+    pub fn storage(&self) -> &'a [(Observed, super::StorageStep)] {
+        &self.0.storage
+    }
+
+    pub fn boundary_outcomes(&self) -> &'a [(Observed, super::BoundaryOutcome)] {
+        &self.0.boundary_outcomes
+    }
+
     /// The session events the host received, in order.
     pub fn events(&self) -> Vec<(Observed, &'a SessionEvent)> {
         self.0

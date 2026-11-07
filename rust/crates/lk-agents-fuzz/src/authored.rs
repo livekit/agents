@@ -394,6 +394,12 @@ impl Authored {
         self
     }
 
+    pub fn storage(mut self, step: crate::record::StorageStep) -> Self {
+        let at = self.next();
+        self.recording.record_storage(at, step);
+        self
+    }
+
     /// A realtime socket's server held these messages as its connection closed.
     pub fn held(mut self, socket: u32, items: Vec<(u32, u64)>) -> Self {
         let at = self.next();

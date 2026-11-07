@@ -111,10 +111,12 @@ impl Run {
         let tts = setup.tts.then(|| {
             fakes::FakeTts::new(
                 registry.clone(),
-                setup.tts_latency,
-                setup.timing(),
-                !setup.chunked_tts,
-                setup.tts_alignment,
+                fakes::TtsOptions {
+                    latency: setup.tts_latency,
+                    timing: setup.timing(),
+                    streaming: !setup.chunked_tts,
+                    alignment: setup.tts_alignment,
+                },
             ) as Arc<Tts>
         });
         let providers = Legs { llm: llm.clone(), tts: tts.clone(), stt: stt.clone() };
@@ -216,7 +218,9 @@ impl Run {
             }),
             hook_bound: setup.hook_bound_ms.map(|ms| ms as f64 / 1000.0),
             max_unrecoverable_errors: setup.max_unrecoverable_errors,
-            storage: setup.storage_lost_at.map(|n| fakes::FakeVoiceStorage::new(n, schedule) as _),
+            storage: setup.storage_lost_at.map(|n| {
+                fakes::FakeVoiceStorage::new(n, schedule, registry.clone(), time.clock()) as _
+            }),
             stt_context: (!setup.keyterms.is_empty() || setup.keyterm_detection.is_some()).then(
                 || SttContextConfig {
                     keyterms: Some(setup.keyterms.clone()),
@@ -397,21 +401,35 @@ impl Run {
         }
         // `BackgroundAudioPlayer().start(room=, agent_session=)` with an ambient sound.
         if setup.background_audio {
-            let player = BackgroundAudio(Arc::new(BackgroundAudioPlayer::new(
-                fakes::SAMPLE_RATE,
-                1,
-                2_400,
-                200,
-                run.time.clock(),
-                run.registry.world.clone(),
-            )));
+            let player = super::background::Background {
+                audio: BackgroundAudio(Arc::new(BackgroundAudioPlayer::new(
+                    fakes::SAMPLE_RATE,
+                    1,
+                    2_400,
+                    200,
+                    run.time.clock(),
+                    run.registry.world.clone(),
+                ))),
+            };
             let room = Arc::new(FixedRoom {
                 rtc: Some(run.room.clone()),
                 time: run.time.clone(),
                 pool: None,
             });
             let ambient = vec![fakes::FakeSoundStream::sound(20)];
-            let _ = player.start(room, fakes::HALF, ambient, true, None).await;
+            let error = player
+                .start(
+                    room,
+                    super::background::StartOptions { ambient, draw: fakes::HALF, choose: true },
+                )
+                .await;
+            run.record.record_boundary(
+                run.stamps.next(),
+                crate::record::BoundaryOutcome {
+                    operation: crate::record::BoundaryOperation::BackgroundStart,
+                    error,
+                },
+            );
             run.background = Some(player);
         }
         if setup.avatar {
@@ -497,7 +515,18 @@ impl Run {
             // frame carries, so nothing mistakes them for the microphone's.
             let buffered = vec![0u8; SAMPLE_RATE as usize];
             if pre_connect != PreConnect::Never {
-                let _ = self.room.send_byte_stream(CALLER, info, [buffered]);
+                let error = self
+                    .room
+                    .send_byte_stream(CALLER, info, [buffered])
+                    .err()
+                    .map(|e| e.to_string());
+                self.record.record_boundary(
+                    self.stamps.next(),
+                    crate::record::BoundaryOutcome {
+                        operation: crate::record::BoundaryOperation::PreConnect,
+                        error,
+                    },
+                );
             }
         }
         let nth = self.registry.new_mic();
