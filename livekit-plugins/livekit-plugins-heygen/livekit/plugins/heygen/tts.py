@@ -16,13 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import contextlib
 import json
 import os
 import re
 import time
 import weakref
-from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 from urllib.parse import urlencode
@@ -61,17 +59,20 @@ AUTHORIZATION_HEADER = "x-api-key"
 _STREAM_PATH = "/v3/models/audio/tts/stream"
 _MULTI_STREAM_PATH = "/v3/models/audio/tts/multi-stream-input"
 
-# The longest the server allows, measured from the last client message. It ends a turn's context
-# after this long without text, and closes an idle socket.
+# The maximum that the server accepts. After this time without a client message, the server ends
+# the context and closes an idle socket.
 _INACTIVITY_TIMEOUT = 180
 
-# How long a stream teardown waits for the close handshake. Closing is what stops a context
-# already flushed, and a socket that does not answer must not hold up a barge-in.
+# The server drops a socket that does not answer pings for 40s. aiohttp answers pings only during a
+# read, and an idle socket has no read. So an idle socket expires before the server drops it.
+_MAX_SESSION_DURATION = 30
+
+# The next turn waits for this close. A socket that does not answer must not delay that turn.
 _CLOSE_TIMEOUT = 1.0
 
-# Without `enable_ssml_parsing` the server closes the socket on a break tag, losing the turn.
+# Without `enable_ssml_parsing`, a break tag makes the server close the socket. The turn is lost.
 _BREAK_TAG = re.compile(r"\s*<break\b[^>]*>", re.IGNORECASE)
-# How a parsed break tag comes back in the alignment. It is a pause, not a spoken word.
+# The alignment shows a parsed break tag in this form. It is not a spoken word.
 _PAUSE_MARKER = re.compile(r"<pause:[^>]*>\s*")
 
 
@@ -177,14 +178,12 @@ class TTS(tts.TTS):
         self._sentence_tokenizer = (
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
-        # monotonic time before which no request is sent, see _note_retry_after()
-        self._not_before = 0.0
-        self._idle_reads: dict[
-            aiohttp.ClientWebSocketResponse, asyncio.Task[aiohttp.WSMessage]
-        ] = {}
         self._pool = (
             utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
-                connect_cb=self._connect_ws, close_cb=self._close_ws
+                connect_cb=self._connect_ws,
+                close_cb=self._close_ws,
+                max_session_duration=_MAX_SESSION_DURATION,
+                mark_refreshed_on_get=True,
             )
             if streaming
             else None
@@ -203,76 +202,32 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
         return self._session
 
-    def _note_retry_after(self, headers: Mapping[str, str] | None) -> None:
-        """Hold off new requests for as long as a 429 asked."""
-        retry_after = (headers or {}).get("Retry-After", "")
-        if retry_after.isdigit():
-            self._not_before = max(self._not_before, time.monotonic() + int(retry_after))
-
-    async def _wait_for_retry_after(self, timeout: float) -> None:
-        # Refused handshakes count against the per-minute limit, so retrying sooner than asked
-        # only pushes the limit further away.
-        if (wait := self._not_before - time.monotonic()) > 0:
-            if wait > timeout:
-                # longer than a reply can wait: stop the retries (a FallbackAdapter moves on)
-                raise APIConnectionError(
-                    f"HeyGen asked to wait {wait:.1f}s before the next request", retryable=False
-                )
-            await asyncio.sleep(wait)
-
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
-        await self._wait_for_retry_after(timeout)
         try:
-            ws = await asyncio.wait_for(
+            return await asyncio.wait_for(
                 self._ensure_session().ws_connect(
                     _ws_url(self._opts), headers={AUTHORIZATION_HEADER: self._api_key}
                 ),
                 timeout,
             )
         except aiohttp.WSServerHandshakeError as e:
-            self._note_retry_after(e.headers)
             message = f"HeyGen refused the connection with HTTP {e.status}"
             if e.status == 400:
                 message += (
                     ". Check voice_id, model and language. Professional voice clones are not "
                     'served over the WebSocket: use streaming=False and model="heygen-voice-1"'
                 )
-            # aiohttp discards the response body here, so the error code is out of reach
+            # aiohttp discards the response body, so the error code is not available.
             raise APIStatusError(
                 message,
                 status_code=e.status,
                 request_id=e.headers.get("x-request-id") if e.headers else None,
+                # A retry after a 429 only spends the limit.
+                retryable=e.status >= 500,
             ) from None
-        self._read_while_idle(ws)
-        return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        if read := self._idle_reads.pop(ws, None):
-            await utils.aio.cancel_and_wait(read)
-        await ws.close()
-
-    def _read_while_idle(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        # Pings are only answered during a read, and the server drops a socket that stops
-        # answering within 40s. The read also shows when the server closed the socket.
-        self._idle_reads[ws] = asyncio.create_task(ws.receive())
-
-    async def _acquire(self, *, timeout: float) -> aiohttp.ClientWebSocketResponse:
-        assert self._pool is not None
-        while True:
-            ws = await self._pool.get(timeout=timeout)
-            read = self._idle_reads.pop(ws)
-            if not read.done():
-                await utils.aio.cancel_and_wait(read)
-                return ws
-            self._pool.remove(ws)
-            if not self._pool.last_connection_reused:
-                # closed as soon as it opened: another connection would only spend the rate limit
-                raise APIConnectionError("HeyGen closed the connection as soon as it opened")
-
-    def _release(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        assert self._pool is not None
-        self._read_while_idle(ws)
-        self._pool.put(ws)
+        await asyncio.wait_for(ws.close(), _CLOSE_TIMEOUT)
 
     def update_options(
         self,
@@ -294,7 +249,6 @@ class TTS(tts.TTS):
             apply_text_normalization: ``auto``, ``on`` or ``off``.
             end_user_id: Your identifier for the end user.
         """
-        url = _ws_url(self._opts)
         if is_given(voice_id):
             self._opts.voice_id = voice_id
         if is_given(model):
@@ -308,8 +262,8 @@ class TTS(tts.TTS):
         if is_given(end_user_id):
             self._opts.end_user_id = end_user_id
 
-        # The URL fixes these for the life of a socket.
-        if self._pool is not None and _ws_url(self._opts) != url:
+        # A socket keeps the options of its URL until it closes.
+        if self._pool is not None:
             self._pool.invalidate()
 
     def synthesize(
@@ -351,7 +305,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        await self._tts._wait_for_retry_after(self._conn_options.timeout)
         try:
             async with self._tts._ensure_session().post(
                 f"{self._opts.base_url}{_STREAM_PATH}",
@@ -364,8 +317,6 @@ class ChunkedStream(tts.ChunkedStream):
                 ),
             ) as resp:
                 if resp.status != 200:
-                    if resp.status == 429:
-                        self._tts._note_retry_after(resp.headers)
                     raise await _http_error(resp)
 
                 output_emitter.initialize(
@@ -397,7 +348,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        # `TTS.stream()` refuses to build one of these without a pool.
         assert tts._pool is not None
         self._pool = tts._pool
         self._opts = replace(tts._opts)
@@ -436,11 +386,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if not text.strip():
                     continue
 
-                # The server joins messages as sent, so sentences need the space between them.
+                # The server joins messages as sent. Sentences need a space between them.
                 packet: dict[str, Any] = {"text": f"{text} "}
                 if open_context is None:
-                    # Naming a context opens it and spends rate limit and billing admission, so
-                    # this waits for the first text: a turn with no text sends nothing.
+                    # Naming a context opens it and spends rate limit and billing admission.
+                    # A turn with no text must send nothing, so wait for the first text.
                     open_context = utils.shortuuid()
                     contexts.send_nowait(open_context)
                     if is_given(self._opts.pronunciation_dictionary):
@@ -459,10 +409,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             error: dict[str, Any] = {}
             while True:
                 try:
-                    # Not `receive(timeout=...)`: every server ping would restart that timer.
+                    # Do not use `receive(timeout=...)`. Each server ping restarts that timer.
                     msg = await asyncio.wait_for(ws.receive(), timeout)
                 except asyncio.TimeoutError:
-                    # The text can pause mid-turn, so silence only counts once it has ended.
+                    # The input can pause mid-turn. Silence counts only after the input ends.
                     if input_ended_at is None or time.monotonic() - input_ended_at < timeout:
                         continue
                     raise
@@ -480,7 +430,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 data: dict[str, Any] = json.loads(msg.data)
                 if isinstance(data.get("error"), dict):
-                    # The close that follows says whether this is worth a retry.
+                    # The close code that follows tells if a retry is useful.
                     error = data["error"]
                     continue
                 return data
@@ -497,7 +447,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if audio := data.get("audio"):
                         pcm = base64.b64decode(audio)
                         output_emitter.push(pcm)
-                        # alignment restarts at 0 on every message
+                        # Alignment times restart at 0 in each message.
                         audio_ms += len(pcm) / (2 * self._opts.sample_rate) * 1000
                     if data.get("isFinal"):
                         output_emitter.push_timed_transcript(words.flush())
@@ -506,27 +456,19 @@ class SynthesizeStream(tts.SynthesizeStream):
             output_emitter.end_segment()
 
         try:
-            ws = await self._tts._acquire(timeout=timeout)
-            self._acquire_time = self._pool.last_acquire_time
-            self._connection_reused = self._pool.last_connection_reused
-            tasks = [
-                asyncio.create_task(input_task()),
-                asyncio.create_task(send_task(ws)),
-                asyncio.create_task(recv_task(ws)),
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await sentence_stream.aclose()
-                await utils.aio.gracefully_cancel(*tasks)
-                if open_context is None and not ws.closed:
-                    self._tts._release(ws)
-                else:
-                    # A running context cannot be recalled: `close_context` lets a flushed one
-                    # finish. Only closing stops it, and keeps its audio out of the next turn.
-                    self._pool.remove(ws)
-                    with contextlib.suppress(Exception):
-                        await asyncio.wait_for(ws.close(), _CLOSE_TIMEOUT)
+            async with self._pool.connection(timeout=timeout) as ws:
+                self._acquire_time = self._pool.last_acquire_time
+                self._connection_reused = self._pool.last_connection_reused
+                tasks = [
+                    asyncio.create_task(input_task()),
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(recv_task(ws)),
+                ]
+                try:
+                    await asyncio.gather(*tasks)
+                finally:
+                    await sentence_stream.aclose()
+                    await utils.aio.gracefully_cancel(*tasks)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except APIError:
@@ -590,7 +532,7 @@ def _shared_params(opts: _TTSOptions) -> dict[str, Any]:
 def _ws_url(opts: _TTSOptions) -> str:
     params = _shared_params(opts) | {
         "output_format": f"pcm_{opts.sample_rate}",
-        # Without it the server waits for 120 characters before it starts on a sentence.
+        # Without this, the server waits for 120 characters before it starts.
         "auto_mode": "true",
         "inactivity_timeout": _INACTIVITY_TIMEOUT,
         "apply_text_normalization": opts.apply_text_normalization,
@@ -623,8 +565,8 @@ def _close_error(
         status_code=close_code or -1,
         request_id=error.get("request_id"),
         body=error or None,
-        # 1008 refuses the request or rate limits it, so another connection would only spend the
-        # limit. Everything else is an interrupted connection, a restart or full capacity.
+        # 1008 is a refusal or a rate limit. A retry only spends the limit.
+        # Other codes are a lost connection, a restart or full capacity.
         retryable=close_code != 1008,
     )
 
@@ -644,4 +586,5 @@ async def _http_error(resp: aiohttp.ClientResponse) -> APIStatusError:
         status_code=resp.status,
         request_id=error.get("request_id") or resp.headers.get("x-request-id"),
         body=payload,
+        retryable=resp.status >= 500,
     )

@@ -54,4 +54,4 @@ tts = heygen.TTS(voice_id="<professional voice id>", model="heygen-voice-1", str
 
 ## Rate limits
 
-HeyGen allows 30 speech requests per minute for each workspace member, and 120 on enterprise plans. Every WebSocket handshake and every turn counts as a request, so one API key carries about 6 live calls. Sockets are pooled between turns to save handshakes. The plugin does not retry a rate limit sooner than HeyGen asks.
+HeyGen allows 30 speech requests per minute for each workspace member, and 120 on enterprise plans. Every WebSocket handshake and every turn counts as a request, so one API key carries about 6 live calls. A socket is reused when the next turn starts within 30 seconds. The plugin does not retry a rate limit.

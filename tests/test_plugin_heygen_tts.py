@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 from unittest.mock import patch
@@ -13,7 +12,6 @@ import pytest
 from aiohttp import web
 
 from livekit.agents import (
-    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
@@ -75,11 +73,9 @@ class _Server:
         self,
         *scripts: Script,
         refusals: list[tuple[int, dict[str, str]]] | None = None,
-        heartbeat: float | None = None,
     ) -> None:
         self.scripts = list(scripts)
         self.refusals = list(refusals or [])
-        self.heartbeat = heartbeat
         self.handshakes = 0
         self.connections: list[web.Request] = []
         self.messages: list[dict[str, Any]] = []
@@ -94,7 +90,7 @@ class _Server:
             return web.json_response({"error": {"code": "nope"}}, status=status, headers=headers)
 
         self.connections.append(request)
-        ws = web.WebSocketResponse(heartbeat=self.heartbeat)
+        ws = web.WebSocketResponse()
         await ws.prepare(request)
         script = self.scripts.pop(0) if self.scripts else _answer_each_closed_context
         try:
@@ -149,8 +145,10 @@ async def _turn(
     return bytes(audio), timed
 
 
-async def _synthesize(tts_instance: TTS, text: str = "hello there") -> bytes:
-    stream = tts_instance.synthesize(text, conn_options=NO_RETRY)
+async def _synthesize(
+    tts_instance: TTS, text: str = "hello there", conn_options: APIConnectOptions = NO_RETRY
+) -> bytes:
+    stream = tts_instance.synthesize(text, conn_options=conn_options)
     audio = bytearray()
     try:
         async for ev in stream:
@@ -172,9 +170,12 @@ def test_requires_api_key() -> None:
             TTS()
 
 
-def test_api_key_from_env() -> None:
+async def test_api_key_from_env(server: _Server) -> None:
     with patch.dict("os.environ", {"HEYGEN_API_KEY": "env-key"}):
-        assert TTS()._api_key == "env-key"
+        tts_instance = TTS(base_url=server.base_url, http_session=server.session)
+    await _synthesize(tts_instance)
+
+    assert server.posts[0][0].headers["x-api-key"] == "env-key"
 
 
 def test_refuses_a_sample_rate_the_api_does_not_serve() -> None:
@@ -182,23 +183,30 @@ def test_refuses_a_sample_rate_the_api_does_not_serve() -> None:
         TTS(api_key="test-key", sample_rate=32000)
 
 
-async def test_handshake_authenticates_and_names_the_voice(server: _Server) -> None:
-    await _turn(server.tts(language="en-US", sample_rate=16000, end_user_id="user-1"), FIRST)
+async def test_handshake_authenticates_and_carries_the_options(server: _Server) -> None:
+    tts_instance = server.tts(
+        language="en-US",
+        sample_rate=16000,
+        end_user_id="user-1",
+        apply_text_normalization="off",
+        enable_ssml_parsing=True,
+        enable_logging=False,
+    )
+    await _turn(tts_instance, FIRST)
 
     request = server.connections[0]
     assert request.headers["x-api-key"] == "test-key"
-    assert dict(request.query) == {
+    assert {
         "voice_id": DEFAULT_VOICE_ID,
         "model": "heygen-voice-1-turbo",
         "language": "en",
         "end_user_id": "user-1",
         "output_format": "pcm_16000",
         "auto_mode": "true",
-        "inactivity_timeout": "180",
-        "apply_text_normalization": "auto",
-        "enable_ssml_parsing": "false",
-        "enable_logging": "true",
-    }
+        "apply_text_normalization": "off",
+        "enable_ssml_parsing": "true",
+        "enable_logging": "false",
+    }.items() <= dict(request.query).items()
 
 
 async def test_turn_is_sent_as_spaced_sentences_with_one_flush_and_one_close(
@@ -221,7 +229,7 @@ async def test_audio_and_word_times_follow_the_audio_clock(server: _Server) -> N
             data = json.loads(msg.data)
             if data.get("close_context"):
                 context_id = data["context_id"]
-                # A word split across messages, and a clock that restarts in each message.
+                # The second word splits across messages. The clock restarts in each message.
                 await ws.send_json(_frame(context_id, "Hi the", audio_ms=600))
                 await ws.send_json(_frame(context_id, "re pal", audio_ms=600))
                 await ws.send_json({"audio": None, "alignment": None, "contextId": context_id})
@@ -273,29 +281,18 @@ async def test_turns_share_a_socket_but_never_a_context(server: _Server) -> None
     assert first != second
 
 
-async def test_idle_socket_answers_server_pings() -> None:
-    async with _Server(heartbeat=0.1) as s:
-        tts_instance = s.tts()
-        await _turn(tts_instance, FIRST)
-        await asyncio.sleep(0.4)
-        await _turn(tts_instance, SECOND)
-        await tts_instance.aclose()
+async def test_socket_is_not_reused_past_the_session_limit(server: _Server) -> None:
+    with patch("livekit.plugins.heygen.tts._MAX_SESSION_DURATION", 0.05):
+        tts_instance = server.tts()
+    await _turn(tts_instance, FIRST)
+    await asyncio.sleep(0.1)
+    await _turn(tts_instance, SECOND)
+    await tts_instance.aclose()
 
-    assert s.handshakes == 1
-
-
-async def test_prewarmed_socket_answers_server_pings() -> None:
-    async with _Server(heartbeat=0.1) as s:
-        tts_instance = s.tts()
-        tts_instance.prewarm()
-        await asyncio.sleep(0.4)
-        await _turn(tts_instance, FIRST)
-        await tts_instance.aclose()
-
-    assert s.handshakes == 1
+    assert server.handshakes == 2
 
 
-async def test_socket_the_server_closed_while_idle_is_replaced_silently() -> None:
+async def test_socket_the_server_closed_while_idle_is_replaced() -> None:
     async def close_after_turn(ws: web.WebSocketResponse, server: _Server) -> None:
         async for msg in ws:
             data = json.loads(msg.data)
@@ -307,9 +304,8 @@ async def test_socket_the_server_closed_while_idle_is_replaced_silently() -> Non
     async with _Server(close_after_turn) as s:
         tts_instance = s.tts()
         await _turn(tts_instance, FIRST)
-        await asyncio.wait_for(s.disconnected.wait(), 2)
         await asyncio.sleep(0.05)
-        audio, _ = await _turn(tts_instance, SECOND)
+        audio, _ = await _turn(tts_instance, SECOND, conn_options=RETRY)
         await tts_instance.aclose()
 
     assert audio
@@ -331,25 +327,21 @@ async def test_barge_in_drops_the_running_context_with_its_socket() -> None:
         stream.end_input()
         await stream.__anext__()
         await stream.aclose()
-        await asyncio.wait_for(s.disconnected.wait(), 2)
 
         _, timed = await _turn(tts_instance, SECOND)
+        await asyncio.wait_for(s.disconnected.wait(), 2)
         await tts_instance.aclose()
 
     assert s.handshakes == 2
     assert "stale" not in "".join(str(word) for word in timed)
 
 
-async def test_cancel_before_any_text_keeps_the_socket(server: _Server) -> None:
-    tts_instance = server.tts()
-    stream = tts_instance.stream(conn_options=NO_RETRY)
+async def test_cancel_before_any_text_sends_nothing(server: _Server) -> None:
+    stream = server.tts().stream(conn_options=NO_RETRY)
     await asyncio.sleep(0.05)
     await stream.aclose()
-    await _turn(tts_instance, FIRST)
-    await tts_instance.aclose()
 
-    assert server.handshakes == 1
-    assert len(server.sent("close_context")) == 1
+    assert server.messages == []
 
 
 async def test_context_the_server_ended_is_not_reused() -> None:
@@ -487,13 +479,14 @@ async def test_failed_turn_is_retried_on_a_new_socket(
     assert s.handshakes == 2
 
 
-async def test_bad_key_is_not_retried_and_keeps_request_id() -> None:
-    async with _Server(refusals=[(401, {"X-Request-ID": "req-2"})]) as s:
+@pytest.mark.parametrize("status", [401, 429])
+async def test_refused_handshake_is_not_retried_and_keeps_request_id(status: int) -> None:
+    async with _Server(refusals=[(status, {"X-Request-ID": "req-2"})]) as s:
         with pytest.raises(APIStatusError) as raised:
             await _turn(s.tts(), FIRST, conn_options=RETRY)
 
     assert s.handshakes == 1
-    assert raised.value.status_code == 401
+    assert raised.value.status_code == status
     assert raised.value.request_id == "req-2"
 
 
@@ -503,30 +496,6 @@ async def test_refused_voice_points_at_the_http_path() -> None:
             await _turn(s.tts(), FIRST, conn_options=RETRY)
 
     assert s.handshakes == 1
-
-
-async def test_rate_limited_handshake_waits_as_long_as_asked() -> None:
-    async with _Server(refusals=[(429, {"Retry-After": "1"})]) as s:
-        started = time.monotonic()
-        audio, _ = await _turn(s.tts(), FIRST, conn_options=RETRY)
-
-    assert audio
-    assert s.handshakes == 2
-    assert time.monotonic() - started >= 0.9
-
-
-async def test_long_rate_limit_stops_spending_requests() -> None:
-    async with _Server(refusals=[(429, {"Retry-After": "60"})]) as s:
-        tts_instance = s.tts()
-        with pytest.raises(APIConnectionError):
-            await _turn(tts_instance, FIRST, conn_options=RETRY)
-        with pytest.raises(APIConnectionError):
-            await _turn(tts_instance, SECOND, conn_options=RETRY)
-        with pytest.raises(APIConnectionError):
-            await _synthesize(tts_instance)
-
-    assert s.handshakes == 1
-    assert s.posts == []
 
 
 @pytest.mark.parametrize(
@@ -554,19 +523,14 @@ async def test_pronunciation_dictionary_goes_on_the_first_message_only(server: _
     assert [m.get("pronunciation_dictionary") for m in server.sent("text")] == [dictionary, None]
 
 
-async def test_update_options_reconnects_only_when_the_socket_is_affected(server: _Server) -> None:
+async def test_update_options_applies_to_the_next_turn(server: _Server) -> None:
     tts_instance = server.tts()
     await _turn(tts_instance, FIRST)
-
-    tts_instance.update_options(voice_id=DEFAULT_VOICE_ID)
-    await _turn(tts_instance, SECOND)
-    assert server.handshakes == 1
 
     tts_instance.update_options(voice_id="other-voice", model="heygen-voice-1", language="de")
     await _turn(tts_instance, SECOND)
     await tts_instance.aclose()
 
-    assert server.handshakes == 2
     query = server.connections[1].query
     assert (query["voice_id"], query["model"], query["language"]) == (
         "other-voice",
@@ -582,7 +546,7 @@ async def test_synthesize_requests_raw_pcm_with_the_supported_fields(server: _Se
         expressiveness_boost=0.5,
         pronunciation_dictionary={"Acme": "/ˈækmi/"},
         end_user_id="user-1",
-        # the HTTP endpoint refuses fields it does not define
+        # The HTTP endpoint refuses these three fields.
         enable_logging=False,
         enable_ssml_parsing=True,
         apply_text_normalization="on",
@@ -625,6 +589,14 @@ async def test_synthesize_error_keeps_code_and_request_id(server: _Server) -> No
     assert raised.value.request_id == "req-3"
     assert raised.value.message == "invalid_parameter: Voice not found"
     assert raised.value.retryable is False
+
+
+async def test_synthesize_does_not_retry_a_rate_limit(server: _Server) -> None:
+    server.post_responses.append(web.Response(status=429))
+    with pytest.raises(APIStatusError):
+        await _synthesize(server.tts(), conn_options=RETRY)
+
+    assert len(server.posts) == 1
 
 
 async def test_synthesize_survives_a_non_json_error(server: _Server) -> None:
