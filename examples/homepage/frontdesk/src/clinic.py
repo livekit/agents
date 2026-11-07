@@ -104,12 +104,6 @@ class Clinic:
     def born_on(self, date_of_birth: date) -> list[str]:
         return [name for name, born in self.patients.items() if born == date_of_birth]
 
-    async def verify(self, name: str, date_of_birth: date) -> bool:
-        if self.patients.get(name) != date_of_birth:
-            return False
-        await self.publish_caller(name)
-        return True
-
     async def register(self, name: str, date_of_birth: date) -> None:
         name = name.strip()
         if not name:

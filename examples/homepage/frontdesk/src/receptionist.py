@@ -172,13 +172,12 @@ To find a time, call check_availability for what they asked, and offer the one o
         born = context.userdata.birthday
         if born is None:
             raise ToolError("Look up the caller's date of birth first.")
-        if name not in context.userdata.charts or not await self._clinic.verify(
-            name, born
-        ):
+        if name not in context.userdata.charts:
             raise ToolError(
                 f"No chart named {name!r} matched that date of birth. Use a name "
                 "look_up_birthday listed."
             )
+        await self._clinic.publish_caller(name)
         context.userdata.caller = Caller(name, born)
         return json.dumps(
             {"upcoming": [_describe(a) for a in self._clinic.upcoming(name)]}
