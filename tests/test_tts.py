@@ -53,7 +53,7 @@ from .utils import EventCollector, fake_llm_stream, wer
 
 pytestmark = pytest.mark.tts
 
-load_dotenv(override=True)
+load_dotenv()
 
 
 WER_THRESHOLD = 0.2
