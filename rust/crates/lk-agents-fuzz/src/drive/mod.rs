@@ -782,8 +782,9 @@ pub struct Run {
     /// task could run when its deadline passed. The evidence of a deadlock.
     deadlock: Option<String>,
     /// Retries the request stream armed for a speech's chat request, with the context the request
-    /// is reopened with, until the reopened request is seen or the speech's request finishes.
-    retried_chats: Vec<(u64, Vec<String>)>,
+    /// is reopened with and when its backoff ends (ms), until the reopened request is seen or the
+    /// speech's request finishes.
+    retried_chats: Vec<(u64, Vec<String>, u64)>,
 }
 
 impl Run {
