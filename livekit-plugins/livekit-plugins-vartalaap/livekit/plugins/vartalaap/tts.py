@@ -95,6 +95,17 @@ class _TTSOptions:
         return f"{self.base_url.replace('http', 'ws', 1)}/v1/tts/stream"
 
 
+def _check_options(o: _TTSOptions) -> None:
+    if o.speed is not None and not 0.5 <= o.speed <= 2.0:
+        raise ValueError("speed must be between 0.5 and 2.0")
+    if o.temperature is not None and not 0.0 <= o.temperature <= 2.0:
+        raise ValueError("temperature must be between 0 and 2")
+    if o.digits not in ("auto", "hi", "mixed", "en"):
+        raise ValueError("digits must be auto, hi, mixed or en")
+    if o.profile is not None and o.profile not in ("default", "telephony"):
+        raise ValueError("profile must be default or telephony")
+
+
 def _request_body(opts: _TTSOptions, *, text: str, request_id: str) -> dict[str, Any]:
     """The JSON of one utterance, shared by the REST and the WebSocket path.
 
@@ -212,14 +223,14 @@ class TTS(tts.TTS):
             api_key=vartalaap_api_key,
             base_url=base_url.rstrip("/"),
         )
-        self._check_options()
+        _check_options(self._opts)
 
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
             max_session_duration=_MAX_SESSION_DURATION,
-            mark_refreshed_on_get=True,
+            mark_refreshed_on_get=False,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._sentence_tokenizer = (
@@ -233,17 +244,6 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Vartalaap"
-
-    def _check_options(self) -> None:
-        o = self._opts
-        if o.speed is not None and not 0.5 <= o.speed <= 2.0:
-            raise ValueError("speed must be between 0.5 and 2.0")
-        if o.temperature is not None and not 0.0 <= o.temperature <= 2.0:
-            raise ValueError("temperature must be between 0 and 2")
-        if o.digits not in ("auto", "hi", "mixed", "en"):
-            raise ValueError("digits must be auto, hi, mixed or en")
-        if o.profile is not None and o.profile not in ("default", "telephony"):
-            raise ValueError("profile must be default or telephony")
 
     def _auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._opts.api_key}", "User-Agent": USER_AGENT}
@@ -330,27 +330,29 @@ class TTS(tts.TTS):
             profile (TTSProfiles | str | None, optional): ``default`` or ``telephony``.
             raw (bool, optional): Skip the normaliser.
         """
+        opts = replace(self._opts)
         if is_given(model):
-            self._opts.model = model
+            opts.model = model
         if is_given(voice):
-            self._opts.voice = voice
+            opts.voice = voice
         if is_given(expression):
-            self._opts.expression = expression
+            opts.expression = expression
         if is_given(digits):
-            self._opts.digits = digits
+            opts.digits = digits
         if is_given(speed):
-            self._opts.speed = speed
+            opts.speed = speed
         if is_given(temperature):
-            self._opts.temperature = temperature
+            opts.temperature = temperature
         if is_given(seed):
-            self._opts.seed = seed
+            opts.seed = seed
         if is_given(postfx):
-            self._opts.postfx = postfx
+            opts.postfx = postfx
         if is_given(profile):
-            self._opts.profile = profile
+            opts.profile = profile
         if is_given(raw):
-            self._opts.raw = raw
-        self._check_options()
+            opts.raw = raw
+        _check_options(opts)  # a rejected update leaves the current options untouched
+        self._opts = opts
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -492,7 +494,13 @@ class SynthesizeStream(tts.SynthesizeStream):
             current_segment: str | None = None
             current_utt: str | None = None
             while True:
-                msg = await ws.receive(timeout=self._conn_options.timeout)
+                if sender_done.is_set() and not pending:
+                    # the last utterance ended before the input closed: nothing more will come
+                    output_emitter.end_input()
+                    return
+                msg = await _receive_or_sender_done(ws)
+                if msg is None:
+                    continue
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -551,6 +559,27 @@ class SynthesizeStream(tts.SynthesizeStream):
                         output_emitter.end_input()
                         return
                 # chunk, first_audio_ms, chunk_end: progress only
+
+        async def _receive_or_sender_done(
+            ws: aiohttp.ClientWebSocketResponse,
+        ) -> aiohttp.WSMessage | None:
+            """The next message, or None once the sender has finished (so the loop can check
+            whether anything is still pending instead of waiting for a message that never comes)."""
+            if sender_done.is_set():
+                return await ws.receive(timeout=self._conn_options.timeout)
+            recv = asyncio.ensure_future(ws.receive(timeout=self._conn_options.timeout))
+            done_waiter = asyncio.ensure_future(sender_done.wait())
+            try:
+                await asyncio.wait({recv, done_waiter}, return_when=asyncio.FIRST_COMPLETED)
+                if recv.done():
+                    return recv.result()
+                return None
+            finally:
+                if not recv.done():
+                    # cancel the pending receive; the socket stays usable (aiohttp re-arms)
+                    await utils.aio.gracefully_cancel(recv)
+                if not done_waiter.done():
+                    await utils.aio.gracefully_cancel(done_waiter)
 
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:

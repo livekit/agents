@@ -330,3 +330,39 @@ async def test_update_options_applies_to_the_next_sentence_of_a_running_stream()
 
     assert [m["voice"] for m in ws.sent] == ["saanvi", "sahil", "sahil"]
     assert "style" not in ws.sent[0] and ws.sent[1]["style"] == "excited"
+
+
+@pytest.mark.asyncio
+async def test_stream_finishes_promptly_when_input_closes_after_the_last_end():
+    """The first sentence's audio has ended while the LLM is still producing text; closing
+    the input then must finish the stream at once, not after a receive timeout."""
+    import time
+
+    from livekit.plugins.vartalaap import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY)
+    ws = _FakeWS()
+    tts._pool = _FakePool(ws)  # type: ignore[assignment]
+
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5.0))
+    stream.push_text("First sentence of the reply, long enough. ")
+    stream.push_text("Second sentence of the reply, long enough. ")  # releases the first
+    async with asyncio.timeout(5):
+        while not ws.sent:
+            await asyncio.sleep(0.01)
+    await asyncio.sleep(0.2)  # the server has long sent its end event
+    t0 = time.perf_counter()
+    stream.end_input()  # the second sentence goes out now and ends
+    frames = [bytes(ev.frame.data) async for ev in stream]
+    assert time.perf_counter() - t0 < 2.0
+    assert len(ws.sent) == 2 and len(b"".join(frames)) == 4 * 3840
+
+
+def test_a_rejected_update_leaves_the_options_untouched():
+    from livekit.plugins.vartalaap import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY, speed=1.2)
+    with pytest.raises(ValueError):
+        tts.update_options(speed=3.0, voice="sahil")
+    assert tts._opts.speed == 1.2
+    assert tts._opts.voice == "saanvi"
