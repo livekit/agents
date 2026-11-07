@@ -62,6 +62,7 @@ DuplexEventTypes = Literal[
     "input_speech_stopped",
     "input_audio_transcription_completed",
     "session_reconnected",
+    "_backend_activity_changed",
     "metrics_collected",
     "error",
 ]
@@ -126,6 +127,11 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         # set once the whole configuration is applied; a model whose configuration is immutable
         # once started waits on it before connecting
         self._configured = asyncio.Event()
+
+    @property
+    def _backend_active(self) -> bool:
+        """Whether delegated model work is still running, independently of audio playout."""
+        return False
 
     @property
     def duplex_model(self) -> DuplexModel:

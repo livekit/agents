@@ -384,6 +384,9 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                 )
                 return
 
+            # Reconcile after the swap: the old backend may have changed while we awaited.
+            self.emit("_backend_activity_changed")
+
             # a swap is a reconnect from the caller's perspective
             self.emit("session_reconnected", RealtimeSessionReconnectedEvent())
 
@@ -394,6 +397,10 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                 and self._agent_session is not None
             ):
                 self._agent_session.generate_reply()
+
+    @property
+    def _backend_active(self) -> bool:
+        return self._active._backend_active
 
     @property
     def capabilities(self) -> RealtimeCapabilities:

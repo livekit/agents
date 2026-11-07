@@ -345,6 +345,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         duplex.on("input_speech_stopped", lambda ev: self.emit("input_speech_stopped", ev))
         duplex.on("metrics_collected", lambda ev: self.emit("metrics_collected", ev))
         duplex.on("error", lambda ev: self.emit("error", ev))
+        duplex.on("_backend_activity_changed", lambda: self.emit("_backend_activity_changed"))
 
         self._segment_atask = asyncio.create_task(
             self._segment_task(), name="DuplexRealtimeSession.segment"
@@ -556,6 +557,10 @@ class _DuplexRealtimeSession(RealtimeSession):
         self.emit("session_reconnected", ev)
 
     # RealtimeSession
+
+    @property
+    def _backend_active(self) -> bool:
+        return self._duplex._backend_active
 
     @property
     def duplex_session(self) -> DuplexSession:
