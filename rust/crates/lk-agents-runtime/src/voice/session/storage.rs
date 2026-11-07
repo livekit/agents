@@ -50,7 +50,8 @@ impl SessionStorage {
     /// local SQLite storage.
     async fn load(&self) -> Result<Opened, StorageError> {
         if let (Some(namespace), Some(thread_id)) = (&self.namespace, &self.thread_id) {
-            match self.lane(Arc::clone(namespace), thread_id.clone()).await {
+            let initial_history = self.initial_history.clone();
+            match self.lane(Arc::clone(namespace), thread_id.clone(), initial_history).await {
                 Ok(opened) => return Ok(opened),
                 Err(error) => {
                     log::warn!(target: lk_agents_abi::LOG_TARGET, threadId = thread_id.as_str(); "the voice lane could not be loaded, the call continues on a new local thread: {error}")
@@ -59,16 +60,19 @@ impl SessionStorage {
         }
         let local = Arc::new(Namespace::new(&self.env, None, None, None, None, None, None)?);
         let thread = local.create_thread(None, None, 0).await?;
-        self.lane(local, thread.thread_id).await
+        // A new thread has nothing to load: the call starts on the history it was given.
+        let history = self.initial_history.clone().unwrap_or_default();
+        self.lane(local, thread.thread_id, Some(history)).await
     }
 
     async fn lane(
         &self,
         namespace: Arc<Namespace>,
         thread_id: String,
+        initial_history: Option<Vec<ChatItem>>,
     ) -> Result<Opened, StorageError> {
         let store = namespace
-            ._core_voice_store(thread_id.clone(), self.lane.clone(), self.initial_history.clone())
+            ._core_voice_store(thread_id.clone(), self.lane.clone(), initial_history)
             .await?;
         Ok(Opened {
             namespace,

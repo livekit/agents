@@ -1,7 +1,6 @@
 import asyncio
 import dataclasses
 import logging
-import os
 import re
 import sys
 from collections.abc import AsyncIterator, Callable, Iterator
@@ -307,22 +306,6 @@ def caplog(request: pytest.FixtureRequest) -> Iterator[pytest.LogCaptureFixture]
     result = _CoreCaplog(request.node, _ispytest=True)
     yield result
     result._finalize()
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _local_threads(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
-    """A call without storage keeps its thread under ``~`` (``SQLiteStorage()``'s default
-    directory): the suite's calls use a temporary home. Caches stay in the real one."""
-    saved = {name: os.environ.get(name) for name in ("HOME", "XDG_CACHE_HOME")}
-    if saved["HOME"] and not saved["XDG_CACHE_HOME"]:
-        os.environ["XDG_CACHE_HOME"] = os.path.join(saved["HOME"], ".cache")
-    os.environ["HOME"] = str(tmp_path_factory.mktemp("home"))
-    yield
-    for name, value in saved.items():
-        if value is None:
-            os.environ.pop(name, None)
-        else:
-            os.environ[name] = value
 
 
 @pytest.fixture(scope="session", autouse=True)
