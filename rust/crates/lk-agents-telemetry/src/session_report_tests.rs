@@ -9,7 +9,7 @@ use tokio::net::TcpListener;
 
 use super::recording::{Multipart, encode_header, retry_delay};
 use super::*;
-use crate::otlp::{CloudRecording, JobIdentity, Limits, ProcessIdentity, SdkName};
+use crate::otlp::{CloudRecording, Limits, ProcessIdentity, SdkName, SessionIdentity};
 
 struct Request {
     path: String,
@@ -231,7 +231,7 @@ fn job_exporter(url: &str) -> Exporter {
     );
     exporter.configure_cloud(cloud(url));
     let key = JobKey("AJ_1".into());
-    let identity = JobIdentity {
+    let identity = SessionIdentity {
         room_id: Some("RM_1".into()),
         job_id: Some("AJ_1".into()),
         room_name: Some("room".into()),

@@ -1,7 +1,8 @@
 //! The worker's endpoint server.
 
-use crate::telemetry::decl::{Attrs, External, SpanValue, span};
+use crate::telemetry::decl::{Attrs, External, span};
 use crate::telemetry::semconv::otel;
+use crate::worker::http::HttpCompletion;
 
 /// One exchange the worker serves on an agent endpoint: an HTTP request and its response, or a
 /// WebSocket connection. Continues the caller's `traceparent`.
@@ -26,16 +27,4 @@ pub struct HttpRequestEnd {
     /// Why the exchange did not complete, as its `x-lk-completion` names it.
     #[attr("lk.endpoint.completion")]
     pub completion: Option<HttpCompletion>,
-}
-
-#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HttpCompletion {
-    /// The application failed.
-    Internal,
-    /// The worker stopped while the exchange ran.
-    Canceled,
-    /// No response head, or no answer to an upgrade, before the deadline.
-    Timeout,
-    /// The client broke the request's framing.
-    Protocol,
 }

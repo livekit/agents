@@ -10,7 +10,7 @@ use lk_agents_abi::BoxFuture;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::http::{
     EndpointExchange, EndpointRequest, ExchangeError, ExchangeEvent, ExchangeKind, ExchangeMessage,
-    HttpExchange, RequestHead,
+    HttpCompletion, HttpExchange, RequestHead,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, watch};
@@ -26,24 +26,14 @@ const REASON_LIMIT: usize = 256;
 const COMPLETION: &[u8] = b"x-lk-completion";
 const COMPLETION_ERROR: &[u8] = b"x-lk-error";
 
-/// The `x-lk-completion` token of an exchange that did not complete.
-fn completion_token(completion: telemetry::HttpCompletion) -> &'static [u8] {
-    match completion {
-        telemetry::HttpCompletion::Internal => b"internal",
-        telemetry::HttpCompletion::Canceled => b"canceled",
-        telemetry::HttpCompletion::Timeout => b"timeout",
-        telemetry::HttpCompletion::Protocol => b"protocol",
-    }
-}
-
 /// The reset that reports `completion` before any response byte.
-fn reset_code(completion: telemetry::HttpCompletion) -> Code {
+fn reset_code(completion: HttpCompletion) -> Code {
     match completion {
-        telemetry::HttpCompletion::Internal => Code::HsrInternal,
+        HttpCompletion::Internal => Code::HsrInternal,
         // A cancelled request makes no claim about whether it was applied.
-        telemetry::HttpCompletion::Canceled => Code::HsrAbort,
-        telemetry::HttpCompletion::Timeout => Code::HsrTimeout,
-        telemetry::HttpCompletion::Protocol => Code::HsrProtocol,
+        HttpCompletion::Canceled => Code::HsrAbort,
+        HttpCompletion::Timeout => Code::HsrTimeout,
+        HttpCompletion::Protocol => Code::HsrProtocol,
     }
 }
 
@@ -251,7 +241,7 @@ pub(super) async fn serve(server: &EndpointServer, wire: Wire, origin: Origin) {
 #[derive(Debug, Default, Clone, Copy)]
 pub(super) struct Outcome {
     status: Option<u16>,
-    completion: Option<telemetry::HttpCompletion>,
+    completion: Option<HttpCompletion>,
 }
 
 /// The outcome its response and its exchange record as they happen.
@@ -264,7 +254,7 @@ impl Recorded {
     }
 
     /// The first reason the exchange did not complete.
-    pub(super) fn failed(&self, completion: telemetry::HttpCompletion) {
+    pub(super) fn failed(&self, completion: HttpCompletion) {
         self.lock().completion.get_or_insert(completion);
     }
 
@@ -631,11 +621,11 @@ impl Http {
             biased;
             () = stopped => {
                 drop(handled);
-                return self.fail(telemetry::HttpCompletion::Canceled, "worker stopped").await;
+                return self.fail(HttpCompletion::Canceled, "worker stopped").await;
             }
             () = head_missed => {
                 drop(handled);
-                return self.abort(telemetry::HttpCompletion::Timeout);
+                return self.abort(HttpCompletion::Timeout);
             }
             result = &mut handled => result,
         };
@@ -643,7 +633,7 @@ impl Http {
             Ok(()) => "application returned with no complete response".to_owned(),
             Err(error) => error.to_string(),
         };
-        self.fail(telemetry::HttpCompletion::Internal, &reason).await;
+        self.fail(HttpCompletion::Internal, &reason).await;
     }
 
     async fn receive(&self) -> Result<ExchangeEvent, ExchangeError> {
@@ -668,7 +658,7 @@ impl Http {
             }
             Err(BodyError::Malformed) => {
                 request.disconnected = true;
-                self.abort(telemetry::HttpCompletion::Protocol);
+                self.abort(HttpCompletion::Protocol);
                 Ok(ExchangeEvent::Disconnected)
             }
         }
@@ -702,14 +692,14 @@ impl Http {
     }
 
     /// End the exchange without its response; no-op once it ended.
-    fn abort(&self, completion: telemetry::HttpCompletion) {
+    fn abort(&self, completion: HttpCompletion) {
         if self.phase.send_replace(Phase::Done) != Phase::Done {
             self.outcome.failed(completion);
             self.end.reset(reset_code(completion));
         }
     }
 
-    async fn fail(&self, completion: telemetry::HttpCompletion, reason: &str) {
+    async fn fail(&self, completion: HttpCompletion, reason: &str) {
         if *self.phase.borrow() == Phase::Done {
             return;
         }
@@ -888,7 +878,7 @@ impl Response {
         }
     }
 
-    async fn fail(&mut self, completion: telemetry::HttpCompletion, reason: &str) -> Failure {
+    async fn fail(&mut self, completion: HttpCompletion, reason: &str) -> Failure {
         let state = std::mem::replace(&mut self.state, State::Done);
         match state {
             State::Done => Failure::Ended,
@@ -900,7 +890,7 @@ impl Response {
                     .take(REASON_LIMIT)
                     .collect();
                 let mut out = b"0\r\n".to_vec();
-                push_field(&mut out, COMPLETION, completion_token(completion));
+                push_field(&mut out, COMPLETION, completion.as_str().as_bytes());
                 push_field(&mut out, COMPLETION_ERROR, reason.as_bytes());
                 out.extend_from_slice(b"\r\n");
                 match self.write_all(&[&out]).await {

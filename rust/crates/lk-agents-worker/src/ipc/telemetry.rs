@@ -11,12 +11,11 @@ pub(crate) use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::telemetry::spans::job::{
     EntrypointStarted, JobAccepted, JobAssigned, JobReceived, JobStartedOnServer, ProcessAssigned,
 };
-use lk_agents_abi::worker::job::StartJobFields;
+use lk_agents_abi::worker::job::{Simulation, StartJobFields};
 pub(crate) use lk_agents_net::telemetry::Tracer;
 pub(crate) use lk_agents_telemetry::exporter;
 pub(crate) use lk_agents_telemetry::otlp::CloudEndpoint;
-use lk_agents_telemetry::otlp::JobIdentity;
-pub(crate) use lk_agents_telemetry::otlp::Simulation;
+use lk_agents_telemetry::otlp::SessionIdentity;
 use prost::Message as _;
 
 pub(crate) use lk_agents_abi::telemetry::decl::SpanDecl;
@@ -24,12 +23,10 @@ pub(crate) use lk_agents_abi::telemetry::policy::{
     SHUTDOWN_TIMEOUT_SECONDS, UPLOAD_TIMEOUT_SECONDS,
 };
 pub(crate) use lk_agents_abi::telemetry::report::RecordingOptions;
-pub(crate) use lk_agents_abi::telemetry::spans::endpoint::{
-    HttpCompletion, HttpRequest, HttpRequestEnd,
-};
+pub(crate) use lk_agents_abi::telemetry::spans::endpoint::{HttpRequest, HttpRequestEnd};
 pub(crate) use lk_agents_abi::telemetry::spans::job::{
     EntrypointCancelled, EntrypointReturned, JobEntrypoint, JobShutdown, OnSessionEnd,
-    RoomDisconnect, SessionEndUpload, ShutdownCallback, ShutdownCause,
+    RoomDisconnect, SessionEndUpload, ShutdownCallback,
 };
 pub(crate) use lk_agents_net::telemetry::{
     Cx, ScopedSpan, SpanContext, SpanEnd, end, event, start,
@@ -103,7 +100,7 @@ pub(crate) fn start_job(
         }
         exporter.open_job(
             key.clone(),
-            JobIdentity {
+            SessionIdentity {
                 room_id: known(&room.sid),
                 job_id: known(&job.id),
                 room_name: known(&room.name),

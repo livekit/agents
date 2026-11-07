@@ -3,6 +3,7 @@
 
 use lk_agents_abi::telemetry::record::{FRAMEWORK, KeyValues};
 use lk_agents_abi::telemetry::semconv::otel::SERVICE_NAME;
+use lk_agents_abi::worker::job::Simulation;
 
 use super::Signal;
 
@@ -47,9 +48,9 @@ impl ProcessIdentity {
     }
 }
 
-/// A job's identity, known when the job is received; `None` is unknown and never stamped.
+/// The session's identity, known when its job is received; `None` is unknown and never stamped.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct JobIdentity {
+pub struct SessionIdentity {
     pub room_id: Option<String>,
     pub job_id: Option<String>,
     pub room_name: Option<String>,
@@ -74,12 +75,6 @@ pub struct CloudRecording {
     pub metrics: bool,
     pub redaction: bool,
     pub simulation: Option<Simulation>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Simulation {
-    pub run_id: Option<String>,
-    pub job_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

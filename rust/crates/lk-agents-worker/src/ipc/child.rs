@@ -8,6 +8,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use lk_agents_abi::worker::ipc_host::{ChildInitialize, JobProcess, WorkerError};
+use lk_agents_abi::worker::job::ShutdownCause;
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
@@ -133,7 +134,7 @@ impl ChildChannel {
                 };
                 let reason =
                     if reason.is_empty() { "parent process shutdown".into() } else { reason };
-                run.end(reason, telemetry::ShutdownCause::ProcessShutdown);
+                run.end(reason, ShutdownCause::ProcessShutdown);
                 Ok(true)
             }
             ToChild::Hello(_) => Ok(true),

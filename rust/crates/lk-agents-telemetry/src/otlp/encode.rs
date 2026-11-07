@@ -19,9 +19,9 @@ use lk_agents_abi::telemetry::record::{
     FRAMEWORK, Key, KeyValues, LogRecord, Record, SpanContext, SpanKind, SpanRecord, Status, Value,
 };
 use lk_agents_abi::telemetry::semconv::otel::SERVICE_NAME;
-use lk_agents_abi::telemetry::spans::common::{JobIdentity as Stamp, SdkResource, SessionFlags};
+use lk_agents_abi::telemetry::spans::common::{self, SdkResource, SessionFlags};
 
-use super::config::{CloudRecording, JobIdentity, ProcessIdentity};
+use super::config::{CloudRecording, ProcessIdentity, SessionIdentity};
 
 /// Sets each key, replacing a producer's value: the stamp is the one place identity is written.
 pub(crate) fn stamp(attributes: &mut KeyValues, stamp: &KeyValues) {
@@ -34,8 +34,8 @@ pub(crate) fn stamp(attributes: &mut KeyValues, stamp: &KeyValues) {
 }
 
 /// A job's identity: the room name is content, which the caller keeps off resources.
-fn identity(process: &ProcessIdentity, job: &JobIdentity) -> Stamp {
-    Stamp {
+fn identity(process: &ProcessIdentity, job: &SessionIdentity) -> common::SessionIdentity {
+    common::SessionIdentity {
         lk_room_id: job.room_id.clone(),
         room_id: job.room_id.clone(),
         lk_job_id: job.job_id.clone(),
@@ -48,7 +48,7 @@ fn identity(process: &ProcessIdentity, job: &JobIdentity) -> Stamp {
 }
 
 /// What the application destination stamps on a job's spans, before its content policy.
-pub(crate) fn app_stamp(process: &ProcessIdentity, job: &JobIdentity) -> KeyValues {
+pub(crate) fn app_stamp(process: &ProcessIdentity, job: &SessionIdentity) -> KeyValues {
     let mut out = KeyValues::new();
     identity(process, job).write(&mut out);
     out
@@ -58,7 +58,7 @@ pub(crate) fn app_stamp(process: &ProcessIdentity, job: &JobIdentity) -> KeyValu
 /// identity and the session flags Cloud's ingest reads.
 pub(crate) fn cloud_stamp(
     process: &ProcessIdentity,
-    job: &JobIdentity,
+    job: &SessionIdentity,
     recording: &CloudRecording,
 ) -> KeyValues {
     let mut out = app_stamp(process, job);
@@ -81,10 +81,10 @@ fn sdk(process: &ProcessIdentity, out: &mut KeyValues) {
     .write(out);
 }
 
-pub(crate) fn cloud_resource(process: &ProcessIdentity, job: &JobIdentity) -> Resource {
+pub(crate) fn cloud_resource(process: &ProcessIdentity, job: &SessionIdentity) -> Resource {
     let mut attributes: KeyValues = vec![(Cow::Borrowed(SERVICE_NAME), FRAMEWORK.into())];
     sdk(process, &mut attributes);
-    Stamp { room_name: None, ..identity(process, job) }.write(&mut attributes);
+    common::SessionIdentity { room_name: None, ..identity(process, job) }.write(&mut attributes);
     resource(&attributes)
 }
 

@@ -1,5 +1,7 @@
 //! The job a process runs (`job.py`): its start fields, the session's view of it and its trace.
 
+use crate::telemetry::decl::SpanValue;
+
 /// The process's one job, shared by the generated host boundary and the IPC wire protocol.
 #[derive(Debug, Clone, Default, PartialEq)]
 #[crate::host(record(module = "worker_ipc", emit, extract))]
@@ -126,4 +128,28 @@ pub enum AutoSubscribe {
     AudioOnly,
     #[host(rename = "video_only")]
     VideoOnly,
+}
+
+/// What ended a job. The application's own end wins over the session close it causes.
+#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownCause {
+    /// `JobContext.shutdown()`.
+    Application,
+    /// The simulator disconnected.
+    SimulationCompleted,
+    /// The job's primary session closed.
+    SessionClosed,
+    /// The room disconnected.
+    RoomDisconnected,
+    /// The entrypoint raised.
+    EntrypointCrashed,
+    /// The worker shut the job's process down.
+    ProcessShutdown,
+}
+
+/// The simulation run a simulated job belongs to, from its `lk.simulator.dispatch` attribute.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Simulation {
+    pub run_id: Option<String>,
+    pub job_id: Option<String>,
 }

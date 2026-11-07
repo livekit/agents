@@ -8,11 +8,12 @@ use lk_agents_abi::telemetry::spans::inference::{
     Attempt, AttemptEnd, LlmRequestRun, TtsRequest, TtsTarget,
 };
 use lk_agents_abi::telemetry::spans::job::{
-    EntrypointStarted, JobEntrypoint, JobShutdown, OnSessionEnd, ShutdownCause,
+    EntrypointStarted, JobEntrypoint, JobShutdown, OnSessionEnd,
 };
 use lk_agents_abi::telemetry::spans::text::{
     AgentRun, AgentRunEnd, JudgeEvaluation, JudgeEvaluationEnd, RunStatus,
 };
+use lk_agents_abi::worker::job::ShutdownCause;
 
 #[derive(Default)]
 struct Collect(Mutex<Vec<Record>>);

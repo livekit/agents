@@ -4,6 +4,7 @@ use super::common::ParticipantAttrs;
 use super::session::{AgentSession, SessionStart};
 use crate::telemetry::decl::{Attrs, Content, External, Seconds, SpanValue, event, span};
 use crate::telemetry::semconv::protocol;
+use crate::worker::job::ShutdownCause;
 
 /// The job, from its receipt (backdated) to the end of shutdown. Root of a job's trace, or a
 /// continuation of the dispatch's `traceparent`.
@@ -93,23 +94,6 @@ pub struct JobShutdown {
     /// What ended the job.
     #[attr("lk.shutdown.cause")]
     pub cause: ShutdownCause,
-}
-
-/// What ended a job. The application's own end wins over the session close it causes.
-#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShutdownCause {
-    /// `JobContext.shutdown()`.
-    Application,
-    /// The simulator disconnected.
-    SimulationCompleted,
-    /// The job's primary session closed.
-    SessionClosed,
-    /// The room disconnected.
-    RoomDisconnected,
-    /// The entrypoint raised.
-    EntrypointCrashed,
-    /// The worker shut the job's process down.
-    ProcessShutdown,
 }
 
 /// The application's `on_session_end` callback, when one is registered.

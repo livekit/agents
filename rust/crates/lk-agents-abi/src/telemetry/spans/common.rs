@@ -1,5 +1,5 @@
-//! Attributes no single span declares: the job identity the exporter stamps, the keys every span
-//! carries, the participant group and the failure event.
+//! Attributes no single span declares: the session identity the exporter stamps, the keys every
+//! span carries, the participant group and the failure event.
 
 use crate::telemetry::decl::{Attrs, Content, SpanValue, event};
 use crate::telemetry::errors::ErrorType;
@@ -7,10 +7,10 @@ use crate::telemetry::semconv::{otel, protocol};
 use crate::types::attributes;
 use crate::voice::rtc;
 
-/// The job's identity, stamped by the exporter on every span, log record and Cloud measurement of
-/// the job (and, without the room name, on the Cloud resource). Never set by a declaration.
+/// The session's identity, stamped by the exporter on every span, log record and Cloud measurement
+/// of its job (and, without the room name, on the Cloud resource). Never set by a declaration.
 #[derive(Attrs)]
-pub struct JobIdentity {
+pub struct SessionIdentity {
     #[attr(protocol::LK_ROOM_ID)]
     pub lk_room_id: Option<String>,
     /// The room session id: Cloud's ingest, session view and Agent Insights find a job by it.

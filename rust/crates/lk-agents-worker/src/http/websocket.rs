@@ -7,7 +7,7 @@ use std::sync::Arc;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::worker::http::{ExchangeError, ExchangeEvent, ExchangeMessage};
+use lk_agents_abi::worker::http::{ExchangeError, ExchangeEvent, ExchangeMessage, HttpCompletion};
 use lk_agents_abi::{BoxFuture, OwnedTask, SpawnerExt};
 use lk_agents_net::task::TokioSpawner;
 use tokio::io::{BufReader, Join};
@@ -21,7 +21,6 @@ use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
 use super::exchange::{Recorded, Response};
 use super::{HttpServerLimits, ReadHalf, ServerState, StreamEnd, WriteHalf};
-use crate::ipc::telemetry;
 use crate::transport::HttpStreamResetCode as Code;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -166,13 +165,13 @@ impl Connection {
             biased;
             () = stopped => {
                 drop(handled);
-                self.0.outcome.failed(telemetry::HttpCompletion::Canceled);
+                self.0.outcome.failed(HttpCompletion::Canceled);
                 self.close(GOING_AWAY, "worker stopped").await;
                 return self.shutdown();
             }
             () = unanswered => {
                 drop(handled);
-                self.0.outcome.failed(telemetry::HttpCompletion::Timeout);
+                self.0.outcome.failed(HttpCompletion::Timeout);
                 self.0.end.reset(Code::HsrTimeout);
                 *self.0.state.lock().await = State::Ended;
                 self.mark_closed(code(CloseCode::Abnormal));
@@ -183,7 +182,7 @@ impl Connection {
         match result {
             Ok(()) => self.close(code(CloseCode::Normal), "").await,
             Err(_) => {
-                self.0.outcome.failed(telemetry::HttpCompletion::Internal);
+                self.0.outcome.failed(HttpCompletion::Internal);
                 self.close(code(CloseCode::Error), "application failed").await;
             }
         }

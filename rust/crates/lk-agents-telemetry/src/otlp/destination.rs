@@ -7,7 +7,7 @@ use std::sync::Arc;
 use super::proto::metrics::v1::Metric;
 use lk_agents_abi::telemetry::record::{JobKey, LogRecord, Record, SpanRecord};
 
-use super::config::{AppConfig, CloudEndpoint, CloudRecording, JobIdentity, ProcessIdentity};
+use super::config::{AppConfig, CloudEndpoint, CloudRecording, ProcessIdentity, SessionIdentity};
 use super::metrics::Aggregator;
 
 /// Spans one undecided job holds in the exporter before its recording decision (as 1.8.10).
@@ -73,7 +73,7 @@ enum Decision {
 }
 
 struct Job {
-    identity: Arc<JobIdentity>,
+    identity: Arc<SessionIdentity>,
     decision: Decision,
     held: Vec<(SpanRecord, usize)>,
     spans: VecDeque<(SpanRecord, usize)>,
@@ -91,12 +91,12 @@ pub(crate) struct AppDestination {
 /// A span for the application endpoint, which mixes jobs: each span carries its job's identity.
 pub(crate) struct AppSpan {
     pub span: SpanRecord,
-    pub job: Option<Arc<JobIdentity>>,
+    pub job: Option<Arc<SessionIdentity>>,
 }
 
 /// One request's worth of records, taken from the queues; encoded outside the lock.
 pub(crate) enum Batch {
-    Cloud { job: JobKey, identity: Arc<JobIdentity>, recording: CloudRecording, payload: Cloud },
+    Cloud { job: JobKey, identity: Arc<SessionIdentity>, recording: CloudRecording, payload: Cloud },
     App { config: Arc<AppConfig>, payload: App },
 }
 
@@ -171,7 +171,7 @@ impl State {
     }
 
     /// False when the job was already open.
-    pub fn open_job(&mut self, key: JobKey, identity: JobIdentity, now: u64) -> bool {
+    pub fn open_job(&mut self, key: JobKey, identity: SessionIdentity, now: u64) -> bool {
         if self.jobs.contains_key(&key) {
             return false;
         }
@@ -306,7 +306,7 @@ impl State {
     fn record_app(
         &mut self,
         record: &Record,
-        identity: Option<Arc<JobIdentity>>,
+        identity: Option<Arc<SessionIdentity>>,
         bytes: usize,
         admitted: &mut Admitted,
     ) {

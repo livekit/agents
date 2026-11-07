@@ -31,7 +31,7 @@ use tokio::sync::Notify;
 
 use cloud::Answer;
 pub use config::{
-    AppConfig, CloudEndpoint, CloudRecording, JobIdentity, ProcessIdentity, SdkName, Simulation,
+    AppConfig, CloudEndpoint, CloudRecording, ProcessIdentity, SdkName, SessionIdentity,
     Temporality,
 };
 pub use destination::Limits;
@@ -157,7 +157,7 @@ impl Exporter {
 
     /// A job started: its identity stamps its records, and Cloud holds its spans until
     /// [`Exporter::register_job`].
-    pub fn open_job(&self, key: JobKey, identity: JobIdentity) {
+    pub fn open_job(&self, key: JobKey, identity: SessionIdentity) {
         let now = self.shared.wall_nanos();
         if !self.shared.state.lock().open_job(key, identity, now) {
             add(&self.shared.counters.conflicts, 1);
@@ -378,7 +378,7 @@ impl Shared {
 /// the signal it is posted as.
 fn cloud_request(
     process: &ProcessIdentity,
-    identity: &JobIdentity,
+    identity: &SessionIdentity,
     recording: &CloudRecording,
     payload: Cloud,
 ) -> (Signal, std::io::Result<encode::Body>) {

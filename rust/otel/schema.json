@@ -5755,8 +5755,8 @@
   ],
   "groups": [
     {
-      "name": "job_identity",
-      "brief": "The job's identity, stamped by the exporter on every span, log record and Cloud measurement of the job (and, without the room name, on the Cloud resource). Never set by a declaration.",
+      "name": "session_identity",
+      "brief": "The session's identity, stamped by the exporter on every span, log record and Cloud measurement of its job (and, without the room name, on the Cloud resource). Never set by a declaration.",
       "attributes": [
         {
           "key": "lk.room_id",

@@ -13,6 +13,7 @@ use lk_agents_abi::telemetry::record::{
     EventRecord, InstrumentKind, JobKey, KeyValues, LogRecord, Measurement, Number, Record,
     SpanContext, SpanKind, SpanRecord, Status, Value,
 };
+use lk_agents_abi::worker::job::Simulation;
 use prost::Message as _;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
@@ -142,8 +143,8 @@ fn key(job: &str) -> JobKey {
     JobKey(job.to_owned())
 }
 
-fn identity(job: &str) -> JobIdentity {
-    JobIdentity {
+fn identity(job: &str) -> SessionIdentity {
+    SessionIdentity {
         room_id: Some(format!("RM_{job}")),
         job_id: Some(job.to_owned()),
         room_name: Some("private-room".into()),

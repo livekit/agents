@@ -169,3 +169,18 @@ pub struct EndpointOptions {
     #[host(default = false)]
     pub public: bool,
 }
+
+/// Why an exchange did not complete: the `x-lk-completion` token the worker answers with.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::telemetry::decl::SpanValue)]
+#[span_value(wire_strs)]
+pub enum HttpCompletion {
+    /// The application failed.
+    Internal,
+    /// The worker stopped while the exchange ran.
+    Canceled,
+    /// No response head, or no answer to an upgrade, before the deadline.
+    Timeout,
+    /// The client broke the request's framing.
+    Protocol,
+}

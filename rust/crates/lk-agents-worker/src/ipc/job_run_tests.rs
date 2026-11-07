@@ -7,7 +7,7 @@ use lk_agents_abi::errors::RefRegistry;
 use lk_agents_abi::telemetry::policy::UPLOAD_TIMEOUT_SECONDS;
 use lk_agents_abi::telemetry::record::{Record, RecordSink, SpanContext, SpanRecord, Status};
 use lk_agents_abi::worker::ipc_host::JobRun as _;
-use lk_agents_abi::worker::job::StartJobFields;
+use lk_agents_abi::worker::job::{ShutdownCause, StartJobFields};
 use lk_agents_net::telemetry::Tracer;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -259,8 +259,8 @@ async fn the_application_ends_the_job_even_when_its_session_closed_first() {
     )
     .unwrap();
     run.session_closed("user_initiated".into());
-    run.end("shutdown".into(), telemetry::ShutdownCause::Application);
+    run.end("shutdown".into(), ShutdownCause::Application);
     let st = run.inner.state.lock();
     assert_eq!(st.shutdown.as_deref(), Some("user_initiated"));
-    assert_eq!(st.cause, Some(telemetry::ShutdownCause::Application));
+    assert_eq!(st.cause, Some(ShutdownCause::Application));
 }

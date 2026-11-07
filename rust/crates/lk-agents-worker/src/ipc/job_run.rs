@@ -14,7 +14,7 @@ use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host::{
     JobCall, JobExecution, JobProcess, ParticipantEntrypoint, WorkerError,
 };
-use lk_agents_abi::worker::job::StartJobFields;
+use lk_agents_abi::worker::job::{ShutdownCause, StartJobFields};
 use lk_agents_abi::{ATTRIBUTE_SIMULATOR, HostRef};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::{TaskSet, TokioSpawner};
@@ -43,7 +43,7 @@ struct State {
     /// The first reason the job ends with.
     shutdown: Option<String>,
     /// What ended the job: the first cause, unless the application ended it too.
-    cause: Option<telemetry::ShutdownCause>,
+    cause: Option<ShutdownCause>,
     connected: bool,
     /// `add_participant_entrypoint`'s, in order, each with the participant kinds it runs for.
     entrypoints: Vec<Entrypoint>,
@@ -115,13 +115,13 @@ struct Inner {
 
 impl JobExecution for JobRun {
     fn session_closed(&self, reason: String) {
-        self.inner.end(reason, telemetry::ShutdownCause::SessionClosed);
+        self.inner.end(reason, ShutdownCause::SessionClosed);
     }
 }
 
 impl JobRun {
     /// The job ends with `reason`; the first reason given is the one kept.
-    pub(crate) fn end(&self, reason: String, cause: telemetry::ShutdownCause) {
+    pub(crate) fn end(&self, reason: String, cause: ShutdownCause) {
         self.inner.end(reason, cause);
     }
 
@@ -135,10 +135,10 @@ fn cancelled(error: &HostError) -> bool {
 }
 
 impl Inner {
-    fn end(&self, reason: String, cause: telemetry::ShutdownCause) {
+    fn end(&self, reason: String, cause: ShutdownCause) {
         let mut st = self.state.lock();
         // The session's close can reach the job before the application's own `shutdown`.
-        if st.cause.is_none() || cause == telemetry::ShutdownCause::Application {
+        if st.cause.is_none() || cause == ShutdownCause::Application {
             st.cause = Some(cause);
         }
         if st.shutdown.is_none() {
@@ -253,7 +253,7 @@ impl Inner {
         }
         let (reason, cause) = {
             let st = self.state.lock();
-            let cause = st.cause.unwrap_or(telemetry::ShutdownCause::ProcessShutdown);
+            let cause = st.cause.unwrap_or(ShutdownCause::ProcessShutdown);
             (st.shutdown.clone().unwrap_or_default(), cause)
         };
         let shutdown =
@@ -294,16 +294,14 @@ impl Inner {
                 log::error!(target: lk_agents_abi::LOG_TARGET, exc_text:% = e.exc_text(); "unhandled exception while running the job task");
                 // A crash before ctx.connect() resolves nothing else: the shutdown
                 // still runs, so the cleanup can flush the crash logs.
-                self.end("job crashed".into(), telemetry::ShutdownCause::EntrypointCrashed);
+                self.end("job crashed".into(), ShutdownCause::EntrypointCrashed);
                 Some(e)
             }
             Ok(()) => {
                 telemetry::event(root, telemetry::EntrypointReturned);
                 let unfinished = {
                     let st = self.state.lock();
-                    !st.connected
-                        && st.cause != Some(telemetry::ShutdownCause::Application)
-                        && !self.fake
+                    !st.connected && st.cause != Some(ShutdownCause::Application) && !self.fake
                 };
                 if unfinished {
                     log::warn!(target: lk_agents_abi::LOG_TARGET, "The job task completed without establishing a connection or performing a proper shutdown. Ensure that job_ctx.connect()/job_ctx.shutdown() is called and the job is correctly finalized.");
@@ -318,7 +316,7 @@ impl Inner {
     fn warn_if_unconnected(&self) {
         let unconnected = {
             let st = self.state.lock();
-            !st.connected && st.cause != Some(telemetry::ShutdownCause::Application)
+            !st.connected && st.cause != Some(ShutdownCause::Application)
         };
         if unconnected {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "The room connection was not established within 10 seconds after calling job_entry. This might mean that job_ctx.connect() was never invoked, or that no VoiceSession with an active RoomIO has been started.");
@@ -375,11 +373,11 @@ impl Inner {
     }
 
     /// The parent learns the job is ending, then why.
-    async fn announce_exit(&self, reason: &str, cause: telemetry::ShutdownCause) {
+    async fn announce_exit(&self, reason: &str, cause: ShutdownCause) {
         if let Some(parent) = self.parent.get() {
             let _ = parent.send(ToParent::ShuttingDown).await;
         }
-        let user_initiated = cause == telemetry::ShutdownCause::Application;
+        let user_initiated = cause == ShutdownCause::Application;
         log::debug!(target: lk_agents_abi::LOG_TARGET, reason = reason, user_initiated = user_initiated; "shutting down job task");
         if let Some(parent) = self.parent.get() {
             let _ = parent.send(ToParent::Exiting { reason: bounded(reason.to_owned()) }).await;
@@ -503,11 +501,11 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
 
     /// The host's `observability_url`, else the server's when it is LiveKit Cloud's.
     fn shutdown(&self, reason: String) {
-        self.inner.end(reason, telemetry::ShutdownCause::Application);
+        self.inner.end(reason, ShutdownCause::Application);
     }
 
     fn room_disconnected(&self) {
-        self.inner.end("room disconnected".into(), telemetry::ShutdownCause::RoomDisconnected);
+        self.inner.end("room disconnected".into(), ShutdownCause::RoomDisconnected);
     }
 
     fn connected(&self) {
@@ -601,8 +599,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
     fn participant_left(&self, attributes: BTreeMap<String, String>) {
         if attributes.contains_key(ATTRIBUTE_SIMULATOR) {
             log::debug!(target: lk_agents_abi::LOG_TARGET, "simulator disconnected, shutting down the job");
-            self.inner
-                .end("simulation completed".into(), telemetry::ShutdownCause::SimulationCompleted);
+            self.inner.end("simulation completed".into(), ShutdownCause::SimulationCompleted);
         }
     }
 
