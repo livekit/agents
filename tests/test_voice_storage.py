@@ -191,7 +191,7 @@ async def test_storage_failure_at_voice_start_is_logged_without_ending_the_call(
 
 
 @pytest.mark.parametrize("deleted_thread", [False, True])
-async def test_call_without_a_loaded_lane_keeps_its_context_in_memory(
+async def test_call_without_a_loaded_lane_keeps_its_context_on_a_local_thread(
     thread_storage: Storage,
     deleted_thread: bool,
 ) -> None:

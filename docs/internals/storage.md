@@ -35,10 +35,11 @@ Participants sharing a thread must use the same storage namespace: the same
 Cloud project or the same local directory. A local thread id does not identify
 a thread in Cloud storage.
 
-Storage only adds durability. A server with no storage still speaks
-standard A2A: every message still gets an A2A task id, and `ctx.thread` is
-an in-memory thread with the same API that nothing persists, so it ends
-with the process.
+A server with no storage still speaks standard A2A: every message still
+gets an A2A task id, and a text run has no `ctx.thread`. A call is never
+without a thread: a `VoiceSession` given none, or whose thread does not
+load, runs on a new thread of the local `SQLiteStorage()`, in its default
+directory, and logs why when a supplied thread did not load.
 
 ## Rust interface
 

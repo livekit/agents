@@ -120,14 +120,7 @@ impl SessionHost for FailingHost {
 async fn option_updates_while_the_session_opens_stay_on_the_options() {
     let owner = owner();
     let host = Arc::new(FailingHost::default());
-    let storage = Arc::new(SessionStorage::new(
-        &ProcessEnv::current_runtime(),
-        None,
-        None,
-        "frontdesk".into(),
-        "frontdesk".into(),
-        None,
-    ));
+    let storage = storage().await;
     let opening =
         owner.start(storage, host.clone(), None, lk_agents_abi::telemetry::Cx::NONE).unwrap();
     host.preparing.notified().await;
@@ -143,14 +136,7 @@ async fn option_updates_while_the_session_opens_stay_on_the_options() {
 async fn cancelled_start_waiter_and_concurrent_close_settle_partial_acquisition_once() {
     let owner = owner();
     let host = Arc::new(FailingHost::default());
-    let storage = Arc::new(SessionStorage::new(
-        &ProcessEnv::current_runtime(),
-        None,
-        None,
-        "frontdesk".into(),
-        "frontdesk".into(),
-        None,
-    ));
+    let storage = storage().await;
     let waiting = owner
         .start(storage.clone(), host.clone(), None, lk_agents_abi::telemetry::Cx::NONE)
         .unwrap();
@@ -177,14 +163,7 @@ async fn close_before_start_refuses_resource_acquisition() {
     let owner = owner();
     owner.aclose("user_initiated".to_owned(), false).unwrap().await;
     let host = Arc::new(FailingHost::default());
-    let storage = Arc::new(SessionStorage::new(
-        &ProcessEnv::current_runtime(),
-        None,
-        None,
-        "frontdesk".into(),
-        "frontdesk".into(),
-        None,
-    ));
+    let storage = storage().await;
     assert!(owner.start(storage, host.clone(), None, lk_agents_abi::telemetry::Cx::NONE).is_err());
     assert_eq!(host.prepared.load(Ordering::SeqCst), 0);
 }
@@ -235,11 +214,23 @@ impl lk_agents_abi::errors::RefRegistry for Registry {
     fn release(&self, _id: u64) {}
 }
 
-fn storage() -> Arc<SessionStorage> {
+/// A call on a new thread of a local storage in its own directory.
+async fn storage() -> Arc<SessionStorage> {
+    use lk_agents_abi::storage::Storage as _;
+    let env = ProcessEnv::current_runtime();
+    let directory = std::env::temp_dir().join(lk_agents_net::strings::shortuuid("owner-threads-"));
+    let local = lk_agents_abi::storage::LocalStorageOptions {
+        directory: Some(directory.display().to_string()),
+        project_id: "default".into(),
+    };
+    let namespace =
+        lk_agents_storage::storage::Namespace::new(&env, Some(local), None, None, None, None, None)
+            .unwrap();
+    let thread = namespace.create_thread(None, None, 0).await.unwrap();
     Arc::new(SessionStorage::new(
-        &ProcessEnv::current_runtime(),
-        None,
-        None,
+        &env,
+        Some(Arc::new(namespace)),
+        Some(thread.thread_id),
         "frontdesk".into(),
         "frontdesk".into(),
         None,
@@ -411,7 +402,12 @@ async fn the_report_belongs_to_the_starting_job_and_a_redacted_one_keeps_no_cont
     };
     let host = Arc::new(FailingHost::default());
     let opening = owner
-        .start(storage(), host.clone(), Some(info("owner")), lk_agents_abi::telemetry::Cx::NONE)
+        .start(
+            storage().await,
+            host.clone(),
+            Some(info("owner")),
+            lk_agents_abi::telemetry::Cx::NONE,
+        )
         .unwrap();
     assert!(owner.allows_report("owner".into()) && !owner.allows_report("other".into()));
     host.release.notify_one();

@@ -54,7 +54,7 @@ By its id, and nothing else.
 | ------------------------------------- | ---------------------------------------------------------------------------------- |
 | the id, as the A2A `contextId`        | that thread; an id the platform does not know fails the task `thread-not-found`     |
 | no `contextId`                        | a new thread; a retried first message (same `messageId`) gets the same thread and task |
-| a job dispatch for a call             | the `thread_id` in the dispatch's JSON metadata, else a new thread, as `ctx.thread` before the entrypoint runs; an unknown or deleted id logs a refusal and continues in memory |
+| a job dispatch for a call             | the `thread_id` in the dispatch's JSON metadata, else a new thread, as `ctx.thread` before the entrypoint runs; an unknown or deleted id logs a refusal and leaves `ctx.thread` `None` |
 
 A backend that wants to find a conversation again stores the thread id in
 its own tables, against its user, lead or order, and passes it on as
@@ -97,8 +97,9 @@ On every context, in a tool during any run and in an endpoint's handler,
 `ctx.live_session`, `None` outside a call; only it speaks. In an
 `rtc_session` entrypoint, `ctx.thread` is the call's thread, `None` on a
 server without storage, and `VoiceSession(thread=ctx.thread)` gives it to
-the call. Without storage, a run's `ctx.thread` is an in-memory thread
-with the same API and no persistence; see [storage.md](internals/storage.md).
+the call. A call without a thread, or whose thread does not load, runs on a
+new thread of the local `SQLiteStorage()` (its default directory); a text
+run without storage has no thread. See [storage.md](internals/storage.md).
 
 | Member | Returns | What |
 | --- | --- | --- |

@@ -38,7 +38,9 @@ def _calls(*inputs: str) -> FakeLLM:
     return FakeLLM(fake_responses=responses)
 
 
-async def test_a_call_without_storage_has_an_in_memory_thread() -> None:
+async def test_a_call_without_storage_runs_on_a_local_thread() -> None:
+    from livekit.agents.storage import SQLiteStorage, Thread
+
     agent = Agent(instructions="Check.", name="desk")
     seen: list[str] = []
 
@@ -46,14 +48,19 @@ async def test_a_call_without_storage_has_an_in_memory_thread() -> None:
     async def check(ctx: RunContext) -> str:
         """Check the thread."""
         assert ctx.thread is ctx.live_session.thread
-        await ctx.thread.chat_history()
         seen.append(ctx.thread.id)
         return "checked 0"
 
     async with VoiceSession(llm=_calls("hello"), vad=None, turn_detection="manual") as session:
         await session.start(agent)
         await session._run(user_input="hello")
-    assert len(seen) == 1 and seen[0]
+    (thread_id,) = seen
+    # the call's history is committed to the local SQLite storage, where a later call finds it
+    local = SQLiteStorage()
+    history = await Thread(local, thread_id, agent_name="desk").chat_history()
+    said = [item.text_content for item in history.items if item.type == "message"]
+    assert said[0] == "hello" and said[-1] == "done"
+    await local.aclose()
 
 
 async def test_a_call_keeps_one_execution_id_across_its_turns() -> None:

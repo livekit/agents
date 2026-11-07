@@ -144,7 +144,8 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
                 defaults to ``inference.VAD(model="silero")``; ``vad=None`` opts out.
             tools: Tools shared by every agent of the session. A name an agent's own tool
                 also has is refused with ``ValueError`` when that agent runs.
-            context, thread: Read by tools through ``RunContext``.
+            context, thread: Read by tools through ``RunContext``. Without ``thread``, the call
+                runs on a new thread of the local ``SQLiteStorage()``.
             video_sampler: How often camera frames reach the model; ``None`` sends every frame.
             turn_detection, endpointing_opts: The session's turn completion and endpointing
                 policy, as ``update_options`` changes them.
@@ -177,8 +178,8 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
 
     @property
     def store(self) -> ContextStore:
-        """The call's store for explicit ``load_context`` and ``save_context``: the thread's
-        lane, or memory when the call has no thread or its lane did not load."""
+        """The call's store for explicit ``load_context`` and ``save_context``: its thread's
+        lane."""
         if self._store is None:
             raise RuntimeError("VoiceSession isn't running")
         return self._store
@@ -190,7 +191,8 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
 
     @property
     def thread(self) -> Thread | None:
-        """The call's supplied thread, or ``None`` without configured storage."""
+        """The call's thread: the supplied one, else, once started, a new thread of the local
+        ``SQLiteStorage()``; ``None`` before ``start()`` without one."""
         return self._thread
 
     @property
