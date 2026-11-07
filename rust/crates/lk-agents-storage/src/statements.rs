@@ -115,6 +115,13 @@ pub struct Loaded {
     pub tip: i64,
 }
 
+/// What one acquire batch got: the lane loaded, or the lease held by another holder, with
+/// whether the batch's `submit` inserted its row, as in [`Loaded::submitted`].
+pub(crate) enum AcquireOutcome {
+    Loaded(Box<Loaded>),
+    Held { submitted: Option<bool> },
+}
+
 /// One history item a commit writes: an upsert on `id`.
 #[derive(Debug, Clone, Serialize, Deserialize, Host)]
 #[python(pydantic, module = "storage")]
@@ -555,6 +562,18 @@ impl ThreadDb {
 
     /// The acquire and the load, one `Batch`; `None` when the lease is held by another holder.
     pub async fn acquire(&self, req: &AcquireRequest) -> Result<Option<Loaded>, StorageError> {
+        Ok(match self.try_acquire(req).await? {
+            AcquireOutcome::Loaded(loaded) => Some(*loaded),
+            AcquireOutcome::Held { .. } => None,
+        })
+    }
+
+    /// [`Self::acquire`], and when the lease is held, whether `submit` inserted its row: a retry
+    /// carries no row, so only the batch that found the lease held can tell a resend.
+    pub(crate) async fn try_acquire(
+        &self,
+        req: &AcquireRequest,
+    ) -> Result<AcquireOutcome, StorageError> {
         // the DDL rides in the acquire batch of a fresh database; a batch that loses the race to
         // another creator's DDL is retried without it
         match self.acquire_batch(req).await {
@@ -566,7 +585,7 @@ impl ThreadDb {
         }
     }
 
-    async fn acquire_batch(&self, req: &AcquireRequest) -> Result<Option<Loaded>, StorageError> {
+    async fn acquire_batch(&self, req: &AcquireRequest) -> Result<AcquireOutcome, StorageError> {
         let lane = req.lane.as_str();
         let token = req.lease_token.as_str();
         let mut stmts = self.bootstrap();
@@ -619,8 +638,10 @@ impl ThreadDb {
             self.schema_applied();
         }
         let r = &out.results;
+        let submitted = req.submit.as_ref().map(|_| r[ddl - 1].rows_affected() > 0);
         let Some(version) = first_int(&r[ddl + 1]) else {
-            return Ok(None); // not acquired: the reads are discarded
+            // not acquired: the reads are discarded
+            return Ok(AcquireOutcome::Held { submitted });
         };
         let already_committed = !r[ddl + 4].rows().is_empty();
         let mut i = ddl + 5;
@@ -635,17 +656,17 @@ impl ThreadDb {
             .first()
             .ok_or_else(|| StorageError::Decode("acquire: no lane row".into()))?;
         let tasks = r[i + 3].rows().iter().map(TaskRow::from_row).collect::<Result<_, _>>()?;
-        Ok(Some(Loaded {
+        Ok(AcquireOutcome::Loaded(Box::new(Loaded {
             version,
             already_committed,
             lane: LaneRow::from_row(lane)?,
             items,
             events,
             tasks,
-            submitted: req.submit.as_ref().map(|_| r[ddl - 1].rows_affected() > 0),
+            submitted,
             picked_up,
             tip: out.tip,
-        }))
+        })))
     }
 
     /// Releases the lease without writing anything else: the path of a retried `run_id`

@@ -6,8 +6,9 @@
 //! part of it; [`Lane::open`] is the `lane.run(...)` of 5.2:
 //!
 //! * it takes the lease and loads the lane in one acquire batch (3.3.2), waiting for a held lease
-//!   with backoff from 100 ms to 1 s, as the lane's `waiter` under `interrupt`; a `run_id` that
-//!   already committed yields a closed [`Run`] that writes nothing;
+//!   with backoff from 100 ms to 1 s, as the lane's `waiter` under `interrupt` (a resend, whose
+//!   message has a row already, waits unmarked); a `run_id` that already committed yields a
+//!   closed [`Run`] that writes nothing;
 //! * [`Run::commit`] writes history, state, agent stack, events, task rows and usage in one fenced
 //!   write, releasing the lease or renewing it when the runner continues;
 //! * [`Run::abandon`] writes `run_ended` with the outcome and releases, nothing else;
@@ -33,8 +34,8 @@ pub use tasks::{SubmitOptions, TaskPatch, Tasks, WaitOptions, agent_message, art
 use crate::StorageError;
 use crate::schema::{ChatItemRow, EventRow, InboxRow};
 use crate::statements::{
-    AcquireRequest, CommitRequest, EventWrite, Fence, ItemWrite, Lease, LeaseAfter, Loaded,
-    RunEndedRequest, SubmittedTask, ThreadDb,
+    AcquireOutcome, AcquireRequest, CommitRequest, EventWrite, Fence, ItemWrite, Lease, LeaseAfter,
+    Loaded, RunEndedRequest, SubmittedTask, ThreadDb,
 };
 
 /// Plan 3.3.2: a waiter that has not acquired after 60 s fails `lease-timeout`.
@@ -251,7 +252,7 @@ pub struct RunOptions {
     /// [`StorageError::LeaseHeld`] at once.
     pub wait: bool,
     /// Record this worker as the lane's `waiter` while it polls, so the holder yields at its next
-    /// boundary (plan 3.3.4).
+    /// boundary (plan 3.3.4); not a resend, whose `submit` found its message on a row already.
     pub interrupt: bool,
     /// The request's channel, for the `run_started` event.
     pub channel: Option<String>,
@@ -465,10 +466,13 @@ impl Lane {
         let deadline = Instant::now() + opts.wait_timeout;
         let mut delay = LEASE_POLL_MIN;
         let mut marked = false;
+        // whether `submit` inserted the row, from the one batch that carried it
+        let mut submitted = None;
         let loaded: Loaded = loop {
             request.ts_ms = thread.now_ms();
-            if let Some(loaded) = self.db().acquire(&request).await? {
-                break loaded;
+            match self.db().try_acquire(&request).await? {
+                AcquireOutcome::Loaded(loaded) => break *loaded,
+                AcquireOutcome::Held { submitted: first } => submitted = submitted.or(first),
             }
             // the row is in; a retry of the batch must not report it as a duplicate
             request.submit = None;
@@ -478,7 +482,8 @@ impl Lane {
                     self.name
                 )));
             }
-            if opts.interrupt && !marked {
+            // a resend waits unmarked: the run it resends must not yield to it
+            if opts.interrupt && !marked && submitted != Some(false) {
                 marked = self.db().set_waiter(&self.name, &holder).await?;
                 if marked {
                     log::debug!(target: "livekit.agents", lane = self.name.as_str(), holder = holder.as_str(); "waiting for the lane as its waiter");
@@ -528,7 +533,7 @@ impl Lane {
             agents: AgentStack::new(stack),
             events: EventLog::new(loaded.events, thread.inner.clock.clone()),
             tasks: Tasks::loaded(self.db().clone(), &self.name, loaded.tasks),
-            submitted: loaded.submitted,
+            submitted: submitted.or(loaded.submitted),
             picked_up: loaded.picked_up,
             answer_task: None,
             committed_task: None,
