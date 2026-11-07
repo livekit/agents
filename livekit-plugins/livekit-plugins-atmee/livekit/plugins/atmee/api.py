@@ -14,8 +14,8 @@
 
 """Thin async client for the Atmee API used by the plugin.
 
-Two resources matter here: **avatars** (create a v1 avatar from a single
-portrait, read an avatar's status) and **avatar sessions** (render an avatar,
+Two resources matter here: **avatars** (read an avatar's generation and
+status) and **avatar sessions** (render an avatar,
 v1 or v2, into your LiveKit room for your agent, end it). Authentication is
 your Atmee API key (``sk_atmee_...``) in the ``X-Api-Key`` header; the key
 never reaches a browser.
@@ -24,10 +24,8 @@ never reaches a browser.
 from __future__ import annotations
 
 import asyncio
-import mimetypes
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Literal, get_args
 from urllib.parse import urlsplit
 
@@ -63,8 +61,6 @@ _START_TOTAL_TIMEOUT: dict[str, dict[str, float]] = {
 # what it gives.
 _WARMING_RETRY_DEFAULT = 5.0
 _WARMING_RETRY_BOUNDS = (1.0, 30.0)
-# Budget of an avatar create: an upload, never retried.
-_CREATE_TOTAL_TIMEOUT = 120.0
 # Engines whose avatars render a selected take (`v2pro` is V2 HD's former name).
 _V2_ENGINES = frozenset({"v2", "v2hd", "v2pro"})
 
@@ -162,7 +158,7 @@ class AvatarSessionInfo:
 
 @dataclass
 class AvatarInfo:
-    """What ``GET /v1/avatars/{avatarId}`` (and a create) report about an avatar.
+    """What ``GET /v1/avatars/{avatarId}`` reports about an avatar.
 
     ``kind`` (``conversational`` | ``render_only``) says whether the avatar has
     a voice and persona; ``engine`` is its generation as the API reports it
@@ -184,14 +180,6 @@ class AvatarInfo:
         return self.engine not in _V2_ENGINES or bool(self.raw.get("servingCandidateId"))
 
 
-_IMAGE_TYPES = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".webp": "image/webp",
-}
-
-
 class AtmeeAPI:
     """Async client for the Atmee API.
 
@@ -202,8 +190,8 @@ class AtmeeAPI:
             every request and each attempt of the calls that are safe to
             repeat (reading and ending a session, reading an avatar), which
             are retried ``max_retry`` times on transport failures and 5xx
-            answers. Starting a session and creating an avatar are never
-            repeated and have budgets of their own.
+            answers. Starting a session is never repeated and has a budget
+            of its own.
         session: an ``aiohttp.ClientSession`` to reuse. Inside a LiveKit job the
             worker's shared session is used; outside (scripts, tests) a private
             one is created and closed by :meth:`aclose`.
@@ -361,75 +349,6 @@ class AtmeeAPI:
 
     # --- avatars -----------------------------------------------------------
 
-    async def create_avatar(
-        self,
-        name: str,
-        image: str | Path | bytes,
-        *,
-        description: str | None = None,
-        content_type: str | None = None,
-        avatar_version: NotGivenOr[str] = NOT_GIVEN,
-    ) -> str:
-        """Create a render-only **v1 avatar** from a single portrait and return its id.
-
-        ``image`` is a local file path, the image bytes, or an ``https://``
-        URL the Atmee service can download. A portrait-only avatar is ready
-        at once; nothing to poll. Add a voice later in the Atmee studio (or
-        ``PUT /v1/avatars/{id}/voice``) to make it conversational as well.
-
-        A v2 avatar also needs a voice and a take built over minutes: create
-        one in the Atmee studio, CLI or MCP server, and render it here by id.
-        """
-        _warn_avatar_version(avatar_version)
-        info = await self.create_avatar_info(
-            name, image, description=description, content_type=content_type
-        )
-        return info.avatar_id
-
-    async def create_avatar_info(
-        self,
-        name: str,
-        image: str | Path | bytes,
-        *,
-        description: str | None = None,
-        content_type: str | None = None,
-        avatar_version: NotGivenOr[str] = NOT_GIVEN,
-    ) -> AvatarInfo:
-        """Like :meth:`create_avatar`, returning the whole response."""
-        _warn_avatar_version(avatar_version)
-        if isinstance(image, str) and _is_url(image):
-            manifest: dict[str, Any] = {
-                "schemaVersion": 1,
-                "name": name,
-                "assets": {"image": {"url": image}},
-            }
-            if description:
-                manifest["description"] = description
-            data = await self._request(
-                "POST",
-                "/v1/avatars",
-                json=manifest,
-                retry=False,
-                total_timeout=_CREATE_TOTAL_TIMEOUT,
-            )
-            return _avatar_info(data)
-
-        if isinstance(image, bytes | bytearray):
-            blob = bytes(image)
-            filename = "portrait" + _extension_for(content_type) if content_type else "portrait.jpg"
-            ctype = content_type or "image/jpeg"
-        else:
-            blob, filename, ctype = await asyncio.to_thread(_load_image_file, image, content_type)
-        form = aiohttp.FormData()
-        form.add_field("name", name)
-        if description:
-            form.add_field("description", description)
-        form.add_field("file", blob, filename=filename, content_type=ctype)
-        data = await self._request(
-            "POST", "/v1/avatars", data=form, retry=False, total_timeout=_CREATE_TOTAL_TIMEOUT
-        )
-        return _avatar_info(data)
-
     async def get_avatar(self, avatar_id: str) -> AvatarInfo:
         return await self._get_avatar(avatar_id)
 
@@ -437,37 +356,6 @@ class AtmeeAPI:
         return _avatar_info(
             await self._request("GET", f"/v1/avatars/{avatar_id}", deadline=deadline)
         )
-
-    async def wait_until_ready(
-        self, avatar_id: str, *, timeout: float = 600.0, poll_interval: float = 5.0
-    ) -> AvatarInfo:
-        """Poll until the avatar reports ``ready`` (a conversational avatar
-        builds asynchronously; a portrait-only one is ready immediately)."""
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        status = "unknown"
-        while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                raise AtmeeException(
-                    f"avatar {avatar_id} not ready after {timeout:.0f}s (status {status})",
-                    code="timeout",
-                )
-            try:
-                info = await self._get_avatar(avatar_id, deadline=deadline)
-            except AtmeeException as e:
-                if loop.time() >= deadline and e.status_code == 0:
-                    raise AtmeeException(
-                        f"avatar {avatar_id} not ready after {timeout:.0f}s (status {status})",
-                        code="timeout",
-                    ) from e
-                raise
-            status = info.status
-            if info.ready:
-                return info
-            if info.status == "failed":
-                raise AtmeeException(f"avatar {avatar_id} failed to build", code="avatar_failed")
-            await asyncio.sleep(max(0.0, min(poll_interval, deadline - loop.time())))
 
     # --- plumbing ------------------------------------------------------------
 
@@ -501,7 +389,6 @@ class AtmeeAPI:
         path: str,
         *,
         json: dict[str, Any] | None = None,
-        data: aiohttp.FormData | None = None,
         params: dict[str, str] | None = None,
         retry: bool = True,
         total_timeout: float | None = None,
@@ -511,7 +398,7 @@ class AtmeeAPI:
         5xx answers are retried up to ``conn_options.max_retry`` times after the
         first attempt; a 503 ``no_capacity`` or ``avatar_warming`` and every
         4xx are final. ``retry=False`` for calls that are not idempotent
-        (creating a session or an avatar).
+        (creating a session).
 
         Each attempt is bounded by ``total_timeout``, ``conn_options.timeout``
         when none is given; ``deadline`` (event-loop time) bounds the whole
@@ -534,7 +421,6 @@ class AtmeeAPI:
                     f"{self._api_url}{path}",
                     headers={"X-Api-Key": self._api_key, "Accept": "application/json"},
                     json=json,
-                    data=data,
                     params=params,
                     timeout=aiohttp.ClientTimeout(
                         sock_connect=self._conn_options.timeout, total=attempt_timeout
@@ -632,25 +518,3 @@ def _avatar_info(data: dict[str, Any]) -> AvatarInfo:
         engine=engine if isinstance(engine, str) and engine else None,
         raw=data,
     )
-
-
-def _is_url(value: str) -> bool:
-    return value.startswith(("http://", "https://"))
-
-
-def _load_image_file(image: str | Path, content_type: str | None) -> tuple[bytes, str, str]:
-    path = Path(image)
-    ctype = (
-        content_type
-        or _IMAGE_TYPES.get(path.suffix.lower())
-        or mimetypes.guess_type(path.name)[0]
-        or "application/octet-stream"
-    )
-    return path.read_bytes(), path.name, ctype
-
-
-def _extension_for(content_type: str) -> str:
-    for ext, ctype in _IMAGE_TYPES.items():
-        if ctype == content_type and ext != ".jpeg":
-            return ext
-    return mimetypes.guess_extension(content_type) or ""

@@ -60,8 +60,8 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
     """An Atmee avatar session: render an Atmee avatar into your agent's room.
 
     Any Atmee avatar renders by its id: a **v1 avatar** is a talking head
-    generated from a single portrait (see :meth:`AtmeeAPI.create_avatar`); a
-    **v2 avatar** moves as a whole and is created in the Atmee studio. The
+    generated from a single portrait; a **v2 avatar** moves as a whole. Both
+    are created in the Atmee studio or with the Atmee API. The
     first v2 session after a quiet period can take a few minutes to start, and
     :meth:`start` waits for it.
 

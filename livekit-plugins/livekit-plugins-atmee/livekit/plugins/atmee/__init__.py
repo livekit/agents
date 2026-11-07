@@ -14,15 +14,13 @@
 
 """Atmee avatar plugin for LiveKit Agents.
 
-Bring your own LiveKit voice agent; Atmee renders its avatar into your room: a
-**v1 avatar** (a talking head generated from a single portrait) or a **v2
-avatar**, rendered the same way by its id::
+Bring your own LiveKit voice agent; Atmee renders its avatar into your room.
+Any Atmee avatar renders by its id, v1 or v2 (create avatars in the Atmee
+studio or with the Atmee API)::
 
     from livekit.plugins import atmee
 
-    avatar_id = await atmee.AtmeeAPI().create_avatar(name="Val", image="portrait.jpg")
-
-    avatar = atmee.AvatarSession(avatar_id=avatar_id)   # ATMEE_API_KEY in the environment
+    avatar = atmee.AvatarSession(avatar_id="...")       # ATMEE_API_KEY in the environment
     await avatar.start(session, room=ctx.room)
     await session.start(agent=..., room=ctx.room)       # the agent's TTS drives the avatar's video
 

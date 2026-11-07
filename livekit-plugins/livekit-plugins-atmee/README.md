@@ -4,9 +4,9 @@ Give a LiveKit voice agent a face with an [Atmee](https://www.atmee.ai/) avatar.
 the room as its own participant and speaks the agent's audio with lips in sync. Your agent keeps its
 own speech recognition, model and voice.
 
-Any Atmee avatar renders by its id: a **v1 avatar** is a talking head generated from a single
-portrait (`create_avatar` below); a **v2 avatar** moves as a whole and is created in the
-[Atmee studio](https://www.atmee.ai/studio).
+Any Atmee avatar renders by its id, v1 (a talking head generated from a single portrait) or v2
+(moves as a whole). Create avatars in the [Atmee studio](https://www.atmee.ai/docs/studio/create-an-avatar)
+or with the [Atmee API](https://www.atmee.ai/docs/api/create-avatar); this plugin renders them.
 
 See the [Atmee integration docs](https://docs.livekit.io/agents/models/avatar/plugins/atmee/) for more information.
 
@@ -29,10 +29,7 @@ The plugin mints the avatar participant's join token with your own LiveKit crede
 ```python
 from livekit.plugins import atmee
 
-# once: create an avatar from a portrait (a local path, raw bytes, or an https URL)
-avatar_id = await atmee.AtmeeAPI().create_avatar(name="Val", image="portrait.jpg")
-
-avatar = atmee.AvatarSession(avatar_id=avatar_id)  # ATMEE_API_KEY from env
+avatar = atmee.AvatarSession(avatar_id="...")  # ATMEE_API_KEY from env
 await avatar.start(session, room=ctx.room)  # before session.start
 await session.start(agent=Agent(...), room=ctx.room)
 ```

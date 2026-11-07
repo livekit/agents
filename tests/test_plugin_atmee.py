@@ -6,7 +6,6 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -72,14 +71,9 @@ class FakeAtmee:
         call = SimpleNamespace(
             method=request.method, path=request.path, query=dict(request.query), json=None
         )
-        call.headers, call.form = dict(request.headers), {}
+        call.headers = dict(request.headers)
         if request.content_type == "application/json":
             call.json = await request.json()
-        elif request.content_type.startswith("multipart/"):
-            async for part in await request.multipart():
-                data = await part.read(decode=False)
-                file = (part.filename, part.headers.get("Content-Type"), data)
-                call.form[part.name] = file if part.filename else data.decode()
         self.requests.append(call)
         if not (queue := self.answers.get((request.method, request.path))):
             return web.json_response({"error": "unscripted"}, status=404)
@@ -256,35 +250,6 @@ async def test_idempotent_calls_are_bounded_by_conn_options(fake: FakeAtmee) -> 
 
 
 @pytest.mark.parametrize(
-    ("image", "content_type", "sent"),
-    [
-        ("val.png", None, {"name": "Val", "file": ("val.png", "image/png", b"\x89PNG")}),
-        (b"webp", "image/webp", {"name": "Val", "file": ("portrait.webp", "image/webp", b"webp")}),
-        (
-            "https://cdn.example/v.jpg",
-            None,
-            {
-                "schemaVersion": 1,
-                "name": "Val",
-                "assets": {"image": {"url": "https://cdn.example/v.jpg"}},
-            },
-        ),
-    ],
-)
-async def test_create_avatar(
-    fake: FakeAtmee, tmp_path: Path, image: Any, content_type: str | None, sent: dict[str, Any]
-) -> None:
-    if image == "val.png":
-        image = tmp_path / image
-        image.write_bytes(b"\x89PNG")
-    fake.script("POST", "/v1/avatars", 201, {"avatarId": AVATAR_ID, "status": "ready"})
-    api = AtmeeAPI(session=fake.session, conn_options=FAST)
-    assert await api.create_avatar("Val", image, content_type=content_type) == AVATAR_ID
-    call = fake.calls("POST", "/v1/avatars")[0]
-    assert (call.json or call.form) == sent
-
-
-@pytest.mark.parametrize(
     ("reported", "engine", "ready"),
     [
         ({"status": "ready"}, None, True),
@@ -300,27 +265,6 @@ def test_avatar_info_reports_the_engine(
 ) -> None:
     info = atmee_api._avatar_info({"id": AVATAR_ID, **reported})
     assert (info.avatar_id, info.engine, info.ready) == (AVATAR_ID, engine, ready)
-
-
-@pytest.mark.parametrize("answer", ["ready", "building", "bad gateway"])
-async def test_wait_until_ready(fake: FakeAtmee, answer: str) -> None:
-    path = f"/v1/avatars/{AVATAR_ID}"
-    if answer == "bad gateway":
-        fake.script("GET", path, 502, body=answer, times=20)
-    else:
-        fake.script("GET", path, 200, {"status": "building"})
-        fake.script("GET", path, 200, {"status": answer}, times=5)
-    slow_retries = APIConnectOptions(max_retry=5, retry_interval=30.0)
-    api = AtmeeAPI(session=fake.session, conn_options=slow_retries)
-    if answer == "ready":
-        assert (await api.wait_until_ready(AVATAR_ID, timeout=10, poll_interval=0)).ready
-        return
-    began = asyncio.get_running_loop().time()
-    with pytest.raises(AtmeeException) as exc:
-        await api.wait_until_ready(AVATAR_ID, timeout=0.3, poll_interval=30)
-    # deadline expiry is a timeout, not the last 5xx seen, and the 30 s pauses
-    # (poll and retry) were cut to the remaining budget
-    assert exc.value.code == "timeout" and asyncio.get_running_loop().time() - began < 2
 
 
 def test_client_guards(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -396,15 +340,13 @@ async def test_avatar_version_is_accepted_but_ignored(
 ) -> None:
     # code written for releases that took avatar_version keeps working
     fake.script("POST", START, 202, STARTED, times=2)
-    fake.script("POST", "/v1/avatars", 201, {"avatarId": AVATAR_ID, "status": "ready"})
     avatar = _avatar(http_session=fake.session, avatar_version="v2")
     await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
     api = AtmeeAPI(session=fake.session, conn_options=FAST)
     await _start(api, avatar_version="v1")
-    await api.create_avatar("Val", "https://cdn.example/v.jpg", avatar_version="v1")
     assert [r.message for r in caplog.records].count(
         "avatar_version is deprecated and ignored, the avatar's own engine decides how it renders"
-    ) == 3
+    ) == 2
     assert all("avatarVersion" not in (c.json or {}) for c in fake.requests)
 
 
