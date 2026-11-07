@@ -189,7 +189,7 @@ async def test_resume_waits_for_a_dropped_turn(monkeypatch: pytest.MonkeyPatch) 
 
     # t0: VAD END_OF_SPEECH — the resume timer is armed, then the bounce is scheduled
     t0 = time.time()
-    activity.on_end_of_speech(None)
+    activity.on_end_of_speech(None, speech_end_time=time.time())
     activity._audio_recognition = _recognition(activity, last_speaking_time=t0 - VAD_MIN_SILENCE)
     # a confirmed backchannel is what makes the turn drop rather than commit
     activity._audio_recognition._turn_backchannel_over_agent = True
@@ -218,7 +218,7 @@ async def test_committed_turn_suppresses_the_resume(monkeypatch: pytest.MonkeyPa
     events: list[str] = []
     session.on("agent_false_interruption", lambda _: events.append("resume"))
 
-    activity.on_end_of_speech(None)
+    activity.on_end_of_speech(None, speech_end_time=time.time())
     activity._audio_recognition = _recognition(
         activity, last_speaking_time=time.time() - VAD_MIN_SILENCE
     )
@@ -244,7 +244,7 @@ async def test_teardown_does_not_resume_a_deferred_pause(monkeypatch: pytest.Mon
     events: list[str] = []
     session.on("agent_false_interruption", lambda _: events.append("resume"))
 
-    activity.on_end_of_speech(None)
+    activity.on_end_of_speech(None, speech_end_time=time.time())
     activity._audio_recognition = _recognition(
         activity, last_speaking_time=time.time() - VAD_MIN_SILENCE
     )
@@ -275,7 +275,7 @@ async def test_skipped_reply_keeps_the_resume_armed(monkeypatch: pytest.MonkeyPa
     events: list[str] = []
     session.on("agent_false_interruption", lambda _: events.append("resume"))
 
-    activity.on_end_of_speech(None)
+    activity.on_end_of_speech(None, speech_end_time=time.time())
     assert activity.on_end_of_turn(_eot_info(skip_reply=True)) is True
 
     await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
@@ -301,7 +301,7 @@ async def test_server_side_turn_detection_keeps_the_resume_armed(
     events: list[str] = []
     session.on("agent_false_interruption", lambda _: events.append("resume"))
 
-    activity.on_end_of_speech(None)
+    activity.on_end_of_speech(None, speech_end_time=time.time())
     assert activity.on_end_of_turn(_eot_info()) is True
 
     await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
@@ -387,7 +387,7 @@ async def test_resume_is_immediate_when_no_turn_decision_is_open(
     session.on("agent_false_interruption", lambda _: events.append(("resume", time.time())))
 
     t0 = time.time()
-    activity.on_end_of_speech(None)
+    activity.on_end_of_speech(None, speech_end_time=time.time())
 
     await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
     await session.aclose()

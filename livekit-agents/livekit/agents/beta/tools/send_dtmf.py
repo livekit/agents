@@ -2,6 +2,7 @@ import asyncio
 
 from ... import function_tool
 from ...job import get_job_context
+from ...llm import ToolError, ToolResult
 from ...voice.events import RunContext
 from ..workflows.utils import DtmfEvent, dtmf_event_to_code
 
@@ -12,9 +13,10 @@ DEFAULT_DTMF_PUBLISH_DELAY = 0.3  # seconds to wait between sending DTMF events
 async def send_dtmf_events(
     ctx: RunContext,
     events: list[DtmfEvent],
-) -> str:
+) -> ToolResult:
     """
     Send a list of DTMF events to the telephony provider.
+    Successful sends do not request a follow-up reply.
 
     Call when:
     - User wants to send DTMF events
@@ -29,7 +31,7 @@ async def send_dtmf_events(
             code = dtmf_event_to_code(event)
             await room.local_participant.publish_dtmf(code=code, digit=event.value)
             await asyncio.sleep(DEFAULT_DTMF_PUBLISH_DELAY)
-        except Exception as e:
-            return f"Failed to send DTMF event: {event.value}. Error: {str(e)}"
+        except Exception:
+            raise ToolError("Failed to send DTMF events.") from None
 
-    return f"Successfully sent DTMF events: {', '.join(events)}"
+    return ToolResult(f"Successfully sent DTMF events: {', '.join(events)}", reply_required=False)

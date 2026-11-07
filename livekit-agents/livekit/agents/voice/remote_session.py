@@ -29,7 +29,7 @@ from ..llm import (
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..version import __version__
-from ..voice.amd import AMDCategory, AMDPredictionEvent
+from ..voice.amd import AMDCategory, AMDCompletedEvent, AMDPredictionEvent
 from .events import (
     AgentFalseInterruptionEvent,
     AgentState,
@@ -305,9 +305,11 @@ _TOOL_REPLY_STATUS_MAP: dict[str, agent_pb.ToolReplyStatus] = {
 _AMD_CATEGORY_MAP: dict[AMDCategory, agent_pb.AmdCategory] = {
     AMDCategory.HUMAN: agent_pb.AmdCategory.AMD_HUMAN,
     AMDCategory.MACHINE_IVR: agent_pb.AmdCategory.AMD_MACHINE_IVR,
+    AMDCategory.MACHINE_SCREENING: agent_pb.AmdCategory.AMD_MACHINE_SCREENING,
     AMDCategory.MACHINE_VM: agent_pb.AmdCategory.AMD_MACHINE_VM,
     AMDCategory.MACHINE_UNAVAILABLE: agent_pb.AmdCategory.AMD_MACHINE_UNAVAILABLE,
     AMDCategory.UNCERTAIN: agent_pb.AmdCategory.AMD_UNCERTAIN,
+    AMDCategory.WAIT: agent_pb.AmdCategory.AMD_WAIT,
 }
 
 _CLOSE_REASON_MAP: dict[CloseReason, agent_pb.CloseReason] = {
@@ -317,6 +319,21 @@ _CLOSE_REASON_MAP: dict[CloseReason, agent_pb.CloseReason] = {
     CloseReason.USER_INITIATED: agent_pb.CloseReason.CR_USER_INITIATED,
     CloseReason.TASK_COMPLETED: agent_pb.CloseReason.CR_COMPLETED,
 }
+
+
+def _encode_amd_prediction(event: AMDPredictionEvent) -> agent_pb.AgentSessionEvent.AmdPrediction:
+    prediction = agent_pb.AgentSessionEvent.AmdPrediction(
+        category=_AMD_CATEGORY_MAP[event.category],
+        reason=event.reason.value,
+        transcript=event.transcript,
+        turn_id=event.turn_id,
+        stage=_AMD_CATEGORY_MAP[event.stage],
+    )
+    prediction.speech_duration.FromNanoseconds(int(event.speech_duration * 1e9))
+    prediction.delay.FromNanoseconds(int(event.delay * 1e9))
+    if event.inference_duration is not None:
+        prediction.inference_duration.FromNanoseconds(int(event.inference_duration * 1e9))
+    return prediction
 
 
 def _tool_names(tools: Sequence[llm.Tool | Toolset]) -> list[str]:
@@ -533,7 +550,11 @@ class SessionHost:
                     new_state=new_pb,
                 )
             ),
-            created_at=event.created_at,
+            # keep the wire timestamp backdated to the speech boundary; the session event
+            # used to set created_at to this value and now carries it in speech_timestamp
+            created_at=(
+                event.speech_timestamp if event.speech_timestamp is not None else event.created_at
+            ),
         )
 
     def _on_user_input_transcribed(self, event: UserInputTranscribedEvent) -> None:
@@ -667,23 +688,17 @@ class SessionHost:
         )
 
     def _on_amd_prediction(self, event: AMDPredictionEvent) -> None:
-        speech_duration = Duration()
-        speech_duration.FromNanoseconds(int(event.speech_duration * 1e9))
+        self._send_event(agent_pb.AgentSessionEvent(amd_prediction=_encode_amd_prediction(event)))
 
-        delay = Duration()
-        delay.FromNanoseconds(int(event.delay * 1e9))
-
-        self._send_event(
-            agent_pb.AgentSessionEvent(
-                amd_prediction=agent_pb.AgentSessionEvent.AmdPrediction(
-                    speech_duration=speech_duration,
-                    delay=delay,
-                    category=_AMD_CATEGORY_MAP[event.category],
-                    reason=event.reason,
-                    transcript=event.transcript,
-                )
-            )
+    def _on_amd_completed(self, event: AMDCompletedEvent) -> None:
+        completed = agent_pb.AgentSessionEvent.AmdCompleted(
+            category=_AMD_CATEGORY_MAP[event.category],
+            reason=event.reason.value,
+            voicemail_message_played=event.voicemail_message_played,
         )
+        if event.last_prediction is not None:
+            completed.prediction.CopyFrom(_encode_amd_prediction(event.last_prediction))
+        self._send_event(agent_pb.AgentSessionEvent(amd_completed=completed))
 
     def _on_eot_prediction(self, event: EotPredictionEvent) -> None:
         inference_duration = Duration()

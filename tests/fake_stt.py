@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import copy
 import time
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -236,3 +236,35 @@ class FakeRecognizeStream(RecognizeStream):
 
         with contextlib.suppress(asyncio.InvalidStateError):
             self._stt._done_fut.set_result(None)
+
+
+class DrainingStream(FakeRecognizeStream):
+    def __init__(self, model: DrainingSTT, conn_options: APIConnectOptions) -> None:
+        super().__init__(stt=model, conn_options=conn_options)
+        self.flushed = asyncio.Event()
+        self.input_ended = asyncio.Event()
+        self.release = asyncio.Event()
+        self.error: Exception | None = None
+        self.frames: list[rtc.AudioFrame] = []
+
+    async def _run(self) -> None:
+        async for frame in self._input_ch:
+            if self.error is not None:
+                raise self.error
+            if isinstance(frame, rtc.AudioFrame):
+                self.frames.append(frame)
+            else:
+                self.flushed.set()
+        self.input_ended.set()
+        await self.release.wait()
+
+
+class DrainingSTT(FakeSTT):
+    def __init__(self) -> None:
+        super().__init__()
+        self.streams: list[DrainingStream] = []
+
+    def stream(self, *, conn_options: APIConnectOptions, **kwargs: Any) -> DrainingStream:
+        stream = DrainingStream(self, conn_options)
+        self.streams.append(stream)
+        return stream
