@@ -50,8 +50,10 @@ lk-agents-telemetry = { path = "../lk-agents-telemetry" }
 prost.workspace = true
 pbjson-types.workspace = true
 tonic-types = { version = "0.14", default-features = false }
-# The OTLP exporter's gzip. Its message types are checked in (`export/otlp/proto.rs`).
+# `http::gzip`: miniz's deflate and flate2's CRC32. The OTLP message types are checked in
+# (`export/otlp/proto.rs`).
 flate2 = "1"
+miniz_oxide = "0.8"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util", "net", "io-util"] }

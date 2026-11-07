@@ -106,8 +106,6 @@ fn encode_body(
     encoding: BodyEncoding,
     headers: &mut Headers,
 ) -> Result<Vec<u8>, ApiError> {
-    use std::io::Write;
-
     let invalid = |e: String| ApiError::new(format!("cannot encode the request: {e}"));
     let mut bytes = if encoding.msgpack {
         headers.set("Content-Type", "application/vnd.msgpack");
@@ -117,9 +115,7 @@ fn encode_body(
         serde_json::to_vec(body).map_err(|e| invalid(e.to_string()))?
     };
     if encoding.gzip {
-        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(5));
-        gz.write_all(&bytes).map_err(|e| invalid(e.to_string()))?;
-        bytes = gz.finish().map_err(|e| invalid(e.to_string()))?;
+        bytes = lk_agents_net::http::gzip(&bytes, 5);
         headers.set("Content-Encoding", "gzip");
     }
     Ok(bytes)

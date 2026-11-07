@@ -17,6 +17,20 @@ use lk_agents_abi::{Clock, Ts};
 use lk_agents_core::request::AttemptFailure;
 use tokio::sync::{Notify, mpsc};
 
+/// `bytes` as one gzip member (RFC 1952) at deflate `level` (0-10), for a `Content-Encoding: gzip`
+/// body or a `.gz` file. Compressing in memory cannot fail, so neither can this.
+pub fn gzip(bytes: &[u8], level: u8) -> Vec<u8> {
+    let mut crc = flate2::Crc::new();
+    crc.update(bytes);
+    // ID1 ID2, deflate, no flags, no modification time, no extra flags, unknown OS.
+    let mut out = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff];
+    out.extend(miniz_oxide::deflate::compress_to_vec(bytes, level));
+    out.extend(crc.sum().to_le_bytes());
+    // ISIZE: the input length modulo 2^32.
+    out.extend(&bytes.len().to_le_bytes()[..4]);
+    out
+}
+
 /// The host's `APIError` helpers: an HTTP status's message as the native client words it.
 pub struct HttpErrors;
 
@@ -394,6 +408,17 @@ impl futures_util::Stream for ReportingBody {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Catches: a gzip member a standard decoder rejects (header, CRC or length trailer).
+    #[test]
+    fn gzip_is_a_standard_member_any_decoder_reads() {
+        use std::io::Read as _;
+        for input in [&b""[..], b"hello", &[7u8; 100_000][..]] {
+            let mut out = Vec::new();
+            flate2::read::GzDecoder::new(&gzip(input, 1)[..]).read_to_end(&mut out).unwrap();
+            assert_eq!(out, input);
+        }
+    }
 
     #[test]
     fn body_limit_counts_all_chunks_and_restarts_without_old_bytes() {

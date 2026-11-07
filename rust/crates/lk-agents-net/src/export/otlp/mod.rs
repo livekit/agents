@@ -401,12 +401,12 @@ async fn export_app(
     let (url, body) = match payload {
         App::Spans(spans) => {
             let spans = stamp_app_spans(process, config, spans);
-            let body = encode::body(&encode::traces_request(resource, &spans), config.gzip);
+            let body = encode::body(&encode::traces_request(resource, &spans), config.traces_gzip);
             (&config.traces_endpoint, body)
         }
         App::Metrics(metrics) => {
             let request = encode::metrics_request(resource, metrics);
-            (&config.metrics_endpoint, encode::body(&request, config.gzip))
+            (&config.metrics_endpoint, encode::body(&request, config.metrics_gzip))
         }
     };
     let Some(url) = url else { return Ok(()) };

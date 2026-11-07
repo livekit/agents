@@ -2,7 +2,6 @@
 //! request body (protobuf, optionally gzip).
 
 use std::borrow::Cow;
-use std::io::Write as _;
 
 use super::proto::collector::logs::v1::ExportLogsServiceRequest;
 use super::proto::collector::metrics::v1::ExportMetricsServiceRequest;
@@ -284,16 +283,11 @@ impl Body {
     }
 }
 
-/// `message` encoded, gzipped when asked; a body gzip fails on is sent uncompressed.
+/// `message` encoded, gzipped (fastest level) when asked.
 pub(crate) fn body(message: &impl prost::Message, gzip: bool) -> Body {
     let bytes = message.encode_to_vec();
-    if gzip {
-        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-        if let Ok(gzipped) = encoder.write_all(&bytes).and_then(|()| encoder.finish()) {
-            return Body { bytes: gzipped, gzip: true };
-        }
-    }
-    Body { bytes, gzip: false }
+    let bytes = if gzip { crate::http::gzip(&bytes, 1) } else { bytes };
+    Body { bytes, gzip }
 }
 
 /// The retained bytes a queued record is charged: its strings and values, plus overhead.

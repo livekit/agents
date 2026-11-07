@@ -4,7 +4,6 @@
 //! (`end_timestamp_ns`), so a viewer can line it up with the recording's start.
 
 use std::collections::HashMap;
-use std::io::Write as _;
 use std::sync::{Arc, LazyLock};
 
 use lk_agents_abi::telemetry::record::JobKey;
@@ -161,10 +160,7 @@ impl Profile {
             period: PERIOD_NANOS,
             ..Default::default()
         };
-        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        // Writing to a `Vec` cannot fail.
-        let _ = gz.write_all(&profile.encode_to_vec());
-        gz.finish().unwrap_or_default()
+        crate::http::gzip(&profile.encode_to_vec(), 6)
     }
 
     /// The stack's id; none when it is new and [`STACKS`] are kept already (nothing interned).

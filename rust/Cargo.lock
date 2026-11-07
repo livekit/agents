@@ -1724,6 +1724,7 @@ dependencies = [
  "lk-agents-media",
  "lk-agents-telemetry",
  "log",
+ "miniz_oxide",
  "parking_lot",
  "pbjson-types",
  "prost",

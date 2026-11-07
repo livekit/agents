@@ -92,7 +92,10 @@ pub struct AppConfig {
     /// Full URL; `None` sends no metrics.
     pub metrics_endpoint: Option<String>,
     pub headers: Vec<(String, String)>,
-    pub gzip: bool,
+    /// `Content-Encoding: gzip` for spans; the specification's default is no compression.
+    pub traces_gzip: bool,
+    /// `Content-Encoding: gzip` for metrics.
+    pub metrics_gzip: bool,
     pub temporality: Temporality,
     /// Resource attributes, `service.name` included.
     pub resource: Vec<(String, String)>,
@@ -146,7 +149,23 @@ impl AppConfig {
                 );
             });
         }
-        config.gzip = var("OTEL_EXPORTER_OTLP_COMPRESSION").as_deref() == Some("gzip");
+        let gzip = |signal: &str| {
+            let value = var(&format!("OTEL_EXPORTER_OTLP_{signal}_COMPRESSION"))
+                .or_else(|| var("OTEL_EXPORTER_OTLP_COMPRESSION"));
+            match value.as_deref() {
+                Some("gzip") => true,
+                None | Some("none") => false,
+                Some(other) => {
+                    log::warn!(
+                        target: lk_agents_abi::LOG_TARGET,
+                        "unsupported OTLP compression {other:?}; sending uncompressed"
+                    );
+                    false
+                }
+            }
+        };
+        config.traces_gzip = gzip("TRACES");
+        config.metrics_gzip = gzip("METRICS");
         config.temporality = match var("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE")
             .as_deref()
         {
@@ -207,8 +226,8 @@ mod tests {
         move |name| entries.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
     }
 
-    // Catches: signal endpoints not overriding the base, or headers and resource attributes
-    // read without percent-decoding.
+    // Catches: signal endpoints or compressions not overriding the shared ones, or headers and
+    // resource attributes read without percent-decoding.
     #[test]
     fn the_environment_follows_the_otel_specification() {
         assert_eq!(AppConfig::from_vars(vars(&[("OTEL_SERVICE_NAME", "x")])), None);
@@ -217,6 +236,7 @@ mod tests {
             ("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "http://metrics/custom"),
             ("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer%20abc, x-team = voice ,bad"),
             ("OTEL_EXPORTER_OTLP_COMPRESSION", "gzip"),
+            ("OTEL_EXPORTER_OTLP_METRICS_COMPRESSION", "none"),
             ("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", "Delta"),
             ("OTEL_RESOURCE_ATTRIBUTES", "service.name=ignored,deployment.environment=prod%2Ceu"),
             ("OTEL_SERVICE_NAME", "front-desk"),
@@ -228,7 +248,8 @@ mod tests {
             config.headers,
             vec![("authorization".into(), "Bearer abc".into()), ("x-team".into(), "voice".into())]
         );
-        assert!(config.gzip);
+        assert!(config.traces_gzip, "the shared compression applies to spans");
+        assert!(!config.metrics_gzip, "a signal's own compression overrides it");
         assert_eq!(config.temporality, Temporality::Delta);
         assert_eq!(
             config.resource,

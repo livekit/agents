@@ -527,7 +527,7 @@ async fn the_application_endpoint_speaks_protobuf_with_its_headers() {
     exporter.configure_app(Some(first));
     exporter.record(span("first", None, vec![("n".into(), Value::Int(3))]));
     let mut proto = AppConfig::with_endpoint(&proto_url);
-    proto.gzip = true;
+    proto.traces_gzip = true;
     exporter.configure_app(Some(proto));
     exporter.record(span("second", None, vec![]));
     assert!(exporter.flush(None, LIMIT).await);

@@ -42,7 +42,6 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 bytes = "1"
 url = "2"
-flate2 = "1"
 rmp-serde = "1"
 log.workspace = true
 # `local_models`: the link-time slot a native provider of the local VAD and end-of-turn models
@@ -58,6 +57,7 @@ prost.workspace = true
 pbjson-types.workspace = true
 
 [dev-dependencies]
+flate2 = "1"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 livekit-token.workspace = true
 # The integration tests' fakes (`testkit`).
