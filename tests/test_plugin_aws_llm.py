@@ -232,3 +232,46 @@ async def test_bedrock_400_fails_fast_throttling_and_5xx_retried(
     if attempts == 1:
         assert isinstance(exc_info.value, APIStatusError)
         assert exc_info.value.status_code == 400
+
+
+async def test_bedrock_client_connects_within_the_conn_options_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # botocore waits 60 s to connect and retries on its own by default; a voice agent
+    # should give up within conn_options.timeout and leave retrying to the stream.
+    configs: list = []
+
+    class _Client:
+        async def __aenter__(self) -> _Client:
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+        async def converse_stream(self, **kwargs: object) -> dict:
+            raise ClientError(
+                {
+                    "Error": {"Code": "ValidationException"},
+                    "ResponseMetadata": {"HTTPStatusCode": 400},
+                },
+                "ConverseStream",
+            )
+
+    def _create_client(*args: object, **kwargs: object) -> _Client:
+        configs.append(kwargs["config"])
+        return _Client()
+
+    instance = BedrockLLM(model="us.openai.gpt-6-sol")
+    monkeypatch.setattr(instance._session, "create_client", _create_client)
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="hi")
+    stream = instance.chat(
+        chat_ctx=chat_ctx, conn_options=APIConnectOptions(timeout=7.0, retry_interval=0)
+    )
+
+    with pytest.raises(APIError):
+        await stream.collect()
+
+    config = configs[0]
+    assert config.connect_timeout == 7.0
+    assert config.retries["total_max_attempts"] == 1

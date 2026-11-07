@@ -325,7 +325,14 @@ class LLMStream(llm.LLMStream):
     async def _run(self) -> None:
         retryable = True
         try:
-            config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
+            # The stream retries through `conn_options`, so boto's own retries would multiply
+            # them; connect within the same timeout the caller gave (as the Polly TTS does)
+            # instead of botocore's 60 s default.
+            config = Config(
+                user_agent_extra="x-client-framework:livekit-plugins-aws",
+                connect_timeout=self._conn_options.timeout,
+                retries={"mode": "standard", "total_max_attempts": 1},
+            )
             async with self._session.create_client("bedrock-runtime", config=config) as client:
                 try:
                     response = await client.converse_stream(**self._opts)
