@@ -24,6 +24,10 @@ session = AgentSession(
 
 - [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent with STT, turn detection, preemptive generation, and metrics collection; switch its LLM to `inference.responses.LLM` for OpenAI models over the Responses API
 
+### Multi-Agent
+
+- [`zoom_voice_agent.py`](./zoom_voice_agent.py) - Three agents handing a caller between them: a pipeline agent, OpenAI Realtime, and Zoom Voice Agent (speech-to-speech)
+
 ### MCP & External Integrations
 
 - [`mcp/`](./mcp/) - Model Context Protocol (MCP) integration examples

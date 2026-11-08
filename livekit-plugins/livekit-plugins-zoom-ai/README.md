@@ -1,6 +1,6 @@
 # Zoom AI plugin for LiveKit Agents
 
-Support for [Zoom Scribe](https://developers.zoom.us/docs/ai-services/scribe/) speech-to-text, in two modes:
+Support for [Zoom Voice Agent](https://developers.zoom.us/docs/ai-services/voice-agent/) speech-to-speech (see [Voice Agent](#voice-agent-realtime) below) and [Zoom Scribe](https://developers.zoom.us/docs/ai-services/scribe/) speech-to-text, in two modes:
 
 - **Live** ([docs](https://developers.zoom.us/docs/ai-services/scribe/live-mode/)): streaming over WebSocket. Scribe's own VAD ends each speech turn and returns its final transcript.
 - **Fast** ([docs](https://developers.zoom.us/docs/ai-services/scribe/fast-mode/)): one HTTP request per utterance. Not streaming, so `AgentSession` pairs it with a VAD.
@@ -21,7 +21,7 @@ uv add "livekit-agents[zoom-ai]"
 
 ## Pre-requisites
 
-The plugin needs a Zoom AI Services API key. Create one in [Zoom Platform Studio](https://platform.zoom.us/) under Credentials → API Keys, with the Scribe permissions.
+The plugin needs a Zoom AI Services API key. Create one in [Zoom Platform Studio](https://platform.zoom.us/) under Credentials → API Keys, with the Scribe or Voice Agent permissions.
 
 Set it in your `.env` file:
 
@@ -91,3 +91,59 @@ Options map to the Scribe API fields of the same name; see the [Scribe docs](htt
 | `text_polishing` | `False` | Polished text as the transcript, with the original in `metadata["transcript"]`; if polishing fails, the original text. `en-US` only |
 | `extra_kwargs` | `None` | Other Scribe request fields, e.g. `{"config": {"language_detection": {"candidate_languages": ["en-US", "fr-FR"]}}}` to restrict language detection |
 | `base_url` | `https://api.zoom.us/v2/aiservices/scribe` | Scribe API base URL |
+
+## Voice Agent (realtime)
+
+`zoom_ai.realtime.RealtimeModel` runs a conversation on the [Voice Agent API](https://developers.zoom.us/docs/ai-services/voice-agent/live-mode/). One WebSocket carries the caller's audio in and the agent's speech, transcripts and function calls back; Zoom runs recognition, the model and synthesis. Zoom detects turns and handles barge-in, so no VAD, STT or TTS is needed:
+
+```python
+from livekit.agents import Agent, AgentSession
+from livekit.plugins import zoom_ai
+
+session = AgentSession(llm=zoom_ai.realtime.RealtimeModel(voice="jenna"))
+await session.start(Agent(instructions="You are a friendly support agent."), room=ctx.room)
+```
+
+It can also be the model of a single agent in a multi-agent handoff (`Agent(llm=zoom_ai.realtime.RealtimeModel())`); see [`examples/voice_agents/zoom_voice_agent.py`](../../examples/voice_agents/zoom_voice_agent.py).
+
+Function tools work as with any model: Zoom asks for the call, the agent runs it, and the plugin returns the result and asks for the follow-up reply.
+
+To use your own OpenAI or Anthropic account for the conversation model, pass its key in `provider_headers`:
+
+```python
+zoom_ai.realtime.RealtimeModel(
+    llm_provider="openai",
+    model="<provider-model-id>",
+    provider_headers={"X-Api-Key": "<your-openai-key>"},
+    provider_metadata={"context_window": 1000000, "max_output_tokens": 128000},
+)
+```
+
+### Voice Agent options
+
+| Option | Default | Description |
+|---|---|---|
+| `voice` | `"jenna"` | `alex`, `ariel`, `ava`, `brooke`, `hazel`, `jenna`, `mark`, `reid`, `scott` (American English) or `tony` (British English) |
+| `model` | `"gemma-4"` | Conversational model; with your own provider, one of its model IDs |
+| `llm_provider` | `"zoom"` | `"zoom"`, `"openai"` or `"anthropic"` |
+| `provider_headers` | `None` | Your provider's API key headers; required unless `llm_provider="zoom"` |
+| `provider_metadata` | `None` | Your model's `context_window` and `max_output_tokens` |
+| `vocabulary` | `None` | Names and terms that improve transcription accuracy |
+| `reasoning_effort` | `None` | Reasoning level, such as `"low"` |
+| `response_token_limit` | `None` | Maximum tokens per response; `None` uses Zoom's default (`"inf"`) |
+| `tool_choice` | `None` | `"auto"`, `"none"` or `"required"`; `None` uses Zoom's default (`"auto"`) |
+| `api_key` | `$ZOOM_AI_API_KEY` | Zoom AI Services API key |
+| `url` | `wss://api.zoom.us/v2/ws/aiservices/voice-agent/live` | Voice Agent endpoint |
+
+`voice`, `tool_choice` and `vocabulary` can be changed on a live session with `update_options()`; instructions and tools follow the agent.
+
+### Voice Agent limitations
+
+These come from the Voice Agent API:
+
+- English only.
+- Replies can't take their own instructions: `generate_reply(instructions=...)` is ignored with a warning, and the reply follows the session instructions. Put greetings and the like in the agent's `instructions`.
+- Messages can't be added to a running conversation; only function results are sent. A chat history that exists before the session starts (an agent handoff) is added to the instructions instead.
+- Turn detection, barge-in, noise reduction and history trimming are Zoom's and can't be configured or turned off.
+- A session lasts up to 60 minutes. When Zoom ends it, the plugin reconnects and carries the conversation over in the instructions.
+- Audio only: video frames are dropped.
