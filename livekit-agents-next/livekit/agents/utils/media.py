@@ -10,7 +10,7 @@ import aiofiles
 from livekit import rtc
 
 from .. import _core
-from .._generated.image_options import EncodeOptions
+from .._generated import public_utils_media as _public
 from .._generated.public_utils_media import *  # noqa: F403
 from ..log import logger
 from .aio import cancel_and_wait
@@ -44,9 +44,6 @@ def calculate_audio_duration(frames: list[rtc.AudioFrame] | rtc.AudioFrame) -> f
         return sum(frame.duration for frame in frames)
     else:
         return frames.duration
-
-
-AudioByteStream = _core.AudioByteStream
 
 
 async def audio_frames_from_file(
@@ -179,7 +176,6 @@ async def encode(frame: rtc.VideoFrame, options: EncodeOptions) -> bytes:
 
 __all__ = [
     "AudioStreamDecoder",
-    "EncodeOptions",
-    "ResizeOptions",
     "encode",
 ]
+__all__ += _public.__all__

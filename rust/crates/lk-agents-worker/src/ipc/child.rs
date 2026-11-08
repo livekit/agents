@@ -144,7 +144,7 @@ impl ChildChannel {
     async fn start(
         &self,
         host: &dyn JobProcess,
-        job: lk_agents_abi::worker::job::StartJobFields,
+        job: lk_agents_abi::worker::job::StartJob,
     ) -> Result<(), WorkerError> {
         let running = || WorkerError::Failed("a job is already running".into());
         if self.run.get().is_some() {

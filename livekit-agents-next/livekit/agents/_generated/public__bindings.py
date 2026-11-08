@@ -15,7 +15,7 @@ from .api_errors import (
     UnexpectedModelBehavior as UnexpectedModelBehavior,
 )
 
-__all__ = [
+__all__: list[str] = [
     "UnexpectedModelBehavior",
     "AssignmentTimeoutError",
     "APIError",

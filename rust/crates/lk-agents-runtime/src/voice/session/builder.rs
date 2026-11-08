@@ -15,6 +15,7 @@ use crate::voice::session::Tx;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
 use lk_agents_abi::voice::rtc::RoomEvent;
+use lk_agents_abi::voice::session_options::TextTransformSet;
 use lk_agents_abi::{AudioFrame, EotDetector, Llm, Spawner, StreamInput, Stt, Tts, Vad};
 use lk_agents_voice::agent_session::machine::activity::{DriverConfig, PIPELINE_SAMPLE_RATE};
 use lk_agents_voice::agent_session::{
@@ -513,9 +514,13 @@ impl DriverBuilder {
             time: self.time.clone(),
             output: publications.output.subscribe(),
             recorder: publications.recorder.subscribe(),
-            tts_transforms: lk_agents_voice::transcription::TransformSpec::of_set(
-                self.config.effective().speech.tts_text_transforms(),
-            ),
+            tts_transforms: self
+                .config
+                .effective()
+                .speech
+                .tts_text_transforms()
+                .map(TextTransformSet::transforms)
+                .unwrap_or_default(),
             conn: self.conn,
             queue: queue.clone(),
             calls: Arc::new(Calls::default()),

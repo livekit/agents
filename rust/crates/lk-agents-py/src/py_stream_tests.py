@@ -198,6 +198,7 @@ async def test_cancelled_pump_waiter_retains_and_settles_both_cleanup_branches()
 async def test_failed_stream_keeps_correlated_input_metadata_on_the_original_failure(
     text_session: bool,
 ) -> None:
+    from livekit.agents import UnexpectedModelBehavior
     from livekit.agents._generated import agent_run as records, text_session as sessions
     from livekit.agents._generated.storage_turn import PendingCall
     from livekit.agents.voice.run_result import RunStream, _Started
@@ -208,11 +209,9 @@ async def test_failed_stream_keeps_correlated_input_metadata_on_the_original_fai
         question="Which city?",
         verbatim=True,
     )
-    failure = records.RunErrorToolRetriesExceeded(tool="retry", retries=0)
+    failure = UnexpectedModelBehavior("tool `retry` exceeded max retries count of 0")
     outcome = (
-        sessions.TextSessionUpdateFailed(
-            error=sessions.TextSessionErrorRun(error=failure), input_requirements=[requirement]
-        )
+        sessions.TextSessionUpdateFailed(error=failure, input_requirements=[requirement])
         if text_session
         else records.RunUpdateFailed(error=failure, input_requirements=[requirement])
     )
@@ -233,19 +232,16 @@ async def test_failed_stream_keeps_correlated_input_metadata_on_the_original_fai
     async def start(native: object) -> _Started[object]:
         raise AssertionError("the result owner is already started")
 
-    error = RuntimeError("tool retry budget exceeded")
     stream = RunStream(start)
     stream._core = NativeResult()
-    stream._started = _Started(
-        settle=lambda _: pytest.fail("failure became success"), fail=lambda _: error
-    )
+    stream._started = _Started(settle=lambda _: pytest.fail("failure became success"))
     with pytest.raises(RuntimeError) as raised:
         await stream.result()
-    assert raised.value is error
+    assert raised.value is failure
     assert raised.value.input_requirements == [requirement]
     with pytest.raises(RuntimeError) as repeated:
         await stream.result()
-    assert repeated.value is error
+    assert repeated.value is failure
 
 
 @pytest.mark.parametrize("text_session", [False, True])

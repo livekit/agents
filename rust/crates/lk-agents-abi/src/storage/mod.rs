@@ -164,8 +164,11 @@ pub trait Storage: Send + Sync + Sized + 'static {
     ) -> Result<Self::VoiceStore, StorageError>;
 
     /// `local`: threads in that project's directory, resolved to an absolute path once.
-    /// Otherwise agentstore through the public API derived from `url` (the project's
-    /// `LIVEKIT_URL`), with tokens minted from the key pair. Opens nothing until first use.
+    /// Otherwise agentstore through the public API derived from `url`, with tokens minted from
+    /// the key pair; each omitted one is `LIVEKIT_URL`, `LIVEKIT_API_KEY` or
+    /// `LIVEKIT_API_SECRET`, and an omitted lease timing `LIVEKIT_AGENTDB_LEASE_TTL` or
+    /// `LIVEKIT_AGENTDB_RENEW_INTERVAL` (float seconds). An omitted or empty `holder` is the
+    /// constructing process's `<hostname>-<pid>`. Opens nothing until first use.
     #[host(new)]
     fn new(
         env: &Self::Env,
@@ -175,11 +178,16 @@ pub trait Storage: Send + Sync + Sized + 'static {
         #[host(default = None)] api_secret: Option<String>,
         #[host(default = None)] lease_ttl: Option<f64>,
         #[host(default = None)] renew_interval: Option<f64>,
+        #[host(default = None)] holder: Option<String>,
     ) -> Result<Self, StorageError>;
 
     /// The absolute local directory, or the public API agentstore is reached through.
     #[host(getter)]
     fn location(&self) -> String;
+
+    /// This process's lease holder id.
+    #[host(getter)]
+    fn holder(&self) -> String;
 
     #[host(getter)]
     fn project_id(&self) -> String;

@@ -199,7 +199,7 @@ impl InferenceEot {
         py: Python<'_>,
         headers: Bound<'_, PyAny>,
         conn_options: Bound<'_, PyAny>,
-    ) -> PyResult<super::turn::EotStream> {
+    ) -> PyResult<super::turn::TurnDetectorStream> {
         crate::py_calls::check_pid()?;
         let headers = crate::generated::records::from_representation::<
             ::lk_agents_abi::Headers,
@@ -235,27 +235,27 @@ impl InferenceEot {
         let conn_options =
             crate::generated::records::connect::api_connect_options_from_py(conn_options.as_any())?;
         let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::stream(&self.0, headers, conn_options)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
-        ::pyo3::PyResult::Ok(super::turn::EotStream(::std::sync::Arc::new(out)))
+        ::pyo3::PyResult::Ok(super::turn::TurnDetectorStream(::std::sync::Arc::new(out)))
     }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/turn/inference.rs.
-type EotStreamImpl =
+type TurnDetectorStreamImpl =
     <crate::generated::implementations::Selected as super::Implementations>::EotStream;
 
 /// `TurnDetectorStream`: one stream of the user's audio, answering `predict()` at each pause. The
 /// session's own detector when handed to it, which implements its stream operations.
-#[pyclass(frozen, name = "EotStream", module = "livekit.agents._core")]
-pub struct EotStream(pub(crate) ::std::sync::Arc<EotStreamImpl>);
+#[pyclass(frozen, name = "TurnDetectorStream", module = "livekit.agents.inference")]
+pub struct TurnDetectorStream(pub(crate) ::std::sync::Arc<TurnDetectorStreamImpl>);
 
 #[pymethods]
-impl EotStream {
+impl TurnDetectorStream {
     /// The active model, which changes under the caller after a fallback.
     #[getter]
     fn model<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| {
-            <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::model(&self.0)
+            <TurnDetectorStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::model(&self.0)
         });
         crate::generated::records::turn_events::turn_detector_model_to_py(py, out)
     }
@@ -264,7 +264,9 @@ impl EotStream {
     fn is_fallback(&self, py: Python<'_>) -> PyResult<bool> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| {
-            <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::is_fallback(&self.0)
+            <TurnDetectorStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::is_fallback(
+                &self.0,
+            )
         });
         ::pyo3::PyResult::Ok(out)
     }
@@ -274,7 +276,9 @@ impl EotStream {
     fn is_degraded(&self, py: Python<'_>) -> PyResult<bool> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| {
-            <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::is_degraded(&self.0)
+            <TurnDetectorStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::is_degraded(
+                &self.0,
+            )
         });
         ::pyo3::PyResult::Ok(out)
     }
@@ -284,7 +288,7 @@ impl EotStream {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::predict(&this, )
+            let out = <TurnDetectorStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::predict(&this, )
                 .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -298,11 +302,7 @@ impl EotStream {
     #[pyo3(signature = (*, timed_out = false))]
     fn cancel_inference(&self, py: Python<'_>, timed_out: bool) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        py.detach(|| {
-            <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::cancel_inference(
-                &self.0, timed_out,
-            )
-        });
+        py.detach(|| <TurnDetectorStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::cancel_inference(&self.0, timed_out));
         Ok(())
     }
 
@@ -314,7 +314,9 @@ impl EotStream {
             .map(|v| crate::generated::records::turn_events::flush_reason_from_py(v.as_any()))
             .transpose()?;
         py.detach(|| {
-            <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::flush(&self.0, reason)
+            <TurnDetectorStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::flush(
+                &self.0, reason,
+            )
         });
         Ok(())
     }
@@ -324,7 +326,7 @@ impl EotStream {
         crate::py_calls::check_pid()?;
         let frame = crate::generated::records::rtc_frames::audio_frame_from_py(frame.as_any())?;
         py.detach(|| {
-            <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::push_audio(
+            <TurnDetectorStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::push_audio(
                 &self.0, frame,
             )
         });
@@ -334,7 +336,9 @@ impl EotStream {
     fn end_input(&self, py: Python<'_>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
         py.detach(|| {
-            <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::end_input(&self.0)
+            <TurnDetectorStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::end_input(
+                &self.0,
+            )
         });
         Ok(())
     }
@@ -344,7 +348,10 @@ impl EotStream {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let () =
-                <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::aclose(&this).await;
+                <TurnDetectorStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::aclose(
+                    &this,
+                )
+                .await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
@@ -355,7 +362,7 @@ inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::EotDetector>(),
         read: |obj| {
-            let this = obj.cast::<EotStream>().ok()?;
+            let this = obj.cast::<TurnDetectorStream>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::EotDetector> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },

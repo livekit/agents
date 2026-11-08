@@ -12,9 +12,11 @@
 //! brings is judged at that install.
 use std::time::Duration;
 
-use lk_agents_voice::agent_session::options::{AgentSessionOptions, ConfigLayer, TurnDetection};
+use lk_agents_abi::Maybe;
+
 use lk_agents_voice::agent_session::VoiceCommandOrigin;
 use lk_agents_voice::agent_session::commands::{ActivityCommandKind, CommandKind, TurnCommandKind};
+use lk_agents_voice::agent_session::options::{AgentSessionOptions, ConfigLayer, TurnDetection};
 use lk_agents_voice::trace::{CoreStep, HandoffStep, Step};
 
 use crate::{
@@ -129,10 +131,10 @@ fn said(knob: Knob, mode: TurnMode, ms: Millis) -> Leaves {
     let delay = Some(Duration::from_millis(ms.0));
     match knob {
         Knob::Detection => Leaves {
-            detection: Some(match mode {
-                TurnMode::Default => TurnDetection::Auto,
-                TurnMode::Stt => TurnDetection::Stt,
-                TurnMode::Manual => TurnDetection::Manual,
+            detection: Maybe::Given(match mode {
+                TurnMode::Default => None,
+                TurnMode::Stt => Some(TurnDetection::Stt),
+                TurnMode::Manual => Some(TurnDetection::Manual),
             }),
             ..Leaves::default()
         },
@@ -152,7 +154,7 @@ enum Taken {
 /// The options a host layers, each `None` where the layer leaves it unsaid.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Leaves {
-    detection: Option<TurnDetection>,
+    detection: Maybe<Option<TurnDetection>>,
     min_delay: Option<Duration>,
     max_delay: Option<Duration>,
 }
@@ -170,7 +172,7 @@ impl Leaves {
     /// `self` laid on `below`: each said option wins.
     fn over(self, below: Leaves) -> Leaves {
         Leaves {
-            detection: self.detection.or(below.detection),
+            detection: if self.detection.is_given() { self.detection } else { below.detection },
             min_delay: self.min_delay.or(below.min_delay),
             max_delay: self.max_delay.or(below.max_delay),
         }

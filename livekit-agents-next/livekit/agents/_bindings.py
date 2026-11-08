@@ -15,13 +15,6 @@ from pydantic import BaseModel
 from livekit import rtc
 
 from . import _core
-from ._generated.api_errors import (
-    APIConnectionError as APIConnectionError,
-    APIError as APIError,
-    APIStatusError as APIStatusError,
-    APITimeoutError as APITimeoutError,
-    RedactedCause as RedactedCause,
-)
 from ._generated.public__bindings import *  # noqa: F403
 from .log import logger
 
@@ -777,14 +770,6 @@ def offered_tools(pool: Sequence[Tool | Toolset], names: Sequence[str]) -> list[
     ctx = llm.ToolContext(pool)
     named = [t for n in names if (t := ctx.get_function_tool(n)) is not None]
     return [*named, *(t for t in ctx.flatten() if isinstance(t, ProviderTool))]
-
-
-def _status_retryable(status_code: int, retryable: bool | None) -> bool:
-    # Preserve the public constructor's transient 499 behavior. Native cancellation has its
-    # own policy and remains non-retryable.
-    if 400 <= status_code < 500 and status_code not in (408, 429, 499):
-        return False
-    return True if retryable is None else retryable
 
 
 def _status_error_str(self: APIStatusError) -> str:

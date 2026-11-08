@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Callable
 from types import TracebackType
@@ -12,10 +11,6 @@ from typing_extensions import TypeVar
 from livekit import rtc
 
 from .. import _core
-from .._generated.duplex import (
-    DuplexAudioFrame as DuplexAudioFrame,
-    DuplexCapabilities as DuplexCapabilities,
-)
 from .._generated.public_llm_duplex import *  # noqa: F403
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
@@ -187,20 +182,10 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
 
     def _report_connection_acquired(self, acquire_time: float) -> None:
         """Report connection timing as a RealtimeModelMetrics event with zero usage."""
-        from ..metrics import Metadata, RealtimeModelMetrics
-
+        model = self._duplex_model
         self.emit(
             "metrics_collected",
-            RealtimeModelMetrics(
-                request_id="",
-                timestamp=time.time(),
-                acquire_time=acquire_time,
-                connection_reused=False,
-                metadata=Metadata(
-                    model_name=self._duplex_model.model,
-                    model_provider=self._duplex_model.provider,
-                ),
-            ),
+            _core._core_realtime_connection_metrics(model.model, model.provider, acquire_time),
         )
 
 
@@ -219,14 +204,6 @@ class AudioGate(Protocol):
     def deactivate(self) -> None:
         """End the open burst, keeping whatever has been learned about the model."""
         ...
-
-
-FixedGate = _core.FixedGate
-"""Opens on output that stands out from a silence the plugin already knows."""
-
-AdaptiveNoiseGate = _core.AdaptiveNoiseGate
-"""Opens on output that stands out from the model's own silence: the floor is the quietest
-``min_silence_duration`` stretch it produced while not speaking, within ``window``."""
 
 
 class DuplexRealtimeAdapter(RealtimeModel):

@@ -562,7 +562,6 @@ are proposed here.
 | `src/eot/options.rs` | 63 | Conditional | `src/eot/detector.rs`. 63 lines of constructor selection can live with AudioEot creation (206+63≈269); retain module if externally consumed as its own API. |
 | `src/eot/shell.rs` | 150 | Keep | Mounted transport owner and channel lifetime are separate from transport contract and EotSession decisions. |
 | `src/eot/transport.rs` | 63 | Keep | Public fakeable transport/listener contract; deliberately separate from concrete shell/cloud/local implementations. |
-| `src/evals/transcript.rs` | 79 | Keep | Transcript formatting shared by judge prompts, not a private incidental helper. |
 | `src/extra.rs` | 14 | Keep | 14-line connection payload is shared by STT and TTS; keep one helper rather than duplicate or put under one provider (rename is separate scope). |
 | `src/fallback/host_tests.rs` | 115 | Keep | Sibling behavioral suite or explicit Cargo integration target; retain separate tests/process isolation. |
 | `src/fallback/mod.rs` | 100 | Keep | Domain/component module facade with real children; retain the navigation and public export boundary. |

@@ -328,7 +328,7 @@ impl Worker {
             return;
         }
         p.state = PendingState::AwaitingUser;
-        let request = JobRequest { job: super::job_info(&p.job), resuming: p.resuming };
+        let request = JobRequest { job: p.job.clone(), resuming: p.resuming };
         log::info!(target: lk_agents_abi::LOG_TARGET, job_id = request.job.id.as_str(), dispatch_id = request.job.dispatch_id.as_str(), room = request.room_name(), resuming = request.resuming, agent_name = self.cfg.agent_name.as_str(); "received job request");
         self.ask_user(slot, request);
     }
@@ -445,7 +445,7 @@ impl Worker {
         let p = &self.pending[idx];
         let info = RunningJobInfo {
             accept_arguments: args,
-            job: super::job_info(&p.job),
+            job: p.job.clone(),
             url,
             token: a.token,
             worker_id: self.worker_id.clone(),
@@ -453,6 +453,7 @@ impl Worker {
             received_at: Some(unix(p.received)),
             accepted_at: Some(unix(p.accepted)),
             assigned_at: Some(unix(self.clock.now())),
+            launched_at: 0.0,
         };
         self.pending[idx].state = PendingState::Launching(Box::new(info.clone()));
         let (host, generation) = (self.host.clone(), self.generation);
@@ -667,10 +668,9 @@ pub(super) fn availability_reject(job_id: &str) -> WorkerMessage {
 
 /// `lk.agent.name` is written first and user attributes merged over it, so the user's wins.
 pub(super) fn accept_arguments(agent_name: &str, mut args: AcceptArguments) -> AcceptArguments {
-    let mut attributes = BTreeMap::new();
-    attributes.insert(ATTRIBUTE_AGENT_NAME.to_string(), agent_name.to_string());
-    attributes.extend(args.attributes);
-    args.attributes = attributes.into_iter().collect();
+    let mut attributes = BTreeMap::from([(ATTRIBUTE_AGENT_NAME.to_string(), agent_name.into())]);
+    attributes.append(&mut args.attributes);
+    args.attributes = attributes;
     args
 }
 
@@ -728,11 +728,12 @@ mod tests {
     #[test]
     fn user_attributes_win_over_the_agent_name_default() {
         let args = AcceptArguments {
-            attributes: vec![(ATTRIBUTE_AGENT_NAME.into(), "override".into())],
+            attributes: BTreeMap::from([(ATTRIBUTE_AGENT_NAME.into(), "override".into())]),
             ..Default::default()
         };
         let args = accept_arguments("configured", args);
-        assert_eq!(args.attributes, vec![(ATTRIBUTE_AGENT_NAME.into(), "override".into())]);
+        let want = BTreeMap::from([(ATTRIBUTE_AGENT_NAME.to_string(), "override".to_string())]);
+        assert_eq!(args.attributes, want);
     }
 
     // Catches: forgetting `agent: true` on the register permissions.

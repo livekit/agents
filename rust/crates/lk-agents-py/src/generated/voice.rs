@@ -14,15 +14,6 @@ use pyo3::prelude::*;
 type AmdFunctionsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::AmdFunctions;
 
-/// These are the reference's, not tuning knobs: the default models are what the benchmark
-/// ran on.
-#[pyfunction]
-pub fn amd_constants<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-    let out =
-        py.detach(<AmdFunctionsImpl as ::lk_agents_abi::voice::amd::AmdFunctions>::amd_constants);
-    crate::generated::records::amd::amd_constants_to_py(py, out)
-}
-
 /// `_resolve_classifier`'s `max_endpointing_delay`: explicit option, else the activity's,
 /// else the default. `provided` is `None` only when the key was absent: an explicit default
 /// still beats a disagreeing activity.
@@ -2523,7 +2514,10 @@ impl SessionOptions {
                 &self.0,
             )
         });
-        out.map(|value| ::pyo3::IntoPyObjectExt::into_bound_py_any(value.as_str(), py)).transpose()
+        out.map(|value| {
+            crate::generated::records::session_options::turn_detection_mode_to_py(py, value)
+        })
+        .transpose()
     }
 
     /// The interruption mode `VoiceSession(turn_handling=)` set; `None` when the session picks.
@@ -2964,9 +2958,11 @@ impl VoiceSession {
         ask_for_confirmation: bool,
         #[pyo3(from_py_with = _extract_voice_session_collect_dtmf_timeout)]
         timeout: VoiceSessionCollectDtmfTimeoutInput,
-        stop_event: ::std::string::String,
+        stop_event: Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
+        let stop_event =
+            crate::generated::records::workflows::dtmf_event_from_py(stop_event.as_any())?;
         let call = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::collect_dtmf(&self.0, num_digits, ask_for_confirmation, timeout, stop_event)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         crate::py_calls::future_into_py(py, async move {
             let out = call.await.map_err(|e: ::lk_agents_abi::voice::session::VoiceTaskEnded| <::lk_agents_abi::voice::session::VoiceTaskEnded as crate::py_errors::HostException>::to_py_err(&e))?;
@@ -3765,7 +3761,7 @@ inventory::submit! {
 type InterruptionGateFunctionsImpl = <crate::generated::implementations::Selected as super::Implementations>::InterruptionGateFunctions;
 
 /// `AgentActivity._rt_turn_detection_enabled` from the host's reads. `turn_detection` is the
-/// explicit mode string (agent over session), `None` when unsaid or a detector object;
+/// explicit mode (agent over session), `None` when unsaid or a detector object;
 /// `streaming_detector` says it was a streaming detector.
 #[pyfunction]
 #[pyo3(signature = (*, caps_turn_detection, can_disable_turn_detection, vad, turn_detection, streaming_detector, interruption_given))]
@@ -3774,11 +3770,16 @@ pub fn rt_server_turn_detection(
     caps_turn_detection: bool,
     can_disable_turn_detection: bool,
     vad: bool,
-    turn_detection: ::std::option::Option<::std::string::String>,
+    turn_detection: Option<Bound<'_, PyAny>>,
     streaming_detector: bool,
     interruption_given: bool,
 ) -> PyResult<bool> {
     crate::py_calls::check_pid()?;
+    let turn_detection = turn_detection
+        .map(|v| {
+            crate::generated::records::session_options::turn_detection_mode_from_py(v.as_any())
+        })
+        .transpose()?;
     let out = py.detach(|| <InterruptionGateFunctionsImpl as ::lk_agents_abi::voice::session_options::InterruptionGateFunctions>::rt_server_turn_detection(caps_turn_detection, can_disable_turn_detection, vad, turn_detection, streaming_detector, interruption_given));
     ::pyo3::PyResult::Ok(out)
 }
@@ -3794,7 +3795,7 @@ pub fn resolve_interruption_detector<'py>(
     realtime: bool,
     rt_server_turn_detection: bool,
     has_vad: bool,
-    turn_detection: ::std::option::Option<::std::string::String>,
+    turn_detection: Option<Bound<'_, PyAny>>,
     allow_interruptions: bool,
     agent_mode: Option<Bound<'_, PyAny>>,
     session_mode: Option<Bound<'_, PyAny>>,
@@ -3802,6 +3803,11 @@ pub fn resolve_interruption_detector<'py>(
     dev_mode: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
+    let turn_detection = turn_detection
+        .map(|v| {
+            crate::generated::records::session_options::turn_detection_mode_from_py(v.as_any())
+        })
+        .transpose()?;
     let agent_mode = agent_mode
         .map(|v| crate::generated::records::turn::interruption_mode_from_py(v.as_any()))
         .transpose()?;
@@ -4976,7 +4982,7 @@ pub fn normalize_phone_number(
 /// Digits are themselves, `*` is 10, `#` is 11 and `A`-`D` are 12-15.
 #[pyfunction]
 #[pyo3(signature = (symbol))]
-pub fn dtmf_code(py: Python<'_>, symbol: ::std::string::String) -> PyResult<u8> {
+pub fn dtmf_event_to_code(py: Python<'_>, symbol: ::std::string::String) -> PyResult<u8> {
     let out = py.detach(|| <WorkflowChecksImpl as ::lk_agents_abi::voice::workflows::WorkflowChecks>::dtmf_code(symbol)).map_err(|e: ::lk_agents_abi::voice::workflows::UnknownDtmfSymbol| <::lk_agents_abi::voice::workflows::UnknownDtmfSymbol as crate::py_errors::HostException>::to_py_err(&e))?;
     ::pyo3::PyResult::Ok(out)
 }
@@ -5014,7 +5020,7 @@ type DtmfIoReceiveDtmfTimeoutInput = f64;
 pub fn send_dtmf_events<'py>(
     py: Python<'py>,
     room: Bound<'_, PyAny>,
-    events: ::std::vec::Vec<::std::string::String>,
+    events: Bound<'_, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
     let room = crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(
@@ -5025,6 +5031,14 @@ pub fn send_dtmf_events<'py>(
             "room",
             ": expected a native room session"
         ))
+    })?;
+    let events = events.try_iter().and_then(|items| {
+        items
+            .map(|item| {
+                let item = item?;
+                crate::generated::records::workflows::dtmf_event_from_py(item.as_any())
+            })
+            .collect::<PyResult<Vec<_>>>()
     })?;
     crate::py_calls::future_into_py(py, async move {
         let out =
@@ -5045,7 +5059,7 @@ pub fn receive_dtmf<'py>(
     num_digits: DtmfIoReceiveDtmfNumDigitsInput,
     #[pyo3(from_py_with = _extract_dtmf_io_receive_dtmf_timeout)]
     timeout: DtmfIoReceiveDtmfTimeoutInput,
-    stop_event: ::std::string::String,
+    stop_event: Bound<'_, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
     let room = crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(
@@ -5057,6 +5071,7 @@ pub fn receive_dtmf<'py>(
             ": expected a native room session"
         ))
     })?;
+    let stop_event = crate::generated::records::workflows::dtmf_event_from_py(stop_event.as_any())?;
     crate::py_calls::future_into_py(py, async move {
         let out = <DtmfIoImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfIo>::receive_dtmf(room, num_digits, timeout, stop_event).await.map_err(|e: ::lk_agents_abi::voice::workflows::dtmf::ReceiveDtmfError| <::lk_agents_abi::voice::workflows::dtmf::ReceiveDtmfError as crate::py_errors::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))

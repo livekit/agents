@@ -24,23 +24,21 @@ pub struct UnknownLiteral {
 )]
 pub struct UnknownTextTransform(pub String);
 
-/// `Auto` is the reference's `None`: decide from the legs.
-// `Auto` is `"unset"`. An unknown literal is refused, never read as `Auto`.
+/// The turn detection mode a session or agent asks for; unsaid or `None` decides from the legs.
+#[crate::host(record(module = "session_options", name = "TurnDetectionMode", extract, emit))]
 #[crate::host(wire_strs(err = UnknownLiteral, msg = UnknownLiteral {
     what: "turn_detection mode",
     value: s.to_owned(),
-    expected: "\"stt\", \"vad\", \"manual\", \"realtime_llm\" or \"unset\"",
+    expected: "\"stt\", \"vad\", \"manual\" or \"realtime_llm\"",
 }))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Vocabulary)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub enum TurnDetection {
-    Vad,
     Stt,
+    Vad,
     Manual,
     RealtimeLlm,
-    #[host(rename = "unset")]
-    Auto,
 }
 
 /// Picks the endpointing base and the turn machine's countdown arm.
@@ -50,10 +48,20 @@ pub enum DetectorKind {
     Streaming,
 }
 
+/// A transform the core applies to the text it sends to the TTS.
+#[crate::host(record(module = "session_options", name = "TextTransforms", extract, emit))]
+#[crate::host(wire_strs(err = UnknownTextTransform, msg = UnknownTextTransform(s.to_owned())))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextTransform {
+    FilterMarkdown,
+    FilterEmoji,
+}
+
 /// Which builtin transforms run between the segmenter and the TTS.
 #[crate::host(codec(
     extract,
-    host = "collections.abc.Sequence[livekit.agents.voice.agent_session.TextTransforms]",
+    host = "collections.abc.Sequence[.session_options.TextTransforms]",
     via = Vec<String>
 ))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,33 +77,27 @@ impl TextTransformSet {
     pub const ALL: TextTransformSet =
         TextTransformSet { filter_markdown: true, filter_emoji: true };
 
-    /// The reference's list form as the set; an unknown name is refused.
-    pub fn from_names(names: &[String]) -> Result<Self, UnknownTextTransform> {
-        let mut set = TextTransformSet { filter_markdown: false, filter_emoji: false };
-        for name in names {
-            match name.as_str() {
-                "filter_markdown" => set.filter_markdown = true,
-                "filter_emoji" => set.filter_emoji = true,
-                other => return Err(UnknownTextTransform(other.to_owned())),
-            }
-        }
-        Ok(set)
-    }
-
-    pub fn names(self) -> Vec<String> {
+    pub fn transforms(self) -> Vec<TextTransform> {
         let TextTransformSet { filter_markdown, filter_emoji } = self;
-        [("filter_markdown", filter_markdown), ("filter_emoji", filter_emoji)]
-            .into_iter()
-            .filter(|(_, on)| *on)
-            .map(|(name, _)| name.to_owned())
-            .collect()
+        [
+            (TextTransform::FilterMarkdown, filter_markdown),
+            (TextTransform::FilterEmoji, filter_emoji),
+        ]
+        .into_iter()
+        .filter_map(|(transform, on)| on.then_some(transform))
+        .collect()
     }
 }
 
 impl TryFrom<Vec<String>> for TextTransformSet {
     type Error = UnknownTextTransform;
     fn try_from(names: Vec<String>) -> Result<Self, Self::Error> {
-        Self::from_names(&names)
+        let transforms =
+            names.iter().map(|name| name.parse()).collect::<Result<Vec<TextTransform>, _>>()?;
+        Ok(TextTransformSet {
+            filter_markdown: transforms.contains(&TextTransform::FilterMarkdown),
+            filter_emoji: transforms.contains(&TextTransform::FilterEmoji),
+        })
     }
 }
 
@@ -178,7 +180,8 @@ pub struct SessionConnOptions {
 /// Of a detector object only whether it streams crosses.
 #[crate::host(codec(
     extract,
-    host = "livekit.agents.voice.io.TurnDetectionMode | None",
+    host = ".session_options.TurnDetectionMode | livekit.agents.voice.io._StreamingTurnDetector \
+            | None",
     py = "py_values::turn_detection_kwarg"
 ))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -427,7 +430,7 @@ pub struct SessionKwargs {
 pub struct UpdateKwargs {
     #[host(default = None)]
     pub endpointing_opts: Option<EndpointingKwargs>,
-    /// `None` reverts to automatic selection (`Auto`).
+    /// `None` reverts to automatic selection.
     pub turn_detection: Maybe<TurnDetectionKwarg>,
     pub expressive: Maybe<Expressive>,
     /// The user-defined keyterms, replaced; the detected ones stay.
@@ -615,13 +618,14 @@ pub struct ResolvedSessionOptions {
     pub interruption: ResolvedInterruption,
     pub preemptive_generation: ResolvedPreemptiveGeneration,
     pub user_turn_limit: ResolvedUserTurnLimit,
-    /// The `turn_detection` the session runs on, as the public literal; `None` is `Auto`.
-    pub turn_detection_mode: Option<String>,
+    /// The `turn_detection` the session runs on; `None` is automatic selection.
+    #[serde(serialize_with = "wire_some")]
+    pub turn_detection_mode: Option<TurnDetection>,
     pub endpointing_overrides: EndpointingOverrides,
     pub max_tool_steps: u32,
     pub min_consecutive_speech_delay: f64,
     pub use_tts_aligned_transcript: Option<bool>,
-    pub tts_text_transforms: Option<Vec<String>>,
+    pub tts_text_transforms: Option<Vec<TextTransform>>,
     pub ivr_detection: bool,
     pub user_away_timeout: Option<f64>,
     pub transcription_timeout: Option<f64>,
@@ -646,14 +650,14 @@ pub struct InterruptionGateVerdict {
 #[crate::host(functions)]
 pub trait InterruptionGateFunctions {
     /// `AgentActivity._rt_turn_detection_enabled` from the host's reads. `turn_detection` is the
-    /// explicit mode string (agent over session), `None` when unsaid or a detector object;
+    /// explicit mode (agent over session), `None` when unsaid or a detector object;
     /// `streaming_detector` says it was a streaming detector.
     #[host(function)]
     fn rt_server_turn_detection(
         #[host(kw)] caps_turn_detection: bool,
         can_disable_turn_detection: bool,
         vad: bool,
-        turn_detection: Option<String>,
+        turn_detection: Option<TurnDetection>,
         streaming_detector: bool,
         interruption_given: bool,
     ) -> bool;
@@ -668,7 +672,7 @@ pub trait InterruptionGateFunctions {
         realtime: bool,
         rt_server_turn_detection: bool,
         has_vad: bool,
-        turn_detection: Option<String>,
+        turn_detection: Option<TurnDetection>,
         allow_interruptions: bool,
         agent_mode: Option<InterruptionMode>,
         session_mode: Option<InterruptionMode>,

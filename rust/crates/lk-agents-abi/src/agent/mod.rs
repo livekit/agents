@@ -215,6 +215,34 @@ pub enum ToolTemplate {
     ReplyMaybeCovered { call_ids: Vec<String> },
 }
 
+/// An `AsyncToolOptions` key: the host's `ctx.update` template, or the one overriding a
+/// [`ToolTemplate`].
+#[crate::host(record(module = "agent_run", emit))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolTemplateKey {
+    #[host(rename = "update_template")]
+    Update,
+    #[host(rename = "duplicate_reject_template")]
+    DuplicateReject,
+    #[host(rename = "duplicate_confirm_template")]
+    DuplicateConfirm,
+    #[host(rename = "reply_at_tail_template")]
+    ReplyAtTail,
+    #[host(rename = "reply_maybe_covered_template")]
+    ReplyMaybeCovered,
+}
+
+impl ToolTemplate {
+    pub fn key(&self) -> ToolTemplateKey {
+        match self {
+            ToolTemplate::DuplicateReject { .. } => ToolTemplateKey::DuplicateReject,
+            ToolTemplate::DuplicateConfirm { .. } => ToolTemplateKey::DuplicateConfirm,
+            ToolTemplate::ReplyAtTail { .. } => ToolTemplateKey::ReplyAtTail,
+            ToolTemplate::ReplyMaybeCovered { .. } => ToolTemplateKey::ReplyMaybeCovered,
+        }
+    }
+}
+
 /// The application callbacks of one agent definition, run by the host object of
 /// `livekit.agents.voice.agent_run.AgentCallbacks` (its methods carry these names). Every call
 /// carries its [`Invocation`] and runs in a copy of the host context it captured; the caller's
@@ -305,6 +333,7 @@ pub trait AgentCallbacks: Send + Sync {
         &'a self,
         _cx: &crate::telemetry::Cx,
         #[host(context)] _invocation: &'a Invocation,
+        _key: ToolTemplateKey,
         _template: ToolTemplate,
     ) -> crate::BoxFuture<'a, Result<Option<String>, HostError>> {
         Box::pin(async move { Ok(None) })

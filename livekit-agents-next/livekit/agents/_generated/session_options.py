@@ -17,8 +17,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from livekit.agents._generated.expressive import ExpressiveOptions
-    from livekit.agents.voice.agent_session import TextTransforms
-    from livekit.agents.voice.io import TurnDetectionMode
+    from livekit.agents.voice.io import _StreamingTurnDetector
 
     from .connect import SessionConnectOptions
     from .turn import (
@@ -29,8 +28,16 @@ if TYPE_CHECKING:
         TurnHandlingOptions,
     )
 
+TurnDetectionMode: TypeAlias = Literal["stt", "vad", "manual", "realtime_llm"]
+"""The turn detection mode a session or agent asks for; unsaid or `None` decides from the legs."""
+
+
 DetectorKind: TypeAlias = Literal["streaming"]
 """Picks the endpointing base and the turn machine's countdown arm."""
+
+
+TextTransforms: TypeAlias = Literal["filter_markdown", "filter_emoji"]
+"""A transform the core applies to the text it sends to the TTS."""
 
 
 class SessionKwargs(TypedDict):
@@ -60,8 +67,8 @@ class UpdateKwargs(TypedDict, total=False):
     """`AgentSession.update_options(..)`'s option surface."""
 
     endpointing_opts: EndpointingOptions
-    turn_detection: TurnDetectionMode | None
-    """`None` reverts to automatic selection (`Auto`)."""
+    turn_detection: TurnDetectionMode | _StreamingTurnDetector | None
+    """`None` reverts to automatic selection."""
     expressive: bool | ExpressiveOptions | None
     keyterms: list[str]
     """The user-defined keyterms, replaced; the detected ones stay."""
@@ -145,13 +152,13 @@ class ResolvedSessionOptions(TypedDict):
     interruption: ResolvedInterruption
     preemptive_generation: ResolvedPreemptiveGeneration
     user_turn_limit: ResolvedUserTurnLimit
-    turn_detection_mode: str | None
-    """The `turn_detection` the session runs on, as the public literal; `None` is `Auto`."""
+    turn_detection_mode: TurnDetectionMode | None
+    """The `turn_detection` the session runs on; `None` is automatic selection."""
     endpointing_overrides: EndpointingOverrides
     max_tool_steps: int
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: bool | None
-    tts_text_transforms: list[str] | None
+    tts_text_transforms: list[TextTransforms] | None
     ivr_detection: bool
     user_away_timeout: float | None
     transcription_timeout: float | None

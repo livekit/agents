@@ -10,14 +10,14 @@ from dataclasses import dataclass
 from typing import Any, Generic
 
 from . import _core, llm, utils
-from ._generated import text_session as records
+from ._generated import public_text_session as _public, text_session as records
 from ._generated.agent_run import RunSettled
+from ._generated.public_text_session import *  # noqa: F403
 from ._generated.run_result import Output_T
-from ._generated.text_session import TextSessionState
 from .storage.context import ContextStore
 from .types import DEFAULT_API_CONNECT_OPTIONS
 from .voice import Agent, AgentRetries, _BindingContextVar, _LocalAgentTool
-from .voice.agent_run import _TextRun, door_hooks, run_error, run_resources, settled_result
+from .voice.agent_run import _TextRun, door_hooks, run_resources, settled_result
 from .voice.events import Context_T
 from .voice.run_result import RunResult, RunStream, _Started
 
@@ -26,14 +26,6 @@ from .voice.run_result import RunResult, RunStream, _Started
 class TextSessionTurn(Generic[Output_T]):
     result: RunResult[Output_T]
     state: TextSessionState
-
-
-class TextSessionRoutingError(ValueError):
-    """The supplied state or an agent-tool route cannot be used."""
-
-    def __init__(self, error: records.RoutingError) -> None:
-        self.error = error
-        super().__init__(str(error))
 
 
 class TextSession(Generic[Context_T, Output_T]):
@@ -166,15 +158,7 @@ class TextSession(Generic[Context_T, Output_T]):
                         hooks.on_result(result)
                     return TextSessionTurn(result=result, state=finished.turn.state)
 
-                def fail(error: records.TextSessionError) -> BaseException:
-                    if isinstance(error, records.TextSessionErrorRun):
-                        return run_error(error.error)
-                    return TextSessionRoutingError(error.error)
-
-                return _Started(
-                    settle=settle,
-                    fail=fail,
-                )
+                return _Started(settle=settle)
 
             except BaseException:
                 await resources.rollback()
@@ -227,4 +211,8 @@ def _agents(root: Agent[Any, Any]) -> list[Agent[Any, Any]]:
     return agents
 
 
-__all__ = ["TextSession", "TextSessionRoutingError", "TextSessionState", "TextSessionTurn"]
+__all__ = [
+    "TextSession",
+    "TextSessionTurn",
+]
+__all__ += _public.__all__

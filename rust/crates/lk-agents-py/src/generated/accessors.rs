@@ -518,3 +518,23 @@ impl NumpyModule {
         obj.as_any().getattr("float32")
     }
 }
+
+/// Python interface: `livekit.protocol.agent.Job`.
+pub use crate::py_values::interfaces::ProtoJob;
+impl ProtoJob {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
+            pyo3::sync::PyOnceLock::new();
+        Ok(CLASS.import(py, "livekit.protocol.agent", "Job")?.as_any().clone())
+    }
+    pub fn serialize_to_string<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("SerializeToString")
+    }
+    pub fn from_string<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("FromString")
+    }
+}

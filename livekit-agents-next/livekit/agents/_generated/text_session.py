@@ -16,14 +16,7 @@ if TYPE_CHECKING:
     from livekit.agents.llm import LLM
     from livekit.agents.voice.agent_run import AgentCallbacks
 
-    from .agent_run import (
-        AgentDefinition,
-        AgentError,
-        RunError,
-        RunInputRequirement,
-        RunResult,
-        StreamEvent,
-    )
+    from .agent_run import AgentDefinition, RunInputRequirement, RunResult, StreamEvent
     from .chat_items import ChatItem, ChatMessage
     from .connect import APIConnectOptions
 
@@ -128,74 +121,9 @@ class LocalAgentTool:
 
 
 @dataclass(kw_only=True, slots=True)
-class RoutingErrorAgent:
-    error: AgentError
-
-
-@dataclass(kw_only=True, slots=True)
-class RoutingErrorMaxDepth:
-    max_depth: int
-
-
-@dataclass(kw_only=True, slots=True)
-class RoutingErrorUnknownAgent:
-    message: str
-
-
-@dataclass(kw_only=True, slots=True)
-class RoutingErrorUnknownScope:
-    message: str
-
-
-@dataclass(kw_only=True, slots=True)
-class RoutingErrorUnknownTool:
-    message: str
-
-
-@dataclass(kw_only=True, slots=True)
-class RoutingErrorMissingOutputType:
-    message: str
-
-
-@dataclass(kw_only=True, slots=True)
-class RoutingErrorInvalidState:
-    message: str
-
-
-@dataclass(kw_only=True, slots=True)
-class RoutingErrorMissingAcceptedOutput:
-    pass
-
-
-RoutingError: TypeAlias = (
-    RoutingErrorAgent
-    | RoutingErrorMaxDepth
-    | RoutingErrorUnknownAgent
-    | RoutingErrorUnknownScope
-    | RoutingErrorUnknownTool
-    | RoutingErrorMissingOutputType
-    | RoutingErrorInvalidState
-    | RoutingErrorMissingAcceptedOutput
-)
-
-
-@dataclass(kw_only=True, slots=True)
 class TextSessionTurn:
     result: RunResult
     state: TextSessionState
-
-
-@dataclass(kw_only=True, slots=True)
-class TextSessionErrorRouting:
-    error: RoutingError
-
-
-@dataclass(kw_only=True, slots=True)
-class TextSessionErrorRun:
-    error: RunError
-
-
-TextSessionError: TypeAlias = TextSessionErrorRouting | TextSessionErrorRun
 
 
 @dataclass(kw_only=True, slots=True)
@@ -265,7 +193,7 @@ class TextSessionUpdateFinished:
 
 @dataclass(kw_only=True, slots=True)
 class TextSessionUpdateFailed:
-    error: TextSessionError
+    error: BaseException
     input_requirements: list[RunInputRequirement] = field(default_factory=list)
     provider_error: BaseException | None = None
     """The original model failure, retained beside its correlated outcome metadata."""
@@ -285,3 +213,6 @@ TextSessionUpdate: TypeAlias = (
 class TextSessionDelivery:
     invocation_id: str
     messages: dict[str, str]
+
+
+TextSessionState.__module__ = "livekit.agents.text_session"

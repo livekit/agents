@@ -20,6 +20,8 @@ pub struct TurnContext {
     pub lane: String,
     pub message: ChatItem,
     pub batch: Vec<Message>,
+    /// Every message of the batch is a delegation from another agent.
+    pub delegated: bool,
     pub history: Vec<ItemRow>,
     pub state: Option<Value>,
     pub context_scope_id: String,

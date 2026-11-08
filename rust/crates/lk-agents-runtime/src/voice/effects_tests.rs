@@ -108,6 +108,7 @@ impl AgentCallbacks for PendingHost {
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a Invocation,
+        _: lk_agents_abi::agent::ToolTemplateKey,
         _: ToolTemplate,
     ) -> BoxFuture<'a, Result<Option<String>, HostError>> {
         self.work()

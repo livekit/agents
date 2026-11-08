@@ -171,16 +171,16 @@ option_group!(TimerOptions {
 });
 
 /// The reference's defaults: every leaf said. The endpointing base tightens to `0.3 / 2.5` with a
-/// streaming detector, and the owner is what `Auto` means for these legs.
+/// streaming detector, and the owner is what automatic selection means for these legs.
 pub const fn defaults(legs: &SessionLegs) -> AgentSessionOptions {
     let (min_delay, max_delay) = match legs.detector {
         Some(DetectorKind::Streaming) => (Duration::from_millis(300), Duration::from_millis(2500)),
         None => (Duration::from_millis(500), Duration::from_millis(3000)),
     };
-    let detection = TurnDetection::Auto;
+    let detection = None;
     AgentSessionOptions {
         turn: TurnHandlingOptions {
-            detection: Some(detection),
+            detection: Maybe::Given(detection),
             owner: Some(resolve_turn_detection_mode(detection, legs)),
             endpointing: EndpointingOptions {
                 mode: Some(EndpointingMode::Fixed),
@@ -229,28 +229,27 @@ pub const fn defaults(legs: &SessionLegs) -> AgentSessionOptions {
         },
     }
 }
-/// `Auto` falls `realtime_llm` → `vad` → `manual`. A mode the legs cannot honour falls back as
-/// `Auto` does; `Manual` always holds. `RealtimeLlm` only when no local leg can decide;
+/// Automatic selection (`None`) falls `realtime_llm` → `vad` → `manual`. A mode the legs cannot
+/// honour falls back as automatic selection does; `Manual` always holds. `RealtimeLlm` only when no local leg can decide;
 /// `DriverBuilder::start` refines it. Only an asked-for `stt` is `Stt`: the reference's unset mode
 /// (`_turn_detection_mode = None`, the default turn detector included) is its VAD-based path, which
 /// with an STT and no VAD ends turns on finals alone and leaves the STT's speech events unread.
 pub const fn resolve_turn_detection_mode(
-    detection: TurnDetection,
+    detection: Option<TurnDetection>,
     legs: &SessionLegs,
 ) -> TurnDetectionMode {
     match detection {
-        TurnDetection::Manual => TurnDetectionMode::Manual,
-        TurnDetection::Vad if legs.vad => TurnDetectionMode::Vad,
-        TurnDetection::Stt if legs.stt && !legs.realtime => TurnDetectionMode::Stt,
-        // `realtime_llm` falls exactly as `Auto` does.
-        TurnDetection::Vad
-        | TurnDetection::Stt
-        | TurnDetection::RealtimeLlm
-        | TurnDetection::Auto => auto_turn_detection_mode(legs),
+        Some(TurnDetection::Manual) => TurnDetectionMode::Manual,
+        Some(TurnDetection::Vad) if legs.vad => TurnDetectionMode::Vad,
+        Some(TurnDetection::Stt) if legs.stt && !legs.realtime => TurnDetectionMode::Stt,
+        // `realtime_llm` falls exactly as automatic selection does.
+        Some(TurnDetection::Vad | TurnDetection::Stt | TurnDetection::RealtimeLlm) | None => {
+            auto_turn_detection_mode(legs)
+        }
     }
 }
 
-/// `Auto`'s fall, with `realtime_llm` taken only when no local VAD or STT exists.
+/// Automatic selection's fall, with `realtime_llm` taken only when no local VAD or STT exists.
 const fn auto_turn_detection_mode(legs: &SessionLegs) -> TurnDetectionMode {
     if legs.realtime && !legs.vad && !legs.stt {
         TurnDetectionMode::RealtimeLlm
@@ -263,11 +262,8 @@ const fn auto_turn_detection_mode(legs: &SessionLegs) -> TurnDetectionMode {
 
 /// `_interruption_by_audio_activity_enabled`'s initial value: off under `manual` or
 /// `realtime_llm`, where the user's audio is not a turn signal.
-const fn by_audio_activity(detection: TurnDetection) -> bool {
-    match detection {
-        TurnDetection::Manual | TurnDetection::RealtimeLlm => false,
-        TurnDetection::Vad | TurnDetection::Stt | TurnDetection::Auto => true,
-    }
+const fn by_audio_activity(detection: Option<TurnDetection>) -> bool {
+    !matches!(detection, Some(TurnDetection::Manual | TurnDetection::RealtimeLlm))
 }
 
 /// The layers, in the order they apply: `defaults(legs)` ⊕ `session` ⊕ `agent` ⊕ `overrides`.
@@ -367,11 +363,11 @@ pub fn update_layer(kw: &UpdateKwargs) -> AgentSessionOptions {
     o.speech.min_consecutive_speech_delay = min_consecutive_speech_delay.map(secs);
     o.speech.tts_text_transforms = tts_text_transforms;
     o.turn.detection = match turn_detection {
-        Maybe::NotGiven => None,
-        Maybe::Given(TurnDetectionKwarg::Null) => Some(TurnDetection::Auto),
-        Maybe::Given(TurnDetectionKwarg::Mode(m)) => Some(m),
+        Maybe::NotGiven => Maybe::NotGiven,
+        Maybe::Given(TurnDetectionKwarg::Null) => Maybe::Given(None),
+        Maybe::Given(TurnDetectionKwarg::Mode(m)) => Maybe::Given(Some(m)),
         // A detector object: refused by `update_turn_options` before this.
-        Maybe::Given(TurnDetectionKwarg::Detector { streaming: _ }) => None,
+        Maybe::Given(TurnDetectionKwarg::Detector { streaming: _ }) => Maybe::NotGiven,
     };
     o
 }
@@ -456,9 +452,7 @@ pub fn resolved_session_options(
             max_words: max_words.resolved(),
             max_duration: max_duration.resolved().map(secs),
         },
-        // The literal, or `None` for `Auto`: "from the legs".
-        turn_detection_mode: (detection != TurnDetection::Auto)
-            .then(|| detection.as_str().to_owned()),
+        turn_detection_mode: detection,
         endpointing_overrides: EndpointingOverrides {
             mode: overrides.mode,
             min_delay: overrides.min_delay.map(secs),
@@ -468,7 +462,7 @@ pub fn resolved_session_options(
         max_tool_steps: max_tool_steps.resolved(),
         min_consecutive_speech_delay: secs(min_consecutive_speech_delay.resolved()),
         use_tts_aligned_transcript,
-        tts_text_transforms: tts_text_transforms.resolved().map(TextTransformSet::names),
+        tts_text_transforms: tts_text_transforms.resolved().map(TextTransformSet::transforms),
         ivr_detection: ivr_detection.resolved(),
         user_away_timeout: user_away.resolved().map(secs),
         transcription_timeout: transcription_timeout.resolved().map(secs),
@@ -506,7 +500,7 @@ pub struct InterruptionGateInputs {
     /// `self.vad is not None`.
     pub has_vad: bool,
     /// The resolved `turn_detection`: `Manual` and `RealtimeLlm` have nothing to withhold with.
-    pub turn_detection: TurnDetection,
+    pub turn_detection: Option<TurnDetection>,
     /// `self.allow_interruptions`.
     pub allow_interruptions: bool,
     /// `interruption_detection` as the agent and the session said it, explicitly (`None` is
@@ -573,7 +567,7 @@ pub fn resolve_interruption_detector(inputs: &InterruptionGateInputs) -> Interru
     let nobody_asked = asked.iter().all(Option::is_none);
     if !can_gatekeep
         || !has_vad
-        || matches!(turn_detection, TurnDetection::Manual | TurnDetection::RealtimeLlm)
+        || matches!(turn_detection, Some(TurnDetection::Manual | TurnDetection::RealtimeLlm))
     {
         return InterruptionGate::VadOnly {
             reason: "cannot_gatekeep",
@@ -611,14 +605,14 @@ impl lk_agents_abi::voice::session_options::InterruptionGateFunctions for Interr
         caps_turn_detection: bool,
         can_disable_turn_detection: bool,
         vad: bool,
-        turn_detection: Option<String>,
+        turn_detection: Option<TurnDetection>,
         streaming_detector: bool,
         interruption_given: bool,
     ) -> bool {
         let side = crate::agent_session::machine::activity::realtime::SessionSide {
             stt: false,
             vad,
-            detection: turn_detection.and_then(|s| s.parse().ok()).unwrap_or(TurnDetection::Auto),
+            detection: turn_detection,
             streaming_detector,
             interruption_given,
             turn_detection_mode: TurnDetectionMode::Manual,
@@ -639,7 +633,7 @@ impl lk_agents_abi::voice::session_options::InterruptionGateFunctions for Interr
         realtime: bool,
         rt_server_turn_detection: bool,
         has_vad: bool,
-        turn_detection: Option<String>,
+        turn_detection: Option<TurnDetection>,
         allow_interruptions: bool,
         agent_mode: Option<InterruptionMode>,
         session_mode: Option<InterruptionMode>,
@@ -656,10 +650,7 @@ impl lk_agents_abi::voice::session_options::InterruptionGateFunctions for Interr
             realtime: realtime
                 .then_some(RealtimeGate { server_turn_detection: rt_server_turn_detection }),
             has_vad,
-            // A detector object's repr, or nothing said, parses to `Auto`, as `"unset"` does.
-            turn_detection: turn_detection
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(TurnDetection::Auto),
+            turn_detection,
             allow_interruptions,
             asked: [agent_mode, session_mode],
             deployment: if hosted {

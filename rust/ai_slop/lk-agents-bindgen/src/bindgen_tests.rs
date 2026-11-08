@@ -173,3 +173,27 @@ fn a_body_is_written_by_send_or_by_hand_never_both_nor_neither() {
             .contains("takes `&self`")
     );
 }
+
+// Catches: a variant's fixed keyword arguments dropped, or a tuple variant refused them.
+#[test]
+fn a_variant_passes_fixed_keyword_arguments() {
+    let e: syn::Item = syn::parse2(quote! {
+        pub enum RunError {
+            #[host(kind = "m.APIError", kwargs(retryable = false))] Model(String),
+        }
+    })
+    .unwrap();
+    let out = exception(quote!(error(kind = "RuntimeError")), &e).unwrap();
+    assert!(
+        out.contains(
+            "Self :: Model (..) => crate :: py_errors :: host_exception_with (\"m\" , \"APIError\""
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "\"retryable\" , :: pyo3 :: IntoPyObjectExt :: into_bound_py_any (false , py) ?"
+        ),
+        "{out}"
+    );
+}

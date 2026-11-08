@@ -38,6 +38,8 @@ impl TryFrom<TurnContext> for host::TurnContext {
             thread_id: ctx.thread_id,
             lane: ctx.lane,
             message,
+            delegated: !ctx.batch.is_empty()
+                && ctx.batch.iter().all(|m| m.channel == super::policy::DELEGATION_CHANNEL),
             batch: ctx.batch.into_iter().map(Into::into).collect(),
             history: ctx.history.into_iter().map(TryInto::try_into).collect::<Result<_, _>>()?,
             state: ctx.state,

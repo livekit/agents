@@ -3,16 +3,12 @@
 use lk_agents_abi::Closed;
 use lk_agents_abi::voice::io::{IoError, Result};
 pub use lk_agents_abi::voice::room_io::{
-    AudioInputConfig, AudioOutputConfig, DeleteRoomRequested, ParticipantLinked,
-    ParticipantUnlinked, RoomIoConfig, TextInput, TextOutputConfig,
+    AudioInputConfig, AudioOutputConfig, DEFAULT_PARTICIPANT_KINDS, DeleteRoomRequested,
+    ParticipantLinked, ParticipantUnlinked, RoomIoConfig, TextInput, TextOutputConfig,
 };
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, ParticipantKind};
 use std::collections::BTreeMap;
 use std::time::Duration;
-
-/// `job.DEFAULT_PARTICIPANT_KINDS`: no `Agent` or `Egress`, so agents never auto-link to each other.
-pub const DEFAULT_PARTICIPANT_KINDS: &[ParticipantKind] =
-    &[ParticipantKind::Connector, ParticipantKind::Sip, ParticipantKind::Standard];
 
 /// `_pre_connect_audio.PRE_CONNECT_AUDIO_BUFFER_STREAM`.
 pub const PRE_CONNECT_AUDIO_BUFFER_STREAM: &str = "lk.agent.pre-connect-audio-buffer";

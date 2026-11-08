@@ -7,8 +7,9 @@ pub const DEFAULT_INFERENCE_URL: &str = "https://agent-gateway.livekit.cloud/v1"
 pub const STAGING_INFERENCE_URL: &str = "https://agent-gateway.staging.livekit.cloud/v1";
 
 pub const HEADER_USER_AGENT: &str = "User-Agent";
-pub const HEADER_INFERENCE_PROVIDER: &str = "X-LiveKit-Inference-Provider";
-pub const HEADER_INFERENCE_PRIORITY: &str = "X-LiveKit-Inference-Priority";
+pub use lk_agents_abi::inference::{
+    HEADER_INFERENCE_PRIORITY, HEADER_INFERENCE_PROVIDER, HEADER_SESSION_ID,
+};
 
 pub use lk_agents_net::http::{QUOTA_HEADER_FIELDS, extract_quota_usage};
 

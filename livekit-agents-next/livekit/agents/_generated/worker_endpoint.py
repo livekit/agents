@@ -150,3 +150,6 @@ class EndpointOptions:
     """Application HTTP route visibility; A2A routes always require authentication."""
 
     public: bool = False
+
+
+EndpointRequest.__module__ = "livekit.agents.http"

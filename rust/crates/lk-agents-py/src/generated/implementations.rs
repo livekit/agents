@@ -55,6 +55,7 @@ impl super::Implementations for Selected {
     type McpToolsetLifecycle = ::lk_agents_runtime::mcp::McpToolsetLifecycle;
     type McpTools = ::lk_agents_runtime::mcp::McpTools;
     type LlmAlgorithms = ::lk_agents_runtime::inference::llm::algorithms::LlmAlgorithms;
+    type RealtimeReports = ::lk_agents_runtime::inference::realtime::machine::Reports;
     type HostRealtimeModel = ::lk_agents_runtime::inference::realtime::host::HostRealtimeModel;
     type OpenAIRealtimeModel = ::lk_agents_runtime::inference::realtime::openai::OpenAIRealtime;
     type ChatContextDict = ::lk_agents_runtime::cores::ChatDict;

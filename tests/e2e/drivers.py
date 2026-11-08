@@ -14,7 +14,7 @@ from google.protobuf.message import Message as ProtoMessage
 from jsonrpc.jsonrpc2 import JSONRPC20Request, JSONRPC20Response  # type: ignore[import-untyped]
 from pydantic import JsonValue, TypeAdapter
 
-from livekit.agents.a2a import EXTENSION_URI, to_json
+from livekit.agents.a2a import EXTENSION_URI
 
 from .resources import REQUEST_SECONDS, Child
 
@@ -85,7 +85,7 @@ class A2ACaller:
 
 
 def _request(method: str, params: ProtoMessage, thread: str) -> dict[str, object]:
-    wire_params = to_json(params)
+    wire_params = json_format.MessageToDict(params)
     if thread:
         # The current server requires the thread beside task lookup parameters.
         wire_params["contextId"] = thread

@@ -109,3 +109,12 @@ class AgentCard:
 
 MessageInput: TypeAlias = str | Message
 """A string is shorthand for a generated message with one text part."""
+
+
+MessageMetadata.__module__ = "livekit.agents.a2a"
+TextPart.__module__ = "livekit.agents.a2a"
+DataPart.__module__ = "livekit.agents.a2a"
+FilePart.__module__ = "livekit.agents.a2a"
+Message.__module__ = "livekit.agents.a2a"
+Artifact.__module__ = "livekit.agents.a2a"
+TaskUpdate.__module__ = "livekit.agents.a2a"

@@ -22,6 +22,14 @@ struct Class {
     normalizers: Vec<Normalize>,
     display: Option<String>,
     repr: Option<Vec<String>>,
+    /// `attrs(name(ty, value))`: class attributes a subclass may override.
+    attrs: Vec<Attr>,
+}
+#[derive(Debug, Clone)]
+struct Attr {
+    name: String,
+    annotation: String,
+    value: Literal,
 }
 #[derive(Debug, Clone)]
 struct Field {
@@ -65,7 +73,24 @@ pub fn resolve(schema: &Entry) -> Result<Family, String> {
     for class in &classes.nested {
         let name = &class.key;
         let keys = &class.nested;
-        voc::only(name, keys, &["base", "doc", "fields", "base_args", "normalize", "str", "repr"])?;
+        voc::only(
+            name,
+            keys,
+            &["base", "doc", "attrs", "fields", "base_args", "normalize", "str", "repr"],
+        )?;
+        let mut attrs = Vec::new();
+        for attr in
+            voc::find(keys, "attrs").map(|entry| entry.nested.as_slice()).unwrap_or_default()
+        {
+            voc::only(name, &attr.nested, &["ty", "value"])?;
+            attrs.push(Attr {
+                name: attr.key.clone(),
+                annotation: required(name, &attr.nested, "ty")?,
+                value: default(&attr.nested, "value")?.ok_or_else(|| {
+                    format!("{name}.{}: a class attribute needs a value", attr.key)
+                })?,
+            });
+        }
         let mut out = Class {
             name: name.clone(),
             base: required(name, keys, "base")?,
@@ -76,6 +101,7 @@ pub fn resolve(schema: &Entry) -> Result<Family, String> {
             display: voc::text(name, keys, "str")?,
             repr: voc::find(keys, "repr")
                 .map(|entry| entry.nested.iter().map(|entry| entry.key.clone()).collect()),
+            attrs,
         };
         if let Some(fields) = voc::find(keys, "fields") {
             let mut resolved = Vec::new();
@@ -194,6 +220,14 @@ fn emit(family: &Family) -> Out {
             text.push_str(&format!("    {doc:?}\n"));
         }
         text.push_str(&format!("    __module__ = {path:?}\n"));
+        for attr in &class.attrs {
+            text.push_str(&format!(
+                "    {}: {} = {}\n",
+                attr.name,
+                attr.annotation,
+                crate::class_stub::py_literal(&attr.value)
+            ));
+        }
         if let Some(fields) = &class.fields {
             let mut params = Vec::new();
             let mut keyword = false;
@@ -228,11 +262,14 @@ fn emit(family: &Family) -> Out {
                 if params.is_empty() { String::new() } else { format!(", {}", params.join(", ")) };
             text.push_str(&format!("\n    def __init__(self{params}) -> None:\n"));
             for normalize in &class.normalizers {
+                // `module.name` is a function of that `livekit.agents` module, else of `path`.
+                let (module, hook) = match normalize.hook.rsplit_once('.') {
+                    Some((module, hook)) => (format!("livekit.agents.{module}"), hook),
+                    None => (path.to_string(), normalize.hook.as_str()),
+                };
                 text.push_str(&format!(
-                    "        from {path} import {}\n\n        {} = {}({})\n",
-                    normalize.hook,
+                    "        from {module} import {hook}\n\n        {} = {hook}({})\n",
                     normalize.field,
-                    normalize.hook,
                     normalize.args.join(", ")
                 ));
             }
@@ -377,6 +414,27 @@ mod tests {
         assert!(schema(r#"exceptions(module = "errors", path = "package.errors", classes(
             Failure(base = "Exception", fields(message(ty = "str", inherited, readonly)), base_args(message))
         ))"#).is_err());
+    }
+
+    #[test]
+    fn class_attributes_are_declared_on_each_class() {
+        let source = schema(
+            r#"exceptions(module = "errors", path = "package.errors", classes(
+            Refused(base = "Exception", attrs(status(ty = "int", value = 401))),
+            Forbidden(base = "Refused", attrs(status(ty = "int", value = 403)))
+        ))"#,
+        )
+        .unwrap();
+        assert!(source.contains("class Refused(Exception):\n    __module__ = \"package.errors\"\n    status: int = 401\n"));
+        assert!(source.contains("class Forbidden(Refused):\n    __module__ = \"package.errors\"\n    status: int = 403\n"));
+        assert!(
+            schema(
+                r#"exceptions(module = "errors", path = "package.errors", classes(
+            Refused(base = "Exception", attrs(status(ty = "int")))
+        ))"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

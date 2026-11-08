@@ -18,14 +18,14 @@ from livekit.agents.llm.tool_context import ToolChoice
 from livekit.agents.stt import STT
 from livekit.agents.tts import TTS
 from livekit.agents.voice._session_bindings import SessionHost
-from livekit.agents.voice.agent_session import TextTransforms, _SessionNodes
+from livekit.agents.voice.agent_session import _SessionNodes
 from livekit.agents.voice.avatar import AudioReceiver, AvatarSession, VideoGenerator
 from livekit.agents.voice.io import (
     AudioInput,
     AudioOutput,
     TextOutput,
-    TurnDetectionMode,
     VideoInput,
+    _StreamingTurnDetector,
 )
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
 from livekit.rtc import VideoFrame
@@ -33,7 +33,7 @@ from livekit.rtc import VideoFrame
 from .._core import SessionRecorder, Storage, VoiceAgent, _core_ContextActivation, _core_VoiceStore
 from ..types import NotGivenOr
 from .agent_nodes import NodeFrame
-from .amd import AMDConfig, AmdConstants, AMDPredictionEvent
+from .amd import AMDConfig, AMDPredictionEvent
 from .avatar import AudioReceiverFrame, MediaFrame
 from .avatar_options import AvatarOptions
 from .avatar_queue import QueueEffects
@@ -51,6 +51,8 @@ from .session_options import (
     ResolvedSessionOptions,
     SessionKwargs,
     SessionLegs,
+    TextTransforms,
+    TurnDetectionMode,
     UpdateKwargs,
 )
 from .session_owner import SessionJobInfo
@@ -70,12 +72,7 @@ from .voice_session import (
     VoiceSessionArgs,
     VoiceTaskValue,
 )
-from .workflows import CapturePlan, InstructionsArg, TwilioDial
-
-def amd_constants() -> AmdConstants:
-    """These are the reference's, not tuning knobs: the default models are what the benchmark
-    ran on.
-    """
+from .workflows import CapturePlan, DtmfEvent, InstructionsArg, TwilioDial
 
 def amd_resolve_max_endpointing_delay(provided: float | None, activity: float | None) -> float:
     """`_resolve_classifier`'s `max_endpointing_delay`: explicit option, else the activity's,
@@ -485,7 +482,7 @@ class SessionOptions:
         before `start()`.
         """
     @property
-    def turn_detection(self) -> Literal["vad", "stt", "manual", "realtime_llm", "unset"] | None:
+    def turn_detection(self) -> TurnDetectionMode | None:
         """The turn detection mode the session's own settings name (the constructor's and every
         `update_options` before `start()`); `None` when automatic or a detector object.
         """
@@ -572,7 +569,7 @@ class VoiceSession:
         num_digits: int,
         ask_for_confirmation: bool,
         timeout: float,
-        stop_event: str,
+        stop_event: DtmfEvent,
     ) -> str:
         """`GetDtmfTask`'s keypad half: the keys the linked participant presses, collected until
         `num_digits` arrived and a `timeout` (seconds) passed without a key, or `stop_event` was
@@ -814,12 +811,12 @@ def rt_server_turn_detection(
     caps_turn_detection: bool,
     can_disable_turn_detection: bool,
     vad: bool,
-    turn_detection: str | None,
+    turn_detection: TurnDetectionMode | None,
     streaming_detector: bool,
     interruption_given: bool,
 ) -> bool:
     """`AgentActivity._rt_turn_detection_enabled` from the host's reads. `turn_detection` is the
-    explicit mode string (agent over session), `None` when unsaid or a detector object;
+    explicit mode (agent over session), `None` when unsaid or a detector object;
     `streaming_detector` says it was a streaming detector.
     """
 
@@ -830,7 +827,7 @@ def resolve_interruption_detector(
     realtime: bool,
     rt_server_turn_detection: bool,
     has_vad: bool,
-    turn_detection: str | None,
+    turn_detection: TurnDetectionMode | None,
     allow_interruptions: bool,
     agent_mode: InterruptionMode | None,
     session_mode: InterruptionMode | None,
@@ -903,7 +900,7 @@ class _core_SessionOwner:
         stt: NotGivenOr[object | None] = ...,
         tts: NotGivenOr[object | None] = ...,
         vad: NotGivenOr[object | None] = ...,
-        turn_detection: NotGivenOr[TurnDetectionMode | None] = ...,
+        turn_detection: NotGivenOr[TurnDetectionMode | _StreamingTurnDetector | None] = ...,
         endpointing_opts: NotGivenOr[EndpointingOptions] = ...,
         interruption: NotGivenOr[InterruptionOptions] = ...,
         min_consecutive_speech_delay: NotGivenOr[float] = ...,
@@ -923,7 +920,7 @@ class _core_SessionOwner:
         stt: NotGivenOr[object | None] = ...,
         tts: NotGivenOr[object | None] = ...,
         vad: NotGivenOr[object | None] = ...,
-        turn_detection: NotGivenOr[TurnDetectionMode | None] = ...,
+        turn_detection: NotGivenOr[TurnDetectionMode | _StreamingTurnDetector | None] = ...,
         endpointing_opts: NotGivenOr[EndpointingOptions] = ...,
         interruption: NotGivenOr[InterruptionOptions] = ...,
         min_consecutive_speech_delay: NotGivenOr[float] = ...,
@@ -1113,19 +1110,19 @@ def normalize_phone_number(phone_number: str) -> str:
     followed by six to fourteen digits.
     """
 
-def dtmf_code(symbol: str) -> int:
+def dtmf_event_to_code(symbol: str) -> int:
     """Digits are themselves, `*` is 10, `#` is 11 and `A`-`D` are 12-15."""
 
 def format_dtmf(symbols: Sequence[str]) -> str:
     """The space-joined digits that fill the DTMF read-back's `{digits}` hole."""
 
-async def send_dtmf_events(room: _core_RoomSession, events: Sequence[str]) -> str: ...
+async def send_dtmf_events(room: _core_RoomSession, events: Sequence[DtmfEvent]) -> str: ...
 
 async def receive_dtmf(
     room: _core_RoomSession,
     num_digits: int,
     timeout: float,
-    stop_event: str,
+    stop_event: DtmfEvent,
 ) -> str: ...
 
 class WarmTransfer:

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::errors::{HostError, ProviderError};
 use crate::utils::stream::{StreamInput, StreamOutput};
-use crate::{AudioFrame, VadEvent};
+use crate::{AudioFrame, Maybe, VadEvent};
 
 /// The host's model factory (`livekit.local_inference.VAD`): called once per stream, as each
 /// stream needs its own recurrent state. Never called when the model is native.
@@ -39,30 +39,34 @@ pub trait InferenceVad: Send + Sync + Sized + 'static {
     #[host(source(item = VadEvent, class = "InferenceVadStream"))]
     type Events: StreamOutput<VadEvent> + 'static;
 
+    /// `deactivation_threshold` is `max(activation_threshold - 0.15, 0.01)` when `None`.
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(
         env: &Self::Env,
         model_factory: Arc<dyn VadModels>,
-        #[host(kw)] min_speech_duration: f64,
-        min_silence_duration: f64,
-        prefix_padding_duration: f64,
-        max_buffered_speech: f64,
-        activation_threshold: f64,
-        deactivation_threshold: f64,
+        #[host(kw, default = 0.05)] min_speech_duration: f64,
+        #[host(default = 0.25)] min_silence_duration: f64,
+        #[host(default = 0.5)] prefix_padding_duration: f64,
+        #[host(default = 60.0)] max_buffered_speech: f64,
+        #[host(default = 0.5)] activation_threshold: f64,
+        #[host(default = None)] deactivation_threshold: Option<f64>,
     ) -> Self;
 
-    /// Every option, applied by each running stream before its next frame.
+    /// The given options, applied by each running stream before its next frame.
     #[host(call)]
     fn update_options(
         &self,
-        #[host(kw)] min_speech_duration: f64,
-        min_silence_duration: f64,
-        prefix_padding_duration: f64,
-        max_buffered_speech: f64,
-        activation_threshold: f64,
-        deactivation_threshold: f64,
+        #[host(kw)] min_speech_duration: Maybe<f64>,
+        min_silence_duration: Maybe<f64>,
+        prefix_padding_duration: Maybe<f64>,
+        max_buffered_speech: Maybe<f64>,
+        activation_threshold: Maybe<f64>,
+        deactivation_threshold: Maybe<f64>,
     );
+
+    #[host(getter)]
+    fn min_silence_duration(&self) -> f64;
 
     /// One detection; each event carries the audio it refers to.
     #[host(call)]

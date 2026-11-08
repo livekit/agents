@@ -90,6 +90,17 @@ impl ServerConfig for Configuration {
         self.get().deployment.clone()
     }
 
+    fn card_version(&self) -> String {
+        let deployment = self.deployment();
+        if !deployment.is_empty() {
+            return deployment;
+        }
+        std::env::var("LIVEKIT_AGENT_VERSION")
+            .ok()
+            .filter(|version| !version.is_empty())
+            .unwrap_or_else(|| "1.0.0".into())
+    }
+
     fn cloud(&self) -> bool {
         self.get().cloud()
     }
@@ -154,8 +165,8 @@ impl ServerCallbacks {
             devmode,
             job_processes: has_rtc,
             env: start.child_env().into_iter().map(|(key, value)| (key.into(), value)).collect(),
-            job_executor_type: start.job_executor_type.clone(),
-            multiprocessing_context: start.multiprocessing_context.clone(),
+            job_executor_type: start.job_executor_type,
+            multiprocessing_context: start.multiprocessing_context,
             pool: ProcessPoolOptions {
                 num_idle_processes: start
                     .num_idle_processes

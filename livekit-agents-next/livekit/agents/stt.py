@@ -9,26 +9,18 @@ from typing import Literal, Protocol, runtime_checkable
 from livekit import rtc
 
 from . import _bindings, _core
+from ._generated import public_stt as _public
 from ._generated.provider_hosts import FallbackSttHost, SttStreamAdapterHost
 from ._generated.public_stt import *  # noqa: F403
-from ._generated.stt import STT, RecognizeStream, SpeechEvent, STTCapabilities
 from ._generated.vad import VAD
 from .types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 
 __all__ = [
-    "SpeechEventType",
-    "SpeechEvent",
-    "SpeechData",
-    "RecognizeStream",
-    "STT",
-    "STTCapabilities",
     "StreamAdapter",
-    "RecognitionUsage",
     "FallbackAdapter",
-    "AvailabilityChangedEvent",
-    "STTError",
     "SpeakerContext",
 ]
+__all__ += _public.__all__
 
 
 # A structural type, which has no core counterpart to be generated from.

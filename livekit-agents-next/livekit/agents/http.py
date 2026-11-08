@@ -12,8 +12,8 @@ from starlette.types import Message, Scope
 from starlette.websockets import WebSocket
 
 from . import _core
+from ._generated.public_http import *  # noqa: F403
 from ._generated.worker_endpoint import (
-    EndpointRequest as EndpointRequest,
     ExchangeEvent,
     ExchangeEventBinary,
     ExchangeEventBody,

@@ -383,7 +383,7 @@ impl JobSupervisor {
                 &self.0,
             )
         });
-        out.map(|value| crate::generated::records::worker_server::running_job_info_to_py(py, value))
+        out.map(|value| crate::generated::records::job_records::running_job_info_to_py(py, value))
             .transpose()
     }
 
@@ -429,8 +429,7 @@ impl JobSupervisor {
         info: Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let info =
-            crate::generated::records::worker_server::running_job_info_from_py(info.as_any())?;
+        let info = crate::generated::records::job_records::running_job_info_from_py(info.as_any())?;
         let context = crate::py_calls::entered();
         let cx = crate::py_calls::entry_cx();
         let this = ::std::sync::Arc::clone(&self.0);
@@ -633,9 +632,7 @@ impl ProcPool {
             ::pyo3::types::PyList::new(
                 py,
                 out.into_iter()
-                    .map(|x| {
-                        crate::generated::records::worker_server::running_job_info_to_py(py, x)
-                    })
+                    .map(|x| crate::generated::records::job_records::running_job_info_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -708,8 +705,7 @@ impl ProcPool {
         info: Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let info =
-            crate::generated::records::worker_server::running_job_info_from_py(info.as_any())?;
+        let info = crate::generated::records::job_records::running_job_info_from_py(info.as_any())?;
         let context = crate::py_calls::entered();
         let cx = crate::py_calls::entry_cx();
         let this = ::std::sync::Arc::clone(&self.0);
@@ -769,11 +765,11 @@ pub struct JobRun(pub(crate) ::std::sync::Arc<JobRunImpl>);
 
 #[pymethods]
 impl JobRun {
-    /// `session_end` names the door's `on_session_end`, when it has one. `observability_url`
-    /// overrides where the job's telemetry and recording go (`LIVEKIT_OBSERVABILITY_URL`);
+    /// `session_end` names the door's `on_session_end`, when it has one. The job's telemetry and
+    /// recording go to `LIVEKIT_OBSERVABILITY_URL` when set, else to `url`'s Cloud project;
     /// `api_key` and `api_secret` sign its Cloud telemetry.
     #[new]
-    #[pyo3(signature = (*, fake_job, session_end_timeout, redaction, url = "".to_owned(), session_end = None, session_aclose_timeout = 60.0, observability_url = None, api_key = "".to_owned(), api_secret = "".to_owned()))]
+    #[pyo3(signature = (*, fake_job, session_end_timeout, redaction, url = "".to_owned(), session_end = None, session_aclose_timeout = 60.0, api_key = "".to_owned(), api_secret = "".to_owned()))]
     fn new(
         py: Python<'_>,
         fake_job: bool,
@@ -783,13 +779,12 @@ impl JobRun {
         url: ::std::string::String,
         session_end: ::std::option::Option<::std::string::String>,
         #[pyo3(from_py_with = _extract_job_run_new_session_aclose_timeout)] session_aclose_timeout: JobRunNewSessionAcloseTimeoutInput,
-        observability_url: ::std::option::Option<::std::string::String>,
         api_key: ::std::string::String,
         api_secret: ::std::string::String,
     ) -> PyResult<JobRun> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let out = py.detach(|| <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::new(&env, fake_job, session_end_timeout, redaction, url, session_end, session_aclose_timeout, observability_url, api_key, api_secret)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::new(&env, fake_job, session_end_timeout, redaction, url, session_end, session_aclose_timeout, api_key, api_secret)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(JobRun(::std::sync::Arc::new(out)))
     }
 
@@ -819,13 +814,12 @@ impl JobRun {
     }
 
     /// Opens the job's root span for the job the parent handed over, before its run starts.
-    #[pyo3(signature = (fields))]
-    fn start_trace(&self, py: Python<'_>, fields: Bound<'_, PyAny>) -> PyResult<()> {
+    #[pyo3(signature = (job))]
+    fn start_trace(&self, py: Python<'_>, job: Bound<'_, PyAny>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        let fields =
-            crate::generated::records::worker_ipc::start_job_fields_from_py(fields.as_any())?;
+        let job = crate::generated::records::worker_ipc::start_job_from_py(job.as_any())?;
         py.detach(|| {
-            <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::start_trace(&self.0, fields)
+            <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::start_trace(&self.0, job)
         });
         Ok(())
     }
@@ -1081,6 +1075,19 @@ impl ServerConfig {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| {
             <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::deployment(
+                &self.0,
+            )
+        });
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// An A2A card's default version: the deployment the worker registered under, else
+    /// `LIVEKIT_AGENT_VERSION` for a local worker, else `"1.0.0"`.
+    #[getter]
+    fn card_version(&self, py: Python<'_>) -> PyResult<::std::string::String> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::card_version(
                 &self.0,
             )
         });
@@ -2634,7 +2641,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
     fn start_job(
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,
-        fields: ::lk_agents_abi::worker::job::StartJobFields,
+        job: ::lk_agents_abi::worker::job::StartJob,
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
@@ -2643,7 +2650,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
         >,
     > {
         let host = ::std::sync::Arc::clone(&self.host);
-        let fields_arg = fields;
+        let job_arg = job;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "JobProcess._core_start_job",
@@ -2652,9 +2659,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [crate::generated::records::worker_ipc::start_job_fields_to_py(
-                        py, fields_arg,
-                    )?];
+                    [crate::generated::records::worker_ipc::start_job_to_py(py, job_arg)?];
                 Ok((
                     host.bind(py).getattr("_core_start_job")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
@@ -3219,7 +3224,7 @@ impl ::lk_agents_abi::worker::ipc_host::PoolCallbacks for PoolCallbacksProxy {
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::py_values::str_to_py(py, &event_arg), <dyn ::lk_agents_abi::worker::ipc_host::SupervisedJob as super::NativeToHost>::to_host(py, process_arg)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::worker_ipc::process_event_to_py(py, event_arg)?, <dyn ::lk_agents_abi::worker::ipc_host::SupervisedJob as super::NativeToHost>::to_host(py, process_arg)?];
                 Ok((host.bind(py).getattr("emit")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
@@ -3285,7 +3290,7 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
     fn launch_job(
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,
-        info: ::lk_agents_abi::worker::types::RunningJobInfo,
+        info: ::lk_agents_abi::worker::job::RunningJobInfo,
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError>,
@@ -3300,9 +3305,7 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [crate::generated::records::worker_server::running_job_info_to_py(
-                        py, info_arg,
-                    )?];
+                    [crate::generated::records::job_records::running_job_info_to_py(py, info_arg)?];
                 Ok((
                     host.bind(py).getattr("_core_launch_job")?,
                     ::pyo3::types::PyTuple::new(py, args)?,

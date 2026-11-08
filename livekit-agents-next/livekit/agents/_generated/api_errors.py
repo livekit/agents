@@ -42,9 +42,9 @@ class APIStatusError(APIError):
     request_id: str | None
 
     def __init__(self, message: str, *, status_code: int = -1, request_id: str | None = None, body: object | None = None, retryable: bool | None = None) -> None:
-        from livekit.agents._bindings import _status_retryable
+        from livekit.agents._core import retryable_for_status
 
-        retryable = _status_retryable(status_code, retryable)
+        retryable = retryable_for_status(status_code, retryable)
         super().__init__(message, body=body, retryable=retryable)
         self.status_code = status_code
         self.request_id = request_id

@@ -60,22 +60,25 @@ def _core_telemetry_install(sdk_version: str) -> None:
     the `OTEL_EXPORTER_OTLP_*` environment. Later calls do nothing.
     """
 
-def _core_telemetry_configure(
+def configure(
     *,
     endpoint: str | None = None,
     headers: Mapping[str, str] | None = None,
     metadata: Mapping[str, object] | None = None,
     allow_pii: bool | None = None,
 ) -> None:
-    """Replaces the application endpoint; arguments override the environment."""
+    """Send the process's spans and metrics to an OTLP/HTTP protobuf endpoint; arguments override
+    the `OTEL_EXPORTER_OTLP_*` environment.
+    """
 
-def _core_telemetry_diagnostics() -> TelemetryDiagnostics: ...
+def diagnostics() -> TelemetryDiagnostics:
+    """The process's export counters."""
 
 def _core_telemetry_conflict() -> None:
     """Counts a configuration conflict the host found (a tracer provider it cannot bridge)."""
 
-def _core_set_capture_content(enabled: bool) -> None:
-    """GenAI message capture for spans recorded afterwards."""
+def set_capture_content(enabled: bool) -> None:
+    """Whether model request and response messages and judge explanations are recorded."""
 
 async def _core_telemetry_shutdown() -> None:
     """The process-exit flush: every destination's queue, bounded."""

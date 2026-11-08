@@ -302,29 +302,29 @@ mod supervision {
         tokio::time::timeout(within, recv_skipping_pings(child)).await.ok()
     }
 
-    // Catches: a job whose protobuf or timestamps are invalid reaching the child.
+    // Catches: a job whose timestamps are invalid reaching the child.
     #[tokio::test(start_paused = true)]
-    async fn invalid_job_protobuf_and_timestamps_are_refused_at_the_launch_boundary() {
+    async fn invalid_job_timestamps_are_refused_at_the_launch_boundary() {
         use super::supervisor::validate_start_job as validate;
         let refused = |job: &StartJob, field: &str| matches!(validate(job), Err(StartJobError::InvalidFields(reason)) if reason.contains(field));
-        let mut invalid = StartJob { job: vec![0xff], ..job() };
-        assert!(refused(&invalid, "protobuf"));
-        invalid.job.clear();
-        invalid.launched_at = f64::NAN;
+        let mut invalid = job();
+        invalid.info.launched_at = f64::NAN;
         assert!(refused(&invalid, "launched_at"));
-        invalid.launched_at = -1.0;
+        invalid.info.launched_at = -1.0;
         assert!(validate(&invalid).is_err());
-        invalid.launched_at = 0.0;
+        invalid.info.launched_at = 0.0;
         assert!(validate(&invalid).is_ok());
-        invalid.received_at = Some(f64::INFINITY);
+        invalid.info.received_at = Some(f64::INFINITY);
         assert!(refused(&invalid, "received_at"));
-        invalid.received_at = None;
-        invalid.accepted_at = None;
+        invalid.info.received_at = None;
+        invalid.info.accepted_at = None;
         assert!(validate(&invalid).is_ok());
 
         let (sup, _host, child) = setup(short(60.0));
         ready(&sup, &child).await;
-        let refused = sup.start_job(StartJob { job: vec![0xff], ..job() }).await;
+        let mut bad = job();
+        bad.info.launched_at = f64::NAN;
+        let refused = sup.start_job(bad).await;
         assert!(matches!(refused, Err(StartJobError::InvalidFields(_))));
         assert_eq!(next_within(&child, Duration::from_secs(1)).await, None);
     }
@@ -418,18 +418,23 @@ mod supervision {
 
 fn job() -> StartJob {
     StartJob {
-        job: vec![0x0a, 0x06, b'A', b'J', b'_', b'1', b'2', b'3'],
-        name: "agent".into(),
-        identity: "ident é".into(),
-        metadata: r#"{"k": 1}"#.into(),
-        url: "wss://x.livekit.cloud".into(),
-        token: "tok".into(),
-        worker_id: "AW_1".into(),
-        fake_job: true,
-        received_at: Some(1761500000.25),
-        accepted_at: Some(1761500000.5),
-        assigned_at: None,
-        launched_at: 1761500001.0,
+        info: lk_agents_abi::worker::job::RunningJobInfo {
+            accept_arguments: lk_agents_abi::worker::job::AcceptArguments {
+                name: "agent".into(),
+                identity: "ident é".into(),
+                metadata: r#"{"k": 1}"#.into(),
+                attributes: Default::default(),
+            },
+            job: livekit_protocol::Job { id: "AJ_123".into(), ..Default::default() },
+            url: "wss://x.livekit.cloud".into(),
+            token: "tok".into(),
+            worker_id: "AW_1".into(),
+            fake_job: true,
+            received_at: Some(1761500000.25),
+            accepted_at: Some(1761500000.5),
+            assigned_at: None,
+            launched_at: 1761500001.0,
+        },
         traceparent: None,
     }
 }
@@ -989,7 +994,7 @@ async fn supervisor_blocked_writer() {
     child.write_all(&ready).await.unwrap();
     initialize.await.unwrap().unwrap();
     let mut large = job();
-    large.metadata = "x".repeat(3 << 20);
+    large.info.accept_arguments.metadata = "x".repeat(3 << 20);
     let pending = tokio::spawn({
         let sup = sup.clone();
         async move { sup.start_job(large).await }

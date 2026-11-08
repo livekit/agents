@@ -69,8 +69,7 @@ pub use http::bind_listener;
 pub use public::{PublicRoutes, serve_public};
 mod settings;
 pub use settings::{
-    Bind, DEFAULT_LOAD_THRESHOLD, Environment, Listeners, ServerSettings, Serving,
-    endpoint_url_base,
+    Bind, DEFAULT_LOAD_THRESHOLD, Environment, ServerSettings, Serving, endpoint_url_base,
 };
 
 use livekit_protocol as proto;
@@ -147,9 +146,9 @@ pub fn simulated_job(
             identity,
             name: String::new(),
             metadata: String::new(),
-            attributes: Vec::new(),
+            attributes: Default::default(),
         },
-        job: crate::worker::job_info(&job),
+        job,
         url: settings.ws_url.clone(),
         token,
         worker_id: worker_id.to_owned(),
@@ -157,6 +156,7 @@ pub fn simulated_job(
         received_at: None,
         accepted_at: None,
         assigned_at: None,
+        launched_at: 0.0,
     })
 }
 
@@ -586,7 +586,7 @@ impl ServerRuntime {
             log::info!(target: lk_agents_abi::LOG_TARGET, "health listener off: simulation runs share a host");
             return Ok(None);
         }
-        let (listener, url) = bind(&settings.listeners.health(local)).await?;
+        let (listener, url) = bind(&Bind::health(&settings.listeners, local)).await?;
         self.snapshot.send_modify(|snapshot| {
             snapshot.http_port = listener.local_addr().map_or(0, |a| a.port())
         });
@@ -608,7 +608,7 @@ impl ServerRuntime {
         status: &ServerStatus,
         stop: &CancellationToken,
     ) -> Result<Option<OwnedTask<Result<(), ServerError>>>, ServerError> {
-        let Some(address) = settings.listeners.prometheus(local) else {
+        let Some(address) = Bind::prometheus(&settings.listeners, local) else {
             log::info!(target: lk_agents_abi::LOG_TARGET, "prometheus listener off: not configured");
             return Ok(None);
         };
@@ -633,7 +633,7 @@ impl ServerRuntime {
         let handler =
             self.host.mounted.get().cloned().ok_or("the endpoint server is not mounted")?;
         let unauthenticated = start.unregistered;
-        let mut address = settings.listeners.public(local);
+        let mut address = Bind::public(&settings.listeners, local);
         if unauthenticated {
             address.host = "127.0.0.1".into();
         }
@@ -649,7 +649,7 @@ impl ServerRuntime {
             prefix,
             routes: start.endpoints.clone(),
             unauthenticated,
-            proxy_headers: settings.listeners.public.proxy_headers,
+            proxy_headers: settings.listeners.public.as_ref().is_some_and(|p| p.proxy_headers),
         });
         Ok(TokioSpawner::current().spawn(serve_public(listener, routes, handler, stop.clone())))
     }

@@ -59,6 +59,14 @@ class RawFunctionDescription(TypedDict):
 RawFunctionDescription.__module__ = "livekit.agents.llm.tool_context"
 
 
+CONFIRM_DUPLICATE_PARAM: Final = "lk_agents_confirm_duplicate"
+"""The schema parameter `@function_tool(on_duplicate="confirm")` adds, which the model sets to
+re-assert a call.
+"""
+UPDATE_TEMPLATE: Final = "The tool `{function_name}` has updated, message: {message}\nThe task is still running, so DON'T make up or give information not included in the message above."
+"""The interim return of a tool's `RunContext.update(message)` when no `update_template`
+overrides it.
+"""
 CONFIRM_DUPLICATE_DESCRIPTION: Final = "Set this to True to confirm you want to run a duplicate. Only do this when user confirms the duplication is needed."
 """The description the model reads for that parameter. A prompt, so rewording it changes
 behaviour: it must say the user asked for the repeat.

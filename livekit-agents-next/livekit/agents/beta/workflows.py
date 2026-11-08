@@ -14,6 +14,7 @@ import livekit.rtc as rtc
 from livekit import api
 
 from .. import _core, llm, stt, tts
+from .._generated import public_beta_workflows as _public
 from .._generated.public_beta_workflows import *  # noqa: F403
 from .._generated.vad import VAD
 from .._generated.voice_session import DtmfTaskOptions, UpdateAgentArgs
@@ -21,14 +22,7 @@ from .._generated.workflow_prompts import (
     ASK_DIGITS_INSTRUCTIONS,
     ASK_EMAIL_INSTRUCTIONS,
 )
-from .._generated.workflows import (
-    DtmfEvent,
-    GetDtmfResult,
-    GetEmailResult,
-    IoEnableState,
-    WarmTransferResult,
-    WorkflowInstructions as WorkflowInstructions,
-)
+from .._generated.workflows import IoEnableState, WorkflowInstructions as WorkflowInstructions
 from ..job import JobContext, _server_credentials, get_job_context
 from ..llm.tool_context import Completed, ToolError, ToolFlag, function_tool
 from ..types import NOT_GIVEN, NotGivenOr
@@ -49,32 +43,19 @@ if TYPE_CHECKING:
     from ..voice.io import TurnHandlingOptions
 
 __all__ = [
-    "DtmfEvent",
-    "GetDtmfResult",
     "GetDtmfTask",
-    "GetEmailResult",
     "GetEmailTask",
     "TwilioConnectorWarmTransfer",
     "WarmTransfer",
-    "WarmTransferResult",
     "WorkflowInstructions",
-    "dtmf_event_to_code",
-    "format_dtmf",
     "is_expired",
     "normalize_date_of_birth",
-    "normalize_email_address",
-    "normalize_phone_number",
     "receive_dtmf",
-    "validate_card_number",
 ]
+__all__ += _public.__all__
 
 
 _HOLD_MUSIC = AudioConfig(BuiltinAudioClip.HOLD_MUSIC, volume=0.8)
-validate_card_number = _core.validate_card_number
-normalize_email_address = _core.normalize_email_address
-normalize_phone_number = _core.normalize_phone_number
-dtmf_event_to_code = _core.dtmf_code
-format_dtmf = _core.format_dtmf
 
 
 def is_expired(month: int, year: int) -> bool:
@@ -96,7 +77,7 @@ async def receive_dtmf(
 ) -> GetDtmfResult:
     """Receive keypad digits; stop at the delimiter or after an inter-digit timeout."""
     digits = await _core.receive_dtmf(
-        _core._core_create_room_session(Room.of(room)), num_digits, timeout, stop_event.value
+        _core._core_create_room_session(Room.of(room)), num_digits, timeout, stop_event
     )
     return GetDtmfResult(user_input=digits)
 
@@ -138,7 +119,7 @@ class GetDtmfTask(VoiceTask[GetDtmfResult]):
         agent.tool(name=plan.tool_name, description=plan.tool_description)(_record_inputs)
         agent.on_enter(_ask_digits)
         super().__init__(agent=agent)
-        self._keypad = (num_digits, ask_for_confirmation, dtmf_input_timeout, dtmf_stop_event.value)
+        self._keypad = (num_digits, ask_for_confirmation, dtmf_input_timeout, dtmf_stop_event)
 
     async def run(self) -> GetDtmfResult:
         binding = _live_binding("GetDtmfTask.run()")

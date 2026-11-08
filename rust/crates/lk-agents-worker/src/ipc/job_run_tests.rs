@@ -7,7 +7,7 @@ use lk_agents_abi::errors::RefRegistry;
 use lk_agents_abi::telemetry::policy::UPLOAD_TIMEOUT_SECONDS;
 use lk_agents_abi::telemetry::record::{Record, RecordSink, SpanContext, SpanRecord, Status};
 use lk_agents_abi::worker::ipc_host::JobRun as _;
-use lk_agents_abi::worker::job::{ShutdownCause, StartJobFields};
+use lk_agents_abi::worker::job::{ShutdownCause, StartJob};
 use lk_agents_telemetry::Tracer;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -64,7 +64,7 @@ impl JobProcess for Host {
     fn start_job(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        _: StartJobFields,
+        _: StartJob,
     ) -> BoxFuture<'_, Result<Arc<dyn JobExecution>, HostError>> {
         unreachable!("this test starts the admitted job directly")
     }
@@ -178,7 +178,6 @@ async fn report_preparation_and_upload_share_one_budget_and_shutdown_always_cont
             "ws://localhost".into(),
             Some("on_end".into()),
             5.0,
-            None,
             String::new(),
             String::new(),
         )
@@ -253,7 +252,6 @@ async fn the_application_ends_the_job_even_when_its_session_closed_first() {
         "ws://localhost".into(),
         None,
         5.0,
-        None,
         String::new(),
         String::new(),
     )

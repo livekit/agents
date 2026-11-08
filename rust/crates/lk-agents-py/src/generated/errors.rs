@@ -21,6 +21,13 @@ fn _extract_api_error_functions_http_error_message_status(
 }
 type ApiErrorFunctionsHttpErrorMessageStatusInput = i64;
 
+fn _extract_api_error_functions_retryable_for_status_status_code(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<ApiErrorFunctionsRetryableForStatusStatusCodeInput> {
+    crate::py_values::number_from_py::<i64>(obj.as_any(), "status_code")
+}
+type ApiErrorFunctionsRetryableForStatusStatusCodeInput = i64;
+
 /// The message of an `APIStatusError` built from an HTTP status: the message and the reason
 /// when the message adds detail, else just the reason.
 #[pyfunction]
@@ -35,6 +42,24 @@ pub fn http_error_display(
     let out = py.detach(|| {
         <ApiErrorFunctionsImpl as ::lk_agents_abi::errors::ApiErrorFunctions>::http_error_message(
             &message, status, reason,
+        )
+    });
+    ::pyo3::PyResult::Ok(out)
+}
+
+/// `APIStatusError`'s `retryable`: a non-transient 4xx status, 499 among them, never is.
+#[pyfunction]
+#[pyo3(signature = (status_code, retryable))]
+pub fn retryable_for_status(
+    py: Python<'_>,
+    #[pyo3(from_py_with = _extract_api_error_functions_retryable_for_status_status_code)]
+    status_code: ApiErrorFunctionsRetryableForStatusStatusCodeInput,
+    retryable: ::std::option::Option<bool>,
+) -> PyResult<bool> {
+    let out = py.detach(|| {
+        <ApiErrorFunctionsImpl as ::lk_agents_abi::errors::ApiErrorFunctions>::retryable_for_status(
+            status_code,
+            retryable,
         )
     });
     ::pyo3::PyResult::Ok(out)
@@ -175,7 +200,9 @@ impl crate::py_errors::HostException for ::lk_agents_abi::errors::ApiError {
                             "phase",
                             match ::std::clone::Clone::clone(&self.phase) {
                                 None => py.None().into_bound(py),
-                                Some(x) => crate::py_values::str_to_py(py, &x),
+                                Some(x) => {
+                                    crate::generated::records::types::timeout_phase_to_py(py, x)?
+                                }
                             },
                         )?;
                         ::std::result::Result::Ok(())

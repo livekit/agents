@@ -24,7 +24,7 @@ fn emit_only_enum_variants_do_not_require_exception_readers() {
     assert!(session.contains("cause: BaseException"), "{session}");
     let conversions = crate::records::conversions(&decls).expect("exception values emit").text;
     assert!(conversions.contains("fn outcome_to_py"), "{conversions}");
-    assert!(conversions.contains("ExceptionValue::to_exception"), "{conversions}");
+    assert!(conversions.contains("crate::py_errors::HostException>::to_py_err"), "{conversions}");
     assert!(!conversions.contains("fn outcome_from_py"), "{conversions}");
 
     let error = crate::decl::tests::read(
@@ -347,6 +347,39 @@ fn native_record_defaults_and_exported_constants_share_resolved_values() {
     ] {
         assert!(crate::decl::tests::read(source).is_err());
     }
+}
+
+// Catches: a protobuf enum constant emitted untyped, under the Rust variant names, or accepting
+// another enum's variants.
+#[test]
+fn proto_enum_constants_name_the_sdk_values() {
+    let declarations = crate::decl::tests::read(
+        r#"
+        #[crate::host(file(module = "kinds"))] const _: () = ();
+        pub enum ParticipantKind { Standard, Sip }
+        #[crate::host(constant(proto_enum = "livekit.rtc.ParticipantKind"))]
+        pub const KINDS: &[ParticipantKind] = &[ParticipantKind::Sip, ParticipantKind::Standard];
+    "#,
+    )
+    .unwrap();
+    let constants = crate::python::emit(&declarations, &[]).unwrap();
+    let module = &constants.iter().find(|m| m.path == "kinds.py").unwrap().text;
+    assert!(module.contains("from livekit import rtc\n"), "{module}");
+    assert!(
+        module.contains(
+            "KINDS: Final[list[rtc.ParticipantKind.ValueType]] = [\n    \
+             rtc.ParticipantKind.PARTICIPANT_KIND_SIP,\n    \
+             rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,\n]"
+        ),
+        "{module}"
+    );
+    let other = r#"
+        #[crate::host(file(module = "kinds"))] const _: () = ();
+        pub enum TrackKind { Audio }
+        #[crate::host(constant(proto_enum = "livekit.rtc.ParticipantKind"))]
+        pub const KINDS: &[TrackKind] = &[TrackKind::Audio];
+    "#;
+    assert!(crate::decl::tests::read(other).is_err());
 }
 
 #[test]

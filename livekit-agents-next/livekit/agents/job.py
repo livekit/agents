@@ -31,17 +31,13 @@ import aiohttp
 from pydantic import JsonValue
 
 import livekit.rtc as rtc
-from livekit.agents._generated.job_records import (
-    AutoSubscribe as AutoSubscribe,
-    JobAcceptArguments as JobAcceptArguments,
-    JobExecutorType as JobExecutorType,
-    RunningJobInfo as RunningJobInfo,
-)
 from livekit.protocol import agent
 from livekit.protocol.sip import TransferSIPParticipantResponse
 
 from . import _core, telemetry
 from ._generated import semconv
+from ._generated.public_job import *  # noqa: F403
+from ._generated.room_io import DEFAULT_PARTICIPANT_KINDS
 from ._generated.telemetry import ReportJob, SessionReport as SessionReport
 from ._generated.types import ATTRIBUTE_SIMULATOR_DISPATCH
 from .log import logger
@@ -119,13 +115,6 @@ def current_simulation() -> SimulationContext | None:
         return None
 
     return ctx.simulation_context
-
-
-DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
-    rtc.ParticipantKind.PARTICIPANT_KIND_CONNECTOR,
-    rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
-    rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
-]
 
 
 class _ContextLogFieldsFilter(logging.Filter):

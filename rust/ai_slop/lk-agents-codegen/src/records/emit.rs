@@ -68,7 +68,15 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
         Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Record(_) => {
             format!("::pyo3::IntoPyObjectExt::into_bound_py_any({x}, py)?")
         }
-        Ty::Error(_) => format!("crate::py_errors::ExceptionValue::to_exception({x}, py)?"),
+        // A retained host failure resolves to its original; any other declared error is the
+        // exception it raises as.
+        Ty::Error(e) if e.rust.ends_with("::ProviderError") || e.rust.ends_with("::HostError") => {
+            format!("crate::py_errors::ExceptionValue::to_exception({x}, py)?")
+        }
+        Ty::Error(e) => format!(
+            "::pyo3::PyErr::into_value(<{} as crate::py_errors::HostException>::to_py_err(&{x}), py).into_bound(py).into_any()",
+            e.rust
+        ),
         Ty::Timestamp => {
             format!(
                 "::pyo3::IntoPyObjectExt::into_bound_py_any(::lk_agents_abi::unix_secs({x}), py)?"

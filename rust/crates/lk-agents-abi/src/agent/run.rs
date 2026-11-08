@@ -194,28 +194,25 @@ pub enum CallerRunResult {
     NoOutput(RunNoOutput),
 }
 
-/// Why an invocation settled without a result.
-#[crate::host(record(module = "agent_run", emit))]
+/// Why an invocation settled without a result: the exception its run raises.
+#[crate::host(error(kind = "RuntimeError"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunError {
     /// The agent has no model to run a step with.
     NoModel,
+    #[host(kind = "asyncio.CancelledError")]
     Cancelled,
     /// The model request failed after the provider's own recovery.
-    #[host(field = "message")]
+    #[host(kind = "livekit.agents._bindings.APIError", kwargs(retryable = false))]
     Model(String),
     /// A host callback the invocation depends on (instructions, output validation) failed.
-    #[host(field = "message")]
     Host(String),
     /// The model kept calling `tool` wrongly past its retry budget.
-    ToolRetriesExceeded {
-        tool: String,
-        retries: u32,
-    },
+    #[host(kind = "livekit.agents._bindings.UnexpectedModelBehavior")]
+    ToolRetriesExceeded { tool: String, retries: u32 },
     /// The model kept producing rejected final output past its retry budget.
-    OutputRetriesExceeded {
-        retries: u32,
-    },
+    #[host(kind = "livekit.agents._bindings.UnexpectedModelBehavior")]
+    OutputRetriesExceeded { retries: u32 },
     /// The voice session closed before the run settled.
     SessionClosed,
 }

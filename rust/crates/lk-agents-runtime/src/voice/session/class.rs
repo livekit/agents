@@ -314,10 +314,8 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         };
         let dtmf = dtmf
             .map(|options| {
-                use lk_agents_voice::workflows::machine::dtmf::{DtmfCollector, DtmfEvent};
-                let stop = DtmfEvent::from_wire(&options.stop_event).ok_or_else(|| {
-                    CommandRefused::Invalid(format!("{:?} is not a DTMF key", options.stop_event))
-                })?;
+                use lk_agents_voice::workflows::machine::dtmf::DtmfCollector;
+                let stop = options.stop_event;
                 let timeout = Duration::try_from_secs_f64(options.timeout)
                     .map_err(|error| CommandRefused::Invalid(format!("timeout: {error}")))?;
                 DtmfCollector::new(options.num_digits, options.ask_for_confirmation, timeout, stop)
@@ -365,12 +363,11 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         num_digits: usize,
         ask_for_confirmation: bool,
         timeout: f64,
-        stop_event: String,
+        stop_event: lk_agents_abi::voice::workflows::dtmf::DtmfEvent,
     ) -> Result<BoxFuture<'static, Result<String, VoiceTaskEnded>>, CommandRefused> {
         use lk_agents_voice::agent_session::DtmfCommand;
-        use lk_agents_voice::workflows::machine::dtmf::{DtmfCollector, DtmfEvent, DtmfOutcome};
-        let stop = DtmfEvent::from_wire(&stop_event)
-            .ok_or_else(|| CommandRefused::Invalid(format!("{stop_event:?} is not a DTMF key")))?;
+        use lk_agents_voice::workflows::machine::dtmf::{DtmfCollector, DtmfOutcome};
+        let stop = stop_event;
         let timeout = Duration::try_from_secs_f64(timeout)
             .map_err(|e| CommandRefused::Invalid(format!("timeout: {e}")))?;
         let collector = DtmfCollector::new(num_digits, ask_for_confirmation, timeout, stop)

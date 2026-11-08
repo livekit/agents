@@ -5,6 +5,6 @@ from __future__ import annotations
 
 from .tokenizer import TokenData as TokenData
 
-__all__ = [
+__all__: list[str] = [
     "TokenData",
 ]

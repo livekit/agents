@@ -9,8 +9,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum, StrEnum, unique
+from dataclasses import dataclass, field
+from enum import StrEnum, unique
 from inspect import get_annotations
 
 from livekit.protocol.agent import Job
@@ -18,14 +18,20 @@ from livekit.protocol.agent import Job
 
 @dataclass
 class JobAcceptArguments:
+    """The participant an accepted job joins as. Application attributes keep their own keys, merged
+    over `lk.agent.name`.
+    """
+
     name: str
     identity: str
     metadata: str
-    attributes: dict[str, str] | None = None
+    attributes: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
 class RunningJobInfo:
+    """What a launched job is handed."""
+
     accept_arguments: JobAcceptArguments
     job: Job
     url: str
@@ -33,7 +39,7 @@ class RunningJobInfo:
     worker_id: str
     fake_job: bool
     received_at: float | None = None
-    """The worker received the availability request."""
+    """The worker received the availability request; absent for a job no dispatch offered."""
     accepted_at: float | None = None
     """The request handler accepted the job."""
     assigned_at: float | None = None
@@ -43,7 +49,7 @@ class RunningJobInfo:
 
 
 @unique
-class JobExecutorType(Enum):
+class JobExecutorType(StrEnum):
     PROCESS = "process"
     THREAD = "thread"
 

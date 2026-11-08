@@ -52,11 +52,10 @@ from ..types import (
 )
 from ..utils import is_given
 from . import Agent, ModelSettings, _BindingContextVar, _VoiceBinding
-from .agent_run import run_error, tool_infos
+from .agent_run import tool_infos
 from .events import (
     AgentEvent,
     CloseEvent,
-    CloseReason,
     ConversationItemAddedEvent,
     ErrorEvent,
     EventTypes,
@@ -426,7 +425,7 @@ def _on_run_finished(self: VoiceSession[Any], wire: RunFinishedWire) -> None:
 def _on_run_failed(self: VoiceSession[Any], wire: RunFailedWire) -> None:
     if (run := _wire_run(wire.run)) is None or run.done():
         return
-    error = wire.provider_error or run_error(wire.error)
+    error = wire.provider_error or wire.error
     error.__dict__["input_requirements"] = list(wire.input_requirements)
     run.set_exception(error)
 
@@ -455,9 +454,8 @@ def _error_record(self: VoiceSession[Any], wire: SessionErrorWire) -> tuple[Any,
     if (failure := wire.processor_failure) is not None:
         error = AudioProcessingError(label=failure.label, error=cast(Exception, failure.error))
         return error, failure.processor
-    record, leg = _ERROR_RECORDS[wire.source]
-    source = getattr(_VoiceBinding(self, self.current_agent), leg)
-    error = record(
+    source = getattr(_VoiceBinding(self, self.current_agent), cast(str, wire.slot))
+    error = _ERROR_RECORDS[wire.source](
         timestamp=time.time(),
         label=getattr(source, "label", wire.label),
         error=wire.error,
@@ -529,14 +527,13 @@ def _on_delete_room(self: VoiceSession[Any], wire: DeleteRoomRequested) -> None:
 
 def _on_close(self: VoiceSession[Any], wire: CloseWire) -> None:
     error = _error_record(self, cause)[0] if (cause := wire.error) is not None else None
-    self.emit("close", CloseEvent(reason=CloseReason(wire.reason), error=error))
+    self.emit("close", CloseEvent(reason=wire.reason, error=error))
 
 
-_ERROR_RECORDS: dict[str, tuple[Any, str]] = {
-    "llm_error": (llm.LLMError, "llm"),
-    "tts_error": (tts.TTSError, "tts"),
-    "stt_error": (stt.STTError, "stt"),
-    "realtime_model_error": (llm.RealtimeModelError, "llm"),
+# each provider error record by its `type`, the wire's `source`
+_ERROR_RECORDS: dict[str, Any] = {
+    record.model_fields["type"].default: record
+    for record in (llm.LLMError, tts.TTSError, stt.STTError, llm.RealtimeModelError)
 }
 
 

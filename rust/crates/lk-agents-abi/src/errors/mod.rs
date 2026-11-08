@@ -47,7 +47,7 @@ impl From<JobPanicked> for std::io::Error {
             request_id(ty = "str | None", default = None),
             body(ty = "object | None", default = None, inherited),
             retryable(ty = "bool | None", default = None, inherited)
-        ), base_args(message, body, retryable), normalize(retryable(call = "_status_retryable", args(status_code, retryable))),
+        ), base_args(message, body, retryable), normalize(retryable(call = "_core.retryable_for_status", args(status_code, retryable))),
         str = "_status_error_str", repr(message, status_code, request_id, body, retryable)),
     APIConnectionError(base = "APIError", doc = "An API request failed due to a connection error.",
         fields(

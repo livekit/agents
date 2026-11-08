@@ -42,7 +42,7 @@ pub trait InferenceEot: Send + Sync + Sized + 'static {
     #[host(env)]
     type Env;
 
-    #[host(class(name = "EotStream"))]
+    #[host(class(name = "TurnDetectorStream"))]
     type Stream;
 
     /// `turn-detector-v1` connects to the gateway at `base_url`; `local_fallback` lets it degrade
@@ -109,7 +109,11 @@ pub trait InferenceEot: Send + Sync + Sized + 'static {
 
 /// `TurnDetectorStream`: one stream of the user's audio, answering `predict()` at each pause. The
 /// session's own detector when handed to it, which implements its stream operations.
-#[crate::host(class(name = "EotStream", native = crate::EotDetector))]
+#[crate::host(class(
+    name = "TurnDetectorStream",
+    native = crate::EotDetector,
+    module = "livekit.agents.inference"
+))]
 pub trait EotStream: crate::EotDetector + Sized + 'static {
     /// The active model, which changes under the caller after a fallback.
     #[host(getter)]

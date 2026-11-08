@@ -1,10 +1,19 @@
 //! Chat and tool-format exports; implementations live in their owning cores and runtime.
-use super::{SerializedImage, StrictError};
+use super::vocabulary::GeminiToolBehavior;
+use super::{ProviderFormat, SerializedImage, StrictError, ToolSchema};
 use crate::errors::Invalid;
 use crate::llm::schema::SchemaError;
 use crate::{ChatItem, Role};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+
+#[crate::host(file(module = "provider_format"))]
+const _: () = ();
+
+/// `convert_mid_conversation_instructions`' default wrapping; `{content}` is the only
+/// placeholder.
+#[crate::host(constant)]
+pub const DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE: &str = "<instructions>\n{content}\n</instructions>";
 
 #[crate::host(functions(pid = false))]
 pub trait LlmAlgorithms {
@@ -15,7 +24,7 @@ pub trait LlmAlgorithms {
     #[host(function, pid = true, name = "to_provider_format")]
     async fn prepare_provider_format(
         env: &Self::Env,
-        format: String,
+        format: ProviderFormat,
         items: Vec<ChatItem>,
         #[host(kw, default = None)] images: Option<BTreeMap<String, SerializedImage>>,
         #[host(default = true)] inject_dummy_user_message: bool,
@@ -30,9 +39,9 @@ pub trait LlmAlgorithms {
     ) -> Vec<(usize, Option<ChatItem>)>;
     #[host(function, pid = true)]
     fn to_fnc_ctx(
-        format: &str,
-        tools: Vec<Value>,
-        #[host(kw, default = None)] tool_behavior: Option<String>,
+        format: ProviderFormat,
+        tools: Vec<ToolSchema>,
+        #[host(kw, default = None)] tool_behavior: Option<GeminiToolBehavior>,
         #[host(default = false)] use_parameters_json_schema: bool,
     ) -> Result<Vec<Value>, Invalid>;
     #[host(function)]

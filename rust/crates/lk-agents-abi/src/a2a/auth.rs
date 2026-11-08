@@ -105,6 +105,23 @@ pub struct AuthPrincipal {
     pub endpoint_call: bool,
 }
 
+#[crate::host(exceptions(
+    module = "a2a_errors",
+    path = "livekit.agents.a2a",
+    classes(
+        AuthError(
+            base = "Exception",
+            doc = "An HTTP authorization refusal, outside JSON-RPC.",
+            attrs(status(ty = "int", value = 401)),
+            fields(message(ty = "str", positional)),
+            base_args(message)
+        ),
+        Unauthorized(base = "AuthError", attrs(status(ty = "int", value = 401))),
+        Forbidden(base = "AuthError", attrs(status(ty = "int", value = 403)))
+    )
+))]
+const _: () = ();
+
 #[derive(Debug, Clone, thiserror::Error)]
 #[crate::host(error(kind = "RuntimeError"))]
 pub enum AuthError {

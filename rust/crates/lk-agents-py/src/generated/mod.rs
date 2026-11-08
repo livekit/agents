@@ -94,6 +94,7 @@ pub trait Implementations: 'static {
     type McpToolsetLifecycle: ::lk_agents_abi::llm::mcp::McpToolsetLifecycle<Session = Self::McpSession>;
     type McpTools: ::lk_agents_abi::llm::mcp::McpTools;
     type LlmAlgorithms: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms;
+    type RealtimeReports: ::lk_agents_abi::llm::realtime::RealtimeReports;
     type HostRealtimeModel: ::lk_agents_abi::llm::realtime::HostRealtimeModel;
     type OpenAIRealtimeModel: ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel;
     type ChatContextDict: ::lk_agents_abi::llm::to_dict::ChatContextDict;
@@ -274,6 +275,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cli::dev_channel, m)?)?;
     m.add_class::<cli::Shutdown>()?;
     m.add_function(wrap_pyfunction!(errors::http_error_display, m)?)?;
+    m.add_function(wrap_pyfunction!(errors::retryable_for_status, m)?)?;
     m.add_class::<evals::CoreJudgeRunner>()?;
     m.add_function(wrap_pyfunction!(evals::_core_evaluation_score, m)?)?;
     m.add_function(wrap_pyfunction!(evals::_core_judgment_passed, m)?)?;
@@ -340,6 +342,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(llm::to_openai_response_format, m)?)?;
     m.add_function(wrap_pyfunction!(llm::parse_function_arguments, m)?)?;
     m.add_function(wrap_pyfunction!(llm::inject_confirm_duplicate, m)?)?;
+    m.add_function(wrap_pyfunction!(llm::_core_realtime_connection_metrics, m)?)?;
     m.add_class::<llm::HostRealtimeModel>()?;
     m.add_class::<llm::OpenAIRealtimeModel>()?;
     m.add_function(wrap_pyfunction!(llm::chat_ctx_to_dict, m)?)?;
@@ -377,10 +380,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<stt::SttAdapterStream>()?;
     m.add_class::<telemetry::TelemetrySpan>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_install, m)?)?;
-    m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_configure, m)?)?;
-    m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_diagnostics, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::configure, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::diagnostics, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_conflict, m)?)?;
-    m.add_function(wrap_pyfunction!(telemetry::_core_set_capture_content, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::set_capture_content, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_shutdown, m)?)?;
     m.add_class::<telemetry::CoreLoopWatch>()?;
     m.add_function(wrap_pyfunction!(telemetry::session_report_json, m)?)?;
@@ -406,6 +409,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tokenize::keyword_search, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize::tool_search_validate, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize::tool_search_loaded, m)?)?;
+    m.add_function(wrap_pyfunction!(tokenize::tool_search_schema, m)?)?;
+    m.add_function(wrap_pyfunction!(tokenize::call_tool_schema, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize::tool_proxy_arguments, m)?)?;
     m.add_function(wrap_pyfunction!(tts::chat_message_text_content, m)?)?;
     m.add_function(wrap_pyfunction!(tts::supported_nonverbals, m)?)?;
@@ -421,7 +426,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<tts::TtsStream>()?;
     m.add_function(wrap_pyfunction!(tts::validate_synthesis, m)?)?;
     m.add_class::<turn::InferenceEot>()?;
-    m.add_class::<turn::EotStream>()?;
+    m.add_class::<turn::TurnDetectorStream>()?;
     m.add_class::<turn::InterruptionDetector>()?;
     m.add_function(wrap_pyfunction!(turn::resolve_keyterm_detection, m)?)?;
     m.add_function(wrap_pyfunction!(types::api_connect_options_check, m)?)?;
@@ -433,7 +438,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<utils::MovingAverage>()?;
     m.add_class::<vad::InferenceVad>()?;
     m.add_class::<vad::InferenceVadStream>()?;
-    m.add_function(wrap_pyfunction!(voice::amd_constants, m)?)?;
     m.add_function(wrap_pyfunction!(voice::amd_resolve_max_endpointing_delay, m)?)?;
     m.add_function(wrap_pyfunction!(voice::amd_prediction_is_human, m)?)?;
     m.add_function(wrap_pyfunction!(voice::amd_prediction_is_machine, m)?)?;
@@ -497,7 +501,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::normalize_date_of_birth, m)?)?;
     m.add_function(wrap_pyfunction!(voice::normalize_email_address, m)?)?;
     m.add_function(wrap_pyfunction!(voice::normalize_phone_number, m)?)?;
-    m.add_function(wrap_pyfunction!(voice::dtmf_code, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::dtmf_event_to_code, m)?)?;
     m.add_function(wrap_pyfunction!(voice::format_dtmf, m)?)?;
     m.add_function(wrap_pyfunction!(voice::send_dtmf_events, m)?)?;
     m.add_function(wrap_pyfunction!(voice::receive_dtmf, m)?)?;

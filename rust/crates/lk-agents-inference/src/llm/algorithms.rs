@@ -2,7 +2,10 @@
 //! formatting, schemas and tool-argument rules, with provider formatting run on an admitted
 //! media worker of the hosting process.
 use lk_agents_abi::errors::Invalid;
-use lk_agents_abi::llm::provider_format::{SerializedImage, StrictError};
+use lk_agents_abi::llm::provider_format::vocabulary::GeminiToolBehavior;
+use lk_agents_abi::llm::provider_format::{
+    ProviderFormat, SerializedImage, StrictError, ToolSchema,
+};
 use lk_agents_abi::llm::schema::SchemaError;
 use lk_agents_abi::{ChatItem, Role};
 use lk_agents_core::llm::{provider_format, schema, tool_arguments};
@@ -18,7 +21,7 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
 
     async fn prepare_provider_format(
         _env: &ProcessEnv,
-        format: String,
+        format: ProviderFormat,
         items: Vec<ChatItem>,
         images: Option<BTreeMap<String, SerializedImage>>,
         inject_dummy_user_message: bool,
@@ -28,7 +31,7 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
         lk_agents_media::pool::media_pool()
             .try_spawn(lk_agents_media::pool::JobClass::Formatting, move || {
                 provider_format::host::to_provider_format(
-                    &format,
+                    format,
                     items,
                     images,
                     inject_dummy_user_message,
@@ -48,17 +51,12 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
         provider_format::host::convert_mid_conversation_instructions(items, role, template)
     }
     fn to_fnc_ctx(
-        format: &str,
-        tools: Vec<Value>,
-        tool_behavior: Option<String>,
+        format: ProviderFormat,
+        tools: Vec<ToolSchema>,
+        tool_behavior: Option<GeminiToolBehavior>,
         use_parameters_json_schema: bool,
     ) -> Result<Vec<Value>, Invalid> {
-        provider_format::host::to_fnc_ctx(
-            format,
-            tools,
-            tool_behavior.as_deref(),
-            use_parameters_json_schema,
-        )
+        provider_format::host::to_fnc_ctx(format, tools, tool_behavior, use_parameters_json_schema)
     }
     fn to_strict_json_schema(
         schema: &Value,

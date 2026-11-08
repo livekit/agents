@@ -103,6 +103,7 @@ async fn probe() {
         Some("secret".into()),
         None,
         None,
+        None,
     )
     .unwrap();
     assert!(storage.list_threads("scope".into(), None, None).await.unwrap().threads.is_empty());
@@ -169,6 +170,7 @@ async fn reject_certificate(cert: CertificateDer<'static>, key: &[u8]) {
                     Some(url),
                     Some("key".into()),
                     Some("secret".into()),
+                    None,
                     None,
                     None,
                 )

@@ -2,15 +2,15 @@ use super::*;
 use lk_agents_abi::voice::events::DiagnosticLevel;
 use lk_agents_abi::voice::session_options::InterruptionGateFunctions;
 
-// Catches: a mode the legs cannot honour kept instead of falling as `Auto` does.
+// Catches: a mode the legs cannot honour kept instead of falling as automatic selection does.
 #[test]
-fn an_unhonourable_mode_falls_as_auto() {
+fn an_unhonourable_mode_falls_as_automatic_selection() {
     let none = SessionLegs::none();
     let vad = SessionLegs { vad: true, ..SessionLegs::none() };
-    assert_eq!(resolve_turn_detection_mode(TurnDetection::Vad, &vad), TurnDetectionMode::Vad);
+    assert_eq!(resolve_turn_detection_mode(Some(TurnDetection::Vad), &vad), TurnDetectionMode::Vad);
     assert_eq!(
-        resolve_turn_detection_mode(TurnDetection::Vad, &none),
-        resolve_turn_detection_mode(TurnDetection::Auto, &none)
+        resolve_turn_detection_mode(Some(TurnDetection::Vad), &none),
+        resolve_turn_detection_mode(None, &none)
     );
 }
 
@@ -59,7 +59,7 @@ fn the_interruption_gate_names_its_reason() {
             false,
             false,
             true,
-            Some("vad".to_owned()),
+            Some(TurnDetection::Vad),
             true,
             asked,
             None,
@@ -79,26 +79,26 @@ fn the_interruption_gate_names_its_reason() {
     assert_eq!(realtime.reason.as_deref(), Some("cannot_gatekeep"));
 }
 
-// Catches: the host's read of `_rt_turn_detection_enabled` parsing its mode string differently
-// from the driver's, so the server keeps detecting turns a local VAD was asked to own.
+// Catches: the host's read of `_rt_turn_detection_enabled` deciding differently from the
+// driver's, so the server keeps detecting turns a local VAD was asked to own.
 #[test]
 fn the_server_keeps_turn_detection_unless_a_local_vad_takes_it() {
-    let rt = |caps, vad, mode: Option<&str>, interruption| {
+    let rt = |caps, vad, mode: Option<TurnDetection>, interruption| {
         <InterruptionGateRules as InterruptionGateFunctions>::rt_server_turn_detection(
             caps,
             true,
             vad,
-            mode.map(str::to_owned),
+            mode,
             false,
             interruption,
         )
     };
     assert!(rt(true, true, None, false));
-    assert!(!rt(true, true, Some("vad"), false));
+    assert!(!rt(true, true, Some(TurnDetection::Vad), false));
     assert!(!rt(true, true, None, true));
-    assert!(rt(true, false, Some("vad"), false));
-    assert!(!rt(true, true, Some("manual"), false));
-    assert!(rt(true, true, Some("realtime_llm"), true));
+    assert!(rt(true, false, Some(TurnDetection::Vad), false));
+    assert!(!rt(true, true, Some(TurnDetection::Manual), false));
+    assert!(rt(true, true, Some(TurnDetection::RealtimeLlm), true));
     assert!(!rt(false, true, None, false));
 }
 
@@ -145,14 +145,14 @@ fn an_agents_turn_detection_none_is_automatic_selection() {
         ..TurnHandlingKwargs::default()
     };
     let mut session = AgentSessionOptions::default();
-    session.turn.detection = Some(TurnDetection::Stt);
+    session.turn.detection = Maybe::Given(Some(TurnDetection::Stt));
     let stack = ConfigStack {
         session,
         agent: Some(crate::turn::agent_layer(Some(&kwargs), None, None)),
         overrides: Vec::new(),
     };
     let legs = SessionLegs { stt: true, vad: true, ..SessionLegs::none() };
-    assert_eq!(stack.resolve(&legs).turn.detection, Some(TurnDetection::Auto));
+    assert_eq!(stack.resolve(&legs).turn.detection, Maybe::Given(None));
 }
 
 #[test]

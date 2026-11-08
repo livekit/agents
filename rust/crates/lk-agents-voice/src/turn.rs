@@ -12,7 +12,8 @@ use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct TurnHandlingOptions {
-    pub detection: Option<TurnDetection>,
+    /// `None` inside is automatic selection.
+    pub detection: Maybe<Option<TurnDetection>>,
     /// What the session runs (four-way); what the turn machine reads. Derived from `detection`
     /// and the legs by `resolve`, never said by a layer.
     pub owner: Option<TurnDetectionMode>,
@@ -25,7 +26,7 @@ pub struct TurnHandlingOptions {
 }
 
 option_group!(TurnHandlingOptions {
-    detection: TurnDetection,
+    detection: Option<TurnDetection>,
     owner: TurnDetectionMode,
     ivr_detection: bool,
 } groups(endpointing, interruption, preemptive, user_turn_limit));
@@ -124,7 +125,9 @@ pub fn turn_handling_layer(kw: &TurnHandlingKwargs) -> AgentSessionOptions {
     if let Some(u) = user_turn_limit {
         o.turn.user_turn_limit = user_turn_limit_options(&u);
     }
-    o.turn.detection = turn_detection.given().and_then(TurnDetectionKwarg::detection);
+    if let Some(m) = turn_detection.given().and_then(TurnDetectionKwarg::detection) {
+        o.turn.detection = Maybe::Given(Some(m));
+    }
     o
 }
 
@@ -144,7 +147,7 @@ pub fn agent_layer(
     if turn_handling
         .is_some_and(|kw| matches!(kw.turn_detection, Maybe::Given(TurnDetectionKwarg::Null)))
     {
-        o.turn.detection = Some(TurnDetection::Auto);
+        o.turn.detection = Maybe::Given(None);
     }
     let InterruptionOptions { enabled, mode, .. } = o.turn.interruption;
     o.turn.interruption = InterruptionOptions { enabled, mode, ..InterruptionOptions::default() };

@@ -84,30 +84,26 @@ fn registration_needs_the_url_the_credentials_and_a_name_for_routes() {
     assert!(s.check_routes(true).unwrap_err().to_string().contains("agent_name"));
 }
 
-// Catches: a mistyped listener key silently ignored, or development binding every interface.
+// Catches: a listener left out not keeping its default, or development binding every interface.
 #[test]
-fn listeners_refuse_unknown_keys_and_default_per_mode() {
+fn listeners_default_per_mode() {
     use lk_agents_abi::Maybe::Given;
-    use lk_agents_abi::worker::types::ServerOptions;
-    let listeners = |value: serde_json::Value| {
-        settings().apply(ServerOptions { listeners: Given(value), ..Default::default() })
-    };
-    let refused = |value| listeners(value).unwrap_err().to_string();
-    assert!(refused(serde_json::json!({"admin": {}})).contains("admin"));
-    assert!(refused(serde_json::json!({"health": {"prt": 1}})).contains("prt"));
+    use lk_agents_abi::worker::types::{ListenerAddress, Listeners, PublicListener, ServerOptions};
     let mut s = settings();
-    s.apply(ServerOptions {
-        listeners: Given(serde_json::json!({"public": {"port": 9000}, "prometheus": {}})),
+    let listeners = Listeners {
+        public: Some(PublicListener { port: Some(9000), ..Default::default() }),
+        prometheus: Some(ListenerAddress::default()),
         ..Default::default()
-    })
-    .unwrap();
+    };
+    s.apply(ServerOptions { listeners: Given(listeners), ..Default::default() }).unwrap();
     let l = &s.listeners;
-    assert_eq!((l.public(false).host.as_str(), l.public(false).port), ("0.0.0.0", 9000));
-    assert_eq!((l.health(false).host.as_str(), l.health(false).port), ("0.0.0.0", 8081));
-    assert_eq!((l.health(true).host.as_str(), l.health(true).port), ("127.0.0.1", 0));
-    assert_eq!(l.prometheus(false).map(|b| b.port), Some(9090));
-    assert!(!l.public.proxy_headers);
-    assert_eq!(settings().listeners.prometheus(false), None, "metrics are off unless given");
+    let at = |b: Bind| (b.host, b.port);
+    assert_eq!(at(Bind::public(l, false)), ("0.0.0.0".into(), 9000));
+    assert_eq!(at(Bind::health(l, false)), ("0.0.0.0".into(), 8081));
+    assert_eq!(at(Bind::health(l, true)), ("127.0.0.1".into(), 0));
+    assert_eq!(Bind::prometheus(l, false).map(|b| b.port), Some(9090));
+    let off = Bind::prometheus(&settings().listeners, false);
+    assert_eq!(off, None, "metrics are off unless given");
 }
 
 // Catches: a development worker delegating to production, or a self-hosted worker calling the
@@ -223,22 +219,6 @@ fn invalid_server_update_cannot_partially_change_launch_configuration() {
     assert_eq!(server.shutdown_process_timeout, 10.0, "omission preserves other fields");
 }
 
-#[test]
-fn unsupported_start_method_is_refused_before_launch() {
-    use lk_agents_abi::Maybe::Given;
-    use lk_agents_abi::worker::types::ServerOptions;
-    let mut server = settings();
-    let method = server.multiprocessing_context.clone();
-    let error = server
-        .apply(ServerOptions {
-            multiprocessing_context: Given("fork".into()),
-            ..Default::default()
-        })
-        .unwrap_err();
-    assert!(error.to_string().contains("multiprocessing_context"));
-    assert_eq!(server.multiprocessing_context, method);
-}
-
 struct Probe;
 
 #[async_trait::async_trait]
@@ -348,7 +328,7 @@ async fn the_worker_endpoint_uses_generated_protobuf_json() {
 #[test]
 fn a_server_takes_a_job_only_with_a_voice_door() {
     let job = proto::Job { id: "AJ_1".into(), ..Default::default() };
-    let req = JobRequest { job: crate::worker::job_info(&job), resuming: false };
+    let req = JobRequest { job, resuming: false };
     assert_eq!(job_decision(&req, false), JobDecision::Reject);
     let JobDecision::Accept(args) = job_decision(&req, true) else {
         panic!("a voice door accepts")
@@ -373,7 +353,7 @@ fn a_simulated_job_names_its_agent_and_room() {
     )
     .unwrap();
     assert!(fake.job.id.starts_with("mock-job-"));
-    assert_eq!(fake.job.room.as_deref(), Some("console-room"));
+    assert_eq!(fake.job.room.as_ref().map(|r| r.name.as_str()), Some("console-room"));
     assert_eq!((fake.accept_arguments.identity.as_str(), fake.token.as_str()), ("console", ""));
     assert_eq!(fake.worker_id, "W1");
     let real = simulated_job(

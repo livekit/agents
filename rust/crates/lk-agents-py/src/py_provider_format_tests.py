@@ -3,6 +3,7 @@
 import pytest
 
 from livekit.agents import _core
+from livekit.agents._generated.provider_data import ProviderFormat, ToolSchemaRaw
 from livekit.agents.llm import (
     ChatContext,
     ChatMessage,
@@ -16,7 +17,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.mark.parametrize("provider", ["google", "aws"])
-async def test_provider_image_bytes_are_materialized_for_the_sdk(provider: str) -> None:
+async def test_provider_image_bytes_are_materialized_for_the_sdk(provider: ProviderFormat) -> None:
     image = ImageContent(id="image", image="https://example.test/image.png")
     messages, _ = await _core.to_provider_format(
         provider,
@@ -74,7 +75,7 @@ async def test_bedrock_failed_tool_status_and_raw_tool_validate_with_botocore() 
         FunctionCallOutput(call_id="call", name="lookup", output="denied", is_error=True)
     )
     messages, _ = await context.to_provider_format("aws")
-    tools = _core.to_fnc_ctx("aws", [["raw", {}, "lookup"]])
+    tools = _core.to_fnc_ctx("aws", [ToolSchemaRaw(name="lookup", raw_schema={})])
     service = Session().get_service_model("bedrock-runtime")
     validate_parameters(
         {"modelId": "test", "messages": messages, "toolConfig": {"tools": tools}},

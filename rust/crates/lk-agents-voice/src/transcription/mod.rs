@@ -92,42 +92,12 @@ pub trait TextTransform: Send {
     fn flush(&mut self) -> Vec<String>;
 }
 
-/// `TextTransforms`: a builtin's name (a callable is refused at the boundary).
-#[derive(Clone, Copy)]
-pub enum TransformSpec {
-    FilterMarkdown,
-    FilterEmoji,
-}
+use lk_agents_abi::voice::session_options::TextTransform as Builtin;
 
-impl std::fmt::Debug for TransformSpec {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TransformSpec::FilterMarkdown => f.write_str("filter_markdown"),
-            TransformSpec::FilterEmoji => f.write_str("filter_emoji"),
-        }
-    }
-}
-
-impl TransformSpec {
-    /// The resolved `tts_text_transforms`, in the reference's order; `None` runs none.
-    pub fn of_set(
-        set: Option<lk_agents_abi::voice::session_options::TextTransformSet>,
-    ) -> Vec<Self> {
-        let Some(set) = set else { return Vec::new() };
-        [
-            (set.filter_markdown, TransformSpec::FilterMarkdown),
-            (set.filter_emoji, TransformSpec::FilterEmoji),
-        ]
-        .into_iter()
-        .filter_map(|(on, spec)| on.then_some(spec))
-        .collect()
-    }
-
-    fn build(&self) -> Box<dyn TextTransform> {
-        match self {
-            TransformSpec::FilterMarkdown => Box::new(MarkdownTransform(MarkdownFilter::new())),
-            TransformSpec::FilterEmoji => Box::new(EmojiTransform),
-        }
+fn build(builtin: Builtin) -> Box<dyn TextTransform> {
+    match builtin {
+        Builtin::FilterMarkdown => Box::new(MarkdownTransform(MarkdownFilter::new())),
+        Builtin::FilterEmoji => Box::new(EmojiTransform),
     }
 }
 
@@ -165,8 +135,8 @@ pub struct Pipeline {
 
 impl Pipeline {
     /// Resolve and build. Fails on the first unknown name, before any text has been seen.
-    pub fn new(specs: &[TransformSpec]) -> Pipeline {
-        Pipeline { stages: specs.iter().map(TransformSpec::build).collect() }
+    pub fn new(builtins: &[Builtin]) -> Pipeline {
+        Pipeline { stages: builtins.iter().copied().map(build).collect() }
     }
 }
 

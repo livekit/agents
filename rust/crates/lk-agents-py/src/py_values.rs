@@ -29,6 +29,12 @@ pub mod interfaces {
 
     #[lk_agents_abi::host(interface(module = "numpy", attrs(asarray, int16, float32)))]
     pub struct NumpyModule;
+
+    #[lk_agents_abi::host(interface(
+        host = "livekit.protocol.agent.Job",
+        attrs(serialize_to_string(name = "SerializeToString"), from_string(name = "FromString"))
+    ))]
+    pub struct ProtoJob;
 }
 
 use crate::generated::accessors as access;
@@ -73,6 +79,26 @@ where
 /// A `#[host(string)]` or `#[host(wire_enum)]` value as the host's `str`.
 pub fn str_to_py<'py>(py: Python<'py>, value: &impl std::fmt::Display) -> Bound<'py, PyAny> {
     PyString::new(py, &value.to_string()).into_any()
+}
+
+/// A `livekit.protocol.agent.Job`, through its protobuf bytes.
+pub fn proto_job_from_py(obj: &Bound<'_, PyAny>) -> PyResult<lk_agents_abi::worker::job::Job> {
+    let bytes = crate::py_calls::call(&access::ProtoJob::serialize_to_string(obj)?, (), None)?;
+    let bytes = bytes.extract::<pyo3::pybacked::PyBackedBytes>()?;
+    lk_agents_abi::worker::job::decode_job(&bytes)
+        .map_err(|error| PyValueError::new_err(format!("Job: {error}")))
+}
+
+pub fn proto_job_to_py(
+    py: Python<'_>,
+    value: lk_agents_abi::worker::job::Job,
+) -> PyResult<Bound<'_, PyAny>> {
+    let bytes = PyBytes::new(py, &lk_agents_abi::worker::job::encode_job(&value));
+    crate::py_calls::call(
+        &access::ProtoJob::from_string(&access::ProtoJob::import(py)?)?,
+        (bytes,),
+        None,
+    )
 }
 
 // JSON, not a `HostRef`: Rust branches on `extra` and provider formats inline it. One mapping rule

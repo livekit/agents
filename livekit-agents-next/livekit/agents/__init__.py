@@ -31,10 +31,8 @@ from ._bindings import (
     create_api_error_from_http,
     redacted_cause,
 )
-from ._core import ProviderAttempts
-from ._generated.language import LanguageCode
+from ._generated import public as _public
 from ._generated.public import *  # noqa: F403
-from ._generated.vad import VAD, VADStream
 from .evals import SimulationContext, SimulationVerdict
 from .job import (
     JobContext,
@@ -127,7 +125,6 @@ from .voice.run_result import (
 from .worker import (
     AgentHandler,
     AgentServer,
-    Listeners,
     Plugin,
     rtc_session,
 )
@@ -153,7 +150,6 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
-    "ProviderAttempts",
     "TextSession",
     "TextSessionState",
     "TextSessionTurn",
@@ -163,7 +159,6 @@ __all__ = [
     "save_context",
     "AgentHandler",
     "AgentServer",
-    "Listeners",
     "rtc_session",
     "a2a_session",
     "JobContext",
@@ -232,7 +227,6 @@ __all__ = [
     "NOT_GIVEN",
     "NotGivenOr",
     "DEFAULT_API_CONNECT_OPTIONS",
-    "LanguageCode",
     "io",
     "cli",
     "llm",
@@ -243,25 +237,11 @@ __all__ = [
     "tts",
     "utils",
     "voice",
-    "VAD",
-    "VADCapabilities",
-    "VADEvent",
-    "VADEventType",
-    "VADStream",
-    # run_result
     "mock_tools",
     "RunResult",
     "RunCompleted",
     "RunInputRequired",
     "RunNoOutput",
-    "Usage",
-    "TokenUsage",
-    "ModelUsage",
-    "LLMUsage",
-    "STTUsage",
-    "TTSUsage",
-    "EOTUsage",
-    "InterruptionUsage",
     "RunStream",
     "StreamEvent",
     "TextDeltaEvent",
@@ -277,3 +257,4 @@ __all__ = [
     "EndpointingOptions",
     "InterruptionOptions",
 ]
+__all__ += _public.__all__

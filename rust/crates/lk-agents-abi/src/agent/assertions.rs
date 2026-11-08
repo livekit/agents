@@ -24,6 +24,15 @@ pub enum EventExpectation {
     },
 }
 
+/// The kind of event an assertion names: an [`EventExpectation`] variant.
+#[crate::host(record(module = "agent_run", name = "EventType", extract))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventKind {
+    Message,
+    FunctionCall,
+    FunctionCallOutput,
+}
+
 /// A failed expectation: what was expected and the events around it.
 #[crate::host(error(kind = "AssertionError"))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

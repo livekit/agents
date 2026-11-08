@@ -16,26 +16,17 @@ from typing import TYPE_CHECKING, TypeAlias, TypedDict, cast
 from livekit import rtc
 
 from .. import _core
-from .._generated import rtc_wire
+from .._generated import public_voice_room_io as _public, rtc_wire
 from .._generated.public_voice_room_io import *  # noqa: F403
-from .._generated.room_input_events import NoiseCancellationParams, TextInputEvent
 from ..types import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 if TYPE_CHECKING:
     from .agent_session import VoiceSession
 
 __all__ = [
-    "RoomOptions",
     "ATTRIBUTE_PUBLISH_ON_BEHALF",
-    "TextInputEvent",
-    "TextInputOptions",
-    "AudioInputOptions",
-    "AudioOutputOptions",
-    "TextOutputOptions",
-    "VideoInputOptions",
-    "AudioProcessingError",
-    "NoiseCancellationParams",
 ]
+__all__ += _public.__all__
 
 TextInputCallback = Callable[["VoiceSession", TextInputEvent], Coroutine[None, None, None] | None]
 

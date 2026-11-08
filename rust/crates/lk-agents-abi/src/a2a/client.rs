@@ -6,7 +6,7 @@ use crate::errors::ProviderError;
 use crate::{ApiConnectOptions, ChatItem};
 
 #[derive(Debug, Clone, Default, PartialEq)]
-#[crate::host(record(module = "a2a_client", emit, extract))]
+#[crate::host(record(module = "a2a_client", path = "livekit.agents.a2a", emit, extract))]
 pub struct MessageMetadata {
     #[host(default = None)]
     pub kind: Option<String>,
@@ -27,7 +27,7 @@ pub struct MessageMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[crate::host(record(module = "a2a_client", emit, extract))]
+#[crate::host(record(module = "a2a_client", path = "livekit.agents.a2a", emit, extract))]
 pub enum MessagePart {
     #[host(name = "TextPart")]
     TextPart {
@@ -57,7 +57,7 @@ pub enum MessagePart {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[crate::host(record(module = "a2a_client", emit, extract))]
+#[crate::host(record(module = "a2a_client", path = "livekit.agents.a2a", emit, extract))]
 #[python(
     property(
         name = "text",
@@ -113,7 +113,7 @@ pub enum MessageInput {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[crate::host(record(module = "a2a_client", emit, extract))]
+#[crate::host(record(module = "a2a_client", path = "livekit.agents.a2a", emit, extract))]
 pub struct Artifact {
     pub artifact_id: String,
     #[host(default = None)]
@@ -125,7 +125,7 @@ pub struct Artifact {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[crate::host(record(module = "a2a_client", emit, extract))]
+#[crate::host(record(module = "a2a_client", path = "livekit.agents.a2a", emit, extract))]
 pub struct TaskUpdate {
     pub state: crate::storage::TaskState,
     pub text: String,
@@ -161,7 +161,7 @@ pub enum AgentClientError {
     Provider(#[from] ProviderError),
 }
 
-#[crate::host(class(name = "Reply"))]
+#[crate::host(class(name = "Reply", module = "livekit.agents.a2a"))]
 pub trait Reply: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn task_id(&self) -> String;
@@ -173,7 +173,7 @@ pub trait Reply: Send + Sync + Sized + 'static {
     async fn aclose(&self);
 }
 
-#[crate::host(class(name = "AgentClient"))]
+#[crate::host(class(name = "AgentClient", module = "livekit.agents.a2a"))]
 pub trait AgentClient: Send + Sync + Sized + 'static {
     #[host(class(name = "Reply"))]
     type Reply;

@@ -45,6 +45,7 @@ from ._generated._core_cli import (
 )
 from ._generated._core_errors import (
     http_error_display as http_error_display,
+    retryable_for_status as retryable_for_status,
 )
 from ._generated._core_evals import (
     _core_evaluation_score as _core_evaluation_score,
@@ -102,6 +103,7 @@ from ._generated._core_llm import (
     RealtimeFallbackModel as RealtimeFallbackModel,
     TtsTokenLog as TtsTokenLog,
     _core_McpToolsetLifecycle as _core_McpToolsetLifecycle,
+    _core_realtime_connection_metrics as _core_realtime_connection_metrics,
     _core_ToolsetGroup as _core_ToolsetGroup,
     _core_ToolsetLifetime as _core_ToolsetLifetime,
     _core_ToolsetScopes as _core_ToolsetScopes,
@@ -174,13 +176,13 @@ from ._generated._core_telemetry import (
     Tagger as Tagger,
     TelemetrySpan as TelemetrySpan,
     _core_LoopWatch as _core_LoopWatch,
-    _core_set_capture_content as _core_set_capture_content,
-    _core_telemetry_configure as _core_telemetry_configure,
     _core_telemetry_conflict as _core_telemetry_conflict,
-    _core_telemetry_diagnostics as _core_telemetry_diagnostics,
     _core_telemetry_install as _core_telemetry_install,
     _core_telemetry_shutdown as _core_telemetry_shutdown,
+    configure as configure,
+    diagnostics as diagnostics,
     session_report_json as session_report_json,
+    set_capture_content as set_capture_content,
 )
 from ._generated._core_text_session import (
     TextSessionRunner as TextSessionRunner,
@@ -196,6 +198,7 @@ from ._generated._core_tokenize import (
     SearchDocument as SearchDocument,
     TokenBuffer as TokenBuffer,
     base_language as base_language,
+    call_tool_schema as call_tool_schema,
     hyphenate_word as hyphenate_word,
     keyword_search as keyword_search,
     language_iso as language_iso,
@@ -207,6 +210,7 @@ from ._generated._core_tokenize import (
     tokenize_paragraphs as tokenize_paragraphs,
     tool_proxy_arguments as tool_proxy_arguments,
     tool_search_loaded as tool_search_loaded,
+    tool_search_schema as tool_search_schema,
     tool_search_validate as tool_search_validate,
     xml_tokenize as xml_tokenize,
 )
@@ -226,9 +230,9 @@ from ._generated._core_tts import (
     validate_synthesis as validate_synthesis,
 )
 from ._generated._core_turn import (
-    EotStream as EotStream,
     InferenceEot as InferenceEot,
     InterruptionDetector as InterruptionDetector,
+    TurnDetectorStream as TurnDetectorStream,
     resolve_keyterm_detection as resolve_keyterm_detection,
 )
 from ._generated._core_types import (
@@ -305,14 +309,13 @@ from ._generated._core_voice import (
     _core_SessionOwner as _core_SessionOwner,
     _core_SessionState as _core_SessionState,
     _core_SessionStorage as _core_SessionStorage,
-    amd_constants as amd_constants,
     amd_prediction_is_human as amd_prediction_is_human,
     amd_prediction_is_machine as amd_prediction_is_machine,
     amd_resolve_max_endpointing_delay as amd_resolve_max_endpointing_delay,
     card_expired as card_expired,
     default_session_models as default_session_models,
     dtmf_capture_plan as dtmf_capture_plan,
-    dtmf_code as dtmf_code,
+    dtmf_event_to_code as dtmf_event_to_code,
     email_capture_plan as email_capture_plan,
     email_read_back as email_read_back,
     format_dtmf as format_dtmf,

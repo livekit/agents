@@ -131,14 +131,12 @@ pub enum StartJobError {
 }
 
 pub fn validate_start_job(job: &StartJob) -> Result<(), StartJobError> {
-    use prost::Message;
-    livekit_protocol::Job::decode(job.job.as_slice())
-        .map_err(|error| StartJobError::InvalidFields(format!("job protobuf: {error}")))?;
+    let info = &job.info;
     for (field, value) in [
-        ("received_at", job.received_at),
-        ("accepted_at", job.accepted_at),
-        ("assigned_at", job.assigned_at),
-        ("launched_at", Some(job.launched_at)),
+        ("received_at", info.received_at),
+        ("accepted_at", info.accepted_at),
+        ("assigned_at", info.assigned_at),
+        ("launched_at", Some(info.launched_at)),
     ] {
         if value.is_some_and(|value| !value.is_finite() || value < 0.0) {
             return Err(StartJobError::InvalidFields(format!(

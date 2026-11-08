@@ -21,8 +21,7 @@ from typing_extensions import TypeVar
 from livekit import rtc
 
 from .. import _core, utils
-from .._generated.avatar import AudioSegmentEnd
-from .._generated.avatar_options import AvatarOptions
+from .._generated import public_voice_avatar as _public
 from .._generated.avatar_queue import QueueEffects
 from .._generated.io_events import AvatarPlaybackSegment
 from .._generated.public_voice_avatar import *  # noqa: F403
@@ -37,15 +36,14 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AvatarRunner",
-    "AvatarOptions",
     "AvatarSession",
     "VideoGenerator",
     "AudioReceiver",
-    "AudioSegmentEnd",
     "QueueAudioOutput",
     "DataStreamAudioReceiver",
     "DataStreamAudioOutput",
 ]
+__all__ += _public.__all__
 
 
 _ReceiverEventT = TypeVar("_ReceiverEventT", default=Never, contravariant=True)

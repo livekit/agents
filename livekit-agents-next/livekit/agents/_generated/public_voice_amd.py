@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from .amd import AMDCategory as AMDCategory, DetectionOptions as DetectionOptions
 
-__all__ = [
+__all__: list[str] = [
     "AMDCategory",
     "DetectionOptions",
 ]

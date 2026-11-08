@@ -30,7 +30,7 @@ from .session_events import (
     ToolExecutionUpdatedEvent as ToolExecutionUpdatedEvent,
 )
 
-__all__ = [
+__all__: list[str] = [
     "UserState",
     "AgentState",
     "UserStateChangedEvent",

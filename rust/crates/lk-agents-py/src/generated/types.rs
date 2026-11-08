@@ -150,7 +150,7 @@ type ProviderAttemptsImpl =
 /// `expect_response()` when it sent something that owes an answer, `progress()` when response
 /// data arrived (heartbeats are not progress), `audio_received()` for synthesized audio and
 /// `complete_response()` when nothing is owed any more.
-#[pyclass(frozen, name = "ProviderAttempts", module = "livekit.agents._core")]
+#[pyclass(frozen, name = "ProviderAttempts", module = "livekit.agents")]
 pub struct ProviderAttempts(pub(crate) ::std::sync::Arc<ProviderAttemptsImpl>);
 
 #[pymethods]

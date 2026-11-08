@@ -262,7 +262,7 @@ impl Execution {
         let cx = self.cx.clone();
         let function_call = self.calls.get(&call).cloned();
         self.invoke(Work::Call(call), function_call, None, move |inv, events| async move {
-            let text = host.render_template(&cx, &inv, template).await.unwrap_or_else(|e| {
+            let text = host.render_template(&cx, &inv, template.key(), template).await.unwrap_or_else(|e| {
                 log::error!(target: lk_agents_abi::LOG_TARGET, "a tool_handling template failed: {e}");
                 None
             });

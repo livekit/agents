@@ -3,7 +3,7 @@ use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use lk_agents_abi::telemetry::decl::MetricDecl;
-use lk_agents_abi::worker::types::{AcceptArguments, JobInfo, RunningJobInfo};
+use lk_agents_abi::worker::job::{AcceptArguments, RunningJobInfo};
 use lk_agents_telemetry::process::{Instruments, Value};
 
 type Executor = super::super::process_pool::Executor<Numbered>;
@@ -61,19 +61,7 @@ fn numbers(processes: &[Executor]) -> Vec<usize> {
 pub(in crate::ipc) fn job(id: &str) -> RunningJobInfo {
     RunningJobInfo {
         accept_arguments: AcceptArguments::default(),
-        job: JobInfo {
-            id: id.to_owned(),
-            dispatch_id: String::new(),
-            r#type: 0,
-            room: None,
-            room_sid: None,
-            agent_name: String::new(),
-            metadata: String::new(),
-            deployment: String::new(),
-            enable_recording: false,
-            enable_redaction: false,
-            proto: Vec::new(),
-        },
+        job: livekit_protocol::Job { id: id.to_owned(), ..Default::default() },
         url: String::new(),
         token: String::new(),
         worker_id: String::new(),
@@ -81,6 +69,7 @@ pub(in crate::ipc) fn job(id: &str) -> RunningJobInfo {
         received_at: None,
         accepted_at: None,
         assigned_at: None,
+        launched_at: 0.0,
     }
 }
 

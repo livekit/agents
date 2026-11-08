@@ -19,13 +19,17 @@ def chat_message_text_content(parts: Sequence[str], assistant: bool) -> str | No
 
 def supported_nonverbals(provider: str) -> MarkupInfo: ...
 
-def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]: ...
+def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
+    """Strip every provider's expressive XML markup; brackets are prose and stay."""
 
 def strip_all_markup(text: str) -> str: ...
 
 def strip_expr_markup(text: str) -> str: ...
 
-def split_expr_markup(text: str) -> tuple[str, list[ExpressiveTag]]: ...
+def split_expr_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
+    """Strip only the `<expr/>` dialect, returning the clean text and its markers; the
+    provider-native tags stay in the words.
+    """
 
 def to_xml(
     tag_name: str,

@@ -397,15 +397,11 @@ impl VoiceDriver {
     /// Emitted once the reply speech exists so it carries its id; never for a turn with no reply.
     /// `metadata` names the detector (model, or mode with `model_name="unknown"`).
     pub(crate) fn emit_eou_metrics(&mut self, info: &EndOfTurnInfo, speech: Option<SpeechId>) {
-        use crate::agent_session::options::TurnDetection;
         let detection = self.session.config.effective.turn.detection();
         let metadata = match (self.activity.audio_recognition.eot_provider(), detection) {
             (Some(eot), _) => Some(eot.metadata()),
-            (None, TurnDetection::Vad) => Some(mode_metadata("vad")),
-            (None, TurnDetection::Stt) => Some(mode_metadata("stt")),
-            (None, TurnDetection::Manual) => Some(mode_metadata("manual")),
-            (None, TurnDetection::RealtimeLlm) => Some(mode_metadata("realtime_llm")),
-            (None, TurnDetection::Auto) => None,
+            (None, Some(mode)) => Some(mode_metadata(mode.as_str())),
+            (None, None) => None,
         };
         let secs = |d: Option<std::time::Duration>| d.map(|d| d.as_secs_f64());
         let record = lk_agents_abi::metrics::base::EouMetrics {

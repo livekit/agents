@@ -4,15 +4,23 @@
 
 from __future__ import annotations
 
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
 from typing_extensions import TypedDict
 
 # Record declarations:
+#     rust/crates/lk-agents-abi/src/errors/api.rs
 #     rust/crates/lk-agents-abi/src/types/mod.rs
 #     rust/crates/lk-agents-abi/src/types/identity.rs
+
+
+TimeoutPhase: TypeAlias = Literal["pool", "connect", "read", "write", "total"]
+"""The wait an `APITimeoutError` bounded, as `APIConnectOptions` names its limits. Absent when the
+failing layer does not say (a foreign SDK timeout), never guessed. Its wire string is the
+Python value of `APITimeoutError.phase`.
+"""
 
 
 class FlushSentinel:

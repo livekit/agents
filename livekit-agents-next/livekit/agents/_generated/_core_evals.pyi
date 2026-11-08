@@ -11,7 +11,6 @@ from typing import Any, Self
 from livekit.agents.evals import _Evaluation
 from livekit.agents.llm import LLM
 
-from .chat_items import ChatItem
 from .evals import (
     EvaluationResult,
     EvaluationScore,
@@ -26,15 +25,8 @@ class _core_JudgeRunner:
     judge tools (`judge_tool_schemas`).
     """
     def __new__(cls, llm: LLM[Any] | None, tools: object, host: _Evaluation) -> Self: ...
-    async def evaluate(
-        self,
-        judges: Sequence[JudgeSpec],
-        chat_ctx: Sequence[ChatItem],
-        reference: Sequence[ChatItem] | None,
-    ) -> list[JudgeOutcome]:
-        """Runs `judges` concurrently on `chat_ctx`, judged against `reference` when given: their
-        outcomes in judge order. An unknown built-in judge is refused before any runs.
-        """
+    async def evaluate(self, judges: Sequence[JudgeSpec]) -> list[JudgeOutcome]:
+        """Runs `judges` concurrently: their outcomes in judge order."""
     async def judge_intent(self, intent: str, message: str) -> IntentJudgment:
         """Whether `message` fulfills `intent`. A provider failure raises the provider's error."""
 

@@ -13,16 +13,16 @@ import socket
 import sys
 import threading
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
 from multiprocessing.context import BaseContext
 from multiprocessing.process import BaseProcess
 from types import ModuleType
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Protocol, cast
 
 from .. import _core, utils
+from .._generated import public_ipc as _public
+from .._generated.job_records import RunningJobInfo
 from .._generated.public_ipc import *  # noqa: F403
-from .._generated.worker_ipc import JobCompletion, JobRunnerOptions
-from .._generated.worker_server import RunningJobInfo
+from .._generated.worker_ipc import JobCompletion, ProcessEvent
 from ..job import JobContext
 from ..log import logger
 from . import child
@@ -99,8 +99,8 @@ class JobLauncher:
             self._proc = self._create_process(self._mp_ctx, child_end)
             method = self._mp_ctx.get_start_method()
 
-            def register(receipt: ProcessReceipt) -> None:
-                launch.process_started(receipt.pid, receipt.sentinel, method, receipt.owned_handles)
+            def register(pid: int, sentinel: int, owned_handles: list[int]) -> None:
+                launch.process_started(pid, sentinel, method, owned_handles)
 
             # The parent must keep receiving shutdown signals while children start.
             # Job processes install their own signal policy in ipc.child.
@@ -135,17 +135,7 @@ class JobLauncher:
         )
 
 
-class ProcPool(
-    utils.EventEmitter[
-        Literal[
-            "process_created",
-            "process_started",
-            "process_ready",
-            "process_closed",
-            "process_job_launched",
-        ]
-    ]
-):
+class ProcPool(utils.EventEmitter[ProcessEvent]):
     """The warm job processes. The core keeps ``num_idle_processes`` warm, hands a job the next
     one, retries a failed spawn or launch and owns each process's state
     (``_core.ProcPool``, ``_core.JobSupervisor``); this class makes the launchers and turns the
@@ -288,15 +278,8 @@ def configure_forkserver(context: BaseContext, modules: Sequence[str]) -> None:
     context.set_forkserver_preload(inventory)
 
 
-@dataclass(frozen=True)
-class ProcessReceipt:
-    pid: int
-    sentinel: int
-    owned_handles: list[int]
-
-
 def start_process(
-    process: BaseProcess, method: str, register: Callable[[ProcessReceipt], None]
+    process: BaseProcess, method: str, register: Callable[[int, int, list[int]], None]
 ) -> None:
     if sys.platform == "win32":
         from multiprocessing.popen_spawn_win32 import Popen
@@ -329,7 +312,7 @@ def start_process(
                     handles: Sequence[int] = finalizer._args  # type: ignore[attr-defined]
                     owned = [handle for handle in handles if handle != sentinel]
                     finalizer.cancel()
-                    register(ProcessReceipt(pid, sentinel, owned))
+                    register(pid, sentinel, owned)
 
     def factory(process_obj: BaseProcess) -> OwnedPopen:
         # The temporary factory contains a native handle and must never enter the child pickle.
@@ -348,7 +331,6 @@ def start_process(
 
 __all__ = [
     "JobLauncher",
-    "JobRunnerOptions",
-    "JobStatus",
     "ProcPool",
 ]
+__all__ += _public.__all__

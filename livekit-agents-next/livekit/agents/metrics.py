@@ -6,24 +6,14 @@ from __future__ import annotations
 import logging
 
 from . import _core
-from ._generated.metrics import AgentMetrics
+from ._generated import public_metrics as _public
 from ._generated.public_metrics import *  # noqa: F403
 from .log import logger as default_logger
 
 __all__ = [
-    "LLMMetrics",
-    "AgentMetrics",
-    "VADMetrics",
-    "EOUMetrics",
-    "EOTInferenceMetrics",
-    "STTMetrics",
-    "TTSMetrics",
-    "RealtimeModelMetrics",
-    "InterruptionMetrics",
     "log_metrics",
-    "AvatarMetrics",
-    "Metadata",
 ]
+__all__ += _public.__all__
 
 
 def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) -> None:

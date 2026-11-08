@@ -17,7 +17,7 @@ from .metrics import (
     VADMetrics as VADMetrics,
 )
 
-__all__ = [
+__all__: list[str] = [
     "Metadata",
     "InterruptionMetrics",
     "EOTInferenceMetrics",

@@ -4,13 +4,8 @@ import dataclasses
 from typing import Any
 
 from .. import _bindings, _core, stt
-from .._generated import vad as vad_mod
-from .._generated.inference_stt import (
-    FallbackModel as FallbackModel,
-    STTEncoding,
-    STTLanguages,
-    STTModels,
-)
+from .._generated import public_inference_stt as _public, vad as vad_mod
+from .._generated.inference_stt import FallbackModel as FallbackModel
 from .._generated.language import LanguageCode
 from .._generated.provider_hosts import InferenceSttHost
 from .._generated.public_inference_stt import *  # noqa: F403
@@ -24,31 +19,10 @@ FallbackModelType = FallbackModel | str
 
 __all__ = [
     "STT",
-    "STTModels",
-    "STTLanguages",
-    "STTEncoding",
     "FallbackModel",
     "FallbackModelType",
-    "AssemblyAIModels",
-    "AssemblyaiOptions",
-    "CartesiaModels",
-    "CartesiaOptions",
-    "DeepgramModels",
-    "DeepgramOptions",
-    "DeepgramFluxModels",
-    "DeepgramFluxOptions",
-    "GoogleModels",
-    "GoogleOptions",
-    "InworldModels",
-    "InworldOptions",
-    "OpenAIModels",
-    "OpenAIOptions",
-    "SpeechmaticsModels",
-    "SpeechmaticsOptions",
-    "XaiModels",
-    "XaiOptions",
-    "AutoModels",
 ]
+__all__ += _public.__all__
 
 DEFAULT_SAMPLE_RATE = 16000
 

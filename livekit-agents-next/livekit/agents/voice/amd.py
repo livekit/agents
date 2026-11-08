@@ -14,7 +14,8 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Literal
 
 from .. import _bindings, _core, inference
-from .._generated.amd import AMDCategory, AMDConfig, AMDPredictionEvent, DetectionOptions
+from .._generated import public_voice_amd as _public
+from .._generated.amd import DEFAULT_LLM_MODEL, DEFAULT_STT_MODEL, AMDConfig, AMDPredictionEvent
 from .._generated.public_voice_amd import *  # noqa: F403
 from ..inference import default_api_key, default_api_secret
 from ..job import _server_credentials
@@ -31,10 +32,9 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AMD",
-    "AMDCategory",
     "AMDPredictionEvent",
-    "DetectionOptions",
 ]
+__all__ += _public.__all__
 
 
 @function_tool
@@ -54,9 +54,6 @@ async def postpone_termination(seconds: float) -> str:
 
 
 CLASSIFIER_TOOLS = [save_prediction, postpone_termination]
-
-
-_CONSTANTS = _core.amd_constants()
 
 
 class AMD(EventEmitter[Literal["amd_prediction"]]):
@@ -110,9 +107,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 default_api_secret(None),
             )
             if not is_given(llm):
-                llm = _CONSTANTS["default_llm_model"] if auto_select else None
+                llm = DEFAULT_LLM_MODEL if auto_select else None
             if not is_given(stt):
-                stt = _CONSTANTS["default_stt_model"] if auto_select else None
+                stt = DEFAULT_STT_MODEL if auto_select else None
 
         self._llm_config: _LLM | str | None = llm
         self._session = session

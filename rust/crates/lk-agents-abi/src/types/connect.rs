@@ -65,7 +65,7 @@ pub struct ApiConnectOptions {
 
 const DEFAULT_PHASE_TIMEOUT: Option<f64> = Some(10.0);
 
-#[crate::host(constant)]
+#[crate::host(constant(path = "livekit.agents.types"))]
 pub const DEFAULT_API_CONNECT_OPTIONS: ApiConnectOptions = ApiConnectOptions {
     max_retry: 3,
     retry_interval: 2.0,

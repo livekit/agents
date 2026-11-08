@@ -65,7 +65,7 @@ impl Backend {
                     directory: Some(dir.display().to_string()),
                     project_id: "default".into(),
                 });
-                (Namespace::new(&env, local, None, None, None, ttl, renew), Some(dir))
+                (Namespace::new(&env, local, None, None, None, ttl, renew, None), Some(dir))
             }
             Backend::AgentDb => {
                 let var = |name: &str| {
@@ -74,7 +74,7 @@ impl Backend {
                 };
                 let (url, key, secret) =
                     (var("LIVEKIT_URL"), var("LIVEKIT_API_KEY"), var("LIVEKIT_API_SECRET"));
-                (Namespace::new(&env, None, url, key, secret, ttl, renew), None)
+                (Namespace::new(&env, None, url, key, secret, ttl, renew, None), None)
             }
         };
         let namespace = Arc::new(namespace.unwrap());

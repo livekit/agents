@@ -5,10 +5,13 @@
 
 use std::collections::BTreeMap;
 
-use crate::decl::{Declarations, RecordBody};
+use crate::decl::{Declarations, Form, RecordBody};
 use crate::python::Out;
 
 const PACKAGE: &str = "livekit.agents";
+/// The native module, and its import from `_generated`.
+const NATIVE_MODULE: &str = "livekit.agents._core";
+const CORE: &str = ".._core";
 
 /// The generated module re-exporting `path`'s names: `public_inference_stt` for
 /// `livekit.agents.inference.stt`, `public` for the package itself.
@@ -21,47 +24,81 @@ pub fn module(path: &str) -> Option<String> {
     }
 }
 
-/// Every placed name by public path: `(generated module, name)`, in declaration order.
-pub fn placed(declared: &Declarations) -> BTreeMap<String, Vec<(String, String)>> {
+/// Every placed name by public path: `(module it is imported from, relative to `_generated`,
+/// name)`, in declaration order. A native class reporting a public module (`class(module = ..)`)
+/// is placed there, and so are a plugin base file's public classes (their host class's module).
+pub fn placed(
+    declared: &Declarations,
+    bases: &[crate::bases::Bases],
+) -> BTreeMap<String, Vec<(String, String)>> {
     let mut placed = BTreeMap::<String, Vec<(String, String)>>::new();
-    let mut add = |path: &str, module: &str, name: &str| {
+    let mut add = |path: &str, source: String, name: &str| {
         // A private name stays the public module's own import.
         if name.starts_with('_') {
             return;
         }
         let names = placed.entry(path.to_owned()).or_default();
         if !names.iter().any(|(_, n)| n == name) {
-            names.push((module.to_owned(), name.to_owned()));
+            names.push((source, name.to_owned()));
         }
     };
+    let generated = |module: &str| format!(".{module}");
     for record in &declared.records {
         let Some(path) = &record.path else { continue };
         if record.name.contains('.') || record.host_type.is_some() {
             continue;
         }
-        add(path, &record.module, &record.name);
+        add(path, generated(&record.module), &record.name);
+        if let Some(missing) = &record.missing {
+            add(path, generated(&record.module), missing);
+        }
         if let RecordBody::Variants(variants) = &record.body
             && !record.transparent
         {
             for variant in variants {
-                add(path, &record.module, &variant.name);
+                add(path, generated(&record.module), &variant.name);
             }
         }
     }
     for family in &declared.exception_families {
         for class in family.class_names() {
-            add(family.path(), family.module(), class);
+            add(family.path(), generated(family.module()), class);
         }
     }
     for flag in &declared.flags {
-        add(&flag.path, &flag.module, &flag.name);
+        add(&flag.path, generated(&flag.module), &flag.name);
+    }
+    for constant in &declared.constants {
+        if let Some(path) = &constant.path {
+            add(path, generated(&constant.module), &constant.name);
+        }
+    }
+    for class in &declared.str_classes {
+        if let Some(path) = &class.path {
+            add(path, generated(&class.module), &class.name);
+        }
+    }
+    for base in bases {
+        for (class, path) in &base.paths {
+            add(path, generated(&base.module), class);
+        }
+    }
+    for class in &declared.classes {
+        if class.form != Form::Functions && class.host_module != NATIVE_MODULE {
+            add(&class.host_module, CORE.to_owned(), &class.name);
+        }
+        for method in &class.methods {
+            if let Some(path) = &method.path {
+                add(path, CORE.to_owned(), &method.name);
+            }
+        }
     }
     placed
 }
 
-pub fn emit(declared: &Declarations) -> Result<Vec<Out>, String> {
+pub fn emit(declared: &Declarations, bases: &[crate::bases::Bases]) -> Result<Vec<Out>, String> {
     let mut out = Vec::new();
-    for (path, names) in placed(declared) {
+    for (path, names) in placed(declared, bases) {
         let Some(module) = module(&path) else {
             return Err(format!("{path}: a public path lies under {PACKAGE}"));
         };
@@ -75,18 +112,18 @@ pub fn emit(declared: &Declarations) -> Result<Vec<Out>, String> {
         for (source, mut items) in by_module {
             items.sort_unstable();
             let items: Vec<String> = items.iter().map(|n| format!("{n} as {n}")).collect();
-            let flat = format!("from .{source} import {}\n", items.join(", "));
+            let flat = format!("from {source} import {}\n", items.join(", "));
             if flat.len() <= 101 {
                 text.push_str(&flat);
             } else {
-                text.push_str(&format!("from .{source} import (\n"));
+                text.push_str(&format!("from {source} import (\n"));
                 for item in items {
                     text.push_str(&format!("    {item},\n"));
                 }
                 text.push_str(")\n");
             }
         }
-        text.push_str("\n__all__ = [\n");
+        text.push_str("\n__all__: list[str] = [\n");
         for (_, name) in &names {
             text.push_str(&format!("    {name:?},\n"));
         }
@@ -111,11 +148,11 @@ mod tests {
             "#,
         )
         .unwrap();
-        let out = super::emit(&declarations).unwrap();
+        let out = super::emit(&declarations, &[]).unwrap();
         let paths: Vec<&str> = out.iter().map(|o| o.path.as_str()).collect();
         assert_eq!(paths, ["public.py", "public_voice_io.py"]);
         assert!(out[1].text.contains("from .turn import EndOfTurn as EndOfTurn\n"));
-        assert!(out[1].text.contains("__all__ = [\n    \"EndOfTurn\",\n]\n"));
+        assert!(out[1].text.contains("__all__: list[str] = [\n    \"EndOfTurn\",\n]\n"));
         assert!(!out.iter().any(|o| o.text.contains("Private")));
     }
 }

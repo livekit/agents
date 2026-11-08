@@ -8,7 +8,7 @@ and judging; the SDK also supports tests and evaluations without a simulation.
 | Surface | Use it for | Evidence |
 | --- | --- | --- |
 | Run event assertions (`result.expect`) | A particular message, tool call, argument or event sequence | Events of one `agent.run()` invocation |
-| Conversation evals (`livekit.agents.evals`) | Scoring a supplied conversation with custom or built-in judges | Transcript, optional reference and individual judgments |
+| Conversation evals (`livekit.agents.evals`) | Scoring a supplied conversation with application judges | Transcript, optional reference and individual judgments |
 | Simulations and `SimulationContext` | An entire scenario with a simulated user and application checks | Simulator verdict plus application-owned verification |
 
 Agent execution and result types are defined in [agents.md](agents.md).
@@ -84,15 +84,22 @@ a simulated user or execute the conversation. It works in tests, application
 evaluation jobs and session-end callbacks.
 
 ```python
-from livekit.agents.evals import JudgeGroup, accuracy_judge, tool_use_judge
+from livekit.agents.evals import Judge, JudgeGroup, JudgmentResult
 
-judges = JudgeGroup(
-    llm=judge_model,
-    judges=[accuracy_judge(), tool_use_judge()],
-)
+
+class CitationJudge(Judge):
+    def __init__(self) -> None:
+        super().__init__(name="citation")
+
+    async def evaluate(self, *, chat_ctx, reference=None, llm=None) -> JudgmentResult:
+        cited = any("[source]" in (m.text_content or "") for m in chat_ctx.messages())
+        return JudgmentResult(verdict="pass" if cited else "fail", reasoning="citation check")
+
+
+judges = JudgeGroup(llm=judge_model, judges=[CitationJudge()])
 evaluation = await judges.evaluate(chat_ctx, reference=reference_chat_ctx)
 
-assert {"accuracy", "tool_use"} <= evaluation.judgments.keys()
+assert "citation" in evaluation.judgments
 assert evaluation.all_passed
 ```
 
@@ -111,11 +118,9 @@ The public evaluation types are:
 | `JudgeGroup` | Evaluate one conversation with a collection of evaluators |
 | `EvaluationResult` | Named `judgments`, aggregate `score`, and predicates such as `all_passed`, `any_passed`, `majority_passed` and `none_failed` |
 
-Built-in factories cover `task_completion_judge`, `handoff_judge`,
-`accuracy_judge`, `tool_use_judge`, `safety_judge`, `relevancy_judge`,
-`coherence_judge` and `conciseness_judge`. Applications choose the criteria
-appropriate to the conversation; a custom `Judge` can check data without an
-LLM. Reference conversations are optional and interpreted by each evaluator.
+Applications write the judges appropriate to the conversation: a `Judge` can
+check data without an LLM, or ask the group's `llm`, which it receives as
+`llm=`. Reference conversations are optional and interpreted by each evaluator.
 
 The aggregate score gives `pass` a value of 1, `maybe` 0.5 and `fail` 0.
 `all_passed` requires passing judgments; `none_failed` also accepts uncertain

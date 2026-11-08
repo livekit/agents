@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from .room_options import RoomIoConfig
     from .tool_options import ToolSpec
     from .turn import TurnHandlingOptions
+    from .workflows import DtmfEvent
 
 
 @dataclass(kw_only=True, slots=True)
@@ -93,7 +94,7 @@ class DtmfTaskOptions:
     num_digits: int
     ask_for_confirmation: bool
     timeout: float
-    stop_event: str
+    stop_event: DtmfEvent
 
 
 @dataclass(kw_only=True, slots=True)

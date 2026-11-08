@@ -236,10 +236,33 @@ pub fn constants(krate: &Crate, index: usize, module: &Module) -> Result<Vec<Con
         let Some(constant) = voc::find(&entries, "constant") else {
             continue;
         };
-        voc::only(&module.file, &constant.nested, &["name"])?;
+        voc::only(&module.file, &constant.nested, &["name", "path", "proto_enum"])?;
         let resolved = krate.constant(index, &item.expr)?;
-        let value = match &resolved {
-            syn::Expr::Struct(value) => {
+        let proto_enum = voc::text(&module.file, &constant.nested, "proto_enum")?;
+        let value = match (&resolved, proto_enum) {
+            (syn::Expr::Array(values), Some(proto)) => {
+                let (module, name) = proto
+                    .rsplit_once('.')
+                    .ok_or_else(|| format!("proto_enum {proto:?} names its module"))?;
+                let variants = values
+                    .elems
+                    .iter()
+                    .map(|value| {
+                        let syn::Expr::Path(path) = value else {
+                            return Err(format!("a {proto} constant lists enum variants"));
+                        };
+                        match krate.enum_variant(index, &path.path) {
+                            Some((ty, variant)) if ty == name => Ok(variant),
+                            _ => Err(format!("a {proto} constant lists {name} variants")),
+                        }
+                    })
+                    .collect::<Result<_, String>>()?;
+                ConstValue::ProtoEnums { module: module.into(), name: name.into(), variants }
+            }
+            (_, Some(_)) => {
+                return Err("a proto_enum constant is a list of enum variants".into());
+            }
+            (syn::Expr::Struct(value), None) => {
                 let crate::decl::tree::Found::Item { module: m, item: i } =
                     krate.resolve(index, &value.path)?
                 else {
@@ -260,7 +283,7 @@ pub fn constants(krate: &Crate, index: usize, module: &Module) -> Result<Vec<Con
                 }
                 ConstValue::Record { rust: krate.extern_path(m, i)?, fields }
             }
-            value => ConstValue::Literal(literal(value)?),
+            (value, None) => ConstValue::Literal(literal(value)?),
         };
         out.push(Constant {
             name: voc::text(&module.file, &constant.nested, "name")?
@@ -268,6 +291,7 @@ pub fn constants(krate: &Crate, index: usize, module: &Module) -> Result<Vec<Con
             module: target
                 .clone()
                 .ok_or_else(|| format!("{}: constant needs file(module = ..)", module.file))?,
+            path: voc::text(&module.file, &constant.nested, "path")?,
             source: module.file.clone(),
             doc: lk_agents_bindgen::doc(&item.attrs),
             value,

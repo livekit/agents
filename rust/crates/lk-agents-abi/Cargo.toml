@@ -15,6 +15,8 @@ doctest = false
 
 [dependencies]
 livekit-protocol.workspace = true
+# `worker::job::RunningJobInfo`'s job crosses the job process channel as its protobuf bytes.
+prost.workspace = true
 # The A2A messages and artifacts the typed task records keep (`storage::thread`).
 a2a.workspace = true
 pbjson-types.workspace = true

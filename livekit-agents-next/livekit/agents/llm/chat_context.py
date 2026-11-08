@@ -15,25 +15,18 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Sequence
-from typing import TYPE_CHECKING, Literal, TypeAlias, overload
+from typing import TYPE_CHECKING, Literal, overload
 
 from pydantic import TypeAdapter
 
 from .. import _core
-from .._generated.chat_items import (
-    ChatContent,
-    ChatItem,
-    ChatMessage,
-    ChatRole,
-    FunctionCall,
-    FunctionCallOutput,
-    MetricsReport,
-)
+from .._generated import public_llm_chat_context as _public
 from .._generated.provider_data import (
     AnthropicFormatData,
     BedrockFormatData,
     GoogleFormatData,
     MistralFormatData,
+    ProviderFormat,
 )
 from .._generated.public_llm_chat_context import *  # noqa: F403
 from ..log import logger
@@ -51,26 +44,9 @@ if TYPE_CHECKING:
     from ..llm import Tool, Toolset
 
 __all__ = [
-    "AgentConfigUpdate",
-    "AgentHandoff",
-    "AudioContent",
-    "ChatContent",
     "ChatContext",
-    "ChatItem",
-    "ChatMessage",
-    "ChatRole",
-    "FunctionCall",
-    "FunctionCallOutput",
-    "ImageContent",
-    "InferenceDetail",
-    "ImageSource",
-    "MetricsMetadata",
-    "MetricsReport",
 ]
-
-ProviderFormat: TypeAlias = Literal[
-    "openai", "openai.responses", "google", "aws", "anthropic", "mistralai"
-]
+__all__ += _public.__all__
 
 
 def _essential_fields(item: ChatItem) -> tuple[object, ...]:

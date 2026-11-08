@@ -6,7 +6,7 @@ from __future__ import annotations
 from .evals import EvaluationResult as EvaluationResult, JudgmentResult as JudgmentResult
 from .simulation import SimulationVerdict as SimulationVerdict
 
-__all__ = [
+__all__: list[str] = [
     "JudgmentResult",
     "EvaluationResult",
     "SimulationVerdict",

@@ -1,14 +1,14 @@
-//! Conversation evals (testing.md "Conversation evals"): the judges of one evaluation run
-//! concurrently on one conversation, the built-in ones natively and the application's through the
-//! host. Their prompts, transcripts and scoring are runtime support's.
+//! Conversation evals (testing.md "Conversation evals"): the application's judges of one
+//! evaluation run concurrently on one conversation, through the host. The intent judge's prompt
+//! and the scoring are runtime support's.
 
 use std::sync::Arc;
 
+use crate::Llm;
 use crate::errors::{HostError, Invalid};
 use crate::telemetry::decl::SpanValue;
 use crate::usage::TokenUsage;
 use crate::utils::host_ref::HostRef;
-use crate::{ChatItem, Llm};
 
 /// What a judge decided.
 #[crate::host(wire_enum(
@@ -60,14 +60,12 @@ pub struct Judgment {
     pub instructions: String,
 }
 
-/// One judge of an evaluation.
+/// One judge of an evaluation: an application evaluator, which the evaluation's host runs.
 #[crate::host(record(module = "evals", extract))]
 #[derive(Debug, Clone)]
-pub enum JudgeSpec {
-    /// A built-in judge, by its name (`"accuracy"`, `"task_completion"`, ...).
-    BuiltIn { name: String },
-    /// An application evaluator, which the evaluation's host runs.
-    Host { name: String, evaluator: HostRef },
+pub struct JudgeSpec {
+    pub name: String,
+    pub evaluator: HostRef,
 }
 
 /// What one judge of an evaluation came to.
@@ -139,17 +137,14 @@ pub trait JudgeRunner: Send + Sync + Sized + 'static {
         host: Arc<dyn EvaluationHost>,
     ) -> Self;
 
-    /// Runs `judges` concurrently on `chat_ctx`, judged against `reference` when given: their
-    /// outcomes in judge order. An unknown built-in judge is refused before any runs.
+    /// Runs `judges` concurrently: their outcomes in judge order.
     #[host(await)]
     async fn evaluate(
         &self,
         judges: Vec<JudgeSpec>,
-        chat_ctx: Vec<ChatItem>,
-        reference: Option<Vec<ChatItem>>,
         #[host(context)] context: crate::invoke::CallContext,
         cx: crate::telemetry::Cx,
-    ) -> Result<Vec<JudgeOutcome>, Invalid>;
+    ) -> Vec<JudgeOutcome>;
 
     /// Whether `message` fulfills `intent`. A provider failure raises the provider's error.
     #[host(await)]

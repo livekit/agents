@@ -52,51 +52,13 @@ type InferenceVadNewActivationThresholdInput = f64;
 fn _extract_inference_vad_new_deactivation_threshold(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<InferenceVadNewDeactivationThresholdInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "deactivation_threshold")
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<f64>(obj.as_any(), "deactivation_threshold")).map(Some)
+    }
 }
-type InferenceVadNewDeactivationThresholdInput = f64;
-
-fn _extract_inference_vad_update_options_min_speech_duration(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<InferenceVadUpdateOptionsMinSpeechDurationInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "min_speech_duration")
-}
-type InferenceVadUpdateOptionsMinSpeechDurationInput = f64;
-
-fn _extract_inference_vad_update_options_min_silence_duration(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<InferenceVadUpdateOptionsMinSilenceDurationInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "min_silence_duration")
-}
-type InferenceVadUpdateOptionsMinSilenceDurationInput = f64;
-
-fn _extract_inference_vad_update_options_prefix_padding_duration(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<InferenceVadUpdateOptionsPrefixPaddingDurationInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "prefix_padding_duration")
-}
-type InferenceVadUpdateOptionsPrefixPaddingDurationInput = f64;
-
-fn _extract_inference_vad_update_options_max_buffered_speech(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<InferenceVadUpdateOptionsMaxBufferedSpeechInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "max_buffered_speech")
-}
-type InferenceVadUpdateOptionsMaxBufferedSpeechInput = f64;
-
-fn _extract_inference_vad_update_options_activation_threshold(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<InferenceVadUpdateOptionsActivationThresholdInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "activation_threshold")
-}
-type InferenceVadUpdateOptionsActivationThresholdInput = f64;
-
-fn _extract_inference_vad_update_options_deactivation_threshold(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<InferenceVadUpdateOptionsDeactivationThresholdInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "deactivation_threshold")
-}
-type InferenceVadUpdateOptionsDeactivationThresholdInput = f64;
+type InferenceVadNewDeactivationThresholdInput = ::std::option::Option<f64>;
 
 /// The Silero VAD behind `inference.VAD`.
 #[pyclass(frozen, name = "InferenceVad", module = "livekit.agents._core")]
@@ -104,8 +66,9 @@ pub struct InferenceVad(pub(crate) ::std::sync::Arc<InferenceVadImpl>);
 
 #[pymethods]
 impl InferenceVad {
+    /// `deactivation_threshold` is `max(activation_threshold - 0.15, 0.01)` when `None`.
     #[new]
-    #[pyo3(signature = (model_factory, *, min_speech_duration, min_silence_duration, prefix_padding_duration, max_buffered_speech, activation_threshold, deactivation_threshold))]
+    #[pyo3(signature = (model_factory, *, min_speech_duration = 0.05, min_silence_duration = 0.25, prefix_padding_duration = 0.5, max_buffered_speech = 60.0, activation_threshold = 0.5, deactivation_threshold = None))]
     fn new(
         py: Python<'_>,
         model_factory: Bound<'_, PyAny>,
@@ -139,25 +102,37 @@ impl InferenceVad {
         ::pyo3::PyResult::Ok(InferenceVad(::std::sync::Arc::new(out)))
     }
 
-    /// Every option, applied by each running stream before its next frame.
-    #[pyo3(signature = (*, min_speech_duration, min_silence_duration, prefix_padding_duration, max_buffered_speech, activation_threshold, deactivation_threshold))]
+    /// The given options, applied by each running stream before its next frame.
+    #[pyo3(signature = (*, min_speech_duration = crate::py_values::Omittable::NOT_GIVEN, min_silence_duration = crate::py_values::Omittable::NOT_GIVEN, prefix_padding_duration = crate::py_values::Omittable::NOT_GIVEN, max_buffered_speech = crate::py_values::Omittable::NOT_GIVEN, activation_threshold = crate::py_values::Omittable::NOT_GIVEN, deactivation_threshold = crate::py_values::Omittable::NOT_GIVEN))]
     fn update_options(
         &self,
         py: Python<'_>,
-        #[pyo3(from_py_with = _extract_inference_vad_update_options_min_speech_duration)]
-        min_speech_duration: InferenceVadUpdateOptionsMinSpeechDurationInput,
-        #[pyo3(from_py_with = _extract_inference_vad_update_options_min_silence_duration)]
-        min_silence_duration: InferenceVadUpdateOptionsMinSilenceDurationInput,
-        #[pyo3(from_py_with = _extract_inference_vad_update_options_prefix_padding_duration)]
-        prefix_padding_duration: InferenceVadUpdateOptionsPrefixPaddingDurationInput,
-        #[pyo3(from_py_with = _extract_inference_vad_update_options_max_buffered_speech)]
-        max_buffered_speech: InferenceVadUpdateOptionsMaxBufferedSpeechInput,
-        #[pyo3(from_py_with = _extract_inference_vad_update_options_activation_threshold)]
-        activation_threshold: InferenceVadUpdateOptionsActivationThresholdInput,
-        #[pyo3(from_py_with = _extract_inference_vad_update_options_deactivation_threshold)]
-        deactivation_threshold: InferenceVadUpdateOptionsDeactivationThresholdInput,
+        min_speech_duration: crate::py_values::Omittable<'_>,
+        min_silence_duration: crate::py_values::Omittable<'_>,
+        prefix_padding_duration: crate::py_values::Omittable<'_>,
+        max_buffered_speech: crate::py_values::Omittable<'_>,
+        activation_threshold: crate::py_values::Omittable<'_>,
+        deactivation_threshold: crate::py_values::Omittable<'_>,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let min_speech_duration = min_speech_duration.map(|value| {
+            crate::py_values::number_from_py::<f64>(value.as_any(), "min_speech_duration")
+        })?;
+        let min_silence_duration = min_silence_duration.map(|value| {
+            crate::py_values::number_from_py::<f64>(value.as_any(), "min_silence_duration")
+        })?;
+        let prefix_padding_duration = prefix_padding_duration.map(|value| {
+            crate::py_values::number_from_py::<f64>(value.as_any(), "prefix_padding_duration")
+        })?;
+        let max_buffered_speech = max_buffered_speech.map(|value| {
+            crate::py_values::number_from_py::<f64>(value.as_any(), "max_buffered_speech")
+        })?;
+        let activation_threshold = activation_threshold.map(|value| {
+            crate::py_values::number_from_py::<f64>(value.as_any(), "activation_threshold")
+        })?;
+        let deactivation_threshold = deactivation_threshold.map(|value| {
+            crate::py_values::number_from_py::<f64>(value.as_any(), "deactivation_threshold")
+        })?;
         py.detach(|| {
             <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::update_options(
                 &self.0,
@@ -170,6 +145,13 @@ impl InferenceVad {
             )
         });
         Ok(())
+    }
+
+    #[getter]
+    fn min_silence_duration(&self, py: Python<'_>) -> PyResult<f64> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::min_silence_duration(&self.0));
+        ::pyo3::PyResult::Ok(out)
     }
 
     /// One detection; each event carries the audio it refers to.

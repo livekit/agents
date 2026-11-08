@@ -22,6 +22,8 @@ from .duplex import DuplexCapabilities, DuplexInputItem
 from .llm import ChatChunk, SerializedImage
 from .llm_fallback import RealtimeFallbackMember
 from .mcp import MCPToolOptions, ResolvedToolOptions
+from .metrics import RealtimeModelMetrics
+from .provider_data import TOOL_BEHAVIOR, ProviderFormat, ToolSchema
 from .realtime import RealtimeCapabilities
 from .realtime_options import OpenAIRealtimeConfig, RealtimeOptions
 from .rtc_frames import AudioFrame
@@ -341,11 +343,11 @@ class McpSession:
 class _core_McpToolsetLifecycle:
     """An `MCPToolset`'s lifecycle (docs/tools.md "MCP servers"): one listing at a time; an
     unreachable server leaves the toolset without tools and is listed again in the background at
-    the session's backoff until it answers; the connection closes `idle_close` seconds after the
+    the session's backoff until it answers; the connection closes [`MCP_IDLE_CLOSE_SECONDS`] after the
     last run released the toolset unless a run sets it up again first. `host` is the toolset,
     held only while a recovery or an idle close is pending.
     """
-    def __new__(cls, server: str, idle_close: float, session: McpSession) -> Self:
+    def __new__(cls, server: str, session: McpSession) -> Self:
         """`server` names the server in logs; `session` owns the reconnect backoff."""
     async def setup(self, host: MCPToolset) -> None:
         """Disarm a pending idle close, then list the tools unless they are listed or a recovery
@@ -369,7 +371,7 @@ def mcp_raw_schema(
 def mcp_render_result(tool_name: str, result: object) -> str: ...
 
 async def to_provider_format(
-    format: str,
+    format: ProviderFormat,
     items: Sequence[ChatItem],
     *,
     images: Mapping[str, SerializedImage] | None = None,
@@ -386,10 +388,10 @@ def convert_mid_conversation_instructions(
 ) -> list[tuple[int, ChatItem | None]]: ...
 
 def to_fnc_ctx(
-    format: str,
-    tools: Sequence[object],
+    format: ProviderFormat,
+    tools: Sequence[ToolSchema],
     *,
-    tool_behavior: str | None = None,
+    tool_behavior: TOOL_BEHAVIOR | None = None,
     use_parameters_json_schema: bool = False,
 ) -> list[object]: ...
 
@@ -420,6 +422,15 @@ def to_openai_response_format(name: str, schema: object) -> dict[str, object]: .
 def parse_function_arguments(raw: str) -> dict[str, object]: ...
 
 def inject_confirm_duplicate(parameters: object) -> dict[str, object]: ...
+
+def _core_realtime_connection_metrics(
+    model: str,
+    provider: str,
+    acquire_time: float,
+) -> RealtimeModelMetrics:
+    """`_report_connection_acquired`: the connection's timing as a `RealtimeModelMetrics` with zero
+    usage, stamped now.
+    """
 
 class HostRealtimeModel:
     """A plugin's realtime model as the core's own: its session opens when the driver first asks and

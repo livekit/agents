@@ -48,7 +48,12 @@ impl std::ops::BitOr for ToolFlag {
 // No `///`: it would become a docstring on the host's `DuplicateMode = Literal[...]`, which has
 // none. Variant order is the `Literal`'s member order, a public surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[crate::host(record(module = "tool_context", emit, extract))]
+#[crate::host(record(
+    module = "tool_context",
+    path = "livekit.agents.llm.tool_context",
+    emit,
+    extract
+))]
 #[crate::host(wire_strs(msg = format!("unknown on_duplicate mode {s:?}")))]
 pub enum DuplicateMode {
     #[default]
@@ -89,7 +94,12 @@ pub enum DuplicateMode {
 // fences exist only for `cargo test --doc`, which the codegen never reads.
 #[allow(rustdoc::invalid_rust_codeblocks)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[crate::host(record(module = "tool_context", emit, extract))]
+#[crate::host(record(
+    module = "tool_context",
+    path = "livekit.agents.llm.tool_context",
+    emit,
+    extract
+))]
 #[crate::host(wire_strs(msg = format!("unknown duplicate_scope {s:?}")))]
 pub enum DuplicateScope {
     /// Any in-flight call of the same tool.
@@ -127,10 +137,18 @@ pub struct RawFunctionDescription {
 
 pub type DuplicateKey = (String, Option<String>);
 
-pub const CONFIRM_DUPLICATE_PARAM: &str = "lk_agents_confirm_duplicate";
-
 #[crate::host(file(module = "tool_context"))]
 const _: () = ();
+
+/// The schema parameter `@function_tool(on_duplicate="confirm")` adds, which the model sets to
+/// re-assert a call.
+#[crate::host(constant)]
+pub const CONFIRM_DUPLICATE_PARAM: &str = "lk_agents_confirm_duplicate";
+
+/// The interim return of a tool's `RunContext.update(message)` when no `update_template`
+/// overrides it.
+#[crate::host(constant)]
+pub const UPDATE_TEMPLATE: &str = "The tool `{function_name}` has updated, message: {message}\nThe task is still running, so DON'T make up or give information not included in the message above.";
 
 /// The description the model reads for that parameter. A prompt, so rewording it changes
 /// behaviour: it must say the user asked for the repeat.

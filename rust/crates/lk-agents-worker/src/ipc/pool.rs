@@ -17,7 +17,7 @@ use tokio::time::Instant;
 use crate::ipc::telemetry;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::ipc_host::ProcessEvent;
-use lk_agents_abi::worker::types::RunningJobInfo;
+use lk_agents_abi::worker::job::RunningJobInfo;
 
 use super::process_pool::Executor;
 

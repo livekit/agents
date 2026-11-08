@@ -113,7 +113,7 @@ pub struct DtmfTaskOptions {
     pub num_digits: usize,
     pub ask_for_confirmation: bool,
     pub timeout: f64,
-    pub stop_event: String,
+    pub stop_event: crate::voice::workflows::dtmf::DtmfEvent,
 }
 
 /// Why `VoiceTask.run()` returned no value. A task ended under its awaiter cancels the await, as
@@ -534,7 +534,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         num_digits: usize,
         ask_for_confirmation: bool,
         timeout: f64,
-        stop_event: String,
+        stop_event: crate::voice::workflows::dtmf::DtmfEvent,
     ) -> Result<BoxFuture<'static, Result<String, VoiceTaskEnded>>, CommandRefused>;
 
     /// An `AvatarSession`'s own measurements (its join and playback latency), recorded with the

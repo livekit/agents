@@ -12,10 +12,9 @@ from typing import Any
 import pytest
 
 from livekit.agents import JobContext, _core
-from livekit.agents._generated.worker_server import AcceptArguments, JobInfo, RunningJobInfo
 from livekit.agents.ipc import JobRunnerOptions
 from livekit.agents.ipc.child import JobArgs, _JobProc
-from livekit.agents.job import JobExecutorType
+from livekit.agents.job import JobAcceptArguments, JobExecutorType, RunningJobInfo
 from livekit.protocol import agent, models
 
 pytestmark = pytest.mark.unit
@@ -101,20 +100,8 @@ async def _run_job() -> None:
         # complete on the real IPC connection and Python loop.
         job = agent.Job(id="AJ_logging", room=models.Room(name="logging"))
         info = RunningJobInfo(
-            accept_arguments=AcceptArguments(name="", identity="agent", metadata="", attributes=[]),
-            job=JobInfo(
-                id=job.id,
-                dispatch_id="",
-                type=0,
-                room="logging",
-                room_sid=None,
-                agent_name="",
-                metadata="",
-                deployment="",
-                enable_recording=False,
-                enable_redaction=False,
-                proto=job.SerializeToString(),
-            ),
+            accept_arguments=JobAcceptArguments(name="", identity="agent", metadata=""),
+            job=job,
             url="",
             token="",
             worker_id="worker",

@@ -74,12 +74,17 @@ pub trait ApiErrorFunctions {
     /// when the message adds detail, else just the reason.
     #[host(function, name = "http_error_display")]
     fn http_error_message(message: &str, status: i64, reason: Option<String>) -> String;
+
+    /// `APIStatusError`'s `retryable`: a non-transient 4xx status, 499 among them, never is.
+    #[host(function)]
+    fn retryable_for_status(status_code: i64, retryable: Option<bool>) -> bool;
 }
 
 /// The wait an `APITimeoutError` bounded, as `APIConnectOptions` names its limits. Absent when the
 /// failing layer does not say (a foreign SDK timeout), never guessed. Its wire string is the
 /// Python value of `APITimeoutError.phase`.
-#[crate::host(wire_enum)]
+#[crate::host(record(module = "types", emit))]
+#[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TimeoutPhase {
     Pool,

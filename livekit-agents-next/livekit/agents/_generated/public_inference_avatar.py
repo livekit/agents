@@ -5,6 +5,6 @@ from __future__ import annotations
 
 from .avatar_options import LemonSliceOptions as LemonSliceOptions
 
-__all__ = [
+__all__: list[str] = [
     "LemonSliceOptions",
 ]

@@ -15,13 +15,12 @@ pub(crate) use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::telemetry::spans::job::{
     EntrypointStarted, JobAccepted, JobAssigned, JobReceived, JobStartedOnServer, ProcessAssigned,
 };
-use lk_agents_abi::worker::job::{Simulation, StartJobFields};
+use lk_agents_abi::worker::job::{Simulation, StartJob};
 pub(crate) use lk_agents_net::export::exporter;
 pub(crate) use lk_agents_net::export::otlp::CloudEndpoint;
 use lk_agents_net::export::otlp::SessionIdentity;
 pub(crate) use lk_agents_telemetry::Tracer;
 pub(crate) use lk_agents_telemetry::process;
-use prost::Message as _;
 
 pub(crate) use lk_agents_abi::telemetry::decl::SpanDecl;
 pub(crate) use lk_agents_abi::telemetry::policy::{
@@ -92,9 +91,9 @@ fn dispatched_thread(job: &livekit_protocol::Job) -> Option<String> {
 pub(crate) fn start_job(
     tracer: &Tracer,
     cloud: Option<&CloudEndpoint>,
-    fields: &StartJobFields,
+    start: &StartJob,
 ) -> JobTrace {
-    let job = livekit_protocol::Job::decode(fields.job.as_slice()).unwrap_or_default();
+    let job = &start.info.job;
     let room = job.room.clone().unwrap_or_default();
     let key = JobKey(job.id.clone());
     if let Some(exporter) = exporter() {
@@ -111,19 +110,19 @@ pub(crate) fn start_job(
             },
         );
     }
-    let parent = fields.traceparent.as_deref().and_then(SpanContext::parse_traceparent);
+    let parent = start.traceparent.as_deref().and_then(SpanContext::parse_traceparent);
     let cx = tracer
         .root()
         .continuing(parent)
         .with_job(Some(key.clone()))
         // `gen_ai.conversation.id`: the dispatched thread, else the room session.
         .with_conversation(
-            dispatched_thread(&job)
+            dispatched_thread(job)
                 .as_deref()
                 .or(Some(room.sid.as_str()).filter(|sid| !sid.is_empty())),
         );
     let started = tracer.now_nanos() as f64 / 1e9;
-    let f = fields;
+    let f = &start.info;
     let decl = JobEntrypoint {
         dispatch_id: known(&job.dispatch_id),
         worker_id: known(&f.worker_id),

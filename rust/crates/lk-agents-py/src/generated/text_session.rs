@@ -219,3 +219,26 @@ pub fn _core_restore_text_session_state<'py>(
         .map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("TextSessionState: {e}")))?;
     crate::generated::records::text_session::text_session_state_to_py(py, record)
 }
+
+impl crate::py_errors::HostException for ::lk_agents_abi::text_session::RoutingError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        crate::py_errors::host_exception(
+            "livekit.agents.text_session",
+            "TextSessionRoutingError",
+            ::std::string::ToString::to_string(self),
+        )
+    }
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::text_session::TextSessionError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::Routing(inner) => crate::py_errors::HostException::to_py_err(inner),
+            Self::Run(inner) => crate::py_errors::HostException::to_py_err(inner),
+            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
+                self,
+            )),
+        }
+    }
+}

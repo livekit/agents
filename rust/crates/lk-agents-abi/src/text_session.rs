@@ -68,7 +68,13 @@ pub struct SessionFrame {
     pub merge_chat_history: bool,
 }
 
-#[crate::host(record(module = "text_session", emit, extract, persisted))]
+#[crate::host(record(
+    module = "text_session",
+    path = "livekit.agents.text_session",
+    emit,
+    extract,
+    persisted
+))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextSessionState {
@@ -99,23 +105,25 @@ pub struct LocalAgentTool {
     pub context_scope: Option<String>,
 }
 
-#[crate::host(record(module = "text_session", emit))]
+#[crate::host(exceptions(
+    module = "text_session_errors",
+    path = "livekit.agents.text_session",
+    classes(TextSessionRoutingError(
+        base = "ValueError",
+        doc = "The supplied state or an agent-tool route cannot be used."
+    ))
+))]
+const _: () = ();
+
+#[crate::host(error(kind = "livekit.agents.text_session.TextSessionRoutingError"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoutingError {
-    #[host(field = "error")]
     Agent(crate::agent::AgentError),
-    MaxDepth {
-        max_depth: usize,
-    },
-    #[host(field = "message")]
+    MaxDepth { max_depth: usize },
     UnknownAgent(String),
-    #[host(field = "message")]
     UnknownScope(String),
-    #[host(field = "message")]
     UnknownTool(String),
-    #[host(field = "message")]
     MissingOutputType(String),
-    #[host(field = "message")]
     InvalidState(String),
     MissingAcceptedOutput,
 }
@@ -159,12 +167,12 @@ pub struct TextSessionTurn {
     pub state: TextSessionState,
 }
 
-#[crate::host(record(module = "text_session", emit))]
+#[crate::host(error(kind = "RuntimeError"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextSessionError {
-    #[host(field = "error")]
+    #[host(delegate)]
     Routing(RoutingError),
-    #[host(field = "error")]
+    #[host(delegate)]
     Run(RunError),
 }
 

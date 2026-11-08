@@ -762,6 +762,38 @@ pub fn tool_search_loaded(
     ::pyo3::PyResult::Ok(out)
 }
 
+/// `ToolSearchToolset`'s `tool_search` raw schema.
+#[pyfunction]
+#[pyo3(signature = (search_description, query_description))]
+pub fn tool_search_schema<'py>(
+    py: Python<'py>,
+    search_description: ::std::string::String,
+    query_description: ::std::string::String,
+) -> PyResult<Bound<'py, PyAny>> {
+    let out = py.detach(|| {
+        <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_search_schema(
+            search_description,
+            query_description,
+        )
+    });
+    crate::generated::records::tool_context::raw_function_description_to_py(py, out)
+}
+
+/// `ToolProxyToolset`'s `call_tool` raw schema.
+#[pyfunction]
+#[pyo3(signature = (description))]
+pub fn call_tool_schema<'py>(
+    py: Python<'py>,
+    description: ::std::string::String,
+) -> PyResult<Bound<'py, PyAny>> {
+    let out = py.detach(|| {
+        <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::call_tool_schema(
+            description,
+        )
+    });
+    crate::generated::records::tool_context::raw_function_description_to_py(py, out)
+}
+
 #[pyfunction]
 #[pyo3(signature = (arguments, known))]
 pub fn tool_proxy_arguments<'py>(

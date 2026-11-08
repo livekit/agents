@@ -9,7 +9,7 @@ from .toolset_events import (
     ToolCompletedEvent as ToolCompletedEvent,
 )
 
-__all__ = [
+__all__: list[str] = [
     "ToolCalledEvent",
     "ToolCompletedEvent",
     "SearchItem",

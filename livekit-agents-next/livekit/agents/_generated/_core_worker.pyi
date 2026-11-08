@@ -15,10 +15,11 @@ from livekit.agents.ipc.child import _JobProc
 from livekit.agents.worker import _ServerCallbacks
 
 from .._core import _core_A2ADoor
+from .job_records import RunningJobInfo
 from .worker_endpoint import ExchangeEvent, ExchangeMessage, RequestHead
-from .worker_ipc import JobRunnerOptions, JobStatus, StartJobFields
+from .worker_ipc import JobRunnerOptions, JobStatus, StartJob
 from .worker_options import ServerOptions
-from .worker_server import EndpointRoute, RunningJobInfo
+from .worker_server import EndpointRoute
 
 def room_join_token(
     api_key: str,
@@ -189,12 +190,11 @@ class JobRun:
         url: str = "",
         session_end: str | None = None,
         session_aclose_timeout: float = 60.0,
-        observability_url: str | None = None,
         api_key: str = "",
         api_secret: str = "",
     ) -> Self:
-        """`session_end` names the door's `on_session_end`, when it has one. `observability_url`
-        overrides where the job's telemetry and recording go (`LIVEKIT_OBSERVABILITY_URL`);
+        """`session_end` names the door's `on_session_end`, when it has one. The job's telemetry and
+        recording go to `LIVEKIT_OBSERVABILITY_URL` when set, else to `url`'s Cloud project;
         `api_key` and `api_secret` sign its Cloud telemetry.
         """
     def add_shutdown_callback(
@@ -207,7 +207,7 @@ class JobRun:
         """`callback(reason)` when it takes the reason, else `callback()`, as the job shuts down; a
         framework callback runs in the shutdown's span, any other in its own span named `name`.
         """
-    def start_trace(self, fields: StartJobFields) -> None:
+    def start_trace(self, job: StartJob) -> None:
         """Opens the job's root span for the job the parent handed over, before its run starts."""
     def shutdown(self, reason: str) -> None:
         """The application ends the job."""
@@ -260,6 +260,11 @@ class ServerConfig:
     def agent_name(self) -> str: ...
     @property
     def deployment(self) -> str: ...
+    @property
+    def card_version(self) -> str:
+        """An A2A card's default version: the deployment the worker registered under, else
+        `LIVEKIT_AGENT_VERSION` for a local worker, else `"1.0.0"`.
+        """
     @property
     def cloud(self) -> bool:
         """Hosted on Cloud (`LIVEKIT_WORKER_TOKEN` set)."""

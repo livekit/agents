@@ -20,7 +20,8 @@ from typing import Literal
 from collections.abc import AsyncIterable
 from .rtc_frames import AudioFrame
 from .usage import Usage
-from livekit.agents.voice.io import TurnDetectionMode
+from .session_options import TurnDetectionMode
+from livekit.agents.voice.io import _StreamingTurnDetector
 from .turn import EndpointingOptions
 from .turn import InterruptionOptions
 from ..stt import STT
@@ -28,7 +29,7 @@ from ..voice._session_bindings import _stt_model
 from ..tts import TTS
 from ..voice._session_bindings import _tts_model
 from .vad import VAD
-from ..voice._session_bindings import TextTransforms
+from .session_options import TextTransforms
 from .expressive import ExpressiveOptions
 
 
@@ -150,7 +151,7 @@ class SessionCommands:
         stt: NotGivenOr[STT | str | None] = NOT_GIVEN,
         tts: NotGivenOr[TTS | str | None] = NOT_GIVEN,
         vad: NotGivenOr[VAD | None] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | _StreamingTurnDetector | None] = NOT_GIVEN,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         interruption: NotGivenOr[InterruptionOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,

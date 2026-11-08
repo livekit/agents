@@ -30,7 +30,7 @@ from .stt_provider_options import (
     XaiOptions as XaiOptions,
 )
 
-__all__ = [
+__all__: list[str] = [
     "DeepgramModels",
     "DeepgramFluxModels",
     "CartesiaModels",

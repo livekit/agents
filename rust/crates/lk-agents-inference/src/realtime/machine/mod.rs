@@ -215,23 +215,13 @@ impl RealtimeMachine {
         }
     }
 
-    /// `_report_connection_acquired`: the connection's timing as a `RealtimeModelMetrics` with zero
-    /// usage.
+    /// `_report_connection_acquired`: the connection's timing.
     pub fn connection_metrics(&self, now: Ts, acquire_time: Duration) -> Event {
-        let metrics = lk_agents_abi::metrics::base::RealtimeModelMetrics {
-            label: String::new(),
-            request_id: String::new(),
-            timestamp: self.wall_secs(now),
-            duration: 0.0,
-            connection_duration: None,
-            ttft: None,
-            cancelled: false,
-            tokens: TokenUsage::default(),
-            tokens_per_second: 0.0,
-            acquire_time: Some(acquire_time.as_secs_f64()),
-            connection_reused: false,
-            metadata: Some(self.metadata(&self.opts.model)),
-        };
+        let metrics = connection_acquired(
+            self.wall_secs(now),
+            acquire_time.as_secs_f64(),
+            self.metadata(&self.opts.model),
+        );
         Event::Metrics(lk_agents_abi::llm::realtime::RealtimeMetrics {
             metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::RealtimeModel(metrics)),
         })
@@ -1076,5 +1066,47 @@ impl EventIds {
         let next = self.next.get() + 1;
         self.next.set(next);
         format!("{kind}{}{next}", self.prefix)
+    }
+}
+
+/// A connection's timing as a `RealtimeModelMetrics` with zero usage.
+fn connection_acquired(
+    timestamp: f64,
+    acquire_time: f64,
+    metadata: lk_agents_abi::metrics::base::Metadata,
+) -> lk_agents_abi::metrics::base::RealtimeModelMetrics {
+    lk_agents_abi::metrics::base::RealtimeModelMetrics {
+        label: String::new(),
+        request_id: String::new(),
+        timestamp,
+        duration: 0.0,
+        connection_duration: None,
+        ttft: None,
+        cancelled: false,
+        tokens: TokenUsage::default(),
+        tokens_per_second: 0.0,
+        acquire_time: Some(acquire_time),
+        connection_reused: false,
+        metadata: Some(metadata),
+    }
+}
+
+/// The reports a plugin's own realtime or duplex session emits.
+pub struct Reports;
+
+impl lk_agents_abi::llm::realtime::RealtimeReports for Reports {
+    fn connection_metrics(
+        model: String,
+        provider: String,
+        acquire_time: f64,
+    ) -> lk_agents_abi::metrics::base::RealtimeModelMetrics {
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64());
+        let metadata = lk_agents_abi::metrics::base::Metadata {
+            model_name: Some(model),
+            model_provider: Some(provider),
+        };
+        connection_acquired(timestamp, acquire_time, metadata)
     }
 }

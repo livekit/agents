@@ -27,12 +27,10 @@ from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
 
 from livekit import rtc
-from livekit.protocol import agent
 
 from .. import _core, telemetry
-from .._generated.worker_ipc import StartJobFields
+from .._generated.worker_ipc import StartJob
 from ..job import (
-    JobAcceptArguments,
     JobContext,
     JobExecutorType,
     JobProcess,
@@ -136,25 +134,10 @@ class _JobProc:
 
     # --- the parent's messages, as the core's IpcClient serves them -------------------------
 
-    async def _core_start_job(self, fields: StartJobFields) -> _core.JobRun:
-        run = self._start_job(
-            RunningJobInfo(
-                accept_arguments=JobAcceptArguments(
-                    name=fields.name, identity=fields.identity, metadata=fields.metadata
-                ),
-                job=agent.Job.FromString(bytes(fields.job)),
-                url=fields.url,
-                token=fields.token,
-                worker_id=fields.worker_id,
-                fake_job=fields.fake_job,
-                received_at=fields.received_at,
-                accepted_at=fields.accepted_at,
-                assigned_at=fields.assigned_at,
-                launched_at=fields.launched_at,
-            )
-        )
+    async def _core_start_job(self, job: StartJob) -> _core.JobRun:
+        run = self._start_job(job.info)
         # the job's root span, before its task can run
-        run.start_trace(fields)
+        run.start_trace(job)
         self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
         self._job_task.add_done_callback(lambda _: self._client.stop())
         return run
@@ -184,7 +167,6 @@ class _JobProc:
             session_end=callable_name(self._args.session_end_fnc)
             if self._args.session_end_fnc
             else None,
-            observability_url=os.environ.get("LIVEKIT_OBSERVABILITY_URL"),
             api_key=self._server_env.get("LIVEKIT_API_KEY") or "",
             api_secret=self._server_env.get("LIVEKIT_API_SECRET") or "",
         )

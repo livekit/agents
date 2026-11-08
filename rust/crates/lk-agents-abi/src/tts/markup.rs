@@ -224,13 +224,16 @@ pub trait MarkupFunctions {
     fn chat_message_text_content(parts: Vec<String>, assistant: bool) -> Option<String>;
     #[host(function)]
     fn supported_nonverbals(provider: String) -> crate::MarkupInfo;
-    #[host(function)]
+    /// Strip every provider's expressive XML markup; brackets are prose and stay.
+    #[host(function, path = "livekit.agents.tts")]
     fn split_all_markup(text: String) -> (String, Vec<ExpressiveTag>);
-    #[host(function)]
+    #[host(function, path = "livekit.agents.tts")]
     fn strip_all_markup(text: String) -> String;
     #[host(function)]
     fn strip_expr_markup(text: String) -> String;
-    #[host(function)]
+    /// Strip only the `<expr/>` dialect, returning the clean text and its markers; the
+    /// provider-native tags stay in the words.
+    #[host(function, path = "livekit.agents.tts")]
     fn split_expr_markup(text: String) -> (String, Vec<ExpressiveTag>);
     #[host(function)]
     fn to_xml(

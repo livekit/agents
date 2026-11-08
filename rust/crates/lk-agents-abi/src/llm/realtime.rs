@@ -5,6 +5,34 @@ use crate::errors::{ApiError, HostError};
 use crate::{ApiConnectOptions, AudioFrame, Maybe, ToolChoice, ToolSpec, Ts};
 use crate::{ChatItem, FunctionCall};
 
+#[crate::host(file(module = "realtime_options"))]
+const _: () = ();
+
+/// The OpenAI Realtime protocol's audio rate, in and out.
+#[crate::host(constant(path = "livekit.agents.llm._realtime"))]
+pub const SAMPLE_RATE: u32 = 24_000;
+#[crate::host(constant(path = "livekit.agents.llm._realtime"))]
+pub const NUM_CHANNELS: u16 = 1;
+/// The OpenAI API's base URL, the realtime model's default.
+#[crate::host(constant(path = "livekit.agents.llm._realtime"))]
+pub const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+/// The OpenAI realtime model's default voice.
+#[crate::host(constant(path = "livekit.agents.llm._realtime"))]
+pub const DEFAULT_VOICE: &str = "marin";
+
+/// The reports a plugin's realtime or duplex session emits as `metrics_collected`.
+#[crate::host(functions)]
+pub trait RealtimeReports {
+    /// `_report_connection_acquired`: the connection's timing as a `RealtimeModelMetrics` with zero
+    /// usage, stamped now.
+    #[host(function, name = "_core_realtime_connection_metrics")]
+    fn connection_metrics(
+        model: String,
+        provider: String,
+        acquire_time: f64,
+    ) -> crate::metrics::RealtimeModelMetrics;
+}
+
 /// The realtime provider selected at configuration time, including gateway model prefixes.
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

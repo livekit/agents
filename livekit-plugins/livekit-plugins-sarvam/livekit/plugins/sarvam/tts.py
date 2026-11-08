@@ -1364,7 +1364,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         # APIStatusError derives retryability from the status code (4xx permanent
-        # except 408/429/499, 5xx transient), so forwarding Sarvam's own code is
+        # except 408/429, 5xx transient), so forwarding Sarvam's own code is
         # all that is needed -- an unrecognized frame stays retryable via -1.
         #
         # Nothing provider-written goes on the exception: its __str__ renders both

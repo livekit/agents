@@ -17,6 +17,7 @@ from livekit.agents._generated.session_events import (
     _TypeDiscriminator as _TypeDiscriminator,
 )
 
+from .._generated import public_voice_events as _public
 from .._generated.public_voice_events import *  # noqa: F403
 from .._generated.session_dispatch import AgentEvent as AgentEvent, EventTypes as EventTypes
 from .._generated.tool_report import ToolOutcomeUpdate, ToolReport
@@ -37,31 +38,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AgentEvent",
-    "AgentFalseInterruptionEvent",
-    "AgentState",
-    "AgentStateChangedEvent",
-    "CloseEvent",
-    "CloseReason",
-    "ConversationItemAddedEvent",
-    "ErrorEvent",
     "EventTypes",
-    "FunctionToolsExecutedEvent",
     "RunContext",
-    "SpeechCreatedEvent",
-    "ToolCallEnded",
-    "ToolCallStarted",
-    "ToolCallUpdated",
-    "ToolEndStatus",
-    "ToolExecutionUpdatedEvent",
-    "ToolReplyStatus",
-    "ToolReplyUpdated",
-    "UserInputTranscribedEvent",
-    "UserState",
-    "UserStateChangedEvent",
-    "UserTranscriptionTimeoutEvent",
-    "UserTurnExceededEvent",
-    "EotPredictionEvent",
 ]
+__all__ += _public.__all__
 
 _AGENT_EVENT: TypeAdapter[AgentEvent] = TypeAdapter(AgentEvent)
 
@@ -264,8 +244,9 @@ class RunContext(Generic[Context_T]):
         On a call, the first update releases control to the model with ``message`` as the
         tool's interim return; later ones are coalesced into a deferred reply by the core.
         """
+        from .._generated.tool_context import UPDATE_TEMPLATE
         from . import _BindingContextVar, _VoiceBinding
-        from .agent_run import UPDATE_TEMPLATE, _template_tools, render_template
+        from .agent_run import _template_tools, render_template
 
         raw = message
         fnc_call = self.function_call

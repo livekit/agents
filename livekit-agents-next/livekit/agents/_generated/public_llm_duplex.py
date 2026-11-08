@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from .._core import AdaptiveNoiseGate as AdaptiveNoiseGate, FixedGate as FixedGate
 from .duplex import (
     DuplexAudioFrame as DuplexAudioFrame,
     DuplexCapabilities as DuplexCapabilities,
@@ -11,10 +12,12 @@ from .duplex import (
     DuplexOutputTranscriptDelta as DuplexOutputTranscriptDelta,
 )
 
-__all__ = [
+__all__: list[str] = [
     "DuplexCapabilities",
     "DuplexAudioFrame",
     "DuplexOutputTranscriptDelta",
     "DuplexInputGap",
     "DuplexInputMute",
+    "FixedGate",
+    "AdaptiveNoiseGate",
 ]

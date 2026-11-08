@@ -20,7 +20,7 @@ from .chat_items import (
     MetricsReport as MetricsReport,
 )
 
-__all__ = [
+__all__: list[str] = [
     "ChatRole",
     "InferenceDetail",
     "ImageSource",

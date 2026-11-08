@@ -75,6 +75,7 @@ async fn cloud_task_views_preserve_waiting_state_and_label_presence_and_refuse_u
         Some("secret".into()),
         None,
         None,
+        None,
     )
     .unwrap();
     let tasks =

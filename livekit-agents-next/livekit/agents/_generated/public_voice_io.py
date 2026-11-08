@@ -18,7 +18,7 @@ from .turn import (
 )
 from .turn_events import TurnDetectionEvent as TurnDetectionEvent
 
-__all__ = [
+__all__: list[str] = [
     "TurnDetectionEvent",
     "PlaybackFinishedEvent",
     "PlaybackStartedEvent",

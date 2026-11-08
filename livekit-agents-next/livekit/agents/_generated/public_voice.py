@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from .agent_authoring import AgentRetries as AgentRetries, ModelSettings as ModelSettings
 
-__all__ = [
+__all__: list[str] = [
     "AgentRetries",
     "ModelSettings",
 ]

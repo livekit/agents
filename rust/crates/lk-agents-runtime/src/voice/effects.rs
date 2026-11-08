@@ -618,7 +618,10 @@ impl VoiceRuntime {
         let mut callback = PendingHostCallback::bind(&shared, hosted, cancelled);
         let work = async move {
             let hosted = callback.hosted.as_ref().expect("callback is pending");
-            let rendered = hosted.host.render_template(&cx, &hosted.invocation, template).await;
+            let rendered = hosted
+                .host
+                .render_template(&cx, &hosted.invocation, template.key(), template)
+                .await;
             let text = rendered.unwrap_or_else(|e| {
                 log::error!(target: lk_agents_abi::LOG_TARGET, "a tool_handling template failed: {e}");
                 None

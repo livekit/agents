@@ -388,7 +388,7 @@ fn _extract_fixed_gate_new_min_silence_duration(
 type FixedGateNewMinSilenceDurationInput = f64;
 
 /// Opens on output that stands out from a silence the plugin already knows.
-#[pyclass(frozen, name = "FixedGate", module = "livekit.agents._core")]
+#[pyclass(frozen, name = "FixedGate", module = "livekit.agents.llm.duplex")]
 pub struct FixedGate(pub(crate) ::std::sync::Arc<FixedGateImpl>);
 
 #[pymethods]
@@ -490,7 +490,7 @@ type AdaptiveNoiseGateNewWindowInput = f64;
 
 /// Opens on output that stands out from the model's own silence: the floor is the quietest
 /// `min_silence_duration` stretch it produced while not speaking, within `window`.
-#[pyclass(frozen, name = "AdaptiveNoiseGate", module = "livekit.agents._core")]
+#[pyclass(frozen, name = "AdaptiveNoiseGate", module = "livekit.agents.llm.duplex")]
 pub struct AdaptiveNoiseGate(pub(crate) ::std::sync::Arc<AdaptiveNoiseGateImpl>);
 
 #[pymethods]
@@ -1859,16 +1859,9 @@ impl McpSession {
 type CoreMcpToolsetLifecycleImpl =
     <crate::generated::implementations::Selected as super::Implementations>::McpToolsetLifecycle;
 
-fn _extract_mcp_toolset_lifecycle_new_idle_close(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<McpToolsetLifecycleNewIdleCloseInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "idle_close")
-}
-type McpToolsetLifecycleNewIdleCloseInput = f64;
-
 /// An `MCPToolset`'s lifecycle (docs/tools.md "MCP servers"): one listing at a time; an
 /// unreachable server leaves the toolset without tools and is listed again in the background at
-/// the session's backoff until it answers; the connection closes `idle_close` seconds after the
+/// the session's backoff until it answers; the connection closes [`MCP_IDLE_CLOSE_SECONDS`] after the
 /// last run released the toolset unless a run sets it up again first. `host` is the toolset,
 /// held only while a recovery or an idle close is pending.
 #[pyclass(frozen, name = "_core_McpToolsetLifecycle", module = "livekit.agents._core")]
@@ -1878,12 +1871,10 @@ pub struct CoreMcpToolsetLifecycle(pub(crate) ::std::sync::Arc<CoreMcpToolsetLif
 impl CoreMcpToolsetLifecycle {
     /// `server` names the server in logs; `session` owns the reconnect backoff.
     #[new]
-    #[pyo3(signature = (server, idle_close, session))]
+    #[pyo3(signature = (server, session))]
     fn new(
         py: Python<'_>,
         server: ::std::string::String,
-        #[pyo3(from_py_with = _extract_mcp_toolset_lifecycle_new_idle_close)]
-        idle_close: McpToolsetLifecycleNewIdleCloseInput,
         session: Bound<'_, PyAny>,
     ) -> PyResult<CoreMcpToolsetLifecycle> {
         crate::py_calls::check_pid()?;
@@ -1893,7 +1884,7 @@ impl CoreMcpToolsetLifecycle {
             .map_err(::pyo3::PyErr::from)?;
         let out = py.detach(|| {
             <CoreMcpToolsetLifecycleImpl as ::lk_agents_abi::llm::mcp::McpToolsetLifecycle>::new(
-                server, idle_close, session,
+                server, session,
             )
         });
         ::pyo3::PyResult::Ok(CoreMcpToolsetLifecycle(::std::sync::Arc::new(out)))
@@ -2060,7 +2051,7 @@ type LlmAlgorithmsPrepareProviderFormatThoughtSignaturesInput =
 #[pyo3(signature = (format, items, *, images = None, inject_dummy_user_message = true, inject_trailing_user_message = false, thought_signatures = None))]
 pub fn to_provider_format<'py>(
     py: Python<'py>,
-    format: ::std::string::String,
+    format: Bound<'_, PyAny>,
     items: Bound<'_, PyAny>,
     images: Option<Bound<'_, PyAny>>,
     inject_dummy_user_message: bool,
@@ -2070,6 +2061,8 @@ pub fn to_provider_format<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
     let env = crate::process::env();
+    let format =
+        crate::generated::records::provider_data::provider_format_from_py(format.as_any())?;
     let items = items.try_iter().and_then(|items| {
         items
             .map(|item| {
@@ -2174,21 +2167,26 @@ pub fn convert_mid_conversation_instructions<'py>(
 #[pyo3(signature = (format, tools, *, tool_behavior = None, use_parameters_json_schema = false))]
 pub fn to_fnc_ctx<'py>(
     py: Python<'py>,
-    format: ::std::string::String,
+    format: Bound<'_, PyAny>,
     tools: Bound<'_, PyAny>,
-    tool_behavior: ::std::option::Option<::std::string::String>,
+    tool_behavior: Option<Bound<'_, PyAny>>,
     use_parameters_json_schema: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
+    let format =
+        crate::generated::records::provider_data::provider_format_from_py(format.as_any())?;
     let tools = tools.try_iter().and_then(|items| {
         items
             .map(|item| {
                 let item = item?;
-                crate::py_values::value_from_py(item.as_any(), "tools")
+                crate::generated::records::provider_data::tool_schema_from_py(item.as_any())
             })
             .collect::<PyResult<Vec<_>>>()
     })?;
-    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::to_fnc_ctx(&format, tools, tool_behavior, use_parameters_json_schema)).map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
+    let tool_behavior = tool_behavior
+        .map(|v| crate::generated::records::provider_data::tool_behavior_from_py(v.as_any()))
+        .transpose()?;
+    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::to_fnc_ctx(format, tools, tool_behavior, use_parameters_json_schema)).map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
     ::pyo3::PyResult::Ok(
         ::pyo3::types::PyList::new(
             py,
@@ -2285,6 +2283,32 @@ pub fn inject_confirm_duplicate<'py>(
     let parameters = crate::py_values::value_from_py(parameters.as_any(), "parameters")?;
     let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::inject_confirm_duplicate(&parameters));
     ::pyo3::PyResult::Ok(crate::py_values::extra_to_py(py, &out)?.into_any())
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
+type RealtimeReportsImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::RealtimeReports;
+
+fn _extract_realtime_reports_connection_metrics_acquire_time(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<RealtimeReportsConnectionMetricsAcquireTimeInput> {
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "acquire_time")
+}
+type RealtimeReportsConnectionMetricsAcquireTimeInput = f64;
+
+/// `_report_connection_acquired`: the connection's timing as a `RealtimeModelMetrics` with zero
+/// usage, stamped now.
+#[pyfunction]
+#[pyo3(signature = (model, provider, acquire_time))]
+pub fn _core_realtime_connection_metrics<'py>(
+    py: Python<'py>,
+    model: ::std::string::String,
+    provider: ::std::string::String,
+    #[pyo3(from_py_with = _extract_realtime_reports_connection_metrics_acquire_time)] acquire_time: RealtimeReportsConnectionMetricsAcquireTimeInput,
+) -> PyResult<Bound<'py, PyAny>> {
+    crate::py_calls::check_pid()?;
+    let out = py.detach(|| <RealtimeReportsImpl as ::lk_agents_abi::llm::realtime::RealtimeReports>::connection_metrics(model, provider, acquire_time));
+    crate::generated::records::metrics::realtime_model_metrics_to_py(py, out)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.

@@ -5,20 +5,19 @@ from __future__ import annotations
 
 import functools
 import os
-import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from .. import _core
+from .._generated import public_storage as _public
 from .._generated.public_storage import *  # noqa: F403
 from .._generated.storage_class import (
     LocalStorageOptions,
     TaskRecord,
     TaskState,
 )
-from .._generated.storage_errors import StorageError
 from .._generated.thread_reads import ThreadReads
 from ..llm import ChatContext
 from ..log import logger
@@ -40,22 +39,21 @@ class Storage:
     """Where threads live: the abstract type ``AgentServer(storage=)`` and
     ``a2a_session(storage=)`` take. Construct ``AgentDBStorage`` or ``SQLiteStorage``."""
 
-    def __init__(self, args: dict[str, Any], holder: str | None) -> None:
+    def __init__(self, args: dict[str, Any]) -> None:
         if type(self) is Storage:
             raise TypeError("Storage is abstract: construct AgentDBStorage or SQLiteStorage")
         self._core = _core.Storage(**args)
-        # what a job process rebuilds the storage from (``__reduce__``)
+        # what a job process rebuilds the storage from (``__reduce__``); an omitted holder
+        # stays omitted, so a job process takes its own pid's default
         self._args = args
-        self._holder = holder
 
     @property
     def holder(self) -> str:
         """This process's lease holder id: the explicit one, else ``<hostname>-<pid>``."""
-        return self._holder or f"{socket.gethostname()}-{os.getpid()}"
+        return self._core.holder
 
     def __reduce__(self) -> tuple[functools.partial[Storage], tuple[()]]:
-        # a job process computes its own default holder: its pid is not the parent's
-        return functools.partial(_rebuild, type(self), self._args, self._holder), ()
+        return functools.partial(_rebuild, type(self), self._args), ()
 
     @property
     def threads(self) -> _core.Storage:
@@ -72,19 +70,10 @@ class Storage:
         await self._core.aclose()
 
 
-def _rebuild(cls: type[Storage], args: dict[str, Any], holder: str | None) -> Storage:
+def _rebuild(cls: type[Storage], args: dict[str, Any]) -> Storage:
     storage = cls.__new__(cls)
-    Storage.__init__(storage, args, holder)
+    Storage.__init__(storage, args)
     return storage
-
-
-def _seconds(value: timedelta | None, variable: str) -> float | None:
-    """``value`` in seconds, else the environment variable as float seconds, else ``None``."""
-    if value is not None:
-        return value.total_seconds()
-
-    raw = os.environ.get(variable)
-    return float(raw) if raw else None
 
 
 class _StorageHandle(Storage):
@@ -93,7 +82,6 @@ class _StorageHandle(Storage):
     def __init__(self, native: _core.Storage) -> None:
         self._core = native
         self._args = {}
-        self._holder = None
 
     def __reduce__(self) -> tuple[functools.partial[Storage], tuple[()]]:
         raise TypeError("borrowed storage handles cannot be copied")
@@ -124,23 +112,16 @@ class AgentDBStorage(Storage):
         renew_interval: timedelta | None = None,
         holder: str | None = None,
     ) -> None:
-        url = os.environ.get("LIVEKIT_URL")
-        api_key = api_key or os.environ.get("LIVEKIT_API_KEY")
-        api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET")
-        if not url or not api_key or not api_secret:
-            raise ValueError(
-                "AgentDBStorage needs the project's LIVEKIT_URL, LIVEKIT_API_KEY and "
-                "LIVEKIT_API_SECRET"
-            )
-
         args = {
-            "url": url,
-            "api_key": api_key,
-            "api_secret": api_secret,
-            "lease_ttl": _seconds(lease_ttl, "LIVEKIT_AGENTDB_LEASE_TTL"),
-            "renew_interval": _seconds(renew_interval, "LIVEKIT_AGENTDB_RENEW_INTERVAL"),
+            "api_key": api_key or None,
+            "api_secret": api_secret or None,
+            "lease_ttl": lease_ttl.total_seconds() if lease_ttl is not None else None,
+            "renew_interval": (
+                renew_interval.total_seconds() if renew_interval is not None else None
+            ),
+            "holder": holder,
         }
-        super().__init__(args, holder)
+        super().__init__(args)
 
 
 class SQLiteStorage(Storage):
@@ -173,8 +154,9 @@ class SQLiteStorage(Storage):
             "renew_interval": (
                 renew_interval.total_seconds() if renew_interval is not None else None
             ),
+            "holder": holder,
         }
-        super().__init__(args, holder)
+        super().__init__(args)
         self._args["local"] = LocalStorageOptions(
             directory=self._core.location, project_id=project_id
         )
@@ -253,14 +235,7 @@ __all__ = [
     "AgentDBStorage",
     "SQLiteStorage",
     "Storage",
-    "LeaseLost",
-    "NotSerializable",
-    "RunRejected",
-    "StorageUnavailable",
-    "ThreadNotFound",
-    "StorageError",
-    "TooLarge",
-    "VersionConflict",
     "Lane",
     "Thread",
 ]
+__all__ += _public.__all__

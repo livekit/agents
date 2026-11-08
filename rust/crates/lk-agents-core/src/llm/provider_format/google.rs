@@ -187,16 +187,10 @@ pub struct FunctionDeclaration {
 
 pub fn to_fnc_ctx(
     tools: &[ToolSchema],
-    tool_behavior: Option<&str>,
+    tool_behavior: Option<Behavior>,
     use_parameters_json_schema: bool,
 ) -> Result<Vec<FunctionDeclaration>, FormatError> {
-    let behavior = tool_behavior
-        .map(|behavior| {
-            behavior
-                .parse::<Behavior>()
-                .map_err(|detail| FormatError::MalformedToolSchema { detail })
-        })
-        .transpose()?;
+    let behavior = tool_behavior.filter(|behavior| *behavior != Behavior::Unspecified);
     let mut declarations = Vec::new();
     for tool in tools {
         if matches!(tool, ToolSchema::Strict(_) | ToolSchema::Provider(_)) {
@@ -566,7 +560,8 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_string(
-                &to_fnc_ctx(std::slice::from_ref(&raw), Some("NON_BLOCKING"), false).unwrap()
+                &to_fnc_ctx(std::slice::from_ref(&raw), Some(Behavior::NonBlocking), false)
+                    .unwrap()
             )
             .unwrap(),
             r#"[{"name":"t","description":"d","behavior":"NON_BLOCKING"}]"#
@@ -640,7 +635,7 @@ mod tests {
                 "additionalProperties": false,
             }}),
         };
-        let tools = to_fnc_ctx(&[raw], Some("NON_BLOCKING"), false).unwrap();
+        let tools = to_fnc_ctx(&[raw], Some(Behavior::NonBlocking), false).unwrap();
         let tools = serde_json::to_value(tools).unwrap();
         assert_eq!(
             tools[0],

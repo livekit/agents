@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import Literal
 
 from .. import _bindings
-from .._generated.llm import LLM, LLMStream
+from .._generated import public_llm as _public
 from .._generated.provider_hosts import FallbackLlmHost
 from .._generated.public_llm import *  # noqa: F403
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -78,8 +78,6 @@ from .tool_context import (
 )
 
 __all__ = [
-    "LLM",
-    "LLMStream",
     "ChatContext",
     "ChatRole",
     "ChatMessage",
@@ -91,10 +89,7 @@ __all__ = [
     "AgentConfigUpdate",
     "AgentHandoff",
     "ChatItem",
-    "ChoiceDelta",
-    "ChatChunk",
     "FallbackAdapter",
-    "AvailabilityChangedEvent",
     "RealtimeModelFallbackAdapter",
     "ToolChoice",
     "Tool",
@@ -119,7 +114,6 @@ __all__ = [
     "InputRequired",
     "Working",
     "utils",
-    "FunctionToolCall",
     "DuplexModel",
     "DuplexSession",
     "DuplexCapabilities",
@@ -132,7 +126,6 @@ __all__ = [
     "FixedGate",
     "RealtimeModel",
     "RealtimeError",
-    "RealtimeModelError",
     "RealtimeCapabilities",
     "RealtimeSession",
     "InputTranscriptionCompleted",
@@ -141,10 +134,9 @@ __all__ = [
     "GenerationCreatedEvent",
     "MessageGeneration",
     "RealtimeSessionReconnectedEvent",
-    "LLMError",
     "RemoteItemAddedEvent",
-    "CollectedResponse",
 ]
+__all__ += _public.__all__
 
 
 class FallbackAdapter(

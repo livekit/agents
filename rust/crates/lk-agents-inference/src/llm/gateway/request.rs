@@ -86,7 +86,7 @@ pub fn build_request(
         {
             headers.insert(name, value);
         }
-        headers.remove("X-LiveKit-Session-ID");
+        headers.remove(crate::headers::HEADER_SESSION_ID);
     }
     headers.insert("Authorization", format!("Bearer {bearer}"));
     let body = encode_body(&Value::Object(body), opts.body, &mut headers)?;

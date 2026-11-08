@@ -57,8 +57,27 @@ pub fn emit(decls: &Declarations, bases: &[crate::bases::Bases]) -> Result<Vec<O
             body.push_str("\n\n\n");
         }
         for constant in &constants {
+            let mut ty = String::new();
             let value = match &constant.value {
                 ConstValue::Literal(value) => value.clone(),
+                ConstValue::ProtoEnums { module, name, variants } => {
+                    let (package, alias) = module.rsplit_once('.').unwrap_or(("", module));
+                    imports.push_str(&if package.is_empty() {
+                        format!("import {alias}\n")
+                    } else {
+                        format!("from {package} import {alias}\n")
+                    });
+                    ty = format!("[list[{alias}.{name}.ValueType]]");
+                    let prefix = crate::decl::resolve::snake(name).to_uppercase();
+                    let values: String = variants
+                        .iter()
+                        .map(|v| {
+                            let v = crate::decl::resolve::snake(v).to_uppercase();
+                            format!("    {alias}.{name}.{prefix}_{v},\n")
+                        })
+                        .collect();
+                    format!("[\n{values}]")
+                }
                 ConstValue::Record { rust, fields } => {
                     let record =
                         decls.records.iter().find(|record| record.rust == *rust).ok_or_else(
@@ -94,7 +113,7 @@ pub fn emit(decls: &Declarations, bases: &[crate::bases::Bases]) -> Result<Vec<O
                     }
                 }
             };
-            body.push_str(&format!("{}: Final = {value}\n", constant.name));
+            body.push_str(&format!("{}: Final{ty} = {value}\n", constant.name));
             docstring(&mut body, &constant.doc, 0);
         }
         if let Some(base) = base {

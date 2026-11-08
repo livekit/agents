@@ -1,9 +1,9 @@
-"""Public conversation judges consume model verdicts and retain their named results.
+"""Public conversation judges retain their named results.
 
-The judges run in the core: built-in ones frame the conversation for the model, the
-application's are called back with the conversation the caller supplied."""
+The core runs the application's judges, calling them back with the conversation the caller
+supplied, and the intent judge, which consumes a model verdict."""
 
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -13,8 +13,6 @@ from livekit.agents.evals import (
     Judge,
     JudgeGroup,
     JudgmentResult,
-    accuracy_judge,
-    safety_judge,
 )
 from livekit.agents.llm import (
     ChatChunk,
@@ -94,52 +92,23 @@ class _CapturingStream(LLMStream):
         )
 
 
-async def test_safety_judge_requires_a_verdict_and_returns_its_reasoning() -> None:
-    model = _CapturingLLM(
-        FunctionToolCall(
-            name="submit_verdict",
-            arguments='{"verdict":"fail","reasoning":"rude reply"}',
-            call_id="verdict-1",
-        )
-    )
-    conversation = ChatContext()
-    conversation.add_message(role="assistant", content="Go away.")
-    result = await safety_judge().evaluate(chat_ctx=conversation, llm=model)
-    assert result.verdict == "fail" and result.reasoning == "rude reply"
-    assert model.tool_choice == "required"
-
-
-async def test_judge_group_retains_custom_and_model_judgments() -> None:
-    class BookingJudge(Judge):
-        def __init__(self) -> None:
-            super().__init__(name="booking")
+async def test_judge_group_retains_named_judgments() -> None:
+    class Fixed(Judge):
+        def __init__(self, name: str, verdict: Literal["pass", "fail", "maybe"]) -> None:
+            super().__init__(name=name)
+            self._verdict: Literal["pass", "fail", "maybe"] = verdict
 
         async def evaluate(self, **kwargs: Any) -> JudgmentResult:
-            return JudgmentResult(verdict="maybe", reasoning="booking still pending")
+            return JudgmentResult(verdict=self._verdict, reasoning=f"{self.name} reasoning")
 
-    model = _CapturingLLM(
-        FunctionToolCall(
-            name="submit_verdict",
-            arguments='{"verdict":"pass","reasoning":"polite reply"}',
-            call_id="verdict-1",
-        )
-    )
     conversation = ChatContext()
     conversation.add_message(role="assistant", content="Your booking is pending.")
-    result = await JudgeGroup(llm=model, judges=[BookingJudge(), safety_judge()]).evaluate(
-        conversation
-    )
-    assert set(result.judgments) == {"booking", "safety"}
-    assert result.judgments["booking"].reasoning == "booking still pending"
+    result = await JudgeGroup(
+        llm=_CapturingLLM(None), judges=[Fixed("booking", "maybe"), Fixed("tone", "pass")]
+    ).evaluate(conversation)
+    assert set(result.judgments) == {"booking", "tone"}
+    assert result.judgments["booking"].reasoning == "booking reasoning"
     assert result.score == 0.75 and result.none_failed and not result.all_passed
-
-
-def _verdict(verdict: str, reasoning: str) -> FunctionToolCall:
-    return FunctionToolCall(
-        name="submit_verdict",
-        arguments=f'{{"verdict":"{verdict}","reasoning":"{reasoning}"}}',
-        call_id="verdict-1",
-    )
 
 
 async def test_evaluators_judge_the_supplied_conversation_and_reference() -> None:
@@ -165,21 +134,15 @@ async def test_evaluators_judge_the_supplied_conversation_and_reference() -> Non
     reference = ChatContext()
     reference.add_message(role="system", content="secret reference instructions")
     reference.add_message(role="assistant", content="Booked for 10am.")
-    model = _CapturingLLM(_verdict("fail", "wrong time"))
-    group = JudgeGroup(llm=model, judges=[Recorder(), accuracy_judge()])
+    model = _CapturingLLM(None)
+    group = JudgeGroup(llm=model, judges=[Recorder()])
 
     without = await group.evaluate(conversation)
     with_reference = await group.evaluate(conversation, reference=reference)
 
     assert seen == [(conversation, None, model), (conversation, reference, model)]
-    assert "Reference:" not in model.prompts[0]
-    assert "user: Book the 9am slot.\nassistant: Booked for 9am." in model.prompts[1]
-    assert "Reference:\nassistant: Booked for 10am." in model.prompts[1]
-    assert "secret reference instructions" not in model.prompts[1]
     for evaluation in (without, with_reference):
         assert evaluation.judgments["recorder"].passed
-        assert evaluation.judgments["accuracy"].failed
-        assert evaluation.judgments["accuracy"].instructions.startswith("All information")
 
 
 async def test_a_judge_without_a_usable_verdict_is_absent_never_a_pass() -> None:
@@ -195,9 +158,8 @@ async def test_a_judge_without_a_usable_verdict_is_absent_never_a_pass() -> None
 
     conversation = ChatContext()
     conversation.add_message(role="assistant", content="Done.")
-    silent = _CapturingLLM(None)
     group = JudgeGroup(
-        llm=silent, judges=[Broken("raised", None), Broken("shouted", "PASS"), safety_judge()]
+        llm=_CapturingLLM(None), judges=[Broken("raised", None), Broken("shouted", "PASS")]
     )
     result = await group.evaluate(conversation)
     assert result.judgments == {}

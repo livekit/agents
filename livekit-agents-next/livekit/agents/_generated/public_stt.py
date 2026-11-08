@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from .stt import (
     RecognitionUsage as RecognitionUsage,
+    RecognizeStream as RecognizeStream,
+    STT as STT,
     STTCapabilities as STTCapabilities,
     STTError as STTError,
     SpeechData as SpeechData,
@@ -13,7 +15,7 @@ from .stt import (
 )
 from .stt_availability import AvailabilityChangedEvent as AvailabilityChangedEvent
 
-__all__ = [
+__all__: list[str] = [
     "SpeechEventType",
     "SpeechData",
     "RecognitionUsage",
@@ -21,4 +23,6 @@ __all__ = [
     "STTCapabilities",
     "AvailabilityChangedEvent",
     "STTError",
+    "STT",
+    "RecognizeStream",
 ]

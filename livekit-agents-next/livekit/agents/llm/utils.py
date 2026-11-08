@@ -22,14 +22,17 @@ from typing_extensions import TypeVar
 from livekit import rtc
 
 from .. import _core
-from .._generated.chat_diff import DiffOps
-from .._generated.llm import SerializedImage
+from .._generated import public_llm_utils as _public
 from .._generated.provider_data import (
-    AnthropicFormatData,
-    BedrockFormatData,
-    GoogleFormatData,
-    MistralFormatData,
+    TOOL_BEHAVIOR,
+    ProviderFormat,
+    ToolSchema,
+    ToolSchemaLegacy,
+    ToolSchemaProvider,
+    ToolSchemaRaw,
+    ToolSchemaStrict,
 )
+from .._generated.provider_format import DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE
 from .._generated.public_llm_utils import *  # noqa: F403
 from .._generated.tool_report import (
     ToolOutcomeCompleted,
@@ -48,7 +51,7 @@ from .._generated.tool_report import (
 )
 from ..log import logger
 from .chat_context import ChatContext, ChatRole, ImageContent
-from .tool_context import TOOL_BEHAVIOR, FunctionTool, RawFunctionTool, ToolError
+from .tool_context import FunctionTool, RawFunctionTool, ToolError
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
@@ -497,14 +500,11 @@ if TYPE_CHECKING:
     from .tool_context import ProviderTool, ToolContext
 
 
-_DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE = "<instructions>\n{content}\n</instructions>"
-
-
 def convert_mid_conversation_instructions(
     chat_ctx: ChatContext,
     *,
     role: ChatRole = "user",
-    template: str = _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE,
+    template: str = DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE,
 ) -> ChatContext:
     """Rewrite every system or developer message but a leading preamble as a ``role`` message
     wrapped in ``template``, so it keeps its position; one without text is dropped."""
@@ -513,7 +513,7 @@ def convert_mid_conversation_instructions(
     return ChatContext([chat_ctx.items[i] if new is None else new for i, new in plan])
 
 
-_DATA = {
+_DATA: dict[ProviderFormat, type[Any]] = {
     "anthropic": AnthropicFormatData,
     "aws": BedrockFormatData,
     "google": GoogleFormatData,
@@ -523,7 +523,7 @@ _DATA = {
 
 async def to_chat_ctx(
     chat_ctx: ChatContext,
-    format: str,
+    format: ProviderFormat,
     *,
     inject_dummy_user_message: bool = True,
     inject_trailing_user_message: bool = False,
@@ -557,7 +557,7 @@ async def to_chat_ctx(
 
 def to_fnc_ctx(
     tool_ctx: ToolContext,
-    format: str,
+    format: ProviderFormat,
     *,
     strict: bool = True,
     provider_tool_type: type[ProviderTool] | None = None,
@@ -567,25 +567,25 @@ def to_fnc_ctx(
     from .tool_context import FunctionTool, RawFunctionTool
 
     responses = format == "openai.responses"
-    specs: list[list[Any]] = []
+    specs: list[ToolSchema] = []
     for tool in tool_ctx.flatten() if responses else tool_ctx.function_tools.values():
         if isinstance(tool, RawFunctionTool):
-            specs.append(["raw", tool.info.raw_schema, tool.info.name])
+            specs.append(ToolSchemaRaw(name=tool.info.name, raw_schema=tool.info.raw_schema))
         elif isinstance(tool, FunctionTool):
             if strict and format in ("openai", "anthropic"):
-                specs.append(["strict", build_strict_openai_schema(tool)])
+                specs.append(ToolSchemaStrict(schema=build_strict_openai_schema(tool)))
                 continue
             fnc = build_legacy_openai_schema(tool, internally_tagged=format != "openai")
-            specs.append(["legacy", fnc])
+            specs.append(ToolSchemaLegacy(schema=fnc))
         elif responses and provider_tool_type and isinstance(tool, provider_tool_type):
             if hasattr(tool, "to_dict"):
-                specs.append(["provider", tool.to_dict()])
+                specs.append(ToolSchemaProvider(schema=tool.to_dict()))
     return cast(
         "list[dict[str, Any]]",
         _core.to_fnc_ctx(
             format,
             specs,
-            tool_behavior=None if tool_behavior == "UNSPECIFIED" else tool_behavior,
+            tool_behavior=tool_behavior,
             use_parameters_json_schema=use_parameters_json_schema,
         ),
     )
@@ -593,12 +593,7 @@ def to_fnc_ctx(
 
 __all__ = [
     "TOOL_BEHAVIOR",
-    "AnthropicFormatData",
-    "BedrockFormatData",
-    "GoogleFormatData",
-    "MistralFormatData",
     "to_chat_ctx",
     "to_fnc_ctx",
-    "DiffOps",
-    "SerializedImage",
 ]
+__all__ += _public.__all__

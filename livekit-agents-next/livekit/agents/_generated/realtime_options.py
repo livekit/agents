@@ -1,16 +1,11 @@
 # GENERATED FILE -- DO NOT EDIT.
-#
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
-# declarations in:
+# From ABI declarations and authored plugin bases:
 #     rust/crates/lk-agents-abi/src/llm/realtime.rs
-#
-# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
-# non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from ..types import NOT_GIVEN
 
@@ -19,6 +14,9 @@ if TYPE_CHECKING:
 
     from ..types import NotGivenOr
     from .connect import APIConnectOptions
+
+
+# Record declarations:
 
 
 @dataclass(kw_only=True, slots=True)
@@ -67,3 +65,12 @@ class OpenAIRealtimeConfig:
     inference_provider: str | None = None
     inference_class: str | None = None
     label: str | None = None
+
+
+SAMPLE_RATE: Final = 24000
+"""The OpenAI Realtime protocol's audio rate, in and out."""
+NUM_CHANNELS: Final = 1
+OPENAI_BASE_URL: Final = "https://api.openai.com/v1"
+"""The OpenAI API's base URL, the realtime model's default."""
+DEFAULT_VOICE: Final = "marin"
+"""The OpenAI realtime model's default voice."""

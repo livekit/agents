@@ -17,7 +17,6 @@ from pydantic import TypeAdapter, ValidationError
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from .. import _core, llm, telemetry, utils
-from .._bindings import UnexpectedModelBehavior
 from .._generated.agent_run import (
     ArgumentIdentity,
     ArgumentIdentityFingerprint,
@@ -36,14 +35,6 @@ from .._generated.agent_run import (
     ReadBackAnswer,
     ReadBackAnswerInputRequired,
     ReadBackAnswerQuestion,
-    RunError,
-    RunErrorCancelled,
-    RunErrorHost,
-    RunErrorModel,
-    RunErrorNoModel,
-    RunErrorOutputRetriesExceeded,
-    RunErrorSessionClosed,
-    RunErrorToolRetriesExceeded,
     RunOutcomeCompleted,
     RunOutcomeInputRequired,
     RunOutcomeNoOutput,
@@ -52,10 +43,7 @@ from .._generated.agent_run import (
     RunSettled,
     SerializedOutput,
     ToolTemplate,
-    ToolTemplateDuplicateConfirm,
-    ToolTemplateDuplicateReject,
-    ToolTemplateReplyAtTail,
-    ToolTemplateReplyMaybeCovered,
+    ToolTemplateKey,
     ValidatedOutput,
     ValidatedOutputAccepted,
     ValidatedOutputFailed,
@@ -364,29 +352,6 @@ def settled_result(settled: RunSettled, hooks: RunHooks | None) -> RunResult[Any
     raise AssertionError(f"unsupported run outcome: {result.outcome!r}")
 
 
-def run_error(error: RunError) -> BaseException:
-    """The exception a run that settled without a result raises."""
-    match error:
-        case RunErrorCancelled():
-            return asyncio.CancelledError("the run was cancelled")
-        case RunErrorToolRetriesExceeded(tool=tool, retries=retries):
-            return UnexpectedModelBehavior(f"tool `{tool}` exceeded max retries count of {retries}")
-        case RunErrorOutputRetriesExceeded(retries=retries):
-            return UnexpectedModelBehavior(
-                f"exceeded maximum retries ({retries}) for output validation"
-            )
-        case RunErrorModel(message=message):
-            from .._bindings import APIError
-
-            return APIError(f"the model request failed: {message}", retryable=False)
-        case RunErrorHost(message=message):
-            return RuntimeError(message)
-        case RunErrorNoModel():
-            return RuntimeError("the agent has no model")
-        case RunErrorSessionClosed():
-            return RuntimeError("the session closed before the run settled")
-
-
 def tool_infos(tools: ToolContext) -> list[FunctionToolInfo]:
     """The core's ``FunctionToolInfo`` of each function tool."""
     from .._bindings import tool_specs
@@ -624,7 +589,9 @@ class AgentCallbacks:
                 serialized = None
             return ValidatedOutputAccepted(text=None, value=value, serialized=serialized)
 
-    async def render_template(self, invocation: Invocation, template: ToolTemplate) -> str | None:
+    async def render_template(
+        self, invocation: Invocation, key: ToolTemplateKey, template: ToolTemplate
+    ) -> str | None:
         """The agent's ``tool_handling`` template, or the call's toolset's, rendered with the
         template's arguments; ``None`` keeps the framework's text."""
         call = invocation.function_call
@@ -632,7 +599,7 @@ class AgentCallbacks:
             self._agent._tool_handling,
             _template_tools(self._agent, _BindingContextVar.get(None)),
             _function_call(invocation).name if call is not None else None,
-            _TEMPLATE_KEYS[type(template)],
+            key,
             dataclasses.asdict(template),
         )
 
@@ -805,14 +772,6 @@ def _template_tools(agent: Agent[Any, Any], binding: object) -> list[Tool | Tool
     return list(agent.tools)
 
 
-_TEMPLATE_KEYS: dict[type[ToolTemplate], str] = {
-    ToolTemplateDuplicateReject: "duplicate_reject_template",
-    ToolTemplateDuplicateConfirm: "duplicate_confirm_template",
-    ToolTemplateReplyAtTail: "reply_at_tail_template",
-    ToolTemplateReplyMaybeCovered: "reply_maybe_covered_template",
-}
-
-
 def _classified(call: FunctionCall, output: Any, exc: BaseException | None) -> ToolReport:
     """What the body returned or raised, classified; an internal error or an invalid output is
     logged."""
@@ -850,15 +809,11 @@ def _operation_key(invocation: Invocation) -> tuple[str, int]:
     return invocation.invocation_id, invocation.operation
 
 
-UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
-The task is still running, so DON'T make up or give information not included in the message above."""
-
-
 def render_template(
     agent_options: ToolHandlingOptions | None,
     tools: Sequence[Tool | Toolset],
     tool: str | None,
-    key: str,
+    key: ToolTemplateKey,
     args: dict[str, Any],
 ) -> str | None:
     """The ``key`` template rendered with ``args``: the innermost ``AsyncToolset`` among
@@ -871,7 +826,7 @@ def render_template(
     return str(template(args) if callable(template) else template.format(**args))
 
 
-def _toolset_template(tools: Sequence[Tool | Toolset], tool: str, key: str) -> Any:
+def _toolset_template(tools: Sequence[Tool | Toolset], tool: str, key: ToolTemplateKey) -> Any:
     from ..llm.tool_context import AsyncToolset, ToolContext, Toolset
 
     for entry in tools:
@@ -889,6 +844,6 @@ def _toolset_template(tools: Sequence[Tool | Toolset], tool: str, key: str) -> A
     return None
 
 
-def _template(options: ToolHandlingOptions | None, key: str) -> Any:
+def _template(options: ToolHandlingOptions | None, key: ToolTemplateKey) -> Any:
     templates: Mapping[str, Any] = (options or {}).get("async_options") or {}
     return templates.get(key)

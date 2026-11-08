@@ -174,7 +174,7 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
             stt = "..stt.STT | str | None",
             tts = "..tts.TTS | str | None",
             vad = ".vad.VAD | None",
-            tts_text_transforms = "collections.abc.Sequence[..voice._session_bindings.TextTransforms] | None",
+            tts_text_transforms = "collections.abc.Sequence[.session_options.TextTransforms] | None",
             expressive = "bool | .expressive.ExpressiveOptions"
         ),
         resolve(

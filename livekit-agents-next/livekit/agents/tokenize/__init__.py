@@ -5,8 +5,8 @@ from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callab
 from typing import Any, overload
 
 from .. import _core
+from .._generated import public_tokenize as _public
 from .._generated.public_tokenize import *  # noqa: F403
-from .._generated.tokenizer import TokenData
 from ..utils import aio, shortuuid
 
 __all__ = [
@@ -14,13 +14,13 @@ __all__ = [
     "SentenceStream",
     "WordTokenizer",
     "WordStream",
-    "TokenData",
     "BufferedSentenceStream",
     "BufferedWordStream",
     "replace_words",
     "basic",
     "blingfire",
 ]
+__all__ += _public.__all__
 
 
 class SentenceTokenizer(ABC):

@@ -23,22 +23,19 @@ from typing import (
 from pydantic import JsonValue as JsonValue
 
 from .. import _core, llm
-from .._generated import agent_run as records, text_session as session_records
+from .._generated import (
+    agent_run as records,
+    public_voice_run_result as _public,
+    text_session as session_records,
+)
 from .._generated.agent_run import (
     EventExpectation,
     EventExpectationFunctionCall,
     EventExpectationFunctionCallOutput,
     EventExpectationMessage,
+    EventType,
 )
 from .._generated.public_voice_run_result import *  # noqa: F403
-from .._generated.run_events import ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent
-from .._generated.run_stream_events import (
-    ProgressEvent,
-    TextDeltaEvent,
-    TextEndEvent,
-    ToolCallEvent,
-    ToolResultEvent,
-)
 from .._generated.usage import Usage
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
@@ -61,9 +58,6 @@ def _events(items: list[llm.ChatItem]) -> list[RunEvent]:
         elif item.type == "function_call_output":
             events.append(FunctionCallOutputEvent(item=item))
     return events
-
-
-EventType = Literal["message", "function_call", "function_call_output"]
 
 
 def _expectation(
@@ -471,9 +465,7 @@ class RunStream(Generic[ResultT]):
                             outcome,
                             (records.RunUpdateFailed, session_records.TextSessionUpdateFailed),
                         )
-                        self._error = outcome.provider_error
-                        if self._error is None:
-                            self._error = self._started.fail(outcome.error)
+                        self._error = outcome.provider_error or outcome.error
                         self._error.__dict__["input_requirements"] = list(
                             outcome.input_requirements
                         )
@@ -538,25 +530,13 @@ class _Iterator(Generic[ItemT]):
 
 @dataclass
 class _Started(Generic[ResultT]):
-    """Only language-specific result and exception hydration; Rust owns the operation."""
+    """Only language-specific result hydration; Rust owns the operation."""
 
     settle: Callable[[Any], ResultT]
-    fail: Callable[[Any], BaseException]
 
 
 __all__ = [
-    "ProgressEvent",
-    "RunCompleted",
-    "RunInputRequired",
-    "RunNoOutput",
-    "RunResult",
     "RunStream",
     "StreamEvent",
-    "TextDeltaEvent",
-    "TextEndEvent",
-    "ToolCallEvent",
-    "ToolResultEvent",
-    "ChatMessageEvent",
-    "FunctionCallEvent",
-    "FunctionCallOutputEvent",
 ]
+__all__ += _public.__all__

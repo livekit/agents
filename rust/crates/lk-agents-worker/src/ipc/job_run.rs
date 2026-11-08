@@ -12,7 +12,7 @@ use super::telemetry;
 use lk_agents_abi::errors::{HostError, HostErrorKind};
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host::{JobCall, JobExecution, JobProcess, WorkerError};
-use lk_agents_abi::worker::job::{ShutdownCause, StartJobFields};
+use lk_agents_abi::worker::job::{ShutdownCause, StartJob};
 use lk_agents_abi::{ATTRIBUTE_SIMULATOR, HostRef};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::TokioSpawner;
@@ -425,12 +425,12 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         url: String,
         session_end: Option<String>,
         session_aclose_timeout: f64,
-        observability_url: Option<String>,
         api_key: String,
         api_secret: String,
     ) -> Result<Self, WorkerError> {
+        let configured = std::env::var("LIVEKIT_OBSERVABILITY_URL").ok();
         let observability_url =
-            lk_agents_net::strings::observability_url(&url, observability_url.as_deref());
+            lk_agents_net::strings::observability_url(&url, configured.as_deref());
         let cloud = observability_url
             .clone()
             .filter(|_| !fake_job && !api_key.is_empty())
@@ -475,10 +475,10 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         });
     }
 
-    fn start_trace(&self, fields: StartJobFields) {
+    fn start_trace(&self, job: StartJob) {
         let inner = &self.inner;
         let telemetry::JobTrace { job, span } =
-            telemetry::start_job(&inner.tracer, inner.cloud.as_ref(), &fields);
+            telemetry::start_job(&inner.tracer, inner.cloud.as_ref(), &job);
         let _ = inner.job.set(job);
         *inner.root.lock() = Some(span);
     }

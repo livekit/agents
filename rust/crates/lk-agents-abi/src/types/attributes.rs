@@ -25,7 +25,7 @@ pub const ATTRIBUTE_TRANSCRIPTION_FINAL: &str = "lk.transcription_final";
 pub const ATTRIBUTE_TRANSCRIPTION_EXPRESSION: &str = "lk.expression";
 
 /// The identity of the agent participant that an avatar worker is publishing on behalf of.
-#[crate::host(constant)]
+#[crate::host(constant(path = "livekit.agents.types"))]
 pub const ATTRIBUTE_PUBLISH_ON_BEHALF: &str = "lk.publish_on_behalf";
 
 /// The state of the agent, stored in the agent's attributes.
@@ -92,11 +92,11 @@ pub const TOPIC_TRANSCRIPTION: &str = "lk.transcription";
 pub const CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS: i32 = 3;
 
 /// The key for the timed transcripts in the audio frame userdata.
-#[crate::host(constant)]
+#[crate::host(constant(path = "livekit.agents.types"))]
 pub const USERDATA_TIMED_TRANSCRIPT: &str = "lk.timed_transcripts";
 
 /// The key for the time (``time.perf_counter()``) at which the synthesized text was first
 /// sent to the TTS provider, attached to the audio frame userdata. Used to compute TTFB
 /// without attributing upstream (e.g. LLM streaming) latency to the TTS.
-#[crate::host(constant)]
+#[crate::host(constant(path = "livekit.agents.types"))]
 pub const USERDATA_TTS_STARTED_TIME: &str = "lk.tts_started_time";

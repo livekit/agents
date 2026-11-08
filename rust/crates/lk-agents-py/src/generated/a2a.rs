@@ -291,7 +291,7 @@ pub fn _core_a2a_message_data<'py>(
 // Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
 type ReplyImpl = <crate::generated::implementations::Selected as super::Implementations>::Reply;
 
-#[pyclass(frozen, name = "Reply", module = "livekit.agents._core")]
+#[pyclass(frozen, name = "Reply", module = "livekit.agents.a2a")]
 pub struct Reply(pub(crate) ::std::sync::Arc<ReplyImpl>);
 
 #[pymethods]
@@ -341,7 +341,7 @@ impl Reply {
 type AgentClientImpl =
     <crate::generated::implementations::Selected as super::Implementations>::AgentClient;
 
-#[pyclass(frozen, name = "AgentClient", module = "livekit.agents._core")]
+#[pyclass(frozen, name = "AgentClient", module = "livekit.agents.a2a")]
 pub struct AgentClient(pub(crate) ::std::sync::Arc<AgentClientImpl>);
 
 #[pymethods]

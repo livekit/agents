@@ -8,7 +8,11 @@ from .function_tools import (
     InputRequired as InputRequired,
     RawFunctionToolInfo as RawFunctionToolInfo,
 )
-from .tool_context import RawFunctionDescription as RawFunctionDescription
+from .tool_context import (
+    DuplicateMode as DuplicateMode,
+    DuplicateScope as DuplicateScope,
+    RawFunctionDescription as RawFunctionDescription,
+)
 from .tool_errors import (
     ModelRetry as ModelRetry,
     StopResponse as StopResponse,
@@ -30,7 +34,9 @@ from .tool_templates import (
     UpdatePromptArgs as UpdatePromptArgs,
 )
 
-__all__ = [
+__all__: list[str] = [
+    "DuplicateMode",
+    "DuplicateScope",
     "RawFunctionDescription",
     "Failed",
     "Rejected",

@@ -29,7 +29,7 @@ from livekit.agents._generated.worker_ipc import (
     IpcFailureMalformed,
     IpcFailureTooLarge,
     JobCompletion,
-    StartJobFields,
+    StartJob,
 )
 from livekit.agents.ipc import JobLauncher, JobRunnerOptions
 from livekit.protocol import agent
@@ -53,9 +53,9 @@ def _kill_pid(pid: int) -> None:
 
 
 class _ChildHost:
-    async def _core_start_job(self, fields: StartJobFields) -> None:
+    async def _core_start_job(self, job: StartJob) -> None:
         # The marker proves the host callback entered before its deliberate event-loop stall.
-        Path(fields.metadata).write_text("entered")
+        Path(job.info.accept_arguments.metadata).write_text("entered")
         time.sleep(60)
 
     async def _core_ping(self) -> None:

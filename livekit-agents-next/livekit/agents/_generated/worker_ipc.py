@@ -4,6 +4,7 @@
 # declarations in:
 #     rust/crates/lk-agents-abi/src/worker/ipc.rs
 #     rust/crates/lk-agents-abi/src/worker/job.rs
+#     rust/crates/lk-agents-abi/src/worker/ipc_host.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
@@ -12,7 +13,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, unique
-from typing import TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
+
+if TYPE_CHECKING:
+    from .job_records import RunningJobInfo
 
 
 @dataclass(kw_only=True, slots=True)
@@ -94,22 +98,15 @@ class JobRunnerOptions:
 
 
 @dataclass(kw_only=True, slots=True)
-class StartJobFields:
-    """The process's one job, shared by the generated host boundary and the IPC wire protocol."""
+class StartJob:
+    """The process's one job as the worker hands it over: what it runs, and the span it continues."""
 
-    job: bytes
-    name: str
-    identity: str
-    metadata: str
-    url: str
-    token: str
-    worker_id: str
-    fake_job: bool
-    received_at: float | None
-    accepted_at: float | None
-    assigned_at: float | None
-    launched_at: float
+    info: RunningJobInfo
     traceparent: str | None = None
+
+
+ProcessEvent: TypeAlias = Literal["process_created", "process_started", "process_ready", "process_closed", "process_job_launched", "process_cleanup_incomplete", "process_join_failed", "process_exit_failed"]
+"""A process's step in the pool, the event `ProcPool.emit` names."""
 
 
 JobStatus.__module__ = "livekit.agents.ipc"

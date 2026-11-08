@@ -7,7 +7,7 @@ import asyncio
 import contextvars
 from collections import deque
 from collections.abc import AsyncIterable, Callable, Coroutine
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from google.protobuf.json_format import MessageToDict
 from typing_extensions import TypeVar
@@ -18,8 +18,6 @@ from .. import _bindings, _core, inference, llm, stt, tts
 from .._bindings import TurnDetector, realtime_model, tool_specs
 from .._generated.connect import SessionConnectOptions as SessionConnectOptions
 from .._generated.keyterms import STTContextOptions
-from .._generated.public_voice__session_bindings import *  # noqa: F403
-from .._generated.recording_options import RecordingOptions as RecordingOptions
 from .._generated.remote_session_wire import STATE_OPTION_FIELDS
 from .._generated.session_options import SessionKwargs
 from .._generated.session_owner import ProviderBindings
@@ -61,10 +59,6 @@ if TYPE_CHECKING:
     from .io import EndpointingOptions, TurnDetectionMode
 
 
-TextTransforms = Literal["filter_markdown", "filter_emoji"]
-"""A transform the core applies to the text it sends to the TTS."""
-
-
 # the session's pipeline callbacks (voice-session.md "Customizing the pipeline"): each receives
 # the call's `RunContext`, whose `agent` is the agent holding the call
 _C = TypeVar("_C")
@@ -101,8 +95,7 @@ class VoiceActivityVideoSampler:
 _CallbackT = TypeVar("_CallbackT", bound=Callable[..., object])
 
 
-for _type in (RecordingOptions, VoiceActivityVideoSampler):
-    _type.__module__ = "livekit.agents.voice.agent_session"
+VoiceActivityVideoSampler.__module__ = "livekit.agents.voice.agent_session"
 
 
 _OPTION_KEYS = (SessionKwargs.__required_keys__ | SessionKwargs.__optional_keys__) - {

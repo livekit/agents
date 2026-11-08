@@ -2,23 +2,21 @@
 
 use crate::telemetry::decl::SpanValue;
 
-/// The process's one job, shared by the generated host boundary and the IPC wire protocol.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// A `livekit.agent.Job`, crossing as the SDK's message.
+#[crate::host(codec(
+    extract,
+    emit,
+    host = "livekit.protocol.agent.Job",
+    py = "py_values::proto_job"
+))]
+pub type Job = livekit_protocol::Job;
+
+/// The process's one job as the worker hands it over: what it runs, and the span it continues.
+#[derive(Debug, Clone, PartialEq)]
 #[crate::host(record(module = "worker_ipc", emit, extract))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct StartJobFields {
-    pub job: Vec<u8>,
-    pub name: String,
-    pub identity: String,
-    pub metadata: String,
-    pub url: String,
-    pub token: String,
-    pub worker_id: String,
-    pub fake_job: bool,
-    pub received_at: Option<f64>,
-    pub accepted_at: Option<f64>,
-    pub assigned_at: Option<f64>,
-    pub launched_at: f64,
+pub struct StartJob {
+    pub info: RunningJobInfo,
     #[host(default = None)]
     pub traceparent: Option<String>,
 }
@@ -68,25 +66,45 @@ pub trait SessionJob: Send + Sync {
 
 // Public data contracts. Python behavior remains in its adapters.
 
-#[crate::host(record(module = "job_records", path = "livekit.agents.job", dataclass))]
-pub struct JobAcceptArguments {
+/// The participant an accepted job joins as. Application attributes keep their own keys, merged
+/// over `lk.agent.name`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[crate::host(record(
+    module = "job_records",
+    path = "livekit.agents.job",
+    name = "JobAcceptArguments",
+    dataclass,
+    extract,
+    emit
+))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct AcceptArguments {
     pub name: String,
     pub identity: String,
     pub metadata: String,
-    #[host(default = None)]
-    pub attributes: Option<std::collections::BTreeMap<String, String>>,
+    #[host(default_factory = "dict")]
+    pub attributes: std::collections::BTreeMap<String, String>,
 }
 
-#[crate::host(record(module = "job_records", path = "livekit.agents.job", dataclass))]
+/// What a launched job is handed.
+#[derive(Debug, Clone, PartialEq)]
+#[crate::host(record(
+    module = "job_records",
+    path = "livekit.agents.job",
+    dataclass,
+    extract,
+    emit
+))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RunningJobInfo {
-    pub accept_arguments: JobAcceptArguments,
-    #[host(annotation = "livekit.protocol.agent.Job")]
-    pub job: crate::HostRef,
+    pub accept_arguments: AcceptArguments,
+    #[cfg_attr(feature = "serde", serde(with = "proto_bytes"))]
+    pub job: Job,
     pub url: String,
     pub token: String,
     pub worker_id: String,
     pub fake_job: bool,
-    /// The worker received the availability request.
+    /// The worker received the availability request; absent for a job no dispatch offered.
     #[host(default = None)]
     pub received_at: Option<f64>,
     /// The request handler accepted the job.
@@ -100,12 +118,39 @@ pub struct RunningJobInfo {
     pub launched_at: f64,
 }
 
+/// The job's protobuf bytes, as the SDK serializes the message.
+pub fn encode_job(job: &Job) -> Vec<u8> {
+    prost::Message::encode_to_vec(job)
+}
+
+pub fn decode_job(bytes: &[u8]) -> Result<Job, prost::DecodeError> {
+    <Job as prost::Message>::decode(bytes)
+}
+
+/// The job as its protobuf bytes on the job process channel.
+#[cfg(feature = "serde")]
+mod proto_bytes {
+    use serde::{Deserialize as _, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(job: &super::Job, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_bytes(&super::encode_job(job))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<super::Job, D::Error> {
+        let bytes = <Vec<u8>>::deserialize(d)?;
+        super::decode_job(&bytes).map_err(serde::de::Error::custom)
+    }
+}
+
 #[crate::host(record(
     module = "job_records",
     path = "livekit.agents.job",
     enum,
-    enum_base = "Enum"
+    enum_base = "StrEnum",
+    extract,
+    emit
 ))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobExecutorType {
     #[host(rename = "process")]
     Process,

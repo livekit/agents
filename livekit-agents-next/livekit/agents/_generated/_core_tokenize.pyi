@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterable, Sequence
 from typing import Self
 
 from .tokenizer import TokenizerToken
+from .tool_context import RawFunctionDescription
 
 def split_words(
     text: str,
@@ -168,5 +169,11 @@ def keyword_search(query: str, docs: Sequence[SearchDocument], limit: int) -> li
 def tool_search_validate(query: str) -> None: ...
 
 def tool_search_loaded(query: str, count: int) -> str: ...
+
+def tool_search_schema(search_description: str, query_description: str) -> RawFunctionDescription:
+    """`ToolSearchToolset`'s `tool_search` raw schema."""
+
+def call_tool_schema(description: str) -> RawFunctionDescription:
+    """`ToolProxyToolset`'s `call_tool` raw schema."""
 
 def tool_proxy_arguments(arguments: object, known: Sequence[str]) -> tuple[str, object]: ...

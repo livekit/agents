@@ -17,6 +17,7 @@ from aiohttp.abc import AbstractStreamWriter
 from yarl import URL
 
 from .._bindings import APITimeoutError
+from .._generated.types import TimeoutPhase
 from ..log import logger
 from ..types import APIConnectOptions
 
@@ -24,21 +25,21 @@ _ClientFactory = Callable[[], aiohttp.ClientSession]
 _ContextVar = contextvars.ContextVar[_ClientFactory | None]("agent_http_session")
 
 
-_Phase = Literal["pool", "connect", "write", "read"]
-
-
 class _Phases:
     """One request's deadline, armed with the limit of the phase it is waiting in."""
 
     def __init__(
-        self, options: APIConnectOptions, deadline: asyncio.Timeout, after_connect: _Phase | None
+        self,
+        options: APIConnectOptions,
+        deadline: asyncio.Timeout,
+        after_connect: TimeoutPhase | None,
     ) -> None:
         self._options = options
         self._deadline = deadline
         self.after_connect = after_connect
-        self.armed: _Phase | None = None
+        self.armed: TimeoutPhase | None = None
 
-    def arm(self, phase: _Phase | None) -> None:
+    def arm(self, phase: TimeoutPhase | None) -> None:
         # Writer cleanup may run after the request's timeout fired. Keep that phase for error
         # attribution; an expiring asyncio.Timeout cannot be rescheduled or disarmed.
         if self._deadline.expired():
@@ -53,7 +54,7 @@ class _Phases:
                 limit = self._options.write_timeout
             case "read":
                 limit = self._options.read_timeout
-            case None:
+            case "total" | None:
                 limit = None
         self._deadline.reschedule(
             None if limit is None else asyncio.get_running_loop().time() + limit
@@ -63,7 +64,7 @@ class _Phases:
 _current_phases = contextvars.ContextVar[_Phases | None]("http_request_phases", default=None)
 
 
-def _on(phase: _Phase | None | Literal["connected"]) -> Callable[..., Awaitable[None]]:
+def _on(phase: TimeoutPhase | None | Literal["connected"]) -> Callable[..., Awaitable[None]]:
     async def arm(*_: object) -> None:
         if (phases := _current_phases.get()) is not None:
             phases.arm(phases.after_connect if phase == "connected" else phase)
@@ -119,7 +120,7 @@ class _TimedBody(aiohttp.payload.Payload):
 
 @contextlib.asynccontextmanager
 async def _phase_limits(
-    session: aiohttp.ClientSession, options: APIConnectOptions, after_connect: _Phase | None
+    session: aiohttp.ClientSession, options: APIConnectOptions, after_connect: TimeoutPhase | None
 ) -> AsyncIterator[_Phases]:
     if _PHASE_TRACE not in session.trace_configs:
         session.trace_configs.append(_PHASE_TRACE)

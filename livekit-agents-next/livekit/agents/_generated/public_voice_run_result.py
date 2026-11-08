@@ -22,7 +22,7 @@ from .run_stream_events import (
     ToolResultEvent as ToolResultEvent,
 )
 
-__all__ = [
+__all__: list[str] = [
     "RunCompleted",
     "RunInputRequired",
     "RunNoOutput",

@@ -5,41 +5,14 @@ use livekit_protocol as proto;
 
 use crate::{EnvOption, RuntimeConfig, WorkerConfig, WorkerPermissions};
 use lk_agents_abi::worker::ipc_host::WorkerError;
+use lk_agents_abi::worker::job::JobExecutorType;
+use lk_agents_abi::worker::types::{Listeners, MultiprocessingContext};
 
 /// `load_threshold`'s default, to which a hosted (Cloud) worker is held.
 pub const DEFAULT_LOAD_THRESHOLD: EnvOption<f32> = EnvOption::Split {
     dev: crate::config::DEFAULT_LOAD_THRESHOLD_DEV,
     prod: crate::config::DEFAULT_LOAD_THRESHOLD_PROD,
 };
-
-/// `AgentServer(listeners=)`: each listener's address, a key left out taking its default.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Listeners {
-    #[serde(default)]
-    pub public: PublicListener,
-    #[serde(default)]
-    pub health: ListenerAddress,
-    /// Off unless given.
-    pub prometheus: Option<ListenerAddress>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ListenerAddress {
-    pub host: Option<String>,
-    pub port: Option<u16>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PublicListener {
-    pub host: Option<String>,
-    pub port: Option<u16>,
-    /// Read the client address and scheme from `X-Forwarded-For` and `X-Forwarded-Proto`.
-    #[serde(default)]
-    pub proxy_headers: bool,
-}
 
 /// Where a listener binds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,17 +33,19 @@ impl Bind {
     }
 }
 
-impl Listeners {
-    pub fn public(&self, local: bool) -> Bind {
-        Bind::resolve(&self.public.host, self.public.port, local, 8080)
+impl Bind {
+    pub fn public(listeners: &Listeners, local: bool) -> Bind {
+        let public = listeners.public.clone().unwrap_or_default();
+        Bind::resolve(&public.host, public.port, local, 8080)
     }
 
-    pub fn health(&self, local: bool) -> Bind {
-        Bind::resolve(&self.health.host, self.health.port, local, 8081)
+    pub fn health(listeners: &Listeners, local: bool) -> Bind {
+        let health = listeners.health.clone().unwrap_or_default();
+        Bind::resolve(&health.host, health.port, local, 8081)
     }
 
-    pub fn prometheus(&self, local: bool) -> Option<Bind> {
-        let given = self.prometheus.as_ref()?;
+    pub fn prometheus(listeners: &Listeners, local: bool) -> Option<Bind> {
+        let given = listeners.prometheus.as_ref()?;
         Some(Bind::resolve(&given.host, given.port, local, 9090))
     }
 }
@@ -108,8 +83,8 @@ pub struct ServerSettings {
     /// The SDK version the worker registers and `/worker` reports.
     pub version: String,
     /// The job processes' settings, which the host's pool takes as they are.
-    pub job_executor_type: String,
-    pub multiprocessing_context: String,
+    pub job_executor_type: JobExecutorType,
+    pub multiprocessing_context: MultiprocessingContext,
     pub(crate) multiprocessing_fallback: bool,
     pub job_memory_warn_mb: f64,
     pub job_memory_limit_mb: f64,
@@ -140,10 +115,13 @@ impl Default for ServerSettings {
             http_proxy: None,
             simulation: false,
             version: env!("CARGO_PKG_VERSION").into(),
-            job_executor_type: "process".into(),
+            job_executor_type: JobExecutorType::Process,
             multiprocessing_fallback: false,
-            multiprocessing_context: if cfg!(target_os = "linux") { "forkserver" } else { "spawn" }
-                .into(),
+            multiprocessing_context: if cfg!(target_os = "linux") {
+                MultiprocessingContext::Forkserver
+            } else {
+                MultiprocessingContext::Spawn
+            },
             job_memory_warn_mb: 1000.0,
             job_memory_limit_mb: 0.0,
             shutdown_process_timeout: 10.0,
@@ -174,8 +152,7 @@ impl ServerSettings {
             next.agent_name = value;
         }
         if let Given(value) = options.listeners {
-            next.listeners = serde_json::from_value(value)
-                .map_err(|error| WorkerError::Invalid(format!("listeners: {error}")))?;
+            next.listeners = value;
         }
         if let Given(value) = options.max_retry {
             next.max_retry = value;
@@ -225,9 +202,11 @@ impl ServerSettings {
             next.shutdown_timeout = value;
         }
         next.validate()?;
-        if next.multiprocessing_context == "forkserver" && !cfg!(target_os = "linux") {
+        if next.multiprocessing_context == MultiprocessingContext::Forkserver
+            && !cfg!(target_os = "linux")
+        {
             next.multiprocessing_fallback = true;
-            next.multiprocessing_context = "spawn".into();
+            next.multiprocessing_context = MultiprocessingContext::Spawn;
         }
         *self = next;
         Ok(())
@@ -253,12 +232,6 @@ impl ServerSettings {
         }
         if self.load_threshold.get(false).is_nan() || self.load_threshold.get(false) < 0.0 {
             return invalid("load_threshold must be non-negative");
-        }
-        if !matches!(self.job_executor_type.as_str(), "process" | "thread") {
-            return invalid("job_executor_type must be process or thread");
-        }
-        if !matches!(self.multiprocessing_context.as_str(), "spawn" | "forkserver") {
-            return invalid("multiprocessing_context must be spawn or forkserver");
         }
         Ok(())
     }

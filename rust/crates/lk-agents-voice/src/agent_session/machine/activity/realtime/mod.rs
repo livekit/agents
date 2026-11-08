@@ -8,7 +8,6 @@ use crate::agent_session::machine::activity::scheduling::{
     SpeechId, SpeechKind, VoiceRunParticipation,
 };
 use crate::agent_session::machine::activity::speech::SpeechSpec;
-use crate::agent_session::options::TurnDetection;
 use crate::agent_session::{Close, ClosePhase, Closing, SpeechCall, VoiceDriver};
 use crate::audio_recognition::{ServerSpeech, TurnDetectionMode};
 use crate::events::{DiagnosticEvent, SessionEvent};
@@ -954,7 +953,7 @@ impl VoiceDriver {
         // is not re-synced, so an explicit change that would flip it is said, once
         //; reverting to automatic is not.
         let enabled_at_open = !disabled;
-        let explicit = side.detection != TurnDetection::Auto;
+        let explicit = side.detection.is_some();
         if requested
             && explicit
             && caps.can_disable_turn_detection
@@ -1035,7 +1034,9 @@ impl VoiceDriver {
 
     /// The model's wire carries a string: a streamed `say` is refused by name.
     pub(crate) fn refuse_realtime_say_stream(&mut self, call: Option<SpeechCall>) {
-        self.record_trace(SpeechStep::SayRefused { why: crate::trace::SayRefusal::ShapeOnRealtime });
+        self.record_trace(SpeechStep::SayRefused {
+            why: crate::trace::SayRefusal::ShapeOnRealtime,
+        });
         self.fail_waiter(
             call,
             SpeechKind::Say,

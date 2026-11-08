@@ -10,6 +10,7 @@ from typing import Self
 
 from livekit.local_inference import VAD
 
+from ..types import NotGivenOr
 from .rtc_frames import AudioFrame
 from .vad import VADEvent
 
@@ -19,24 +20,27 @@ class InferenceVad:
         cls,
         model_factory: Callable[[], VAD],
         *,
-        min_speech_duration: float,
-        min_silence_duration: float,
-        prefix_padding_duration: float,
-        max_buffered_speech: float,
-        activation_threshold: float,
-        deactivation_threshold: float,
-    ) -> Self: ...
+        min_speech_duration: float = 0.05,
+        min_silence_duration: float = 0.25,
+        prefix_padding_duration: float = 0.5,
+        max_buffered_speech: float = 60.0,
+        activation_threshold: float = 0.5,
+        deactivation_threshold: float | None = None,
+    ) -> Self:
+        """`deactivation_threshold` is `max(activation_threshold - 0.15, 0.01)` when `None`."""
     def update_options(
         self,
         *,
-        min_speech_duration: float,
-        min_silence_duration: float,
-        prefix_padding_duration: float,
-        max_buffered_speech: float,
-        activation_threshold: float,
-        deactivation_threshold: float,
+        min_speech_duration: NotGivenOr[float] = ...,
+        min_silence_duration: NotGivenOr[float] = ...,
+        prefix_padding_duration: NotGivenOr[float] = ...,
+        max_buffered_speech: NotGivenOr[float] = ...,
+        activation_threshold: NotGivenOr[float] = ...,
+        deactivation_threshold: NotGivenOr[float] = ...,
     ) -> None:
-        """Every option, applied by each running stream before its next frame."""
+        """The given options, applied by each running stream before its next frame."""
+    @property
+    def min_silence_duration(self) -> float: ...
     def stream(self) -> InferenceVadStream:
         """One detection; each event carries the audio it refers to."""
 

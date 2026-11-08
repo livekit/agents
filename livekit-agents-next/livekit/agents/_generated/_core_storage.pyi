@@ -59,14 +59,21 @@ class Storage:
         api_secret: str | None = None,
         lease_ttl: float | None = None,
         renew_interval: float | None = None,
+        holder: str | None = None,
     ) -> Self:
         """`local`: threads in that project's directory, resolved to an absolute path once.
-        Otherwise agentstore through the public API derived from `url` (the project's
-        `LIVEKIT_URL`), with tokens minted from the key pair. Opens nothing until first use.
+        Otherwise agentstore through the public API derived from `url`, with tokens minted from
+        the key pair; each omitted one is `LIVEKIT_URL`, `LIVEKIT_API_KEY` or
+        `LIVEKIT_API_SECRET`, and an omitted lease timing `LIVEKIT_AGENTDB_LEASE_TTL` or
+        `LIVEKIT_AGENTDB_RENEW_INTERVAL` (float seconds). An omitted or empty `holder` is the
+        constructing process's `<hostname>-<pid>`. Opens nothing until first use.
         """
     @property
     def location(self) -> str:
         """The absolute local directory, or the public API agentstore is reached through."""
+    @property
+    def holder(self) -> str:
+        """This process's lease holder id."""
     @property
     def project_id(self) -> str: ...
     async def create_thread(

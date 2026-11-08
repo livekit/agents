@@ -51,6 +51,13 @@ pub struct ProcessEnv {
 }
 
 impl ProcessEnv {
+    /// `<hostname>-<pid>`: this process's default storage lease holder. Read on each call, so a
+    /// job process names itself, not the parent it was forked from.
+    pub fn lease_holder(&self) -> String {
+        let host = sysinfo::System::host_name().unwrap_or_default();
+        format!("{host}-{}", std::process::id())
+    }
+
     /// The runtime the caller is on, else the process runtime.
     pub fn caller_runtime(&self) -> Result<tokio::runtime::Handle, ProcessError> {
         tokio::runtime::Handle::try_current().or_else(|_| (self.runtime)())

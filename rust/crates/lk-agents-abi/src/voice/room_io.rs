@@ -13,6 +13,12 @@ use std::time::Duration;
 #[crate::host(file(module = "room_io", path = "livekit.agents.voice.room_io"))]
 const _: () = ();
 
+/// The participant kinds a room links to when none are given: no agents or egress, so agents
+/// never link to each other.
+#[crate::host(constant(path = "livekit.agents.job", proto_enum = "livekit.rtc.ParticipantKind"))]
+pub const DEFAULT_PARTICIPANT_KINDS: &[ParticipantKind] =
+    &[ParticipantKind::Connector, ParticipantKind::Sip, ParticipantKind::Standard];
+
 // The public RoomOptions as the core reads it: each leg through its `get_*_options()`.
 
 /// A normalized `AudioInputOptions` view. Generated extraction reads its declared attributes.

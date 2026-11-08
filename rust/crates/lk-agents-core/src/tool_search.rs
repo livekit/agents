@@ -189,6 +189,8 @@ impl Bm25 {
 
 pub struct ToolDiscovery;
 
+use lk_agents_abi::llm::provider_format::tools::RawFunctionDescription;
+
 impl abi::ToolSearch for ToolDiscovery {
     type Document = Document;
 
@@ -215,6 +217,39 @@ impl abi::ToolSearch for ToolDiscovery {
             Err(ToolSearchError(format!("No tools found matching '{query}'.")))
         } else {
             Ok("Tools loaded successfully.".into())
+        }
+    }
+
+    fn tool_search_schema(
+        search_description: String,
+        query_description: String,
+    ) -> RawFunctionDescription {
+        RawFunctionDescription {
+            name: "tool_search".into(),
+            description: Some(search_description),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": query_description}},
+                "required": ["query"],
+            }),
+        }
+    }
+
+    fn call_tool_schema(description: String) -> RawFunctionDescription {
+        RawFunctionDescription {
+            name: "call_tool".into(),
+            description: Some(description),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "The name of the tool to call"},
+                    "parameters": {
+                        "type": "object",
+                        "description": "The parameters to pass to the tool",
+                    },
+                },
+                "required": ["name", "parameters"],
+            }),
         }
     }
 

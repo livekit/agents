@@ -9,7 +9,8 @@ use crate::errors::HostError;
 use crate::invoke::CallContext;
 use crate::worker::http::{EndpointHandler, EndpointKind};
 use crate::worker::ipc_host::WorkerError;
-use crate::worker::types::{ProcessStartOptions, RunningJobInfo, ServerOptions};
+use crate::worker::job::RunningJobInfo;
+use crate::worker::types::{ProcessStartOptions, ServerOptions};
 
 /// Preserve the native configuration identity shared by a server and its options surface.
 #[crate::host(native(refused = "expected a native ServerConfig"))]
@@ -36,6 +37,10 @@ pub trait ServerConfig: Send + Sync + Sized + 'static {
     fn agent_name(&self) -> String;
     #[host(getter)]
     fn deployment(&self) -> String;
+    /// An A2A card's default version: the deployment the worker registered under, else
+    /// `LIVEKIT_AGENT_VERSION` for a local worker, else `"1.0.0"`.
+    #[host(getter)]
+    fn card_version(&self) -> String;
     /// Hosted on Cloud (`LIVEKIT_WORKER_TOKEN` set).
     #[host(getter)]
     fn cloud(&self) -> bool;

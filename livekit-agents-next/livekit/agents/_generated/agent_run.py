@@ -215,6 +215,12 @@ the arguments its `*PromptArgs` names.
 """
 
 
+ToolTemplateKey: TypeAlias = Literal["update_template", "duplicate_reject_template", "duplicate_confirm_template", "reply_at_tail_template", "reply_maybe_covered_template"]
+"""An `AsyncToolOptions` key: the host's `ctx.update` template, or the one overriding a
+[`ToolTemplate`].
+"""
+
+
 @dataclass(kw_only=True, slots=True)
 class AgentDefinition:
     """The shared agent definition (agents.md "Agent"): reusable configuration every invocation reads
@@ -313,6 +319,10 @@ EventExpectation: TypeAlias = (
 """What an assertion expects of an event: its kind and the fields it names."""
 
 
+EventType: TypeAlias = Literal["message", "function_call", "function_call_output"]
+"""The kind of event an assertion names: an [`EventExpectation`] variant."""
+
+
 @dataclass(kw_only=True, slots=True)
 class RunInputRequirement:
     """One tool call still awaiting human input. This is correlated outcome metadata, not a
@@ -400,62 +410,6 @@ class OutputValidated:
 
 Output: TypeAlias = OutputText | OutputValidated
 """The accepted output of a completed invocation."""
-
-
-@dataclass(kw_only=True, slots=True)
-class RunErrorNoModel:
-    """The agent has no model to run a step with."""
-
-
-@dataclass(kw_only=True, slots=True)
-class RunErrorCancelled:
-    pass
-
-
-@dataclass(kw_only=True, slots=True)
-class RunErrorModel:
-    """The model request failed after the provider's own recovery."""
-
-    message: str
-
-
-@dataclass(kw_only=True, slots=True)
-class RunErrorHost:
-    """A host callback the invocation depends on (instructions, output validation) failed."""
-
-    message: str
-
-
-@dataclass(kw_only=True, slots=True)
-class RunErrorToolRetriesExceeded:
-    """The model kept calling `tool` wrongly past its retry budget."""
-
-    tool: str
-    retries: int
-
-
-@dataclass(kw_only=True, slots=True)
-class RunErrorOutputRetriesExceeded:
-    """The model kept producing rejected final output past its retry budget."""
-
-    retries: int
-
-
-@dataclass(kw_only=True, slots=True)
-class RunErrorSessionClosed:
-    """The voice session closed before the run settled."""
-
-
-RunError: TypeAlias = (
-    RunErrorNoModel
-    | RunErrorCancelled
-    | RunErrorModel
-    | RunErrorHost
-    | RunErrorToolRetriesExceeded
-    | RunErrorOutputRetriesExceeded
-    | RunErrorSessionClosed
-)
-"""Why an invocation settled without a result."""
 
 
 @dataclass(kw_only=True, slots=True)
@@ -567,7 +521,7 @@ class RunUpdateFinished:
 class RunUpdateFailed:
     """The last update of a run that settled without one."""
 
-    error: RunError
+    error: BaseException
     input_requirements: list[RunInputRequirement] = field(default_factory=list)
     provider_error: BaseException | None = None
     """The original model failure, retained beside its correlated outcome metadata."""

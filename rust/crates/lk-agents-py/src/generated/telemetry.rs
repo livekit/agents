@@ -219,10 +219,11 @@ pub fn _core_telemetry_install(py: Python<'_>, sdk_version: ::std::string::Strin
     Ok(())
 }
 
-/// Replaces the application endpoint; arguments override the environment.
+/// Send the process's spans and metrics to an OTLP/HTTP protobuf endpoint; arguments override
+/// the `OTEL_EXPORTER_OTLP_*` environment.
 #[pyfunction]
 #[pyo3(signature = (*, endpoint = None, headers = None, metadata = None, allow_pii = None))]
-pub fn _core_telemetry_configure(
+pub fn configure(
     py: Python<'_>,
     endpoint: ::std::option::Option<::std::string::String>,
     headers: ::std::option::Option<
@@ -249,8 +250,9 @@ pub fn _core_telemetry_configure(
     Ok(())
 }
 
+/// The process's export counters.
 #[pyfunction]
-pub fn _core_telemetry_diagnostics<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+pub fn diagnostics<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
     let out = py.detach(
         <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_diagnostics,
     );
@@ -266,10 +268,10 @@ pub fn _core_telemetry_conflict(py: Python<'_>) -> PyResult<()> {
     Ok(())
 }
 
-/// GenAI message capture for spans recorded afterwards.
+/// Whether model request and response messages and judge explanations are recorded.
 #[pyfunction]
 #[pyo3(signature = (enabled))]
-pub fn _core_set_capture_content(py: Python<'_>, enabled: bool) -> PyResult<()> {
+pub fn set_capture_content(py: Python<'_>, enabled: bool) -> PyResult<()> {
     py.detach(|| {
         <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_set_capture_content(
             enabled,

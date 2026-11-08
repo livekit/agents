@@ -14,8 +14,7 @@ use lk_agents_abi::worker::ipc::{JobCompletion, JobRunnerOptions, JobStatus};
 use lk_agents_abi::worker::ipc_host::{
     self, JobLauncher, LaunchReport, SupervisedJob, WorkerError,
 };
-use lk_agents_abi::worker::job::StartJobFields;
-use lk_agents_abi::worker::types::RunningJobInfo;
+use lk_agents_abi::worker::job::{RunningJobInfo, StartJob};
 use tokio::sync::watch;
 
 use super::executor::{RunnerExecutor, ThreadExecutor};
@@ -259,25 +258,15 @@ impl ipc_host::JobSupervisor for JobSupervisor {
     ) -> Result<(), WorkerError> {
         let sup =
             self.sup().ok_or_else(|| WorkerError::Failed("process not initialized".into()))?;
-        let fields = StartJobFields {
-            job: info.job.proto.clone(),
-            name: info.accept_arguments.name.clone(),
-            identity: info.accept_arguments.identity.clone(),
-            metadata: info.accept_arguments.metadata.clone(),
-            url: info.url.clone(),
-            token: info.token.clone(),
-            worker_id: info.worker_id.clone(),
-            fake_job: info.fake_job,
-            received_at: info.received_at,
-            accepted_at: info.accepted_at,
-            assigned_at: info.assigned_at,
-            // The dispatch timeline: a ready process is now handling the job.
-            launched_at: lk_agents_net::clock::unix_now(),
+        // The dispatch timeline: a ready process is now handling the job.
+        let info = RunningJobInfo { launched_at: lk_agents_net::clock::unix_now(), ..info };
+        let job = StartJob {
+            info: info.clone(),
             traceparent: cx.span().map(telemetry::SpanContext::traceparent),
         };
         // The runner's own guard refuses a second job and a runner that is not ready.
         self.spawner
-            .run(async move { sup.start_job(fields).await })
+            .run(async move { sup.start_job(job).await })
             .await
             .map_err(|error| WorkerError::Failed(error.to_string()))?;
         self.state.lock().running_job = Some(info);
@@ -358,11 +347,12 @@ impl SupervisorCallbacks for JobLogger {
     fn runner(&self) -> RunnerFields {
         let state = self.state.lock();
         let job = state.running_job.as_ref().map(|info| &info.job);
+        let room = job.and_then(|job| job.room.as_ref());
         RunnerFields {
             pid: state.pid,
             job_id: job.map(|job| job.id.clone()),
-            room: job.and_then(|job| job.room.clone()),
-            room_id: job.and_then(|job| job.room_sid.clone()),
+            room: room.map(|room| room.name.clone()),
+            room_id: room.map(|room| room.sid.clone()),
         }
     }
 }

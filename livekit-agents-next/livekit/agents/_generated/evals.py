@@ -49,22 +49,11 @@ class JudgmentResult:
 
 
 @dataclass(kw_only=True, slots=True)
-class JudgeSpecBuiltIn:
-    """A built-in judge, by its name (`"accuracy"`, `"task_completion"`, ...)."""
-
-    name: str
-
-
-@dataclass(kw_only=True, slots=True)
-class JudgeSpecHost:
-    """An application evaluator, which the evaluation's host runs."""
+class JudgeSpec:
+    """One judge of an evaluation: an application evaluator, which the evaluation's host runs."""
 
     name: str
     evaluator: object
-
-
-JudgeSpec: TypeAlias = JudgeSpecBuiltIn | JudgeSpecHost
-"""One judge of an evaluation."""
 
 
 @dataclass(kw_only=True, slots=True)

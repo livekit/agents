@@ -130,6 +130,8 @@ pub struct Namespace {
     backend: OnceCell<Backend>,
     a2a_tasks: Arc<TaskSet>,
     clock: Arc<dyn lk_agents_abi::Clock>,
+    /// The lease holder id this process opens threads under.
+    holder: String,
 }
 
 /// A local items page when the caller names no limit.
@@ -184,6 +186,19 @@ fn seconds(value: Option<f64>, default: Duration, name: &str) -> Result<Duration
         Some(s) => Duration::try_from_secs_f64(s)
             .map_err(|e| StorageError::Invalid(format!("{name}: {e}"))),
         None => Ok(default),
+    }
+}
+
+/// `value`, else the environment variable `name` as float seconds.
+fn env_seconds(value: Option<f64>, name: &str) -> Result<Option<f64>, StorageError> {
+    if value.is_some() {
+        return Ok(value);
+    }
+    match std::env::var(name) {
+        Ok(raw) if !raw.is_empty() => {
+            raw.parse().map(Some).map_err(|e| StorageError::Invalid(format!("{name}={raw:?}: {e}")))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -326,26 +341,53 @@ impl HostStorageClass for Namespace {
         api_secret: Option<String>,
         lease_ttl: Option<f64>,
         renew_interval: Option<f64>,
+        holder: Option<String>,
     ) -> Result<Self, StorageError> {
         let default = LeaseTiming::default();
-        let lease = LeaseTiming::new(
-            seconds(lease_ttl, default.ttl, "lease_ttl")?,
-            seconds(renew_interval, default.renew_interval, "renew_interval")?,
-        )?;
-        let config = match (local, url, api_key, api_secret) {
-            (local, None, None, None) => Config::local(local, lease)?,
-            (None, Some(url), Some(key), Some(secret)) => {
-                Config::cloud(&url, key, secret, lease, env)?
+        let lease = |ttl, renew_interval| {
+            LeaseTiming::new(
+                seconds(ttl, default.ttl, "lease_ttl")?,
+                seconds(renew_interval, default.renew_interval, "renew_interval")?,
+            )
+        };
+        let config = match local {
+            Some(local) => {
+                if url.is_some() || api_key.is_some() || api_secret.is_some() {
+                    return Err(StorageError::Invalid(
+                        "local storage takes no project url or key pair".into(),
+                    ));
+                }
+                Config::local(Some(local), lease(lease_ttl, renew_interval)?)?
             }
-            _ => {
-                return Err(StorageError::Invalid(
-                    "storage is a local directory, or a project's url, api_key and api_secret"
-                        .into(),
-                ));
+            None => {
+                let setting = |value: Option<String>, name: &str| {
+                    value.or_else(|| std::env::var(name).ok()).filter(|value| !value.is_empty())
+                };
+                let (Some(url), Some(key), Some(secret)) = (
+                    setting(url, "LIVEKIT_URL"),
+                    setting(api_key, "LIVEKIT_API_KEY"),
+                    setting(api_secret, "LIVEKIT_API_SECRET"),
+                ) else {
+                    return Err(StorageError::Invalid(
+                        "AgentDBStorage needs the project's LIVEKIT_URL, LIVEKIT_API_KEY and \
+                         LIVEKIT_API_SECRET"
+                            .into(),
+                    ));
+                };
+                let lease = lease(
+                    env_seconds(lease_ttl, "LIVEKIT_AGENTDB_LEASE_TTL")?,
+                    env_seconds(renew_interval, "LIVEKIT_AGENTDB_RENEW_INTERVAL")?,
+                )?;
+                Config::cloud(&url, key, secret, lease, env)?
             }
         };
         let (backend, a2a_tasks, clock) = (OnceCell::new(), Arc::default(), env.clock.clone());
-        Ok(Self { config, backend, a2a_tasks, clock })
+        let holder = holder.filter(|h| !h.is_empty()).unwrap_or_else(|| env.lease_holder());
+        Ok(Self { config, backend, a2a_tasks, clock, holder })
+    }
+
+    fn holder(&self) -> String {
+        self.holder.clone()
     }
 
     fn location(&self) -> String {
@@ -771,6 +813,7 @@ mod tests {
             Some("wss://project.livekit.cloud".into()),
             Some("key".into()),
             Some("secret".into()),
+            None,
             None,
             None,
         )

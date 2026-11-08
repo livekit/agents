@@ -39,6 +39,10 @@ impl lk_agents_abi::errors::ApiErrorFunctions for HttpErrors {
     fn http_error_message(message: &str, status: i64, reason: Option<String>) -> String {
         lk_agents_abi::errors::http_error_message(message, status, reason.as_deref())
     }
+
+    fn retryable_for_status(status_code: i64, retryable: Option<bool>) -> bool {
+        lk_agents_abi::errors::retryable_for_status(status_code, retryable)
+    }
 }
 
 /// A transport observation and the instant it was made.

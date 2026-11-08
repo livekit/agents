@@ -158,7 +158,8 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
             }
         }
         if inner.is_some()
-            && (kind.is_none() || !matches!(&v.fields, syn::Fields::Unnamed(f) if f.unnamed.len() == 1))
+            && (kind.is_none()
+                || !matches!(&v.fields, syn::Fields::Unnamed(f) if f.unnamed.len() == 1))
         {
             return syn::Error::new_spanned(
                 &v.ident,

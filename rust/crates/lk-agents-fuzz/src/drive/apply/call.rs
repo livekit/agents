@@ -420,9 +420,7 @@ impl Run {
             Input::SetVideoInput { attach } => api
                 .set_video_input(attach.then(|| fakes::FakeVideoInput::new(registry) as _))
                 .ok()?,
-            Input::SetIoEnabled { leg, enabled } => {
-                api.set_io_enabled(*leg, *enabled).ok()?
-            }
+            Input::SetIoEnabled { leg, enabled } => api.set_io_enabled(*leg, *enabled).ok()?,
             Input::SetAudioOutput { attach } => api
                 .set_audio_output(attach.then(|| {
                     fakes::FakeAudioOutput::new(
@@ -491,7 +489,12 @@ impl Run {
             Input::Dtmf { input, key, digits, confirm, timeout } => match input {
                 DtmfInput::Start => {
                     let reply = api
-                        .collect_dtmf(digits.0 as usize + 1, *confirm, secs(*timeout), "#".into())
+                        .collect_dtmf(
+                            digits.0 as usize + 1,
+                            *confirm,
+                            secs(*timeout),
+                            lk_agents_abi::voice::workflows::dtmf::DtmfEvent::Pound,
+                        )
                         .ok()?;
                     return Some(Pending::Answer {
                         owner: AwaitOwner::Dtmf,

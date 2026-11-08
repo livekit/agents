@@ -104,7 +104,7 @@ pub trait WorkflowChecks {
     #[host(function)]
     fn email_read_back(email_address: String) -> String;
     /// The Luhn checksum over an all-digit string.
-    #[host(function)]
+    #[host(function, path = "livekit.agents.beta.workflows")]
     fn validate_card_number(card_number: String) -> bool;
     /// Whether a two-digit expiry year and its month precede `today`'s month.
     #[host(function)]
@@ -119,17 +119,17 @@ pub trait WorkflowChecks {
         today: Date,
     ) -> Result<Date, DateOfBirthRefused>;
     /// Stripped, and refused unless it reads `local@label.….tld`.
-    #[host(function)]
+    #[host(function, path = "livekit.agents.beta.workflows")]
     fn normalize_email_address(email: String) -> Result<String, CaptureRefused>;
     /// Whitespace, hyphens, parentheses and dots dropped, and refused unless it reads `+?[1-9]`
     /// followed by six to fourteen digits.
-    #[host(function)]
+    #[host(function, path = "livekit.agents.beta.workflows")]
     fn normalize_phone_number(phone_number: String) -> Result<String, CaptureRefused>;
     /// Digits are themselves, `*` is 10, `#` is 11 and `A`-`D` are 12-15.
-    #[host(function)]
+    #[host(function, name = "dtmf_event_to_code", path = "livekit.agents.beta.workflows")]
     fn dtmf_code(symbol: String) -> Result<u8, UnknownDtmfSymbol>;
     /// The space-joined digits that fill the DTMF read-back's `{digits}` hole.
-    #[host(function)]
+    #[host(function, path = "livekit.agents.beta.workflows")]
     fn format_dtmf(symbols: Vec<String>) -> Result<String, UnknownDtmfSymbol>;
 }
 

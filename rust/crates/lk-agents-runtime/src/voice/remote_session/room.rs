@@ -183,4 +183,3 @@ async fn read_bounded(stream: &mut ByteStream) -> Result<Vec<u8>, HostError> {
     }
     Ok(data)
 }
-

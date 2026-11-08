@@ -1,4 +1,5 @@
-//! The prompts the workflows' host tools are written with, in the `workflow_prompts` module.
+//! The prompts the beta and workflow host tools are written with, in the `workflow_prompts`
+//! module.
 
 #[crate::host(file(module = "workflow_prompts"))]
 const _: () = ();
@@ -38,3 +39,20 @@ pub const ASK_EMAIL_INSTRUCTIONS: &str =
 
 #[crate::host(constant)]
 pub const EMAIL_READ_BACK: &str = "Just to confirm, your email is {email_address}, right?";
+
+/// `ToolSearchToolset`'s default `tool_search` description.
+#[crate::host(constant)]
+pub const TOOL_SEARCH_DESCRIPTION: &str = "Search for available tools by describing what you need. The matching tools will become available for use after calling this tool. Call this before attempting to use a tool that isn't currently available.";
+
+/// The default description of `tool_search`'s `query` parameter.
+#[crate::host(constant)]
+pub const TOOL_SEARCH_QUERY_DESCRIPTION: &str =
+    "keywords to search for in the tool names and descriptions, split by spaces";
+
+/// `ToolProxyToolset`'s default `tool_search` description.
+#[crate::host(constant)]
+pub const TOOL_PROXY_SEARCH_DESCRIPTION: &str = "Search for available tools by describing what you need. Returns the schemas of matching tools. Use call_tool to invoke them.";
+
+/// `ToolProxyToolset`'s default `call_tool` description.
+#[crate::host(constant)]
+pub const CALL_TOOL_DESCRIPTION: &str = "Call a tool by name with the given arguments. Use tool_search to discover available tools and their schemas if it isn't already loaded.";

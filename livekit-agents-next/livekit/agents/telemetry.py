@@ -18,37 +18,12 @@ from opentelemetry.util._decorator import _agnosticcontextmanager
 from livekit import rtc
 
 from . import _core
-from ._generated import semconv
-from ._generated.telemetry import SpanContext as _SpanContext, TelemetryDiagnostics
+from ._generated import public_telemetry as _public, semconv
+from ._generated.public_telemetry import *  # noqa: F403
+from ._generated.telemetry import SpanContext as _SpanContext
 
-__all__ = ["configure", "diagnostics", "set_capture_content"]
-
-
-def configure(
-    *,
-    endpoint: str | None = None,
-    headers: Mapping[str, str] | None = None,
-    metadata: Mapping[str, Any] | None = None,
-    allow_pii: bool | None = None,
-) -> None:
-    """Send the process's spans and metrics to an OTLP/HTTP protobuf endpoint; arguments override
-    the ``OTEL_EXPORTER_OTLP_*`` environment."""
-    _core._core_telemetry_configure(
-        endpoint=endpoint,
-        headers=dict(headers) if headers else None,
-        metadata=dict(metadata) if metadata else None,
-        allow_pii=allow_pii,
-    )
-
-
-def set_capture_content(enabled: bool) -> None:
-    """Whether model request and response messages and judge explanations are recorded."""
-    _core._core_set_capture_content(enabled)
-
-
-def diagnostics() -> TelemetryDiagnostics:
-    """The process's export counters."""
-    return _core._core_telemetry_diagnostics()
+__all__: list[str] = []
+__all__ += _public.__all__
 
 
 async def _shutdown() -> None:

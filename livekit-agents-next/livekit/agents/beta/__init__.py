@@ -14,9 +14,15 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, Self, cast
 
 from .. import _core
+from .._generated import public_beta as _public
 from .._generated.public_beta import *  # noqa: F403
-from .._generated.toolset_events import SearchItem, ToolCalledEvent, ToolCompletedEvent
-from .._generated.workflow_prompts import END_CALL_DESCRIPTION
+from .._generated.workflow_prompts import (
+    CALL_TOOL_DESCRIPTION,
+    END_CALL_DESCRIPTION,
+    TOOL_PROXY_SEARCH_DESCRIPTION,
+    TOOL_SEARCH_DESCRIPTION,
+    TOOL_SEARCH_QUERY_DESCRIPTION,
+)
 from ..job import get_job_context
 from ..llm import ToolFlag, Toolset, function_tool
 from ..llm.tool_context import (
@@ -36,16 +42,14 @@ from .workflows import DtmfEvent
 __all__ = [
     "workflows",
     "EndCallTool",
-    "ToolCalledEvent",
-    "ToolCompletedEvent",
     "send_dtmf_events",
     "BM25SearchStrategy",
     "KeywordSearchStrategy",
-    "SearchItem",
     "SearchStrategy",
     "ToolProxyToolset",
     "ToolSearchToolset",
 ]
+__all__ += _public.__all__
 
 
 class EndCallTool(Toolset):
@@ -130,9 +134,7 @@ async def send_dtmf_events(ctx: RunContext, events: list[DtmfEvent]) -> str:
     if session is None:
         raise RuntimeError("DTMF tones are sent on a call; this tool runs outside one")
     room = session._room or get_job_context().room
-    return await _core.send_dtmf_events(
-        _core._core_create_room_session(Room.of(room)), [event.value for event in events]
-    )
+    return await _core.send_dtmf_events(_core._core_create_room_session(Room.of(room)), events)
 
 
 class SearchStrategy(Protocol):
@@ -141,19 +143,6 @@ class SearchStrategy(Protocol):
         self, query: str, items: list[SearchItem], max_results: int
     ) -> list[SearchItem] | Awaitable[list[SearchItem]]: ...
     def cleanup(self) -> None | Awaitable[None]: ...
-
-
-_DEFAULT_SEARCH_DESCRIPTION = (
-    "Search for available tools by describing what you need. "
-    "The matching tools will become available for use after calling this tool. "
-    "Call this before attempting to use a tool that isn't "
-    "currently available."
-)
-
-
-_DEFAULT_QUERY_DESCRIPTION = (
-    "keywords to search for in the tool names and descriptions, split by spaces"
-)
 
 
 class ToolSearchToolset(Toolset):
@@ -185,19 +174,12 @@ class ToolSearchToolset(Toolset):
 
         self._search_items: list[SearchItem] = []
 
-        search_description = search_description or _DEFAULT_SEARCH_DESCRIPTION
-        query_description = query_description or _DEFAULT_QUERY_DESCRIPTION
         self._search_tool = function_tool(
             self._handle_search,
-            raw_schema={
-                "name": "tool_search",
-                "description": search_description,
-                "parameters": {
-                    "type": "object",
-                    "properties": {"query": {"type": "string", "description": query_description}},
-                    "required": ["query"],
-                },
-            },
+            raw_schema=_core.tool_search_schema(
+                search_description or TOOL_SEARCH_DESCRIPTION,
+                query_description or TOOL_SEARCH_QUERY_DESCRIPTION,
+            ),
         )
 
     @property
@@ -326,18 +308,6 @@ class BM25SearchStrategy:
         self._index.clear()
 
 
-_PROXY_SEARCH_DESCRIPTION = (
-    "Search for available tools by describing what you need. "
-    "Returns the schemas of matching tools. Use call_tool to invoke them."
-)
-
-
-_DEFAULT_CALL_DESCRIPTION = (
-    "Call a tool by name with the given arguments. "
-    "Use tool_search to discover available tools and their schemas if it isn't already loaded."
-)
-
-
 class ToolProxyToolset(ToolSearchToolset):
     """Exposes exactly two fixed tools: tool_search and call_tool.
 
@@ -365,32 +335,14 @@ class ToolProxyToolset(ToolSearchToolset):
             tools=tools,
             max_results=max_results,
             search_strategy=search_strategy,
-            search_description=search_description or _PROXY_SEARCH_DESCRIPTION,
+            search_description=search_description or TOOL_PROXY_SEARCH_DESCRIPTION,
             query_description=query_description,
         )
         self._tool_ctx: ToolContext | None = None
 
-        call_description = call_description or _DEFAULT_CALL_DESCRIPTION
         self._call_tool = function_tool(
             self._handle_call,
-            raw_schema={
-                "name": "call_tool",
-                "description": call_description,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                            "description": "The name of the tool to call",
-                        },
-                        "parameters": {
-                            "type": "object",
-                            "description": "The parameters to pass to the tool",
-                        },
-                    },
-                    "required": ["name", "parameters"],
-                },
-            },
+            raw_schema=_core.call_tool_schema(call_description or CALL_TOOL_DESCRIPTION),
         )
 
     @property

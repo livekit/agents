@@ -37,6 +37,7 @@ pub fn supported_nonverbals<'py>(
     crate::generated::records::tts::markup_info_to_py(py, out)
 }
 
+/// Strip every provider's expressive XML markup; brackets are prose and stay.
 #[pyfunction]
 #[pyo3(signature = (text))]
 pub fn split_all_markup<'py>(
@@ -95,6 +96,8 @@ pub fn strip_expr_markup(
     ::pyo3::PyResult::Ok(out)
 }
 
+/// Strip only the `<expr/>` dialect, returning the clean text and its markers; the
+/// provider-native tags stay in the words.
 #[pyfunction]
 #[pyo3(signature = (text))]
 pub fn split_expr_markup<'py>(

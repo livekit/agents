@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from livekit.agents.llm import ChatItem
     from livekit.agents.llm.tool_context import ToolChoice
 
-    from .agent_run import RunError, RunInputRequirement, RunSettled
+    from .agent_run import RunInputRequirement, RunSettled
     from .chat_items import FunctionCall
     from .events import CloseReason
     from .metrics import AgentMetrics
@@ -178,7 +178,7 @@ class RunFailedWire:
 
     run: object | None
     """The host's object for the run (the future its `_run()` awaits)."""
-    error: RunError
+    error: BaseException
     input_requirements: list[RunInputRequirement] = field(default_factory=list)
     provider_error: BaseException | None = None
     """The provider failure the run's last speech ended on, raised as itself."""
@@ -251,6 +251,8 @@ class SessionErrorWire:
     """
 
     source: Literal["stt_error", "llm_error", "tts_error", "realtime_model_error", "audio_processing_error"]
+    slot: Literal["llm", "stt", "tts", "vad"] | None
+    """The session slot whose provider failed (`source.slot()`); `None` for an audio processor."""
     recoverable: bool
     label: Literal["host", "engine"]
     error: BaseException

@@ -17,7 +17,7 @@ from .room_input_events import (
     TextInputEvent as TextInputEvent,
 )
 
-__all__ = [
+__all__: list[str] = [
     "TextInputOptions",
     "AudioProcessingError",
     "TextInputEvent",

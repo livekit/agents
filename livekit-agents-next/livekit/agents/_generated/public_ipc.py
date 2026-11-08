@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from .worker_ipc import JobRunnerOptions as JobRunnerOptions, JobStatus as JobStatus
 
-__all__ = [
+__all__: list[str] = [
     "JobStatus",
     "JobRunnerOptions",
 ]

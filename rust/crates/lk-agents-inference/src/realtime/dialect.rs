@@ -10,8 +10,7 @@ use serde_json::{Value, json};
 
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 
-pub const SAMPLE_RATE: u32 = 24_000;
-pub const NUM_CHANNELS: u16 = 1;
+pub use lk_agents_abi::llm::realtime::{NUM_CHANNELS, SAMPLE_RATE};
 /// A string: `f64::INFINITY` would serialise as `null`.
 pub const DEFAULT_MAX_OUTPUT_TOKENS: &str = "inf";
 /// `_FATAL_ERROR_CODES`: the socket reconnects but every generation fails, so these stop the
@@ -237,10 +236,10 @@ impl Dialect {
 pub const OPENAI: Dialect = Dialect {
     provider: RealtimeProvider::Openai,
     provider_label: "OpenAI Realtime API",
-    default_base_url: "https://api.openai.com/v1",
+    default_base_url: lk_agents_abi::llm::realtime::OPENAI_BASE_URL,
     api_key_env: "OPENAI_API_KEY",
     default_model: "gpt-realtime",
-    default_voice: "marin",
+    default_voice: lk_agents_abi::llm::realtime::DEFAULT_VOICE,
     default_transcription_model: Some("gpt-4o-mini-transcribe"),
     // `DEFAULT_TURN_DETECTION`, "got from a default session from their API".
     default_turn_detection: Some(TurnDetection::SemanticVad {

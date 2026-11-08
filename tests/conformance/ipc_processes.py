@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING, Any
 import psutil
 
 from livekit.agents import _core
-from livekit.agents._generated.worker_server import AcceptArguments, JobInfo, RunningJobInfo
 from livekit.agents.ipc import JobLauncher, JobRunnerOptions
+from livekit.agents.job import JobAcceptArguments, RunningJobInfo
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -56,20 +56,8 @@ def job_runner(
 def running_job(job: agent.Job, *, fake_job: bool = True) -> RunningJobInfo:
     """The worker's record of `job`, as a dispatch would hand it over."""
     return RunningJobInfo(
-        accept_arguments=AcceptArguments(name="", identity="", metadata="", attributes=[]),
-        job=JobInfo(
-            id=job.id,
-            dispatch_id=job.dispatch_id,
-            type=job.type,
-            room=job.room.name if job.HasField("room") else None,
-            room_sid=job.room.sid if job.HasField("room") else None,
-            agent_name=job.agent_name,
-            metadata=job.metadata,
-            deployment=job.deployment,
-            enable_recording=job.enable_recording,
-            enable_redaction=job.enable_redaction,
-            proto=job.SerializeToString(),
-        ),
+        accept_arguments=JobAcceptArguments(name="", identity="", metadata=""),
+        job=job,
         url="",
         token="",
         worker_id="",

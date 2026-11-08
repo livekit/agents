@@ -72,7 +72,7 @@ impl McpToolsetHost for Host {
 struct Lifecycle(McpToolsetLifecycle, Arc<Host>);
 
 fn lifecycle(host: &Arc<Host>) -> Lifecycle {
-    Lifecycle(McpToolsetLifecycle::new("test".into(), 60.0, host.session.clone()), host.clone())
+    Lifecycle(McpToolsetLifecycle::new("test".into(), host.session.clone()), host.clone())
 }
 
 async fn setup(lifecycle: &Lifecycle) {

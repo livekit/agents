@@ -2144,6 +2144,26 @@ pub mod agent_run {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
+
+    pub fn tool_template_key_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::agent::ToolTemplateKey,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::agent::ToolTemplateKey::Update => "update_template",
+            ::lk_agents_abi::agent::ToolTemplateKey::DuplicateReject => "duplicate_reject_template",
+            ::lk_agents_abi::agent::ToolTemplateKey::DuplicateConfirm => {
+                "duplicate_confirm_template"
+            }
+            ::lk_agents_abi::agent::ToolTemplateKey::ReplyAtTail => "reply_at_tail_template",
+            ::lk_agents_abi::agent::ToolTemplateKey::ReplyMaybeCovered => {
+                "reply_maybe_covered_template"
+            }
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
     static AGENT_DEFINITION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -2445,6 +2465,24 @@ pub mod agent_run {
         ))
     }
 
+    // Declared in rust/crates/lk-agents-abi/src/agent/assertions.rs.
+
+    pub fn event_type_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::agent::assertions::EventKind> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "message" => Ok(::lk_agents_abi::agent::assertions::EventKind::Message),
+            "function_call" => Ok(::lk_agents_abi::agent::assertions::EventKind::FunctionCall),
+            "function_call_output" => {
+                Ok(::lk_agents_abi::agent::assertions::EventKind::FunctionCallOutput)
+            }
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "EventType: {other:?} is not one of 'message', 'function_call', 'function_call_output'"
+            ))),
+        }
+    }
+
     // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
     static RUN_INPUT_REQUIREMENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
@@ -2697,116 +2735,6 @@ pub mod agent_run {
             ::lk_agents_abi::agent::run::Output::Validated(_) => crate::py_calls::call(
                 OUTPUT_VALIDATED
                     .import(py, "livekit.agents._generated.agent_run", "OutputValidated")?
-                    .as_any(),
-                (),
-                None,
-            ),
-        }
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
-    static RUN_ERROR_NO_MODEL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static RUN_ERROR_CANCELLED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static RUN_ERROR_MODEL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static RUN_ERROR_HOST: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static RUN_ERROR_TOOL_RETRIES_EXCEEDED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static RUN_ERROR_OUTPUT_RETRIES_EXCEEDED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static RUN_ERROR_SESSION_CLOSED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn run_error_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::agent::run::RunError,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        match value {
-            ::lk_agents_abi::agent::run::RunError::NoModel => crate::py_calls::call(
-                RUN_ERROR_NO_MODEL
-                    .import(py, "livekit.agents._generated.agent_run", "RunErrorNoModel")?
-                    .as_any(),
-                (),
-                None,
-            ),
-            ::lk_agents_abi::agent::run::RunError::Cancelled => crate::py_calls::call(
-                RUN_ERROR_CANCELLED
-                    .import(py, "livekit.agents._generated.agent_run", "RunErrorCancelled")?
-                    .as_any(),
-                (),
-                None,
-            ),
-            ::lk_agents_abi::agent::run::RunError::Model(message) => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "message",
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?,
-                )?;
-                crate::py_calls::call(
-                    RUN_ERROR_MODEL
-                        .import(py, "livekit.agents._generated.agent_run", "RunErrorModel")?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-            ::lk_agents_abi::agent::run::RunError::Host(message) => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "message",
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?,
-                )?;
-                crate::py_calls::call(
-                    RUN_ERROR_HOST
-                        .import(py, "livekit.agents._generated.agent_run", "RunErrorHost")?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-            ::lk_agents_abi::agent::run::RunError::ToolRetriesExceeded { tool, retries } => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item("tool", ::pyo3::IntoPyObjectExt::into_bound_py_any(tool, py)?)?;
-                kwargs.set_item(
-                    "retries",
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(retries, py)?,
-                )?;
-                crate::py_calls::call(
-                    RUN_ERROR_TOOL_RETRIES_EXCEEDED
-                        .import(
-                            py,
-                            "livekit.agents._generated.agent_run",
-                            "RunErrorToolRetriesExceeded",
-                        )?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-            ::lk_agents_abi::agent::run::RunError::OutputRetriesExceeded { retries } => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "retries",
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(retries, py)?,
-                )?;
-                crate::py_calls::call(
-                    RUN_ERROR_OUTPUT_RETRIES_EXCEEDED
-                        .import(
-                            py,
-                            "livekit.agents._generated.agent_run",
-                            "RunErrorOutputRetriesExceeded",
-                        )?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-            ::lk_agents_abi::agent::run::RunError::SessionClosed => crate::py_calls::call(
-                RUN_ERROR_SESSION_CLOSED
-                    .import(py, "livekit.agents._generated.agent_run", "RunErrorSessionClosed")?
                     .as_any(),
                 (),
                 None,
@@ -3135,10 +3063,7 @@ pub mod agent_run {
                 provider_error,
             } => {
                 let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "error",
-                    crate::generated::records::agent_run::run_error_to_py(py, error)?,
-                )?;
+                kwargs.set_item("error", ::pyo3::PyErr::into_value(<::lk_agents_abi::agent::run::RunError as crate::py_errors::HostException>::to_py_err(&error), py).into_bound(py).into_any())?;
                 kwargs.set_item(
                     "input_requirements",
                     ::pyo3::types::PyList::new(
@@ -3307,94 +3232,6 @@ pub mod amd {
             (),
             Some(&kwargs),
         )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
-
-    pub fn amd_constants_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::voice::amd::AmdConstants,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::voice::amd::AmdConstants {
-            default_llm_model,
-            default_stt_model,
-            prompt,
-            evaluated_llm_models,
-            evaluated_stt_models,
-            human_speech_threshold,
-            human_silence_threshold,
-            machine_silence_threshold,
-            no_speech_threshold,
-            detection_timeout,
-            max_endpointing_delay,
-            max_extensions,
-            max_extension_secs,
-        } = value;
-        let dict = ::pyo3::types::PyDict::new(py);
-        dict.set_item(
-            "default_llm_model",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(default_llm_model, py)?,
-        )?;
-        dict.set_item(
-            "default_stt_model",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(default_stt_model, py)?,
-        )?;
-        dict.set_item("prompt", ::pyo3::IntoPyObjectExt::into_bound_py_any(prompt, py)?)?;
-        dict.set_item(
-            "evaluated_llm_models",
-            ::pyo3::types::PyList::new(
-                py,
-                evaluated_llm_models
-                    .into_iter()
-                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
-                    .collect::<PyResult<Vec<_>>>()?,
-            )?
-            .into_any(),
-        )?;
-        dict.set_item(
-            "evaluated_stt_models",
-            ::pyo3::types::PyList::new(
-                py,
-                evaluated_stt_models
-                    .into_iter()
-                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
-                    .collect::<PyResult<Vec<_>>>()?,
-            )?
-            .into_any(),
-        )?;
-        dict.set_item(
-            "human_speech_threshold",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(human_speech_threshold, py)?,
-        )?;
-        dict.set_item(
-            "human_silence_threshold",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(human_silence_threshold, py)?,
-        )?;
-        dict.set_item(
-            "machine_silence_threshold",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(machine_silence_threshold, py)?,
-        )?;
-        dict.set_item(
-            "no_speech_threshold",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(no_speech_threshold, py)?,
-        )?;
-        dict.set_item(
-            "detection_timeout",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(detection_timeout, py)?,
-        )?;
-        dict.set_item(
-            "max_endpointing_delay",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(max_endpointing_delay, py)?,
-        )?;
-        dict.set_item(
-            "max_extensions",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(max_extensions, py)?,
-        )?;
-        dict.set_item(
-            "max_extension_secs",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(max_extension_secs, py)?,
-        )?;
-        Ok(dict.into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
@@ -6229,41 +6066,28 @@ pub mod evals {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/evals.rs.
-    static JUDGE_SPEC_BUILT_IN: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static JUDGE_SPEC_HOST: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static JUDGE_SPEC: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
     pub fn judge_spec_from_py(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::lk_agents_abi::evals::JudgeSpec> {
         let py = obj.py();
-        if obj.is_instance(JUDGE_SPEC_BUILT_IN.import(
+        if !obj.is_instance(JUDGE_SPEC.import(
             py,
             "livekit.agents._generated.evals",
-            "JudgeSpecBuiltIn",
+            "JudgeSpec",
         )?)? {
-            return Ok(::lk_agents_abi::evals::JudgeSpec::BuiltIn {
-                name: crate::py_values::attr_with(obj, "JudgeSpecBuiltIn", "name", |v| {
-                    v.extract::<::std::string::String>()
-                })?,
-            });
+            return Err(super::not_a(obj, "JudgeSpec"));
         }
-        if obj.is_instance(JUDGE_SPEC_HOST.import(
-            py,
-            "livekit.agents._generated.evals",
-            "JudgeSpecHost",
-        )?)? {
-            return Ok(::lk_agents_abi::evals::JudgeSpec::Host {
-                name: crate::py_values::attr_with(obj, "JudgeSpecHost", "name", |v| {
-                    v.extract::<::std::string::String>()
-                })?,
-                evaluator: crate::py_values::attr_with(obj, "JudgeSpecHost", "evaluator", |v| {
-                    crate::py_objects::object_ref_from_py(v)
-                })?,
-            });
-        }
-        Err(super::not_a(obj, "JudgeSpecBuiltIn | JudgeSpecHost"))
+        Ok(::lk_agents_abi::evals::JudgeSpec {
+            name: crate::py_values::attr_with(obj, "JudgeSpec", "name", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            evaluator: crate::py_values::attr_with(obj, "JudgeSpec", "evaluator", |v| {
+                crate::py_objects::object_ref_from_py(v)
+            })?,
+        })
     }
 
     // Declared in rust/crates/lk-agents-abi/src/evals.rs.
@@ -7331,6 +7155,248 @@ pub mod io_events {
                 .as_any(),
             (),
             Some(&kwargs),
+        )
+    }
+}
+
+pub mod job_records {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/job.rs.
+    static JOB_ACCEPT_ARGUMENTS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn job_accept_arguments_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::worker::job::AcceptArguments> {
+        let py = obj.py();
+        if !obj.is_instance(JOB_ACCEPT_ARGUMENTS.import(
+            py,
+            "livekit.agents._generated.job_records",
+            "JobAcceptArguments",
+        )?)? {
+            return Err(super::not_a(obj, "JobAcceptArguments"));
+        }
+        Ok(::lk_agents_abi::worker::job::AcceptArguments {
+            name: crate::py_values::attr_with(obj, "JobAcceptArguments", "name", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            identity: crate::py_values::attr_with(obj, "JobAcceptArguments", "identity", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            metadata: crate::py_values::attr_with(obj, "JobAcceptArguments", "metadata", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            attributes: crate::py_values::attr_with(
+                obj,
+                "JobAcceptArguments",
+                "attributes",
+                |v| {
+                    v.cast::<::pyo3::types::PyDict>()?
+                        .iter()
+                        .map(|(key, item)| {
+                            let (key, item) = (&key, &item);
+                            Ok((
+                                key.extract::<::std::string::String>()?,
+                                item.extract::<::std::string::String>()?,
+                            ))
+                        })
+                        .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
+                },
+            )?,
+        })
+    }
+
+    pub fn job_accept_arguments_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::worker::job::AcceptArguments,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::worker::job::AcceptArguments { name, identity, metadata, attributes } =
+            value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
+        kwargs.set_item("identity", ::pyo3::IntoPyObjectExt::into_bound_py_any(identity, py)?)?;
+        kwargs.set_item("metadata", ::pyo3::IntoPyObjectExt::into_bound_py_any(metadata, py)?)?;
+        kwargs.set_item("attributes", {
+            let d = ::pyo3::types::PyDict::new(py);
+            for (k, x) in attributes {
+                d.set_item(
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?,
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+                )?;
+            }
+            d.into_any()
+        })?;
+        crate::py_calls::call(
+            JOB_ACCEPT_ARGUMENTS
+                .import(py, "livekit.agents._generated.job_records", "JobAcceptArguments")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/job.rs.
+    static RUNNING_JOB_INFO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn running_job_info_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::worker::job::RunningJobInfo> {
+        let py = obj.py();
+        if !obj.is_instance(RUNNING_JOB_INFO.import(
+            py,
+            "livekit.agents._generated.job_records",
+            "RunningJobInfo",
+        )?)? {
+            return Err(super::not_a(obj, "RunningJobInfo"));
+        }
+        Ok(::lk_agents_abi::worker::job::RunningJobInfo {
+            accept_arguments: crate::py_values::attr_with(
+                obj,
+                "RunningJobInfo",
+                "accept_arguments",
+                |v| crate::generated::records::job_records::job_accept_arguments_from_py(v),
+            )?,
+            job: crate::py_values::attr_with(obj, "RunningJobInfo", "job", |v| {
+                crate::py_values::proto_job_from_py(v)
+            })?,
+            url: crate::py_values::attr_with(obj, "RunningJobInfo", "url", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            token: crate::py_values::attr_with(obj, "RunningJobInfo", "token", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            worker_id: crate::py_values::attr_with(obj, "RunningJobInfo", "worker_id", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            fake_job: crate::py_values::attr_with(obj, "RunningJobInfo", "fake_job", |v| {
+                v.extract::<bool>()
+            })?,
+            received_at: crate::py_values::attr_with(obj, "RunningJobInfo", "received_at", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<f64>(v, "RunningJobInfo.received_at"))
+                        .map(Some)
+                }
+            })?,
+            accepted_at: crate::py_values::attr_with(obj, "RunningJobInfo", "accepted_at", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<f64>(v, "RunningJobInfo.accepted_at"))
+                        .map(Some)
+                }
+            })?,
+            assigned_at: crate::py_values::attr_with(obj, "RunningJobInfo", "assigned_at", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<f64>(v, "RunningJobInfo.assigned_at"))
+                        .map(Some)
+                }
+            })?,
+            launched_at: crate::py_values::attr_with(obj, "RunningJobInfo", "launched_at", |v| {
+                crate::py_values::number_from_py::<f64>(v, "RunningJobInfo.launched_at")
+            })?,
+        })
+    }
+
+    pub fn running_job_info_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::worker::job::RunningJobInfo,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::worker::job::RunningJobInfo {
+            accept_arguments,
+            job,
+            url,
+            token,
+            worker_id,
+            fake_job,
+            received_at,
+            accepted_at,
+            assigned_at,
+            launched_at,
+        } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "accept_arguments",
+            crate::generated::records::job_records::job_accept_arguments_to_py(
+                py,
+                accept_arguments,
+            )?,
+        )?;
+        kwargs.set_item("job", crate::py_values::proto_job_to_py(py, job)?)?;
+        kwargs.set_item("url", ::pyo3::IntoPyObjectExt::into_bound_py_any(url, py)?)?;
+        kwargs.set_item("token", ::pyo3::IntoPyObjectExt::into_bound_py_any(token, py)?)?;
+        kwargs.set_item("worker_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(worker_id, py)?)?;
+        kwargs.set_item("fake_job", ::pyo3::IntoPyObjectExt::into_bound_py_any(fake_job, py)?)?;
+        kwargs.set_item(
+            "received_at",
+            match received_at {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item(
+            "accepted_at",
+            match accepted_at {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item(
+            "assigned_at",
+            match assigned_at {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item(
+            "launched_at",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(launched_at, py)?,
+        )?;
+        crate::py_calls::call(
+            RUNNING_JOB_INFO
+                .import(py, "livekit.agents._generated.job_records", "RunningJobInfo")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/job.rs.
+    static JOB_EXECUTOR_TYPE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn job_executor_type_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::worker::job::JobExecutorType> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "process" => Ok(::lk_agents_abi::worker::job::JobExecutorType::Process),
+            "thread" => Ok(::lk_agents_abi::worker::job::JobExecutorType::Thread),
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "JobExecutorType: {other:?} is not one of 'process', 'thread'"
+            ))),
+        }
+    }
+
+    pub fn job_executor_type_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::worker::job::JobExecutorType,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::worker::job::JobExecutorType::Process => "process",
+            ::lk_agents_abi::worker::job::JobExecutorType::Thread => "thread",
+        };
+        crate::py_calls::call(
+            JOB_EXECUTOR_TYPE
+                .import(py, "livekit.agents._generated.job_records", "JobExecutorType")?
+                .as_any(),
+            (value,),
+            None,
         )
     }
 }
@@ -9626,6 +9692,120 @@ pub mod overlap {
             (),
             Some(&kwargs),
         )
+    }
+}
+
+pub mod provider_data {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/provider_format/mod.rs.
+
+    pub fn provider_format_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::provider_format::ProviderFormat> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "openai" => Ok(::lk_agents_abi::llm::provider_format::ProviderFormat::OpenAi),
+            "openai.responses" => {
+                Ok(::lk_agents_abi::llm::provider_format::ProviderFormat::OpenAiResponses)
+            }
+            "google" => Ok(::lk_agents_abi::llm::provider_format::ProviderFormat::Google),
+            "aws" => Ok(::lk_agents_abi::llm::provider_format::ProviderFormat::Aws),
+            "anthropic" => Ok(::lk_agents_abi::llm::provider_format::ProviderFormat::Anthropic),
+            "mistralai" => Ok(::lk_agents_abi::llm::provider_format::ProviderFormat::MistralAi),
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "ProviderFormat: {other:?} is not one of 'openai', 'openai.responses', 'google', 'aws', 'anthropic', 'mistralai'"
+            ))),
+        }
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/provider_format/mod.rs.
+    static TOOL_SCHEMA_RAW: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_SCHEMA_LEGACY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_SCHEMA_STRICT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_SCHEMA_PROVIDER: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn tool_schema_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::provider_format::ToolSchema> {
+        let py = obj.py();
+        if obj.is_instance(TOOL_SCHEMA_RAW.import(
+            py,
+            "livekit.agents._generated.provider_data",
+            "ToolSchemaRaw",
+        )?)? {
+            return Ok(::lk_agents_abi::llm::provider_format::ToolSchema::Raw {
+                name: crate::py_values::attr_with(obj, "ToolSchemaRaw", "name", |v| {
+                    v.extract::<::std::string::String>()
+                })?,
+                raw_schema: crate::py_values::attr_with(obj, "ToolSchemaRaw", "raw_schema", |v| {
+                    crate::py_values::value_from_py(v, "ToolSchemaRaw.raw_schema")
+                })?,
+            });
+        }
+        if obj.is_instance(TOOL_SCHEMA_LEGACY.import(
+            py,
+            "livekit.agents._generated.provider_data",
+            "ToolSchemaLegacy",
+        )?)? {
+            return Ok(::lk_agents_abi::llm::provider_format::ToolSchema::Legacy(
+                crate::py_values::attr_with(obj, "ToolSchemaLegacy", "schema", |v| {
+                    crate::py_values::value_from_py(v, "ToolSchemaLegacy.schema")
+                })?,
+            ));
+        }
+        if obj.is_instance(TOOL_SCHEMA_STRICT.import(
+            py,
+            "livekit.agents._generated.provider_data",
+            "ToolSchemaStrict",
+        )?)? {
+            return Ok(::lk_agents_abi::llm::provider_format::ToolSchema::Strict(
+                crate::py_values::attr_with(obj, "ToolSchemaStrict", "schema", |v| {
+                    crate::py_values::value_from_py(v, "ToolSchemaStrict.schema")
+                })?,
+            ));
+        }
+        if obj.is_instance(TOOL_SCHEMA_PROVIDER.import(
+            py,
+            "livekit.agents._generated.provider_data",
+            "ToolSchemaProvider",
+        )?)? {
+            return Ok(::lk_agents_abi::llm::provider_format::ToolSchema::Provider(
+                crate::py_values::attr_with(obj, "ToolSchemaProvider", "schema", |v| {
+                    crate::py_values::value_from_py(v, "ToolSchemaProvider.schema")
+                })?,
+            ));
+        }
+        Err(super::not_a(
+            obj,
+            "ToolSchemaRaw | ToolSchemaLegacy | ToolSchemaStrict | ToolSchemaProvider",
+        ))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/provider_format/vocabulary.rs.
+
+    pub fn tool_behavior_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::provider_format::vocabulary::GeminiToolBehavior> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "UNSPECIFIED" => Ok(
+                ::lk_agents_abi::llm::provider_format::vocabulary::GeminiToolBehavior::Unspecified,
+            ),
+            "BLOCKING" => {
+                Ok(::lk_agents_abi::llm::provider_format::vocabulary::GeminiToolBehavior::Blocking)
+            }
+            "NON_BLOCKING" => Ok(
+                ::lk_agents_abi::llm::provider_format::vocabulary::GeminiToolBehavior::NonBlocking,
+            ),
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "TOOL_BEHAVIOR: {other:?} is not one of 'UNSPECIFIED', 'BLOCKING', 'NON_BLOCKING'"
+            ))),
+        }
     }
 }
 
@@ -12455,6 +12635,38 @@ pub mod session_options {
 
     // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
 
+    pub fn turn_detection_mode_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::voice::session_options::TurnDetection> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "stt" => Ok(::lk_agents_abi::voice::session_options::TurnDetection::Stt),
+            "vad" => Ok(::lk_agents_abi::voice::session_options::TurnDetection::Vad),
+            "manual" => Ok(::lk_agents_abi::voice::session_options::TurnDetection::Manual),
+            "realtime_llm" => {
+                Ok(::lk_agents_abi::voice::session_options::TurnDetection::RealtimeLlm)
+            }
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "TurnDetectionMode: {other:?} is not one of 'stt', 'vad', 'manual', 'realtime_llm'"
+            ))),
+        }
+    }
+
+    pub fn turn_detection_mode_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::voice::session_options::TurnDetection,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::voice::session_options::TurnDetection::Stt => "stt",
+            ::lk_agents_abi::voice::session_options::TurnDetection::Vad => "vad",
+            ::lk_agents_abi::voice::session_options::TurnDetection::Manual => "manual",
+            ::lk_agents_abi::voice::session_options::TurnDetection::RealtimeLlm => "realtime_llm",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
+
     pub fn detector_kind_from_py(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::lk_agents_abi::voice::session_options::DetectorKind> {
@@ -12465,6 +12677,38 @@ pub mod session_options {
                 "DetectorKind: {other:?} is not one of 'streaming'"
             ))),
         }
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
+
+    pub fn text_transforms_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::voice::session_options::TextTransform> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "filter_markdown" => {
+                Ok(::lk_agents_abi::voice::session_options::TextTransform::FilterMarkdown)
+            }
+            "filter_emoji" => {
+                Ok(::lk_agents_abi::voice::session_options::TextTransform::FilterEmoji)
+            }
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "TextTransforms: {other:?} is not one of 'filter_markdown', 'filter_emoji'"
+            ))),
+        }
+    }
+
+    pub fn text_transforms_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::voice::session_options::TextTransform,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::voice::session_options::TextTransform::FilterMarkdown => {
+                "filter_markdown"
+            }
+            ::lk_agents_abi::voice::session_options::TextTransform::FilterEmoji => "filter_emoji",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
@@ -13072,7 +13316,9 @@ pub mod session_options {
             "turn_detection_mode",
             match turn_detection_mode {
                 None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+                Some(x) => {
+                    crate::generated::records::session_options::turn_detection_mode_to_py(py, x)?
+                }
             },
         )?;
         dict.set_item(
@@ -13104,7 +13350,9 @@ pub mod session_options {
                 Some(x) => ::pyo3::types::PyList::new(
                     py,
                     x.into_iter()
-                        .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
+                        .map(|x| {
+                            crate::generated::records::session_options::text_transforms_to_py(py, x)
+                        })
                         .collect::<PyResult<Vec<_>>>()?,
                 )?
                 .into_any(),
@@ -13751,8 +13999,7 @@ pub mod session_wire {
                 Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
             },
         )?;
-        kwargs
-            .set_item("error", crate::generated::records::agent_run::run_error_to_py(py, error)?)?;
+        kwargs.set_item("error", ::pyo3::PyErr::into_value(<::lk_agents_abi::agent::run::RunError as crate::py_errors::HostException>::to_py_err(&error), py).into_bound(py).into_any())?;
         kwargs.set_item(
             "input_requirements",
             ::pyo3::types::PyList::new(
@@ -13979,6 +14226,7 @@ pub mod session_wire {
     ) -> PyResult<Bound<'py, PyAny>> {
         let ::lk_agents_abi::voice::events::SessionErrorWire {
             source,
+            slot,
             recoverable,
             label,
             error,
@@ -13988,6 +14236,13 @@ pub mod session_wire {
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs
             .set_item("source", ::pyo3::IntoPyObjectExt::into_bound_py_any(source.as_str(), py)?)?;
+        kwargs.set_item(
+            "slot",
+            match slot {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x.as_str(), py)?,
+            },
+        )?;
         kwargs.set_item(
             "recoverable",
             ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable, py)?,
@@ -15892,6 +16147,7 @@ pub mod storage_turn {
             lane,
             message,
             batch,
+            delegated,
             history,
             state,
             context_scope_id,
@@ -15921,6 +16177,7 @@ pub mod storage_turn {
             )?
             .into_any(),
         )?;
+        kwargs.set_item("delegated", ::pyo3::IntoPyObjectExt::into_bound_py_any(delegated, py)?)?;
         kwargs.set_item(
             "history",
             ::pyo3::types::PyList::new(
@@ -18783,168 +19040,6 @@ pub mod text_session {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
-    static ROUTING_ERROR_AGENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static ROUTING_ERROR_MAX_DEPTH: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static ROUTING_ERROR_UNKNOWN_AGENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static ROUTING_ERROR_UNKNOWN_SCOPE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static ROUTING_ERROR_UNKNOWN_TOOL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static ROUTING_ERROR_MISSING_OUTPUT_TYPE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static ROUTING_ERROR_INVALID_STATE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static ROUTING_ERROR_MISSING_ACCEPTED_OUTPUT: ::pyo3::sync::PyOnceLock<
-        Py<::pyo3::types::PyType>,
-    > = ::pyo3::sync::PyOnceLock::new();
-
-    pub fn routing_error_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::text_session::RoutingError,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        match value {
-            ::lk_agents_abi::text_session::RoutingError::Agent(error) => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "error",
-                    crate::generated::records::agent_run::agent_error_to_py(py, error)?,
-                )?;
-                crate::py_calls::call(
-                    ROUTING_ERROR_AGENT
-                        .import(py, "livekit.agents._generated.text_session", "RoutingErrorAgent")?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-            ::lk_agents_abi::text_session::RoutingError::MaxDepth { max_depth } => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "max_depth",
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(max_depth, py)?,
-                )?;
-                crate::py_calls::call(
-                    ROUTING_ERROR_MAX_DEPTH
-                        .import(
-                            py,
-                            "livekit.agents._generated.text_session",
-                            "RoutingErrorMaxDepth",
-                        )?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-            ::lk_agents_abi::text_session::RoutingError::UnknownAgent(message) => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "message",
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?,
-                )?;
-                crate::py_calls::call(
-                    ROUTING_ERROR_UNKNOWN_AGENT
-                        .import(
-                            py,
-                            "livekit.agents._generated.text_session",
-                            "RoutingErrorUnknownAgent",
-                        )?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-            ::lk_agents_abi::text_session::RoutingError::UnknownScope(message) => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "message",
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?,
-                )?;
-                crate::py_calls::call(
-                    ROUTING_ERROR_UNKNOWN_SCOPE
-                        .import(
-                            py,
-                            "livekit.agents._generated.text_session",
-                            "RoutingErrorUnknownScope",
-                        )?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-            ::lk_agents_abi::text_session::RoutingError::UnknownTool(message) => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "message",
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?,
-                )?;
-                crate::py_calls::call(
-                    ROUTING_ERROR_UNKNOWN_TOOL
-                        .import(
-                            py,
-                            "livekit.agents._generated.text_session",
-                            "RoutingErrorUnknownTool",
-                        )?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-            ::lk_agents_abi::text_session::RoutingError::MissingOutputType(message) => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "message",
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?,
-                )?;
-                crate::py_calls::call(
-                    ROUTING_ERROR_MISSING_OUTPUT_TYPE
-                        .import(
-                            py,
-                            "livekit.agents._generated.text_session",
-                            "RoutingErrorMissingOutputType",
-                        )?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-            ::lk_agents_abi::text_session::RoutingError::InvalidState(message) => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "message",
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?,
-                )?;
-                crate::py_calls::call(
-                    ROUTING_ERROR_INVALID_STATE
-                        .import(
-                            py,
-                            "livekit.agents._generated.text_session",
-                            "RoutingErrorInvalidState",
-                        )?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-            ::lk_agents_abi::text_session::RoutingError::MissingAcceptedOutput => {
-                crate::py_calls::call(
-                    ROUTING_ERROR_MISSING_ACCEPTED_OUTPUT
-                        .import(
-                            py,
-                            "livekit.agents._generated.text_session",
-                            "RoutingErrorMissingAcceptedOutput",
-                        )?
-                        .as_any(),
-                    (),
-                    None,
-                )
-            }
-        }
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
     static TEXT_SESSION_TURN: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -18969,56 +19064,6 @@ pub mod text_session {
             (),
             Some(&kwargs),
         )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
-    static TEXT_SESSION_ERROR_ROUTING: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static TEXT_SESSION_ERROR_RUN: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn text_session_error_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::text_session::TextSessionError,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        match value {
-            ::lk_agents_abi::text_session::TextSessionError::Routing(error) => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "error",
-                    crate::generated::records::text_session::routing_error_to_py(py, error)?,
-                )?;
-                crate::py_calls::call(
-                    TEXT_SESSION_ERROR_ROUTING
-                        .import(
-                            py,
-                            "livekit.agents._generated.text_session",
-                            "TextSessionErrorRouting",
-                        )?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-            ::lk_agents_abi::text_session::TextSessionError::Run(error) => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "error",
-                    crate::generated::records::agent_run::run_error_to_py(py, error)?,
-                )?;
-                crate::py_calls::call(
-                    TEXT_SESSION_ERROR_RUN
-                        .import(
-                            py,
-                            "livekit.agents._generated.text_session",
-                            "TextSessionErrorRun",
-                        )?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-        }
     }
 
     // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
@@ -19345,10 +19390,7 @@ pub mod text_session {
                 provider_error,
             } => {
                 let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "error",
-                    crate::generated::records::text_session::text_session_error_to_py(py, error)?,
-                )?;
+                kwargs.set_item("error", ::pyo3::PyErr::into_value(<::lk_agents_abi::text_session::TextSessionError as crate::py_errors::HostException>::to_py_err(&error), py).into_bound(py).into_any())?;
                 kwargs.set_item(
                     "input_requirements",
                     ::pyo3::types::PyList::new(
@@ -21217,6 +21259,22 @@ pub mod turn_events {
 pub mod types {
     use pyo3::prelude::*;
 
+    // Declared in rust/crates/lk-agents-abi/src/errors/api.rs.
+
+    pub fn timeout_phase_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::errors::TimeoutPhase,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::errors::TimeoutPhase::Pool => "pool",
+            ::lk_agents_abi::errors::TimeoutPhase::Connect => "connect",
+            ::lk_agents_abi::errors::TimeoutPhase::Read => "read",
+            ::lk_agents_abi::errors::TimeoutPhase::Write => "write",
+            ::lk_agents_abi::errors::TimeoutPhase::Total => "total",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
     // Declared in rust/crates/lk-agents-abi/src/types/mod.rs.
     static FLUSH_SENTINEL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
@@ -22757,7 +22815,7 @@ pub mod voice_session {
                 crate::py_values::number_from_py::<f64>(v, "DtmfTaskOptions.timeout")
             })?,
             stop_event: crate::py_values::attr_with(obj, "DtmfTaskOptions", "stop_event", |v| {
-                v.extract::<::std::string::String>()
+                crate::generated::records::workflows::dtmf_event_from_py(v)
             })?,
         })
     }
@@ -24483,90 +24541,25 @@ pub mod worker_ipc {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/worker/job.rs.
-    static START_JOB_FIELDS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static START_JOB: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn start_job_fields_from_py(
+    pub fn start_job_from_py(
         obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::worker::job::StartJobFields> {
+    ) -> PyResult<::lk_agents_abi::worker::job::StartJob> {
         let py = obj.py();
-        if !obj.is_instance(START_JOB_FIELDS.import(
+        if !obj.is_instance(START_JOB.import(
             py,
             "livekit.agents._generated.worker_ipc",
-            "StartJobFields",
+            "StartJob",
         )?)? {
-            return Err(super::not_a(obj, "StartJobFields"));
+            return Err(super::not_a(obj, "StartJob"));
         }
-        Ok(::lk_agents_abi::worker::job::StartJobFields {
-            job: crate::py_values::attr_with(obj, "StartJobFields", "job", |v| {
-                if v.is_instance_of::<::pyo3::types::PyBytes>()
-                    || v.is_instance_of::<::pyo3::types::PyByteArray>()
-                    || v.is_instance_of::<::pyo3::types::PyMemoryView>()
-                {
-                    crate::py_values::owned_bytes(v.as_any(), "StartJobFields.job")
-                } else {
-                    v.try_iter().and_then(|items| {
-                        items
-                            .map(|item| {
-                                let item = item?;
-                                crate::py_values::number_from_py::<u8>(
-                                    item.as_any(),
-                                    "StartJobFields.job",
-                                )
-                            })
-                            .collect::<PyResult<Vec<_>>>()
-                    })
-                }
+        Ok(::lk_agents_abi::worker::job::StartJob {
+            info: crate::py_values::attr_with(obj, "StartJob", "info", |v| {
+                crate::generated::records::job_records::running_job_info_from_py(v)
             })?,
-            name: crate::py_values::attr_with(obj, "StartJobFields", "name", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            identity: crate::py_values::attr_with(obj, "StartJobFields", "identity", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            metadata: crate::py_values::attr_with(obj, "StartJobFields", "metadata", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            url: crate::py_values::attr_with(obj, "StartJobFields", "url", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            token: crate::py_values::attr_with(obj, "StartJobFields", "token", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            worker_id: crate::py_values::attr_with(obj, "StartJobFields", "worker_id", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            fake_job: crate::py_values::attr_with(obj, "StartJobFields", "fake_job", |v| {
-                v.extract::<bool>()
-            })?,
-            received_at: crate::py_values::attr_with(obj, "StartJobFields", "received_at", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (crate::py_values::number_from_py::<f64>(v, "StartJobFields.received_at"))
-                        .map(Some)
-                }
-            })?,
-            accepted_at: crate::py_values::attr_with(obj, "StartJobFields", "accepted_at", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (crate::py_values::number_from_py::<f64>(v, "StartJobFields.accepted_at"))
-                        .map(Some)
-                }
-            })?,
-            assigned_at: crate::py_values::attr_with(obj, "StartJobFields", "assigned_at", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (crate::py_values::number_from_py::<f64>(v, "StartJobFields.assigned_at"))
-                        .map(Some)
-                }
-            })?,
-            launched_at: crate::py_values::attr_with(obj, "StartJobFields", "launched_at", |v| {
-                crate::py_values::number_from_py::<f64>(v, "StartJobFields.launched_at")
-            })?,
-            traceparent: crate::py_values::attr_with(obj, "StartJobFields", "traceparent", |v| {
+            traceparent: crate::py_values::attr_with(obj, "StartJob", "traceparent", |v| {
                 if v.is_none() {
                     Ok(None)
                 } else {
@@ -24576,58 +24569,15 @@ pub mod worker_ipc {
         })
     }
 
-    pub fn start_job_fields_to_py<'py>(
+    pub fn start_job_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::worker::job::StartJobFields,
+        value: ::lk_agents_abi::worker::job::StartJob,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::worker::job::StartJobFields {
-            job,
-            name,
-            identity,
-            metadata,
-            url,
-            token,
-            worker_id,
-            fake_job,
-            received_at,
-            accepted_at,
-            assigned_at,
-            launched_at,
-            traceparent,
-        } = value;
+        let ::lk_agents_abi::worker::job::StartJob { info, traceparent } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("job", ::pyo3::types::PyBytes::new(py, &job).into_any())?;
-        kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
-        kwargs.set_item("identity", ::pyo3::IntoPyObjectExt::into_bound_py_any(identity, py)?)?;
-        kwargs.set_item("metadata", ::pyo3::IntoPyObjectExt::into_bound_py_any(metadata, py)?)?;
-        kwargs.set_item("url", ::pyo3::IntoPyObjectExt::into_bound_py_any(url, py)?)?;
-        kwargs.set_item("token", ::pyo3::IntoPyObjectExt::into_bound_py_any(token, py)?)?;
-        kwargs.set_item("worker_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(worker_id, py)?)?;
-        kwargs.set_item("fake_job", ::pyo3::IntoPyObjectExt::into_bound_py_any(fake_job, py)?)?;
         kwargs.set_item(
-            "received_at",
-            match received_at {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        kwargs.set_item(
-            "accepted_at",
-            match accepted_at {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        kwargs.set_item(
-            "assigned_at",
-            match assigned_at {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        kwargs.set_item(
-            "launched_at",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(launched_at, py)?,
+            "info",
+            crate::generated::records::job_records::running_job_info_to_py(py, info)?,
         )?;
         kwargs.set_item(
             "traceparent",
@@ -24637,12 +24587,31 @@ pub mod worker_ipc {
             },
         )?;
         crate::py_calls::call(
-            START_JOB_FIELDS
-                .import(py, "livekit.agents._generated.worker_ipc", "StartJobFields")?
-                .as_any(),
+            START_JOB.import(py, "livekit.agents._generated.worker_ipc", "StartJob")?.as_any(),
             (),
             Some(&kwargs),
         )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/ipc_host.rs.
+
+    pub fn process_event_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::worker::ipc_host::ProcessEvent,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::worker::ipc_host::ProcessEvent::Created => "process_created",
+            ::lk_agents_abi::worker::ipc_host::ProcessEvent::Started => "process_started",
+            ::lk_agents_abi::worker::ipc_host::ProcessEvent::Ready => "process_ready",
+            ::lk_agents_abi::worker::ipc_host::ProcessEvent::Closed => "process_closed",
+            ::lk_agents_abi::worker::ipc_host::ProcessEvent::JobLaunched => "process_job_launched",
+            ::lk_agents_abi::worker::ipc_host::ProcessEvent::CleanupIncomplete => {
+                "process_cleanup_incomplete"
+            }
+            ::lk_agents_abi::worker::ipc_host::ProcessEvent::JoinFailed => "process_join_failed",
+            ::lk_agents_abi::worker::ipc_host::ProcessEvent::ExitFailed => "process_exit_failed",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 }
 
@@ -24720,6 +24689,114 @@ pub mod worker_options {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
+
+    pub fn multiprocessing_context_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::worker::types::MultiprocessingContext> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "spawn" => Ok(::lk_agents_abi::worker::types::MultiprocessingContext::Spawn),
+            "forkserver" => Ok(::lk_agents_abi::worker::types::MultiprocessingContext::Forkserver),
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "MultiprocessingContext: {other:?} is not one of 'spawn', 'forkserver'"
+            ))),
+        }
+    }
+
+    pub fn multiprocessing_context_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::worker::types::MultiprocessingContext,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::worker::types::MultiprocessingContext::Spawn => "spawn",
+            ::lk_agents_abi::worker::types::MultiprocessingContext::Forkserver => "forkserver",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
+
+    pub fn listeners_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::worker::types::Listeners> {
+        let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+        Ok(::lk_agents_abi::worker::types::Listeners {
+            public: match obj.get_item("public")? {
+                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
+                    (crate::generated::records::worker_options::public_listener_from_py(
+                        v.as_any(),
+                    ))?,
+                ),
+                _ => None,
+            },
+            health: match obj.get_item("health")? {
+                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
+                    (crate::generated::records::worker_options::listener_address_from_py(
+                        v.as_any(),
+                    ))?,
+                ),
+                _ => None,
+            },
+            prometheus: match obj.get_item("prometheus")? {
+                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
+                    (crate::generated::records::worker_options::listener_address_from_py(
+                        v.as_any(),
+                    ))?,
+                ),
+                _ => None,
+            },
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
+
+    pub fn listener_address_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::worker::types::ListenerAddress> {
+        let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+        Ok(::lk_agents_abi::worker::types::ListenerAddress {
+            host: match obj.get_item("host")? {
+                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => {
+                    Some((v.as_any().extract::<::std::string::String>())?)
+                }
+                _ => None,
+            },
+            port: match obj.get_item("port")? {
+                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
+                    (crate::py_values::number_from_py::<u16>(v.as_any(), "ListenerAddress.port"))?,
+                ),
+                _ => None,
+            },
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
+
+    pub fn public_listener_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::worker::types::PublicListener> {
+        let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+        Ok(::lk_agents_abi::worker::types::PublicListener {
+            host: match obj.get_item("host")? {
+                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => {
+                    Some((v.as_any().extract::<::std::string::String>())?)
+                }
+                _ => None,
+            },
+            port: match obj.get_item("port")? {
+                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
+                    (crate::py_values::number_from_py::<u16>(v.as_any(), "PublicListener.port"))?,
+                ),
+                _ => None,
+            },
+            proxy_headers: match obj.get_item("proxy_headers")? {
+                Some(v) if !crate::py_values::is_not_given(&v)? => (v.as_any().extract::<bool>())?,
+                _ => false,
+            },
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
     static SERVER_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -24767,7 +24844,7 @@ pub mod worker_options {
                 if crate::py_values::is_not_given(v)? {
                     Ok(::lk_agents_abi::Maybe::NotGiven)
                 } else {
-                    (crate::py_values::value_from_py(v, "ServerOptions.listeners"))
+                    (crate::generated::records::worker_options::listeners_from_py(v))
                         .map(::lk_agents_abi::Maybe::Given)
                 }
             })?,
@@ -24872,7 +24949,8 @@ pub mod worker_options {
                     if crate::py_values::is_not_given(v)? {
                         Ok(::lk_agents_abi::Maybe::NotGiven)
                     } else {
-                        (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given)
+                        (crate::generated::records::job_records::job_executor_type_from_py(v))
+                            .map(::lk_agents_abi::Maybe::Given)
                     }
                 },
             )?,
@@ -24884,7 +24962,10 @@ pub mod worker_options {
                     if crate::py_values::is_not_given(v)? {
                         Ok(::lk_agents_abi::Maybe::NotGiven)
                     } else {
-                        (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given)
+                        (crate::generated::records::worker_options::multiprocessing_context_from_py(
+                            v,
+                        ))
+                        .map(::lk_agents_abi::Maybe::Given)
                     }
                 },
             )?,
@@ -24974,372 +25055,6 @@ pub mod worker_options {
 
 pub mod worker_server {
     use pyo3::prelude::*;
-
-    // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
-    static JOB_INFO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn job_info_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::worker::types::JobInfo> {
-        let py = obj.py();
-        if !obj.is_instance(JOB_INFO.import(
-            py,
-            "livekit.agents._generated.worker_server",
-            "JobInfo",
-        )?)? {
-            return Err(super::not_a(obj, "JobInfo"));
-        }
-        Ok(::lk_agents_abi::worker::types::JobInfo {
-            id: crate::py_values::attr_with(obj, "JobInfo", "id", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            dispatch_id: crate::py_values::attr_with(obj, "JobInfo", "dispatch_id", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            r#type: crate::py_values::attr_with(obj, "JobInfo", "type", |v| {
-                crate::py_values::number_from_py::<i32>(v, "JobInfo.type")
-            })?,
-            room: crate::py_values::attr_with(obj, "JobInfo", "room", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (v.extract::<::std::string::String>()).map(Some)
-                }
-            })?,
-            room_sid: crate::py_values::attr_with(obj, "JobInfo", "room_sid", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (v.extract::<::std::string::String>()).map(Some)
-                }
-            })?,
-            agent_name: crate::py_values::attr_with(obj, "JobInfo", "agent_name", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            metadata: crate::py_values::attr_with(obj, "JobInfo", "metadata", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            deployment: crate::py_values::attr_with(obj, "JobInfo", "deployment", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            enable_recording: crate::py_values::attr_with(
-                obj,
-                "JobInfo",
-                "enable_recording",
-                |v| v.extract::<bool>(),
-            )?,
-            enable_redaction: crate::py_values::attr_with(
-                obj,
-                "JobInfo",
-                "enable_redaction",
-                |v| v.extract::<bool>(),
-            )?,
-            proto: crate::py_values::attr_with(obj, "JobInfo", "proto", |v| {
-                if v.is_instance_of::<::pyo3::types::PyBytes>()
-                    || v.is_instance_of::<::pyo3::types::PyByteArray>()
-                    || v.is_instance_of::<::pyo3::types::PyMemoryView>()
-                {
-                    crate::py_values::owned_bytes(v.as_any(), "JobInfo.proto")
-                } else {
-                    v.try_iter().and_then(|items| {
-                        items
-                            .map(|item| {
-                                let item = item?;
-                                crate::py_values::number_from_py::<u8>(
-                                    item.as_any(),
-                                    "JobInfo.proto",
-                                )
-                            })
-                            .collect::<PyResult<Vec<_>>>()
-                    })
-                }
-            })?,
-        })
-    }
-
-    pub fn job_info_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::worker::types::JobInfo,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::worker::types::JobInfo {
-            id,
-            dispatch_id,
-            r#type,
-            room,
-            room_sid,
-            agent_name,
-            metadata,
-            deployment,
-            enable_recording,
-            enable_redaction,
-            proto,
-        } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("id", ::pyo3::IntoPyObjectExt::into_bound_py_any(id, py)?)?;
-        kwargs.set_item(
-            "dispatch_id",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(dispatch_id, py)?,
-        )?;
-        kwargs.set_item("type", ::pyo3::IntoPyObjectExt::into_bound_py_any(r#type, py)?)?;
-        kwargs.set_item(
-            "room",
-            match room {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        kwargs.set_item(
-            "room_sid",
-            match room_sid {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        kwargs
-            .set_item("agent_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(agent_name, py)?)?;
-        kwargs.set_item("metadata", ::pyo3::IntoPyObjectExt::into_bound_py_any(metadata, py)?)?;
-        kwargs
-            .set_item("deployment", ::pyo3::IntoPyObjectExt::into_bound_py_any(deployment, py)?)?;
-        kwargs.set_item(
-            "enable_recording",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(enable_recording, py)?,
-        )?;
-        kwargs.set_item(
-            "enable_redaction",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(enable_redaction, py)?,
-        )?;
-        kwargs.set_item("proto", ::pyo3::types::PyBytes::new(py, &proto).into_any())?;
-        crate::py_calls::call(
-            JOB_INFO.import(py, "livekit.agents._generated.worker_server", "JobInfo")?.as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
-    static RUNNING_JOB_INFO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn running_job_info_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::worker::types::RunningJobInfo> {
-        let py = obj.py();
-        if !obj.is_instance(RUNNING_JOB_INFO.import(
-            py,
-            "livekit.agents._generated.worker_server",
-            "RunningJobInfo",
-        )?)? {
-            return Err(super::not_a(obj, "RunningJobInfo"));
-        }
-        Ok(::lk_agents_abi::worker::types::RunningJobInfo {
-            accept_arguments: crate::py_values::attr_with(
-                obj,
-                "RunningJobInfo",
-                "accept_arguments",
-                |v| crate::generated::records::worker_server::accept_arguments_from_py(v),
-            )?,
-            job: crate::py_values::attr_with(obj, "RunningJobInfo", "job", |v| {
-                crate::generated::records::worker_server::job_info_from_py(v)
-            })?,
-            url: crate::py_values::attr_with(obj, "RunningJobInfo", "url", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            token: crate::py_values::attr_with(obj, "RunningJobInfo", "token", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            worker_id: crate::py_values::attr_with(obj, "RunningJobInfo", "worker_id", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            fake_job: crate::py_values::attr_with(obj, "RunningJobInfo", "fake_job", |v| {
-                v.extract::<bool>()
-            })?,
-            received_at: crate::py_values::attr_with(obj, "RunningJobInfo", "received_at", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (crate::py_values::number_from_py::<f64>(v, "RunningJobInfo.received_at"))
-                        .map(Some)
-                }
-            })?,
-            accepted_at: crate::py_values::attr_with(obj, "RunningJobInfo", "accepted_at", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (crate::py_values::number_from_py::<f64>(v, "RunningJobInfo.accepted_at"))
-                        .map(Some)
-                }
-            })?,
-            assigned_at: crate::py_values::attr_with(obj, "RunningJobInfo", "assigned_at", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (crate::py_values::number_from_py::<f64>(v, "RunningJobInfo.assigned_at"))
-                        .map(Some)
-                }
-            })?,
-        })
-    }
-
-    pub fn running_job_info_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::worker::types::RunningJobInfo,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::worker::types::RunningJobInfo {
-            accept_arguments,
-            job,
-            url,
-            token,
-            worker_id,
-            fake_job,
-            received_at,
-            accepted_at,
-            assigned_at,
-        } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item(
-            "accept_arguments",
-            crate::generated::records::worker_server::accept_arguments_to_py(py, accept_arguments)?,
-        )?;
-        kwargs
-            .set_item("job", crate::generated::records::worker_server::job_info_to_py(py, job)?)?;
-        kwargs.set_item("url", ::pyo3::IntoPyObjectExt::into_bound_py_any(url, py)?)?;
-        kwargs.set_item("token", ::pyo3::IntoPyObjectExt::into_bound_py_any(token, py)?)?;
-        kwargs.set_item("worker_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(worker_id, py)?)?;
-        kwargs.set_item("fake_job", ::pyo3::IntoPyObjectExt::into_bound_py_any(fake_job, py)?)?;
-        kwargs.set_item(
-            "received_at",
-            match received_at {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        kwargs.set_item(
-            "accepted_at",
-            match accepted_at {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        kwargs.set_item(
-            "assigned_at",
-            match assigned_at {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        crate::py_calls::call(
-            RUNNING_JOB_INFO
-                .import(py, "livekit.agents._generated.worker_server", "RunningJobInfo")?
-                .as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
-    static ACCEPT_ARGUMENTS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn accept_arguments_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::worker::types::AcceptArguments> {
-        let py = obj.py();
-        if !obj.is_instance(ACCEPT_ARGUMENTS.import(
-            py,
-            "livekit.agents._generated.worker_server",
-            "AcceptArguments",
-        )?)? {
-            return Err(super::not_a(obj, "AcceptArguments"));
-        }
-        Ok(::lk_agents_abi::worker::types::AcceptArguments {
-            name: crate::py_values::attr_with(obj, "AcceptArguments", "name", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            identity: crate::py_values::attr_with(obj, "AcceptArguments", "identity", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            metadata: crate::py_values::attr_with(obj, "AcceptArguments", "metadata", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            attributes: crate::py_values::attr_with(obj, "AcceptArguments", "attributes", |v| {
-                if v.is_instance_of::<::pyo3::types::PyList>()
-                    || v.is_instance_of::<::pyo3::types::PyTuple>()
-                {
-                    v.try_iter()?
-                        .map(|item| {
-                            let item = &item?;
-                            (|| -> ::pyo3::PyResult<_> {
-                                let tuple = item.cast::<::pyo3::types::PyTuple>()?;
-                                if tuple.len() != 2 {
-                                    return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "{}: expected a tuple of 2 items",
-                                        "AcceptArguments.attributes"
-                                    )));
-                                }
-                                let item_0 = tuple.get_item(0)?;
-                                let item_1 = tuple.get_item(1)?;
-                                Ok((
-                                    (item_0.extract::<::std::string::String>())?,
-                                    (item_1.extract::<::std::string::String>())?,
-                                ))
-                            })()
-                        })
-                        .collect::<PyResult<Vec<_>>>()
-                } else {
-                    Err(::pyo3::exceptions::PyTypeError::new_err(
-                        "AcceptArguments.attributes: expected a list or tuple",
-                    ))
-                }
-            })?,
-        })
-    }
-
-    pub fn accept_arguments_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::worker::types::AcceptArguments,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::worker::types::AcceptArguments {
-            name,
-            identity,
-            metadata,
-            attributes,
-        } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
-        kwargs.set_item("identity", ::pyo3::IntoPyObjectExt::into_bound_py_any(identity, py)?)?;
-        kwargs.set_item("metadata", ::pyo3::IntoPyObjectExt::into_bound_py_any(metadata, py)?)?;
-        kwargs.set_item(
-            "attributes",
-            ::pyo3::types::PyList::new(
-                py,
-                attributes
-                    .into_iter()
-                    .map(|x| {
-                        ::pyo3::PyResult::Ok({
-                            let (x0, x1) = x;
-                            ::pyo3::types::PyTuple::new(
-                                py,
-                                [
-                                    ::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?,
-                                    ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?,
-                                ],
-                            )?
-                            .into_any()
-                        })
-                    })
-                    .collect::<PyResult<Vec<_>>>()?,
-            )?
-            .into_any(),
-        )?;
-        crate::py_calls::call(
-            ACCEPT_ARGUMENTS
-                .import(py, "livekit.agents._generated.worker_server", "AcceptArguments")?
-                .as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
 
     // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
     static PROCESS_POOL_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -25445,11 +25160,14 @@ pub mod worker_server {
         )?;
         kwargs.set_item(
             "job_executor_type",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(job_executor_type, py)?,
+            crate::generated::records::job_records::job_executor_type_to_py(py, job_executor_type)?,
         )?;
         kwargs.set_item(
             "multiprocessing_context",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(multiprocessing_context, py)?,
+            crate::generated::records::worker_options::multiprocessing_context_to_py(
+                py,
+                multiprocessing_context,
+            )?,
         )?;
         kwargs.set_item(
             "pool",
@@ -25693,5 +25411,34 @@ pub mod workflows {
             (),
             Some(&kwargs),
         )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/workflows/dtmf.rs.
+
+    pub fn dtmf_event_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::voice::workflows::dtmf::DtmfEvent> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "1" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::One),
+            "2" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::Two),
+            "3" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::Three),
+            "4" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::Four),
+            "5" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::Five),
+            "6" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::Six),
+            "7" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::Seven),
+            "8" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::Eight),
+            "9" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::Nine),
+            "0" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::Zero),
+            "*" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::Star),
+            "#" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::Pound),
+            "A" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::A),
+            "B" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::B),
+            "C" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::C),
+            "D" => Ok(::lk_agents_abi::voice::workflows::dtmf::DtmfEvent::D),
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "DtmfEvent: {other:?} is not one of '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '*', '#', 'A', 'B', 'C', 'D'"
+            ))),
+        }
     }
 }

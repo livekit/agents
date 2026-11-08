@@ -15,9 +15,11 @@ from .keyterms import (
     ResolvedKeytermDetection as ResolvedKeytermDetection,
     STTContextOptions as STTContextOptions,
 )
+from .recording_options import RecordingOptions as RecordingOptions
 from .voice_task_errors import VoiceTaskFailed as VoiceTaskFailed
 
-__all__ = [
+__all__: list[str] = [
+    "RecordingOptions",
     "NonverbalOptions",
     "SpeechSteeringOptions",
     "DetectionLlm",

@@ -127,8 +127,14 @@ Output: human"#;
 
 // `voice/amd/detector.py`'s constants; the classifier's are `lk_agents_voice::amd::classifier`'s.
 
-/// `detector.py:165`.
+#[crate::host(file(module = "amd"))]
+const _: () = ();
+
+/// The LLM an `AMD` auto-selects: the one the benchmark ran on.
+#[crate::host(constant)]
 pub const DEFAULT_LLM_MODEL: &str = "google/gemini-3.1-flash-lite";
+/// The STT an `AMD` auto-selects: the one the benchmark ran on.
+#[crate::host(constant)]
 pub const DEFAULT_STT_MODEL: &str = "cartesia/ink-whisper";
 /// How long `_setup` waits for the callee's audio track before settling `participant_missing`.
 pub const TRACK_PUBLICATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -155,32 +161,9 @@ pub const EVALUATED_LLM_MODELS: &[&str] = &[
 pub const EVALUATED_STT_MODELS: &[&str] =
     &["deepgram/nova-3", "assemblyai/universal-streaming-multilingual", "cartesia/ink-whisper"];
 
-/// The detector's constants, as one dict so a host cannot pick up half of them.
-#[crate::host(record(module = "amd", emit, typed_dict))]
-pub struct AmdConstants {
-    pub default_llm_model: String,
-    pub default_stt_model: String,
-    pub prompt: String,
-    pub evaluated_llm_models: Vec<String>,
-    pub evaluated_stt_models: Vec<String>,
-    pub human_speech_threshold: f64,
-    pub human_silence_threshold: f64,
-    pub machine_silence_threshold: f64,
-    pub no_speech_threshold: f64,
-    pub detection_timeout: f64,
-    pub max_endpointing_delay: f64,
-    /// The extension budget: `MAX_EXTENSIONS` requests, each clamped to `MAX_EXTENSION_SECS`.
-    pub max_extensions: u32,
-    pub max_extension_secs: f64,
-}
-
-/// The detector's reference constants and its endpointing rule.
+/// The detector's endpointing rule and prediction reads.
 #[crate::host(functions(pid = false))]
 pub trait AmdFunctions {
-    /// These are the reference's, not tuning knobs: the default models are what the benchmark
-    /// ran on.
-    #[host(function)]
-    fn amd_constants() -> AmdConstants;
     /// `_resolve_classifier`'s `max_endpointing_delay`: explicit option, else the activity's,
     /// else the default. `provided` is `None` only when the key was absent: an explicit default
     /// still beats a disagreeing activity.

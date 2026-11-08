@@ -3,7 +3,11 @@
 
 from __future__ import annotations
 
-from .realtime import RealtimeCapabilities as RealtimeCapabilities
+from .realtime import (
+    RealtimeCapabilities as RealtimeCapabilities,
+    RealtimeModel as RealtimeModel,
+    RealtimeSession as RealtimeSession,
+)
 from .realtime_availability import (
     RealtimeAvailabilityChangedEvent as RealtimeAvailabilityChangedEvent,
 )
@@ -18,7 +22,7 @@ from .realtime_wire import (
     RemoteItemAddedEvent as RemoteItemAddedEvent,
 )
 
-__all__ = [
+__all__: list[str] = [
     "RealtimeAvailabilityChangedEvent",
     "RealtimeCapabilities",
     "RemoteItemAddedEvent",
@@ -29,4 +33,6 @@ __all__ = [
     "MessageGeneration",
     "GenerationCreatedEvent",
     "RealtimeError",
+    "RealtimeModel",
+    "RealtimeSession",
 ]

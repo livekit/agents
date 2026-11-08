@@ -4,10 +4,10 @@
 use std::collections::BTreeMap;
 
 use lk_agents_abi::errors::Invalid;
+use lk_agents_abi::llm::provider_format::ProviderFormat;
+use lk_agents_abi::llm::provider_format::vocabulary::GeminiToolBehavior;
 use serde::Serialize;
 use serde_json::Value;
-#[cfg(test)]
-use serde_json::json;
 
 use super::{
     DropReason, Formatted, PreResolved, SerializedImage, ToolSchema, anthropic, aws, google,
@@ -18,7 +18,7 @@ use lk_agents_abi::{ChatContext, ChatItem};
 /// `ChatContext.to_provider_format(format, ...)` -> `(messages, data)`. `data` is `None` for OpenAI
 /// and a dict for the dialects that hoist something out of band.
 pub fn to_provider_format(
-    format: &str,
+    format: ProviderFormat,
     items: Vec<ChatItem>,
     images: Option<BTreeMap<String, SerializedImage>>,
     inject_dummy_user_message: bool,
@@ -29,15 +29,19 @@ pub fn to_provider_format(
     let images = PreResolved::from_pairs(images.unwrap_or_default());
     let e = |e: super::FormatError| Invalid(e.to_string());
     let formatted = match format {
-        "openai" => finish(openai::to_chat_ctx(&ctx, &images).map_err(e)?),
-        "openai.responses" => finish(openai::to_responses_chat_ctx(&ctx, &images).map_err(e)?),
-        "anthropic" => {
+        ProviderFormat::OpenAi => finish(openai::to_chat_ctx(&ctx, &images).map_err(e)?),
+        ProviderFormat::OpenAiResponses => {
+            finish(openai::to_responses_chat_ctx(&ctx, &images).map_err(e)?)
+        }
+        ProviderFormat::Anthropic => {
             let opts =
                 anthropic::Options { inject_dummy_user_message, inject_trailing_user_message };
             finish(anthropic::to_chat_ctx(&ctx, &images, opts).map_err(e)?)
         }
-        "aws" => finish(aws::to_chat_ctx(&ctx, &images, inject_dummy_user_message).map_err(e)?),
-        "google" => {
+        ProviderFormat::Aws => {
+            finish(aws::to_chat_ctx(&ctx, &images, inject_dummy_user_message).map_err(e)?)
+        }
+        ProviderFormat::Google => {
             let f = google::to_chat_ctx(
                 &ctx,
                 &images,
@@ -46,15 +50,9 @@ pub fn to_provider_format(
             );
             finish(f.map_err(e)?)
         }
-        "mistralai" => {
+        ProviderFormat::MistralAi => {
             let f = mistralai::to_conversations_ctx(&ctx, &images, inject_dummy_user_message);
             finish(f.map_err(e)?)
-        }
-        _ => {
-            return Err(Invalid(format!(
-                "unknown provider format {format:?}: expected one of 'openai', 'openai.responses', \
-                 'anthropic', 'aws', 'google', 'mistralai'"
-            )));
         }
     };
     formatted.map_err(|error| Invalid(error.to_string()))
@@ -102,72 +100,34 @@ fn serialize_list<T: Serialize>(items: &[T]) -> serde_json::Result<Vec<Value>> {
     items.iter().map(serde_json::to_value).collect()
 }
 
-/// `to_fnc_ctx(tools)` for a dialect; each tool is the host's `[kind, schema, name]` (`name` only for
-/// `raw`). `tool_behavior` and `use_parameters_json_schema` are Gemini-only (Gemini Live rejects
-/// `parameters_json_schema`, googleapis/python-genai#1147).
+/// `to_fnc_ctx(tools)` for a dialect. `tool_behavior` and `use_parameters_json_schema` are
+/// Gemini-only (Gemini Live rejects `parameters_json_schema`, googleapis/python-genai#1147).
 pub fn to_fnc_ctx(
-    format: &str,
-    tools: Vec<Value>,
-    tool_behavior: Option<&str>,
+    format: ProviderFormat,
+    specs: Vec<ToolSchema>,
+    tool_behavior: Option<GeminiToolBehavior>,
     use_parameters_json_schema: bool,
 ) -> Result<Vec<Value>, Invalid> {
-    let specs = tools.into_iter().map(tool_schema).collect::<Result<Vec<_>, _>>()?;
     let e = |e: super::FormatError| Invalid(e.to_string());
-    // Mistral has no rewrapper, and an unknown format gets the same message.
     let formatted = match format {
-        "openai" => serialize_list(&openai::to_fnc_ctx(&specs).map_err(e)?),
+        ProviderFormat::OpenAi => serialize_list(&openai::to_fnc_ctx(&specs).map_err(e)?),
         // Not a flag: the Responses API spreads raw schemas flat and includes `ProviderTool`s.
-        "openai.responses" => serialize_list(&openai::to_responses_fnc_ctx(&specs).map_err(e)?),
-        "anthropic" => serialize_list(&anthropic::to_fnc_ctx(&specs).map_err(e)?),
-        "aws" => serialize_list(&aws::to_fnc_ctx(&specs).map_err(e)?),
-        "google" => {
-            // `UNSPECIFIED` is spelled by omitting `tool_behavior`.
-            if let Some(b) = tool_behavior.filter(|b| {
-                lk_agents_abi::llm::provider_format::vocabulary::GeminiToolBehavior::from_wire(b)
-                    .is_none()
-            }) {
-                return Err(Invalid(format!(
-                    "unknown tool_behavior {b:?}: expected 'BLOCKING' or 'NON_BLOCKING'"
-                )));
-            }
-            serialize_list(
-                &google::to_fnc_ctx(&specs, tool_behavior, use_parameters_json_schema)
-                    .map_err(e)?,
-            )
+        ProviderFormat::OpenAiResponses => {
+            serialize_list(&openai::to_responses_fnc_ctx(&specs).map_err(e)?)
         }
-        _ => {
-            return Err(Invalid(format!(
-                "{format:?} has no tool-schema rewrapper: Mistral takes the OpenAI shape verbatim"
-            )));
+        ProviderFormat::Anthropic => serialize_list(&anthropic::to_fnc_ctx(&specs).map_err(e)?),
+        ProviderFormat::Aws => serialize_list(&aws::to_fnc_ctx(&specs).map_err(e)?),
+        ProviderFormat::Google => serialize_list(
+            &google::to_fnc_ctx(&specs, tool_behavior, use_parameters_json_schema).map_err(e)?,
+        ),
+        ProviderFormat::MistralAi => {
+            return Err(Invalid(
+                "\"mistralai\" has no tool-schema rewrapper: Mistral takes the OpenAI shape verbatim"
+                    .into(),
+            ));
         }
     };
     formatted.map_err(|error| Invalid(error.to_string()))
-}
-
-fn tool_schema(tool: Value) -> Result<ToolSchema, Invalid> {
-    let Value::Array(mut parts) = tool else {
-        return Err(Invalid(format!("a tool schema is [kind, schema, name], got {tool}")));
-    };
-    parts.resize(3, Value::Null);
-    let (name, payload) = (parts.pop().unwrap_or_default(), parts.pop().unwrap_or_default());
-    let kind = parts.pop().and_then(|k| k.as_str().map(str::to_owned)).unwrap_or_default();
-    Ok(match kind.as_str() {
-        "raw" => ToolSchema::Raw {
-            name: name
-                .as_str()
-                .ok_or_else(|| Invalid("a raw tool schema carries its name".into()))?
-                .to_owned(),
-            raw_schema: payload,
-        },
-        "legacy" => ToolSchema::Legacy(payload),
-        "strict" => ToolSchema::Strict(payload),
-        "provider" => ToolSchema::Provider(payload),
-        _ => {
-            return Err(Invalid(format!(
-                "unknown tool schema kind {kind:?}: expected 'raw', 'legacy', 'strict' or 'provider'"
-            )));
-        }
-    })
 }
 
 #[cfg(test)]
@@ -194,15 +154,5 @@ mod tests {
             (rewritten.role, rewritten.raw_text_content().as_deref()),
             (Role::User, Some("<mid>"))
         );
-    }
-
-    // Catches: an unknown tool kind or `tool_behavior` defaulting instead of refusing.
-    #[test]
-    fn unknown_words_are_refused() {
-        assert!(to_fnc_ctx("openai", vec![json!(["mcp", {}])], None, false).is_err());
-        for refused in ["UNSPECIFIED", "blocking"] {
-            assert!(to_fnc_ctx("google", vec![], Some(refused), false).is_err());
-        }
-        assert!(to_fnc_ctx("google", vec![], Some("NON_BLOCKING"), false).is_ok());
     }
 }

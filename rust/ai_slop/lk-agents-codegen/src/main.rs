@@ -130,8 +130,8 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     let mut models = records::python(&declared)?;
     models.extend(exceptions::python(&declared));
     models.extend(native_enums::flags(&declared));
-    models.extend(exports::emit(&declared)?);
     let bases = bases::read(root, &declared)?;
+    models.extend(exports::emit(&declared, &bases)?);
     let with_bases = python::emit(&declared, &bases)?;
     let (core_pyi, core_names) = surface::emit(class_stubs.iter())?;
     o.add(PathBuf::from(CORE_NAMES), &core_names.text);

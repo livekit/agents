@@ -1390,6 +1390,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
         &'a self,
         cx: &::lk_agents_abi::telemetry::Cx,
         invocation: &::lk_agents_abi::agent::Invocation,
+        key: ::lk_agents_abi::agent::ToolTemplateKey,
         template: ::lk_agents_abi::agent::ToolTemplate,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
@@ -1400,6 +1401,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
+        let key_arg = key;
         let template_arg = template;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -1408,8 +1410,9 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [
                     crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?,
+                    crate::generated::records::agent_run::tool_template_key_to_py(py, key_arg)?,
                     crate::generated::records::agent_run::tool_template_to_py(py, template_arg)?,
                 ];
                 Ok((
@@ -1699,6 +1702,46 @@ impl crate::py_errors::HostException for ::lk_agents_abi::agent::resources::Reso
         match self {
             Self::Storage(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Host(inner) => crate::py_errors::HostException::to_py_err(inner),
+            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
+                self,
+            )),
+        }
+    }
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::agent::run::RunError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::Cancelled => crate::py_errors::host_exception(
+                "asyncio",
+                "CancelledError",
+                ::std::string::ToString::to_string(self),
+            ),
+            Self::Model(..) => crate::py_errors::host_exception_with(
+                "livekit.agents._bindings",
+                "APIError",
+                ::std::string::ToString::to_string(self),
+                |kwargs| {
+                    let py = kwargs.py();
+                    ::pyo3::types::PyDictMethods::set_item(
+                        kwargs,
+                        "retryable",
+                        ::pyo3::IntoPyObjectExt::into_bound_py_any(false, py)?,
+                    )?;
+                    ::std::result::Result::Ok(())
+                },
+            ),
+            Self::ToolRetriesExceeded { .. } => crate::py_errors::host_exception(
+                "livekit.agents._bindings",
+                "UnexpectedModelBehavior",
+                ::std::string::ToString::to_string(self),
+            ),
+            Self::OutputRetriesExceeded { .. } => crate::py_errors::host_exception(
+                "livekit.agents._bindings",
+                "UnexpectedModelBehavior",
+                ::std::string::ToString::to_string(self),
+            ),
             _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
                 self,
             )),

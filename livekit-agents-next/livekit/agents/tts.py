@@ -11,16 +11,9 @@ from typing import TYPE_CHECKING, Any, Literal
 from livekit import rtc
 
 from . import _bindings, _core, tokenize, utils
+from ._generated import public_tts as _public
 from ._generated.provider_hosts import FallbackTtsHost
 from ._generated.public_tts import *  # noqa: F403
-from ._generated.tts import (
-    TTS,
-    ChunkedStream,
-    ExpressiveTag,
-    SynthesizedAudio,
-    SynthesizeStream,
-    TTSCapabilities,
-)
 from .tokenize import SentenceStream, TokenData
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -35,25 +28,11 @@ if TYPE_CHECKING:
     from ._generated.usage import TokenUsage
 
 __all__ = [
-    "TTS",
-    "SynthesizedAudio",
-    "SynthesizeStream",
-    "TTSCapabilities",
-    "MarkupInfo",
     "StreamAdapter",
-    "ChunkedStream",
-    "AvailabilityChangedEvent",
     "FallbackAdapter",
-    "AudioEmitter",
-    "TTSError",
     "SentenceStreamPacer",
-    "ExpressiveTag",
 ]
-
-
-# The core's class under its public name: `audio/pcm` is framed as it is, any other container
-# decoded (ffmpeg) as it arrives.
-AudioEmitter = _core.AudioEmitter
+__all__ += _public.__all__
 
 
 class _EmitterOutput:
@@ -91,21 +70,6 @@ class _EmitterOutput:
 
     def closed(self) -> bool:
         return self._ch.closed
-
-
-def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
-    """Strip every provider's expressive XML markup; brackets are prose and stay."""
-    return _core.split_all_markup(text)
-
-
-def strip_all_markup(text: str) -> str:
-    return _core.strip_all_markup(text)
-
-
-def split_expr_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
-    """Strip only the ``<expr/>`` dialect, returning the clean text and its markers; the
-    provider-native tags stay in the words."""
-    return _core.split_expr_markup(text)
 
 
 def _into(output_emitter: AudioEmitter, *, stream: bool) -> Any:

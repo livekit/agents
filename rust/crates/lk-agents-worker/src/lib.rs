@@ -10,7 +10,6 @@ pub mod ipc;
 pub mod server;
 pub mod transport;
 mod worker;
-pub use worker::job_info;
 #[cfg(test)]
 mod worker_tests;
 
@@ -19,9 +18,9 @@ pub use config::{
     WORKER_PROTOCOL_VERSION, WorkerConfig,
 };
 pub use hw::{CpuMonitor, CpuMonitorKind};
+pub use lk_agents_abi::worker::job::{AcceptArguments, RunningJobInfo};
 pub use lk_agents_abi::worker::types::{
-    AcceptArguments, JobDecision, JobInfo, JobRequest, RegisteredInfo, RunningJobInfo,
-    WorkerPermissions, WorkerStopped,
+    JobDecision, JobRequest, RegisteredInfo, WorkerPermissions, WorkerStopped,
 };
 pub use transport::{
     AgentEndpointKind, Connected, EndpointReader, EndpointStream, EndpointWriter,

@@ -212,7 +212,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
     fn running_jobs(
         &self,
     ) -> ::std::result::Result<
-        ::std::vec::Vec<::lk_agents_abi::worker::types::RunningJobInfo>,
+        ::std::vec::Vec<::lk_agents_abi::worker::job::RunningJobInfo>,
         ::lk_agents_abi::errors::HostError,
     > {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -239,7 +239,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
                 items
                     .map(|item| {
                         let item = item?;
-                        crate::generated::records::worker_server::running_job_info_from_py(
+                        crate::generated::records::job_records::running_job_info_from_py(
                             item.as_any(),
                         )
                     })
@@ -257,7 +257,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
     fn reload_jobs(
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,
-        jobs: ::std::vec::Vec<::lk_agents_abi::worker::types::RunningJobInfo>,
+        jobs: ::std::vec::Vec<::lk_agents_abi::worker::job::RunningJobInfo>,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -274,7 +274,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
                     jobs_arg
                         .into_iter()
                         .map(|x| {
-                            crate::generated::records::worker_server::running_job_info_to_py(py, x)
+                            crate::generated::records::job_records::running_job_info_to_py(py, x)
                         })
                         .collect::<PyResult<Vec<_>>>()?,
                 )?

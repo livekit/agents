@@ -49,7 +49,7 @@ impl Run {
                         server_turn_detection: !setup.vad && !setup.stt
                     }),
                     has_vad: setup.vad,
-                    turn_detection: turn_detection(setup.turn).unwrap_or(TurnDetection::Auto),
+                    turn_detection: turn_detection(setup.turn),
                     allow_interruptions: true,
                     asked: [None, Some(InterruptionMode::Adaptive)],
                     deployment: Deployment::Dev,
@@ -829,13 +829,7 @@ pub(super) fn patch(
     let mut patch = AgentSessionOptions::default();
     let delay = Some(Duration::from_millis(ms.0));
     match knob {
-        Knob::Detection => {
-            patch.turn.detection = Some(match mode {
-                TurnMode::Default => TurnDetection::Auto,
-                TurnMode::Stt => TurnDetection::Stt,
-                TurnMode::Manual => TurnDetection::Manual,
-            })
-        }
+        Knob::Detection => patch.turn.detection = lk_agents_abi::Maybe::Given(turn_detection(mode)),
         Knob::MinEndpointing => patch.turn.endpointing.min_delay = delay,
         Knob::MaxEndpointing => patch.turn.endpointing.max_delay = delay,
         Knob::Interruptions => patch.turn.interruption.enabled = Some(on),

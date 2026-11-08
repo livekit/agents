@@ -5,6 +5,6 @@ from __future__ import annotations
 
 from .mcp import MCPToolOptions as MCPToolOptions
 
-__all__ = [
+__all__: list[str] = [
     "MCPToolOptions",
 ]

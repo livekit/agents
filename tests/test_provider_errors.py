@@ -213,6 +213,6 @@ def test_generated_status_constructor_keeps_retry_policy(
 
     error = APIStatusError("failure", status_code=status, retryable=requested)
     expected = True if requested is None else requested
-    if 400 <= status < 500 and status not in (408, 429, 499):
+    if 400 <= status < 500 and status not in (408, 429):
         expected = False
     assert error.retryable is expected

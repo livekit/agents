@@ -12,7 +12,7 @@ from .provider_data import (
     MistralFormatData as MistralFormatData,
 )
 
-__all__ = [
+__all__: list[str] = [
     "DiffOps",
     "AnthropicFormatData",
     "BedrockFormatData",

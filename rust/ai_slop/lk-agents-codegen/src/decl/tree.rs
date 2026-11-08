@@ -435,6 +435,22 @@ impl Crate {
 
     /// Resolve a data constant without evaluating Rust code. Only literals, arrays, record
     /// literals, references, option constructors and aliases to those constants are accepted.
+    /// `Enum::Variant` naming a variant of a crate enum: the enum's name and the variant's.
+    pub fn enum_variant(&self, module: usize, path: &syn::Path) -> Option<(String, String)> {
+        let mut prefix = path.clone();
+        let variant = prefix.segments.pop()?.into_value();
+        prefix.segments.pop_punct();
+        if prefix.segments.is_empty() {
+            return None;
+        }
+        let Ok(Found::Item { module, item }) = self.resolve(module, &prefix) else { return None };
+        let syn::Item::Enum(e) = &self.modules[module].items[item] else { return None };
+        e.variants
+            .iter()
+            .any(|v| v.ident == variant.ident)
+            .then(|| (e.ident.to_string(), variant.ident.to_string()))
+    }
+
     pub fn constant(&self, module: usize, value: &syn::Expr) -> Result<syn::Expr, String> {
         self.constant_at(module, value, &mut Vec::new())
     }
@@ -472,6 +488,9 @@ impl Crate {
                 self.constant_at(module, &call.args[0], stack)?
             }
             syn::Expr::Path(path) if path.path.is_ident("None") => value.clone(),
+            syn::Expr::Path(path) if self.enum_variant(module, &path.path).is_some() => {
+                value.clone()
+            }
             syn::Expr::Path(path) => {
                 let Found::Item { module, item } = self.resolve(module, &path.path)? else {
                     return Err("a constant alias must name a declared constant".into());

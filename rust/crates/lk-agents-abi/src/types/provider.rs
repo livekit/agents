@@ -89,7 +89,7 @@ pub trait AttemptHost: Send + Sync {
 /// `expect_response()` when it sent something that owes an answer, `progress()` when response
 /// data arrived (heartbeats are not progress), `audio_received()` for synthesized audio and
 /// `complete_response()` when nothing is owed any more.
-#[crate::host(class(name = "ProviderAttempts"))]
+#[crate::host(class(name = "ProviderAttempts", module = "livekit.agents"))]
 pub trait ProviderAttempts: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(

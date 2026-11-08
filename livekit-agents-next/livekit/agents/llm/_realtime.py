@@ -12,7 +12,8 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from .. import _core
-from .._generated.realtime_options import OpenAIRealtimeConfig, RealtimeOptions
+from .._generated.public_llm__realtime import *  # noqa: F403
+from .._generated.realtime_options import DEFAULT_VOICE, OpenAIRealtimeConfig, RealtimeOptions
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGiven, NotGivenOr
 from ..utils import is_given
 from . import realtime as llm_realtime
@@ -25,18 +26,6 @@ RealtimeModels = Literal[
     "gpt-realtime-2025-08-28",
     "gpt-4o-realtime-preview",
 ]
-
-
-SAMPLE_RATE = 24000
-
-
-NUM_CHANNELS = 1
-
-
-OPENAI_BASE_URL = "https://api.openai.com/v1"
-
-
-DEFAULT_VOICE = "marin"
 
 
 # the metrics label direct OpenAI sessions had before the client moved into the core

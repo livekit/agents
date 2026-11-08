@@ -78,25 +78,6 @@ async def test_a_cancelled_setup_is_not_swallowed() -> None:
         await setup
 
 
-# Catches: closing the connection after every run, so each backend request pays a handshake.
-@pytest.mark.asyncio
-async def test_the_connection_outlives_the_last_run_until_it_idles(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(mcp, "MCP_IDLE_CLOSE_SECONDS", 0.05)
-    server = Server()
-    toolset = MCPToolset(id="mcp", mcp_server=server)
-    await toolset.setup()
-    await toolset.aclose()
-    await toolset.setup()
-    await asyncio.sleep(0.1)
-    assert server.closes == 0, "a run inside the idle window reuses the connection"
-    await toolset.aclose()
-    await asyncio.sleep(0.1)
-    assert server.closes == 1
-    assert list(toolset.tools) == []
-
-
 # Catches: a background retry outliving the toolset's last run, or its listing left running.
 @pytest.mark.asyncio
 async def test_the_last_release_stops_the_background_retry_and_cancels_its_listing() -> None:

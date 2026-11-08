@@ -8,7 +8,7 @@ use crate::transport::{
     Connected, EndpointStream, TransportError, TransportEvent, WorkerSink, WorkerTransport,
 };
 use crate::{DefaultLoadCalc, WorkerConfig};
-use crate::{JobDecision, JobInfo, JobRequest, RunningJobInfo};
+use crate::{JobDecision, JobRequest, RunningJobInfo};
 use async_trait::async_trait;
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use livekit_protocol::{
@@ -18,7 +18,6 @@ use lk_agents_abi::{Clock, TimerSet, WallAnchor};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::clock::RealClock;
 use lk_agents_net::task::TokioSpawner;
-use prost::Message as _;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -909,23 +908,6 @@ pub trait WorkerHost: Send + Sync {
     /// The worker is stopping while its connection still carries the endpoint streams: end the
     /// exchanges still running in a way their peer can read. Bounded by the host.
     async fn stop_endpoints(&self) {}
-}
-
-/// The job's scalar fields beside its exact bytes.
-pub fn job_info(job: &livekit_protocol::Job) -> JobInfo {
-    JobInfo {
-        id: job.id.clone(),
-        dispatch_id: job.dispatch_id.clone(),
-        r#type: job.r#type,
-        room: job.room.as_ref().map(|r| r.name.clone()),
-        room_sid: job.room.as_ref().map(|r| r.sid.clone()),
-        agent_name: job.agent_name.clone(),
-        metadata: job.metadata.clone(),
-        deployment: job.deployment.clone(),
-        enable_recording: job.enable_recording,
-        enable_redaction: job.enable_redaction,
-        proto: job.encode_to_vec(),
-    }
 }
 
 #[cfg(test)]

@@ -24,7 +24,7 @@ from .tts_provider_options import (
     XaiOptions as XaiOptions,
 )
 
-__all__ = [
+__all__: list[str] = [
     "CartesiaModels",
     "DeepgramModels",
     "RimeModels",

@@ -27,11 +27,8 @@ from pydantic_core import to_jsonable_python
 from typing_extensions import ParamSpec, TypeVar
 
 from .. import _core, llm, stt, tts
-from .._generated.agent_authoring import (
-    DEFAULT_AGENT_NAME as DEFAULT_AGENT_NAME,
-    AgentRetries,
-    CallbackKind,
-)
+from .._generated import public_voice as _public
+from .._generated.agent_authoring import DEFAULT_AGENT_NAME as DEFAULT_AGENT_NAME, CallbackKind
 from .._generated.agent_run import AgentDefinition
 from .._generated.public_voice import *  # noqa: F403
 from .._generated.text_session import LocalAgentTool
@@ -437,7 +434,7 @@ class Agent(Generic[Context_T, Output_T]):
                     print(delta, end="")
                 result = await stream.result()
         """
-        from .agent_run import run_error, settled_result, start_run
+        from .agent_run import settled_result, start_run
         from .run_result import RunStream, _Started
 
         async def start(stream: _core._core_RunStream) -> _Started[RunResult[Output_T]]:
@@ -458,10 +455,7 @@ class Agent(Generic[Context_T, Output_T]):
                     run.hooks.on_result(result)
                 return result
 
-            return _Started(
-                settle=settle,
-                fail=run_error,
-            )
+            return _Started(settle=settle)
 
         return RunStream(start)
 
@@ -818,8 +812,6 @@ __all__ = [
     "VoiceTask",
     "VoiceTaskFailed",
     "Agent",
-    "AgentRetries",
-    "ModelSettings",
     "SpeechHandle",
     "RunContext",
     "UserInputTranscribedEvent",
@@ -842,3 +834,4 @@ __all__ = [
     "io",
     "room_io",
 ]
+__all__ += _public.__all__

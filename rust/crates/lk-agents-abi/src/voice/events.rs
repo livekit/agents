@@ -676,6 +676,19 @@ pub enum ErrorSource {
     AudioProcessing,
 }
 
+impl ErrorSource {
+    /// The session slot whose provider failed; `None` for an audio processor.
+    pub fn slot(self) -> Option<crate::voice::session::ModelSlot> {
+        use crate::voice::session::ModelSlot;
+        match self {
+            ErrorSource::Stt => Some(ModelSlot::Stt),
+            ErrorSource::Llm | ErrorSource::Realtime => Some(ModelSlot::Llm),
+            ErrorSource::Tts => Some(ModelSlot::Tts),
+            ErrorSource::AudioProcessing => None,
+        }
+    }
+}
+
 /// Where a session error was captured.
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -691,6 +704,8 @@ pub enum ErrorOrigin {
 #[derive(Debug, Clone)]
 pub struct SessionErrorWire {
     pub source: ErrorSource,
+    /// The session slot whose provider failed (`source.slot()`); `None` for an audio processor.
+    pub slot: Option<crate::voice::session::ModelSlot>,
     pub recoverable: bool,
     pub label: ErrorOrigin,
     /// The host's own exception when the provider raised one, else an `APIError`.

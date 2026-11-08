@@ -1,19 +1,16 @@
 # GENERATED FILE -- DO NOT EDIT.
-#
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
-# declarations in:
+# From ABI declarations and authored plugin bases:
 #     rust/crates/lk-agents-abi/src/voice/amd.rs
-#
-# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
-# non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum, unique
-from typing import Literal, NotRequired, TypeAlias
+from typing import Final, Literal, NotRequired, TypeAlias
 
 from typing_extensions import TypedDict
+
+# Record declarations:
 
 
 @unique
@@ -45,25 +42,6 @@ class AMDPredictionEvent:
         from .. import _core
 
         return _core.amd_prediction_is_machine(self)
-
-
-class AmdConstants(TypedDict):
-    """The detector's constants, as one dict so a host cannot pick up half of them."""
-
-    default_llm_model: str
-    default_stt_model: str
-    prompt: str
-    evaluated_llm_models: list[str]
-    evaluated_stt_models: list[str]
-    human_speech_threshold: float
-    human_silence_threshold: float
-    machine_silence_threshold: float
-    no_speech_threshold: float
-    detection_timeout: float
-    max_endpointing_delay: float
-    max_extensions: int
-    """The extension budget: `MAX_EXTENSIONS` requests, each clamped to `MAX_EXTENSION_SECS`."""
-    max_extension_secs: float
 
 
 class DetectionOptions(TypedDict, total=False):
@@ -98,3 +76,9 @@ class AMDConfig(TypedDict):
 
 AMDCategory.__module__ = "livekit.agents.voice.amd"
 DetectionOptions.__module__ = "livekit.agents.voice.amd"
+
+
+DEFAULT_LLM_MODEL: Final = "google/gemini-3.1-flash-lite"
+"""The LLM an `AMD` auto-selects: the one the benchmark ran on."""
+DEFAULT_STT_MODEL: Final = "cartesia/ink-whisper"
+"""The STT an `AMD` auto-selects: the one the benchmark ran on."""

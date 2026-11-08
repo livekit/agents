@@ -316,12 +316,12 @@ async def test_run_handle_keeps_loaded_snapshot_and_commits_state(tmp_path: Path
             await next_run.commit([], None)
             last_run = await thread.open_run("desk", "third")
             assert last_run.state == {"visits": 1}, "None preserves stored state"
-            with pytest.raises(ValueError, match="unknown outcome"):
+            with pytest.raises(ValueError, match='RunOutcome: "invalid" is not one of'):
                 await last_run.abandon("invalid", "reason")
             await last_run.abandon("failed", "finished testing")
             assert await thread.task("missing") is None
             assert await thread.lane_info("missing") is None
-            with pytest.raises(ValueError, match="unknown task order"):
+            with pytest.raises(ValueError, match='TaskOrder: "invalid" is not one of'):
                 await thread.list_tasks(order="invalid")
         finally:
             thread.close()
@@ -857,11 +857,7 @@ async def test_voice_failure_keeps_input_requirements_on_the_raised_exception(
     from types import SimpleNamespace
 
     from livekit.agents import APIError
-    from livekit.agents._generated.agent_run import (
-        RunErrorModel,
-        RunErrorSessionClosed,
-        RunInputRequirement,
-    )
+    from livekit.agents._generated.agent_run import RunInputRequirement
     from livekit.agents._generated.session_wire import RunFailedWire
     from livekit.agents._generated.storage_turn import PendingCall
     from livekit.agents.voice._session_callbacks import _on_run_failed
@@ -878,7 +874,7 @@ async def test_voice_failure_keeps_input_requirements_on_the_raised_exception(
     original = APIError("tts failed") if provider else None
     failed = RunFailedWire(
         run=run,
-        error=RunErrorModel(message="tts failed"),
+        error=APIError("the model request failed: tts failed", retryable=False),
         input_requirements=requirements,
         provider_error=original,
     )
@@ -890,6 +886,10 @@ async def test_voice_failure_keeps_input_requirements_on_the_raised_exception(
     assert raised.value.__dict__["input_requirements"] == requirements
     assert raised.value.__dict__["input_requirements"] is not requirements
 
-    late = RunFailedWire(run=run, error=RunErrorSessionClosed(), input_requirements=[])
+    late = RunFailedWire(
+        run=run,
+        error=RuntimeError("the session closed before the run settled"),
+        input_requirements=[],
+    )
     _on_run_failed(SimpleNamespace(), late)  # type: ignore[arg-type]
     assert raised.value.__dict__["input_requirements"] == requirements

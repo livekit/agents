@@ -125,12 +125,12 @@ pub trait DevServer: Send + Sync {
     #[host(call, name = "_core_running_jobs")]
     fn running_jobs(
         &self,
-    ) -> Result<Vec<crate::worker::types::RunningJobInfo>, crate::errors::HostError>;
+    ) -> Result<Vec<crate::worker::job::RunningJobInfo>, crate::errors::HostError>;
     /// Resume the jobs the CLI kept from before the reload, on this server's URL and a fresh token.
     #[host(await, name = "_core_reload_jobs")]
     fn reload_jobs(
         &self,
         cx: &crate::telemetry::Cx,
-        jobs: Vec<crate::worker::types::RunningJobInfo>,
+        jobs: Vec<crate::worker::job::RunningJobInfo>,
     ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 }

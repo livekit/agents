@@ -21,8 +21,8 @@ use crate::telemetry;
 use lk_agents_core::request::{Policy, Request, Step};
 use lk_agents_net::task::TaskSet;
 use lk_agents_net::transport::{
-    TransportError, WsMessage, WsSender, WsTransport, connect_error, open_ws, stream_closed,
-    join_url, to_ws_url, within,
+    TransportError, WsMessage, WsSender, WsTransport, connect_error, join_url, open_ws,
+    stream_closed, to_ws_url, within,
 };
 
 use base64::Engine as _;

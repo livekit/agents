@@ -56,75 +56,26 @@ impl Default for WorkerPermissions {
     }
 }
 
-/// The scalar half of a `livekit.agent.Job`.
-#[derive(Debug, Clone, PartialEq)]
-#[crate::host(record(module = "worker_server", emit, extract))]
-pub struct JobInfo {
-    pub id: String,
-    pub dispatch_id: String,
-    pub r#type: i32,
-    /// The room's name, flattened out of `Job.room`.
-    pub room: Option<String>,
-    pub room_sid: Option<String>,
-    pub agent_name: String,
-    pub metadata: String,
-    pub deployment: String,
-    pub enable_recording: bool,
-    pub enable_redaction: bool,
-    /// The exact `agent.Job` bytes: the fields above are lossy, and this crosses IPC.
-    pub proto: Vec<u8>,
-}
-
 /// A job offered to the worker, which answers it with a [`JobDecision`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct JobRequest {
-    pub job: JobInfo,
+    pub job: livekit_protocol::Job,
     /// `AvailabilityRequest.resuming` -- the job is migrating from another worker.
     pub resuming: bool,
 }
 
 impl JobRequest {
     pub fn room_name(&self) -> &str {
-        self.job.room.as_deref().unwrap_or("")
+        self.job.room.as_ref().map_or("", |room| room.name.as_str())
     }
-}
-
-/// `RunningJobInfo`: what a launched job is handed.
-#[derive(Debug, Clone, PartialEq)]
-#[crate::host(record(module = "worker_server", emit, extract))]
-pub struct RunningJobInfo {
-    pub accept_arguments: AcceptArguments,
-    pub job: JobInfo,
-    pub url: String,
-    pub token: String,
-    pub worker_id: String,
-    pub fake_job: bool,
-    /// The dispatch timeline in unix seconds, absent for a job no dispatch offered:
-    /// the `AvailabilityRequest` arrived,
-    pub received_at: Option<f64>,
-    /// the request was accepted,
-    pub accepted_at: Option<f64>,
-    /// and the `JobAssignment` arrived.
-    pub assigned_at: Option<f64>,
 }
 
 /// Acceptance returns before assignment and launch; the worker owns the assignment deadline.
 /// A rejection leaves the job to another worker.
 #[derive(Debug, Clone, PartialEq)]
 pub enum JobDecision {
-    Accept(AcceptArguments),
+    Accept(crate::worker::job::AcceptArguments),
     Reject,
-}
-
-/// Accepted participant fields; application attributes retain their own string keys.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[crate::host(record(module = "worker_server", emit, extract))]
-pub struct AcceptArguments {
-    pub name: String,
-    pub identity: String,
-    pub metadata: String,
-    /// Merged after `lk.agent.name`, so a user attribute of that name wins.
-    pub attributes: Vec<(String, String)>,
 }
 
 // --- the worker's notifications ------------------------------------------------------------
@@ -172,9 +123,60 @@ pub struct ProcessStartOptions {
     pub devmode: bool,
     pub job_processes: bool,
     pub env: Vec<(String, String)>,
-    pub job_executor_type: String,
-    pub multiprocessing_context: String,
+    pub job_executor_type: crate::worker::job::JobExecutorType,
+    pub multiprocessing_context: MultiprocessingContext,
     pub pool: ProcessPoolOptions,
+}
+
+/// How job processes start: `forkserver` (Linux only; elsewhere it falls back to `spawn`) or
+/// `spawn`.
+#[crate::host(record(module = "worker_options", extract, emit))]
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultiprocessingContext {
+    Spawn,
+    Forkserver,
+}
+
+/// `AgentServer(listeners=)`: public traffic and operational information never share a port
+/// (docs/server.md "Listeners"). A listener left out keeps its default.
+#[crate::host(record(module = "worker_options", path = "livekit.agents", typed_dict, extract))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Listeners {
+    /// The agent's endpoints and HTTP routes, where the worker serves them (a self-hosted
+    /// LiveKit server, the console); `0.0.0.0:8080`.
+    #[host(default = None)]
+    pub public: Option<PublicListener>,
+    /// `/`, `/ready` and `/worker`; `0.0.0.0:8081`.
+    #[host(default = None)]
+    pub health: Option<ListenerAddress>,
+    /// `/metrics`; off unless given, then `0.0.0.0:9090`.
+    #[host(default = None)]
+    pub prometheus: Option<ListenerAddress>,
+}
+
+/// Where a listener binds; a key left out keeps its default.
+#[crate::host(record(module = "worker_options", path = "livekit.agents", typed_dict, extract))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListenerAddress {
+    #[host(default = None)]
+    pub host: Option<String>,
+    #[host(default = None)]
+    pub port: Option<u16>,
+}
+
+/// The public listener's address and how it reads the client.
+#[crate::host(record(module = "worker_options", path = "livekit.agents", typed_dict, extract))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PublicListener {
+    #[host(default = None)]
+    pub host: Option<String>,
+    #[host(default = None)]
+    pub port: Option<u16>,
+    /// Read the client address and scheme from `X-Forwarded-For` and `X-Forwarded-Proto`; only
+    /// behind a proxy that always sets them.
+    #[host(default = false)]
+    pub proxy_headers: bool,
 }
 
 /// A sparse update to the server configuration; omission and an explicit null remain distinct.
@@ -185,9 +187,7 @@ pub struct ServerOptions {
     pub api_key: crate::Maybe<String>,
     pub api_secret: crate::Maybe<String>,
     pub agent_name: crate::Maybe<String>,
-    /// `{"public": {...}, "health": {...}, "prometheus": {...}}`, each `host` and `port`
-    /// (`public` also `proxy_headers`); the worker validates the keys.
-    pub listeners: crate::Maybe<serde_json::Value>,
+    pub listeners: crate::Maybe<Listeners>,
     pub load_threshold: crate::Maybe<f64>,
     pub num_idle_processes: crate::Maybe<u32>,
     pub drain_timeout: crate::Maybe<f64>,
@@ -196,8 +196,8 @@ pub struct ServerOptions {
     pub permissions: crate::Maybe<WorkerPermissions>,
     pub http_proxy: crate::Maybe<Option<String>>,
     pub version: crate::Maybe<String>,
-    pub job_executor_type: crate::Maybe<String>,
-    pub multiprocessing_context: crate::Maybe<String>,
+    pub job_executor_type: crate::Maybe<crate::worker::job::JobExecutorType>,
+    pub multiprocessing_context: crate::Maybe<MultiprocessingContext>,
     pub job_memory_warn_mb: crate::Maybe<f64>,
     pub job_memory_limit_mb: crate::Maybe<f64>,
     pub shutdown_process_timeout: crate::Maybe<f64>,

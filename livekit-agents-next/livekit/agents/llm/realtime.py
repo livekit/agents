@@ -5,16 +5,10 @@ from typing import TYPE_CHECKING, Any, Literal
 from livekit import rtc
 
 from .. import _core
+from .._generated import public_llm_realtime as _public
 from .._generated.chat_items import MetricsMetadata
 from .._generated.public_llm_realtime import *  # noqa: F403
-from .._generated.realtime import (
-    EventTypes,
-    RealtimeCapabilities,
-    RealtimeModel,
-    RealtimeModelError,
-    RealtimeSession,
-)
-from .._generated.realtime_availability import RealtimeAvailabilityChangedEvent
+from .._generated.realtime import EventTypes, RealtimeModelError
 
 if TYPE_CHECKING:
     from .._generated.llm_fallback import AvailabilityChanged
@@ -128,17 +122,6 @@ class RealtimeModelFallbackAdapter(
 
 __all__ = [
     "EventTypes",
-    "GenerationCreatedEvent",
-    "InputSpeechStartedEvent",
-    "InputSpeechStoppedEvent",
-    "InputTranscriptionCompleted",
-    "MessageGeneration",
-    "RealtimeCapabilities",
-    "RealtimeError",
-    "RealtimeModel",
     "RealtimeModelError",
-    "RealtimeSession",
-    "RealtimeSessionReconnectedEvent",
-    "RemoteItemAddedEvent",
-    "RealtimeAvailabilityChangedEvent",
 ]
+__all__ += _public.__all__

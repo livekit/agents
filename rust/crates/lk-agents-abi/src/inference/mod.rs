@@ -10,6 +10,19 @@ pub mod tts_wire;
 use crate::errors::Invalid;
 use serde_json::Value;
 
+#[crate::host(file(module = "inference_headers"))]
+const _: () = ();
+
+/// The gateway's session identification header.
+#[crate::host(constant(path = "livekit.agents.inference"))]
+pub const HEADER_SESSION_ID: &str = "X-LiveKit-Session-ID";
+/// The provider a gateway request asks for.
+#[crate::host(constant(path = "livekit.agents.inference"))]
+pub const HEADER_INFERENCE_PROVIDER: &str = "X-LiveKit-Inference-Provider";
+/// A request's inference class (`"low"` for a background job).
+#[crate::host(constant(path = "livekit.agents.inference"))]
+pub const HEADER_INFERENCE_PRIORITY: &str = "X-LiveKit-Inference-Priority";
+
 /// The inference gateway's credentials and identification. The core reads
 /// `LIVEKIT_INFERENCE_URL`, `LIVEKIT_INFERENCE_API_KEY`, `LIVEKIT_INFERENCE_API_SECRET` and
 /// `LIVEKIT_WORKER_TOKEN` from the environment; `server_*` are the server's `LIVEKIT_URL` and key

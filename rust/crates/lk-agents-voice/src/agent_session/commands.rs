@@ -54,9 +54,7 @@ pub enum Command {
 #[derive(Debug, Clone)]
 pub enum AmdSpan {
     /// Attached: `amd` opens with the context the detector's classification runs under.
-    Attached(
-        lk_agents_telemetry::span::Reserved<lk_agents_abi::telemetry::spans::session::Amd>,
-    ),
+    Attached(lk_agents_telemetry::span::Reserved<lk_agents_abi::telemetry::spans::session::Amd>),
     /// Released its verdict: `amd` ends.
     Verdict(lk_agents_abi::voice::amd::AmdPrediction),
 }
@@ -271,7 +269,7 @@ pub enum TurnCommand {
     /// A realtime server buffer is cleared too.
     Clear,
     /// Unnamed leaves keep their answer; a changed endpointing replaces the model (a running
-    /// countdown keeps its deadline); `turn_detection=None` arrives as `Some(Auto)`.
+    /// countdown keeps its deadline); `turn_detection=None` arrives as `Given(None)`.
     Configure(Box<crate::agent_session::options::AgentSessionOptions>),
     /// `override_options(..)`: a layer over the base until its `ReleaseOverride`.
     Override(Box<crate::agent_session::options::OverrideLayer>),

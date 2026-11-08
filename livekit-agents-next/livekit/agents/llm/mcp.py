@@ -15,7 +15,8 @@ from typing import Any, Self, cast
 from pydantic import JsonValue
 
 from .. import _core
-from .._generated.mcp import MCP_IDLE_CLOSE_SECONDS, MCPToolOptions, ResolvedToolOptions
+from .._generated import public_llm_mcp as _public
+from .._generated.mcp import ResolvedToolOptions
 from .._generated.public_llm_mcp import *  # noqa: F403
 from ..voice.events import RunContext
 from .tool_context import AsyncToolset, RawFunctionTool, Toolset, function_tool
@@ -24,9 +25,9 @@ from .tool_context import AsyncToolset, RawFunctionTool, Toolset, function_tool
 __all__ = [
     "MCPServerHTTP",
     "MCPServerStdio",
-    "MCPToolOptions",
     "MCPToolset",
 ]
+__all__ += _public.__all__
 
 
 class _Progress:
@@ -296,9 +297,7 @@ class MCPToolset(AsyncToolset):
         self._mcp_server = mcp_server
         self._tool_options = dict(tool_options or {})
         # the listing's recovery and the idle close are the core's
-        self._lifecycle = _core._core_McpToolsetLifecycle(
-            repr(mcp_server), MCP_IDLE_CLOSE_SECONDS, mcp_server._session
-        )
+        self._lifecycle = _core._core_McpToolsetLifecycle(repr(mcp_server), mcp_server._session)
         # per-run credentials: one toolset per credential set, and each call's
         self._by_credentials: dict[str, MCPToolset] = {}
         self._by_call: weakref.WeakKeyDictionary[object, MCPToolset] = weakref.WeakKeyDictionary()

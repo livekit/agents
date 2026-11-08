@@ -8,7 +8,7 @@ use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 pub struct SessionSide {
     pub stt: bool,
     pub vad: bool,
-    pub detection: TurnDetection,
+    pub detection: Option<TurnDetection>,
     pub streaming_detector: bool,
     pub interruption_given: bool,
     pub turn_detection_mode: TurnDetectionMode,
@@ -19,12 +19,13 @@ pub fn server_turn_detection_enabled(caps: &RealtimeCapabilities, side: SessionS
         return caps.turn_detection;
     }
     match side.detection {
-        TurnDetection::RealtimeLlm => return true,
-        TurnDetection::Manual => return false,
-        TurnDetection::Vad | TurnDetection::Stt | TurnDetection::Auto => {}
+        Some(TurnDetection::RealtimeLlm) => return true,
+        Some(TurnDetection::Manual) => return false,
+        Some(TurnDetection::Vad | TurnDetection::Stt) | None => {}
     }
-    let client_side =
-        side.detection == TurnDetection::Vad || side.streaming_detector || side.interruption_given;
+    let client_side = side.detection == Some(TurnDetection::Vad)
+        || side.streaming_detector
+        || side.interruption_given;
     !(side.vad && client_side)
 }
 

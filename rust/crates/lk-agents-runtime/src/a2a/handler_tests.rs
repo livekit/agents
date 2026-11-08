@@ -44,6 +44,7 @@ fn open(
             std::time::SystemTime::UNIX_EPOCH,
         )),
         batch: Vec::new(),
+        delegated: false,
         history: Vec::new(),
         state: None,
         context_scope_id: String::new(),

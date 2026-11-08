@@ -11,20 +11,11 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import JsonValue
 
 from livekit import rtc
-from livekit.agents._generated.interruption_errors import (
-    InterruptionDetectionError as InterruptionDetectionError,
-)
 
 from .. import _bindings, _core
-from .._generated import vad
-from .._generated.inference_models import (
-    InferenceClass as InferenceClass,
-    TurnDetectorModels as TurnDetectorModels,
-    TurnDetectorVersions as TurnDetectorVersions,
-    VADModels as VADModels,
-)
+from .._generated import public_inference as _public, vad
 from .._generated.language import LanguageCode
-from .._generated.overlap import OverlappingSpeechEvent as OverlappingSpeechEvent
+from .._generated.public_inference import *  # noqa: F403
 from ..job import _server_setting, get_job_context
 from ..log import logger
 from ..metrics import EOTInferenceMetrics
@@ -41,11 +32,6 @@ from ..version import __version__
 if TYPE_CHECKING:
     from .avatar import AvatarSession, LemonSliceOptions
     from .realtime import RealtimeModel, RealtimeSession
-
-
-HEADER_SESSION_ID = "X-LiveKit-Session-ID"
-HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
-HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 
 
 def get_default_inference_url() -> str:
@@ -159,17 +145,17 @@ class VAD(vad.VAD):
         if is_given(deactivation_threshold) and deactivation_threshold <= 0:
             raise ValueError("deactivation_threshold must be greater than 0")
         self._model = model
-        self._opts = {
-            "min_speech_duration": min_speech_duration,
-            "min_silence_duration": min_silence_duration,
-            "prefix_padding_duration": prefix_padding_duration,
-            "max_buffered_speech": max_buffered_speech,
-            "activation_threshold": activation_threshold,
-            "deactivation_threshold": deactivation_threshold
+        self._native = _core.InferenceVad(
+            _silero_model,
+            min_speech_duration=min_speech_duration,
+            min_silence_duration=min_silence_duration,
+            prefix_padding_duration=prefix_padding_duration,
+            max_buffered_speech=max_buffered_speech,
+            activation_threshold=activation_threshold,
+            deactivation_threshold=deactivation_threshold
             if is_given(deactivation_threshold)
-            else max(activation_threshold - 0.15, 0.01),
-        }
-        self._native = _core.InferenceVad(_silero_model, **self._opts)
+            else None,
+        )
 
     def _core_leg(self) -> Any:
         """The core's own detector, unless a subclass replaces its stream."""
@@ -185,7 +171,7 @@ class VAD(vad.VAD):
 
     @property
     def min_silence_duration(self) -> float:
-        return self._opts["min_silence_duration"]
+        return self._native.min_silence_duration
 
     def stream(self) -> vad.VADStream:
         return _VADStream(self)
@@ -201,16 +187,14 @@ class VAD(vad.VAD):
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """Update the options; running streams apply them before their next frame."""
-        given = {
-            "min_speech_duration": min_speech_duration,
-            "min_silence_duration": min_silence_duration,
-            "prefix_padding_duration": prefix_padding_duration,
-            "max_buffered_speech": max_buffered_speech,
-            "activation_threshold": activation_threshold,
-            "deactivation_threshold": deactivation_threshold,
-        }
-        self._opts.update({k: v for k, v in given.items() if is_given(v)})
-        self._native.update_options(**self._opts)
+        self._native.update_options(
+            min_speech_duration=min_speech_duration,
+            min_silence_duration=min_silence_duration,
+            prefix_padding_duration=prefix_padding_duration,
+            max_buffered_speech=max_buffered_speech,
+            activation_threshold=activation_threshold,
+            deactivation_threshold=deactivation_threshold,
+        )
 
 
 class _VADStream(vad.VADStream):
@@ -231,7 +215,6 @@ class _VADStream(vad.VADStream):
 
 
 DEFAULT_SAMPLE_RATE = 16000
-DEFAULT_PREDICTION_TIMEOUT = 1.0
 
 
 Overrides = float | dict[LanguageCode | str, float]
@@ -368,15 +351,14 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
     async def supports_language(self, language: LanguageCode | None) -> bool:
         return self._detector.supports(language)
 
-    def stream(self, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN) -> _core.EotStream:
+    def stream(
+        self, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN
+    ) -> TurnDetectorStream:
         resolved = conn_options if is_given(conn_options) else self._conn_options
         return self._detector.stream(list(get_inference_headers().items()), resolved)
 
     def _emit_metrics(self, ev: EOTInferenceMetrics) -> None:
         self.emit("metrics_collected", ev)
-
-
-TurnDetectorStream = _core.EotStream
 
 
 def _json(overrides: float | dict[str, float]) -> JsonValue:
@@ -433,20 +415,14 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
-    "InferenceClass",
     "Credentials",
     "extract_quota_usage",
     "get_default_inference_url",
     "get_inference_headers",
     "resolve_credentials",
     "VAD",
-    "VADModels",
     "TurnDetector",
-    "TurnDetectorModels",
-    "TurnDetectorVersions",
     "AdaptiveInterruptionDetector",
-    "InterruptionDetectionError",
-    "OverlappingSpeechEvent",
     "STT",
     "TTS",
     "LLM",
@@ -462,3 +438,4 @@ __all__ = [
     "OpenAIRealtimeModels",
     "XAIRealtimeModels",
 ]
+__all__ += _public.__all__

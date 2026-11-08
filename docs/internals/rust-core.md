@@ -1437,8 +1437,11 @@ Modules that only forward or re-export are generated, with public names
 re-exported by their owning package's `__init__`. A declaration's `path = "livekit.agents.x"`
 is its public module: `_generated/public_x.py` re-exports every name placed there, and `x`
 star-imports it, holding no import list of those names; its literal `__all__` lists them, which
-mypy requires. A handwritten module that adds names of its own spreads the generated list and
-lists only its own: `__all__ = [*_public.__all__, "AudioOutput"]`.
+mypy requires. Records, exceptions, flags, `constant(path = ..)`, `function, path = ..` and str
+classes are placed by `path`; a native class by `class(module = ..)`; a plugin base file's public
+classes at their host class's module. A handwritten module lists only its own names and extends
+them with the generated list, the one spelling pyright follows:
+`__all__ = ["AudioOutput"]` then `__all__ += _public.__all__`.
 
 ### Module registration
 

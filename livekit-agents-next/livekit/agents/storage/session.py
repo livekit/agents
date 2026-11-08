@@ -128,7 +128,7 @@ class _TurnHost:
             task_id=ctx.task_id,
             store=context.store,
             answer_tool=ctx.answer_tool,
-            delegated=bool(ctx.batch) and all(m.channel == "delegation" for m in ctx.batch),
+            delegated=ctx.delegated,
         )
 
         token = set_run_hooks(hooks)

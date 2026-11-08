@@ -5,8 +5,7 @@ from typing import TYPE_CHECKING, Any, cast, get_args
 
 from .. import _core, llm
 from .._bindings import APIConnectionError, APIStatusError, APITimeoutError
-from .._generated.inference_llm import LLMModels, RealtimeModels, ReasoningEffort
-from .._generated.llm_provider_options import ChatCompletionOptions
+from .._generated import public_inference_llm as _public
 from .._generated.provider_hosts import InferenceLlmHost
 from .._generated.public_inference_llm import *  # noqa: F403
 from ..llm import ToolChoice, utils as llm_utils
@@ -33,19 +32,8 @@ __all__ = [
     "LLM",
     "LLMStream",
     "ProviderEndpoint",
-    "LLMModels",
-    "ChatCompletionOptions",
-    "OpenAIModels",
-    "GoogleModels",
-    "KimiModels",
-    "DeepSeekModels",
-    "ZAIModels",
-    "XAIModels",
-    "RealtimeModels",
-    "OpenAIRealtimeModels",
-    "XAIRealtimeModels",
-    "ReasoningEffort",
 ]
+__all__ += _public.__all__
 
 _REALTIME_MODEL_IDS: frozenset[str] = frozenset(
     model for literal in get_args(RealtimeModels) for model in get_args(literal)

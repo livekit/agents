@@ -148,7 +148,7 @@ pub enum HttpScheme {
 
 /// The authenticated node preamble attached to an endpoint byte stream.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[crate::host(record(module = "worker_endpoint", emit, extract))]
+#[crate::host(record(module = "worker_endpoint", path = "livekit.agents.http", emit, extract))]
 pub struct EndpointRequest {
     pub request_id: String,
     pub authorized: bool,

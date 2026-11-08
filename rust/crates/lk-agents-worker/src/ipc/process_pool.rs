@@ -11,7 +11,7 @@ use lk_agents_abi::worker::ipc::{JobRunnerOptions, JobStatus};
 use lk_agents_abi::worker::ipc_host::{
     JobSupervisor as _, PoolCallbacks, ProcessEvent, SupervisedJob, WorkerError,
 };
-use lk_agents_abi::worker::types::RunningJobInfo;
+use lk_agents_abi::worker::job::RunningJobInfo;
 
 use super::owner::JobSupervisor;
 use super::pool::{Executors, LaunchError, PoolOptions, ProcPool};

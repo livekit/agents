@@ -5,8 +5,7 @@ use std::sync::Arc;
 
 use crate::invoke::CallContext;
 use crate::worker::ipc::{JobCompletion, JobRunnerOptions, JobStatus};
-use crate::worker::job::StartJobFields;
-use crate::worker::types::RunningJobInfo;
+use crate::worker::job::{RunningJobInfo, StartJob};
 use crate::{HostRef, errors::HostError};
 use std::collections::BTreeMap;
 
@@ -190,7 +189,7 @@ pub trait JobProcess: Send + Sync {
     fn start_job(
         &self,
         cx: &crate::telemetry::Cx,
-        fields: StartJobFields,
+        job: StartJob,
     ) -> crate::BoxFuture<'_, Result<Arc<dyn JobExecution>, HostError>>;
 
     /// The entrypoint's task.
@@ -289,7 +288,8 @@ pub trait IpcClient: Send + Sync + Sized + 'static {
 }
 
 /// A process's step in the pool, the event `ProcPool.emit` names.
-#[crate::host(wire_enum)]
+#[crate::host(record(module = "worker_ipc", emit))]
+#[crate::host(wire_strs)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProcessEvent {
     #[host(rename = "process_created")]
@@ -388,8 +388,8 @@ pub trait JobRun: Send + Sync + Sized + 'static {
     #[host(env)]
     type Env;
 
-    /// `session_end` names the door's `on_session_end`, when it has one. `observability_url`
-    /// overrides where the job's telemetry and recording go (`LIVEKIT_OBSERVABILITY_URL`);
+    /// `session_end` names the door's `on_session_end`, when it has one. The job's telemetry and
+    /// recording go to `LIVEKIT_OBSERVABILITY_URL` when set, else to `url`'s Cloud project;
     /// `api_key` and `api_secret` sign its Cloud telemetry.
     #[host(new)]
     #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
@@ -401,7 +401,6 @@ pub trait JobRun: Send + Sync + Sized + 'static {
         #[host(default = "")] url: String,
         #[host(default = None)] session_end: Option<String>,
         #[host(default = 60.0)] session_aclose_timeout: f64,
-        #[host(default = None)] observability_url: Option<String>,
         #[host(default = "")] api_key: String,
         #[host(default = "")] api_secret: String,
     ) -> Result<Self, WorkerError>;
@@ -417,7 +416,7 @@ pub trait JobRun: Send + Sync + Sized + 'static {
     );
     /// Opens the job's root span for the job the parent handed over, before its run starts.
     #[host(call)]
-    fn start_trace(&self, fields: StartJobFields);
+    fn start_trace(&self, job: StartJob);
     /// The application ends the job.
     #[host(call)]
     fn shutdown(&self, reason: String);

@@ -172,7 +172,10 @@ fn read(attr: TokenStream, item: &syn::Item, to_host: Option<ToHost<'_>>) -> syn
             if vm.0.is_empty() {
                 continue;
             }
-            vm.only(&format!("{ident}::{}", v.ident), &["kind", "delegate", "kwargs", "capture"])?;
+            vm.only(
+                &format!("{ident}::{}", v.ident),
+                &["kind", "delegate", "kwargs", "kwargs.", "capture"],
+            )?;
             let vi = &v.ident;
             // `delegate = field`: a named variant raises as that field's error.
             if let Some(field) = vm.ident("delegate")? {
@@ -213,25 +216,47 @@ fn read(attr: TokenStream, item: &syn::Item, to_host: Option<ToHost<'_>>) -> syn
             };
             let message = quote!(::std::string::ToString::to_string(self));
             kind_arms.push(quote!(#pat => #k,));
-            // `kwargs`: the variant's fields are the host class's keyword arguments too.
-            if vm.flag("kwargs") {
-                let (syn::Fields::Named(named), Some((module, class))) =
-                    (&v.fields, k.rsplit_once('.'))
-                else {
+            // `kwargs`: the variant's fields are the host class's keyword arguments too;
+            // `kwargs(name = value)`: fixed keyword arguments.
+            let constants = vm.under("kwargs.").collect::<Vec<_>>();
+            if vm.flag("kwargs") || !constants.is_empty() {
+                let Some((module, class)) = k.rsplit_once('.') else {
                     return Err(syn::Error::new_spanned(
                         vi,
-                        "`kwargs` passes a named-field variant's fields to a dotted host class",
+                        "`kwargs` passes keyword arguments to a dotted host class",
                     ));
                 };
-                let fields: Vec<_> = named.named.iter().filter_map(|f| f.ident.clone()).collect();
-                let names = fields.iter().map(|f| f.to_string());
-                let values = named
-                    .named
-                    .iter()
-                    .zip(&fields)
-                    .map(|(f, name)| to_host(&f.ty, quote!(::std::clone::Clone::clone(#name))))
-                    .collect::<syn::Result<Vec<_>>>()?;
-                arms.push(quote!(Self::#vi { #(#fields),* } => crate::py_errors::host_exception_with(#module, #class, #message, |kwargs| {
+                let (mut pattern, mut names, mut values) = (pat.clone(), Vec::new(), Vec::new());
+                if vm.flag("kwargs") {
+                    let syn::Fields::Named(named) = &v.fields else {
+                        return Err(syn::Error::new_spanned(
+                            vi,
+                            "`kwargs` passes a named-field variant's fields",
+                        ));
+                    };
+                    let fields: Vec<_> =
+                        named.named.iter().filter_map(|f| f.ident.clone()).collect();
+                    for (f, name) in named.named.iter().zip(&fields) {
+                        names.push(name.to_string());
+                        values.push(to_host(&f.ty, quote!(::std::clone::Clone::clone(#name)))?);
+                    }
+                    pattern = quote!(Self::#vi { #(#fields),* });
+                }
+                for (name, value) in constants {
+                    let value: syn::Expr = match value {
+                        crate::meta::Value::Text(text) => syn::parse_quote!(#text),
+                        crate::meta::Value::Rust(rust) => syn::parse_str(rust)?,
+                        crate::meta::Value::Word => {
+                            return Err(syn::Error::new_spanned(
+                                vi,
+                                format!("`kwargs({name})` takes a value"),
+                            ));
+                        }
+                    };
+                    names.push(name.to_string());
+                    values.push(quote!(::pyo3::IntoPyObjectExt::into_bound_py_any(#value, py)?));
+                }
+                arms.push(quote!(#pattern => crate::py_errors::host_exception_with(#module, #class, #message, |kwargs| {
                     let py = kwargs.py();
                     #( ::pyo3::types::PyDictMethods::set_item(kwargs, #names, #values)?; )*
                     ::std::result::Result::Ok(())

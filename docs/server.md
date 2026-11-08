@@ -221,10 +221,10 @@ server = AgentServer(
 | `prometheus` | `/metrics` | when given | off |
 
 Each listener takes `host` and `port`; `public` also takes `proxy_headers`. A key or a whole
-listener left out keeps its default; an unknown listener or key is refused when the server
-is built. In development and the console, every listener binds `127.0.0.1` on a free port.
-The worker logs every listener at startup, including the ones that are off, with its address
-or the reason it is off.
+listener left out keeps its default; a type checker flags an unknown listener or key, and the
+server ignores it. In development and the console, every listener binds `127.0.0.1` on a free
+port. The worker logs every listener at startup, including the ones that are off, with its
+address or the reason it is off.
 
 `proxy_headers` (default `False`) reads the client address and scheme from
 `X-Forwarded-For` and `X-Forwarded-Proto`. Enable it only when every request reaches the

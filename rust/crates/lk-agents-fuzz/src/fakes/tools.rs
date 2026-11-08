@@ -267,6 +267,7 @@ impl AgentCallbacks for FakeTools {
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
         invocation: &'a Invocation,
+        _: lk_agents_abi::agent::ToolTemplateKey,
         template: ToolTemplate,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Option<String>, HostError>> {
         let templated = invocation.function_call.as_ref().is_some_and(|c| c.name == TEMPLATED_TOOL);

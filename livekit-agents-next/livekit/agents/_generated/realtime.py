@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Callable, Sequence
 from dataclasses import dataclass
@@ -18,6 +17,7 @@ from typing_extensions import TypeVar
 
 from livekit import rtc
 
+from .. import _core
 from ..llm.chat_context import ChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr, TranscriptChunk
@@ -220,20 +220,10 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
 
     def _report_connection_acquired(self, acquire_time: float) -> None:
         """Report connection timing as a RealtimeModelMetrics event with zero usage."""
-        from ..metrics import Metadata, RealtimeModelMetrics
-
+        model = self._realtime_model
         self.emit(
             "metrics_collected",
-            RealtimeModelMetrics(
-                request_id="",
-                timestamp=time.time(),
-                acquire_time=acquire_time,
-                connection_reused=False,
-                metadata=Metadata(
-                    model_name=self._realtime_model.model,
-                    model_provider=self._realtime_model.provider,
-                ),
-            ),
+            _core._core_realtime_connection_metrics(model.model, model.provider, acquire_time),
         )
 
     @property

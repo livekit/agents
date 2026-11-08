@@ -40,19 +40,7 @@ pub struct Formatted<M, D> {
     pub dropped: Vec<Dropped>,
 }
 
-/// The host builds the OpenAI-shaped schema; the reference's `strict` flag becomes the variant.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ToolSchema {
-    /// `info.raw_schema`, verbatim.
-    Raw { name: String, raw_schema: Value },
-    /// `build_legacy_openai_schema(tool, internally_tagged=True)`: for Anthropic, Bedrock, Gemini
-    /// and the Responses API.
-    Legacy(Value),
-    /// `build_strict_openai_schema(tool)`.
-    Strict(Value),
-    /// Only the Responses API accepts one.
-    Provider(Value),
-}
+pub use lk_agents_abi::llm::provider_format::ToolSchema;
 
 /// `null`, `{}`, `[]`, `0` and `""` are falsy, which decides whether keys appear in the body.
 pub fn is_truthy(value: &Value) -> bool {

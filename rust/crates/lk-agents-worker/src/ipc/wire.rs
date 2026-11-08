@@ -57,7 +57,7 @@ pub struct Hello {
     pub health_timeout_ms: Option<u64>,
 }
 
-pub use lk_agents_abi::worker::job::StartJobFields as StartJob;
+pub use lk_agents_abi::worker::job::StartJob;
 
 /// `text`, cut to [`MAX_TEXT`] bytes with a marker, so a huge traceback cannot exceed a frame.
 pub fn bounded(mut text: String) -> String {

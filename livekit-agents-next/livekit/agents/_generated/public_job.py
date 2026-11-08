@@ -9,10 +9,12 @@ from .job_records import (
     JobExecutorType as JobExecutorType,
     RunningJobInfo as RunningJobInfo,
 )
+from .room_io import DEFAULT_PARTICIPANT_KINDS as DEFAULT_PARTICIPANT_KINDS
 
-__all__ = [
+__all__: list[str] = [
     "JobAcceptArguments",
     "RunningJobInfo",
     "JobExecutorType",
     "AutoSubscribe",
+    "DEFAULT_PARTICIPANT_KINDS",
 ]

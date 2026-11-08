@@ -20,7 +20,7 @@ from ._generated.cli import (
     CliParseResultDisplay,
     LogRecord,
 )
-from ._generated.worker_server import RunningJobInfo
+from ._generated.job_records import RunningJobInfo
 from .job import JobExecutorType
 from .log import DEV_LEVEL, _add_global_log_fields, logger
 from .types import NOT_GIVEN

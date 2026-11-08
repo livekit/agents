@@ -43,15 +43,12 @@ impl CoreJudgeRunner {
         ::pyo3::PyResult::Ok(CoreJudgeRunner(::std::sync::Arc::new(out)))
     }
 
-    /// Runs `judges` concurrently on `chat_ctx`, judged against `reference` when given: their
-    /// outcomes in judge order. An unknown built-in judge is refused before any runs.
-    #[pyo3(signature = (judges, chat_ctx, reference))]
+    /// Runs `judges` concurrently: their outcomes in judge order.
+    #[pyo3(signature = (judges))]
     fn evaluate<'py>(
         &self,
         py: Python<'py>,
         judges: Bound<'_, PyAny>,
-        chat_ctx: Bound<'_, PyAny>,
-        reference: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let judges = judges.try_iter().and_then(|items| {
@@ -62,37 +59,14 @@ impl CoreJudgeRunner {
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
-        let chat_ctx = chat_ctx.try_iter().and_then(|items| {
-            items
-                .map(|item| {
-                    let item = item?;
-                    crate::generated::records::chat_items::chat_item_from_py(item.as_any())
-                })
-                .collect::<PyResult<Vec<_>>>()
-        })?;
-        let reference = reference
-            .map(|v| {
-                v.try_iter().and_then(|items| {
-                    items
-                        .map(|item| {
-                            let item = item?;
-                            crate::generated::records::chat_items::chat_item_from_py(item.as_any())
-                        })
-                        .collect::<PyResult<Vec<_>>>()
-                })
-            })
-            .transpose()?;
         let context = crate::py_calls::entered();
         let cx = crate::py_calls::entry_cx();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::evaluate(
-                &this, judges, chat_ctx, reference, context, cx,
+                &this, judges, context, cx,
             )
-            .await
-            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
-                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
-            })?;
+            .await;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     ::pyo3::types::PyList::new(

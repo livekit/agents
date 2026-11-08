@@ -4,43 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import weakref
 from collections.abc import Callable, Mapping, Sequence
 from datetime import timedelta
 from typing import TypedDict, cast
 
-from google.protobuf import json_format, struct_pb2
-from google.protobuf.message import Message as ProtoMessage
 from pydantic import JsonValue
 from typing_extensions import Unpack
 
 from . import _core
-from ._core import (
-    AgentClient,
-    Reply,
-    ServerConfig,
-    _core_a2a_agent_card,
-    _core_Credentials,
-)
-from ._generated.a2a_auth import AgentThreadGrant, Principal
+from ._core import ServerConfig, _core_a2a_agent_card, _core_Credentials
+from ._generated import public_a2a as _public
 from ._generated.a2a_card import EndpointDescriptor
-from ._generated.a2a_client import (
-    Artifact,
-    DataPart,
-    FilePart,
-    Message,
-    MessageMetadata,
-    TaskUpdate,
-    TextPart,
-)
 from ._generated.a2a_door import DoorConfig
-from ._generated.a2a_metadata import (
-    AGENT_CARD_PATH as AGENT_CARD_PATH,
-    EXTENSION_URI as EXTENSION_URI,
-    GRANT_HEADER,
-    RPC_PATH,
-)
+from ._generated.a2a_metadata import GRANT_HEADER, RPC_PATH
 from ._generated.a2a_remote import RemoteEventInputRequired, RemoteEventOutcome
 from ._generated.public_a2a import *  # noqa: F403
 from ._generated.storage_options import Policy, TurnOptions
@@ -51,24 +28,6 @@ from .storage import Storage, Thread
 from .storage.session import A2ASessionContext, _Handler, _TurnHost
 from .types import APIConnectOptions
 from .voice.events import RunContext
-
-
-class AuthError(Exception):
-    """An HTTP authorization refusal, outside JSON-RPC."""
-
-    status = 401
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-        self.message = message
-
-
-class Unauthorized(AuthError):
-    status = 401
-
-
-class Forbidden(AuthError):
-    status = 403
 
 
 class Credentials:
@@ -104,34 +63,6 @@ class Credentials:
         self, grant: AgentThreadGrant, *, identity: str = "", ttl_seconds: int = 3600
     ) -> str:
         return self._native.thread_grant_token(grant, identity=identity, ttl_seconds=ttl_seconds)
-
-
-Metadata = dict[str, JsonValue]
-
-
-# -- protobuf helpers --
-
-
-def struct(value: Mapping[str, JsonValue]) -> struct_pb2.Struct:
-    """A metadata field: A2A types them ``Struct``."""
-    return json_format.ParseDict(dict(value), struct_pb2.Struct())
-
-
-def value(data: JsonValue) -> struct_pb2.Value:
-    """A data part's payload: A2A types it ``Value``."""
-    holder = json_format.ParseDict({"data": data}, struct_pb2.Struct())
-    return holder.fields["data"]
-
-
-def as_dict(field: ProtoMessage) -> Metadata:
-    """A ``Struct`` or ``Value`` back as JSON; an empty dict for anything that is not a map."""
-    out = json_format.MessageToDict(field)
-    return out if isinstance(out, dict) else {}
-
-
-def to_json(message: ProtoMessage) -> dict[str, JsonValue]:
-    """A proto message as the JSON the HTTP binding carries (camelCase, enums by name)."""
-    return json_format.MessageToDict(message, preserving_proto_field_name=False)
 
 
 class A2AService:
@@ -404,11 +335,7 @@ class A2AEndpoint:
         """Attach the endpoint to a server's storage and options: its agent name (the lane,
         unless the door writes its own) and URL."""
         chosen = self._storage or storage
-        # the card's version is the deployment's; a local worker, registered under none, falls
-        # back to LIVEKIT_AGENT_VERSION
-        self.version = (
-            self.version or config.deployment or os.environ.get("LIVEKIT_AGENT_VERSION") or "1.0.0"
-        )
+        self.version = self.version or config.card_version
         own = self.lane
         self._service = A2AService(
             self,
@@ -473,21 +400,8 @@ def _seconds(
 __all__ = [
     "a2a_session",
     "A2ASessionContext",
-    "AgentClient",
-    "Artifact",
-    "DataPart",
-    "FilePart",
-    "Message",
-    "MessageMetadata",
     "RemoteAgent",
-    "TextPart",
-    "AgentThreadGrant",
     "Credentials",
-    "Forbidden",
-    "Principal",
-    "Reply",
-    "TaskUpdate",
-    "Unauthorized",
-    "AuthError",
     "A2AEndpoint",
 ]
+__all__ += _public.__all__

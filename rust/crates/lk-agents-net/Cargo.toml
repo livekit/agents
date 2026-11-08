@@ -54,6 +54,8 @@ tonic-types = { version = "0.14", default-features = false }
 # (`export/otlp/proto.rs`).
 flate2 = "1"
 miniz_oxide = "0.8"
+# The host name of the default storage lease holder (`env::ProcessEnv::lease_holder`).
+sysinfo.workspace = true
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util", "net", "io-util"] }

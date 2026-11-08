@@ -291,7 +291,7 @@ pub struct SessionShared {
     pub(in crate::voice) recorder:
         tokio::sync::watch::Receiver<Option<crate::voice::recorder::RecorderTap>>,
     /// A pipeline is built per segment, so a half-open `**` cannot leak into the next utterance.
-    pub(in crate::voice) tts_transforms: Vec<lk_agents_voice::transcription::TransformSpec>,
+    pub(in crate::voice) tts_transforms: Vec<lk_agents_abi::voice::session_options::TextTransform>,
     /// The loop's queue: a task's reports, and the commands of the speech handle a host tool
     /// receives. Unbounded: a task must never block on the loop draining it.
     pub(in crate::voice) queue: Tx,

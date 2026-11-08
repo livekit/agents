@@ -30,9 +30,8 @@ from typing import Any, Literal, TypeAlias
 import psutil
 
 from livekit.agents import JobContext, _core
-from livekit.agents._generated.worker_server import AcceptArguments, JobInfo, RunningJobInfo
 from livekit.agents.ipc import JobLauncher, JobRunnerOptions, ProcPool, configure_forkserver
-from livekit.agents.job import JobProcess
+from livekit.agents.job import JobAcceptArguments, JobProcess, RunningJobInfo
 from livekit.protocol import agent
 from scripts.bench.metrics import LoopLag, distribution
 
@@ -285,22 +284,8 @@ def job(ledger: Ledger, args: argparse.Namespace, label: str) -> RunningJobInfo:
     )
     ledger.submitted[job_id] = (hashlib.sha256(metadata.encode()).hexdigest(), time.monotonic_ns())
     return RunningJobInfo(
-        accept_arguments=AcceptArguments(
-            name="ipc-bench", identity=job_id, metadata="", attributes=[]
-        ),
-        job=JobInfo(
-            id=job_id,
-            dispatch_id="",
-            type=0,
-            room=None,
-            room_sid=None,
-            agent_name="",
-            metadata=metadata,
-            deployment="",
-            enable_recording=False,
-            enable_redaction=False,
-            proto=agent.Job(id=job_id, metadata=metadata).SerializeToString(),
-        ),
+        accept_arguments=JobAcceptArguments(name="ipc-bench", identity=job_id, metadata=""),
+        job=agent.Job(id=job_id, metadata=metadata),
         url="",
         token="",
         worker_id="ipc-bench",

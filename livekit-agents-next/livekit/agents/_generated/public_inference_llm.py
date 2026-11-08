@@ -18,7 +18,7 @@ from .inference_llm import (
 )
 from .llm_provider_options import ChatCompletionOptions as ChatCompletionOptions
 
-__all__ = [
+__all__: list[str] = [
     "ReasoningEffort",
     "OpenAIModels",
     "GoogleModels",

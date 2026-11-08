@@ -266,7 +266,7 @@ impl Resolver<'_> {
             &entries,
             &[
                 "new", "call", "await", "getter", "setter", "function", "next", "name", "pid",
-                "attached", "future", "facade",
+                "attached", "future", "facade", "path",
             ],
         )?;
         let kinds: Vec<MethodKind> = [
@@ -496,6 +496,10 @@ impl Resolver<'_> {
             }
         };
         let facade = class::facade(&entries, &at)?;
+        let path = voc::text(&at, &entries, "path")?;
+        if path.is_some() && !matches!(kind, MethodKind::Function | MethodKind::AsyncFunction) {
+            return Err(format!("{at}: only a `function` is placed in a public module"));
+        }
         Ok(Method {
             facade,
             rust_name: f.sig.ident.to_string(),
@@ -506,6 +510,7 @@ impl Resolver<'_> {
             refused,
             attached,
             pid: voc::boolean(&at, &entries, "pid")?,
+            path,
             params,
             ret,
             future,

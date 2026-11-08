@@ -14,57 +14,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .job_records import JobExecutorType
     from .worker_endpoint import EndpointKind
-
-
-@dataclass(kw_only=True, slots=True)
-class JobInfo:
-    """The scalar half of a `livekit.agent.Job`."""
-
-    id: str
-    dispatch_id: str
-    type: int
-    room: str | None
-    """The room's name, flattened out of `Job.room`."""
-    room_sid: str | None
-    agent_name: str
-    metadata: str
-    deployment: str
-    enable_recording: bool
-    enable_redaction: bool
-    proto: bytes
-    """The exact `agent.Job` bytes: the fields above are lossy, and this crosses IPC."""
-
-
-@dataclass(kw_only=True, slots=True)
-class RunningJobInfo:
-    """`RunningJobInfo`: what a launched job is handed."""
-
-    accept_arguments: AcceptArguments
-    job: JobInfo
-    url: str
-    token: str
-    worker_id: str
-    fake_job: bool
-    received_at: float | None
-    """The dispatch timeline in unix seconds, absent for a job no dispatch offered:
-    the `AvailabilityRequest` arrived,
-    """
-    accepted_at: float | None
-    """the request was accepted,"""
-    assigned_at: float | None
-    """and the `JobAssignment` arrived."""
-
-
-@dataclass(kw_only=True, slots=True)
-class AcceptArguments:
-    """Accepted participant fields; application attributes retain their own string keys."""
-
-    name: str
-    identity: str
-    metadata: str
-    attributes: list[tuple[str, str]]
-    """Merged after `lk.agent.name`, so a user attribute of that name wins."""
+    from .worker_options import MultiprocessingContext
 
 
 @dataclass(kw_only=True, slots=True)
@@ -87,8 +39,8 @@ class ProcessStartOptions:
     devmode: bool
     job_processes: bool
     env: list[tuple[str, str]]
-    job_executor_type: str
-    multiprocessing_context: str
+    job_executor_type: JobExecutorType
+    multiprocessing_context: MultiprocessingContext
     pool: ProcessPoolOptions
 
 

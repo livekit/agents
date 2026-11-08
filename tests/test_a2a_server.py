@@ -20,6 +20,7 @@ from a2a.client import ClientConfig, ClientFactory
 from a2a.client.card_resolver import A2ACardResolver
 from a2a.types import a2a_pb2 as pb
 from a2a.utils.constants import TransportProtocol
+from google.protobuf import json_format
 
 from livekit.agents import Agent, AgentServer, RunContext, RunResult
 from livekit.agents._generated.a2a_metadata import (
@@ -41,7 +42,6 @@ from livekit.agents.a2a import (
     Credentials,
     TextPart,
     Unauthorized,
-    as_dict,
 )
 from livekit.agents.llm import ChatItem, FunctionToolCall
 from livekit.agents.storage import Storage, StorageUnavailable, Thread
@@ -139,9 +139,7 @@ def user_message(
     if context_id:
         msg.context_id = context_id
     if metadata:
-        from livekit.agents.a2a import struct
-
-        msg.metadata.CopyFrom(struct(metadata))
+        json_format.ParseDict(metadata, msg.metadata)
     return msg
 
 
@@ -255,7 +253,7 @@ async def test_a_stock_client_without_the_header_gets_a_plain_text_agent(
     assert artifacts[0].last_chunk is True
     # nothing profile-specific rides on a plain request
     for s in statuses:
-        assert not as_dict(s.status.message.metadata)
+        assert not json_format.MessageToDict(s.status.message.metadata)
         assert all(p.WhichOneof("content") == "text" for p in s.status.message.parts)
 
 

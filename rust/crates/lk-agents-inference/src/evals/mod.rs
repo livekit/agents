@@ -1,10 +1,8 @@
-//! Conversation evals (testing.md "Conversation evals"): the judges of one evaluation run
-//! concurrently on one conversation. Built-in judges make one forced tool call each on the
-//! evaluation's model; application evaluators run in the host. Prompts and scoring are
-//! [`prompts`], the transcript [`transcript`]: pure support.
+//! Conversation evals (testing.md "Conversation evals"): the application's judges of one
+//! evaluation run concurrently in the host, each in its span; the intent judge makes one forced
+//! tool call on the evaluation's model. Its prompt and the scoring are [`prompts`]: pure support.
 
 pub mod prompts;
-pub mod transcript;
 
 #[cfg(test)]
 #[path = "../evals_tests.rs"]
@@ -14,7 +12,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use futures_util::future::join_all;
-use lk_agents_abi::errors::{Invalid, ProviderError};
+use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::evals::{
     EvaluationHost, EvaluationResult, EvaluationScore, Evaluations, IntentFailure, IntentJudgment,
     JudgeOutcome, JudgeRunner, JudgeSpec, JudgeVerdict, Judgment,
@@ -22,20 +20,13 @@ use lk_agents_abi::evals::{
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{
-    ApiConnectOptions, ChatContext, ChatItem, ChatMessage, ChatRequest, Clock,
-    DEFAULT_API_CONNECT_OPTIONS, HOST_TEARDOWN_TIMEOUT, Llm, LlmChunk, Role, StreamOutput,
-    ToolChoice, ToolSpec,
+    ChatContext, ChatMessage, ChatRequest, Clock, DEFAULT_API_CONNECT_OPTIONS,
+    HOST_TEARDOWN_TIMEOUT, Llm, LlmChunk, Role, StreamOutput, ToolChoice,
 };
-
-use prompts::BuiltIn;
 
 use crate::telemetry;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_net::env::ProcessEnv;
-
-/// A judgment is one long completion over a whole transcript.
-const JUDGE_CONN_OPTIONS: ApiConnectOptions =
-    ApiConnectOptions { read_timeout: Some(90.0), ..DEFAULT_API_CONNECT_OPTIONS };
 
 /// Judging is batch load after the conversation: it never competes with live traffic.
 const INFERENCE_CLASS: &str = "low";
@@ -47,11 +38,6 @@ pub struct Judges {
     tools: HostRef,
     host: Arc<dyn EvaluationHost>,
     clock: Arc<dyn Clock>,
-}
-
-enum Judge {
-    BuiltIn(&'static BuiltIn),
-    Host { name: String, evaluator: HostRef },
 }
 
 impl JudgeRunner for Judges {
@@ -69,24 +55,10 @@ impl JudgeRunner for Judges {
     async fn evaluate(
         &self,
         judges: Vec<JudgeSpec>,
-        chat_ctx: Vec<ChatItem>,
-        reference: Option<Vec<ChatItem>>,
         context: CallContext,
         cx: telemetry::Cx,
-    ) -> Result<Vec<JudgeOutcome>, Invalid> {
-        let judges = judges
-            .into_iter()
-            .map(|spec| match spec {
-                JudgeSpec::BuiltIn { name } => prompts::built_in(&name)
-                    .map(Judge::BuiltIn)
-                    .ok_or_else(|| Invalid(format!("no built-in judge {name:?}"))),
-                JudgeSpec::Host { name, evaluator } => Ok(Judge::Host { name, evaluator }),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let reference = reference.as_deref();
-        let judged =
-            judges.iter().map(|judge| self.judge(&cx, &context, judge, &chat_ctx, reference));
-        Ok(join_all(judged).await)
+    ) -> Vec<JudgeOutcome> {
+        join_all(judges.into_iter().map(|judge| self.judge(&cx, &context, judge))).await
     }
 
     async fn judge_intent(
@@ -145,16 +117,7 @@ impl Judges {
         let llm =
             self.llm.as_ref().ok_or_else(|| invalid("No LLM provided to judge the message."))?;
         let prompt = prompts::intent_prompt(&intent, &message);
-        let (arguments, usage) = self
-            .call(
-                cx,
-                llm,
-                prompts::INTENT_SYSTEM_PROMPT,
-                prompt,
-                prompts::check_intent_tool(),
-                DEFAULT_API_CONNECT_OPTIONS,
-            )
-            .await?;
+        let (arguments, usage) = self.call(cx, llm, prompts::INTENT_SYSTEM_PROMPT, prompt).await?;
         let arguments = arguments
             .filter(|a| !a.is_empty())
             .ok_or_else(|| invalid("LLM did not return any arguments for evaluation."))?;
@@ -169,24 +132,10 @@ impl Judges {
         &self,
         cx: &telemetry::Cx,
         context: &CallContext,
-        judge: &Judge,
-        chat_ctx: &[ChatItem],
-        reference: Option<&[ChatItem]>,
+        JudgeSpec { name, evaluator }: JudgeSpec,
     ) -> JudgeOutcome {
-        let name = match judge {
-            Judge::BuiltIn(judge) => judge.name.to_owned(),
-            Judge::Host { name, .. } => name.clone(),
-        };
         let span = telemetry::start(cx, telemetry::JudgeEvaluation { name: name.clone() });
-        let judged = match judge {
-            Judge::BuiltIn(judge) => {
-                self.built_in(span.cx(), judge, chat_ctx, reference).await.map_err(|e| e.0)
-            }
-            Judge::Host { evaluator, .. } => {
-                self.host.evaluate(span.cx(), evaluator, context).await.map_err(|e| e.message)
-            }
-        };
-        match judged {
+        match self.host.evaluate(span.cx(), &evaluator, context).await {
             Ok(judgment) => {
                 let capture = cx.capture_content();
                 telemetry::end(
@@ -204,60 +153,22 @@ impl Judges {
                     span,
                     telemetry::Failure {
                         kind: telemetry::ErrorType::JudgeError,
-                        message: error.clone(),
+                        message: error.message.clone(),
                     },
                 );
-                JudgeOutcome::Failed { name, error }
+                JudgeOutcome::Failed { name, error: error.message }
             }
         }
     }
 
-    async fn built_in(
-        &self,
-        cx: &telemetry::Cx,
-        judge: &BuiltIn,
-        chat_ctx: &[ChatItem],
-        reference: Option<&[ChatItem]>,
-    ) -> Result<Judgment, Invalid> {
-        if let Some(judgment) = judge.without_model(chat_ctx) {
-            return Ok(judgment);
-        }
-        let llm = self.llm.as_ref().ok_or_else(|| {
-            Invalid(format!(
-                "No LLM provided for judge '{}'. Pass llm to JudgeGroup or to the judge constructor.",
-                judge.name
-            ))
-        })?;
-        let prompt = judge.prompt(chat_ctx, reference);
-        let (arguments, _) = self
-            .call(
-                cx,
-                llm,
-                prompts::JUDGE_SYSTEM_PROMPT,
-                prompt,
-                prompts::submit_verdict_tool(),
-                JUDGE_CONN_OPTIONS,
-            )
-            .await
-            .map_err(|e| Invalid(e.to_string()))?;
-        let arguments =
-            arguments.ok_or_else(|| Invalid("LLM did not return verdict arguments".into()))?;
-        let (verdict, reasoning) = prompts::parse_verdict(&arguments).map_err(|reason| {
-            Invalid(format!("submit_verdict returned unusable arguments: {reason}"))
-        })?;
-        Ok(Judgment { verdict, reasoning, instructions: judge.criteria.to_owned() })
-    }
-
-    /// One completion that must call `tool`: the first call's arguments and the reported usage.
-    /// The stream is closed whatever it ended with.
+    /// One completion that must call `check_intent`: the first call's arguments and the reported
+    /// usage. The stream is closed whatever it ended with.
     async fn call(
         &self,
         cx: &telemetry::Cx,
         llm: &Arc<dyn Llm>,
         system: &str,
         prompt: String,
-        tool: ToolSpec,
-        conn_options: ApiConnectOptions,
     ) -> Result<(Option<String>, Option<TokenUsage>), ProviderError> {
         // Sent once and never kept: fixed ids and creation times.
         let at = SystemTime::UNIX_EPOCH;
@@ -267,10 +178,10 @@ impl Judges {
                 ChatMessage::text("lk.judge.prompt", Role::User, prompt, at).into(),
             ]),
             chat_ctx_host: None,
-            tools: vec![tool],
+            tools: vec![prompts::check_intent_tool()],
             tools_host: Some(self.tools.clone()),
             tools_host_extra: Vec::new(),
-            conn_options,
+            conn_options: DEFAULT_API_CONNECT_OPTIONS,
             parallel_tool_calls: None,
             tool_choice: Some(ToolChoice::Required),
             extra: Some(prompts::request_extra(&llm.model())),
@@ -339,15 +250,11 @@ impl Evaluations for Rules {
     }
 
     fn tool_schemas() -> serde_json::Value {
-        [prompts::submit_verdict_tool(), prompts::check_intent_tool()]
-            .into_iter()
-            .map(|t| {
-                serde_json::json!({
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.json_schema,
-                })
-            })
-            .collect()
+        let tool = prompts::check_intent_tool();
+        serde_json::json!([{
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.json_schema,
+        }])
     }
 }

@@ -19,16 +19,16 @@ from typing import TYPE_CHECKING, Any, Generic, cast, overload
 from livekit import rtc
 
 from .. import _core, llm, stt, tts
-from .._generated.keyterms import STTContextOptions
+from .._generated import public_voice_agent_session as _public
 from .._generated.public_voice_agent_session import *  # noqa: F403
 from .._generated.session_commands import SessionCommands
+from .._generated.session_options import TextTransforms as TextTransforms
 from .._generated.session_wire import (
     HostWire,
     SessionErrorWire,
 )
 from .._generated.vad import VAD
 from .._generated.voice_session import UpdateAgentArgs
-from .._generated.voice_task_errors import VoiceTaskFailed
 from ..llm import (
     ChatContext,
     ChatItem,
@@ -42,11 +42,8 @@ from ..types import (
 from . import Agent, Output_T, io
 from ._session_bindings import (
     LLMNode as LLMNode,
-    RecordingOptions as RecordingOptions,
     SessionAdapter,
-    SessionConnectOptions as SessionConnectOptions,
     STTNode as STTNode,
-    TextTransforms as TextTransforms,
     TranscriptionNode as TranscriptionNode,
     TTSNode as TTSNode,
     UserTurnCompletedHook as UserTurnCompletedHook,
@@ -552,20 +549,9 @@ class VoiceTask(Generic[Output_T, Context_T]):
         return output
 
 
-VoiceTask.__module__ = VoiceTaskFailed.__module__ = "livekit.agents.voice.agent_session"
-
-
 __all__ = [
     "VoiceSession",
-    "ExpressiveOptions",
-    "NonverbalOptions",
-    "SessionConnectOptions",
-    "SpeechSteeringOptions",
     "VoiceActivityVideoSampler",
-    "KeytermDetectionOptions",
-    "STTContextOptions",
     "TextTransforms",
-    "DetectionLlm",
-    "ResolvedKeytermDetection",
-    "VoiceTaskFailed",
 ]
+__all__ += _public.__all__

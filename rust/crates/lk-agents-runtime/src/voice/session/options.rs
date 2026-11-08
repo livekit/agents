@@ -126,7 +126,7 @@ impl lk_agents_abi::voice::session::SessionOptions for SessionOptions {
     }
 
     fn turn_detection(&self) -> Option<TurnDetection> {
-        self.state().layers.session.turn.detection.filter(|mode| *mode != TurnDetection::Auto)
+        self.state().layers.session.turn.detection.given().flatten()
     }
 
     fn interruption_mode(&self) -> Option<InterruptionMode> {
@@ -255,16 +255,16 @@ mod tests {
             expressive: Maybe::Given(Expressive::default()),
             ..Default::default()
         });
-        assert_eq!(mode(&options).as_deref(), Some("manual"));
+        assert_eq!(mode(&options), Some(TurnDetection::Manual));
         options.update(UpdateKwargs {
             turn_detection: Maybe::Given(TurnDetectionKwarg::Detector { streaming: true }),
             ..Default::default()
         });
-        assert_eq!(mode(&options).as_deref(), Some("manual"));
+        assert_eq!(mode(&options), Some(TurnDetection::Manual));
         options.update(UpdateKwargs {
             turn_detection: Maybe::Given(TurnDetectionKwarg::Null),
             ..Default::default()
         });
-        assert_ne!(mode(&options).as_deref(), Some("manual"));
+        assert_ne!(mode(&options), Some(TurnDetection::Manual));
     }
 }

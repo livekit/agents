@@ -23,14 +23,14 @@ pub trait DtmfIo {
     #[host(function)]
     async fn send_dtmf_events(
         room: std::sync::Arc<dyn crate::voice::room_owner::SessionRoom>,
-        events: Vec<String>,
+        events: Vec<DtmfEvent>,
     ) -> String;
     #[host(function)]
     async fn receive_dtmf(
         room: std::sync::Arc<dyn crate::voice::room_owner::SessionRoom>,
         num_digits: usize,
         timeout: f64,
-        stop_event: String,
+        stop_event: DtmfEvent,
     ) -> Result<String, ReceiveDtmfError>;
 }
 
@@ -38,7 +38,8 @@ pub trait DtmfIo {
     module = "workflows",
     path = "livekit.agents.beta.workflows",
     enum,
-    enum_base = "StrEnum"
+    enum_base = "StrEnum",
+    extract
 ))]
 #[crate::host(wire_strs(msg = format!("unknown DTMF symbol {s:?}")))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

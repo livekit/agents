@@ -21,7 +21,11 @@ pub trait AudioGate: Send + Sync {
 }
 
 /// Opens on output that stands out from a silence the plugin already knows.
-#[crate::host(class(name = "FixedGate", native = AudioGate))]
+#[crate::host(class(
+    name = "FixedGate",
+    native = AudioGate,
+    module = "livekit.agents.llm.duplex"
+))]
 pub trait FixedGate: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(
@@ -42,7 +46,11 @@ pub trait FixedGate: Send + Sync + Sized + 'static {
 
 /// Opens on output that stands out from the model's own silence: the floor is the quietest
 /// `min_silence_duration` stretch it produced while not speaking, within `window`.
-#[crate::host(class(name = "AdaptiveNoiseGate", native = AudioGate))]
+#[crate::host(class(
+    name = "AdaptiveNoiseGate",
+    native = AudioGate,
+    module = "livekit.agents.llm.duplex"
+))]
 pub trait AdaptiveNoiseGate: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(

@@ -138,6 +138,7 @@ def test_a_processor_failure_is_an_error_event_whose_source_is_the_processor(
     sessions[0]._core_event(
         SessionErrorWire(
             source="audio_processing_error",
+            slot=None,
             recoverable=True,
             label="engine",
             error=RuntimeError(failure.message),

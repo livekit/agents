@@ -1,4 +1,4 @@
-//! Closed vocabularies of the provider request schemas. No Python exports.
+//! Closed vocabularies of the provider request schemas.
 
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -59,9 +59,14 @@ pub enum ResponsesPhase {
     FinalAnswer,
 }
 
+/// Gemini's function `behavior`; `UNSPECIFIED` is spelled by omitting it.
+#[crate::host(record(module = "provider_data", name = "TOOL_BEHAVIOR", extract))]
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GeminiToolBehavior {
+    #[host(rename = "UNSPECIFIED")]
+    #[serde(rename = "UNSPECIFIED")]
+    Unspecified,
     #[host(rename = "BLOCKING")]
     #[serde(rename = "BLOCKING")]
     Blocking,

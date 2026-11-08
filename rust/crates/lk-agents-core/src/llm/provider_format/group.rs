@@ -8,8 +8,7 @@ use lk_agents_abi::{ChatContext, ChatItem, ChatMessage, FunctionCall, FunctionCa
 
 use crate::llm::provider_format::FormatError;
 
-/// `utils.py:9`. `{content}` is the only placeholder.
-pub const DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE: &str = "<instructions>\n{content}\n</instructions>";
+pub use lk_agents_abi::llm::provider_format::host::DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE;
 
 /// A system/developer message is the preamble only when it is the first one and no message or
 /// tool call precedes it. Every other one is rewritten as a `role` message wrapped in `template`,

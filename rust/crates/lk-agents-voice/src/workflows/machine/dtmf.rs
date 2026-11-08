@@ -73,33 +73,36 @@ pub fn dtmf_code(symbol: &str) -> Result<u8, String> {
 #[derive(Debug)]
 pub enum DtmfSendError {
     NotConnected,
-    /// The key that was not published: not a DTMF symbol, or the room refused it.
+    /// The key the room refused to publish.
     Key {
-        event: String,
+        event: DtmfEvent,
         error: String,
     },
 }
 
 impl DtmfSendError {
     /// The room's refusal of `event`, in the host's own words when the host raised it.
-    pub fn refused(event: &str, error: lk_agents_abi::voice::rtc::RtcError) -> Self {
+    pub fn refused(event: DtmfEvent, error: lk_agents_abi::voice::rtc::RtcError) -> Self {
         let error = match error {
             lk_agents_abi::voice::rtc::RtcError::Host(host) => host.message,
             other => other.to_string(),
         };
-        DtmfSendError::Key { event: event.to_owned(), error }
+        DtmfSendError::Key { event, error }
     }
 }
 
 /// What `send_dtmf_events` answers the model: the keys sent, or the first that failed and why.
-pub fn dtmf_send_answer(events: &[String], outcome: Result<(), DtmfSendError>) -> String {
+pub fn dtmf_send_answer(events: &[DtmfEvent], outcome: Result<(), DtmfSendError>) -> String {
     match outcome {
-        Ok(()) => format!("Successfully sent DTMF events: {}", events.join(", ")),
+        Ok(()) => {
+            let keys: Vec<&str> = events.iter().map(|event| event.as_str()).collect();
+            format!("Successfully sent DTMF events: {}", keys.join(", "))
+        }
         Err(DtmfSendError::NotConnected) => {
             "Failed to send DTMF events: room is not connected".into()
         }
         Err(DtmfSendError::Key { event, error }) => {
-            format!("Failed to send DTMF event: {event}. Error: {error}")
+            format!("Failed to send DTMF event: {}. Error: {error}", event.as_str())
         }
     }
 }
@@ -350,9 +353,7 @@ impl Dtmf {
                     DtmfTaskEvent::AgentState(new) => {
                         dtmf.collector.on_agent_state_changed(new, now)
                     }
-                    DtmfTaskEvent::UserState(new) => {
-                        dtmf.collector.on_user_state_changed(new, now)
-                    }
+                    DtmfTaskEvent::UserState(new) => dtmf.collector.on_user_state_changed(new, now),
                     // The read-back's end releases its guard.
                     DtmfTaskEvent::SpeechDone(speech) if dtmf.confirm == Some(speech) => {
                         dtmf.confirm = None;
@@ -505,17 +506,10 @@ pub struct DtmfReception {
 }
 
 impl DtmfReception {
-    pub fn new(
-        num_digits: usize,
-        timeout: f64,
-        stop_event: &str,
-    ) -> Result<Self, ReceiveDtmfError> {
-        use lk_agents_core::text::py_repr;
+    pub fn new(num_digits: usize, timeout: f64, stop: DtmfEvent) -> Result<Self, ReceiveDtmfError> {
         if num_digits == 0 {
             return Err(ReceiveDtmfError::NoDigits);
         }
-        let stop = DtmfEvent::from_wire(stop_event)
-            .ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(stop_event)))?;
         let gap = Duration::try_from_secs_f64(timeout.max(0.0)).unwrap_or(Duration::MAX);
         Ok(Self { num_digits, stop, gap, digits: Vec::new(), deadline: None })
     }
@@ -530,8 +524,8 @@ impl DtmfReception {
         if digit == self.stop.as_str() {
             return Ok(true);
         }
-        let key =
-            DtmfEvent::from_wire(digit).ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(digit)))?;
+        let key = DtmfEvent::from_wire(digit)
+            .ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(digit)))?;
         self.digits.push(key);
         if self.digits.len() == self.num_digits {
             return Ok(true);
@@ -592,7 +586,10 @@ mod tests {
         c.on_sip_dtmf("1", now);
         assert_eq!(c.on_agent_state_changed(AgentState::Thinking, now), DtmfAction::Cancel);
         assert!(
-            matches!(c.on_agent_state_changed(AgentState::Listening, now), DtmfAction::Schedule { .. }),
+            matches!(
+                c.on_agent_state_changed(AgentState::Listening, now),
+                DtmfAction::Schedule { .. }
+            ),
             "and re-arms when idle"
         );
     }
@@ -655,7 +652,7 @@ mod tests {
 
     #[test]
     fn room_reception_arms_the_gap_after_digits_and_never_counts_the_delimiter() {
-        let mut reception = DtmfReception::new(2, 1.0, "#").unwrap();
+        let mut reception = DtmfReception::new(2, 1.0, DtmfEvent::Pound).unwrap();
         assert_eq!(reception.deadline(), None);
         assert!(!reception.on_digit("1", Ts::ZERO).unwrap());
         assert_eq!(reception.deadline(), Some(Ts::from_nanos(1_000_000_000)));

@@ -145,10 +145,13 @@ impl Storage {
     }
 
     /// `local`: threads in that project's directory, resolved to an absolute path once.
-    /// Otherwise agentstore through the public API derived from `url` (the project's
-    /// `LIVEKIT_URL`), with tokens minted from the key pair. Opens nothing until first use.
+    /// Otherwise agentstore through the public API derived from `url`, with tokens minted from
+    /// the key pair; each omitted one is `LIVEKIT_URL`, `LIVEKIT_API_KEY` or
+    /// `LIVEKIT_API_SECRET`, and an omitted lease timing `LIVEKIT_AGENTDB_LEASE_TTL` or
+    /// `LIVEKIT_AGENTDB_RENEW_INTERVAL` (float seconds). An omitted or empty `holder` is the
+    /// constructing process's `<hostname>-<pid>`. Opens nothing until first use.
     #[new]
-    #[pyo3(signature = (*, local = None, url = None, api_key = None, api_secret = None, lease_ttl = None, renew_interval = None))]
+    #[pyo3(signature = (*, local = None, url = None, api_key = None, api_secret = None, lease_ttl = None, renew_interval = None, holder = None))]
     fn new(
         py: Python<'_>,
         local: Option<Bound<'_, PyAny>>,
@@ -158,6 +161,7 @@ impl Storage {
         #[pyo3(from_py_with = _extract_storage_new_lease_ttl)] lease_ttl: StorageNewLeaseTtlInput,
         #[pyo3(from_py_with = _extract_storage_new_renew_interval)]
         renew_interval: StorageNewRenewIntervalInput,
+        holder: ::std::option::Option<::std::string::String>,
     ) -> PyResult<Storage> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
@@ -166,7 +170,7 @@ impl Storage {
                 crate::generated::records::storage_class::local_storage_options_from_py(v.as_any())
             })
             .transpose()?;
-        let out = py.detach(|| <StorageImpl as ::lk_agents_abi::storage::Storage>::new(&env, local, url, api_key, api_secret, lease_ttl, renew_interval)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <StorageImpl as ::lk_agents_abi::storage::Storage>::new(&env, local, url, api_key, api_secret, lease_ttl, renew_interval, holder)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(Storage(::std::sync::Arc::new(out)))
     }
 
@@ -176,6 +180,14 @@ impl Storage {
         crate::py_calls::check_pid()?;
         let out =
             py.detach(|| <StorageImpl as ::lk_agents_abi::storage::Storage>::location(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// This process's lease holder id.
+    #[getter]
+    fn holder(&self, py: Python<'_>) -> PyResult<::std::string::String> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <StorageImpl as ::lk_agents_abi::storage::Storage>::holder(&self.0));
         ::pyo3::PyResult::Ok(out)
     }
 

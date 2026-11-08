@@ -4,7 +4,8 @@ import dataclasses
 from typing import Any
 
 from .. import _core, tts
-from .._generated.inference_tts import FallbackModel as FallbackModel, TTSEncoding, TTSModels
+from .._generated import public_inference_tts as _public
+from .._generated.inference_tts import FallbackModel as FallbackModel
 from .._generated.language import LanguageCode
 from .._generated.provider_hosts import InferenceTtsHost
 from .._generated.public_inference_tts import *  # noqa: F403
@@ -18,25 +19,10 @@ FallbackModelType = FallbackModel | str
 __all__ = [
     "TTS",
     "SynthesizeStream",
-    "TTSModels",
-    "TTSEncoding",
     "FallbackModel",
     "FallbackModelType",
-    "AssemblyAIModels",
-    "AssemblyaiOptions",
-    "CartesiaModels",
-    "CartesiaOptions",
-    "DeepgramModels",
-    "DeepgramOptions",
-    "FishAudioModels",
-    "FishAudioOptions",
-    "InworldModels",
-    "InworldOptions",
-    "RimeModels",
-    "RimeOptions",
-    "XaiModels",
-    "XaiOptions",
 ]
+__all__ += _public.__all__
 
 DEFAULT_SAMPLE_RATE = 24000
 

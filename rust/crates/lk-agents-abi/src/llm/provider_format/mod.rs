@@ -7,6 +7,40 @@ pub use image::{BYTES_TAG, ImageResolver, SerializedImage};
 
 // Public data contracts. Python behavior remains in its adapters.
 
+/// The request schema `to_provider_format` and `to_fnc_ctx` write.
+#[crate::host(record(module = "provider_data", extract))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderFormat {
+    #[host(rename = "openai")]
+    OpenAi,
+    #[host(rename = "openai.responses")]
+    OpenAiResponses,
+    Google,
+    Aws,
+    Anthropic,
+    #[host(rename = "mistralai")]
+    MistralAi,
+}
+
+/// One tool as the host hands it to `to_fnc_ctx`: the host builds the OpenAI-shaped schema, and
+/// the reference's `strict` flag becomes the variant.
+#[crate::host(record(module = "provider_data", extract))]
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolSchema {
+    /// `info.raw_schema`, verbatim.
+    Raw { name: String, raw_schema: serde_json::Value },
+    /// `build_legacy_openai_schema(tool, internally_tagged=True)`: for Anthropic, Bedrock, Gemini
+    /// and the Responses API.
+    #[host(field = "schema")]
+    Legacy(serde_json::Value),
+    /// `build_strict_openai_schema(tool)`.
+    #[host(field = "schema")]
+    Strict(serde_json::Value),
+    /// Only the Responses API accepts one.
+    #[host(field = "schema")]
+    Provider(serde_json::Value),
+}
+
 #[crate::host(record(module = "provider_data", path = "livekit.agents.llm.utils", dataclass))]
 pub struct AnthropicFormatData {
     pub system_messages: Option<Vec<String>>,

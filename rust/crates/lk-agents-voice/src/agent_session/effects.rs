@@ -267,7 +267,6 @@ pub enum DetectorCall {
     Close,
 }
 
-
 /// The outputs are named by id, as the core decided them when it raised the op: the data plane
 /// keeps no record of its own.
 #[derive(Debug)]

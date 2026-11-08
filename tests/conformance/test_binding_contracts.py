@@ -63,11 +63,11 @@ def test_scalar_conversion_preserves_values_and_types(case: dict[str, Any]) -> N
         try:
             if "error" in case:
                 with pytest.raises(TypeError, match=case["error"]):
-                    _core._core_set_capture_content(value)
+                    _core.set_capture_content(value)
             else:
-                _core._core_set_capture_content(value)
+                _core.set_capture_content(value)
         finally:
-            _core._core_set_capture_content(True)
+            _core.set_capture_content(True)
     else:
         error_type = TypeError if isinstance(value, bool) else OverflowError
         with pytest.raises(error_type, match=case["error"]):

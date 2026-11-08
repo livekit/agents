@@ -95,11 +95,11 @@ async fn recover(
 impl Port for McpToolsetLifecycle {
     type Session = super::session::McpSession;
 
-    fn new(server: String, idle_close: f64, session: Arc<Self::Session>) -> Self {
+    fn new(server: String, session: Arc<Self::Session>) -> Self {
         Self {
             server,
             session,
-            idle_close: Duration::try_from_secs_f64(idle_close).unwrap_or_default(),
+            idle_close: Duration::from_secs_f64(lk_agents_abi::llm::mcp::MCP_IDLE_CLOSE_SECONDS),
             setting_up: tokio::sync::Mutex::new(()),
             state: Arc::default(),
         }

@@ -6,13 +6,13 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub use lk_agents_abi::cli::DevServer;
-use lk_agents_abi::worker::types::{AcceptArguments, RunningJobInfo};
+use lk_agents_abi::worker::job::{AcceptArguments, RunningJobInfo};
 
 const DEV_FRAME_LIMIT: usize = 8 * 1024 * 1024;
 
 fn to_proto(info: RunningJobInfo) -> livekit_protocol::agent::RunningAgentJobInfo {
     livekit_protocol::agent::RunningAgentJobInfo {
-        job: info.job.proto,
+        job: info.job.encode_to_vec(),
         accept_name: info.accept_arguments.name,
         accept_identity: info.accept_arguments.identity,
         accept_metadata: info.accept_arguments.metadata,
@@ -34,9 +34,9 @@ fn from_proto(
             name: pb.accept_name,
             identity: pb.accept_identity,
             metadata: pb.accept_metadata,
-            attributes: Vec::new(),
+            attributes: Default::default(),
         },
-        job: lk_agents_worker::job_info(&job),
+        job,
         url: pb.url,
         token: pb.token,
         worker_id: pb.worker_id,
@@ -44,6 +44,7 @@ fn from_proto(
         received_at: None,
         accepted_at: None,
         assigned_at: None,
+        launched_at: 0.0,
     })
 }
 

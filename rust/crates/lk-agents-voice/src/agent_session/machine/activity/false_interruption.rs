@@ -463,10 +463,7 @@ impl VoiceDriver {
         let (req, v) = match ev {
             LegEvent::Verdict { req, verdict } => (req, verdict),
             LegEvent::Error { recoverable, .. } => {
-                self.record_trace(InputStep::LegFailed {
-                    leg: Leg::Interruption,
-                    recoverable,
-                });
+                self.record_trace(InputStep::LegFailed { leg: Leg::Interruption, recoverable });
                 self.restore_audio_activity_guard();
                 if !recoverable {
                     self.activity.audio_recognition.set_interruption_active(false);

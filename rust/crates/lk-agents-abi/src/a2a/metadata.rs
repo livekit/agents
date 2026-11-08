@@ -3,7 +3,7 @@
 #[crate::host(file(module = "a2a_metadata"))]
 const _: () = ();
 
-#[crate::host(constant)]
+#[crate::host(constant(path = "livekit.agents.a2a"))]
 pub const EXTENSION_URI: &str = "https://livekit.io/a2a/ext/agents/v1";
 #[crate::host(constant)]
 pub const EXTENSIONS_HEADER: &str = "A2A-Extensions";
@@ -11,7 +11,7 @@ pub const EXTENSIONS_HEADER: &str = "A2A-Extensions";
 #[crate::host(constant)]
 pub const GRANT_HEADER: &str = "X-LiveKit-Thread-Grant";
 /// Where an endpoint publishes its agent card, under `/<endpoint>`.
-#[crate::host(constant)]
+#[crate::host(constant(path = "livekit.agents.a2a"))]
 pub const AGENT_CARD_PATH: &str = "/.well-known/agent-card.json";
 /// Where an endpoint's JSON-RPC methods live, under `/<endpoint>`; the card's URL points here.
 #[crate::host(constant)]

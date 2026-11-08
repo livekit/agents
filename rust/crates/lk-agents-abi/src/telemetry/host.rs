@@ -69,8 +69,9 @@ pub trait Telemetry {
     #[host(function)]
     fn _core_telemetry_install(sdk_version: String);
 
-    /// Replaces the application endpoint; arguments override the environment.
-    #[host(function)]
+    /// Send the process's spans and metrics to an OTLP/HTTP protobuf endpoint; arguments override
+    /// the `OTEL_EXPORTER_OTLP_*` environment.
+    #[host(function, name = "configure", path = "livekit.agents.telemetry")]
     fn _core_telemetry_configure(
         #[host(kw, default = None)] endpoint: Option<String>,
         #[host(kw, default = None)] headers: Option<BTreeMap<String, String>>,
@@ -78,15 +79,16 @@ pub trait Telemetry {
         #[host(kw, default = None)] allow_pii: Option<bool>,
     ) -> Result<(), TelemetryConfigError>;
 
-    #[host(function)]
+    /// The process's export counters.
+    #[host(function, name = "diagnostics", path = "livekit.agents.telemetry")]
     fn _core_telemetry_diagnostics() -> TelemetryDiagnostics;
 
     /// Counts a configuration conflict the host found (a tracer provider it cannot bridge).
     #[host(function)]
     fn _core_telemetry_conflict();
 
-    /// GenAI message capture for spans recorded afterwards.
-    #[host(function)]
+    /// Whether model request and response messages and judge explanations are recorded.
+    #[host(function, name = "set_capture_content", path = "livekit.agents.telemetry")]
     fn _core_set_capture_content(enabled: bool);
 
     /// The process-exit flush: every destination's queue, bounded.

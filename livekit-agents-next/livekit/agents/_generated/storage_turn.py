@@ -27,6 +27,8 @@ class TurnContext:
     lane: str
     message: ChatItem
     batch: list[Message]
+    delegated: bool
+    """Every message of the batch is a delegation from another agent."""
     history: list[ItemRow]
     state: object | None
     context_scope_id: str

@@ -184,7 +184,7 @@ struct RealtimeActivity {
     players: BTreeSet<SpeechId>,
     turn_detection_disabled: bool,
     resolved_mode: crate::audio_recognition::TurnDetectionMode,
-    requested_detection: crate::agent_session::options::TurnDetection,
+    requested_detection: Option<crate::agent_session::options::TurnDetection>,
 }
 
 struct Preemptive {
@@ -324,7 +324,7 @@ impl AgentActivity {
     pub(crate) fn note_resolved_mode(
         &mut self,
         resolved: crate::audio_recognition::TurnDetectionMode,
-        detection: crate::agent_session::options::TurnDetection,
+        detection: Option<crate::agent_session::options::TurnDetection>,
     ) -> bool {
         let Some(rt) = self.realtime_activity_mut() else { return false };
         let moved = resolved != rt.resolved_mode || detection != rt.requested_detection;

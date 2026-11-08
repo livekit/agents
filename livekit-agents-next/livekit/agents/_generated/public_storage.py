@@ -14,7 +14,7 @@ from .storage_errors import (
     VersionConflict as VersionConflict,
 )
 
-__all__ = [
+__all__: list[str] = [
     "StorageError",
     "ThreadNotFound",
     "VersionConflict",

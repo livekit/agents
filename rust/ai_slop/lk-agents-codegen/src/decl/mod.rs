@@ -98,6 +98,8 @@ pub struct StrClass {
 pub struct Constant {
     pub name: String,
     pub module: String,
+    /// `constant(path = "livekit.agents.x")`: the public module re-exporting it.
+    pub path: Option<String>,
     pub source: String,
     pub doc: Vec<String>,
     pub value: ConstValue,
@@ -106,7 +108,17 @@ pub struct Constant {
 #[derive(Debug, Clone)]
 pub enum ConstValue {
     Literal(String),
-    Record { rust: String, fields: Vec<(String, String)> },
+    Record {
+        rust: String,
+        fields: Vec<(String, String)>,
+    },
+    /// `constant(proto_enum = "livekit.rtc.ParticipantKind")`: a list of that protobuf enum's
+    /// values, named by the Rust enum's variants (`Sip` -> `PARTICIPANT_KIND_SIP`).
+    ProtoEnums {
+        module: String,
+        name: String,
+        variants: Vec<String>,
+    },
 }
 
 /// Backend-local interpreter interfaces. They cannot declare public native exports or provider
@@ -695,6 +707,8 @@ pub struct Method {
     pub attached: bool,
     /// Override the class or function group fork guard for this entry.
     pub pid: Option<bool>,
+    /// `function, path = "livekit.agents.x"`: the public module re-exporting it.
+    pub path: Option<String>,
     pub params: Vec<Param>,
     pub ret: Ret,
     /// A host-owned future returned as HostRef, with its declared completion type.

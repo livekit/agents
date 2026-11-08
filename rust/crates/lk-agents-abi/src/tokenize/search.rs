@@ -51,6 +51,17 @@ pub trait ToolSearch {
     fn tool_search_validate(query: String) -> Result<(), ToolSearchError>;
     #[host(function, pid = true)]
     fn tool_search_loaded(query: String, count: usize) -> Result<String, ToolSearchError>;
+    /// `ToolSearchToolset`'s `tool_search` raw schema.
+    #[host(function)]
+    fn tool_search_schema(
+        search_description: String,
+        query_description: String,
+    ) -> crate::llm::provider_format::tools::RawFunctionDescription;
+    /// `ToolProxyToolset`'s `call_tool` raw schema.
+    #[host(function)]
+    fn call_tool_schema(
+        description: String,
+    ) -> crate::llm::provider_format::tools::RawFunctionDescription;
     #[host(function, pid = true)]
     fn tool_proxy_arguments(
         arguments: serde_json::Value,

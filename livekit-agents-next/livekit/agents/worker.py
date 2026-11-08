@@ -16,8 +16,9 @@ from livekit import rtc
 from livekit.protocol import models
 
 from . import _core, ipc, telemetry, utils
-from ._generated.worker_options import ServerOptions
-from ._generated.worker_server import ProcessStartOptions, RunningJobInfo
+from ._generated.job_records import RunningJobInfo
+from ._generated.worker_options import Listeners, ServerOptions
+from ._generated.worker_server import ProcessStartOptions
 from .evals import SimulationContext
 from .http import AgentRoutes
 from .ipc import preload_module_names
@@ -47,32 +48,6 @@ class RtcSessionOptions(TypedDict, total=False):
     """The door's name under the agent, ``{agent_name}/{endpoint}``; the agent's name when empty."""
     on_session_end: Callable[[JobContext], Any] | None
     on_simulation_end: Callable[[SimulationContext], Any] | None
-
-
-class ListenerOptions(TypedDict, total=False):
-    """Where a listener binds; a key left out keeps its default."""
-
-    host: str
-    port: int
-
-
-class PublicListenerOptions(ListenerOptions, total=False):
-    proxy_headers: bool
-    """Read the client address and scheme from ``X-Forwarded-For`` and ``X-Forwarded-Proto``;
-    only behind a proxy that always sets them."""
-
-
-class Listeners(TypedDict, total=False):
-    """``AgentServer(listeners=)``: public traffic and operational information never share a
-    port (docs/server.md "Listeners")."""
-
-    public: PublicListenerOptions
-    """The agent's endpoints and HTTP routes, where the worker serves them (a self-hosted
-    LiveKit server, the console); ``0.0.0.0:8080``."""
-    health: ListenerOptions
-    """``/``, ``/ready`` and ``/worker``; ``0.0.0.0:8081``."""
-    prometheus: ListenerOptions
-    """``/metrics``; off unless given, then ``0.0.0.0:9090``."""
 
 
 @dataclass(frozen=True)
@@ -168,10 +143,7 @@ def _core_options(given: dict[str, Any]) -> ServerOptions:
         "preload_modules",
         "_load_fnc",
     )
-    options = {k: v for k, v in given.items() if k not in skip and is_given(v)}
-    if "job_executor_type" in options:
-        options["job_executor_type"] = options["job_executor_type"].value
-    return ServerOptions(**options)
+    return ServerOptions(**{k: v for k, v in given.items() if k not in skip and is_given(v)})
 
 
 class AgentServer(AgentHandler):
@@ -421,7 +393,7 @@ class _ServerCallbacks:
             mp_ctx=mp_ctx,
             num_idle_processes=opts.pool.num_idle_processes,
             options=ipc.JobRunnerOptions(
-                thread=JobExecutorType(opts.job_executor_type) == JobExecutorType.THREAD,
+                thread=opts.job_executor_type == JobExecutorType.THREAD,
                 initialize_timeout=opts.pool.initialize_timeout,
                 close_timeout=opts.pool.close_timeout,
                 memory_warn_mb=opts.pool.memory_warn_mb,

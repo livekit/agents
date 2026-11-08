@@ -322,7 +322,8 @@ impl WorkerHost for GatedHost {
             identity: "agent-identity".into(),
             name: "Agent Name".into(),
             metadata: "participant-metadata".into(),
-            attributes: vec![(lk_agents_abi::ATTRIBUTE_AGENT_NAME.into(), "per-job-agent".into())],
+            attributes: [(lk_agents_abi::ATTRIBUTE_AGENT_NAME.into(), "per-job-agent".into())]
+                .into(),
         })
     }
     async fn launch_job(&self, info: crate::RunningJobInfo) -> Result<JobId, HostError> {

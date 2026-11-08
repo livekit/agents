@@ -53,12 +53,16 @@ class InferenceEot:
     def supports(self, language: str | None = None) -> bool: ...
     def update_overrides(self, overrides: ThresholdOverride | None = None) -> None: ...
     def update_backchannel_overrides(self, overrides: ThresholdOverride | None = None) -> None: ...
-    def stream(self, headers: list[tuple[str, str]], conn_options: APIConnectOptions) -> EotStream:
+    def stream(
+        self,
+        headers: list[tuple[str, str]],
+        conn_options: APIConnectOptions,
+    ) -> TurnDetectorStream:
         """One stream of the user's audio. `headers` (`get_inference_headers()`) identify the job on
         each gateway connection.
         """
 
-class EotStream:
+class TurnDetectorStream:
     """`TurnDetectorStream`: one stream of the user's audio, answering `predict()` at each pause. The
     session's own detector when handed to it, which implements its stream operations.
     """

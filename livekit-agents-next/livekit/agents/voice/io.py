@@ -15,18 +15,15 @@ from typing_extensions import TypeVar
 from livekit import rtc
 
 from .. import _core
-from .._generated import speech_defaults
+from .._generated import (
+    public_voice_io as _public,
+    session_options as _session_options,
+    speech_defaults,
+)
 from .._generated.io_events import PlaybackSegment as PlaybackSegment
 from .._generated.language import LanguageCode
-from .._generated.playback_events import (
-    PlaybackFinishedEvent,
-    PlaybackProgressedEvent,
-    PlaybackStartedEvent,
-)
 from .._generated.public_voice_io import *  # noqa: F403
-from .._generated.rtc_wire import AudioOutputCapabilities
 from .._generated.speech_view import SpeechView
-from .._generated.turn_events import TurnDetectionEvent
 from ..log import logger
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -398,10 +395,6 @@ class AgentOutput:
         self._session._running.set_io_enabled("transcription", enabled)
 
 
-InterruptionSource = Literal["audio_activity", "user_turn", "programmatic"]
-"""Why a speech was interrupted, as the reference's ``agent_turn`` trace names it."""
-
-
 class SpeechHandle(SpeechView):
     """One speech of the session, over the core's handle: its state is the core's, and awaiting
     it waits for the core to finish playing it out. Awaiting never raises; read
@@ -454,11 +447,8 @@ class SpeechHandle(SpeechView):
             raise asyncio.InvalidStateError("SpeechHandle is not done yet")
         return self._core.exception()
 
-    def interrupt(
-        self, *, force: bool = False, source: InterruptionSource = "programmatic"
-    ) -> SpeechHandle:
-        """Interrupt the speech. ``source`` is accepted for the reference's signature: the trace
-        records the cause the core observed."""
+    def interrupt(self, *, force: bool = False) -> SpeechHandle:
+        """Interrupt the speech."""
         self._core.interrupt(force=force)
         return self
 
@@ -572,7 +562,7 @@ class _StreamingTurnDetector(Protocol):
     ) -> _StreamingTurnDetectorStream: ...
 
 
-TurnDetectionMode = Literal["stt", "vad", "realtime_llm", "manual"] | _StreamingTurnDetector
+TurnDetectionMode = _session_options.TurnDetectionMode | _StreamingTurnDetector
 """
 The mode of turn detection to use.
 
@@ -590,15 +580,6 @@ If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to th
 
 
 __all__ = [
-    "EndpointingOptions",
-    "InterruptionOptions",
-    "PreemptiveGenerationOptions",
     "TurnDetectionMode",
-    "TurnHandlingOptions",
-    "UserTurnLimitOptions",
-    "TurnDetectionEvent",
-    "PlaybackFinishedEvent",
-    "PlaybackStartedEvent",
-    "PlaybackProgressedEvent",
-    "AudioOutputCapabilities",
 ]
+__all__ += _public.__all__

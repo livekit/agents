@@ -14,7 +14,7 @@ use crate::telemetry;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::vad::inference::VadModels;
-use lk_agents_abi::{ProviderId, Vad, VadCapabilities, VadEvent, VadSink, VadSource};
+use lk_agents_abi::{Maybe, ProviderId, Vad, VadCapabilities, VadEvent, VadSink, VadSource};
 use machine::{VadOptions, VadOutput};
 use std::sync::Arc;
 
@@ -84,7 +84,7 @@ impl lk_agents_abi::vad::inference::InferenceVad for LocalVad {
         prefix_padding_duration: f64,
         max_buffered_speech: f64,
         activation_threshold: f64,
-        deactivation_threshold: f64,
+        deactivation_threshold: Option<f64>,
     ) -> Self {
         let opts = VadOptions {
             min_speech_duration,
@@ -92,7 +92,9 @@ impl lk_agents_abi::vad::inference::InferenceVad for LocalVad {
             prefix_padding_duration,
             max_buffered_speech,
             activation_threshold,
-            deactivation_threshold,
+            // Hysteresis.
+            deactivation_threshold: deactivation_threshold
+                .unwrap_or((activation_threshold - 0.15).max(0.01)),
         };
         let host = Arc::new(HostModels(model_factory));
         LocalVad::new(opts, crate::local_models::vad_factory_or(host), env)
@@ -100,21 +102,32 @@ impl lk_agents_abi::vad::inference::InferenceVad for LocalVad {
 
     fn update_options(
         &self,
-        min_speech_duration: f64,
-        min_silence_duration: f64,
-        prefix_padding_duration: f64,
-        max_buffered_speech: f64,
-        activation_threshold: f64,
-        deactivation_threshold: f64,
+        min_speech_duration: Maybe<f64>,
+        min_silence_duration: Maybe<f64>,
+        prefix_padding_duration: Maybe<f64>,
+        max_buffered_speech: Maybe<f64>,
+        activation_threshold: Maybe<f64>,
+        deactivation_threshold: Maybe<f64>,
     ) {
-        self.opts.send_replace(VadOptions {
-            min_speech_duration,
-            min_silence_duration,
-            prefix_padding_duration,
-            max_buffered_speech,
-            activation_threshold,
-            deactivation_threshold,
+        self.opts.send_modify(|opts| {
+            let given = [
+                (&mut opts.min_speech_duration, min_speech_duration),
+                (&mut opts.min_silence_duration, min_silence_duration),
+                (&mut opts.prefix_padding_duration, prefix_padding_duration),
+                (&mut opts.max_buffered_speech, max_buffered_speech),
+                (&mut opts.activation_threshold, activation_threshold),
+                (&mut opts.deactivation_threshold, deactivation_threshold),
+            ];
+            for (option, value) in given {
+                if let Some(value) = value.given() {
+                    *option = value;
+                }
+            }
         });
+    }
+
+    fn min_silence_duration(&self) -> f64 {
+        self.opts.borrow().min_silence_duration
     }
 
     fn stream(
