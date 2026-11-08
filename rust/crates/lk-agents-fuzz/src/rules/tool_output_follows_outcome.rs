@@ -7,10 +7,8 @@
 //!
 //! A step cut short records its outputs asking for no reply, and the close settles calls still
 //! running as an error, so neither is held to the reply flag; a body cancelled has no outcome. A
-//! step whose speech ended before its outputs were recorded asks for no reply to them. A
 //! `VoiceTask`'s speech runs its tools on the task's runner, whose `Completed` ends the task: its
-//! agent asks for no reply to it. A body its first `ctx.update()` detached answers with its final,
-//! recorded under `<call_id>_final`; a host update ending a body first answers its call.
+//! agent asks for no reply to it.
 use lk_agents_abi::{ChatItem, FunctionCall, Role, llm::tool_executor::WAITING_PREFIX};
 use lk_agents_core::tts::markup::ChatMessageExt;
 use lk_agents_voice::{
@@ -49,7 +47,6 @@ impl Rule for ToolOutputFollowsOutcome {
     fn on_complete(r: &Recording, check: &mut Check) {
         let inputs = r.inputs_view();
         let host = r.host_view();
-        let internal = r.internal_view();
         let closing = inputs.closing_asked_at();
         // Each output as first announced, and every announcement in order.
         let announced: Vec<_> = r
@@ -62,13 +59,6 @@ impl Rule for ToolOutputFollowsOutcome {
                 _ => None,
             })
             .collect();
-        // When each speech was told done.
-        let mut done = std::collections::BTreeMap::new();
-        for (at, step) in r.journal() {
-            if let Step::Emitted(SessionEvent::SpeechDone { speech, .. }) = step {
-                done.entry(speech.0).or_insert(*at);
-            }
-        }
         // Each task's stretch, from its entry to its end: a speech created in one is the task's.
         let mut stretches = Vec::new();
         let mut open = Vec::new();
@@ -88,49 +78,20 @@ impl Rule for ToolOutputFollowsOutcome {
             let created = host.speech(speech).created_at();
             created.is_some_and(|c| stretches.iter().any(|(from, to)| *from < c && c <= *to))
         };
-        // A tool's first report may be the host's: progress detaches the body, which answers
-        // with its final; an end answers the call, or a detached body's final, and the body's
-        // own answer comes too late.
-        let mut detached = BTreeSet::new();
-        let mut ended = BTreeSet::new();
         for applied in inputs.accepted() {
-            let (tool, answer, outcome) = match &applied.input {
-                Input::ToolUpdate { tool, progress, end } => {
-                    if ended.contains(&tool.nth) {
-                        continue;
-                    }
-                    if progress.is_some() {
-                        detached.insert(tool.nth);
-                        continue;
-                    }
-                    ended.insert(tool.nth);
-                    (tool, end, crate::fakes::tools::update_outcome(None, *end))
-                }
-                Input::ToolAnswered { tool, answer, text: AgentText(text) } => {
-                    if *answer == ToolAnswer::Detached {
-                        detached.insert(tool.nth);
-                    }
-                    if ended.contains(&tool.nth)
-                        || matches!(answer, ToolAnswer::Cancelled | ToolAnswer::Detached)
-                    {
-                        continue;
-                    }
-                    (tool, answer, crate::fakes::tools::outcome_of(*answer, text))
-                }
-                _ => continue,
+            let Input::ToolAnswered { tool, answer, text: AgentText(text) } = &applied.input else {
+                continue;
             };
+            if matches!(answer, ToolAnswer::Cancelled | ToolAnswer::Detached) {
+                continue;
+            }
             let Some(Detail::Tool { call_id, speech, .. }) =
                 r.resource(Kind::Tool, tool.nth).map(|t| t.detail().clone())
             else {
                 continue;
             };
-            let recorded = if detached.contains(&tool.nth) {
-                format!("{call_id}_final")
-            } else {
-                call_id.clone()
-            };
             let Some((at, ChatItem::FunctionCallOutput(output), _)) = announced.iter().find(
-                |(_, i, _)| matches!(i, ChatItem::FunctionCallOutput(o) if o.call_id == recorded),
+                |(_, i, _)| matches!(i, ChatItem::FunctionCallOutput(o) if o.call_id == call_id),
             ) else {
                 continue;
             };
@@ -138,14 +99,12 @@ impl Rule for ToolOutputFollowsOutcome {
             if closing.is_some_and(|c| c <= *at) || host.speech(speech).is_interrupted() {
                 continue;
             }
+            let outcome = crate::fakes::tools::outcome_of(*answer, text);
             let mut shape = lk_agents_core::tool_outcome::shape(
                 &outcome,
                 lk_agents_core::tool_outcome::Mode::Voice,
             );
-            let over = done.get(&speech).is_some_and(|done| done < at);
-            if *answer == ToolAnswer::Completed && in_task(speech)
-                || over && !detached.contains(&tool.nth)
-            {
+            if *answer == ToolAnswer::Completed && in_task(speech) {
                 shape.reply_required = false;
             }
             let want = lk_agents_core::tool_outcome::delivered(&outcome).unwrap_or(shape.text);
@@ -174,8 +133,7 @@ impl Rule for ToolOutputFollowsOutcome {
         for (i, (at, item, speech)) in announced.iter().enumerate() {
             match item {
                 ChatItem::FunctionCall(call) => {
-                    let flag =
-                        call.extra.get(lk_agents_core::agent_run::planning::INPUT_REQUESTED_KEY);
+                    let flag = call.extra.get(lk_agents_core::request::INPUT_REQUESTED_KEY);
                     if flag.is_some_and(|flag| {
                         flag.as_bool() == Some(true) || flag.as_str() == Some("true")
                     }) {
@@ -184,12 +142,9 @@ impl Rule for ToolOutputFollowsOutcome {
                         selected.remove(&call.call_id);
                     }
                 }
-                // A step cut before its tools were awaited asks nothing; one cut after it put
-                // its question leaves the question asked.
+                // A step cut before its tools were awaited asks nothing.
                 ChatItem::FunctionCallOutput(o) if o.output.starts_with(WAITING_PREFIX) => {
-                    let cut = speech.is_some_and(|s| {
-                        internal.speech(s.0).interrupted_at().is_some_and(|cut| cut <= *at)
-                    });
+                    let cut = speech.is_some_and(|s| host.speech(s.0).is_interrupted());
                     if !cut {
                         match waiting.iter_mut().find(|(call, _)| *call == o.call_id) {
                             Some((_, id)) => *id = o.id.clone(),
@@ -275,7 +230,7 @@ fn selected_question(call_id: &str) -> Step {
         extra: Default::default(),
         group_id: None,
     };
-    call.extra.insert(lk_agents_core::agent_run::planning::INPUT_REQUESTED_KEY.into(), true.into());
+    call.extra.insert(lk_agents_core::request::INPUT_REQUESTED_KEY.into(), true.into());
     Step::Emitted(SessionEvent::ConversationItemAdded {
         item: Box::new(call.into()),
         agent: "agent".into(),

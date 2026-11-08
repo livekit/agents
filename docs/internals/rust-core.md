@@ -748,7 +748,7 @@ references outside its lock. Language adapters keep no provider precedence stack
 
 Session defaults are declared in ABI and resolved by voice. The host constructs
 Python provider objects from the resulting model plan. Native `SessionStorage`
-opens the supplied thread's lane, else one on a new local SQLite thread, owns the context
+opens a configured lane or executes voice's ephemeral fallback, owns the context
 activation and closes its storage resources. Python only wraps the supplied
 activation and thread namespace.
 
@@ -2405,9 +2405,9 @@ supervisor's diagnostics are ordinary log lines naming the pid and the job
 for it to return, and it has no pong deadline nor memory limit. A runner takes
 one job: a second `launch_job` is refused. Supervision settings and their
 production defaults are `JobRunnerOptions`. The pool answers `active_jobs`
-(`status` `RUNNING`) and `get_by_job_id`, and notifies the host of each
-process's step through one `emit`, which also drives the Prometheus process
-metrics.
+(`status` `RUNNING`) and `get_by_job_id`, notifies the host of each
+process's step through one `emit`, and records the worker's jobs and warm
+processes as process instruments on every change.
 
 Provider clients and model execution run in the job process
 (`lk-agents-inference`). There is no separate inference-process service.

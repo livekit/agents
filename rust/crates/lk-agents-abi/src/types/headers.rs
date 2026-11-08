@@ -9,16 +9,17 @@
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Headers(Vec<(String, String)>);
 
+/// One value per name; names compare case-insensitively, as in `http::HeaderMap`.
 impl Headers {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn set(&mut self, name: impl Into<String>, value: impl Into<String>) {
-        let name = name.into();
-        let value = value.into();
-        match self.0.iter_mut().find(|(key, _)| *key == name) {
-            Some(slot) => slot.1 = value,
+    /// Sets `name` to `value`, in the name's place when it is already set.
+    pub fn insert(&mut self, name: impl Into<String>, value: impl Into<String>) {
+        let (name, value) = (name.into(), value.into());
+        match self.0.iter_mut().find(|(key, _)| key.eq_ignore_ascii_case(&name)) {
+            Some(slot) => *slot = (name, value),
             None => self.0.push((name, value)),
         }
     }
@@ -36,11 +37,12 @@ impl Headers {
     }
 }
 
+/// The host's pairs: a repeated name keeps its last value, as a Python `dict` of them would.
 impl FromIterator<(String, String)> for Headers {
     fn from_iter<I: IntoIterator<Item = (String, String)>>(pairs: I) -> Self {
         let mut headers = Self::new();
         for (name, value) in pairs {
-            headers.set(name, value);
+            headers.insert(name, value);
         }
         headers
     }
@@ -71,6 +73,10 @@ impl From<Headers> for Vec<(String, String)> {
 mod tests {
     use super::*;
 
+    fn pairs(headers: &Headers) -> Vec<(&str, &str)> {
+        headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
+    }
+
     #[test]
     fn host_pairs_preserve_order_and_replace_repeated_names() {
         let mut headers = Headers::from(vec![
@@ -81,5 +87,17 @@ mod tests {
         assert_eq!(headers.get("authorization"), Some("new"));
         headers.remove("AUTHORIZATION");
         assert_eq!(Vec::from(headers), [("X-Job".into(), "job".into())]);
+    }
+
+    // Catches: an insert that matches its name by case and so leaves a second `Authorization`
+    // beside the one it meant to replace.
+    #[test]
+    fn insert_replaces_a_name_whatever_its_case() {
+        let mut headers = Headers::from(vec![
+            ("authorization".into(), "Bearer a".into()),
+            ("X-Job".into(), "job".into()),
+        ]);
+        headers.insert("Authorization", "Bearer c");
+        assert_eq!(pairs(&headers), [("Authorization", "Bearer c"), ("X-Job", "job")]);
     }
 }

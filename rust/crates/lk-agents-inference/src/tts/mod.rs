@@ -28,7 +28,7 @@ use lk_agents_net::connection_pool::ConnectionPool;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TaskSet;
 use lk_agents_net::transport::{
-    WsReceiver, WsSender, WsTransport, open_ws, stream_closed, to_ws_url,
+    WsReceiver, WsSender, WsTransport, join_url, open_ws, stream_closed, to_ws_url,
 };
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -238,7 +238,7 @@ impl GatewayTts {
         let query = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("model", &opts.model)
             .finish();
-        let url = format!("{}/tts?{query}", to_ws_url(&opts.base_url));
+        let url = format!("{}?{query}", join_url(&to_ws_url(&opts.base_url), "tts"));
         let Ok(create_frame) = wire::session_create(&opts) else { return };
         let configuration = connection_configuration(&create_frame, &headers);
         self.tasks.spawn(self.spawner.as_ref(), "tts prewarm", async move {
@@ -352,7 +352,7 @@ impl GatewayTts {
             connections: self.connections.clone(),
             session_id,
             ws: self.ws.clone(),
-            url: format!("{}/tts?{query}", to_ws_url(&opts.base_url)),
+            url: format!("{}?{query}", join_url(&to_ws_url(&opts.base_url), "tts")),
             headers,
             clock: clock.clone(),
             accepted_at,

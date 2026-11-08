@@ -81,6 +81,15 @@ pub enum Mood {
     Calm,
 }
 
+/// The value of the `lk.expression` transcription attribute.
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptionExpression<'a> {
+    /// The provider's own words for the segment's leading delivery.
+    pub expression: &'a str,
+    /// The [`Mood`] they normalize to, as its wire string.
+    pub mood: &'a str,
+}
+
 /// The keys of `_PROVIDER_MARKUP`: `_provider_key()`, the key into every table in this module.
 /// `from_wire` is `None` for a key with no dialect (`""`, `"rime"`, ...).
 #[crate::host(wire_strs)]

@@ -85,6 +85,8 @@ disallowed-methods = [
   { path = "lk_agents_telemetry::scoped::measure", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
   { path = "lk_agents_telemetry::scoped::reserve", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
   { path = "lk_agents_telemetry::scoped::random_seed", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
+  { path = "lk_agents_telemetry::process::Instruments::set", reason = "The process's own instruments are recorded by the worker, not by a sans-I/O machine." },
+  { path = "lk_agents_telemetry::process::Instruments::observe", reason = "The process's own instruments are recorded by the worker, not by a sans-I/O machine." },
 ]
 
 disallowed-types = [

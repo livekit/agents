@@ -46,18 +46,18 @@ def seen_by_the_app(scope: Request | WebSocket) -> dict[str, object]:
 def add_routes(endpoint: Endpoint) -> None:
     http = endpoint.server.http  # type: ignore[attr-defined]
 
-    @http.get("/hello")
+    @http.get("/hello", public=True)
     async def hello(request: Request) -> Response:
         return JSONResponse({"route": request.state.lk_request.route, "query": request.url.query})
 
-    @http.post("/echo-size")
+    @http.post("/echo-size", public=True)
     async def echo_size(request: Request) -> Response:
         size = 0
         async for chunk in request.stream():
             size += len(chunk)
         return PlainTextResponse(str(size))
 
-    @http.get("/stream")
+    @http.get("/stream", public=True)
     async def stream(request: Request) -> Response:
         async def chunks() -> AsyncIterator[bytes]:
             for i in range(5):
@@ -66,7 +66,7 @@ def add_routes(endpoint: Endpoint) -> None:
 
         return StreamingResponse(chunks(), media_type="text/plain")
 
-    @http.get("/late-boom")
+    @http.get("/late-boom", public=True)
     async def late_boom(request: Request) -> Response:
         async def chunks() -> AsyncIterator[bytes]:
             yield b"first chunk\n"
@@ -75,7 +75,7 @@ def add_routes(endpoint: Endpoint) -> None:
 
         return StreamingResponse(chunks(), media_type="text/plain")
 
-    @http.websocket("/ws")
+    @http.websocket("/ws", public=True)
     async def ws(websocket: WebSocket) -> None:
         await websocket.accept(subprotocol="chat")
         try:
@@ -94,7 +94,7 @@ def add_routes(endpoint: Endpoint) -> None:
         except WebSocketDisconnect as error:
             endpoint.closed.append(error.code)
 
-    @http.get("/slow-stream")
+    @http.get("/slow-stream", public=True)
     async def slow_stream(request: Request) -> Response:
         async def chunks() -> AsyncIterator[bytes]:
             for i in range(10):
@@ -103,7 +103,7 @@ def add_routes(endpoint: Endpoint) -> None:
 
         return StreamingResponse(chunks(), media_type="text/plain")
 
-    @http.get("/endless")
+    @http.get("/endless", public=True)
     async def endless(request: Request) -> Response:
         async def chunks() -> AsyncIterator[bytes]:
             while True:
@@ -112,7 +112,7 @@ def add_routes(endpoint: Endpoint) -> None:
 
         return StreamingResponse(chunks(), media_type="text/plain")
 
-    @http.websocket("/push")
+    @http.websocket("/push", public=True)
     async def push(websocket: WebSocket) -> None:
         # Sends only: the worker still answers pings and notices the close.
         await websocket.accept()
@@ -120,7 +120,7 @@ def add_routes(endpoint: Endpoint) -> None:
             await websocket.send_text(f"tick {i}")
             await asyncio.sleep(0.01)
 
-    @http.websocket("/refused")
+    @http.websocket("/refused", public=True)
     async def refused(websocket: WebSocket) -> None:
         await websocket.close()
 
@@ -134,10 +134,6 @@ def add_routes(endpoint: Endpoint) -> None:
         await websocket.accept()
         await websocket.send_json(seen_by_the_app(websocket))
         await websocket.close()
-
-    paths = ("/hello", "/echo-size", "/stream", "/slow-stream", "/endless", "/late-boom")
-    for path in (*paths, "/ws", "/push", "/refused"):
-        http.configure_endpoint(path, public=True)
 
 
 async def _entrypoint(ctx: object) -> None:

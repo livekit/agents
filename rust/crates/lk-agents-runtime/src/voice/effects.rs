@@ -388,8 +388,7 @@ impl VoiceRuntime {
     }
 
     /// Binds the speech's reply to its providers and spawns it. A stored speech first reloads its
-    /// history from the voice lane; a realtime one plays what the socket sends at once while its
-    /// lane reloads beside it.
+    /// history from the voice lane.
     fn start_speech(
         &mut self,
         speech: SpeechId,
@@ -418,25 +417,12 @@ impl VoiceRuntime {
         };
         let shared = Arc::clone(&self.shared);
         let task = Arc::clone(&handle);
-        let mut storage = self.storage.clone().filter(|_| history == SpeechHistory::VoiceLane);
+        let storage = self.storage.clone().filter(|_| history == SpeechHistory::VoiceLane);
         let queue = self.reports.clone();
-        if player.is_some()
-            && let Some(storage) = storage.take()
-        {
-            let local = context.plan.request.chat_ctx.items.clone();
-            let queue = queue.clone();
-            let reload = async move {
-                reload_history(storage, speech, local, &queue).await;
-            };
-            self.speeches.spawn(handle.id(), "speech lane reload", reload);
-        }
         let speeches = self.speeches.clone();
         self.speeches.spawn(handle.id(), "speech", async move {
             if let Some(storage) = storage {
-                let local = context.plan.request.chat_ctx.items.clone();
-                if let Some(history) = reload_history(storage, task.id(), local, &queue).await {
-                    context.plan.request.chat_ctx.items = history;
-                }
+                reload_history(storage, task.id(), &mut context, &queue).await;
             }
             crate::voice::generation::pipeline_reply::pipeline_reply_task(
                 shared, task, context, player, speeches,
@@ -688,32 +674,30 @@ impl VoiceRuntime {
     }
 }
 
-/// The speech takes the voice lane: the lane's history, which replaces the speech's `local` one,
-/// is reported and returned, and the lane's loss is watched.
+/// The voice lane's history replaces the speech's local one, and the lane's loss is watched.
 async fn reload_history(
     storage: Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>,
     speech: SpeechId,
-    local: Vec<lk_agents_abi::ChatItem>,
+    context: &mut super::generation::ReplyExecution,
     queue: &crate::voice::session::Tx,
-) -> Option<Vec<lk_agents_abi::ChatItem>> {
-    match storage.acquire(speech.0, local.clone()).await {
+) {
+    let items = &mut context.plan.request.chat_ctx.items;
+    match storage.acquire(speech.0, items.clone()).await {
         Ok(history) => {
-            let _ =
-                queue.send(VoiceEvent::StorageReloaded { read: local, history: history.clone() });
+            let read = std::mem::replace(items, history.clone());
+            let _ = queue.send(VoiceEvent::StorageReloaded { read, history });
             let _ = storage.clone().dispatch(
                 lk_agents_abi::storage::voice::VoiceStorageCommand::ObserveLoss {
                     speech: speech.0,
                 },
                 Arc::new(super::session::storage::StorageReporter(queue.clone())),
             );
-            Some(history)
         }
         Err(error) => {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice lane could not be acquired: {error}");
             if storage.lease_lost() {
                 let _ = queue.send(VoiceEvent::StorageLost(speech));
             }
-            None
         }
     }
 }

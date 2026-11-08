@@ -6,6 +6,11 @@ pub fn is_cloud_url(url: &str) -> bool {
     host.ends_with(".livekit.cloud") || host.ends_with(".livekit.run")
 }
 
+/// Is this LiveKit's staging cloud? Hostname suffix only, like [`is_cloud_url`].
+pub fn is_staging_cloud_url(url: &str) -> bool {
+    host_of(url).is_some_and(|host| host.ends_with(".staging.livekit.cloud"))
+}
+
 /// Minimal `urlparse().hostname`: scheme, optional userinfo, strip port and IPv6 brackets, lowercase.
 pub(crate) fn host_of(url: &str) -> Option<String> {
     let rest = url.split_once("://").map(|(_, r)| r)?;
@@ -50,6 +55,14 @@ pub fn observability_url(livekit_url: &str, env_override: Option<&str>) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Catches: staging decided by a substring anywhere in the URL, so a path or query fakes it.
+    #[test]
+    fn only_the_hostname_decides_staging() {
+        assert!(is_staging_cloud_url("wss://p.staging.livekit.cloud"));
+        assert!(!is_staging_cloud_url("wss://p.livekit.cloud/x.staging.livekit.cloud"));
+        assert!(!is_staging_cloud_url("https://example.com?u=.staging.livekit.cloud"));
+    }
+
     // Catches: matching the suffix against the whole URL, an undotted suffix, or the port or
     // userinfo leaking into the hostname.
     #[test]

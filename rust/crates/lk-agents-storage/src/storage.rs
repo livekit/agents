@@ -43,8 +43,6 @@ enum Config {
 
 /// The project a local store without options belongs to.
 const DEFAULT_PROJECT_ID: &str = "default";
-/// Where `SQLiteStorage()` keeps its project directories instead of `~/.livekit/agent-threads`.
-const THREADS_DIR_ENV: &str = "LIVEKIT_AGENT_THREADS_DIR";
 /// The bare project-id prefix, refused as an id of its own.
 const PROJECT_ID_PREFIX: &str = "p_";
 /// The longest project id accepted.
@@ -103,11 +101,8 @@ fn check_project_id(project_id: &str) -> Result<(), StorageError> {
     Ok(())
 }
 
-/// `$LIVEKIT_AGENT_THREADS_DIR/<project_id>`, else `~/.livekit/agent-threads/<project_id>`.
+/// `~/.livekit/agent-threads/<project_id>`.
 fn default_directory(project_id: &str) -> Result<PathBuf, StorageError> {
-    if let Some(threads) = std::env::var_os(THREADS_DIR_ENV).filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(threads).join(project_id));
-    }
     let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
     let home = std::env::var_os(home).filter(|value| !value.is_empty()).ok_or_else(|| {
         StorageError::Invalid("home directory is unavailable; configure directory=".into())

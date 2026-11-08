@@ -445,15 +445,6 @@ pub fn outcome_of(answer: Answer, text: &str) -> ToolOutcome {
     }
 }
 
-/// What the host reports for a `ToolUpdate`: its progress message, or its end answered as `end`.
-pub fn update_outcome(progress: Option<&str>, end: Answer) -> ToolOutcome {
-    match progress {
-        Some(message) => ToolOutcome::Update { message: message.into(), raw: message.into() },
-        None if end == Answer::Detached => ToolOutcome::Nothing,
-        None => outcome_of(end, "the tool finished"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

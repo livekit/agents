@@ -41,7 +41,7 @@ use lk_agents_voice::agent_session::{
 };
 use lk_agents_voice::audio::ChannelEnd;
 use lk_agents_voice::data_plane::{
-    AudioInputRouter, AudioInputRouterCommand, AudioInputRouterEffect, Delivery,
+    AudioInputRouter, AudioInputRouterCommand, AudioInputRouterEffect,
 };
 use lk_agents_voice::trace::ChannelEndCause;
 use session::{Calls, PeerHandle, QueueOwner, SessionCores, SessionShared};
@@ -572,13 +572,10 @@ impl VoiceRuntime {
         let resources = &self.shared.resources;
         for effect in effects {
             match effect {
-                AudioInputRouterEffect::PushFrame { sink, frame, delivery } => {
+                AudioInputRouterEffect::PushFrame { sink, frame, head } => {
                     if let Some(stream) = resources.audio_sink(sink)
-                        && let Err(error) = match delivery {
-                            Delivery::Live => stream.push(frame),
-                            Delivery::Head => stream.head(frame),
-                            Delivery::Filler => stream.filler(frame),
-                        }
+                        && let Err(error) =
+                            if head { stream.head(frame) } else { stream.push(frame) }
                         && self.push_warned.insert(sink)
                     {
                         log::warn!(

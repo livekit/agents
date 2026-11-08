@@ -84,12 +84,11 @@ pub fn build_request(
         for (name, value) in
             gateway_headers(identification, class, opts.provider.as_deref(), bearer)
         {
-            headers.set(name, value);
+            headers.insert(name, value);
         }
         headers.remove("X-LiveKit-Session-ID");
     }
-    headers.remove("Authorization");
-    headers.set("Authorization", format!("Bearer {bearer}"));
+    headers.insert("Authorization", format!("Bearer {bearer}"));
     let body = encode_body(&Value::Object(body), opts.body, &mut headers)?;
 
     let mut url = url::Url::parse(&request::completions_url(&opts.base_url))
@@ -108,15 +107,15 @@ fn encode_body(
 ) -> Result<Vec<u8>, ApiError> {
     let invalid = |e: String| ApiError::new(format!("cannot encode the request: {e}"));
     let mut bytes = if encoding.msgpack {
-        headers.set("Content-Type", "application/vnd.msgpack");
+        headers.insert("Content-Type", "application/vnd.msgpack");
         rmp_serde::to_vec_named(body).map_err(|e| invalid(e.to_string()))?
     } else {
-        headers.set("Content-Type", "application/json");
+        headers.insert("Content-Type", "application/json");
         serde_json::to_vec(body).map_err(|e| invalid(e.to_string()))?
     };
     if encoding.gzip {
         bytes = lk_agents_net::http::gzip(&bytes);
-        headers.set("Content-Encoding", "gzip");
+        headers.insert("Content-Encoding", "gzip");
     }
     Ok(bytes)
 }

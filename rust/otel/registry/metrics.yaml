@@ -488,6 +488,56 @@
           "requirement_level": "recommended"
         }
       ]
+    },
+    {
+      "id": "metric.lk.agents.worker.idle_processes",
+      "type": "metric",
+      "metric_name": "lk.agents.worker.idle_processes",
+      "instrument": "gauge",
+      "unit": "{process}",
+      "stability": "development",
+      "brief": "The warm processes ready for a job.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.agents.worker.idle_processes_target",
+      "type": "metric",
+      "metric_name": "lk.agents.worker.idle_processes_target",
+      "instrument": "gauge",
+      "unit": "{process}",
+      "stability": "development",
+      "brief": "The warm processes the pool keeps ready.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.agents.worker.jobs",
+      "type": "metric",
+      "metric_name": "lk.agents.worker.jobs",
+      "instrument": "gauge",
+      "unit": "{job}",
+      "stability": "development",
+      "brief": "The jobs running on the worker.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.agents.worker.load",
+      "type": "metric",
+      "metric_name": "lk.agents.worker.load",
+      "instrument": "gauge",
+      "unit": "1",
+      "stability": "development",
+      "brief": "The load the worker admits jobs by, 0 to 1.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.agents.worker.process_ready.duration",
+      "type": "metric",
+      "metric_name": "lk.agents.worker.process_ready.duration",
+      "instrument": "histogram",
+      "unit": "s",
+      "stability": "development",
+      "brief": "Each job process's time from its spawn to ready: imports, `setup_fnc` and prewarm.",
+      "attributes": []
     }
   ]
 }

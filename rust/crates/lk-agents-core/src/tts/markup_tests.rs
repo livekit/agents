@@ -130,13 +130,14 @@ fn ties_break_by_priority_and_an_unmatched_label_is_recessive() {
     assert_eq!(match_mood("zzzz", None), None);
 }
 
+// Catches: the `lk.expression` value losing its documented `{"expression", "mood"}` shape, or the
+// provider's words altered on the way.
 #[test]
-fn the_expression_attribute_is_compact_and_ascii_escaped() {
-    // `json.dumps` defaults to `ensure_ascii=True`.
+fn the_expression_attribute_is_the_documented_compact_json() {
     let tags = vec![ExpressiveTag::new("expression", "trés\u{a0}calme")];
     let (key, json) = expression_attribute(&tags).unwrap();
     assert_eq!(key, lk_agents_abi::ATTRIBUTE_TRANSCRIPTION_EXPRESSION);
-    assert_eq!(json, r#"{"expression":"tr\u00e9s\u00a0calme","mood":"calm"}"#);
+    assert_eq!(json, "{\"expression\":\"trés\u{a0}calme\",\"mood\":\"calm\"}");
     // no expression or emotion tag at all -> no attribute, not an empty one
     assert_eq!(expression_attribute(&[ExpressiveTag::new("sound", "laugh")]), None);
 }

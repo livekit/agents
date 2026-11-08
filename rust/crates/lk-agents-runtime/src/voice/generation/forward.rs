@@ -495,7 +495,7 @@ pub(super) fn first_text_started_speaking(
     acc: &mut TurnAccumulator,
     event: TurnAccumulatorOutputEvent<'_>,
 ) {
-    if acc.on_forwarded(event, || shared.time.wall_secs()) {
+    if acc.on_forwarded(event, shared.time.wall_secs()) {
         shared.report(GenEvent::FirstFrame { speech: handle.id() });
     }
 }

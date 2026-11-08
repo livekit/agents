@@ -141,14 +141,6 @@ impl StreamInput<AudioFrame> for GatedSink {
         }
     }
 
-    fn filler(&self, item: AudioFrame) -> Result<(), ProviderError> {
-        if self.open.load(Ordering::Relaxed) && !self.ended.load(Ordering::Relaxed) {
-            self.inner.filler(item)
-        } else {
-            Ok(())
-        }
-    }
-
     fn flush(&self) -> Result<(), ProviderError> {
         self.inner.flush()
     }

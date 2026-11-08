@@ -16,10 +16,11 @@ pub const ATTRIBUTE_TRANSCRIPTION_FINAL: &str = "lk.transcription_final";
 
 /// The expression (delivery/emotion) the agent used for a transcription segment, surfaced so
 /// the frontend can react to it, when expressive markup is stripped from the transcript. The
-/// value is a JSON object ``{"value": ...}`` carrying the segment's leading expression -- the
-/// ``<expression>`` tag for Inworld/ElevenLabs v3 or the ``<emotion>`` tag for Cartesia, e.g.
-/// ``{"value": "speak happy"}``. A JSON object (rather than a bare string) so the shape can
-/// gain fields later without breaking parsers.
+/// value is a JSON [`TranscriptionExpression`](crate::tts::markup::TranscriptionExpression):
+/// ``{"expression": "speak happy", "mood": "happy"}``, the segment's leading ``<expression>``
+/// (Inworld/ElevenLabs v3) or ``<emotion>`` (Cartesia) tag and the ``AgentMood`` it normalizes
+/// to. A JSON object (rather than a bare string) so the shape can gain fields later without
+/// breaking parsers.
 #[crate::host(constant)]
 pub const ATTRIBUTE_TRANSCRIPTION_EXPRESSION: &str = "lk.expression";
 

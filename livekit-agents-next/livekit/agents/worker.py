@@ -4,7 +4,6 @@ import asyncio
 import inspect
 import logging
 import multiprocessing as mp
-import os
 import threading
 from abc import ABC
 from collections.abc import Awaitable, Callable, Sequence
@@ -239,16 +238,7 @@ class AgentServer(AgentHandler):
 
     @property
     def http(self) -> AgentRoutes:
-        """HTTP routes served alongside the agent, as a Starlette application::
-
-            @server.http.get("/token")
-            async def token(request: Request) -> Response:
-                return JSONResponse({"ok": True})
-
-        Routes are served at ``/agents/{agent_name}/{deployment}/{path}``, through LiveKit Cloud
-        or the public listener. The handler reads the request's preamble as
-        ``request.state.lk_request``.
-        """
+        """HTTP and WebSocket routes served next to the agent; see ``AgentRoutes``."""
         return self._http
 
     def add(
@@ -320,9 +310,9 @@ class AgentServer(AgentHandler):
                 unregistered=unregistered,
                 has_rtc=self._rtc is not None,
                 has_text_doors=bool(self._a2a_endpoints),
-                routes=self._http.manifest(),
+                routes=self._http._manifest,
                 has_load_fnc=self._load_fnc is not None,
-                endpoints=self._http._server,
+                endpoints=self._http,
                 text_doors=[await door.service.native() for door in self._a2a_endpoints.values()],
             )
         finally:
@@ -454,15 +444,8 @@ class _ServerCallbacks:
         if self._proc_pool is not None:
             self._proc_pool.set_target_idle_processes(target)
 
-    async def _core_worker_load(self, load: float) -> None:
-        ipc.prometheus.update_worker_load(load)
-        if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
-            await asyncio.get_running_loop().run_in_executor(
-                None, ipc.prometheus.update_child_proc_count
-            )
-
-    async def _core_metrics(self) -> tuple[str, str]:
-        return await asyncio.get_running_loop().run_in_executor(None, ipc.prometheus.exposition)
+    async def _core_heartbeat(self) -> None:
+        pass
 
     async def _core_health(self) -> int:
         return len(self.active_jobs())

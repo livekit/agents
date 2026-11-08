@@ -13,12 +13,7 @@ impl TurnAccumulator {
     /// The first output determines the speaking stamp for the entire generation step.
     /// Returns whether text-only delivery must publish the first-frame notification. Audio
     /// delivery records its stamp here but publishes through its existing playback path.
-    /// `now` is read only for the first frame, the one reading kept.
-    pub fn on_forwarded(
-        &mut self,
-        event: TurnAccumulatorOutputEvent<'_>,
-        now: impl FnOnce() -> f64,
-    ) -> bool {
+    pub fn on_forwarded(&mut self, event: TurnAccumulatorOutputEvent<'_>, now: f64) -> bool {
         match event {
             TurnAccumulatorOutputEvent::TextDelta { delta, has_audio_output, interrupted } => {
                 if delta.is_empty() {
@@ -104,7 +99,7 @@ impl TurnAccumulator {
                 // with audio of its own (1.8.10's `wait_for_playout()` event), however the
                 // interruption reaches the step: on the cut segment, or later, through the
                 // words leg, after a segment played out.
-                if heard.frames > 0 || (interrupted && self.played_at().is_none()) {
+                if heard.frames > 0 || (interrupted && !self.has_played()) {
                     self.played_to(heard.position);
                 }
                 if interrupted {
@@ -216,14 +211,14 @@ mod tests {
                 has_audio_output: false,
                 interrupted: false,
             },
-            || 1.0
+            1.0
         ));
         assert!(!acc.on_forwarded(
             TurnAccumulatorOutputEvent::SegmentOpened {
                 has_audio_output: false,
                 interrupted: true,
             },
-            || 1.0
+            1.0
         ));
         assert!(acc.on_forwarded(
             TurnAccumulatorOutputEvent::TextDelta {
@@ -231,14 +226,14 @@ mod tests {
                 has_audio_output: false,
                 interrupted: false,
             },
-            || 2.0
+            2.0
         ));
         assert!(!acc.on_forwarded(
             TurnAccumulatorOutputEvent::SegmentOpened {
                 has_audio_output: false,
                 interrupted: false,
             },
-            || 3.0
+            3.0
         ));
     }
 

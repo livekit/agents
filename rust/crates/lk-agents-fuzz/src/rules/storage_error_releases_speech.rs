@@ -5,11 +5,7 @@ use crate::{
     record::{Recording, StorageOperation, StorageStep},
 };
 use lk_agents_abi::storage::StorageError;
-use lk_agents_voice::{
-    agent_session::machine::activity::scheduling::SpeechId,
-    events::SpeechOutcome,
-    trace::{InterruptStep, Step},
-};
+use lk_agents_voice::events::SpeechOutcome;
 
 pub struct StorageErrorReleasesSpeech;
 
@@ -17,7 +13,7 @@ impl Rule for StorageErrorReleasesSpeech {
     const CONTRACT: Contract = Contract {
         id: "storage_error_releases_speech",
         guarantee: "Unavailable and VersionConflict settle and abandon receipts release the speech's completion barrier.",
-        examples: &[unavailable_settled, conflict_abandoned, released_after_watchdog],
+        examples: &[unavailable_settled, conflict_abandoned],
         counterexamples: &[unavailable_stuck, conflict_stuck],
         probe: None,
     };
@@ -36,11 +32,6 @@ impl Rule for StorageErrorReleasesSpeech {
                     StorageError::Unavailable(_) | StorageError::VersionConflict { .. }
                 )
             {
-                continue;
-            }
-            // The watchdog already released a speech it ended; this receipt is its lane's release.
-            let timed_out = r.internal_view().speech(*speech).timed_out_at();
-            if timed_out.is_some_and(|ended| ended < *at) {
                 continue;
             }
             let done = host.speech(*speech).done_announcements().iter().any(|(done, _)| at < done);
@@ -76,23 +67,6 @@ fn conflict_abandoned() -> Recording {
     Authored::new()
         .storage(failed(StorageOperation::Abandon))
         .speech_done(1, SpeechOutcome::Completed)
-        .done()
-}
-
-/// Speech 2's watchdog ended it unreported: its lane's failed release comes after it is done.
-fn released_after_watchdog() -> Recording {
-    Authored::new()
-        .storage(failed(StorageOperation::Settle))
-        .speech_done(1, SpeechOutcome::Completed)
-        .journal(Step::Interrupt(InterruptStep::InterruptionTimedOut { speech: SpeechId(2) }))
-        .speech_done(2, SpeechOutcome::Interrupted)
-        .later(30_000)
-        .storage(StorageStep::Answered {
-            speech: 2,
-            operation: StorageOperation::Abandon,
-            delivered: true,
-            result: Err(StorageError::Unavailable("outage".into())),
-        })
         .done()
 }
 

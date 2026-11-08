@@ -1,5 +1,5 @@
-//! Measurement aggregation per destination: counter sums and explicit-bucket histograms, read out
-//! with delta or cumulative temporality.
+//! Measurement aggregation per destination: counter sums, gauges' last values and explicit-bucket
+//! histograms, read out with delta or cumulative temporality.
 
 use super::proto::common::v1::KeyValue;
 use super::proto::metrics::v1 as proto;
@@ -13,6 +13,7 @@ pub(crate) const MAX_SERIES: usize = 2000;
 
 enum Point {
     Sum(Number),
+    Last(Number),
     /// `buckets` has one count per bound, then the overflow bucket.
     Histogram {
         count: u64,
@@ -78,6 +79,7 @@ impl Aggregator {
                 self.series += 1;
                 let point = match m.kind {
                     InstrumentKind::Counter => Point::Sum(Number::Int(0)),
+                    InstrumentKind::Gauge => Point::Last(m.value),
                     InstrumentKind::Histogram => Point::Histogram {
                         count: 0,
                         sum: 0.0,
@@ -99,6 +101,7 @@ impl Aggregator {
                     (a, b) => Number::Double(as_f64(a) + as_f64(b)),
                 }
             }
+            Point::Last(last) => *last = m.value,
             Point::Histogram { count, sum, min, max, buckets } => {
                 let v = as_f64(m.value);
                 *count += 1;
@@ -164,7 +167,10 @@ impl Instrument {
             InstrumentKind::Counter => proto::metric::Data::Sum(proto::Sum {
                 aggregation_temporality: temporality,
                 is_monotonic: true,
-                data_points: self.sum_points(interval),
+                data_points: self.number_points(interval),
+            }),
+            InstrumentKind::Gauge => proto::metric::Data::Gauge(proto::Gauge {
+                data_points: self.number_points(interval),
             }),
             InstrumentKind::Histogram => proto::metric::Data::Histogram(proto::Histogram {
                 aggregation_temporality: temporality,
@@ -173,10 +179,10 @@ impl Instrument {
         }
     }
 
-    fn sum_points(&self, interval: &Interval) -> Vec<proto::NumberDataPoint> {
+    fn number_points(&self, interval: &Interval) -> Vec<proto::NumberDataPoint> {
         let points = self.series.iter().filter_map(|(labels, point)| {
-            let Point::Sum(total) = point else { return None };
-            let value = match *total {
+            let (Point::Sum(number) | Point::Last(number)) = point else { return None };
+            let value = match *number {
                 Number::Int(v) => proto::number_data_point::Value::AsInt(v),
                 Number::Double(v) => proto::number_data_point::Value::AsDouble(v),
             };

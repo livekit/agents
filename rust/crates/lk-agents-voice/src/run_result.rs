@@ -311,21 +311,21 @@ impl VoiceDriver {
         self.session.runs.outputs.insert(speech, RunOutcome::Failed(error));
     }
 
-    /// Whether an item is the open run's: its own speeches' items, the input it was run on
-    /// (`new_messages()` starts with it, as a text run's does) and the handoff record. A committed
-    /// call is not: a call became the run's when it started.
+    /// Whether an item is the open run's: its own speeches' items and the handoff record. The
+    /// `run(user_input=)` user message is not, as in the reference (`RunResult.events` opens with
+    /// the reply), and neither is a committed call: a call became the run's when it started.
     pub(crate) fn run_owns_item(&self, source: &Source) -> bool {
         let Some(open) = self.session.runs.current() else { return false };
         match source {
-            Source::UserInput { speech }
-            | Source::Reply { speech, .. }
+            Source::Reply { speech, .. }
             | Source::Say { speech }
             | Source::ToolOutput { speech, .. }
             | Source::ToolUpdate { speech, .. } => {
                 self.activity.speech_belongs_to_run(*speech, open.id)
             }
             Source::Handoff => true,
-            Source::ToolCall { .. }
+            Source::UserInput { .. }
+            | Source::ToolCall { .. }
             | Source::UserTurn { .. }
             | Source::ConfigUpdate
             | Source::HostCtx

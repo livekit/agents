@@ -69,7 +69,7 @@ async fn with_playout_controls<S: Segment, T: Send>(
 pub(crate) fn first_frame(shared: &Arc<SessionShared>, acc: &mut TurnAccumulator, at: f64) {
     acc.on_forwarded(
         lk_agents_voice::generation::machine::forward::TurnAccumulatorOutputEvent::Audio { at },
-        || shared.time.wall_secs(),
+        shared.time.wall_secs(),
     );
 }
 
@@ -365,15 +365,9 @@ impl Playing<'_> {
             }
             AudioPlaybackEffect::FinishCut { heard, reported } => {
                 self.drain(segment);
-                // Journal the physical receipt, even if clear arrived after playback finished. A
-                // cut the output never reported stopped no earlier than the progress it confirmed.
-                match (self.state.has_started(), reported) {
-                    (true, Some(interrupted)) => self.finished(heard.position, interrupted),
-                    (true, None) => self.shared.report(GenEvent::PlayedTo {
-                        speech: handle.id(),
-                        position: heard.position,
-                    }),
-                    (false, _) => {}
+                // Journal the physical receipt, even if clear arrived after playback finished.
+                if let (true, Some(interrupted)) = (self.state.has_started(), reported) {
+                    self.finished(heard.position, interrupted);
                 }
                 AudioPlaybackEvent::CutFinished(heard)
             }
@@ -412,7 +406,11 @@ impl Playing<'_> {
     fn finished(&self, position: Duration, interrupted: bool) {
         let speech = self.handle.id();
         self.trace(PlayoutStep::PlaybackFinished { speech, position, interrupted });
-        self.shared.report(GenEvent::PlayedTo { speech, position });
+        self.shared.report(lk_agents_voice::generation::GenEvent::PlaybackFinished {
+            speech,
+            position,
+            interrupted,
+        });
     }
 
     /// The sink reported the segment played out; its `Finished` was emitted before the wait
@@ -490,7 +488,6 @@ impl Playing<'_> {
 
     /// A missing report is bounded from the flush by delivered audio plus the transport
     /// allowance. Expiry reports uncertainty; it never manufactures heard audio or a leaf finish.
-    /// The turn records the progress the sink confirmed, a true lower bound of where it stopped.
     async fn played_out_report(&mut self) -> Result<Option<PlaybackFinished>, DriverError> {
         let out = self.out;
         let time = self.shared.time.clone();
@@ -503,16 +500,13 @@ impl Playing<'_> {
             None => Ok(None),
             Some(Ok(event)) => Ok(Some(event)),
             Some(Err(_)) => {
-                let (speech, position) = (
-                    self.handle.id(),
-                    self.state.played_audio().saturating_sub(self.state.completed_audio()),
-                );
+                let position =
+                    self.state.played_audio().saturating_sub(self.state.completed_audio());
                 self.trace(PlayoutStep::FinishLost {
-                    speech,
+                    speech: self.handle.id(),
                     segment: self.state.segment_key().expect("captured audio has a playback key"),
                     position,
                 });
-                self.shared.report(GenEvent::PlayedTo { speech, position });
                 Err(DriverError::PlaybackReportTimeout(
                     self.state.segment_key().expect("captured audio has a playback key"),
                 ))

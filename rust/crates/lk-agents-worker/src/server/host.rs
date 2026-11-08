@@ -221,10 +221,6 @@ impl HealthProbe for ServerCallbacks {
     async fn health(&self) -> usize {
         self.proxy.active_jobs(&telemetry::Cx::NONE).await.unwrap_or(0)
     }
-
-    async fn metrics(&self) -> Option<(String, String)> {
-        self.proxy.metrics(&telemetry::Cx::NONE).await.ok()
-    }
 }
 
 fn env_flag(name: &str) -> bool {

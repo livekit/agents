@@ -187,25 +187,30 @@ def test_the_manifest_carries_methods_kinds_and_public() -> None:
     http = AgentRoutes()
     add_routes(http)
 
-    async def raw(scope, receive, send) -> None:  # type: ignore[no-untyped-def]
-        return
+    @http.post("/public", public=True)
+    async def public(request: Request) -> Response:
+        return Response()
 
-    http.mount("/raw", raw)
-    http.configure_endpoint("/echo-size", public=True)
-    by_path = {route.path: route for route in http.manifest()}
+    by_path = {route.path: route for route in http._manifest}
     assert by_path["/hello/{name}"] == EndpointRoute(
         path="/hello/{name}", methods=["GET", "HEAD"], kind="http", public=False
     )
-    assert by_path["/echo-size"].methods == ["POST"] and by_path["/echo-size"].public
+    assert by_path["/echo-size"].methods == ["POST"] and not by_path["/echo-size"].public
+    assert by_path["/public"].public
     assert by_path["/ws"] == EndpointRoute(path="/ws", methods=["GET"], kind="http", public=False)
-    assert by_path["/raw/{path:path}"].methods == [
-        "GET",
-        "HEAD",
-        "POST",
-        "PUT",
-        "PATCH",
-        "DELETE",
-        "OPTIONS",
-        "TRACE",
-    ]
-    assert [route.path for route in http.manifest()][0] == "/hello/{name}", "order is preserved"
+    assert [route.path for route in http._manifest][0] == "/hello/{name}", "order is preserved"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"type": "websocket.send"},
+        {"type": "websocket.send", "bytes": b"a", "text": "a"},
+        {"type": "lifespan.startup.complete"},
+    ],
+)
+def test_a_malformed_asgi_message_fails_the_application(message: dict[str, object]) -> None:
+    from livekit.agents.http import _message
+
+    with pytest.raises(RuntimeError):
+        _message(message)

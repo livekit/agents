@@ -85,7 +85,7 @@ impl AgentRun {
             if terminal.is_none() {
                 if exceeded.is_none() && matches!(this, Some(Terminal::Ask(_))) {
                     item.extra.insert(
-                        crate::agent_run::planning::INPUT_REQUESTED_KEY.into(),
+                        crate::request::INPUT_REQUESTED_KEY.into(),
                         serde_json::Value::Bool(true),
                     );
                 }
@@ -100,7 +100,7 @@ impl AgentRun {
                 item.call_id.clone(),
                 text,
                 shape.is_error,
-                self.stamp(now).max(item.created_at),
+                self.stamp(now),
             );
             output.name = item.name.clone();
             output.reply_required = reply_required;
@@ -108,8 +108,7 @@ impl AgentRun {
             outputs.push(ChatItem::FunctionCallOutput(output));
         }
         self.input_requirements.extend(input_requirements.iter().cloned());
-        // Calls retain their dispatch stamps; outputs are stamped when the step settles, never
-        // before their call: a host that stamps its calls finer than the run's clock reads them.
+        // Calls retain their dispatch stamps; outputs are stamped when the step settles.
         // One canonical order agrees with chronological voice/storage projections without
         // rewriting those stamps: all calls, then all outputs, each in model order.
         let items: Vec<ChatItem> = calls.into_iter().chain(outputs).collect();

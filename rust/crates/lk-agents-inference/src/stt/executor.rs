@@ -116,7 +116,7 @@ impl SttStreamExecutor {
         let query = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("model", self.opts.model.as_deref().unwrap_or(""))
             .finish();
-        let url = format!("{}/stt?{}", to_ws_url(&self.opts.base_url), query,);
+        let url = format!("{}?{query}", join_url(&to_ws_url(&self.opts.base_url), "stt"));
         // `_speech_duration`: written by send, read by recv.
         let machine = Arc::new(Mutex::new(SttStream::new(
             0,

@@ -167,7 +167,7 @@
       "consumers": [
         "worker CPU/cgroup sampler",
         "process memory sampler",
-        "server diagnostics/Prometheus-directory/CPU setup"
+        "server diagnostics/CPU setup"
       ],
       "derivation": "The blocking I/O pool has its own 4 threads, independent of the media pool and its payload classes, so payload saturation never blocks health sampling. CPU sampling runs at 500ms cadence; memory sampling at 5s cadence. Exact fleet throughput and CPU-quota calibration remain unmeasured.",
       "overload": {

@@ -263,19 +263,6 @@ pub trait JobCall: Send + Sync {
     ) -> crate::BoxFuture<'a, Result<HostRef, HostError>>;
 }
 
-/// A participant entrypoint: `entrypoint(ctx, participant)`.
-#[crate::host(proxy(host = "collections.abc.Callable"))]
-pub trait ParticipantEntrypoint: Send + Sync {
-    #[host(await, name = "__call__")]
-    fn run<'a>(
-        &'a self,
-        cx: &crate::telemetry::Cx,
-        #[host(context)] context: &'a CallContext,
-        job: HostRef,
-        participant: HostRef,
-    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
-}
-
 #[crate::host(class(name = "IpcClient"))]
 pub trait IpcClient: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
@@ -393,8 +380,8 @@ pub trait JobExecution: Any + Send + Sync {
 }
 
 /// A job's run: what ends the job (the first reason wins), the entrypoint's supervision, the
-/// order and bounds of the shutdown, the participant entrypoints, the room connected once, the
-/// application calls in flight and the recording's setup.
+/// order and bounds of the shutdown, the room connected once, the application calls in flight
+/// and the recording's setup.
 #[crate::host(class(name = "JobRun", native = JobExecution))]
 pub trait JobRun: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
@@ -447,25 +434,6 @@ pub trait JobRun: Send + Sync + Sized + 'static {
         #[host(context)] context: CallContext,
         cx: crate::telemetry::Cx,
     ) -> Result<(), WorkerError>;
-    /// `entrypoint` (named `name`) runs for each joining participant of one of `kinds`.
-    #[host(call)]
-    fn add_participant_entrypoint(
-        &self,
-        entrypoint: Arc<dyn ParticipantEntrypoint>,
-        kinds: Vec<i32>,
-        name: String,
-    );
-    /// A participant joined, or was in the room when it connected; `job` is the `JobContext`.
-    #[host(call)]
-    fn participant_joined(
-        &self,
-        job: HostRef,
-        participant: HostRef,
-        identity: String,
-        kind: i32,
-        #[host(context)] context: CallContext,
-        cx: crate::telemetry::Cx,
-    );
     #[host(call)]
     fn participant_left(&self, attributes: BTreeMap<String, String>);
     /// An application API call (`delete_room`, ...): its failure is logged whether or not the

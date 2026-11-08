@@ -1,8 +1,8 @@
 """``a2a_session`` over the wire, in process: each server runs on the worker's own loopback
 listener (``local_server.py``), which serves its text doors natively; a stock a2a-sdk client over
 HTTP+SSE with and without the extension header, two workers sharing one local agent-db
-(``storage_fixture.py``) for the thin slice, the interrupt, the inbox, a resend and a task
-read after a dropped stream. That listener vouches for every caller: authentication by bearer and by the node's
+(``storage_fixture.py``) for the thin slice, the interrupt, the inbox, a resend and a
+resubscribe. That listener vouches for every caller: authentication by bearer and by the node's
 verdict is pinned by the door's own tests (``lk-agents-runtime/src/a2a/door_tests.rs``)."""
 
 from __future__ import annotations
@@ -356,7 +356,6 @@ async def test_thin_slice_across_two_workers(thread_storages: Workers) -> None:
 async def test_a_server_defaults_to_project_isolated_sqlite(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.delenv("LIVEKIT_AGENT_THREADS_DIR")
     seen: list[list[str]] = []
 
     async def handler(ctx: A2ASessionContext) -> str:
@@ -547,22 +546,9 @@ async def first_event(http: httpx.AsyncClient, ctx_id: str) -> tuple[str, httpx.
     raise AssertionError("the stream ended before its first event")
 
 
-async def settled_task(http: httpx.AsyncClient, task_id: str, ctx_id: str) -> dict[str, Any]:
-    """The task as ``tasks/get`` returns it once it is terminal."""
-    async with asyncio.timeout(10):
-        while True:
-            r = await rpc(http, "tasks/get", {"id": task_id, "contextId": ctx_id})
-            task: dict[str, Any] = r.json()["result"]
-            if task["status"]["state"] != "TASK_STATE_WORKING":
-                return task
-            await asyncio.sleep(0.05)
-
-
-async def test_a_dropped_stream_leaves_the_task_to_get_task_not_resubscribe(
+async def test_resubscribe_replays_after_the_first_stream_is_dropped(
     thread_storages: Workers,
 ) -> None:
-    """docs/protocol/a2a.md: events are live only; after a disconnect, GetTask returns the
-    current task and its saved answer, and resubscribe is an UnsupportedOperationError."""
     a, b = thread_storages
     release = asyncio.Event()
 
@@ -576,22 +562,43 @@ async def test_a_dropped_stream_leaves_the_task_to_get_task_not_resubscribe(
     ctx_id = (await a.threads.create_thread()).thread_id
 
     async with http_client(server_a) as http_a, http_client(server_b) as http_b:
+        # the first client reads the acknowledgment and drops the stream
         task_id, dropped = await first_event(http_a, ctx_id)
         await dropped.aclose()
-        r = await rpc(http_b, "tasks/resubscribe", {"id": task_id, "contextId": ctx_id})
-        assert r.json()["error"]["code"] == -32004
+        # a live follow from the other worker while the turn still runs
+        following = asyncio.create_task(
+            rpc(http_b, "tasks/resubscribe", {"id": task_id, "contextId": ctx_id})
+        )
+        await asyncio.sleep(0.1)
         release.set()
-        task = await settled_task(http_b, task_id, ctx_id)
-        assert task["status"]["state"] == "TASK_STATE_COMPLETED"
-        assert task["artifacts"][0]["parts"][0]["text"] == "done"
+        response = await asyncio.wait_for(following, 10)
+        results = [r["result"] for r in sse_results(response)]
+        # the Task object first, as the spec requires, then the frames from the start
+        assert list(results[0]) == ["task"] and results[0]["task"]["id"] == task_id
+        kinds = [list(r)[0] for r in results[1:]]
+        assert kinds == ["task", "statusUpdate", "artifactUpdate", "statusUpdate"]
+        assert results[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
+        # after the fact: the Task object, then the whole stream from its start, not followed
+        later = await rpc(http_b, "tasks/resubscribe", {"id": task_id, "contextId": ctx_id})
+        results = [r["result"] for r in sse_results(later)]
+        assert [list(r)[0] for r in results] == [
+            "task",
+            "task",
+            "statusUpdate",
+            "artifactUpdate",
+            "statusUpdate",
+        ]
+        assert results[0]["task"]["status"]["state"] == "TASK_STATE_COMPLETED"
+        assert results[1]["task"]["id"] == task_id
 
 
-async def test_the_turn_completes_when_the_first_client_vanishes_without_closing(
+async def test_the_stream_completes_when_the_first_client_vanishes_without_closing(
     thread_storages: Workers,
 ) -> None:
     """A browser reload drops the response mid-turn: the response is left open and unread,
-    never closed. The turn must still finish and save its answer for GetTask on another
-    worker."""
+    never closed. The durable stream must still receive the rest of the
+    turn, or a tasks/resubscribe from another worker ends at the last frame the first client
+    saw."""
     a, b = thread_storages
     release = asyncio.Event()
 
@@ -607,10 +614,14 @@ async def test_the_turn_completes_when_the_first_client_vanishes_without_closing
     async with http_client(server_a) as http_a, http_client(server_b) as http_b:
         # held, never closed: a response whose client is gone without closing
         task_id, held = await first_event(http_a, ctx_id)
+        following = asyncio.create_task(
+            rpc(http_b, "tasks/resubscribe", {"id": task_id, "contextId": ctx_id})
+        )
+        await asyncio.sleep(0.1)
         release.set()
-        task = await settled_task(http_b, task_id, ctx_id)
-        assert task["status"]["state"] == "TASK_STATE_COMPLETED"
-        assert task["artifacts"][0]["parts"][0]["text"] == "done"
+        response = await asyncio.wait_for(following, 10)
+        results = [r["result"] for r in sse_results(response)]
+        assert results[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
         await held.aclose()
 
 

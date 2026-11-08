@@ -150,18 +150,17 @@ impl SynthesisMetrics {
         self.metrics.ttfb().is_some()
     }
 
-    /// `now` is read only for the first audio, the one reading kept.
     pub fn note(
         &mut self,
         chunk: &lk_agents_abi::SynthesizedAudio,
-        now: impl FnOnce() -> f64,
+        now: f64,
     ) -> Option<super::TtsStats> {
-        let first = (!self.produced()).then(now);
-        self.metrics.observe(chunk, || first.map_or(0.0, |now| now - self.started_at));
-        first.map(|now| super::TtsStats {
+        let first = (!self.produced()).then(|| super::TtsStats {
             ttfb: Some(now - chunk.started_time.unwrap_or(self.synthesis_started_at)),
             synthesis_started_at: chunk.started_time,
-        })
+        });
+        self.metrics.observe(chunk, || now - self.started_at);
+        first
     }
 
     pub fn calls(

@@ -5059,6 +5059,54 @@
           "label": true
         }
       ]
+    },
+    {
+      "name": "lk.agents.worker.idle_processes",
+      "brief": "The warm processes ready for a job.",
+      "kind": "gauge",
+      "unit": "{process}",
+      "registry": "agents",
+      "labels": []
+    },
+    {
+      "name": "lk.agents.worker.idle_processes_target",
+      "brief": "The warm processes the pool keeps ready.",
+      "kind": "gauge",
+      "unit": "{process}",
+      "registry": "agents",
+      "labels": []
+    },
+    {
+      "name": "lk.agents.worker.jobs",
+      "brief": "The jobs running on the worker.",
+      "kind": "gauge",
+      "unit": "{job}",
+      "registry": "agents",
+      "labels": []
+    },
+    {
+      "name": "lk.agents.worker.load",
+      "brief": "The load the worker admits jobs by, 0 to 1.",
+      "kind": "gauge",
+      "unit": "1",
+      "registry": "agents",
+      "labels": []
+    },
+    {
+      "name": "lk.agents.worker.process_ready.duration",
+      "brief": "Each job process's time from its spawn to ready: imports, `setup_fnc` and prewarm.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [],
+      "bounds": [
+        0.1,
+        0.5,
+        1.0,
+        2.0,
+        5.0,
+        10.0
+      ]
     }
   ],
   "records": [

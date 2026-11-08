@@ -48,7 +48,6 @@ class ServerOptions:
     max_retry: NotGivenOr[int] = NOT_GIVEN
     permissions: NotGivenOr[WorkerPermissions] = NOT_GIVEN
     http_proxy: NotGivenOr[str | None] = NOT_GIVEN
-    prometheus_multiproc_dir: NotGivenOr[str | None] = NOT_GIVEN
     version: NotGivenOr[str] = NOT_GIVEN
     job_executor_type: NotGivenOr[str] = NOT_GIVEN
     multiprocessing_context: NotGivenOr[str] = NOT_GIVEN

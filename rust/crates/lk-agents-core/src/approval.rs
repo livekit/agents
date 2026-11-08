@@ -72,27 +72,21 @@ fn write_canonical(value: &Value, out: &mut String) {
 
 /// Whether a call of `tool` with `identity` repeats the latest read-back of that tool, answered
 /// by this invocation, and no earlier repeat consumed that answer. `items` are the calls decided
-/// before this one, with their outputs; `answered` identifies the pending calls this invocation
-/// answered when it started.
+/// before this one, in model order, with their outputs; `answered` identifies the pending calls
+/// this invocation answered when it started.
 pub fn granted<'a>(
     items: impl IntoIterator<Item = &'a ChatItem>,
     answered: &BTreeSet<String>,
     tool: &str,
     identity: &str,
 ) -> bool {
-    // A reply commits its calls beside its own items, so the history is not in the order the
-    // calls were made: the latest read-back is the one the model made last.
-    let mut calls: Vec<&FunctionCall> = items
-        .into_iter()
-        .filter_map(|item| match item {
-            ChatItem::FunctionCall(call) if call.name == tool => Some(call),
-            _ => None,
-        })
-        .collect();
-    calls.sort_by_key(|call| call.created_at);
     // The identity of the latest answered, unconsumed read-back.
     let mut open: Option<String> = None;
-    for call in calls {
+    for item in items {
+        let ChatItem::FunctionCall(call) = item else { continue };
+        if call.name != tool {
+            continue;
+        }
         let decided = call.extra.get(APPROVAL_IDENTITY_KEY).map(decided_identity);
         match mark(call) {
             Some(Approval::Granted) if decided.is_some() && decided == open => open = None,
@@ -204,33 +198,6 @@ mod tests {
             ArgumentIdentity::Json(json!({"a": {"x": "s", "y": [1, {"c": 2, "d": 1}]}, "b": 1}));
         assert_eq!(canonical(&a), canonical(&b));
         assert_ne!(canonical(&a), canonical(&ArgumentIdentity::Fingerprint(canonical(&a))));
-    }
-
-    // Catches: a repeat refused although the person answered its read-back, the read-back asked
-    // last: a reply commits its calls beside its own items, so another reply's earlier read-back
-    // stood after it in the history and was taken for the latest question (DST
-    // approval_runs_on_the_answer, VOICE_SEED=19993 VOICE_POLICY=TaskBridge).
-    #[test]
-    fn the_latest_read_back_is_the_one_asked_last() {
-        let at = |ms| std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(ms);
-        let identity = canonical(&ArgumentIdentity::Json(json!({})));
-        let asked = |call_id: &str, created| {
-            let mut call = FunctionCall {
-                id: format!("item_{call_id}"),
-                call_id: call_id.into(),
-                arguments: "{}".into(),
-                name: "transfer".into(),
-                created_at: at(created),
-                extra: Default::default(),
-                group_id: None,
-            };
-            set_mark(&mut call, Approval::Asked, &identity);
-            ChatItem::FunctionCall(call)
-        };
-        // Asked later, committed earlier in the history than the other reply's read-back.
-        let history = [asked("answered", 2_000), asked("earlier", 1_000)];
-        let answered = BTreeSet::from(["answered".to_owned()]);
-        assert!(granted(&history, &answered, "transfer", &identity));
     }
 
     // Catches: the read-back losing its first-sentence form or showing JSON instead of the

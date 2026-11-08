@@ -1,23 +1,21 @@
 //! A job's run inside its process (`_core.JobRun`): what ends the job (the room, the user, the
 //! parent, a crash, the simulator leaving; the first wins), the entrypoint's supervision, the
 //! order and bounds of the shutdown (whose steps the host runs and opens the spans of), the
-//! session report's outputs, the participant entrypoints, the room connected once, the
-//! application calls in flight and the recording's setup.
+//! session report's outputs, the room connected once, the application calls in flight and the
+//! recording's setup.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use super::telemetry;
 use lk_agents_abi::errors::{HostError, HostErrorKind};
 use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::worker::ipc_host::{
-    JobCall, JobExecution, JobProcess, ParticipantEntrypoint, WorkerError,
-};
+use lk_agents_abi::worker::ipc_host::{JobCall, JobExecution, JobProcess, WorkerError};
 use lk_agents_abi::worker::job::{ShutdownCause, StartJobFields};
 use lk_agents_abi::{ATTRIBUTE_SIMULATOR, HostRef};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
-use lk_agents_net::task::{TaskSet, TokioSpawner};
+use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -45,11 +43,6 @@ struct State {
     /// What ended the job: the first cause, unless the application ended it too.
     cause: Option<ShutdownCause>,
     connected: bool,
-    /// `add_participant_entrypoint`'s, in order, each with the participant kinds it runs for.
-    entrypoints: Vec<Entrypoint>,
-    /// The participant entrypoints running, by participant and entrypoint, each its run's number.
-    participant_runs: HashMap<(String, usize), u64>,
-    runs: u64,
     /// The application calls (`delete_room`, ...) still running.
     tasks: Vec<OwnedTask>,
     /// Whether `init_recording` ran, and the redaction it resolved (the job's until then).
@@ -59,12 +52,6 @@ struct State {
     recording: Option<telemetry::RecordingOptions>,
     /// `ctx.add_shutdown_callback`'s, in order.
     shutdown_callbacks: Vec<ShutdownCallback>,
-}
-
-struct Entrypoint {
-    run: Arc<dyn ParticipantEntrypoint>,
-    kinds: Vec<i32>,
-    name: String,
 }
 
 struct ShutdownCallback {
@@ -100,8 +87,6 @@ struct Inner {
     connecting: tokio::sync::Mutex<()>,
     /// Set once the job ends: the application calls still running are cancelled.
     tasks_closed: CancellationToken,
-    /// The participant entrypoints, which run to their own end.
-    participants: Arc<TaskSet>,
     tracer: telemetry::Tracer,
     /// Times the session report's outputs.
     clock: Arc<dyn lk_agents_abi::Clock>,
@@ -466,7 +451,6 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
                 ended: CancellationToken::new(),
                 connecting: tokio::sync::Mutex::new(()),
                 tasks_closed: CancellationToken::new(),
-                participants: Arc::default(),
                 tracer: env.tracer.clone(),
                 clock: env.clock.clone(),
                 cloud,
@@ -531,68 +515,6 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
                 Ok(())
             })
             .await
-    }
-
-    fn add_participant_entrypoint(
-        &self,
-        entrypoint: Arc<dyn ParticipantEntrypoint>,
-        kinds: Vec<i32>,
-        name: String,
-    ) {
-        self.inner.state.lock().entrypoints.push(Entrypoint { run: entrypoint, kinds, name });
-    }
-
-    fn participant_joined(
-        &self,
-        job: HostRef,
-        participant: HostRef,
-        identity: String,
-        kind: i32,
-        context: CallContext,
-        cx: telemetry::Cx,
-    ) {
-        let mut starts = Vec::new();
-        let mut overlapping = false;
-        {
-            let mut st = self.inner.state.lock();
-            let matching: Vec<(usize, Arc<dyn ParticipantEntrypoint>, String)> = st
-                .entrypoints
-                .iter()
-                .enumerate()
-                .filter(|(_, entry)| entry.kinds.contains(&kind))
-                .map(|(i, entry)| (i, entry.run.clone(), entry.name.clone()))
-                .collect();
-            for (index, entry, name) in matching {
-                let key = (identity.clone(), index);
-                st.runs += 1;
-                let run = st.runs;
-                overlapping |= st.participant_runs.insert(key.clone(), run).is_some();
-                starts.push((key, run, entry, name));
-            }
-        }
-        if overlapping {
-            log::warn!(target: lk_agents_abi::LOG_TARGET, "a participant has joined before a prior participant task matching the same identity has finished: '{identity}'");
-        }
-        let spawner = TokioSpawner::new(self.inner.spawner.handle().clone());
-        for (key, run, entry, name) in starts {
-            let inner = self.inner.clone();
-            let (job, participant, context, cx) =
-                (job.clone(), participant.clone(), context.clone(), cx.clone());
-            self.inner.participants.spawn(&spawner, "participant entrypoint", async move {
-                let ran = entry.run(&cx, &context, participant, job).await;
-                {
-                    let mut st = inner.state.lock();
-                    if st.participant_runs.get(&key) == Some(&run) {
-                        st.participant_runs.remove(&key);
-                    }
-                }
-                if let Err(error) = ran
-                    && !cancelled(&error)
-                {
-                    log::error!(target: lk_agents_abi::LOG_TARGET, exc_text:% = error.exc_text(); "error in participant entrypoint {name} for '{}'", key.0);
-                }
-            });
-        }
     }
 
     /// A simulator leaving ends the job.

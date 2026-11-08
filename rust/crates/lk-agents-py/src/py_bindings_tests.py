@@ -316,12 +316,12 @@ async def test_run_handle_keeps_loaded_snapshot_and_commits_state(tmp_path: Path
             await next_run.commit([], None)
             last_run = await thread.open_run("desk", "third")
             assert last_run.state == {"visits": 1}, "None preserves stored state"
-            with pytest.raises(ValueError, match='RunOutcome: "invalid" is not one of'):
+            with pytest.raises(ValueError, match="unknown outcome"):
                 await last_run.abandon("invalid", "reason")
             await last_run.abandon("failed", "finished testing")
             assert await thread.task("missing") is None
             assert await thread.lane_info("missing") is None
-            with pytest.raises(ValueError, match='TaskOrder: "invalid" is not one of'):
+            with pytest.raises(ValueError, match="unknown task order"):
                 await thread.list_tasks(order="invalid")
         finally:
             thread.close()
@@ -400,7 +400,7 @@ async def test_drain_distinguishes_deadlines_from_identical_host_error_text(
         async def _core_started(self) -> None:
             self.started.set()
 
-        async def _core_worker_load(self, load: float) -> None:
+        async def _core_heartbeat(self) -> None:
             pass
 
         async def _core_join_jobs(self) -> None:

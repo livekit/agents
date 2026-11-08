@@ -326,7 +326,7 @@ pub(crate) fn driver_with(
     VoiceDriver::new(initial_session(parts, hook_bound, now))
 }
 
-pub(crate) fn realtime_driver() -> VoiceDriver {
+fn realtime_driver() -> VoiceDriver {
     let parts = SessionParts { agent: "agent".into(), ..Default::default() };
     let now = Now { at: lk_agents_abi::Ts::ZERO, wall: std::time::UNIX_EPOCH };
     let mut initial = initial_session(parts, None, now);

@@ -84,7 +84,7 @@ pub fn request_headers(mut base: Headers, provider: Option<&str>) -> Headers {
     if let Some(provider) = provider
         && !provider.is_empty()
     {
-        base.set(HEADER_INFERENCE_PROVIDER, provider);
+        base.insert(HEADER_INFERENCE_PROVIDER, provider);
     }
     base
 }

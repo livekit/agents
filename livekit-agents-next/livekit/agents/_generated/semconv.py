@@ -317,6 +317,11 @@ METRIC_LK_AGENTS_USAGE_LLM_SESSION_DURATION: Final = "lk.agents.usage.llm_sessio
 METRIC_LK_AGENTS_USAGE_STT_AUDIO_DURATION: Final = "lk.agents.usage.stt_audio_duration"
 METRIC_LK_AGENTS_USAGE_TTS_AUDIO_DURATION: Final = "lk.agents.usage.tts_audio_duration"
 METRIC_LK_AGENTS_USAGE_TTS_CHARACTERS: Final = "lk.agents.usage.tts_characters"
+METRIC_LK_AGENTS_WORKER_IDLE_PROCESSES: Final = "lk.agents.worker.idle_processes"
+METRIC_LK_AGENTS_WORKER_IDLE_PROCESSES_TARGET: Final = "lk.agents.worker.idle_processes_target"
+METRIC_LK_AGENTS_WORKER_JOBS: Final = "lk.agents.worker.jobs"
+METRIC_LK_AGENTS_WORKER_LOAD: Final = "lk.agents.worker.load"
+METRIC_LK_AGENTS_WORKER_PROCESS_READY_DURATION: Final = "lk.agents.worker.process_ready.duration"
 
 # Report record scopes
 LOG_SCOPE_CHAT_HISTORY: Final = "chat_history"

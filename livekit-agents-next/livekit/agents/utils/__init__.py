@@ -7,7 +7,6 @@ import functools
 import inspect
 import logging
 import os
-import platform
 import uuid
 from collections.abc import Callable, Coroutine, Sequence
 from typing import Literal, Protocol, TypeVar, overload
@@ -33,10 +32,6 @@ def shortuuid(prefix: str = "") -> str:
 
 def is_given(obj: NotGivenOr[_T]) -> TypeIs[_T]:
     return not isinstance(obj, NotGiven)
-
-
-def nodename() -> str:
-    return platform.node()
 
 
 def is_dev_mode() -> bool:

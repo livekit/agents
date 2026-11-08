@@ -111,8 +111,7 @@ side is one module, `livekit/agents/telemetry.py`, of about 400 lines:
 
 `opentelemetry-api` is the only OpenTelemetry dependency. Spans the framework
 needs around Python-only code are started by the module's own tracer, so they
-reach Rust whatever the global provider is. The worker's Prometheus process
-metrics are `ipc/prometheus.py`, not telemetry.
+reach Rust whatever the global provider is.
 
 Everything else left Python:
 

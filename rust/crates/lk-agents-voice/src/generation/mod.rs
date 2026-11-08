@@ -9,7 +9,6 @@ use lk_agents_abi::{
     ChatContext, ChatItem, ChatMessage, CopyOptions, Extra, FunctionCall, FunctionCallOutput,
     MetricsReport, Role, ToolSpec,
 };
-use lk_agents_core::agent_run::planning;
 use lk_agents_core::llm::history::ChatContextExt;
 use lk_agents_core::tts::markup::MarkupExt;
 use std::hash::{Hash, Hasher};
@@ -30,7 +29,7 @@ pub const RUNNING_TOOL_PLACEHOLDER: &str = "The tool call is still in progress."
 pub const RUNNING_PLACEHOLDER_KEY: &str = "__lk_running_placeholder__";
 
 /// The id of the rendered prompt in every request. Must not change (persisted contexts carry it).
-pub const INSTRUCTIONS_MESSAGE_ID: &str = planning::INSTRUCTIONS_MESSAGE_ID;
+pub const INSTRUCTIONS_MESSAGE_ID: &str = lk_agents_core::request::INSTRUCTIONS_MESSAGE_ID;
 
 /// Python truthiness for an `f64`: zero is "absent".
 fn truthy(v: f64) -> bool {
@@ -140,12 +139,12 @@ impl TurnAccumulator {
     /// `_on_first_frame`: stamps the turn's first audible instant, `at` (the capture instant for
     /// audio, nothing for text) or `now` (`fut.result() or time.time()`). `false` if not the turn's
     /// first frame (it fires per segment and from both outputs).
-    pub fn on_first_frame(&mut self, at: Option<f64>, now: impl FnOnce() -> f64) -> bool {
+    pub fn on_first_frame(&mut self, at: Option<f64>, now: f64) -> bool {
         if self.started_speaking_at.is_some() {
             return false;
         }
         // Truthiness, not presence.
-        self.started_speaking_at = Some(at.filter(|at| truthy(*at)).unwrap_or_else(now));
+        self.started_speaking_at = Some(at.filter(|at| truthy(*at)).unwrap_or(now));
         true
     }
 
@@ -160,9 +159,9 @@ impl TurnAccumulator {
         self.cut_at = Some(position);
     }
 
-    /// Where the last segment that played its own audio stopped, if one did.
-    pub fn played_at(&self) -> Option<std::time::Duration> {
-        self.cut_at
+    /// Whether a segment of this step played its own audio.
+    pub fn has_played(&self) -> bool {
+        self.cut_at.is_some()
     }
 
     /// One forwarded segment's text (`segment_outputs.append(out)`).
@@ -267,7 +266,7 @@ impl PlanSpec {
             && !known.contains(msg.id.as_str())
         {
             if msg.role == Role::User {
-                planning::answer_pending_input(
+                lk_agents_core::request::answer_pending_input(
                     &mut ctx.items,
                     &msg.raw_text_content().unwrap_or_default(),
                 );
@@ -290,14 +289,15 @@ impl PlanSpec {
 
         inject_running_tool_calls(&mut ctx, &self.running_tool_calls);
 
-        let planned = planning::plan_request(planning::RequestSnapshot {
-            history: &ctx.items,
-            instructions,
-            tools: &self.tools,
-            on_enter: self.on_enter,
-            turn_instructions: self.turn_instructions.as_deref(),
-            created_at: now,
-        });
+        let planned =
+            lk_agents_core::request::plan_request(lk_agents_core::request::RequestSnapshot {
+                history: &ctx.items,
+                instructions,
+                tools: &self.tools,
+                on_enter: self.on_enter,
+                turn_instructions: self.turn_instructions.as_deref(),
+                created_at: now,
+            });
         Request {
             chat_ctx: planned.chat_ctx,
             tools: planned.tools,
@@ -447,12 +447,12 @@ pub fn safe_render(template: &str, data: &serde_json::Value) -> Rendered {
                 out.push('}');
             }
             '{' => match read_field(&mut chars) {
-                Field::Closed(field) => match lookup(data, &field) {
+                Ok(field) => match lookup(data, &field) {
                     Some(v) => out.push_str(&v),
                     None => missing.push(field),
                 },
                 // An unterminated hole is left verbatim and reported missing.
-                Field::Unterminated(field) => {
+                Err(field) => {
                     out.push('{');
                     out.push_str(&field);
                     missing.push(field);
@@ -465,21 +465,16 @@ pub fn safe_render(template: &str, data: &serde_json::Value) -> Rendered {
     Rendered { text: out, missing }
 }
 
-/// A hole's name up to its `}`, or what was read when the template ends first.
-enum Field {
-    Closed(String),
-    Unterminated(String),
-}
-
-fn read_field(chars: &mut impl Iterator<Item = (usize, char)>) -> Field {
+/// A hole's name up to its `}`: `Err` with what was read when the template ends first.
+fn read_field(chars: &mut impl Iterator<Item = (usize, char)>) -> Result<String, String> {
     let mut field = String::new();
     for (_, c) in chars {
         if c == '}' {
-            return Field::Closed(field);
+            return Ok(field);
         }
         field.push(c);
     }
-    Field::Unterminated(field)
+    Err(field)
 }
 
 /// Resolve `a.b.c` against `data`. `None` is "no value"; a JSON `null` resolves to `""`.

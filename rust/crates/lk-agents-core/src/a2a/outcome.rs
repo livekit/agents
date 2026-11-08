@@ -16,7 +16,8 @@ use lk_agents_abi::storage::journal::JournalEvent;
 use lk_agents_abi::storage::thread::TaskData;
 use lk_agents_abi::storage::thread::timestamp;
 use lk_agents_abi::storage::thread::{
-    ItemRow, RunOutcome, TaskPatch, TaskReason, TaskRow, WaitOptions, agent_message, wait_patch,
+    ItemRow, RunOutcome, TaskPatch, TaskReason, TaskRow, WaitOptions, agent_message,
+    wait_patch,
 };
 use lk_agents_abi::storage::{Ask, StorageError, TaskState};
 
@@ -503,8 +504,7 @@ pub fn agent_text(task_id: &str, text: &str, message_id: String) -> a2a::Message
 /// `livekit/reason`.
 pub fn failed_message(task_id: &str, reason: TaskReason, message_id: String) -> a2a::Message {
     let mut msg = agent_text(task_id, &format!("the task failed: {reason}"), message_id);
-    msg.metadata =
-        Some([(REASON_KEY.to_owned(), Value::String(reason.as_str().to_owned()))].into());
+    msg.metadata = Some([(REASON_KEY.to_owned(), Value::String(reason.as_str().to_owned()))].into());
     msg
 }
 
@@ -730,14 +730,8 @@ mod tests {
     }
     #[test]
     fn a_plain_question_can_continue_its_existing_task() {
-        let mut waiting = unpersisted_failed(
-            "AST_waiting",
-            "desk",
-            None,
-            TaskReason::NotWritten,
-            0,
-            "msg_question".into(),
-        );
+        let mut waiting =
+            unpersisted_failed("AST_waiting", "desk", None, TaskReason::NotWritten, 0, "msg_question".into());
         waiting.status = TaskState::InputRequired;
         waiting.internal = Some(lk_agents_abi::storage::TaskInternal {
             ask: Some(lk_agents_abi::storage::Ask {
@@ -759,14 +753,8 @@ mod tests {
     /// `taskId`, through `answer_pending` and the settlement of a turn that ended with `out` or
     /// `stop`: the continued row, then the reply's receipt, as the commit leaves them.
     fn continued(out: HandlerOutput, stop: Option<Stop>) -> Vec<TaskWrite> {
-        let mut waiting = unpersisted_failed(
-            "AST_waiting",
-            "desk",
-            None,
-            TaskReason::NotWritten,
-            0,
-            "msg_question".into(),
-        );
+        let mut waiting =
+            unpersisted_failed("AST_waiting", "desk", None, TaskReason::NotWritten, 0, "msg_question".into());
         waiting.status = TaskState::InputRequired;
         waiting.message_id = Some("question".into());
         waiting.data.history = vec![msg("question", "book me a table").to_a2a()];

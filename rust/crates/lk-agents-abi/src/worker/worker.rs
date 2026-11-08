@@ -195,7 +195,6 @@ pub struct ServerOptions {
     pub max_retry: crate::Maybe<u32>,
     pub permissions: crate::Maybe<WorkerPermissions>,
     pub http_proxy: crate::Maybe<Option<String>>,
-    pub prometheus_multiproc_dir: crate::Maybe<Option<String>>,
     pub version: crate::Maybe<String>,
     pub job_executor_type: crate::Maybe<String>,
     pub multiprocessing_context: crate::Maybe<String>,

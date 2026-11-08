@@ -2,6 +2,7 @@ use super::*;
 use http_body_util::BodyExt as _;
 use hyper::{Method, StatusCode};
 use lk_agents_abi::worker::server_host::HealthState;
+use lk_agents_telemetry::process::Instruments;
 
 fn settings() -> ServerSettings {
     ServerSettings { version: "2.0.0".into(), ..ServerSettings::default() }
@@ -9,6 +10,14 @@ fn settings() -> ServerSettings {
 
 fn env(vars: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
     move |name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_owned())
+}
+
+// Catches: an empty `HTTP_PROXY` read as a proxy (`Some("")`) instead of unset.
+#[test]
+fn an_empty_proxy_variable_is_unset() {
+    assert_eq!(ServerSettings::env_proxy(env(&[("HTTPS_PROXY", ""), ("HTTP_PROXY", "")])), None);
+    let http = ServerSettings::env_proxy(env(&[("HTTPS_PROXY", ""), ("HTTP_PROXY", "http://p")]));
+    assert_eq!(http.as_deref(), Some("http://p"));
 }
 
 // Catches: an argument losing to the environment, the override losing to the argument, or an
@@ -237,10 +246,6 @@ impl HealthProbe for Probe {
     async fn health(&self) -> usize {
         0
     }
-
-    async fn metrics(&self) -> Option<(String, String)> {
-        Some(("text/plain; version=0.0.4".into(), "lk_agents_worker_load 0.5\n".into()))
-    }
 }
 
 #[tokio::test]
@@ -276,43 +281,12 @@ async fn endpoint_route_inventory_health_listener_serves_no_content() {
     }
 }
 
-// Catches: the metrics listener answering another path, or losing the host's content type.
-#[tokio::test]
-async fn the_metrics_listener_serves_the_host_exposition_at_metrics() {
-    let response = metrics_route(&Method::GET, "/metrics", &Probe).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["content-type"], "text/plain; version=0.0.4");
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(body, "lk_agents_worker_load 0.5\n");
-    assert_eq!(metrics_route(&Method::GET, "/", &Probe).await.status(), StatusCode::NOT_FOUND);
-    assert_eq!(
-        metrics_route(&Method::POST, "/metrics", &Probe).await.status(),
-        StatusCode::METHOD_NOT_ALLOWED
-    );
-}
-
-struct MetricsProbe(String);
-
-#[async_trait::async_trait]
-impl HealthProbe for MetricsProbe {
-    async fn health(&self) -> usize {
-        0
-    }
-
-    async fn metrics(&self) -> Option<(String, String)> {
-        Some((self.0.clone(), "lk_agents_worker_load 0.5\n".into()))
-    }
-}
-
-async fn metrics_exchange(request: &[u8], content_type: &str) -> String {
+/// The raw response to `request` from a metrics listener serving `instruments`.
+async fn scrape(instruments: &'static Instruments, request: &[u8]) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let (listener, port) = bind_listener("127.0.0.1", 0).await.unwrap();
     let stop = tokio_util::sync::CancellationToken::new();
-    let serving = tokio::spawn(serve_metrics(
-        listener,
-        Arc::new(MetricsProbe(content_type.into())),
-        stop.clone(),
-    ));
+    let serving = tokio::spawn(serve_metrics(listener, instruments, stop.clone()));
     let mut client = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
     client.write_all(request).await.unwrap();
     let mut response = String::new();
@@ -325,35 +299,30 @@ async fn metrics_exchange(request: &[u8], content_type: &str) -> String {
     response
 }
 
+// Catches: the load the worker admits by not reaching `/metrics`, a body its declared length or
+// content type misdescribes, `HEAD` sending a body, or another path or method answered.
 #[tokio::test]
-async fn metrics_responses_use_http_framing_and_preserve_scraper_contracts() {
+async fn the_metrics_listener_serves_the_worker_load_over_http() {
+    let instruments: &'static Instruments = Box::leak(Box::new(Instruments::new()));
+    let status = ServerStatus::new(instruments);
+    status.set_load(0.5);
     for method in ["GET", "HEAD"] {
         let request = format!("{method} /metrics?format=text HTTP/1.1\r\nHost: localhost\r\n\r\n");
-        let response = metrics_exchange(request.as_bytes(), "text/plain; version=0.0.4").await;
+        let response = scrape(instruments, request.as_bytes()).await;
         let (head, body) = response.split_once("\r\n\r\n").unwrap();
-        assert!(head.starts_with("HTTP/1.1 200"));
         let head = head.to_ascii_lowercase();
-        assert!(head.contains("content-type: text/plain; version=0.0.4"));
-        assert!(head.contains("content-length: 26"));
-        assert!(head.contains("connection: close"));
-        assert_eq!(body, if method == "HEAD" { "" } else { "lk_agents_worker_load 0.5\n" });
+        assert!(head.starts_with("http/1.1 200"), "{head}");
+        assert!(head.contains("content-type: text/plain; version=0.0.4; charset=utf-8"));
+        let expected =
+            "# TYPE lk_agents_worker_load_ratio gauge\nlk_agents_worker_load_ratio 0.5\n";
+        assert!(head.contains(&format!("content-length: {}", expected.len())), "{head}");
+        assert_eq!(body, if method == "HEAD" { "" } else { expected });
     }
-    let response =
-        metrics_exchange(b"POST /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n", "text/plain").await;
-    assert!(response.starts_with("HTTP/1.1 405"));
-    assert!(response.to_ascii_lowercase().contains("allow: get, head\r\n"));
-}
-
-#[tokio::test]
-async fn the_metrics_content_type_cannot_inject_response_headers() {
-    for content_type in ["text/plain\r\nX-Injected: yes", "text/plain\n", "text/plain\0"] {
-        let response =
-            metrics_exchange(b"GET /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n", content_type)
-                .await;
-        assert!(response.starts_with("HTTP/1.1 500"));
-        assert!(!response.to_ascii_lowercase().contains("x-injected"));
-        assert!(response.ends_with("metrics unavailable"));
-    }
+    let refused = scrape(instruments, b"POST /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n").await;
+    assert!(refused.starts_with("HTTP/1.1 405"));
+    assert!(refused.to_ascii_lowercase().contains("allow: get, head\r\n"));
+    let other = scrape(instruments, b"GET /worker HTTP/1.1\r\nHost: localhost\r\n\r\n").await;
+    assert!(other.starts_with("HTTP/1.1 404"));
 }
 
 // The endpoint uses livekit-protocol's pbjson-generated Serialize implementation directly.
@@ -447,7 +416,8 @@ async fn server_shutdown_resources_joins_stalled_health_and_metrics_connections(
     for count in [1, 8, 32, 64] {
         let (listener, port) = bind_listener("127.0.0.1", 0).await.unwrap();
         let stop = tokio_util::sync::CancellationToken::new();
-        let serving = serve_metrics(listener, Arc::new(Probe), stop.clone());
+        let serving =
+            serve_metrics(listener, Box::leak(Box::new(Instruments::new())), stop.clone());
         tokio::pin!(serving);
         let mut peers = Vec::new();
         for _ in 0..count {

@@ -103,7 +103,6 @@ pub struct ServerSettings {
     pub max_retry: u32,
     pub permissions: WorkerPermissions,
     pub http_proxy: Option<String>,
-    pub prometheus_multiproc_dir: Option<String>,
     /// Set by `--simulation`: load shedding off, and no health listener (runs share a host).
     pub simulation: bool,
     /// The SDK version the worker registers and `/worker` reports.
@@ -139,7 +138,6 @@ impl Default for ServerSettings {
             max_retry: 16,
             permissions: WorkerPermissions::default(),
             http_proxy: None,
-            prometheus_multiproc_dir: None,
             simulation: false,
             version: env!("CARGO_PKG_VERSION").into(),
             job_executor_type: "process".into(),
@@ -187,9 +185,6 @@ impl ServerSettings {
         }
         if let Given(value) = options.http_proxy {
             next.http_proxy = value;
-        }
-        if let Given(value) = options.prometheus_multiproc_dir {
-            next.prometheus_multiproc_dir = value;
         }
         if let Given(value) = options.version {
             next.version = value;
@@ -250,7 +245,7 @@ impl ServerSettings {
             ("session_end_timeout", self.session_end_timeout),
             ("initialize_process_timeout", self.initialize_process_timeout),
         ] {
-            if !value.is_finite() || value < 0.0 || value > 3_155_760_000.0 {
+            if lk_agents_abi::types::connect::duration_from_seconds(value).is_none() {
                 return Err(WorkerError::Invalid(format!(
                     "{name} must be finite and non-negative"
                 )));
@@ -293,9 +288,11 @@ impl ServerSettings {
         self
     }
 
-    /// `HTTPS_PROXY`, else `HTTP_PROXY`: the proxy when none was given.
+    /// `HTTPS_PROXY`, else `HTTP_PROXY`: the proxy when none was given; an empty one is unset.
     pub fn env_proxy(read_env: impl Fn(&str) -> Option<String>) -> Option<String> {
-        read_env("HTTPS_PROXY").filter(|v| !v.is_empty()).or_else(|| read_env("HTTP_PROXY"))
+        ["HTTPS_PROXY", "HTTP_PROXY"]
+            .into_iter()
+            .find_map(|name| read_env(name).filter(|v| !v.is_empty()))
     }
 
     /// Hosted on Cloud: the worker's load is the platform's to judge.
@@ -331,8 +328,7 @@ impl ServerSettings {
         Ok(())
     }
 
-    /// The variables the job processes inherit: the resolved connection, and the Prometheus
-    /// multiprocess directory when one is configured.
+    /// The variables the job processes inherit: the resolved connection.
     pub fn child_env(&self) -> Vec<(&'static str, String)> {
         let mut env = Vec::new();
         for (name, value) in [
@@ -346,9 +342,6 @@ impl ServerSettings {
             if !value.is_empty() {
                 env.push((name, value.clone()));
             }
-        }
-        if let Some(dir) = &self.prometheus_multiproc_dir {
-            env.push(("PROMETHEUS_MULTIPROC_DIR", dir.clone()));
         }
         env
     }
@@ -388,27 +381,6 @@ impl ServerSettings {
         };
         (worker, connection)
     }
-}
-
-/// The Prometheus multiprocess directory a run uses: the configured one, else the inherited
-/// `PROMETHEUS_MULTIPROC_DIR`; created, and emptied of a previous run's files.
-pub fn prepare_prometheus_dir(configured: Option<&str>) -> Option<String> {
-    let dir = configured
-        .map(str::to_owned)
-        .or_else(|| std::env::var("PROMETHEUS_MULTIPROC_DIR").ok().filter(|d| !d.is_empty()))?;
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        log::warn!(target: lk_agents_abi::LOG_TARGET, path = dir.as_str(); "failed to create the prometheus directory: {e}");
-        return Some(dir);
-    }
-    log::debug!(target: lk_agents_abi::LOG_TARGET, path = dir.as_str(); "cleaning prometheus multiprocess directory");
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for path in entries.flatten().map(|e| e.path()).filter(|p| p.is_file()) {
-            if let Err(e) = std::fs::remove_file(&path) {
-                log::warn!(target: lk_agents_abi::LOG_TARGET, path:% = path.display(); "failed to remove a prometheus file: {e}");
-            }
-        }
-    }
-    Some(dir)
 }
 
 /// The agent server's environment reads, as the host calls them.

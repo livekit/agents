@@ -10,7 +10,6 @@ use crate::trace::{InterruptCause, InterruptStep};
 use crate::workflows::render;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::{AgentState, UserState};
-use lk_agents_abi::voice::workflows::UnknownDtmfSymbol;
 use std::time::Duration;
 
 pub use lk_agents_abi::voice::workflows::dtmf::DtmfEvent;
@@ -54,15 +53,20 @@ pub fn dtmf_result(inputs: &[DtmfEvent]) -> GetDtmfResult {
     GetDtmfResult { user_input: format_dtmf(inputs) }
 }
 
-/// `symbol` as a key, or refused by name.
-pub(crate) fn parse(symbol: &str) -> Result<DtmfEvent, UnknownDtmfSymbol> {
-    DtmfEvent::from_wire(symbol).ok_or_else(|| UnknownDtmfSymbol(symbol.to_owned()))
+/// Each symbol a key, or the first that is not one, refused by name.
+pub(crate) fn parse_all(
+    symbols: &[String],
+    refusal: impl Fn(&str) -> String,
+) -> Result<Vec<DtmfEvent>, String> {
+    symbols.iter().map(|s| DtmfEvent::from_wire(s).ok_or_else(|| refusal(s))).collect()
 }
 
 /// `dtmf_event_to_code` (`beta/workflows/utils.py:30`): digits are themselves, `*` is 10, `#` is 11
 /// and `A`-`D` are 12-15.
-pub fn dtmf_code(symbol: &str) -> Result<u8, UnknownDtmfSymbol> {
-    parse(symbol).map(dtmf_event_to_code)
+pub fn dtmf_code(symbol: &str) -> Result<u8, String> {
+    let event =
+        DtmfEvent::from_wire(symbol).ok_or_else(|| format!("unknown DTMF symbol {symbol:?}"))?;
+    Ok(dtmf_event_to_code(event))
 }
 
 /// Why `send_dtmf_events` stopped before every key was published.
@@ -346,7 +350,9 @@ impl Dtmf {
                     DtmfTaskEvent::AgentState(new) => {
                         dtmf.collector.on_agent_state_changed(new, now)
                     }
-                    DtmfTaskEvent::UserState(new) => dtmf.collector.on_user_state_changed(new, now),
+                    DtmfTaskEvent::UserState(new) => {
+                        dtmf.collector.on_user_state_changed(new, now)
+                    }
                     // The read-back's end releases its guard.
                     DtmfTaskEvent::SpeechDone(speech) if dtmf.confirm == Some(speech) => {
                         dtmf.confirm = None;
@@ -524,8 +530,8 @@ impl DtmfReception {
         if digit == self.stop.as_str() {
             return Ok(true);
         }
-        let key = DtmfEvent::from_wire(digit)
-            .ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(digit)))?;
+        let key =
+            DtmfEvent::from_wire(digit).ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(digit)))?;
         self.digits.push(key);
         if self.digits.len() == self.num_digits {
             return Ok(true);
@@ -586,10 +592,7 @@ mod tests {
         c.on_sip_dtmf("1", now);
         assert_eq!(c.on_agent_state_changed(AgentState::Thinking, now), DtmfAction::Cancel);
         assert!(
-            matches!(
-                c.on_agent_state_changed(AgentState::Listening, now),
-                DtmfAction::Schedule { .. }
-            ),
+            matches!(c.on_agent_state_changed(AgentState::Listening, now), DtmfAction::Schedule { .. }),
             "and re-arms when idle"
         );
     }

@@ -70,7 +70,7 @@ impl Inner {
         let data = msg.encode_to_vec();
         let _turn = self.sending.lock().await;
         let opts = StreamBytesOptions {
-            name: stream_name(),
+            name: lk_agents_net::strings::shortuuid("AS_"),
             topic: TOPIC_SESSION_MESSAGES.to_owned(),
             ..StreamBytesOptions::default()
         };
@@ -184,11 +184,3 @@ async fn read_bounded(stream: &mut ByteStream) -> Result<Vec<u8>, HostError> {
     Ok(data)
 }
 
-/// `utils.shortuuid("AS_")`.
-fn stream_name() -> String {
-    use std::hash::BuildHasher;
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = std::collections::hash_map::RandomState::new()
-        .hash_one(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-    format!("AS_{:012x}", n & 0xffff_ffff_ffff)
-}

@@ -39,12 +39,12 @@ pub enum GenEvent {
         interrupted: bool,
     },
 
-    /// One of the speech's audio segments stopped playing at `position`: the sink's
-    /// `PlaybackFinished`, or the progress it confirmed before its finish report was lost (a lower
-    /// bound). `agent_turn` records where an interrupted speech stopped.
-    PlayedTo {
+    /// One of the speech's audio segments finished playing, at `position` (the sink's
+    /// `PlaybackFinished`): `agent_turn` records where an interrupted speech stopped.
+    PlaybackFinished {
         speech: SpeechId,
         position: std::time::Duration,
+        interrupted: bool,
     },
 
     /// Forwarded to the bus, ordered against every other `GenEvent`.

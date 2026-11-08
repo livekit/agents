@@ -321,8 +321,11 @@ impl InterruptionStream {
     /// stream`); [`recv_event`](Self::recv_event) yields verdicts and failures.
     pub async fn recv(&mut self) -> Option<OverlappingSpeechEvent> {
         loop {
-            if let StreamEvent::Overlap { event, .. } = self.event_rx.recv().await? {
-                return Some(*event);
+            match self.event_rx.recv().await? {
+                StreamEvent::Overlap { event, .. } => {
+                    return Some(*event);
+                }
+                _ => {}
             }
         }
     }
@@ -641,7 +644,10 @@ async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
         let opts = ctx.opts.lock();
         (
             // `_connect_ws`'s URL (`inference/interruption.py:986`).
-            format!("{}/bargein", lk_agents_net::transport::to_ws_url(&opts.base_url)),
+            lk_agents_net::transport::join_url(
+                &lk_agents_net::transport::to_ws_url(&opts.base_url),
+                "bargein",
+            ),
             SessionCreateSettings {
                 sample_rate: opts.sample_rate,
                 num_channels: 1,

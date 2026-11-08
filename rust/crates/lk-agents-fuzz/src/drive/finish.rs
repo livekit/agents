@@ -24,7 +24,7 @@ impl Run {
     /// closed". Empty means the run is quiet and the settle can begin.
     pub fn releases(&self) -> Vec<Input> {
         let blank = || AgentText(String::new());
-        let each: [(Kind, &dyn Fn(u32) -> Input); 7] = [
+        let each: [(Kind, &dyn Fn(u32) -> Input); 8] = [
             (Kind::Stream, &|nth| Input::FeedEnd { stream: Ref::new(nth) }),
             (Kind::Chat, &|nth| Input::LlmEnd { chat: Ref::new(nth) }),
             // A prediction left pending holds the endpointing phase open until it times out.
@@ -34,6 +34,7 @@ impl Run {
                 backchannel: None,
             }),
             (Kind::Segment, &|nth| Input::PlayoutFinished { segment: Ref::new(nth) }),
+            (Kind::Tts, &|nth| Input::TtsRelease { tts: Ref::new(nth) }),
             // A recognition stream left mid-utterance keeps the caller "speaking", which keeps the
             // session from ever being idle.
             (Kind::Utterance, &|nth| Input::SttEnd { utterance: Ref::new(nth) }),
@@ -48,16 +49,6 @@ impl Run {
         for (kind, make) in each {
             out.extend(self.record.live().of(kind).into_iter().map(make));
         }
-        // A synthesis the case held is let through. One it never held waits on the driver to end
-        // its input, which a release cannot do (seed 7788: behind a speech held for the person).
-        out.extend(
-            self.record
-                .live()
-                .of(Kind::Tts)
-                .into_iter()
-                .filter(|nth| self.tts_held(*nth))
-                .map(|nth| Input::TtsRelease { tts: Ref::new(nth) }),
-        );
         // A realtime turn the server is still speaking is the case's to end.
         if let Some(socket) = self.record.live().of(Kind::Realtime).first().copied() {
             for _ in self.record.live().of(Kind::Generation) {
@@ -234,8 +225,6 @@ impl Run {
         let voice = now + self.registry.voice_due_in().map_or(0, |d| d.as_millis() as u64);
         // The avatar plays what it holds in real time before it reports it played.
         let avatar = now + self.avatar_due_in().map_or(0, |d| d.as_millis() as u64);
-        // The store answers a commit or an acquire after its own latency.
-        let storage = self.storage_due().map_or(now, |at| at.as_nanos() / 1_000_000);
         let furthest = self
             .deadlines()
             .map(|(_, at)| at)
@@ -243,15 +232,13 @@ impl Run {
             .unwrap_or(now)
             .max(playing)
             .max(voice)
-            .max(avatar)
-            .max(storage);
+            .max(avatar);
         Input::Advance { ms: Millis((furthest.saturating_sub(now) + 1).min(RELEASE_CAP_MS)) }
     }
 
     /// Whether the driver armed a deadline the clock has not reached: a speech queued behind
     /// `min_consecutive_speech_delay`, or a retry waiting out its backoff, waits on the driver's
-    /// own clock, not on the case, so a round that leaves one ahead is not quiet, as is a storage
-    /// answer still in its latency (seed 13626). The recorder's
+    /// own clock, not on the case, so a round that leaves one ahead is not quiet. The recorder's
     /// flush re-arms for as long as the session lives and owes nobody anything.
     fn deadline_ahead(&self) -> bool {
         let now = self.record.now().at_ms;
@@ -259,12 +246,6 @@ impl Run {
             || !self.room_audio_queued().is_zero()
             || self.registry.voice_due_in().is_some()
             || self.avatar_due_in().is_some()
-            || self.storage_due().is_some()
-    }
-
-    /// The storage answer the fake still owes on its own clock, past now.
-    fn storage_due(&self) -> Option<Ts> {
-        self.registry.storage_due_after(self.time.now())
     }
 
     /// The avatar's playout still to come, or the agent's sink waiting out its give-up timer.
@@ -362,21 +343,6 @@ impl Run {
 
     /// How many `open` inputs the case applied without a matching `close`, in order. A close with
     /// nothing to close is a no-op in the product, so the count never goes below zero.
-    /// The case's last hold or release of this synthesis was a hold.
-    fn tts_held(&self, nth: u32) -> bool {
-        self.record
-            .applied()
-            .iter()
-            .filter(|a| a.accepted)
-            .filter_map(|a| match &a.input {
-                Input::TtsHold { tts } if tts.nth == nth => Some(true),
-                Input::TtsRelease { tts } if tts.nth == nth => Some(false),
-                _ => None,
-            })
-            .next_back()
-            .unwrap_or(false)
-    }
-
     fn outstanding(&self, open: Input, close: Input) -> u32 {
         let mut count: u32 = 0;
         for applied in self.record.applied() {

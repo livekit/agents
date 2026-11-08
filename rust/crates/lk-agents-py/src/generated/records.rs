@@ -24857,23 +24857,6 @@ pub mod worker_options {
                     .map(::lk_agents_abi::Maybe::Given)
                 }
             })?,
-            prometheus_multiproc_dir: crate::py_values::attr_with(
-                obj,
-                "ServerOptions",
-                "prometheus_multiproc_dir",
-                |v| {
-                    if crate::py_values::is_not_given(v)? {
-                        Ok(::lk_agents_abi::Maybe::NotGiven)
-                    } else {
-                        (if v.is_none() {
-                            Ok(None)
-                        } else {
-                            (v.extract::<::std::string::String>()).map(Some)
-                        })
-                        .map(::lk_agents_abi::Maybe::Given)
-                    }
-                },
-            )?,
             version: crate::py_values::attr_with(obj, "ServerOptions", "version", |v| {
                 if crate::py_values::is_not_given(v)? {
                     Ok(::lk_agents_abi::Maybe::NotGiven)

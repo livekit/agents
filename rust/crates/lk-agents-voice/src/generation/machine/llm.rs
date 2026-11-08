@@ -56,14 +56,7 @@ impl LlmGenerationData {
     }
 
     /// Calls have already been dispatched; the same chunk's words precede its flush sentinel.
-    /// `at` (seconds on the session's clock) times the streaming window; `wall` is read only for
-    /// the first response.
-    pub fn chunk(
-        &mut self,
-        chunk: &LlmChunk,
-        at: f64,
-        wall: impl FnOnce() -> f64,
-    ) -> Vec<SpeechSegmentEvent> {
+    pub fn chunk(&mut self, chunk: &LlmChunk, now: f64) -> Vec<SpeechSegmentEvent> {
         let mut effects = Vec::new();
         self.produced |= chunk.has_response();
         if let Some(delta) = &chunk.delta {
@@ -71,7 +64,7 @@ impl LlmGenerationData {
                 self.extra.extend(extra.clone());
             }
             if let Some(text) = delta.content.as_ref().filter(|text| !text.is_empty()) {
-                self.window = Some((self.window.map_or(at, |(first, _)| first), at));
+                self.window = Some((self.window.map_or(now, |(first, _)| first), now));
                 self.open = true;
                 effects.push(SpeechSegmentEvent::Chunk(self.visible.push(text)));
             }
@@ -80,7 +73,7 @@ impl LlmGenerationData {
             self.output_tokens = Some(usage.output_tokens);
         }
         self.called |= !chunk.node_text;
-        self.metrics.observe(chunk, wall);
+        self.metrics.observe(chunk, || now);
         if chunk.flush {
             self.end_segment(&mut effects);
         }

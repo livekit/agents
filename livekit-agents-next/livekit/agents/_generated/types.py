@@ -68,10 +68,11 @@ ATTRIBUTE_TRANSCRIPTION_FINAL: Final = "lk.transcription_final"
 ATTRIBUTE_TRANSCRIPTION_EXPRESSION: Final = "lk.expression"
 """The expression (delivery/emotion) the agent used for a transcription segment, surfaced so
 the frontend can react to it, when expressive markup is stripped from the transcript. The
-value is a JSON object ``{"value": ...}`` carrying the segment's leading expression -- the
-``<expression>`` tag for Inworld/ElevenLabs v3 or the ``<emotion>`` tag for Cartesia, e.g.
-``{"value": "speak happy"}``. A JSON object (rather than a bare string) so the shape can
-gain fields later without breaking parsers.
+value is a JSON [`TranscriptionExpression`](crate::tts::markup::TranscriptionExpression):
+``{"expression": "speak happy", "mood": "happy"}``, the segment's leading ``<expression>``
+(Inworld/ElevenLabs v3) or ``<emotion>`` (Cartesia) tag and the ``AgentMood`` it normalizes
+to. A JSON object (rather than a bare string) so the shape can gain fields later without
+breaking parsers.
 """
 ATTRIBUTE_PUBLISH_ON_BEHALF: Final = "lk.publish_on_behalf"
 """The identity of the agent participant that an avatar worker is publishing on behalf of."""

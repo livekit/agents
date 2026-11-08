@@ -30,7 +30,7 @@ pub(crate) use session::{AmdDetection, Arriving, Blocking, Holding, HookSpan, It
 pub(crate) use user_turn::{Endpointing, Stt, UserTurnSpan};
 
 // The declarations and records logic code names, under `telemetry::` (`telemetry.md`, rule 4).
-pub(crate) use lk_agents_abi::telemetry::record::{Record, SpanContext};
+pub(crate) use lk_agents_abi::telemetry::record::SpanContext;
 pub(crate) use lk_agents_abi::telemetry::report::SessionReport;
 pub(crate) use lk_agents_abi::telemetry::spans::session::{
     AgentSession, AgentStateChanged, Amd, AmdVerdict, CloseReason, ConnectionStateChanged,

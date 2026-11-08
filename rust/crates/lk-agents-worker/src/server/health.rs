@@ -4,13 +4,13 @@ use super::*;
 use hyper::header::HeaderValue;
 use hyper::{Method, StatusCode};
 use lk_agents_abi::worker::server_host::HealthState;
-/// What the health and metrics listeners read from the host, beside the server's own state.
+use lk_agents_net::export::prometheus;
+
+/// What `/worker` reads from the host, beside the server's own state.
 #[async_trait::async_trait]
 pub trait HealthProbe: Send + Sync {
-    /// The active jobs, for `/worker`.
+    /// The active jobs.
     async fn health(&self) -> usize;
-    /// The Prometheus exposition, `(content type, body)`; `None` when it cannot be rendered.
-    async fn metrics(&self) -> Option<(String, String)>;
 }
 
 /// How long the host may go without answering before the worker reads as stuck.
@@ -30,10 +30,19 @@ pub struct ServerStatus {
     heartbeat: parking_lot::Mutex<tokio::time::Instant>,
     /// `f32` bits.
     pub worker_load: AtomicU32,
+    /// Where the load is recorded for `/metrics`.
+    pub instruments: &'static telemetry::process::Instruments,
 }
 
 impl Default for ServerStatus {
     fn default() -> Self {
+        Self::new(&telemetry::process::INSTRUMENTS)
+    }
+}
+
+impl ServerStatus {
+    /// A starting server recording its load into `instruments`.
+    pub fn new(instruments: &'static telemetry::process::Instruments) -> Self {
         Self {
             started: AtomicBool::new(false),
             registered: AtomicBool::new(false),
@@ -42,17 +51,17 @@ impl Default for ServerStatus {
             failed: AtomicBool::new(false),
             heartbeat: parking_lot::Mutex::new(tokio::time::Instant::now()),
             worker_load: AtomicU32::new(0),
+            instruments,
         }
     }
-}
 
-impl ServerStatus {
     pub fn load(&self) -> f32 {
         f32::from_bits(self.worker_load.load(Ordering::Relaxed))
     }
 
     pub fn set_load(&self, load: f32) {
         self.worker_load.store(load.to_bits(), Ordering::Relaxed);
+        self.instruments.set::<telemetry::WorkerLoad>(f64::from(load));
     }
 
     pub fn heartbeat(&self) {
@@ -118,11 +127,11 @@ pub(super) async fn health_route(
     }
 }
 
-/// `/metrics`: the host's Prometheus exposition.
-pub(super) async fn metrics_route(
+/// `/metrics`: the Prometheus exposition of `instruments`.
+pub(super) fn metrics_route(
     method: &Method,
     path: &str,
-    probe: &dyn HealthProbe,
+    instruments: &telemetry::process::Instruments,
 ) -> Response {
     if path.split('?').next().unwrap_or_default() != "/metrics" {
         return text(StatusCode::NOT_FOUND, "404: Not Found");
@@ -130,13 +139,8 @@ pub(super) async fn metrics_route(
     if method != Method::GET && method != Method::HEAD {
         return method_not_allowed();
     }
-    match probe.metrics().await {
-        Some((content_type, body)) => match HeaderValue::from_str(&content_type) {
-            Ok(content_type) => response(StatusCode::OK, content_type, body),
-            Err(_) => text(StatusCode::INTERNAL_SERVER_ERROR, "metrics unavailable"),
-        },
-        None => text(StatusCode::INTERNAL_SERVER_ERROR, "metrics unavailable"),
-    }
+    let content_type = HeaderValue::from_static(prometheus::CONTENT_TYPE);
+    response(StatusCode::OK, content_type, prometheus::exposition(instruments))
 }
 
 /// The health listener on `listener` until dropped.
@@ -158,16 +162,16 @@ pub async fn serve_health(
         .await
 }
 
-/// The Prometheus listener on `listener` until dropped.
+/// The Prometheus listener on `listener`, serving `instruments`, until dropped.
 pub async fn serve_metrics(
     listener: tokio::net::TcpListener,
-    probe: Arc<dyn HealthProbe>,
+    instruments: &'static telemetry::process::Instruments,
     stop: tokio_util::sync::CancellationToken,
 ) -> Result<(), ServerError> {
     HttpServer::new(listener)
         .serve(stop, move |request| {
-            let probe = probe.clone();
-            async move { metrics_route(request.method(), request.uri().path(), &*probe).await }
+            let route = metrics_route(request.method(), request.uri().path(), instruments);
+            std::future::ready(route)
         })
         .await
 }

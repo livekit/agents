@@ -477,6 +477,7 @@ fn declarations_cover_the_1_8_10_wire() {
         };
         let kind = match d.kind {
             lk_agents_bindgen::telemetry::InstrumentKind::Counter => "sum",
+            lk_agents_bindgen::telemetry::InstrumentKind::Gauge => "gauge",
             lk_agents_bindgen::telemetry::InstrumentKind::Histogram => "histogram",
         };
         if (metric["kind"].as_str(), metric["unit"].as_str()) != (Some(kind), Some(d.unit.as_str()))

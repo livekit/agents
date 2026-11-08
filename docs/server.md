@@ -125,6 +125,24 @@ The decorator returns an `A2AEndpoint`: its `name`, its `url` once the server kn
 project and deployment, and `card()`, the agent card as JSON. Pass it wherever a delegate
 or a client wants the endpoint.
 
+### What a text door exposes
+
+Each `a2a_session` is a public HTTP endpoint at
+`/agents/<agent>/<deployment>/<endpoint>` ([where it is served](#launching-and-shutdown)).
+It serves only:
+
+| Request | Project token | Thread grant |
+| --- | --- | --- |
+| `GET .well-known/agent-card.json`: name, `description=`, version, URL | yes | yes |
+| `POST v1` `message/send`, `message/stream` | no (403) | `write`; `create` for a new thread |
+| `POST v1` `tasks/get`, `tasks/list` | no (403) | `read` |
+| `POST v1` `tasks/cancel` | no (403) | `write` |
+
+A grant covers only its scope's threads, and works on every door of the project: a
+browser's grant can call the back office as well as the front desk. History, lanes,
+context and the journal are never served here. Under `lk agent console` there is no
+authentication. Tokens: [protocol/a2a.md](protocol/a2a.md#tokens).
+
 `AgentServer(preload_modules=[...])` imports preload modules in the supplied
 order before job readiness. Import failures stop initialization and identify
 the module; see [Python preloading](internals/rust-core.md#python-preloading).
@@ -255,6 +273,20 @@ registration, so it sets no readiness probe.
 `/worker` uses the protocol's generated protobuf JSON serialization: camelCase keys and
 omitted default values. These operational
 endpoints accept `GET` and `HEAD`; other methods receive `405` with an `Allow` header.
+
+`/metrics`, on the `prometheus` listener, serves the worker's own state in the Prometheus
+text format, for autoscaling and alerting:
+
+| Metric | Type | Value |
+| --- | --- | --- |
+| `lk_agents_worker_load_ratio` | gauge | the load the worker admits jobs by, 0 to 1 |
+| `lk_agents_worker_jobs` | gauge | jobs running |
+| `lk_agents_worker_idle_processes` | gauge | warm processes ready for a job |
+| `lk_agents_worker_idle_processes_target` | gauge | warm processes the pool keeps ready |
+| `lk_agents_worker_process_ready_duration_seconds` | histogram | each job process's time from its spawn to ready: imports, `setup_fnc` and prewarm |
+
+What a session measures (latency, usage, tools) is exported over OpenTelemetry; see
+[Telemetry](telemetry.md).
 `HEAD` reports the corresponding `GET` content length without sending its body.
 
 The health and metrics listeners each admit at most 64 connections, accepts request heads up to 16 KiB and
@@ -387,8 +419,10 @@ async def token(request: Request) -> Response:
     return JSONResponse({"token": await mint_browser_token(request)})
 ```
 
-`get`, `post`, `put`, `patch`, `delete`, `route` and `websocket` register
-handlers, and `mount(path, app)` mounts any ASGI application. Routes are served
+`get`, `post`, `put`, `patch`, `delete`, `route(path, methods=)` and `websocket`
+register Starlette handlers. Each takes
+`public=True` to serve the route without a LiveKit token; otherwise only a caller holding
+the project's endpoint grant reaches it. Routes are served
 at `/agents/{agent_name}/{deployment}/{path}`, where the worker's endpoints are
 (see [Launching and shutdown](#launching-and-shutdown)); a handler reads the request's LiveKit
 preamble as `request.state.lk_request`. Read the client host, without a port, from
@@ -429,7 +463,7 @@ A route of kind `text` goes to its A2A door
 instead of the binding.
 Python route authoring and the ASGI adapter are in
 [`livekit/agents/http.py`](../livekit-agents-next/livekit/agents/http.py):
-`AgentRoutes` defines the routes, and `_AsgiServer` runs the application once per exchange.
+`AgentRoutes` defines the routes and runs the application once per exchange.
 
 ## Voice entrypoints
 

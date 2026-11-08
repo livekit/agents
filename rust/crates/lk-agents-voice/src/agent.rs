@@ -223,12 +223,11 @@ impl SessionChatCtx {
                 .expect("an id in the set is on the record");
             // A replaced item keeps every projection it was in and gains the replacement's.
             let was = self.items[idx].visibility;
-            let visibility =
-                match (was.model() || visibility.model(), was.history() || visibility.history()) {
-                    (true, true) => Visibility::Both,
-                    (true, false) => Visibility::Model,
-                    (false, _) => Visibility::History,
-                };
+            let visibility = match (was.model() || visibility.model(), was.history() || visibility.history()) {
+                (true, true) => Visibility::Both,
+                (true, false) => Visibility::Model,
+                (false, _) => Visibility::History,
+            };
             self.items[idx] = Committed { visibility, ..entry.clone() };
             if !was.history() && visibility.history() {
                 CommitOutcome::Added

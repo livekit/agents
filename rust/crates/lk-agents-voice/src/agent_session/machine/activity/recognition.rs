@@ -825,14 +825,10 @@ impl super::AgentActivity {
         thresholds: Option<lk_agents_abi::tokenize::language::ThresholdOptions>,
     ) -> (Vec<InputStep>, Vec<crate::audio_recognition::effects::AudioRecognitionEffect>) {
         self.audio_recognition.set_thresholds(thresholds);
-        let mut observations =
-            vec![InputStep::LegVerdict { leg: lk_agents_abi::voice::events::Leg::Eot, req: req.0 }];
+        let mut observations = vec![InputStep::LegVerdict { leg: lk_agents_abi::voice::events::Leg::Eot, req: req.0 }];
         // Recoverable: the next pause asks again. The machine serves `min_delay`.
         let result = p.map_err(|_| {
-            observations.push(InputStep::LegFailed {
-                leg: lk_agents_abi::voice::events::Leg::Eot,
-                recoverable: true,
-            });
+            observations.push(InputStep::LegFailed { leg: lk_agents_abi::voice::events::Leg::Eot, recoverable: true });
         });
         let eff = self.audio_recognition.on_prediction(now, req, result);
         (observations, eff)

@@ -452,18 +452,15 @@ mod text_before_attach {
     // Catches: an authorized synthesised segment forwarding its words straight to the transcription
     // output it captured, ahead of the activation that attaches it. With the voice down until the
     // output is replaced, the words written as the synthesis gives up reach an output that was never
-    // attached (`output_replacement_is_clean`, survey seed 1560 and 17 more in the 32768 window). A
-    // retrying voice no longer holds the activation back, so the segment here waits on its
-    // authorization instead: it activates after the replacement, and all its words go to it.
+    // attached (`output_replacement_is_clean`, survey seed 1560 and 17 more in the 32768 window). The
+    // segment activates after the replacement, so all its words go to the replacement.
     #[test]
     fn a_failed_voice_writes_no_words_to_an_unattached_replaced_output() {
         let text = |t: &str| AgentText(t.into());
         simulate(async {
-            let setup = Setup { preemptive: true, ..Setup::default() };
-            let mut run = Run::start(&setup, 0, Default::default()).await;
+            let mut run = Run::start(&Setup::default(), 0, Default::default()).await;
             for input in [
                 Input::TtsOutage { down: true },
-                Input::PauseAuthorization {},
                 Input::GenerateReply { user_input: None, instructions: None, allow: None },
                 Input::Advance { ms: Millis(20) },
                 Input::LlmText { chat: Ref::new(0), text: text("Hello there.") },
@@ -473,7 +470,6 @@ mod text_before_attach {
                 Input::LlmText { chat: Ref::new(0), text: text(" How are you?") },
                 Input::LlmEnd { chat: Ref::new(0) },
                 Input::Advance { ms: Millis(20) },
-                Input::ResumeAuthorization {},
                 Input::Advance { ms: Millis(10_000) },
             ] {
                 run.apply(&input).await;
@@ -617,24 +613,5 @@ mod unset_detection_stt_only {
         let realtime = Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() });
         let setup = Setup { stt: true, realtime, ..Setup::default() };
         assert_eq!(observed(&setup), (0, 0), "no user state change, no user item");
-    }
-}
-
-mod stt_flush_is_filler {
-    //! The silence `commit_user_turn` flushes the recogniser with never pushes the person's
-    //! queued audio out of the recogniser's input.
-    use lk_agents_fuzz::search;
-
-    // Catches: a 15 s flush of silence into the recogniser's 10 s input queue dropping the
-    // person's frames queued ahead of it (`forwarded_while_enabled`, campaign seeds 6573, 30122
-    // and 32653).
-    #[test]
-    fn a_long_flush_keeps_the_queued_microphone_audio() {
-        for seed in [6573, 30122, 32653] {
-            let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
-            let outcome = search::explore(setup, seed, 3000);
-            let failed = outcome.failures.iter().any(|f| f.contract == "forwarded_while_enabled");
-            assert!(!failed, "seed {seed}: the flush dropped the person's audio");
-        }
     }
 }

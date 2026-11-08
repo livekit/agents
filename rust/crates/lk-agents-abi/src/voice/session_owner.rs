@@ -117,8 +117,6 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     /// console's) claims the job's primary session and sets the job's recording from its plan;
     /// the start time is set; the job's session opens its audio recording and the job's shutdown
     /// is made to close it; the recording is ready; the toolsets set up and the voice loop starts.
-    /// A failure closes the owner and ends the session's spans with it; a thread whose lane does
-    /// not load fails it with its storage error.
     #[host(await)]
     fn start(
         &self,
@@ -126,7 +124,7 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
         host: Arc<dyn SessionHost>,
         #[host(kw, default = None)] job: Option<SessionJobInfo>,
         cx: crate::telemetry::Cx,
-    ) -> Result<BoxFuture<'static, Result<(), super::session::StartFailed>>, HostError>;
+    ) -> Result<BoxFuture<'static, Result<(), HostError>>, HostError>;
     #[host(getter)]
     fn session(&self) -> Option<Arc<Self::Session>>;
     /// The session's `agent_session` span, from `start()`: the job's current span while the

@@ -596,9 +596,8 @@ async def console() -> None:
 
 async def job() -> None:
     """A console job, as a job process runs it: the entrypoint connects (twice: once is made) and
-    waits for the participant in the room, for whom a participant entrypoint runs, an API call is
-    skipped, the
-    shutdown it asks for runs the shutdown callback and tells the parent."""
+    waits for the participant in the room, an API call is skipped, the shutdown it asks for runs
+    the shutdown callback and tells the parent."""
     from livekit.agents._generated.worker_server import AcceptArguments, JobInfo, RunningJobInfo
     from livekit.agents.ipc import JobRunnerOptions, JobStatus
     from livekit.agents.ipc.child import JobArgs, _JobProc
@@ -608,9 +607,6 @@ async def job() -> None:
     print("== job")
     seen: list[str] = []
 
-    async def on_participant(ctx: JobContext, p: rtc.RemoteParticipant) -> None:
-        seen.append(f"participant {p.identity}")
-
     async def on_shutdown(reason: str) -> None:
         seen.append(f"shutdown callback {reason!r}")
 
@@ -618,10 +614,6 @@ async def job() -> None:
         seen.append("shutdown callback, no reason")
 
     async def entrypoint(ctx: JobContext) -> None:
-        ctx.add_participant_entrypoint(on_participant)
-        with contextlib.suppress(ValueError):
-            ctx.add_participant_entrypoint(on_participant)
-            seen.append("added twice")
         ctx.add_shutdown_callback(on_shutdown)
         ctx.add_shutdown_callback(on_shutdown_no_reason)
         await asyncio.gather(ctx.connect(), ctx.connect())
@@ -725,10 +717,8 @@ async def job() -> None:
     _core.flush_logs()
     agents_logger.removeHandler(logs)
     print(f"job {seen} told its parent {[r.getMessage() for r in logs.records]}")
-    # the participant's entrypoint runs beside the entrypoint, in no set order with it
     assert sorted(seen) == [
         "delete_room DeleteRoomResponse",
-        "participant mock_user",
         "shutdown callback 'done'",
         "shutdown callback, no reason",
         "waited for mock_user",

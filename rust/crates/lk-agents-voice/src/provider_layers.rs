@@ -134,10 +134,7 @@ mod tests {
         layers.push(ProviderOverrideId(11), providers(&[("tts", 4)]));
         layers.update(providers(&[("tts", 5)]));
         assert_eq!(layers.effective(&tts), Some(ProviderObjectId(4)));
-        assert_eq!(
-            layers.effective(&ProviderSlot::Model(ModelSlot::Stt)),
-            Some(ProviderObjectId(2))
-        );
+        assert_eq!(layers.effective(&ProviderSlot::Model(ModelSlot::Stt)), Some(ProviderObjectId(2)));
         layers.release(ProviderOverrideId(11));
         assert_eq!(layers.effective(&tts), Some(ProviderObjectId(3)));
         layers.release(ProviderOverrideId(10));

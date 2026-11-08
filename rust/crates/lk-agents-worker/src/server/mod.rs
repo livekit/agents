@@ -3,8 +3,6 @@
 //! host, and the lifecycle (start, load, drain, close) the binding runs. The host keeps the job
 //! processes and the user's callbacks.
 
-type SetupOutcome = (Option<String>, Option<f32>);
-
 /// A server lifecycle failure, raised to the host as its message (`RuntimeError`): nothing
 /// branches on it.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -64,15 +62,15 @@ use tokio_util::sync::CancellationToken;
 mod health;
 mod http;
 mod public;
-pub use health::{HealthProbe, ServerStatus, serve_health, serve_metrics};
 #[cfg(test)]
-use health::{health_route, metrics_route};
+use health::health_route;
+pub use health::{HealthProbe, ServerStatus, serve_health, serve_metrics};
 pub use http::bind_listener;
 pub use public::{PublicRoutes, serve_public};
 mod settings;
 pub use settings::{
     Bind, DEFAULT_LOAD_THRESHOLD, Environment, Listeners, ServerSettings, Serving,
-    endpoint_url_base, prepare_prometheus_dir,
+    endpoint_url_base,
 };
 
 use livekit_protocol as proto;
@@ -490,10 +488,10 @@ impl ServerRuntime {
             settings.num_idle_processes = Some(crate::EnvOption::Fixed(0));
         }
         let status = Arc::new(ServerStatus::default());
-        let probe = Arc::new(host.clone());
         let local = start.devmode || start.unregistered;
-        resources.health = self.open_health(&settings, local, &status, &probe, stop).await?;
-        resources.metrics = self.open_metrics(&settings, local, probe, stop).await?;
+        let probe = Arc::new(host.clone());
+        resources.health = self.open_health(&settings, local, &status, probe, stop).await?;
+        resources.metrics = self.open_metrics(&settings, local, &status, stop).await?;
         // Decided before the job processes start, which inherit it: they delegate too.
         let cloud_routed = !start.unregistered
             && (settings.cloud() || lk_agents_net::strings::is_cloud_url(&settings.ws_url));
@@ -539,15 +537,14 @@ impl ServerRuntime {
         Ok(status)
     }
 
-    /// Logging set up and the Prometheus directory prepared on the blocking pool, and the idle
-    /// process count taken from the CPUs when it is not configured.
+    /// The idle process count taken from the CPUs on the blocking pool when it is not
+    /// configured.
     async fn prepare_host(
         &self,
         settings: &mut ServerSettings,
         blocking_io: &lk_agents_net::blocking_io::BlockingIo,
         resources: &mut Resources,
     ) -> Result<(), ServerError> {
-        let configured = settings.prometheus_multiproc_dir.clone();
         let discover_cpus = settings.num_idle_processes.is_none();
         let admission_deadline =
             Duration::try_from_secs_f64(settings.initialize_process_timeout)
@@ -564,15 +561,11 @@ impl ServerRuntime {
             .await
             .map_err(|_| "server setup capacity wait timed out".to_owned())?;
         resources.setup = Some(blocking_io.spawn_admitted(permit, move || {
-            (
-                prepare_prometheus_dir(configured.as_deref()),
-                discover_cpus.then(|| crate::CpuMonitor::new().cpu_count()),
-            )
+            discover_cpus.then(|| crate::CpuMonitor::new().cpu_count())
         }));
         let setup = resources.setup.as_mut().expect("setup owned before awaiting").await;
         resources.setup.take();
-        let (directory, cpus) = setup.map_err(|error| ServerError(error.to_string()))?;
-        settings.prometheus_multiproc_dir = directory;
+        let cpus = setup.map_err(|error| ServerError(error.to_string()))?;
         if let Some(cpus) = cpus {
             let prod = (cpus.ceil() as u32).min(MAX_DISCOVERED_IDLE_PROCESSES);
             settings.num_idle_processes = Some(crate::EnvOption::Split { dev: 0, prod });
@@ -586,7 +579,7 @@ impl ServerRuntime {
         settings: &ServerSettings,
         local: bool,
         status: &Arc<ServerStatus>,
-        probe: &Arc<ServerCallbacks>,
+        probe: Arc<ServerCallbacks>,
         stop: &CancellationToken,
     ) -> Result<Option<OwnedTask<Result<(), ServerError>>>, ServerError> {
         if settings.simulation {
@@ -602,7 +595,7 @@ impl ServerRuntime {
             listener,
             Arc::new(settings.clone()),
             status.clone(),
-            probe.clone(),
+            probe,
             stop.clone(),
         ))))
     }
@@ -612,7 +605,7 @@ impl ServerRuntime {
         &self,
         settings: &ServerSettings,
         local: bool,
-        probe: Arc<ServerCallbacks>,
+        status: &ServerStatus,
         stop: &CancellationToken,
     ) -> Result<Option<OwnedTask<Result<(), ServerError>>>, ServerError> {
         let Some(address) = settings.listeners.prometheus(local) else {
@@ -621,7 +614,11 @@ impl ServerRuntime {
         };
         let (listener, url) = bind(&address).await?;
         log::info!(target: lk_agents_abi::LOG_TARGET, url:% = format_args!("{url}/metrics"); "prometheus listener");
-        Ok(Some(TokioSpawner::current().spawn(serve_metrics(listener, probe, stop.clone()))))
+        Ok(Some(TokioSpawner::current().spawn(serve_metrics(
+            listener,
+            status.instruments,
+            stop.clone(),
+        ))))
     }
 
     /// The worker's own endpoints: the console's, unauthenticated and on loopback only, or a
@@ -925,7 +922,7 @@ impl LoadReporter {
             }
         }
         // The host answering is its heartbeat: `/` reads it without waiting on the host.
-        host.proxy.worker_load(&telemetry::Cx::NONE, f64::from(status.load())).await?;
+        host.proxy.heartbeat(&telemetry::Cx::NONE).await?;
         status.heartbeat();
         Ok(())
     }
@@ -992,7 +989,8 @@ async fn pending_worker(
 
 #[derive(Default)]
 struct Resources {
-    setup: Option<lk_agents_net::blocking_io::Job<SetupOutcome>>,
+    /// The CPU discovery, when the idle process count is not configured.
+    setup: Option<lk_agents_net::blocking_io::Job<Option<f32>>>,
     worker: Option<WorkerClient>,
     connection: Option<OwnedTask<Result<(), ServerError>>>,
     load: Option<OwnedTask<Result<(), ServerError>>>,

@@ -399,3 +399,36 @@ pub struct InvokeAgentDuration {
     #[attr(otel::GEN_AI_AGENT_NAME)]
     pub agent: Label,
 }
+
+/// A process's spawn-to-ready time's bucket bounds, in seconds.
+pub const PROCESS_READY_BOUNDS: &[f64] = &[0.1, 0.5, 1.0, 2.0, 5.0, 10.0];
+
+/// The load the worker admits jobs by, 0 to 1.
+#[metric(name = "lk.agents.worker.load", kind = Gauge, unit = "1")]
+#[derive(Attrs)]
+pub struct WorkerLoad;
+
+/// The jobs running on the worker.
+#[metric(name = "lk.agents.worker.jobs", kind = Gauge, unit = "{job}")]
+#[derive(Attrs)]
+pub struct WorkerJobs;
+
+/// The warm processes ready for a job.
+#[metric(name = "lk.agents.worker.idle_processes", kind = Gauge, unit = "{process}")]
+#[derive(Attrs)]
+pub struct WorkerIdleProcesses;
+
+/// The warm processes the pool keeps ready.
+#[metric(name = "lk.agents.worker.idle_processes_target", kind = Gauge, unit = "{process}")]
+#[derive(Attrs)]
+pub struct WorkerIdleProcessesTarget;
+
+/// Each job process's time from its spawn to ready: imports, `setup_fnc` and prewarm.
+#[metric(
+    name = "lk.agents.worker.process_ready.duration",
+    kind = Histogram,
+    unit = "s",
+    bounds = PROCESS_READY_BOUNDS
+)]
+#[derive(Attrs)]
+pub struct WorkerProcessReadyDuration;

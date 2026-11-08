@@ -362,9 +362,18 @@ and `model_name`, the `G` labels `gen_ai.operation.name`, `gen_ai.provider.name`
 | `gen_ai.execute_tool.duration` | histogram | s | `gen_ai.operation.name`, `gen_ai.tool.name`, `error.type` | each tool call |
 | `gen_ai.invoke_agent.duration` | histogram | s | `gen_ai.operation.name`, `gen_ai.agent.name` | each agent turn |
 
-The worker also serves Prometheus process metrics: `lk_agents_proc_initialize_duration_seconds`,
-`lk_agents_active_job_count`, `lk_agents_child_process_count`, `lk_agents_worker_load`
-(label `nodename`).
+The worker's own instruments are not a job's: the worker process holds their current value
+(`lk_agents_telemetry::process`) and serves it on its Prometheus listener
+(`lk_agents_net::export::prometheus`), named with `.` as `_` and a unit `s` or `1` as the
+`_seconds` or `_ratio` suffix.
+
+| Instrument | Kind | Unit | Recorded |
+| --- | --- | --- | --- |
+| `lk.agents.worker.load` | gauge | 1 | each load update |
+| `lk.agents.worker.jobs` | gauge | `{job}` | each change of the process pool |
+| `lk.agents.worker.idle_processes` | gauge | `{process}` | each change of the process pool |
+| `lk.agents.worker.idle_processes_target` | gauge | `{process}` | each change of the process pool |
+| `lk.agents.worker.process_ready.duration` | histogram | s | each job process that became ready |
 
 ### Report records
 

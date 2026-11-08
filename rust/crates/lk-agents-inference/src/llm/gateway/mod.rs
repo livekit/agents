@@ -276,7 +276,7 @@ impl Llm for GatewayLlm {
             Auth::Gateway { .. } => gateway_headers(self.identity.as_ref(), None, None, &bearer),
             Auth::ProviderKey(_) => {
                 let mut headers = Headers::new();
-                headers.set("Authorization", format!("Bearer {bearer}"));
+                headers.insert("Authorization", format!("Bearer {bearer}"));
                 headers
             }
         };

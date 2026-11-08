@@ -25,7 +25,7 @@ async def test_close_during_drain_does_not_wait_for_running_jobs() -> None:
         async def _core_started(self) -> None:
             self.started.set()
 
-        async def _core_worker_load(self, load: float) -> None:
+        async def _core_heartbeat(self) -> None:
             pass
 
         async def _core_join_jobs(self) -> None:
@@ -49,7 +49,7 @@ async def test_close_during_drain_does_not_wait_for_running_jobs() -> None:
             has_text_doors=True,
             routes=[],
             has_load_fnc=False,
-            endpoints=http._server,
+            endpoints=http,
             text_doors=[],
         )
     )

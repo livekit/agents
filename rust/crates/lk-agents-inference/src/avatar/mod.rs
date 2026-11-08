@@ -101,7 +101,7 @@ pub fn create_request(
     }
     let body = payload(fields, opts.avatar_id.as_deref(), opts.options.clone());
     let mut headers = headers;
-    headers.set("Idempotency-Key", idempotency_key);
+    headers.insert("Idempotency-Key", idempotency_key);
     request(opts, "/avatar/sessions", &body, headers, bearer)
 }
 
@@ -128,7 +128,7 @@ fn request(
     bearer: &str,
 ) -> HttpRequest {
     headers = gateway_headers(Some(&headers), None, Some(&opts.provider), bearer);
-    headers.set("Content-Type", "application/json");
+    headers.insert("Content-Type", "application/json");
     HttpRequest {
         url: format!("{}{path}", opts.base_url.trim_end_matches('/')),
         headers,

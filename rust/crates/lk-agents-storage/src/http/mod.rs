@@ -83,9 +83,7 @@ impl ThreadService {
         body: &[u8],
     ) -> Result<Value, ApiError> {
         let token = authorization
-            .and_then(|header| header.split_once(' '))
-            .filter(|(scheme, token)| scheme.eq_ignore_ascii_case("bearer") && !token.is_empty())
-            .map(|(_, token)| token)
+            .and_then(lk_agents_abi::a2a::auth::bearer_token)
             .ok_or_else(|| ApiError::unauthorized("a bearer token is required"))?;
         let principal = self
             .credentials

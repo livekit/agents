@@ -40,6 +40,7 @@ pub struct VoiceStore {
 struct State {
     known: BTreeSet<String>,
     version: i64,
+    explicit: bool,
     active: Option<Active>,
     uncertain_fields: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
@@ -79,6 +80,7 @@ impl VoiceStore {
             .iter()
             .map(|item| item.id().to_owned())
             .collect();
+        let explicit = explicit_history.is_some();
         let activation =
             ContextStore::bound(backend.clone(), thread_id.clone(), lane.clone()).await?;
         Ok(Self {
@@ -86,10 +88,11 @@ impl VoiceStore {
             thread_id,
             lane,
             activation,
-            initial: explicit_history.is_none().then_some(items),
+            initial: (!explicit).then_some(items),
             state: tokio::sync::Mutex::new(State {
                 known,
                 version,
+                explicit,
                 active: None,
                 uncertain_fields: None,
             }),
@@ -135,9 +138,7 @@ impl VoiceStore {
             }
         };
         let prepared = (|| {
-            // The lane as this store last saw it: the turn's own reading, edits included, is
-            // the newest.
-            let merged = if run.version() == state.version {
+            let merged = if state.explicit && run.version() == state.version {
                 local
             } else {
                 let mut stored = run
@@ -176,6 +177,7 @@ impl VoiceStore {
             .filter(|item| conversational(item))
             .map(|item| item.id().to_owned())
             .collect();
+        state.explicit = false;
         *self.lease.lock() = run.lease().cloned();
         state.active = Some(Active { thread, run, speeches: BTreeSet::from([speech]) });
         Ok(merged)

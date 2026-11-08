@@ -358,8 +358,6 @@ pub struct Registry {
     /// When each synthesis with a voice latency will hand over its first audio, until it has: work
     /// the fake owes on its own clock, which no answer of the case's releases.
     voice_due: std::sync::Mutex<BTreeMap<u32, tokio::time::Instant>>,
-    /// When the last storage answer the fake owes on its own clock is due: its seeded latency.
-    storage_due: std::sync::Mutex<lk_agents_abi::Ts>,
     chat_responses: std::sync::Mutex<BTreeMap<String, u32>>,
 }
 
@@ -380,7 +378,6 @@ impl Registry {
             refuse_cancel: std::sync::atomic::AtomicBool::new(false),
             session: std::sync::OnceLock::new(),
             voice_due: std::sync::Mutex::default(),
-            storage_due: std::sync::Mutex::new(lk_agents_abi::Ts::ZERO),
             chat_responses: std::sync::Mutex::default(),
         };
         (Arc::new(registry), receiver)
@@ -547,17 +544,6 @@ impl Registry {
         let now = tokio::time::Instant::now();
         let due = self.voice_due.lock().unwrap();
         due.values().filter(|at| **at > now).max().map(|at| *at - now)
-    }
-
-    pub(super) fn storage_due(&self, at: lk_agents_abi::Ts) {
-        let mut due = self.storage_due.lock().unwrap();
-        *due = (*due).max(at);
-    }
-
-    /// When the last storage answer still owed is due, if it is after `now`.
-    pub fn storage_due_after(&self, now: lk_agents_abi::Ts) -> Option<lk_agents_abi::Ts> {
-        let due = *self.storage_due.lock().unwrap();
-        (due > now).then_some(due)
     }
 
     pub(super) fn output_attachment(&self, output: u32, attached: bool) {

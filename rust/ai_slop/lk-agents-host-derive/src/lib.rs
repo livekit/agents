@@ -54,7 +54,7 @@ pub fn event(attr: TokenStream, item: TokenStream) -> TokenStream {
     telemetry_role("event", attr, item)
 }
 
-/// `#[metric(name, kind = Counter | Histogram, unit)]` on an `Attrs` struct: an instrument and its
+/// `#[metric(name, kind = Counter | Gauge | Histogram, unit)]` on an `Attrs` struct: an instrument and its
 /// labels.
 #[proc_macro_attribute]
 pub fn metric(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -158,8 +158,7 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
             }
         }
         if inner.is_some()
-            && (kind.is_none()
-                || !matches!(&v.fields, syn::Fields::Unnamed(f) if f.unnamed.len() == 1))
+            && (kind.is_none() || !matches!(&v.fields, syn::Fields::Unnamed(f) if f.unnamed.len() == 1))
         {
             return syn::Error::new_spanned(
                 &v.ident,

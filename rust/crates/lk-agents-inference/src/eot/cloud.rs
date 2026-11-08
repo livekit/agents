@@ -47,7 +47,7 @@ fn socket_error(err: TransportError) -> ApiError {
 
 /// `/eot` path (`transports.py:154`).
 fn eot_url(base_url: &str) -> String {
-    format!("{}/eot", lk_agents_net::transport::to_ws_url(base_url))
+    lk_agents_net::transport::join_url(&lk_agents_net::transport::to_ws_url(base_url), "eot")
 }
 
 fn now_timestamp() -> pbjson_types::Timestamp {

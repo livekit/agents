@@ -534,7 +534,7 @@ async fn a_tts_connection_reaches_the_sink_through_the_node() {
     let mut fold =
         lk_agents_voice::generation::machine::tts::SynthesisMetrics::new(tts.id(), 0, 0.0, 0.0);
     while let Some(frame) = source.next().await.unwrap() {
-        fold.note(&frame, || 1.0);
+        fold.note(&frame, 1.0);
     }
     let metrics = fold.finish("Hello there.", 2.0, false, "speech_1").expect("a record");
     let AgentMetrics::Tts(record) = &metrics else { panic!("a TTS record") };

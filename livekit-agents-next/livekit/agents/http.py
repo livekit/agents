@@ -1,34 +1,18 @@
-"""``AgentServer.http``: the agent's HTTP routes, served as an ASGI application.
-
-Routes are served at ``/agents/{agent_name}/{deployment}/{path}``: through LiveKit Cloud, or the
-worker's public listener where nothing routes them (a self-hosted server, the console). The Rust
-worker owns each connection: it parses the request, enforces limits and deadlines, frames the
-response and closes WebSockets. Python only adapts each parsed exchange to one ASGI call.
-
-The handler sees the preamble through ``request.state.lk_request`` (:class:`EndpointRequest`):
-the request id, whether the caller holds the call permission, the manifest route that matched,
-and whether the route is public (``configure_endpoint(path, public=True)``).
-The node verifies the caller's LiveKit token, asserts ``authorized`` here and forwards the token
-as sent, so a handler can verify what it grants.
-"""
-
 from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable, Iterable
-from functools import cached_property
 from typing import TypeVar
 
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import Response
-from starlette.routing import BaseRoute, Mount, Route, WebSocketRoute
-from starlette.types import ASGIApp, Message, Scope
+from starlette.routing import Route, WebSocketRoute
+from starlette.types import Message, Scope
 from starlette.websockets import WebSocket
 
 from . import _core
 from ._generated.worker_endpoint import (
-    EndpointOptions as EndpointOptions,
     EndpointRequest as EndpointRequest,
     ExchangeEvent,
     ExchangeEventBinary,
@@ -43,6 +27,7 @@ from ._generated.worker_endpoint import (
     ExchangeMessageClose,
     ExchangeMessageStart,
     ExchangeMessageText,
+    RequestHead,
 )
 from ._generated.worker_server import EndpointRoute
 
@@ -53,174 +38,78 @@ _HttpEndpointT = TypeVar("_HttpEndpointT", bound=_HttpEndpoint)
 _WebSocketEndpoint = Callable[[WebSocket], Awaitable[None]]
 _WebSocketEndpointT = TypeVar("_WebSocketEndpointT", bound=_WebSocketEndpoint)
 
-_ALL_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"]
-
 
 class AgentRoutes:
-    """The application's HTTP routes, as a Starlette application, served through the LiveKit
-    server at ``/agents/{agent_name}/{deployment}/{path}`` beside the text doors, which the
-    worker serves itself; a handler reads the request's preamble as ``request.state.lk_request``.
+    """HTTP and WebSocket routes served next to the agent, at
+    ``/agents/{agent_name}/{deployment}/{path}``::
 
-    Handlers are Starlette endpoints: a request in, a response out. Any ASGI application mounts.
+        @server.http.get("/token", public=True)
+        async def token(request: Request) -> Response:
+            return JSONResponse({"token": ...})
+
+    Handlers are Starlette endpoints. Routes require a LiveKit token unless ``public=True``.
+    ``request.state.lk_request`` holds the request's ``EndpointRequest``.
     """
 
     def __init__(self) -> None:
-        self._routes: list[BaseRoute] = []
-        self._app: ASGIApp | None = None
-        self._options: dict[str, EndpointOptions] = {}
-
-    # --- registration -------------------------------------------------------------------------
+        self._app = Starlette()
+        self._manifest: list[EndpointRoute] = []
 
     def route(
-        self, path: str, *, methods: Iterable[str], name: str | None = None
+        self, path: str, *, methods: Iterable[str], public: bool = False
     ) -> Callable[[_HttpEndpointT], _HttpEndpointT]:
         def decorator(func: _HttpEndpointT) -> _HttpEndpointT:
-            self.add_route(path, func, methods=list(methods), name=name)
+            route = Route(path, func, methods=list(methods))
+            # Starlette adds HEAD to a GET route
+            self._add(route, sorted(route.methods or ()), public)
             return func
 
         return decorator
 
-    def get(
-        self, path: str, *, name: str | None = None
-    ) -> Callable[[_HttpEndpointT], _HttpEndpointT]:
-        return self.route(path, methods=["GET"], name=name)
+    def get(self, path: str, *, public: bool = False) -> Callable[[_HttpEndpointT], _HttpEndpointT]:
+        return self.route(path, methods=["GET"], public=public)
 
     def post(
-        self, path: str, *, name: str | None = None
+        self, path: str, *, public: bool = False
     ) -> Callable[[_HttpEndpointT], _HttpEndpointT]:
-        return self.route(path, methods=["POST"], name=name)
+        return self.route(path, methods=["POST"], public=public)
 
-    def put(
-        self, path: str, *, name: str | None = None
-    ) -> Callable[[_HttpEndpointT], _HttpEndpointT]:
-        return self.route(path, methods=["PUT"], name=name)
+    def put(self, path: str, *, public: bool = False) -> Callable[[_HttpEndpointT], _HttpEndpointT]:
+        return self.route(path, methods=["PUT"], public=public)
 
     def patch(
-        self, path: str, *, name: str | None = None
+        self, path: str, *, public: bool = False
     ) -> Callable[[_HttpEndpointT], _HttpEndpointT]:
-        return self.route(path, methods=["PATCH"], name=name)
+        return self.route(path, methods=["PATCH"], public=public)
 
     def delete(
-        self, path: str, *, name: str | None = None
+        self, path: str, *, public: bool = False
     ) -> Callable[[_HttpEndpointT], _HttpEndpointT]:
-        return self.route(path, methods=["DELETE"], name=name)
+        return self.route(path, methods=["DELETE"], public=public)
 
     def websocket(
-        self, path: str, *, name: str | None = None
+        self, path: str, *, public: bool = False
     ) -> Callable[[_WebSocketEndpointT], _WebSocketEndpointT]:
         def decorator(func: _WebSocketEndpointT) -> _WebSocketEndpointT:
-            self.add_websocket_route(path, func, name=name)
+            self._add(WebSocketRoute(path, func), ["GET"], public)
             return func
 
         return decorator
 
-    def add_route(
-        self,
-        path: str,
-        endpoint: _HttpEndpoint | ASGIApp,
-        *,
-        methods: list[str],
-        name: str | None = None,
-    ) -> None:
-        self._add(Route(path, endpoint, methods=methods, name=name))
-
-    def add_websocket_route(
-        self, path: str, endpoint: _WebSocketEndpoint | ASGIApp, *, name: str | None = None
-    ) -> None:
-        self._add(WebSocketRoute(path, endpoint, name=name))
-
-    def mount(self, path: str, app: ASGIApp, *, name: str | None = None) -> None:
-        """Serve an ASGI application (FastAPI, another Starlette app, ...) under ``path``."""
-        self._add(Mount(path, app=app, name=name))
-
-    def configure_endpoint(self, path: str, *, public: bool = False) -> None:
-        """Set routing policy for one route, by its registered path."""
-        self._options[path] = EndpointOptions(public=public)
-
-    def _add(self, route: BaseRoute) -> None:
-        if self._app is not None:
-            raise RuntimeError("routes cannot be added once the agent server is running")
-        self._routes.append(route)
-
-    @property
-    def routes(self) -> list[BaseRoute]:
-        return list(self._routes)
-
-    # --- what the worker needs ----------------------------------------------------------------
-
-    @cached_property
-    def _server(self) -> _AsgiServer:
-        return _AsgiServer(self.app)
-
-    @property
-    def app(self) -> ASGIApp:
-        """The ASGI application, built on first use; routes are fixed from then on."""
-        if self._app is None:
-            self._app = Starlette(routes=self._routes)
-        return self._app
-
-    def manifest(self) -> list[EndpointRoute]:
-        """The endpoint manifest the worker registers, in route order as typed ``EndpointRoute``
-        records, as ``_core.Worker`` takes them.
-
-        Methods travel exactly as Starlette routes them (a GET route also answers HEAD); a
-        WebSocket route is a GET; a mount declares every method under ``{path:path}``.
-        """
-        manifest: list[EndpointRoute] = []
-        for route in self._routes:
-            if isinstance(route, Route):
-                path, methods = route.path, sorted(route.methods or ())
-            elif isinstance(route, WebSocketRoute):
-                path, methods = route.path, ["GET"]
-            elif isinstance(route, Mount):
-                path, methods = route.path.rstrip("/") + "/{path:path}", list(_ALL_METHODS)
-            else:
-                continue
-            opts = self._options.get(route.path, EndpointOptions())
-            manifest.append(
-                EndpointRoute(path=path, methods=methods, kind="http", public=opts.public)
-            )
-        return manifest
-
-
-class _AsgiServer:
-    """Run the ASGI application once per exchange the worker serves."""
-
-    def __init__(self, app: ASGIApp) -> None:
-        self._app = app
+    def _add(self, route: Route | WebSocketRoute, methods: list[str], public: bool) -> None:
+        self._app.router.routes.append(route)
+        self._manifest.append(
+            EndpointRoute(path=route.path, methods=methods, kind="http", public=public)
+        )
 
     async def _core_handle(self, exchange: _core.HttpExchange, request: EndpointRequest) -> None:
-        head = exchange.head
-        websocket = head.kind == "websocket"
-        scope: Scope = {
-            "type": head.kind,
-            "asgi": {"version": "3.0", "spec_version": "2.4"},
-            "http_version": head.http_version,
-            "scheme": {"http": "ws", "https": "wss"}[request.scheme]
-            if websocket
-            else request.scheme,
-            "path": head.path,
-            "raw_path": head.raw_path,
-            "query_string": head.query_string,
-            "root_path": "",
-            "headers": head.headers,
-            "client": None,  # The node supplies a host only, not a client socket address.
-            "server": None,
-            "state": {"lk_request": request},
-        }
-        if websocket:
-            scope["subprotocols"] = head.subprotocols
-            scope["extensions"] = {"websocket.http.response": {}}
-        else:
-            scope["method"] = head.method
-        connected = not websocket
+        scope = _scope(exchange.head, request)
+        pending: list[Message] = (
+            [{"type": "websocket.connect"}] if scope["type"] == "websocket" else []
+        )
 
         async def receive() -> Message:
-            nonlocal connected
-            if not connected:
-                connected = True
-                return {"type": "websocket.connect"}
-            return _event(await exchange.receive())
+            return pending.pop() if pending else _event(await exchange.receive())
 
         async def send(message: Message) -> None:
             if (outgoing := _message(message)) is not None:
@@ -231,6 +120,30 @@ class _AsgiServer:
         except Exception:
             logger.exception("endpoint application failed: %s", request.request_id)
             raise
+
+
+def _scope(head: RequestHead, request: EndpointRequest) -> Scope:
+    scope: Scope = {
+        "type": head.kind,
+        "asgi": {"version": "3.0", "spec_version": "2.4"},
+        "http_version": head.http_version,
+        "scheme": request.scheme,
+        "path": head.path,
+        "raw_path": head.raw_path,
+        "query_string": head.query_string,
+        "root_path": "",
+        "headers": head.headers,
+        "client": None,  # the node supplies a host only, not a client socket address
+        "server": None,
+        "state": {"lk_request": request},
+    }
+    if head.kind == "websocket":
+        scope["scheme"] = {"http": "ws", "https": "wss"}[request.scheme]
+        scope["subprotocols"] = head.subprotocols
+        scope["extensions"] = {"websocket.http.response": {}}
+    else:
+        scope["method"] = head.method
+    return scope
 
 
 def _event(event: ExchangeEvent) -> Message:
@@ -259,16 +172,19 @@ def _message(message: Message) -> ExchangeMessage | None:
                 data=bytes(message.get("body", b"")), more=message.get("more_body", False)
             )
         case "http.response.trailers":
-            return None
+            return None  # the worker writes its own completion trailers
         case "websocket.accept":
             return ExchangeMessageAccept(
                 subprotocol=message.get("subprotocol"),
                 headers=_headers(message.get("headers", ())),
             )
         case "websocket.send":
-            if (data := message.get("bytes")) is not None:
+            data, text = message.get("bytes"), message.get("text")
+            if data is not None and text is None:
                 return ExchangeMessageBinary(data=bytes(data))
-            return ExchangeMessageText(text=message.get("text") or "")
+            if text is not None and data is None:
+                return ExchangeMessageText(text=text)
+            raise RuntimeError("websocket.send carries exactly one of bytes and text")
         case "websocket.close":
             return ExchangeMessageClose(
                 code=message.get("code", 1000), reason=message.get("reason") or ""

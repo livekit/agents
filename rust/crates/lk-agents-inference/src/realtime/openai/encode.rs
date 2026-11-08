@@ -66,7 +66,7 @@ pub fn encode(
 fn session_update(event_id: &str, config: SessionConfig, dialect: &Dialect) -> ClientEvent {
     ClientEvent::SessionUpdate {
         event_id: event_id.to_owned(),
-        session: Box::new(Session::new(config, dialect.provider, dialect.protocol)),
+        session: Session::new(config, dialect.provider, dialect.protocol),
     }
 }
 
@@ -80,7 +80,7 @@ pub fn tools_update(
         event_id,
         SessionConfig {
             model: Some(model.to_owned()),
-            tools: Some(tools.iter().map(wire::tool_spec).collect()),
+            tools: Some(tools.iter().map(|tool| wire::tool_spec(tool, dialect.provider)).collect()),
             ..Default::default()
         },
         dialect,

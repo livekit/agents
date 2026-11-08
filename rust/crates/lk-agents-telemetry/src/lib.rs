@@ -7,12 +7,15 @@
 //!   [`span::Trace`].
 //! - [`ScopedSpan`]: a span of async work under the process [`Tracer`], ended when its scope
 //!   exits.
+//!
+//! [`process`] holds the current value of the process's own instruments, for a pull exporter.
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 // `#[span]` functions name the span API by its crate path, here as in every caller.
 extern crate self as lk_agents_telemetry;
 
+pub mod process;
 mod scoped;
 pub mod span;
 

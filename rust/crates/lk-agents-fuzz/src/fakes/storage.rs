@@ -135,7 +135,6 @@ impl VoiceStorage for FakeVoiceStorage {
             self.deliver(&events, VoiceStorageEvent::LeaseLost { speech });
         }
         let until = self.clock.now().saturating_add(latency);
-        self.registry.storage_due(until);
         // The storage request outlives a cancelled caller, just as an issued commit does.
         let world = self.registry.world.clone();
         world.spawn_detached(async move {
@@ -158,7 +157,6 @@ impl VoiceStorage for FakeVoiceStorage {
             operation: StorageOperation::Acquire,
         });
         let until = self.clock.now().saturating_add(latency);
-        self.registry.storage_due(until);
         Box::pin(async move {
             self.clock.wait_until(until).await;
             let result = if lost {

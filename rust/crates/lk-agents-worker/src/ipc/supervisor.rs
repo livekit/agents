@@ -206,7 +206,7 @@ const QUEUE: usize = 16;
 enum Command {
     Supervise,
     Initialize(Hello, oneshot::Sender<Result<Duration, InitError>>),
-    StartJob(Box<StartJob>, oneshot::Sender<Result<(), StartJobError>>),
+    StartJob(StartJob, oneshot::Sender<Result<(), StartJobError>>),
 }
 
 /// Whether a driver input still applies once the runner exited.
@@ -317,7 +317,7 @@ impl RunnerSupervisor {
         validate_start_job(&job)?;
         let (reply, result) = oneshot::channel();
         self.commands
-            .send(Command::StartJob(Box::new(job), reply))
+            .send(Command::StartJob(job, reply))
             .await
             .map_err(|_| StartJobError::Closed)?;
         result.await.unwrap_or(Err(StartJobError::Closed))
@@ -520,7 +520,7 @@ impl Driver {
         match command {
             Command::Supervise => self.input(AfterExit::Dropped, Self::supervise),
             Command::Initialize(hello, reply) => self.initialize_requested(hello, reply),
-            Command::StartJob(job, reply) => self.job_requested(*job, reply),
+            Command::StartJob(job, reply) => self.job_requested(job, reply),
         }
     }
 

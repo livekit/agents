@@ -184,6 +184,8 @@ pub struct LogRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstrumentKind {
     Counter,
+    /// The last value set.
+    Gauge,
     Histogram,
 }
 

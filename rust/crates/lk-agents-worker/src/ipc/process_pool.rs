@@ -125,6 +125,7 @@ impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
             num_idle_processes,
             initialize_timeout: secs(options.initialize_timeout),
             close_timeout: secs(options.close_timeout),
+            instruments: &telemetry::process::INSTRUMENTS,
         };
         let spawner = TokioSpawner::new(
             (env.runtime)().map_err(|error| WorkerError::Failed(error.to_string()))?,

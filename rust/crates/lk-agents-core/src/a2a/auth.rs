@@ -9,13 +9,9 @@ pub fn selected_token<'a>(
     thread_grant: Option<&'a str>,
 ) -> Result<Option<&'a str>, AuthError> {
     if let Some(header) = authorization {
-        let (scheme, token) = header
-            .split_once(' ')
-            .ok_or_else(|| AuthError::Unauthorized("invalid Authorization header".into()))?;
-        if !scheme.eq_ignore_ascii_case("bearer") || token.trim().is_empty() {
-            return Err(AuthError::Unauthorized("invalid Authorization header".into()));
-        }
-        return Ok(Some(token.trim()));
+        return lk_agents_abi::a2a::auth::bearer_token(header)
+            .map(Some)
+            .ok_or_else(|| AuthError::Unauthorized("invalid Authorization header".into()));
     }
     match thread_grant {
         Some(token) if token.trim().is_empty() => {

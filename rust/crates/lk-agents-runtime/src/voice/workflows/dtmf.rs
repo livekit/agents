@@ -20,10 +20,8 @@ pub async fn send_dtmf_events(
     let outcome = async {
         let room = room.rtc().ok_or(DtmfSendError::NotConnected)?;
         for event in &events {
-            let code = dtmf_code(event).map_err(|error| DtmfSendError::Key {
-                event: event.clone(),
-                error: error.to_string(),
-            })?;
+            let code = dtmf_code(event)
+                .map_err(|error| DtmfSendError::Key { event: event.clone(), error })?;
             room.local()
                 .publish_dtmf(&telemetry::Cx::NONE, u32::from(code), event.clone())
                 .await

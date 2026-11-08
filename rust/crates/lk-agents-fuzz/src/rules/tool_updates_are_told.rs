@@ -5,7 +5,7 @@
 //! `<call_id>_update_<n>`), and the final as `<call_id>_final`.
 //!
 //! The close may cut a tool before its updates land, and a cancelled tool says nothing more.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use lk_agents_voice::{
     events::{SessionEvent, ToolEndStatus, ToolLifecycle},
@@ -25,7 +25,7 @@ impl Rule for ToolUpdatesAreTold {
     const CONTRACT: Contract = Contract {
         id: "tool_updates_are_told",
         guarantee: "Every update and the final result a background tool sends are told to the host, even when they arrive before its step's join heard it detach.",
-        examples: &[an_update_told, a_first_update_detaches],
+        examples: &[an_update_told],
         counterexamples: &[an_update_dropped],
         probe: None,
     };
@@ -36,21 +36,8 @@ impl Rule for ToolUpdatesAreTold {
         }
         // Per call: updates sent, and finals sent.
         let mut sent: BTreeMap<String, (u32, u32, u32)> = BTreeMap::new();
-        let mut reported = BTreeSet::new();
         for applied in r.inputs_view().accepted() {
-            let (tool, progress, end) = match &applied.input {
-                Input::ToolAnswered { tool, answer: ToolAnswer::Detached, .. } => {
-                    reported.insert(tool.nth);
-                    continue;
-                }
-                Input::ToolUpdate { tool, progress, end } => (tool, progress, end),
-                _ => continue,
-            };
-            // A body's first report from the host is its detach (`ctx.update()`) or its end,
-            // either told under the call's own id.
-            if reported.insert(tool.nth) {
-                continue;
-            }
+            let Input::ToolUpdate { tool, progress, end } = &applied.input else { continue };
             let Some(Detail::Tool { call_id, .. }) =
                 r.resource(Kind::Tool, tool.nth).map(|t| t.detail().clone())
             else {
@@ -132,23 +119,6 @@ fn sent() -> Authored {
 /// The update arrives before the detach is heard, and is told after it.
 fn an_update_told() -> Recording {
     sent().journal(update("c1")).journal(update("c1_update_1")).done()
-}
-
-/// The body's first `ctx.update()` is its detach, told under the call's own id; its second is
-/// its first later update.
-fn a_first_update_detaches() -> Recording {
-    let progress = |text: &str| Input::ToolUpdate {
-        tool: Ref::new(0),
-        progress: Some(AgentText(text.into())),
-        end: ToolAnswer::Return,
-    };
-    Authored::new()
-        .tool_call("c1", 1)
-        .sent(progress("started"))
-        .sent(progress("half way"))
-        .journal(update("c1"))
-        .journal(update("c1_update_1"))
-        .done()
 }
 
 /// The update arrives before the detach is heard, and is lost.

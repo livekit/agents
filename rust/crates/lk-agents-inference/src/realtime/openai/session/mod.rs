@@ -72,18 +72,18 @@ impl Connect {
         Ok(match &self.auth {
             Auth::Bearer(key) => {
                 let mut headers = Headers::new();
-                headers.set("User-Agent", "LiveKit Agents");
-                headers.set("Authorization", format!("Bearer {key}"));
+                headers.insert("User-Agent", "LiveKit Agents");
+                headers.insert("Authorization", format!("Bearer {key}"));
                 headers
             }
             Auth::Azure { api_key, entra_token } => {
                 let mut h = Headers::new();
-                h.set("User-Agent", "LiveKit Agents");
+                h.insert("User-Agent", "LiveKit Agents");
                 if let Some(token) = entra_token {
-                    h.set("Authorization", format!("Bearer {token}"));
+                    h.insert("Authorization", format!("Bearer {token}"));
                 }
                 if let Some(key) = api_key {
-                    h.set("api-key", key.clone());
+                    h.insert("api-key", key.clone());
                 }
                 h
             }
@@ -290,7 +290,11 @@ impl OpenAIRealtime {
             .with_label(label.clone())
             .with_provider(self.metrics_provider())
             .with_wall_anchor(
-                self.clock.wall() - Duration::from_nanos(self.clock.now().as_nanos()),
+                // The wall time of `Ts::ZERO`; the epoch rather than a panic if it underflows.
+                self.clock
+                    .wall()
+                    .checked_sub(Duration::from_nanos(self.clock.now().as_nanos()))
+                    .unwrap_or(std::time::UNIX_EPOCH),
             );
 
         let (input, input_rx) = media_queue::audio(

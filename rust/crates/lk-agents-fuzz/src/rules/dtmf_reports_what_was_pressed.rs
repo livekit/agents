@@ -19,7 +19,7 @@ use crate::{
     check::{Check, Contract, Rule, Subject},
     drive::{Case, RoomSetup, Setup},
     input::{Count, DtmfInput, DtmfKey, Input, Millis, RoomIn},
-    record::{Answer, Detail, Kind, Observed, Recording},
+    record::{Answer, Detail, Kind, Recording},
 };
 
 pub struct DtmfReportsWhatWasPressed;
@@ -33,7 +33,6 @@ impl Rule for DtmfReportsWhatWasPressed {
             stopped_after_stop,
             a_guest_is_not_heard,
             a_press_racing_the_close,
-            a_press_left_with_its_participant,
         ],
         counterexamples: &[
             wrong_digits,
@@ -43,7 +42,6 @@ impl Rule for DtmfReportsWhatWasPressed {
             a_guests_press_heard,
             a_press_dropped_before_the_close,
             a_press_dropped_before_a_draining_close,
-            a_press_dropped_before_a_rejoin,
         ],
         probe: Some(two_collections),
     };
@@ -79,36 +77,21 @@ impl Rule for DtmfReportsWhatWasPressed {
                 a.accepted && matches!(a.input, Input::Dtmf { input: DtmfInput::Digit, .. })
             })
             .collect();
-        // The person rejoining or leaving ends the room's participant that pressed. The room link
-        // drops the events of a participant replaced before it took them, a press with them: a
-        // press is owed only when the session was listening to the person as they left.
-        let links: Vec<_> = r
-            .journal_where(|step| match step {
-                Step::Room(RoomStep::Link(RoomLinkStep::Linked)) => Some(true),
-                Step::Room(RoomStep::Link(RoomLinkStep::Unlinked { .. })) => Some(false),
-                _ => None,
-            })
-            .collect();
-        let listened_as_they_left = |pressed: Observed| {
-            let left = inputs.sent().iter().find(|a| {
-                a.accepted
-                    && pressed < a.at
-                    && matches!(a.input, Input::Room { event: RoomIn::Linked | RoomIn::Unlinked })
-            });
-            left.is_none_or(|left| {
-                links.iter().take_while(|(at, _)| *at < left.at).last().is_some_and(|(_, l)| *l)
-            })
-        };
         // The room link forwards a press on its own task: a close that tore room I/O down in the
         // driver's first turn after the press may beat it, as the room's events and a failing
         // provider race in a real call. A press the driver had a whole turn to take before the
         // session finished closing is owed, a close that is still draining included.
-        let before_the_close = |pressed: Observed| {
-            closing.is_none_or(|c| pressed < c)
-                && closed.is_none_or(|d| {
-                    inputs.driver_turn_after(pressed).is_some_and(|t| t.ended.is_some_and(|e| e < d))
-                })
-        };
+        let owed = presses
+            .iter()
+            .filter(|a| {
+                closing.is_none_or(|c| a.at < c)
+                    && closed.is_none_or(|d| {
+                        inputs
+                            .driver_turn_after(a.at)
+                            .is_some_and(|t| t.ended.is_some_and(|e| e < d))
+                    })
+            })
+            .count();
         let heard: Vec<_> = journaled.iter().map(|(_, key)| *key).collect();
         let pressed_keys: Vec<_> = presses
             .iter()
@@ -117,28 +100,12 @@ impl Rule for DtmfReportsWhatWasPressed {
                 _ => unreachable!(),
             })
             .collect();
-        // The keys heard are the person's in order, skipping only presses dropped with their
-        // participant, and no owed press is missing.
-        let mut unheard = heard.iter().peekable();
-        let mut stopped = false;
-        let mut owed_missed = false;
-        for (a, key) in presses.iter().zip(&pressed_keys) {
-            let listened = listened_as_they_left(a.at);
-            if !stopped && unheard.peek() == Some(&key) {
-                unheard.next();
-            } else if stopped || listened {
-                stopped = true;
-                owed_missed |= listened && before_the_close(a.at);
-            }
-        }
-        let owed = presses.iter().filter(|a| listened_as_they_left(a.at) && before_the_close(a.at));
-        let owed = owed.count();
         check.expect(
             Subject::Session,
-            !owed_missed && unheard.next().is_none(),
+            heard.len() >= owed && pressed_keys.starts_with(&heard),
             format!(
-                "the session heard keys {heard:?}; the person pressed {pressed_keys:?} ({owed} owed \
-                 before the close)"
+                "the session heard keys {heard:?}; the person pressed {pressed_keys:?} ({owed} before \
+                 the close)"
             ),
         );
         for call in host.api_calls() {
@@ -372,30 +339,6 @@ fn a_press_dropped_before_a_draining_close() -> Recording {
         .sent(Input::Advance { ms: Millis(20) })
         .journal(Step::Close(CloseStep::Requested { reason, drain: true }))
         .sent(Input::Advance { ms: Millis(20) })
-        .done()
-}
-
-fn linked() -> Step {
-    Step::Room(RoomStep::Link(RoomLinkStep::Linked))
-}
-
-/// The person rejoined before the room link took their first join: that participant's press left
-/// with it.
-fn a_press_left_with_its_participant() -> Recording {
-    collecting(0)
-        .sent(key(DtmfKey::One))
-        .sent(Input::Room { event: RoomIn::Linked })
-        .journal(linked())
-        .done()
-}
-
-/// The session was listening to the person when they pressed and rejoined, and never heard it.
-fn a_press_dropped_before_a_rejoin() -> Recording {
-    collecting(0)
-        .journal(linked())
-        .sent(key(DtmfKey::One))
-        .sent(Input::Room { event: RoomIn::Linked })
-        .journal(linked())
         .done()
 }
 

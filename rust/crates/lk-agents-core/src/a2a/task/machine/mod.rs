@@ -1029,8 +1029,7 @@ impl TaskMachine {
     ) -> Result<Option<Operation>, Finish> {
         let row = match completion {
             Completion::Task(Some(row)) if answered(&row) => {
-                let answer =
-                    Answer::row(row.task_id.clone(), Some(row), Some(TaskReason::NotWritten));
+                let answer = Answer::row(row.task_id.clone(), Some(row), Some(TaskReason::NotWritten));
                 return Err(Finish::Answer(Box::new(Answer {
                     run_id: self.run_id.take(),
                     ..answer

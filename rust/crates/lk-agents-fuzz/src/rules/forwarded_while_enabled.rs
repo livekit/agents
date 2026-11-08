@@ -144,13 +144,6 @@ impl Rule for ForwardedWhileEnabled {
             }
             for tag in heard.tags {
                 let Tag::Mic { mic, chunk } = *tag else { continue };
-                // A tag no push made by then is a sample the leg's own processing made (a
-                // resampler ringing past the last chunk of a microphone's tag range), not audio
-                // that got past a closed input.
-                let pushed = pushed_at.get(&(mic, chunk));
-                if pushed.is_none_or(|pushes| pushes.iter().all(|pushed| *pushed >= heard.at)) {
-                    continue;
-                }
                 let late =
                     pushed_enabled.get(&(mic, chunk)).is_some_and(|pushed| *pushed < heard.at);
                 let raced = pushed_at.get(&(mic, chunk)).is_some_and(|pushes| {
@@ -220,10 +213,9 @@ fn expect_reached(
     (mic, chunk): (u32, u16),
     pushed: Observed,
 ) {
-    // Frames move through the pump on the driver's next turn that runs the session to rest (an
-    // await answered first ends its turn before the pump ran, seed 11116). Until it has had one,
-    // nothing has moved the frame and nothing can be said about where it went.
-    let Some(turn) = inputs.rested_turn_after(pushed) else { return };
+    // Frames move through the pump on the driver's next turn. Until it has had one, nothing has
+    // moved the frame and nothing can be said about where it went.
+    let Some(turn) = inputs.driver_turn_after(pushed) else { return };
     let end = turn.ended.unwrap_or(Observed::END);
     let way = std::cell::OnceCell::new();
     let on_its_way = || *way.get_or_init(|| on_its_way(inference, (mic, chunk), pushed).max(end));

@@ -25,7 +25,7 @@ from .._generated.worker_ipc import JobCompletion, JobRunnerOptions
 from .._generated.worker_server import RunningJobInfo
 from ..job import JobContext
 from ..log import logger
-from . import child, prometheus
+from . import child
 
 
 class _JobThread:
@@ -149,7 +149,7 @@ class ProcPool(
     """The warm job processes. The core keeps ``num_idle_processes`` warm, hands a job the next
     one, retries a failed spawn or launch and owns each process's state
     (``_core.ProcPool``, ``_core.JobSupervisor``); this class makes the launchers and turns the
-    core's notifications into events and Prometheus metrics."""
+    core's notifications into events."""
 
     def __init__(
         self,
@@ -212,11 +212,6 @@ class ProcPool(
     @property
     def target_idle_processes(self) -> int:
         return self._pool.target_idle_processes
-
-    def emit(self, event: Any, *args: Any) -> None:
-        """The core's one notification of a process's step."""
-        prometheus.process_event(event, *args)
-        super().emit(event, *args)
 
     async def _core_create(self) -> JobLauncher:
         return JobLauncher(**self._launcher_args)

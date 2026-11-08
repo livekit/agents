@@ -217,6 +217,7 @@ pub fn role(role: &str, args: TokenStream, item: TokenStream) -> syn::Result<Tok
             let (name, unit) = (&metric.name, &metric.unit);
             let kind = match metric.kind {
                 InstrumentKind::Counter => quote!(Counter),
+                InstrumentKind::Gauge => quote!(Gauge),
                 InstrumentKind::Histogram => quote!(Histogram),
             };
             let bounds = metric.bounds.as_ref().map_or_else(|| quote!(&[]), |b| quote!(#b));
@@ -483,9 +484,17 @@ mod tests {
             ("span", quote!(name = "x", parent = A, colour = "red"), "#[span(name"),
             ("span", quote!(name = "x", name = "y", parent = A), "twice"),
             ("metric", quote!(name = "m", unit = "s"), "needs `kind`"),
-            ("metric", quote!(name = "m", kind = Gauge, unit = "s"), "`Counter` or `Histogram`"),
+            (
+                "metric",
+                quote!(name = "m", kind = Meter, unit = "s"),
+                "`Counter`, `Gauge` or `Histogram`",
+            ),
             ("metric", quote!(name = "m", kind = Histogram, unit = "s"), "needs `bounds`"),
-            ("metric", quote!(name = "m", kind = Counter, unit = "", bounds = B), "no `bounds`"),
+            (
+                "metric",
+                quote!(name = "m", kind = Counter, unit = "", bounds = B),
+                "only a histogram",
+            ),
             ("record", quote!(scope = "chat_history"), "needs `body`"),
         ] {
             let out = role(r, args, item.clone());

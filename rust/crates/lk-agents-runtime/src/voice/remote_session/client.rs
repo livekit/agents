@@ -4,9 +4,7 @@
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::hash::BuildHasher;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;
@@ -61,38 +59,12 @@ pub(super) struct Client {
     /// `_pending_requests` (`remote_session.py:981`), by request id.
     pub(super) pending: Mutex<HashMap<String, oneshot::Sender<proto::SessionResponse>>>,
     recv: Arc<TaskSet>,
-    ids: IdMint,
 }
 
 #[derive(Default)]
 struct ClientState {
     started: bool,
     transport: Option<Arc<dyn SessionTransport>>,
-}
-
-/// Request ids as `utils.shortuuid("req_")` spells them. Random, since clients in one room share a
-/// response stream.
-struct IdMint {
-    keys: std::collections::hash_map::RandomState,
-    counter: AtomicU64,
-}
-
-impl IdMint {
-    const ALPHABET: &'static [u8] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-    fn new() -> Self {
-        IdMint { keys: Default::default(), counter: AtomicU64::new(0) }
-    }
-
-    fn mint(&self) -> String {
-        let mut n = self.keys.hash_one(self.counter.fetch_add(1, Ordering::Relaxed));
-        let mut out = String::from("req_");
-        for _ in 0..11 {
-            out.push(Self::ALPHABET[(n % 57) as usize] as char);
-            n /= 57;
-        }
-        out
-    }
 }
 
 struct Unregister<'a> {
@@ -117,7 +89,6 @@ impl RemoteSession {
                 state: Mutex::new(ClientState::default()),
                 pending: Mutex::default(),
                 recv: Arc::default(),
-                ids: IdMint::new(),
             }),
         }
     }
@@ -173,7 +144,8 @@ impl RemoteSession {
         let sh = &*self.shared;
         let transport = sh.state.lock().transport.clone().ok_or(RequestError::NotStarted)?;
         let kind = request_kind(&request).as_str();
-        let id = sh.ids.mint();
+        // Random, since clients in one room share a response stream.
+        let id = lk_agents_net::strings::shortuuid("req_");
         let (tx, rx) = oneshot::channel();
         if sh.pending.lock().insert(id.clone(), tx).is_some() {
             // unreachable with a working id mint; the displaced caller sees `Cancelled`

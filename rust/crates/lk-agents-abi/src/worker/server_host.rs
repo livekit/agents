@@ -105,12 +105,9 @@ pub trait ServerHost: Send + Sync {
         cx: &crate::telemetry::Cx,
         target: u32,
     ) -> crate::BoxFuture<'_, Result<(), HostError>>;
-    #[host(await, name = "_core_worker_load")]
-    fn worker_load(
-        &self,
-        cx: &crate::telemetry::Cx,
-        load: f64,
-    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    /// Answered by a responsive host on every load interval: `/` reads a silent one as stuck.
+    #[host(await, name = "_core_heartbeat")]
+    fn heartbeat(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_join_jobs")]
     fn join_jobs(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_close")]
@@ -121,12 +118,6 @@ pub trait ServerHost: Send + Sync {
         &self,
         cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<usize, HostError>>;
-    /// The Prometheus exposition and its content type.
-    #[host(await, name = "_core_metrics")]
-    fn metrics(
-        &self,
-        cx: &crate::telemetry::Cx,
-    ) -> crate::BoxFuture<'_, Result<(String, String), HostError>>;
 }
 
 #[crate::host(class(name = "ServerRuntime"))]

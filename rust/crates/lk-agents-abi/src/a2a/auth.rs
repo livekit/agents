@@ -116,6 +116,14 @@ pub enum AuthError {
     Forbidden(String),
 }
 
+/// The token of an `Authorization: Bearer <token>` header, trimmed; `None` for another scheme or
+/// an empty token.
+pub fn bearer_token(header: &str) -> Option<&str> {
+    let (scheme, token) = header.split_once(' ')?;
+    let token = token.trim();
+    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then_some(token)
+}
+
 #[crate::host(class(name = "_core_Credentials"))]
 pub trait Credentials: Send + Sync + Sized + 'static {
     #[host(new)]
@@ -217,4 +225,19 @@ pub trait AuthPermissions: Send + Sync + Sized + 'static {
     /// created in the `console` scope.
     #[host(function)]
     fn _core_unauthenticated_principal() -> AuthPrincipal;
+}
+
+#[cfg(test)]
+mod tests {
+    // Catches: one `Authorization` reader accepting what another refuses: a padded token, another
+    // scheme, a scheme's case, or an empty token.
+    #[test]
+    fn a_bearer_token_is_trimmed_and_only_bearer_counts() {
+        use super::bearer_token;
+        assert_eq!(bearer_token("Bearer abc"), Some("abc"));
+        assert_eq!(bearer_token("bearer  abc "), Some("abc"));
+        for header in ["Basic abc", "Bearer", "Bearer   ", "abc"] {
+            assert_eq!(bearer_token(header), None, "{header}");
+        }
+    }
 }

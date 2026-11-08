@@ -163,10 +163,6 @@ def callable_name(callable: Any) -> str:
 
 
 class JobContext:
-    _PARTICIPANT_ENTRYPOINT_CALLBACK = Callable[
-        ["JobContext", rtc.RemoteParticipant], Coroutine[None, None, None]
-    ]
-
     # private ctor
     def __init__(
         self,
@@ -183,13 +179,11 @@ class JobContext:
         self._server_env = server_env
         self._info = info
         self._room = room
-        # the participant entrypoints, the connection, the API calls and the recording's setup
+        # the connection, the API calls and the recording's setup
         self._run = run
-        self._participant_entrypoints: list[Callable[..., Any]] = []
         # every session started for the job, which the job closes; the first is the primary one,
         # which it reports
         self._sessions: list[VoiceSession] = []
-        self._room.on("participant_connected", self._participant_available)
 
         self._log_fields: dict[str, JsonValue] = {}
         self._log_filter = _ContextLogFieldsFilter(self)
@@ -598,9 +592,6 @@ class JobContext:
         self._room.on(
             "participant_disconnected", lambda p: self._run.participant_left(dict(p.attributes))
         )
-        for p in self._room.remote_participants.values():
-            self._participant_available(p)
-
         _apply_auto_subscribe_opts(self._room, auto_subscribe)
 
     def delete_room(self, room_name: str | None = None) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
@@ -716,30 +707,8 @@ class JobContext:
     def shutdown(self, reason: str = "user requested") -> None:
         self._run.shutdown(reason or "user requested")
 
-    def add_participant_entrypoint(
-        self,
-        entrypoint_fnc: Callable[[JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]],
-        *,
-        kind: list[rtc.ParticipantKind.ValueType]
-        | rtc.ParticipantKind.ValueType = DEFAULT_PARTICIPANT_KINDS,
-    ) -> None:
-        """Adds an entrypoint function to be run when a participant joins the room. In cases where
-        the participant has already joined, the entrypoint will be run immediately. Multiple unique entrypoints can be
-        added and they will each be run in parallel for each participant.
-        """  # noqa: E501
-        if entrypoint_fnc in self._participant_entrypoints:
-            raise ValueError("entrypoints cannot be added more than once")
-        self._participant_entrypoints.append(entrypoint_fnc)
-        kinds = kind if isinstance(kind, list) else [kind]
-        self._run.add_participant_entrypoint(
-            cast(Any, entrypoint_fnc), kinds, getattr(entrypoint_fnc, "__name__", "")
-        )
-
     def init_recording(self, options: RecordingOptions) -> None:
         self._run.init_recording(dict(options))  # type: ignore[arg-type]
-
-    def _participant_available(self, p: rtc.RemoteParticipant) -> None:
-        self._run.participant_joined(self, p, p.identity, p.kind)
 
     def token_claims(self) -> Claims:
         from livekit import api

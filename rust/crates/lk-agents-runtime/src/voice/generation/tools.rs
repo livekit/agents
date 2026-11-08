@@ -252,12 +252,7 @@ async fn run_body(
         _guard: guard,
     };
     site.bodies.spawn(speech, "host tool body", body.run(span, progress, tx));
-    // The close cancels the body, which owns its cleanup from there: a body refusing its
-    // cancellation runs to the close's bound on its own, its call answered as cancelled.
-    tokio::select! { biased;
-        report = rx => report.unwrap_or_else(|_| ToolOutcome::Cancelled.into()),
-        () = shared.closing.cancelled() => ToolOutcome::Cancelled.into(),
-    }
+    rx.await.unwrap_or_else(|_| ToolOutcome::Cancelled.into())
 }
 
 /// Ends the body's progress tracking once the body has finished, on every path.
@@ -289,8 +284,7 @@ struct ToolBody {
 
 impl ToolBody {
     /// Answers the step with the body's report, or with its first progress update; then the
-    /// body's own report reaches the core as a tool update. An update already sent when the body
-    /// has also returned came first: the body sends it before returning.
+    /// body's own report reaches the core as a tool update.
     async fn run(
         self,
         span: Option<telemetry::ScopedSpan<telemetry::FunctionTool>>,
@@ -300,8 +294,8 @@ impl ToolBody {
         let execute = self.execute(span);
         tokio::pin!(execute);
         let first = tokio::select! { biased;
-            update = &mut progress => Err(update),
             report = &mut execute => Ok(report),
+            update = &mut progress => Err(update),
         };
         match first {
             Ok(report) => {

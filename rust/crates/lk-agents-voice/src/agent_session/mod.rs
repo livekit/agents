@@ -33,7 +33,6 @@ pub(crate) use closing::{ClosePhase, Closing};
 pub use commands::*;
 pub use host_events::*;
 pub use machine::driver::*;
-pub use spans::failed_start;
 pub use time::*;
 
 /// State retained across agent changes. The `VoiceDriver` orchestrates it together with the

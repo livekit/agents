@@ -451,14 +451,7 @@ pub fn follow_up(
 /// The task of a message for a thread that does not exist: failed `thread-not-found`, never
 /// stored.
 pub fn unknown_thread_task(task_id: &str, lane: &str, now_ms: i64, message_id: String) -> TaskRow {
-    crate::a2a::unpersisted_failed(
-        task_id,
-        lane,
-        None,
-        TaskReason::ThreadNotFound,
-        now_ms,
-        message_id,
-    )
+    crate::a2a::unpersisted_failed(task_id, lane, None, TaskReason::ThreadNotFound, now_ms, message_id)
 }
 
 /// The answer to a message whose task failed before any storage held it (an unknown thread):

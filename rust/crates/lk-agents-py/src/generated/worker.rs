@@ -761,30 +761,9 @@ fn _extract_job_run_new_session_aclose_timeout(
 }
 type JobRunNewSessionAcloseTimeoutInput = f64;
 
-fn _extract_job_run_add_participant_entrypoint_kinds(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<JobRunAddParticipantEntrypointKindsInput> {
-    obj.try_iter().and_then(|items| {
-        items
-            .map(|item| {
-                let item = item?;
-                crate::py_values::number_from_py::<i32>(item.as_any(), "kinds")
-            })
-            .collect::<PyResult<Vec<_>>>()
-    })
-}
-type JobRunAddParticipantEntrypointKindsInput = ::std::vec::Vec<i32>;
-
-fn _extract_job_run_participant_joined_kind(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<JobRunParticipantJoinedKindInput> {
-    crate::py_values::number_from_py::<i32>(obj.as_any(), "kind")
-}
-type JobRunParticipantJoinedKindInput = i32;
-
 /// A job's run: what ends the job (the first reason wins), the entrypoint's supervision, the
-/// order and bounds of the shutdown, the participant entrypoints, the room connected once, the
-/// application calls in flight and the recording's setup.
+/// order and bounds of the shutdown, the room connected once, the application calls in flight
+/// and the recording's setup.
 #[pyclass(frozen, name = "JobRun", module = "livekit.agents._core")]
 pub struct JobRun(pub(crate) ::std::sync::Arc<JobRunImpl>);
 
@@ -893,57 +872,6 @@ impl JobRun {
                 .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
-    }
-
-    /// `entrypoint` (named `name`) runs for each joining participant of one of `kinds`.
-    #[pyo3(signature = (entrypoint, kinds, name))]
-    fn add_participant_entrypoint(
-        &self,
-        py: Python<'_>,
-        entrypoint: Bound<'_, PyAny>,
-        #[pyo3(from_py_with = _extract_job_run_add_participant_entrypoint_kinds)]
-        kinds: JobRunAddParticipantEntrypointKindsInput,
-        name: ::std::string::String,
-    ) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        let entrypoint =
-            crate::generated::worker::ParticipantEntrypointProxy::from_host(entrypoint.as_any())?;
-        py.detach(|| {
-            <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::add_participant_entrypoint(
-                &self.0, entrypoint, kinds, name,
-            )
-        });
-        Ok(())
-    }
-
-    /// A participant joined, or was in the room when it connected; `job` is the `JobContext`.
-    #[pyo3(signature = (job, participant, identity, kind))]
-    fn participant_joined(
-        &self,
-        py: Python<'_>,
-        job: Bound<'_, PyAny>,
-        participant: Bound<'_, PyAny>,
-        identity: ::std::string::String,
-        #[pyo3(from_py_with = _extract_job_run_participant_joined_kind)]
-        kind: JobRunParticipantJoinedKindInput,
-    ) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        let job = crate::py_objects::object_ref_from_py(job.as_any())?;
-        let participant = crate::py_objects::object_ref_from_py(participant.as_any())?;
-        let context = crate::py_calls::entered();
-        let cx = crate::py_calls::entry_cx();
-        py.detach(|| {
-            <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::participant_joined(
-                &self.0,
-                job,
-                participant,
-                identity,
-                kind,
-                context,
-                cx,
-            )
-        });
-        Ok(())
     }
 
     #[pyo3(signature = (attributes))]
@@ -1472,7 +1400,7 @@ impl ServerRuntime {
 
 // Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
 
-/// [`::lk_agents_abi::worker::http::EndpointHandler`] over a host `livekit.agents.http._AsgiServer`.
+/// [`::lk_agents_abi::worker::http::EndpointHandler`] over a host `livekit.agents.http.AgentRoutes`.
 #[derive(Clone)]
 pub struct EndpointHandlerProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
@@ -3169,108 +3097,6 @@ impl ::lk_agents_abi::worker::ipc_host::JobCall for JobCallProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/worker/ipc_host.rs.
 
-/// [`::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint`] over a host `collections.abc.Callable`.
-#[derive(Clone)]
-pub struct ParticipantEntrypointProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
-}
-
-impl ParticipantEntrypointProxy {
-    /// A registered native class as itself, any other host object behind this proxy.
-    pub fn from_host(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint>>
-    {
-        if let Some(native) = crate::py_objects::native::<
-            dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint,
-        >(obj)
-        {
-            return Ok(native);
-        }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
-    pub fn in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint>>
-    {
-        if let Some(native) = crate::py_objects::native::<
-            dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint,
-        >(obj)
-        {
-            return Ok(native);
-        }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
-    }
-
-    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
-    pub fn owned(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint>>
-    {
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    fn take(
-        obj: &Bound<'_, PyAny>,
-        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
-    ) -> PyResult<Self> {
-        let _ = context;
-        Ok(ParticipantEntrypointProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
-    }
-}
-
-impl ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint for ParticipantEntrypointProxy {
-    fn run<'a>(
-        &'a self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-        context: &::lk_agents_abi::invoke::CallContext,
-        job: ::lk_agents_abi::HostRef,
-        participant: ::lk_agents_abi::HostRef,
-    ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
-    {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let job_arg = job;
-        let participant_arg = participant;
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "ParticipantEntrypoint.__call__",
-            context,
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    crate::py_objects::object_ref_to_py(py, job_arg)?,
-                    crate::py_objects::object_ref_to_py(py, participant_arg)?,
-                ];
-                Ok((
-                    host.bind(py).getattr("__call__")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(())
-            })
-        })
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/worker/ipc_host.rs.
-
 /// [`::lk_agents_abi::worker::ipc_host::PoolCallbacks`] over a host `livekit.agents.ipc.ProcPool`.
 #[derive(Clone)]
 pub struct PoolCallbacksProxy {
@@ -3699,25 +3525,22 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
         })
     }
 
-    fn worker_load(
+    fn heartbeat(
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,
-        load: f64,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::sync::Arc::clone(&self.host);
-        let load_arg = load;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "ServerHost._core_worker_load",
+            "ServerHost._core_heartbeat",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [::pyo3::IntoPyObjectExt::into_bound_py_any(load_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_worker_load")?,
+                    host.bind(py).getattr("_core_heartbeat")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3847,48 +3670,6 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 };
                 let o = out.value.bind(py);
                 let out = (crate::py_values::number_from_py::<usize>(o.as_any(), "ServerHost._core_health")).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(out)
-            })
-        })
-    }
-
-    fn metrics(
-        &self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-    ) -> ::lk_agents_abi::BoxFuture<
-        '_,
-        ::std::result::Result<
-            (::std::string::String, ::std::string::String),
-            ::lk_agents_abi::errors::HostError,
-        >,
-    > {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "ServerHost._core_metrics",
-            &self.context,
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((
-                    host.bind(py).getattr("_core_metrics")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "ServerHost._core_metrics"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((item_0.extract::<::std::string::String>())?, (item_1.extract::<::std::string::String>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

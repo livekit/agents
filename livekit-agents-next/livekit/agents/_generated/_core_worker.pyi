@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Self
 
 from livekit.agents._core import Role
-from livekit.agents.http import _AsgiServer
+from livekit.agents.http import AgentRoutes
 from livekit.agents.ipc import JobLauncher, ProcPool as HostProcPool
 from livekit.agents.ipc.child import _JobProc
 from livekit.agents.worker import _ServerCallbacks
@@ -177,8 +177,8 @@ class ProcPool:
 
 class JobRun:
     """A job's run: what ends the job (the first reason wins), the entrypoint's supervision, the
-    order and bounds of the shutdown, the participant entrypoints, the room connected once, the
-    application calls in flight and the recording's setup.
+    order and bounds of the shutdown, the room connected once, the application calls in flight
+    and the recording's setup.
     """
     def __new__(
         cls,
@@ -217,21 +217,6 @@ class JobRun:
         """Awaits `connect()` once: a call while it runs waits for it, a call after it connected
         returns at once, a failed one leaves the next call to try again.
         """
-    def add_participant_entrypoint(
-        self,
-        entrypoint: Callable[[object, object], Awaitable[None]],
-        kinds: Sequence[int],
-        name: str,
-    ) -> None:
-        """`entrypoint` (named `name`) runs for each joining participant of one of `kinds`."""
-    def participant_joined(
-        self,
-        job: object,
-        participant: object,
-        identity: str,
-        kind: int,
-    ) -> None:
-        """A participant joined, or was in the room when it connected; `job` is the `JobContext`."""
     def participant_left(self, attributes: Mapping[str, str]) -> None: ...
     async def api_call(
         self,
@@ -312,7 +297,7 @@ class ServerRuntime:
         has_text_doors: bool,
         routes: Sequence[EndpointRoute],
         has_load_fnc: bool,
-        endpoints: _AsgiServer,
+        endpoints: AgentRoutes,
         text_doors: Sequence[_core_A2ADoor],
     ) -> None:
         """Start the job processes and the health listener and, unless `unregistered`, register;

@@ -158,10 +158,24 @@ pub fn to_ws_url(base_url: &str) -> String {
     }
 }
 
+/// `path` under `base`, one `/` between them whether or not `base` ends with one.
+pub fn join_url(base: &str, path: &str) -> String {
+    format!("{}/{}", base.trim_end_matches('/'), path.trim_start_matches('/'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use lk_agents_abi::errors::ApiErrorKind;
+
+    // Catches: a base URL ending in `/` producing `//` before the path (`wss://x/v1//eot`).
+    #[test]
+    fn join_url_puts_one_slash_between_base_and_path() {
+        for base in ["wss://x/v1", "wss://x/v1/"] {
+            assert_eq!(join_url(base, "eot"), "wss://x/v1/eot");
+            assert_eq!(join_url(base, "/eot"), "wss://x/v1/eot");
+        }
+    }
 
     // Catches: a global `replace("http", "ws")` corrupting a later `http` in the URL.
     #[test]

@@ -48,14 +48,10 @@ impl VoiceDriver {
         }
     }
 
-    /// The speech's tasks reported its turn: it no longer holds the lane, and the interruption
-    /// watchdog, there for tasks that never report, no longer ends it: its receipt does.
-    fn turn_reported(&mut self, speech: SpeechId) {
+    /// The speech reported its turn, or the lane is lost: it no longer holds the lane.
+    fn storage_reported(&mut self, speech: SpeechId) -> bool {
         self.clear_deadline_if_set(Timer::LaneRelease(speech));
-        self.session.storage.holding.remove(&speech);
-        if self.clear_deadline_if_set(Timer::InterruptionTimeout(speech)) {
-            self.record_trace(crate::trace::SpeechStep::WatchdogCleared { speech });
-        }
+        self.session.storage.holding.remove(&speech)
     }
 
     /// The speech left the loop: one that never reported its turn releases the lane within
@@ -79,7 +75,7 @@ impl VoiceDriver {
         outcome: TurnOutcome,
         interrupted: bool,
     ) {
-        self.turn_reported(speech);
+        self.storage_reported(speech);
         self.session.storage.pending.insert(speech, (outcome, interrupted));
         self.record_effect(VoiceEffect::StorageCommit {
             speech,
@@ -99,7 +95,7 @@ impl VoiceDriver {
         speech: SpeechId,
         error: Box<lk_agents_abi::errors::ProviderError>,
     ) {
-        self.turn_reported(speech);
+        self.storage_reported(speech);
         self.session.storage.failures.insert(speech, error);
         self.record_effect(VoiceEffect::StorageAbort(speech));
     }

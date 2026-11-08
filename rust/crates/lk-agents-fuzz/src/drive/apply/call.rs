@@ -239,8 +239,13 @@ impl Run {
                 else {
                     return None;
                 };
-                let progress = progress.as_ref().map(|AgentText(m)| m.as_str());
-                let outcome = crate::fakes::tools::update_outcome(progress, *end);
+                let outcome = match progress {
+                    Some(AgentText(m)) => {
+                        ToolOutcome::Update { message: m.clone(), raw: m.clone() }
+                    }
+                    None if *end == crate::input::ToolAnswer::Detached => ToolOutcome::Nothing,
+                    None => crate::fakes::tools::outcome_of(*end, "the tool finished"),
+                };
                 api.tool_update(invocation_id.clone(), *operation, call_id.clone(), outcome.into())
                     .ok()?;
             }
@@ -415,7 +420,9 @@ impl Run {
             Input::SetVideoInput { attach } => api
                 .set_video_input(attach.then(|| fakes::FakeVideoInput::new(registry) as _))
                 .ok()?,
-            Input::SetIoEnabled { leg, enabled } => api.set_io_enabled(*leg, *enabled).ok()?,
+            Input::SetIoEnabled { leg, enabled } => {
+                api.set_io_enabled(*leg, *enabled).ok()?
+            }
             Input::SetAudioOutput { attach } => api
                 .set_audio_output(attach.then(|| {
                     fakes::FakeAudioOutput::new(

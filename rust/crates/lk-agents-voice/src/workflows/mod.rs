@@ -149,13 +149,12 @@ impl WorkflowChecks for WorkflowRules {
     }
 
     fn dtmf_code(symbol: String) -> Result<u8, UnknownDtmfSymbol> {
-        machine::dtmf::dtmf_code(&symbol)
+        machine::dtmf::dtmf_code(&symbol).map_err(|_| UnknownDtmfSymbol(symbol))
     }
 
     fn format_dtmf(symbols: Vec<String>) -> Result<String, UnknownDtmfSymbol> {
         // the space-joined digits that fill the DTMF read-back's `{digits}` hole
-        let keys =
-            symbols.iter().map(|s| machine::dtmf::parse(s)).collect::<Result<Vec<_>, _>>()?;
+        let keys = machine::dtmf::parse_all(&symbols, str::to_owned).map_err(UnknownDtmfSymbol)?;
         Ok(machine::dtmf::format_dtmf(&keys))
     }
 }

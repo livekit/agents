@@ -28,12 +28,7 @@ impl Rule for RetriesFollowConnOptions {
         id: "retries_follow_conn_options",
         guarantee: "Model and voice requests are retried within the session's conn_options, each failure reported recoverable exactly when retried, and a failed sentence of a voice that does not stream is synthesized again.",
         examples: &[retried_once_and_reported, sentence_synthesized_again],
-        counterexamples: &[
-            retried_past_budget,
-            recoverable_but_not_retried,
-            sentence_dropped,
-            retry_reported_twice,
-        ],
+        counterexamples: &[retried_past_budget, recoverable_but_not_retried, sentence_dropped],
         probe: None,
     };
 
@@ -46,19 +41,9 @@ impl Rule for RetriesFollowConnOptions {
         let internal = r.internal_view();
         // (speech, leg) -> (retries armed, failures reported recoverable)
         let mut tally: BTreeMap<(u64, ProviderKind), (u32, u32)> = BTreeMap::new();
-        let mut armed = std::collections::BTreeSet::new();
         for (_, step) in internal.steps() {
             match step {
-                Step::Generation(GenerationStep::RetryArmed { speech, leg, attempt, at }) => {
-                    // A sentence's own budget repeats attempt numbers, never at the same instant.
-                    check.expect(
-                        Subject::Speech(speech.0),
-                        armed.insert((speech.0, *leg, *attempt, *at)),
-                        format!(
-                            "{leg:?} attempt {attempt} of speech {} was reported twice",
-                            speech.0
-                        ),
-                    );
+                Step::Generation(GenerationStep::RetryArmed { speech, leg, attempt, .. }) => {
                     check.expect(
                         Subject::Speech(speech.0),
                         *attempt <= budget(*leg),
@@ -179,17 +164,6 @@ fn retried_past_budget() -> Recording {
         .journal(armed(1))
         .journal(error(true))
         .journal(armed(2))
-        .done()
-}
-
-/// One failure reported twice: the request's own report and its stream's retry hook.
-fn retry_reported_twice() -> Recording {
-    Authored::new()
-        .conn(budgets(), false)
-        .journal(error(true))
-        .journal(armed(1))
-        .journal(error(true))
-        .journal(armed(1))
         .done()
 }
 

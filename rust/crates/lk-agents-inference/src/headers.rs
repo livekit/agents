@@ -32,7 +32,7 @@ pub fn default_inference_url(inference_url: Option<&str>, livekit_url: Option<&s
         return url.to_owned();
     }
 
-    if livekit_url.unwrap_or_default().contains(".staging.livekit.cloud") {
+    if livekit_url.is_some_and(lk_agents_net::strings::is_staging_cloud_url) {
         return STAGING_INFERENCE_URL.to_owned();
     }
 
@@ -42,10 +42,10 @@ pub fn default_inference_url(inference_url: Option<&str>, livekit_url: Option<&s
 /// The native identification: `User-Agent` and, for a nonempty class, the priority.
 fn native_headers(user_agent: &str, inference_class: Option<&str>) -> Headers {
     let mut headers = Headers::new();
-    headers.set(HEADER_USER_AGENT, user_agent);
+    headers.insert(HEADER_USER_AGENT, user_agent);
     // `if inference_class:` -- an empty class sends no priority header.
     if let Some(class) = inference_class.filter(|class| !class.is_empty()) {
-        headers.set(HEADER_INFERENCE_PRIORITY, class);
+        headers.insert(HEADER_INFERENCE_PRIORITY, class);
     }
     headers
 }
@@ -82,11 +82,11 @@ pub fn identity_headers(
         ("X-LiveKit-Agent-ID", nonempty(job.agent_sid)),
     ] {
         if let Some(value) = value {
-            headers.set(name, value);
+            headers.insert(name, value);
         }
     }
     for (name, value) in job.headers {
-        headers.set(name, value);
+        headers.insert(name, value);
     }
     headers
 }
@@ -114,8 +114,7 @@ pub fn gateway_headers(
 ) -> Headers {
     let mut headers = identification_headers(identification, inference_class, provider);
     headers.remove("X-LiveKit-Session-ID");
-    headers.remove("Authorization");
-    headers.set("Authorization", format!("Bearer {bearer}"));
+    headers.insert("Authorization", format!("Bearer {bearer}"));
     headers
 }
 

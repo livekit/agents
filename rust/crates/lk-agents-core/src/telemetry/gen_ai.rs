@@ -11,7 +11,7 @@ use lk_agents_abi::telemetry::spans::inference::{
 use lk_agents_abi::{ChatItem, ToDictOptions, ToolSpec};
 use serde_json::Value;
 
-use crate::agent_run::planning::INSTRUCTIONS_MESSAGE_ID;
+use crate::request::INSTRUCTIONS_MESSAGE_ID;
 
 /// `gen_ai_provider_name` (`trace_types.py`): a plugin's `provider` in the GenAI registry's
 /// spelling; one outside the registry keeps its own.

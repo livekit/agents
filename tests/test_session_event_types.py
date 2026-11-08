@@ -17,9 +17,7 @@ def _models_by_name() -> dict[str, type]:
     models = {}
     for model in typing.get_args(union):
         fields = getattr(model, "model_fields", None)
-        default = (
-            fields["type"].default if fields else model.__dataclass_fields__["type"].default
-        )
+        default = fields["type"].default if fields else model.__dataclass_fields__["type"].default
         models[default] = model
     return models
 

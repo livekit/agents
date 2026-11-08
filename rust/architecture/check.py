@@ -196,10 +196,6 @@ HOST_ENTRY_FILES = {
     "rust/crates/lk-agents-py/src/py_calls.rs",
     "rust/crates/lk-agents-py/src/py_streams.rs",
     "rust/crates/lk-agents-py/src/py_logging.rs",
-    # The entries' own tests, beside them.
-    "rust/crates/lk-agents-py/src/py_calls_tests.rs",
-    "rust/crates/lk-agents-py/src/py_streams_tests.rs",
-    "rust/crates/lk-agents-py/src/py_streams_boundary_tests.rs",
 }
 HOST_CALL = re.compile(
     r"\.call(?:0|1|_method|_method0|_method1)?\("
@@ -498,14 +494,16 @@ def inline_sql_violations(root: Path, paths: list[str]) -> dict[str, int]:
         if generated(text):
             continue
         code = NOT_CODE.sub(blank, text)
-        allowed = [(m.start(), brace_end(code, m.end() - 1)) for m in STATEMENT_MACRO.finditer(code)]
+        allowed = [
+            (m.start(), brace_end(code, m.end() - 1)) for m in STATEMENT_MACRO.finditer(code)
+        ]
         for module in TEST_MODULE.finditer(code):
             if module.group(1) == "{":
                 allowed.append((module.start(), brace_end(code, module.end() - 1)))
         count = 0
         for literal in NOT_CODE.finditer(text):
             body = literal.group(0)
-            if body[0] not in "\"rb" or not SQL_DML.search(body):
+            if body[0] not in '"rb' or not SQL_DML.search(body):
                 continue
             if body.lstrip('br#"').lstrip().startswith("CREATE"):
                 continue

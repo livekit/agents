@@ -88,8 +88,8 @@ impl AmdConfig {
         let defaults = AmdConfig::default();
         let secs = |key: &'static str, v: Option<f64>, default: Duration| match v {
             None => Ok(default),
-            Some(s) if s.is_finite() && s >= 0.0 => Ok(Duration::from_secs_f64(s)),
-            Some(s) => Err(InvalidDuration { key, value: s }),
+            Some(s) => lk_agents_abi::types::connect::duration_from_seconds(s)
+                .ok_or(InvalidDuration { key, value: s }),
         };
         let given = &kw.detection;
         macro_rules! secs {

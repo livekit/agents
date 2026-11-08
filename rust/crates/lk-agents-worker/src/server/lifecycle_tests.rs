@@ -75,10 +75,9 @@ impl ServerHost for Host {
     ) -> BoxFuture<'_, Result<(), HostError>> {
         async { Ok(()) }.boxed()
     }
-    fn worker_load(
+    fn heartbeat(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        _: f64,
     ) -> BoxFuture<'_, Result<(), HostError>> {
         async { Ok(()) }.boxed()
     }
@@ -102,12 +101,6 @@ impl ServerHost for Host {
         _cx: &lk_agents_abi::telemetry::Cx,
     ) -> BoxFuture<'_, Result<usize, HostError>> {
         async { Ok(0) }.boxed()
-    }
-    fn metrics(
-        &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-    ) -> BoxFuture<'_, Result<(String, String), HostError>> {
-        async { Err("no metrics".into()) }.boxed()
     }
 }
 

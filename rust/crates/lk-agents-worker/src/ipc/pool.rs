@@ -93,6 +93,8 @@ pub struct PoolOptions {
     pub num_idle_processes: usize,
     pub initialize_timeout: Duration,
     pub close_timeout: Duration,
+    /// Where the pool records the worker's jobs and warm processes.
+    pub instruments: &'static telemetry::process::Instruments,
 }
 
 /// Why a job found no process to run on.
@@ -146,6 +148,7 @@ enum ReservationState {
 struct Process<P> {
     executor: Option<Executor<P>>,
     phase: Phase,
+    spawned: Instant,
     /// The reservation this process is created, initialized or reserved for.
     request: Option<ReservationId>,
     /// The job it was reserved for, released when it retires.
@@ -198,6 +201,14 @@ struct State<P> {
 }
 
 impl<P> State<P> {
+    /// The jobs running, the warm processes ready and the target, as the worker's gauges.
+    fn record(&self, instruments: &telemetry::process::Instruments) {
+        let jobs = self.processes.values().filter(|p| p.phase == Phase::Running).count();
+        instruments.set::<telemetry::WorkerJobs>(jobs as f64);
+        instruments.set::<telemetry::WorkerIdleProcesses>(self.ready.len() as f64);
+        instruments.set::<telemetry::WorkerIdleProcessesTarget>(self.target_idle as f64);
+    }
+
     fn reservation(&self, id: ReservationId) -> Option<ReservationState> {
         self.requests.get(&id).map(|request| request.state.clone())
     }
@@ -366,6 +377,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
             }
             let result = f(self, &mut st);
             self.allocate(&mut st);
+            st.record(self.0.opts.instruments);
             if st.closed {
                 self.0.closed.cancel();
                 self.0.idle_ready.send_replace(Readiness::Closed);
@@ -512,6 +524,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
             Process {
                 executor: None,
                 phase: Phase::Creating,
+                spawned: Instant::now(),
                 request: None,
                 job: None,
                 closed: false,
@@ -589,6 +602,8 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
             entry.phase = Phase::Ready;
             entry.request = None;
             entry.joining = true;
+            let ready = entry.spawned.elapsed().as_secs_f64();
+            pool.0.opts.instruments.observe::<telemetry::WorkerProcessReadyDuration>(ready);
             st.initializing.remove(&id);
             st.ready.push_back(id);
             pool.join(st, id, Duration::ZERO);

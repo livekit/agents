@@ -109,13 +109,6 @@ impl StreamInput<AudioFrame> for RecognitionInput {
         Err(self.closed_error())
     }
 
-    fn filler(&self, item: AudioFrame) -> Result<(), ProviderError> {
-        if !self.control.stop.token().is_cancelled() && self.audio.filler(item) {
-            return Ok(());
-        }
-        Err(self.closed_error())
-    }
-
     fn flush(&self) -> Result<(), ProviderError> {
         match self.audio.flush() {
             Some(flushed) if !self.control.stop.token().is_cancelled() => {

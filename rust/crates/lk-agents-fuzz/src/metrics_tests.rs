@@ -48,7 +48,8 @@ mod llm_tokens_per_second {
                 _ => None,
             })
             .collect();
-        // The window is timed on the session's clock: the two text chunks are 0.5 s apart.
+        // Each chunk's wall stamp is a microsecond past the last (wall time strictly increases), and
+        // the model streams a word a chunk, so the window reads a hair over 0.5 s.
         let expected = COMPLETION_TOKENS as f64 / 0.5;
         assert!(
             matches!(rates.as_slice(), [Some(rate)] if (rate - expected).abs() < 1e-3),
@@ -465,62 +466,5 @@ mod user_turn_metrics {
         let m = &users[0];
         assert!(m.started_speaking_at.is_some() && m.stopped_speaking_at.is_some(), "{m:?}");
         assert!(m.end_of_turn_delay.is_some() && m.transcription_delay.is_some(), "{m:?}");
-    }
-}
-
-mod metrics_stamped_on_the_session_wall {
-    //! A burst of model output at one instant leaves the wall clock where the session is.
-    use lk_agents_abi::metrics::base::AgentMetrics;
-    use lk_agents_fuzz::drive::{Run, Setup, simulate};
-    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
-    use lk_agents_voice::events::SessionEvent;
-
-    // Catches: the LLM and TTS folds read the wall clock for every chunk though they keep only the
-    // first chunk's reading. A wall reading at one instant is nudged a microsecond past the last,
-    // so a voice handing over a thousand chunks at once stamped the metrics after it milliseconds
-    // past the session's clock (seed 2342: 43 us past its end).
-    #[test]
-    fn a_burst_of_chunks_stamps_the_session_instant() {
-        let setup = Setup { avatar: true, ..Setup::default() };
-        let words =
-            "Your balance is twelve dollars and the next payment is due Friday. ".repeat(40);
-        let inputs = [
-            Input::GenerateReply { user_input: None, instructions: None, allow: None },
-            Input::Advance { ms: Millis(800) },
-            Input::LlmText { chat: Ref::new(0), text: AgentText(words) },
-            // The voice hands over the whole reply at once, then the model ends at that instant.
-            Input::Advance { ms: Millis(0) },
-            Input::LlmEnd { chat: Ref::new(0) },
-            Input::Advance { ms: Millis(100) },
-        ];
-        let run = simulate(async {
-            let mut run = Run::start(&setup, 0, Default::default()).await;
-            for input in &inputs {
-                run.apply(input).await;
-            }
-            run
-        });
-        let epoch = lk_agents_abi::unix_secs(lk_agents_abi::simulated_epoch());
-        let stamps: Vec<_> = run
-            .record
-            .host_view()
-            .events()
-            .into_iter()
-            .filter_map(|(at, ev)| match ev {
-                SessionEvent::MetricsCollected { metrics, .. } => match metrics.as_ref() {
-                    AgentMetrics::Llm(m) => Some((at.at_ms, m.timestamp - epoch)),
-                    AgentMetrics::Tts(m) => Some((at.at_ms, m.timestamp - epoch)),
-                    _ => None,
-                },
-                _ => None,
-            })
-            .collect();
-        assert!(!stamps.is_empty(), "the reply is metered");
-        for (at_ms, stamp) in stamps {
-            assert!(
-                stamp * 1000.0 <= at_ms as f64 + 1.0,
-                "stamped {stamp} s, reported at {at_ms} ms"
-            );
-        }
     }
 }

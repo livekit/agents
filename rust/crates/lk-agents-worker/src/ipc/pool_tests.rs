@@ -2,7 +2,9 @@ use super::*;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use lk_agents_abi::telemetry::decl::MetricDecl;
 use lk_agents_abi::worker::types::{AcceptArguments, JobInfo, RunningJobInfo};
+use lk_agents_telemetry::process::{Instruments, Value};
 
 type Executor = super::super::process_pool::Executor<Numbered>;
 type ProcPool = super::ProcPool<Numbered>;
@@ -18,6 +20,8 @@ struct Host {
     /// A launch never completes (to cancel it mid-way).
     slow_launch: bool,
     slow_initialize: bool,
+    /// How long each initialize takes.
+    initialize_time: Duration,
     close_gate: Option<watch::Sender<bool>>,
     join_receipt: Option<watch::Sender<bool>>,
     reap_gate: Option<watch::Sender<bool>>,
@@ -96,6 +100,7 @@ impl Executors for Host {
         if self.slow_initialize {
             std::future::pending::<()>().await;
         }
+        tokio::time::sleep(self.initialize_time).await;
         if self.fail_init { Err(HostError::new("init failed")) } else { Ok(()) }
     }
     async fn launch(
@@ -178,12 +183,19 @@ impl Executors for Host {
 }
 
 fn pool(host: &Arc<Host>, idle: usize) -> ProcPool {
+    measured_pool(host, idle).0
+}
+
+/// A pool recording into instruments of its own, which no other test writes.
+fn measured_pool(host: &Arc<Host>, idle: usize) -> (ProcPool, &'static Instruments) {
+    let instruments = Box::leak(Box::new(Instruments::new()));
     let opts = PoolOptions {
         num_idle_processes: idle,
         initialize_timeout: Duration::from_secs(1),
         close_timeout: Duration::from_secs(1),
+        instruments,
     };
-    ProcPool::new(host.clone(), opts)
+    (ProcPool::new(host.clone(), opts), instruments)
 }
 
 fn count(host: &Host, event: ProcessEvent) -> usize {
@@ -658,4 +670,103 @@ mod generated_sequences {
         assert_eq!(launched.len(), 3 - usize::from(cancel), "seed {seed}");
         assert_eq!(retired.len(), host.created(), "process leaked: seed {seed}");
     }
+}
+
+fn gauge<M: MetricDecl>(instruments: &Instruments) -> f64 {
+    match instruments.snapshot().into_iter().find(|(i, _)| i.name == M::NAME) {
+        Some((_, Value::Gauge(value))) => value,
+        other => panic!("{} is not a recorded gauge: {other:?}", M::NAME),
+    }
+}
+
+/// `(jobs, idle, idle target)` as the pool last recorded them.
+fn gauges(instruments: &Instruments) -> (f64, f64, f64) {
+    (
+        gauge::<telemetry::WorkerJobs>(instruments),
+        gauge::<telemetry::WorkerIdleProcesses>(instruments),
+        gauge::<telemetry::WorkerIdleProcessesTarget>(instruments),
+    )
+}
+
+async fn until(what: &str, mut done: impl FnMut() -> bool) {
+    let waited = tokio::time::timeout(Duration::from_secs(5), async {
+        while !done() {
+            tokio::time::sleep(REFILL_INTERVAL).await;
+        }
+    });
+    waited.await.unwrap_or_else(|_| panic!("timed out waiting until {what}"));
+}
+
+// Catches: a job counted before it runs or still counted after its process exits, a warm process
+// counted while it initializes or after a job took it, or a target change not recorded.
+#[tokio::test(start_paused = true)]
+async fn the_pool_records_its_jobs_and_warm_processes_as_they_change() {
+    let host = Arc::new(Host::default());
+    let (pool, instruments) = measured_pool(&host, 2);
+    pool.start().await.unwrap();
+    assert_eq!(gauges(instruments), (0.0, 2.0, 2.0), "warm, no job");
+
+    pool.launch_job(job("j1"), telemetry::Cx::NONE).await.unwrap();
+    let (jobs, idle, _) = gauges(instruments);
+    assert_eq!((jobs, idle), (1.0, 1.0), "the job took a warm process");
+    until("the taken process is replaced", || gauges(instruments) == (1.0, 2.0, 2.0)).await;
+
+    pool.set_target_idle(1);
+    pool.launch_job(job("j2"), telemetry::Cx::NONE).await.unwrap();
+    until("the second job runs at the lower target", || gauges(instruments) == (2.0, 1.0, 1.0))
+        .await;
+
+    host.close(&host.process(0)).await.unwrap();
+    until("the first job's exit is counted", || gauge::<telemetry::WorkerJobs>(instruments) == 1.0)
+        .await;
+    pool.aclose().await;
+    assert_eq!(gauges(instruments).1, 0.0, "a closed pool keeps no warm process");
+}
+
+// Catches: a job counted while its launch is still in flight (it may yet fail), or the process
+// it reserved still counted as warm.
+#[tokio::test(start_paused = true)]
+async fn a_job_counts_only_once_its_launch_completed() {
+    let host = Arc::new(Host { slow_launch: true, ..Host::default() });
+    let (pool, instruments) = measured_pool(&host, 1);
+    pool.start().await.unwrap();
+    let launching = tokio::spawn({
+        let pool = pool.clone();
+        async move { pool.launch_job(job("j1"), telemetry::Cx::NONE).await }
+    });
+    until("the launch reserved the warm process", || count(&host, ProcessEvent::Ready) == 2).await;
+    let (jobs, idle, _) = gauges(instruments);
+    assert_eq!((jobs, idle), (0.0, 1.0), "reserved for a launch: neither running nor warm");
+    launching.abort();
+    let _ = launching.await;
+    pool.aclose().await;
+}
+
+// Catches: a ready time measured from the wrong start (initialize only, or the job's launch), a
+// process that never became ready observed, or each ready process not observed exactly once.
+#[tokio::test(start_paused = true)]
+async fn each_ready_process_records_its_spawn_to_ready_duration() {
+    let host = Arc::new(Host { initialize_time: Duration::from_millis(1500), ..Host::default() });
+    let (pool, instruments) = measured_pool(&host, 2);
+    pool.start().await.unwrap();
+    pool.launch_job(job("j1"), telemetry::Cx::NONE).await.unwrap();
+    until("the taken process is replaced", || count(&host, ProcessEvent::Ready) == 3).await;
+    let ready = instruments
+        .snapshot()
+        .into_iter()
+        .find(|(i, _)| i.name == <telemetry::WorkerProcessReadyDuration as MetricDecl>::NAME)
+        .map(|(_, value)| value);
+    // Bounds 0.1, 0.5, 1, 2, 5, 10: every 1.5 s initialize lands in the `le="2"` bucket.
+    assert_eq!(ready, Some(Value::Histogram { buckets: vec![0, 0, 0, 3, 0, 0, 0], sum: 4.5 }));
+    pool.aclose().await;
+
+    let failing = Arc::new(Host { fail_init: true, ..Host::default() });
+    let (pool, instruments) = measured_pool(&failing, 1);
+    let _ = pool.start().await;
+    let observed = instruments
+        .snapshot()
+        .iter()
+        .any(|(i, _)| i.name == <telemetry::WorkerProcessReadyDuration as MetricDecl>::NAME);
+    assert!(!observed, "a process that failed to initialize is not a ready one");
+    pool.aclose().await;
 }

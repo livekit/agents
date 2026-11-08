@@ -45,6 +45,7 @@ pub enum SpanKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstrumentKind {
     Counter,
+    Gauge,
     Histogram,
 }
 
@@ -195,19 +196,20 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
             "metric" => {
                 let kind = match kind.as_ref().map(|k| k.to_string()).as_deref() {
                     Some("Counter") => InstrumentKind::Counter,
+                    Some("Gauge") => InstrumentKind::Gauge,
                     Some("Histogram") => InstrumentKind::Histogram,
                     Some(_) => {
                         return Err(syn::Error::new_spanned(
                             kind,
-                            "a metric kind is `Counter` or `Histogram`",
+                            "a metric kind is `Counter`, `Gauge` or `Histogram`",
                         ));
                     }
                     None => return Err(missing("kind")),
                 };
                 match (kind, &bounds) {
                     (InstrumentKind::Histogram, None) => return Err(missing("bounds")),
-                    (InstrumentKind::Counter, Some(b)) => {
-                        return Err(syn::Error::new_spanned(b, "a counter has no `bounds`"));
+                    (InstrumentKind::Counter | InstrumentKind::Gauge, Some(b)) => {
+                        return Err(syn::Error::new_spanned(b, "only a histogram has `bounds`"));
                     }
                     _ => {}
                 }

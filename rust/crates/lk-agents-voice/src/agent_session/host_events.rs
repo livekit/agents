@@ -77,6 +77,7 @@ impl HookCall {
             | HookCall::FunctionToolsExecuted { id, .. } => *id,
         }
     }
+
 }
 
 /// A hook request asks the host to run user code and answer; it is not just an event to log.
@@ -294,9 +295,7 @@ impl ErrorEvent {
             source: self.source,
             recoverable: self.recoverable,
             label: match &self.error {
-                lk_agents_abi::errors::ProviderError::Host { .. } => {
-                    lk_agents_abi::voice::events::ErrorOrigin::Host
-                }
+                lk_agents_abi::errors::ProviderError::Host { .. } => lk_agents_abi::voice::events::ErrorOrigin::Host,
                 _ => lk_agents_abi::voice::events::ErrorOrigin::Engine,
             },
             error: self.error.clone(),

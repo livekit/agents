@@ -147,8 +147,7 @@ class SQLiteStorage(Storage):
     """Threads in a local directory: ``registry.sqlite`` and ``threads/<id>.sqlite``.
 
     Args:
-        directory: Defaults to ``~/.livekit/agent-threads/<project-id>``, or
-            ``$LIVEKIT_AGENT_THREADS_DIR/<project-id>`` when that is set. A relative path
+        directory: Defaults to ``~/.livekit/agent-threads/<project-id>``. A relative path
             resolves against the working directory once; job processes receive the absolute path.
         project_id: Local project namespace; defaults to ``"default"``.
         lease_ttl, renew_interval: As for ``AgentDBStorage``, for processes sharing the

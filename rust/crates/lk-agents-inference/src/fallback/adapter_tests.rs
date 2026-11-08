@@ -730,11 +730,9 @@ async fn the_streaming_path_wires_the_callers_audio_into_the_provider_it_opened(
     sink.flush().expect("flush");
     sink.end_input();
 
-    // The request's input queue hands each entry over in order, a backlog merged.
-    until("end_input to reach the stream that is serving", || s.ended.load(Ordering::SeqCst)).await;
-    let heard = |s: &SttSess| s.frames.lock().iter().map(|f| f.data.len()).sum::<usize>();
-    assert_eq!(heard(&s), 2 * frame(1).data.len(), "every frame reaches the provider");
+    assert_eq!(s.frames.lock().len(), 2, "every frame reaches the provider");
     assert_eq!(s.flushes.load(Ordering::SeqCst), 1, "a flush is a segment boundary, not a close");
+    assert!(s.ended.load(Ordering::SeqCst), "end_input reaches the stream that is serving");
 
     p.send(0, Ok(speech(SpeechEventType::FinalTranscript, "hello")));
     let ev =
@@ -746,8 +744,8 @@ async fn the_streaming_path_wires_the_callers_audio_into_the_provider_it_opened(
 
     sink.push(frame(3)).expect("push");
     assert_eq!(
-        heard(&s),
-        2 * frame(1).data.len(),
+        s.frames.lock().len(),
+        2,
         "the turn is over: audio must not reach a provider the chain has released"
     );
     source.close(NO_DEADLINE).await;
@@ -773,9 +771,12 @@ async fn a_streaming_probe_shadows_the_live_audio_and_only_a_real_transcript_is_
     assert!(!fb.chain().is_available(0), "the primary failed to open");
 
     sink.push(frame(1)).expect("push");
-    // The probe shadows the live audio -- there is nothing else for it to listen to.
-    until("the probe to hear the frame", || p.sess(0).frames.lock().len() == 1).await;
-    until("the serving stream to get it", || b.sess(0).frames.lock().len() == 1).await;
+    assert_eq!(
+        p.sess(0).frames.lock().len(),
+        1,
+        "the probe shadows the live audio -- there is nothing else for it to listen to"
+    );
+    assert_eq!(b.sess(0).frames.lock().len(), 1, "and the serving stream gets it");
 
     p.send(0, Ok(speech(SpeechEventType::InterimTranscript, "hel")));
     p.send(0, Ok(speech(SpeechEventType::FinalTranscript, "")));
@@ -790,12 +791,12 @@ async fn a_streaming_probe_shadows_the_live_audio_and_only_a_real_transcript_is_
     assert!(p.sess(0).closed.load(Ordering::SeqCst), "a finished probe closes its own stream");
 
     sink.push(frame(2)).expect("push");
-    until("the serving stream to get it", || b.sess(0).frames.lock().len() == 2).await;
     assert_eq!(
         p.sess(0).frames.lock().len(),
         1,
         "a finished probe has left the tee and stops consuming the user's audio"
     );
+    assert_eq!(b.sess(0).frames.lock().len(), 2);
     source.close(NO_DEADLINE).await;
     fb.aclose();
 }

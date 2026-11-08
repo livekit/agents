@@ -123,8 +123,6 @@ dev = [
     "pytest-timeout>=2.3",
     # the tests bridge an application's SDK provider
     "opentelemetry-sdk>=1.45,<1.46",
-    # .github/update_versions.py, which tests/test_package_releases.py runs
-    "colorama",
 ]
 docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
 lint = ["ruff"]

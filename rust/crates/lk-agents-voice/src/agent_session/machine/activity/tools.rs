@@ -22,7 +22,6 @@ use crate::tool_executor::{
 use crate::trace::{FillerEnd, GenerationStep, ToolStep as TraceToolStep};
 use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer, ToolTemplate};
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::voice::session::VoiceTaskEnded;
 use lk_agents_abi::{ChatItem, FunctionCall, Ts};
 use lk_agents_core::agent_run::AgentRunEvent;
 use lk_agents_core::tool_calls::{Admission, admit};
@@ -553,9 +552,7 @@ impl VoiceDriver {
                 self.say_text(now, text, voice_run);
             }
             Delivery::Complete(value) => self.end_voice_task(now, speech, Ok(value)),
-            Delivery::Fail(reason) => {
-                self.end_voice_task(now, speech, Err(VoiceTaskEnded::Failed(reason)))
-            }
+            Delivery::Fail(reason) => self.end_voice_task(now, speech, Err(reason)),
             Delivery::Ask(ask) => {
                 let output = crate::events::RunOutcome::InputRequired(ask.clone());
                 self.session.runs.outputs.insert(speech, output.clone());
@@ -587,8 +584,7 @@ impl VoiceDriver {
     /// waiting; retaining them is not permission to answer them with this person's message.
     pub(crate) fn answer_pending_input(&mut self, text: &str) {
         let mut history: Vec<ChatItem> = self.session.chat_ctx.items().cloned().collect();
-        let approval_answers =
-            lk_agents_core::agent_run::planning::answer_pending_input(&mut history, text);
+        let approval_answers = lk_agents_core::request::answer_pending_input(&mut history, text);
         history.retain(|item| matches!(item, ChatItem::FunctionCallOutput(output) if approval_answers.contains(&output.call_id)));
         self.replies_answered(&approval_answers);
         self.activity.tools.approval_answers = approval_answers;

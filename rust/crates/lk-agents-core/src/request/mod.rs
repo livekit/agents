@@ -1,5 +1,4 @@
-//! The retry machine every retried request shares: phase limits, retry allowance and backoff,
-//! total deadline and cleanup, decided on supplied time.
+//! Request planning, retry policy and supplied-time lifecycle decisions.
 
 use lk_agents_abi::errors::{ApiError, ApiErrorKind};
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
@@ -8,9 +7,15 @@ use std::time::Duration;
 
 mod effects;
 mod machine;
+mod planning;
 
 pub use effects::{Retry, Step};
 pub use machine::Request;
+pub(crate) use planning::answered_approval_calls;
+pub use planning::{
+    INPUT_REQUESTED_KEY, INSTRUCTIONS_MESSAGE_ID, ModelRequest, RequestSnapshot,
+    answer_pending_input, model_view, plan_request,
+};
 
 /// The resolved per-request policy. `None` disables a limit. There is no pool limit: the
 /// gateway transport has no pool capacity, so a request never waits for a connection slot.

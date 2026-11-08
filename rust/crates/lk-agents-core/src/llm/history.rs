@@ -242,7 +242,7 @@ impl ChatContextPlans for ChatPlans {
     }
 
     fn remove_instructions(item_ids: Vec<String>) -> Vec<usize> {
-        let id = crate::agent_run::planning::INSTRUCTIONS_MESSAGE_ID;
+        let id = crate::request::INSTRUCTIONS_MESSAGE_ID;
         item_ids.iter().enumerate().filter(|(_, item)| *item == id).map(|(i, _)| i).collect()
     }
 }

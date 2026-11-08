@@ -307,13 +307,14 @@ impl Inner {
             )
             .await;
         let pending = self.tracker.has_pending_segment(key);
-        let give_up_after = match after_clear(pending, rpc, self.clear_buffer_timeout) {
-            AfterClear::Retire => {
-                self.retire_segment(key);
-                return;
-            }
-            AfterClear::AwaitFinish { give_up_after } => give_up_after,
-        };
+        let give_up_after =
+            match after_clear(pending, rpc.map_err(|e| e.to_string()), self.clear_buffer_timeout) {
+                AfterClear::Retire => {
+                    self.retire_segment(key);
+                    return;
+                }
+                AfterClear::AwaitFinish { give_up_after } => give_up_after,
+            };
         if let Some((timer, _, _)) = self.clear_timer.lock().take() {
             self.tasks.cancel(timer);
         }

@@ -10,7 +10,7 @@ use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure, SessionRecorder a
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::events::{HostWire, SessionErrorWire};
 use lk_agents_abi::voice::session::{
-    SessionOptions as _, SessionRefused, StartFailed, UnknownCloseReason, VoiceSession as _,
+    SessionOptions as _, SessionRefused, UnknownCloseReason, VoiceSession as _,
 };
 use lk_agents_abi::voice::session_effects::{DeliveredState, SessionEvents};
 use lk_agents_abi::voice::session_options::{
@@ -111,7 +111,7 @@ struct Inner {
     /// The report's events: which are kept, and the job allowed to read them.
     retention: Mutex<Retention>,
     tasks: Arc<TaskSet>,
-    opened: watch::Sender<Option<Result<(), StartFailed>>>,
+    opened: watch::Sender<Option<Result<(), HostError>>>,
     closed: watch::Sender<bool>,
     recording: OnceCell<Result<(), RecordingFailure>>,
     selection: Mutex<Selection>,
@@ -202,11 +202,15 @@ impl SessionEvents for Events {
 }
 
 impl Inner {
-    async fn open(self: &Arc<Self>, startup: Startup) -> Result<(), StartFailed> {
+    async fn open(self: &Arc<Self>, startup: Startup) -> Result<(), HostError> {
         let Startup { storage, host, trace, job_ids, mut opening } = startup;
-        let ready = storage.open_ready().await?;
-        // `gen_ai.conversation.id` is the call's thread.
-        let trace = trace.with_conversation(Some(ready.thread()));
+        let ready =
+            storage.open_ready().await.map_err(|error| HostError::new(error.to_string()))?;
+        // `gen_ai.conversation.id` is the call's thread when it has one, else the job's.
+        let trace = match ready.thread() {
+            Some(thread) => trace.with_conversation(Some(&thread)),
+            None => trace,
+        };
         // Startup work runs under `session_start`, reserved before the driver opens it.
         let starting = trace.clone().under::<telemetry::SessionStart>(opening.start.context);
         let bindings = host.prepare(&starting).await?.bindings();
@@ -244,7 +248,7 @@ impl Inner {
         }
         args.on_event =
             Some(Arc::new(Events { owner: Arc::downgrade(self), host: args.on_event.take() }));
-        args.storage = Some(ready.voice_store());
+        args.storage = ready.voice_store().map(|store| store as Arc<_>);
         if let Some(history) = ready.history() {
             args.chat_ctx = Some(history);
         }
@@ -260,37 +264,11 @@ impl Inner {
         let initial = self.select(initial_agent);
         let started = session.start().map_err(|error| HostError::new(error.to_string()))?.await;
         self.selected(initial);
-        started?;
-        Ok(host.started(&in_session).await?)
-    }
-
-    /// A start that failed: logged once, and the session's reserved spans end with it unless its
-    /// driver opened them.
-    fn start_failed(&self, error: &StartFailed) {
-        let Some(startup) = self.startup.get() else { return };
-        let job = startup.trace.job().map(|job| job.0.as_str());
-        let thread = startup.storage.supplied_thread();
-        log::error!(target: lk_agents_abi::LOG_TARGET, job_id = job, thread_id = thread; "the session could not start: {error}");
-        if self.session.get().is_some() {
-            return;
-        }
-        let trace = &startup.trace;
-        let supplied = telemetry::SessionTelemetry {
-            parent: trace.span(),
-            job: trace.job().cloned(),
-            conversation: thread.map(str::to_owned),
-            job_ids: startup.job_ids.clone(),
-            ids: Some(telemetry::seeded_ids(telemetry::random_seed())),
-            opening: Some(startup.opening),
-        };
-        let now = lk_agents_voice::agent_session::Now {
-            at: self.env.clock.now(),
-            wall: self.env.clock.wall(),
-        };
-        let agent = startup.storage.agent();
-        for record in lk_agents_voice::agent_session::failed_start(supplied, agent, now, error) {
-            self.env.tracer.record(record);
-        }
+        started.map_err(|error| match error {
+            lk_agents_abi::voice::session::StartFailed::Host(error) => error,
+            error => HostError::new(error.to_string()),
+        })?;
+        host.started(&in_session).await
     }
 
     /// The session as `args.job`'s, prepared: the job's first session claimed is its primary one,
@@ -413,8 +391,8 @@ fn providers(
 }
 
 async fn opened(
-    mut receiver: watch::Receiver<Option<Result<(), StartFailed>>>,
-) -> Result<(), StartFailed> {
+    mut receiver: watch::Receiver<Option<Result<(), HostError>>>,
+) -> Result<(), HostError> {
     loop {
         if let Some(result) = receiver.borrow_and_update().clone() {
             return result;
@@ -459,7 +437,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         host: Arc<dyn SessionHost>,
         job: Option<lk_agents_abi::voice::session_owner::SessionJobInfo>,
         cx: telemetry::Cx,
-    ) -> Result<BoxFuture<'static, Result<(), StartFailed>>, HostError> {
+    ) -> Result<BoxFuture<'static, Result<(), HostError>>, HostError> {
         let spawner = (self.0.env.spawner)().map_err(|e| HostError::new(e.to_string()))?;
         let action = self.0.lifecycle.lock().start();
         match action {
@@ -498,8 +476,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
                     "session startup",
                     Box::pin(async move {
                         let result = inner.open(startup).await;
-                        if let Err(error) = &result {
-                            inner.start_failed(error);
+                        if result.is_err() {
                             // A failed open is terminal and settles every resource acquired so far.
                             let _ = inner.lifecycle.lock().close();
                             inner.cleanup(CloseReason::Error, false).await;

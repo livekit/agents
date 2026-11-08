@@ -7,6 +7,10 @@
 
 use lk_agents_abi::ATTRIBUTE_SIMULATOR_DISPATCH;
 use lk_agents_abi::telemetry::decl::Seconds;
+pub(crate) use lk_agents_abi::telemetry::instruments::{
+    WorkerIdleProcesses, WorkerIdleProcessesTarget, WorkerJobs, WorkerLoad,
+    WorkerProcessReadyDuration,
+};
 pub(crate) use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::telemetry::spans::job::{
     EntrypointStarted, JobAccepted, JobAssigned, JobReceived, JobStartedOnServer, ProcessAssigned,
@@ -16,6 +20,7 @@ pub(crate) use lk_agents_net::export::exporter;
 pub(crate) use lk_agents_net::export::otlp::CloudEndpoint;
 use lk_agents_net::export::otlp::SessionIdentity;
 pub(crate) use lk_agents_telemetry::Tracer;
+pub(crate) use lk_agents_telemetry::process;
 use prost::Message as _;
 
 pub(crate) use lk_agents_abi::telemetry::decl::SpanDecl;

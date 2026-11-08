@@ -45,6 +45,7 @@ fn kind_name(kind: SpanKind) -> &'static str {
 fn instrument_name(kind: InstrumentKind) -> &'static str {
     match kind {
         InstrumentKind::Counter => "counter",
+        InstrumentKind::Gauge => "gauge",
         InstrumentKind::Histogram => "histogram",
     }
 }

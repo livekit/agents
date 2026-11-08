@@ -452,16 +452,6 @@ impl StreamInput<AudioFrame> for AudioSink {
         Ok(())
     }
 
-    fn filler(&self, frame: AudioFrame) -> Result<(), ProviderError> {
-        match self.audio.lock().as_ref() {
-            Some(audio) if !audio.is_closed() => {
-                audio.filler(frame);
-                Ok(())
-            }
-            _ => Err(Self::closed()),
-        }
-    }
-
     fn flush(&self) -> Result<(), ProviderError> {
         match self.audio.lock().as_ref() {
             Some(audio) if !audio.is_closed() => Ok(()),

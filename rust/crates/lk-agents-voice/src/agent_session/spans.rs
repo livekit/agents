@@ -25,38 +25,6 @@ pub(crate) fn trace(
     telemetry::Trace::new(ids, now.at, now.wall, supplied.job.take(), conversation)
 }
 
-fn session_decl(agent: &str, job_ids: telemetry::JobIds) -> telemetry::AgentSession {
-    telemetry::AgentSession {
-        agent_label: agent.to_owned(),
-        operation: telemetry::GenAiOperation::InvokeWorkflow,
-        workflow: <telemetry::AgentSession as telemetry::SpanDecl>::NAME.to_owned(),
-        dispatch_id: job_ids.dispatch_id,
-        worker_id: job_ids.worker_id,
-        agent_id: job_ids.agent_id,
-    }
-}
-
-/// A start that failed before its session was built: `agent_session` and `session_start`, as
-/// `start()` reserved them, end with the failure. The records, for the exporter.
-pub fn failed_start(
-    supplied: telemetry::SessionTelemetry,
-    agent: &str,
-    now: super::Now,
-    error: &impl telemetry::SpanError,
-) -> Vec<telemetry::Record> {
-    let telemetry::SessionTelemetry { parent, job, conversation, job_ids, ids, opening } = supplied;
-    let ids = ids.unwrap_or_else(|| telemetry::seeded_ids(telemetry::fnv(agent)));
-    let mut trace = telemetry::Trace::new(ids, now.at, now.wall, job, conversation);
-    let root = trace.open_root(parent, opening.map(|o| o.session), session_decl(agent, job_ids));
-    let start = match opening {
-        Some(o) => trace.open_in_reserved(&root, o.start, telemetry::SessionStart),
-        None => trace.open_in(&root, telemetry::SessionStart),
-    };
-    trace.end(start, error);
-    trace.end(root, error);
-    trace.drain()
-}
-
 impl VoiceDriver {
     /// `start()`, as the session is built: `agent_session` and `session_start` open, as `start()`
     /// reserved them.
@@ -66,7 +34,14 @@ impl VoiceDriver {
         agent: &str,
     ) {
         let telemetry::SessionTelemetry { parent, job_ids, opening, .. } = telemetry;
-        let decl = session_decl(agent, job_ids);
+        let decl = telemetry::AgentSession {
+            agent_label: agent.to_owned(),
+            operation: telemetry::GenAiOperation::InvokeWorkflow,
+            workflow: <telemetry::AgentSession as telemetry::SpanDecl>::NAME.to_owned(),
+            dispatch_id: job_ids.dispatch_id,
+            worker_id: job_ids.worker_id,
+            agent_id: job_ids.agent_id,
+        };
         let trace = &mut self.telemetry;
         let (root, start) = match opening {
             Some(o) => {

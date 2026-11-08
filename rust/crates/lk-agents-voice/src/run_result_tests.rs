@@ -130,30 +130,6 @@ fn a_last_assistant_message_without_text_is_no_output() {
     assert_eq!(settled.result.outcome, Outcome::NoOutput);
 }
 
-/// The open run's items, as `new_messages()` will list them.
-fn recorded(driver: &VoiceDriver) -> Vec<(Role, String)> {
-    let open = driver.session.runs.open.as_ref().expect("open");
-    open.items
-        .iter()
-        .filter_map(|item| match item {
-            ChatItem::Message(message) => Some((message.role, message.text_content()?)),
-            _ => None,
-        })
-        .collect()
-}
-
-// Catches: a voice run's `new_messages()` leaving out the input it was run on, which a text
-// run's (and pydantic-ai's) starts with.
-#[test]
-fn a_run_records_its_input_first() {
-    for mut driver in
-        [crate::agent_session::tests::driver(), crate::agent_session::tests::realtime_driver()]
-    {
-        driver.on_run(Ts::ZERO, RunSpec { user_input: Some("hello".into()), host: None });
-        assert_eq!(recorded(&driver).first(), Some(&(Role::User, "hello".to_owned())));
-    }
-}
-
 #[test]
 fn the_run_counts_only_its_own_speeches_requests() {
     use crate::agent_session::machine::activity::scheduling::SpeechKind;

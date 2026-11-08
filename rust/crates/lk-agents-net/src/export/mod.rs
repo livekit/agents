@@ -6,6 +6,7 @@
 //! - [`session_report`]: the LiveKit Cloud session report's records and recording upload.
 //! - [`host`]: `_core.TelemetrySpan`, a span the host's OpenTelemetry API starts.
 //! - [`stall`]: event-loop stalls, measured and spanned within a rate limit.
+//! - [`prometheus`]: the process's own instruments as the worker's `/metrics` serves them.
 //! - [`ExporterSlot`], [`exporter`]: the process's exporter once the host installs telemetry.
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -13,6 +14,7 @@
 pub mod host;
 pub mod otlp;
 pub mod profile;
+pub mod prometheus;
 pub mod session_report;
 pub mod stall;
 

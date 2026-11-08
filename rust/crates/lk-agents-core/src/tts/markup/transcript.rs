@@ -1,7 +1,7 @@
 //! The provider-agnostic transcript side: strip every dialect, surface the leading expression, hold
 //! a tag that straddles a chunk boundary.
 
-use lk_agents_abi::tts::markup::{EMOTION_TAG, MarkerKind};
+use lk_agents_abi::tts::markup::{EMOTION_TAG, MarkerKind, TranscriptionExpression};
 use lk_agents_abi::{ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TranscriptChunk};
 
 use crate::tts::markup::expr::{ExpressiveTag, split_expr};
@@ -50,18 +50,15 @@ pub fn split_expr_markup(text: &str) -> (String, Vec<ExpressiveTag>) {
     (clean.to_owned(), tags)
 }
 
-/// `{"expression", "mood"}` from a segment's leading expression/emotion tag.
+/// The `lk.expression` attribute from a segment's leading expression/emotion tag.
 pub fn expression_attribute(tags: &[ExpressiveTag]) -> Option<(&'static str, String)> {
     let expression = tags.iter().find(|t| {
         MarkerKind::from_wire(&t.kind) == Some(MarkerKind::Expression) || t.kind == EMOTION_TAG
     })?;
     // `match_mood`'s fallback is `DEFAULT_MOOD`, so `"mood"` is never null on the wire
     let mood = match_mood(&expression.value, Some(DEFAULT_MOOD)).unwrap_or(DEFAULT_MOOD);
-    let mut json = String::from("{\"expression\":");
-    push_json_string(&mut json, &expression.value);
-    json.push_str(",\"mood\":");
-    push_json_string(&mut json, mood.as_str());
-    json.push('}');
+    let value = TranscriptionExpression { expression: &expression.value, mood: mood.as_str() };
+    let json = serde_json::to_string(&value).ok()?;
     Some((ATTRIBUTE_TRANSCRIPTION_EXPRESSION, json))
 }
 
@@ -77,30 +74,6 @@ fn attribute_map(
     pair: Option<(&'static str, String)>,
 ) -> Option<std::collections::BTreeMap<String, String>> {
     pair.map(|(key, json)| std::collections::BTreeMap::from([(key.to_owned(), json)]))
-}
-
-/// `ensure_ascii=True`: non-ASCII is escaped as `\uXXXX`, which a JSON writer would not do.
-fn push_json_string(out: &mut String, s: &str) {
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            ' '..='~' => out.push(c),
-            c if (c as u32) < 0x10000 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => {
-                let n = c as u32 - 0x10000;
-                out.push_str(&format!("\\u{:04x}", 0xd800 + (n >> 10)));
-                out.push_str(&format!("\\u{:04x}", 0xdc00 + (n & 0x3ff)));
-            }
-        }
-    }
-    out.push('"');
 }
 
 /// Stateful, provider-agnostic markup stripper for one transcript segment. A partial trailing tag

@@ -10,11 +10,10 @@ from unittest.mock import patch
 
 from check import (
     check_history,
+    cx_none_violations,
     dependency_violations,
     executor_violations,
     host_call_violations,
-    telemetry_spelling_violations,
-    cx_none_violations,
     inline_sql_violations,
     length_violations,
     nesting_violations,
@@ -24,6 +23,7 @@ from check import (
     read_baselines,
     shipped_dependency_violations,
     stale,
+    telemetry_spelling_violations,
     tracked_rust_paths,
     use_violations,
     warning_violations,
@@ -506,9 +506,7 @@ class HostCallContracts(unittest.TestCase):
                     "use lk_agents_abi::telemetry::record::SpanRef;\n"
                 ),
                 # The I/O crates: logic code is a violation, their telemetry modules are not.
-                "rust/crates/lk-agents-runtime/src/voice/io.rs": (
-                    "use lk_agents_telemetry::Cx;\n"
-                ),
+                "rust/crates/lk-agents-runtime/src/voice/io.rs": ("use lk_agents_telemetry::Cx;\n"),
                 "rust/crates/lk-agents-inference/src/fallback/llm.rs": (
                     "use lk_agents_telemetry::{ScopedSpan, start};\n"
                 ),
@@ -563,7 +561,7 @@ class HostCallContracts(unittest.TestCase):
                 ),
                 # Allowed: a comment, a string, a test module, a test file, an unspelled crate.
                 "rust/crates/lk-agents-inference/src/stt.rs": (
-                    "// Cx::NONE\nconst S: &str = \"Cx::NONE\";\n"
+                    '// Cx::NONE\nconst S: &str = "Cx::NONE";\n'
                     "#[cfg(test)]\nmod tests { fn t() { f(&Cx::NONE); } }\n"
                 ),
                 "rust/crates/lk-agents-net/src/http_tests.rs": "fn t() { f(&Cx::NONE); }\n",
@@ -590,10 +588,10 @@ class HostCallContracts(unittest.TestCase):
                 ),
                 # Allowed: declarations, DDL, comments, prose, test modules and test files.
                 "rust/crates/lk-agents-storage/src/schema.rs": (
-                    'statement! {\n    /// A doc { brace.\n    SelectThread<\'a> { id: &\'a str } => r#"\n'
+                    "statement! {\n    /// A doc { brace.\n    SelectThread<'a> { id: &'a str } => r#\"\n"
                     'SELECT id FROM threads WHERE id = :id\n"#\n}\n'
                     'const SCHEMA: &str = "CREATE TABLE t (a TEXT);\nINSERT INTO t VALUES (1)";\n'
-                    '// SELECT id FROM threads\n'
+                    "// SELECT id FROM threads\n"
                     'const E: &str = "expected one SQL statement";\n'
                     '#[cfg(test)]\nmod tests { fn t() { s("INSERT INTO t VALUES (1)"); } }\n'
                 ),

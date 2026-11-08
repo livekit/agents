@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -13,7 +11,7 @@ import pytest
 from livekit.agents import Agent, RunContext, StopResponse, VoiceSession, persisted
 from livekit.agents._generated.storage_class import ItemRow
 from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall, LLMStream
-from livekit.agents.storage import Storage, Thread, ThreadNotFound
+from livekit.agents.storage import Storage, Thread
 from livekit.agents.storage.session import ContextStore
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -177,34 +175,33 @@ async def test_voice_explicit_save_joins_reply_commit_and_releases_the_lane(
         assert texts(history)[-1] == ("save" if no_reply else "done")
 
 
-# Catches: a call given a thread whose lane does not load continuing on a new local thread (a
-# silent fork, a local file on an AgentDB server) instead of failing its start with the storage's
-# own error, logged once with the job and the thread.
-async def test_a_call_on_a_thread_that_does_not_load_fails_to_start(
+async def test_storage_failure_at_voice_start_is_logged_without_ending_the_call(
     thread_storage: Storage,
     caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    local = tmp_path / "local-threads"
-    monkeypatch.setenv("LIVEKIT_AGENT_THREADS_DIR", str(local))
     thread_id = await new_session(thread_storage, "desk")
     thread = Thread(thread_storage, thread_id, agent_name="desk")
     await thread_storage.threads.delete_thread(thread_id)
-    started: list[str] = []
-    async with VoiceSession(llm=ObservedLLM(), thread=thread) as session:
-        session.on("agent_state_changed", lambda ev: started.append(ev.new_state))
-        with pytest.raises(ThreadNotFound):
-            await session.start(Agent(instructions="desk", name="desk"))
-        assert session.thread is thread
-    assert started == [] and not local.exists()
-    (record,) = [r for r in caplog.records if r.getMessage().startswith("the session could not")]
-    assert record.levelno == logging.ERROR and getattr(record, "thread_id", None) == thread_id
+    model = ObservedLLM()
+    async with VoiceSession(llm=model, thread=thread) as session:
+        await session.start(Agent(instructions="desk", name="desk"))
+        result = await session._run(user_input="hello")
+        assert result.output == "hi there"
+        assert "the voice lane could not be loaded" in caplog.text
 
 
-async def test_call_without_a_thread_keeps_its_context_on_a_local_thread() -> None:
+@pytest.mark.parametrize("deleted_thread", [False, True])
+async def test_call_without_a_loaded_lane_keeps_its_context_in_memory(
+    thread_storage: Storage,
+    deleted_thread: bool,
+) -> None:
+    thread = None
+    if deleted_thread:
+        thread_id = await new_session(thread_storage, "desk")
+        thread = Thread(thread_storage, thread_id, agent_name="desk")
+        await thread_storage.threads.delete_thread(thread_id)
     app = Application()
-    async with VoiceSession(llm=ObservedLLM(), context=app) as session:
+    async with VoiceSession(llm=ObservedLLM(), context=app, thread=thread) as session:
         await session.start(Agent(instructions="desk", name="desk"))
         await session.store.load_context(app)
         app.draft.count = 2
