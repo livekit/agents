@@ -1,9 +1,7 @@
 """Latency benchmark: the same scripted call on two stacks, interleaved, per-stage median and p90.
 
-Each stack runs a worker serving one benchmark agent (LiveKit inference models, identical on both
-sides). The caller joins a fresh room per call, dispatches the agents in turn (A/B/A/B...), speaks
-the same pre-synthesized lines, and measures when it hears the reply. Each agent sends the
-metrics of every chat item it adds back to the caller on the ``lk.latency`` text topic.
+The caller dispatches the agents in turn (A/B/A/B...) into a fresh room per call, speaks the
+same pre-synthesized lines, and measures when it hears each reply.
 
 Run against a project with LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET set:
 
@@ -69,15 +67,12 @@ STAGES = {
 
 
 def busy_seconds() -> list[float]:
-    """The Rust core's async workers' busy seconds so far; empty on the reference stack."""
+    # Empty on the reference stack, which has no Rust core.
     try:
         from livekit.agents import _core
     except ImportError:
         return []
     return _core.runtime_busy_seconds()
-
-
-# ------------------------------------------------------------------------------------- agent
 
 
 async def entry(ctx: JobContext) -> None:
@@ -105,15 +100,12 @@ async def entry(ctx: JobContext) -> None:
 
 
 def run_agent(name: str) -> None:
-    # the scripted calls are the only load: a busy machine must not turn them away
+    # The scripted calls are the only load: a busy machine must not turn them away.
     server = AgentServer(agent_name=name, _load_fnc=lambda: 0.0)
     server._update_options(listeners={"health": {"port": 0}})
     server.rtc_session()(entry)
     sys.argv = [sys.argv[0], "start"]
     cli.run_app(server)
-
-
-# ------------------------------------------------------------------------------------ caller
 
 
 async def synthesize(lines: list[str]) -> list[list[rtc.AudioFrame]]:
@@ -179,7 +171,6 @@ async def one_call(lkapi: api.LiveKitAPI, agent: str, speech: list[list[rtc.Audi
     )
 
     async def settled(timeout: float) -> bool:
-        """The agent is listening and has been quiet for 1.5 s."""
         deadline = time.time() + timeout
         while time.time() < deadline:
             if state["agent"] == "listening" and time.time() - state["loud_at"] > 1.5:
@@ -227,7 +218,7 @@ def p90(values: list[float]) -> float:
 
 
 def diff_ci(a: list[float], b: list[float], stat: Any) -> str:
-    """B - A of ``stat``, with its 95% bootstrap interval: a gap inside it is noise."""
+    # B - A of `stat` with its 95% bootstrap interval.
     rng = np.random.default_rng(0)
     boot = [
         stat(list(rng.choice(b, len(b)))) - stat(list(rng.choice(a, len(a)))) for _ in range(2000)

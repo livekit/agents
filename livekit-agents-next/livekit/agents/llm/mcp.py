@@ -1,19 +1,3 @@
-"""MCP servers as tool sources (docs/tools.md, "MCP servers").
-
-The Rust core does the MCP work: the protocol, the stdio and Streamable HTTP transports, listing
-and paginating tools, rendering their schemas and results, the reconnect backoff, recovering an
-unreachable server in the background and closing an idle connection (``_core.McpSession`` and
-``_core._core_McpToolsetLifecycle``). ``MCPServerStdio`` is generated over it whole, and so is
-the connection half of ``MCPServerHTTP``.
-
-What stays here is what only the host can do:
-
-- credentials that come from a run (``headers=``/``auth=`` functions of the ``RunContext``),
-  which are application code;
-- one toolset per set of run credentials, kept by a call for its whole length;
-- each MCP tool as a function tool, because tools are host objects.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -33,7 +17,6 @@ from .._generated.public_llm_mcp import *  # noqa: F403
 from ..voice.events import RunContext
 from .tool_context import AsyncToolset, RawFunctionTool, Toolset, function_tool
 
-# the documented surface (docs/tools.md "Toolsets")
 __all__ = [
     "MCPServer",
     "MCPServerHTTP",
@@ -48,9 +31,6 @@ TokenFor = Callable[[RunContext[Any]], "str | None"]
 """A run's bearer token, from its ``RunContext``."""
 _Credentials = tuple[tuple[tuple[str, str], ...], "str | None"]
 """Headers (sorted name/value pairs) and a bearer token, comparable and hashable."""
-
-
-# --- servers ----------------------------------------------------------------------------------
 
 
 class MCPServerHTTP(_facades.MCPServerHTTP):
@@ -91,7 +71,7 @@ class MCPServerHTTP(_facades.MCPServerHTTP):
         self._headers = headers
         self._auth = auth
         self._timeouts = (init_timeout, read_timeout, request_timeout)
-        # set on a run's copy (``_for_run``): its credentials, resolved again before a request
+        # set on a run's copy (``_for_run``); resolved again before each request
         self._run_credentials: Callable[[], _Credentials] | None = None
         self._connected = False
 
@@ -104,7 +84,6 @@ class MCPServerHTTP(_facades.MCPServerHTTP):
         return callable(self._headers) or callable(self._auth)
 
     def _credentials(self, ctx: RunContext[Any] | None) -> _Credentials:
-        """The headers and token to connect with; ``ctx`` is required when either is per run."""
         headers, auth = self._headers, self._auth
         if callable(headers):
             assert ctx is not None
@@ -115,7 +94,6 @@ class MCPServerHTTP(_facades.MCPServerHTTP):
         return tuple(sorted((name, str(value)) for name, value in (headers or {}).items())), auth
 
     def _for_run(self, ctx: RunContext[Any]) -> MCPServerHTTP:
-        """A copy of this server that connects with ``ctx``'s credentials."""
         init_timeout, read_timeout, request_timeout = self._timeouts
         copy = MCPServerHTTP(
             self._url,
@@ -141,8 +119,7 @@ class MCPServerHTTP(_facades.MCPServerHTTP):
         self._connected = True
 
     async def _refresh(self) -> None:
-        """Before each request: the core keeps the connection when the run's credentials are
-        unchanged and replaces it when they changed. A closed server is not reopened."""
+        # reconnects only when the run's credentials changed; a closed server stays closed
         if self._run_credentials is not None and self._connected:
             await self._connect(self._run_credentials())
 
@@ -156,9 +133,6 @@ class MCPServerHTTP(_facades.MCPServerHTTP):
 
 MCPServer = MCPServerHTTP | _facades.MCPServerStdio
 """An MCP server an ``MCPToolset`` takes its tools from."""
-
-
-# --- the toolset ------------------------------------------------------------------------------
 
 
 class MCPToolset(AsyncToolset):
@@ -194,8 +168,7 @@ class MCPToolset(AsyncToolset):
         super().__init__(id=id)
         self._mcp_server = mcp_server
         self._tool_options = dict(tool_options or {})
-        # the core decides when to list, recover and close; it calls back _core_list and
-        # _core_close_idle
+        # calls back _core_list and _core_close_idle
         self._lifecycle = _core._core_McpToolsetLifecycle(_describe(mcp_server), mcp_server._native)
         # per-run credentials: one toolset per credential set, kept by a call for its length
         self._by_credentials: dict[str, MCPToolset] = {}
@@ -230,9 +203,9 @@ class MCPToolset(AsyncToolset):
         return toolset
 
     async def setup(self) -> Self:
-        """Fetch the server's tools, connecting it when it is not; without them while the server
-        cannot be reached, which is listed again in the background at the session's backoff.
-        A per-run toolset lists nothing itself: each run's copy does."""
+        """Connect the server and fetch its tools. An unreachable server leaves the toolset
+        empty and is retried in the background. A per-run toolset lists nothing itself: each
+        run's copy does."""
         await super().setup()
         if not self._per_run:
             await self._lifecycle.setup(self)
@@ -268,15 +241,9 @@ class MCPToolset(AsyncToolset):
         await self._mcp_server.aclose()
 
 
-# --- tools ------------------------------------------------------------------------------------
-
-
 def _function_tool(
     server: MCPServer, tool: dict[str, Any], options: ResolvedToolOptions
 ) -> RawFunctionTool:
-    """``tool`` (an MCP listing entry) as a function tool calling ``server``. With
-    ``report_progress``, the tool takes the ``RunContext`` so its progress reaches
-    ``ctx.update()``."""
     name = tool["name"]
 
     async def call(arguments: dict[str, Any], progress: RunContext | None) -> Any:
@@ -320,7 +287,6 @@ async def _refresh(server: MCPServer) -> None:
 
 
 def _describe(server: MCPServer) -> str:
-    """The server as logs name it."""
     if isinstance(server, MCPServerHTTP):
         return repr(server)
     return f"MCPServerStdio(command={server._command}, args={list(server._args)})"

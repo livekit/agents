@@ -1,5 +1,3 @@
-"""asyncio helpers: channels, intervals, task sets, cancellation and ``ConnectionPool``."""
-
 from __future__ import annotations
 
 import asyncio
@@ -160,18 +158,11 @@ class Chan(Generic[T]):
         while self._gets:
             self._wakeup_next(self._gets)
 
-    #        if self.empty():
-    #            self._finished_ev.set()
-
     @property
     def closed(self) -> bool:
         return self._closed
 
-    #    async def join(self) -> None:
-    #        await self._finished_ev.wait()
-
     def qsize(self) -> int:
-        """the number of elements queued (unread) in the channel buffer"""
         return len(self._queue)
 
     def full(self) -> bool:
@@ -255,9 +246,8 @@ class _CancellableFuture(Protocol):
     def remove_done_callback(self, callback: Callable[[_CancellableFuture], object], /) -> int: ...
 
 
-# Process-scoped references, not a second cancellation/timeout policy. A cancelled waiter or
-# expired native budget cannot release an authored finally block that still runs on its loop.
-# Only the future's completion releases this reference; job/process shutdown owns the loops.
+# Strong references so a cancelled waiter cannot drop a cleanup whose finally block still runs;
+# only the future's completion releases one.
 _pending_cleanup: set[_CancellableFuture] = set()
 
 
@@ -274,15 +264,14 @@ def _retain_cleanup(future: _CancellableFuture) -> None:
 
 
 def pending_cleanup_count() -> int:
-    """Process-wide host cleanup references awaiting completion callbacks, across job loops."""
+    """The number of cleanups still running in this process, across job loops."""
     return len(_pending_cleanup)
 
 
 async def await_cleanup(cleanup: Awaitable[_T]) -> _T:
-    """Start cleanup once and retain it to settlement if its waiter is cancelled.
+    """Start ``cleanup`` once and keep it running to completion if this wait is cancelled.
 
-    The operation supplying ``cleanup`` owns its deadline. Cancelling this wait does not cancel
-    cleanup a second time or abandon native stream closure behind an authored finally block.
+    ``cleanup`` owns its deadline; cancelling the wait never cancels it.
     """
     future = asyncio.ensure_future(cleanup)
     _retain_cleanup(future)
@@ -300,10 +289,11 @@ async def cancel_and_wait(*futures: _CancellableFuture, timeout: float) -> bool:
 async def cancel_and_wait(
     *futures: _CancellableFuture, timeout: float | None = None
 ) -> bool | None:
-    """Cancel once and wait for settlement, retaining unfinished tasks after an interrupted wait.
+    """Cancel each future once and wait for them to settle.
 
-    With an operation-supplied ``timeout``, return whether every future settled within it.
-    Rejoining cleanup never injects another cancellation into a task's authored finally block.
+    Futures still running when the wait is interrupted are kept alive until they finish; a task
+    already cancelling is not cancelled again. With ``timeout``, returns whether every future
+    settled within it.
     """
     pending = {future for future in futures if not future.done()}
     for future in futures:
@@ -338,12 +328,9 @@ async def cancel_and_wait(
 
 
 class ConnectionPool(_facades.ConnectionPool, Generic[T]):
-    """Helper class to manage persistent connections like websockets.
+    """A pool of persistent connections, such as websockets, reconnected after a max duration.
 
-    Handles connection pooling and reconnection after max duration.
-    Can be used as an async context manager to automatically return connections to the pool.
-    Which connection is reused, retired or closed is the core's (``_core.ConnectionPoolState``);
-    this holds the connections and runs the callbacks.
+    ``connection()`` checks one out and returns it to the pool when the block exits.
     """
 
     def __init__(
@@ -355,16 +342,15 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
         close_cb: Callable[[T], Awaitable[None]] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        """Initialize the connection wrapper.
-
+        """
         Args:
-            max_session_duration: Maximum duration in seconds before forcing reconnection
-            mark_refreshed_on_get: If True, the session will be marked as fresh when get() is called. only used when max_session_duration is set.
-            connect_cb: Optional async callback to create new connections, within the connect
-                (and, over HTTP, pool and read) limits of the ``conn_options`` it is given
-            close_cb: Optional async callback to close connections
-            conn_options: The limits of a connection :meth:`prewarm` opens
-        """  # noqa: E501
+            max_session_duration: Seconds before a connection is replaced.
+            mark_refreshed_on_get: Restart a connection's duration on each ``get()``; only used
+                with ``max_session_duration``.
+            connect_cb: Opens a connection within the limits of the ``conn_options`` it is given.
+            close_cb: Closes a connection.
+            conn_options: The limits of a connection :meth:`prewarm` opens.
+        """
         self._connect_cb = connect_cb
         self._close_cb = close_cb
         self._conn_options = conn_options
@@ -389,7 +375,6 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
             await self._drain_to_close()
 
     async def _drain_to_close(self) -> None:
-        """Close the connections queued for closing."""
         while (cid := self._native.next_closing()) is not None:
             conn = self._conns[cid]
             try:
@@ -402,11 +387,7 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
 
     @asynccontextmanager
     async def connection(self, *, conn_options: APIConnectOptions) -> AsyncGenerator[T, None]:
-        """Get a connection from the pool and automatically return it when done.
-
-        Yields:
-            An active connection object
-        """
+        """A connection from the pool, returned on exit or removed if the block raises."""
         conn = await self.get(conn_options=conn_options)
         try:
             yield conn
@@ -417,13 +398,9 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
             self.put(conn)
 
     async def get(self, *, conn_options: APIConnectOptions) -> T:
-        """Get an available connection or create a new one if needed.
+        """An available connection, or a new one opened under ``conn_options``' limits.
 
-        Waiting for the pool runs under ``conn_options.pool_timeout``; a new connection is opened
-        by ``connect_cb`` under the limits of ``conn_options``.
-
-        Returns:
-            An active connection object
+        Waiting for the pool runs under ``conn_options.pool_timeout``.
         """
         try:
             async with asyncio.timeout(conn_options.pool_timeout):
@@ -447,47 +424,25 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
             self._connect_lock.release()
 
     def put(self, conn: T) -> None:
-        """Mark a connection as available for reuse.
-
-        If connection has been reset, it will not be added to the pool.
-        A connection retired by :meth:`invalidate` while it was checked out is queued
-        for closing instead of being made available again.
-
-        Args:
-            conn: The connection to make available
-        """
+        """Make a connection available for reuse; one removed or retired by :meth:`invalidate`
+        is closed instead."""
         self._native.put(id(conn))
 
     def remove(self, conn: T) -> None:
-        """Remove a specific connection from the pool.
-
-        Marks the connection to be closed during the next drain cycle.
-
-        Args:
-            conn: The connection to reset
-        """
+        """Remove a connection from the pool; it is closed on the next drain."""
         self._native.remove(id(conn))
 
     def invalidate(self) -> None:
         """Stop reusing every existing connection.
 
-        Idle connections are marked to be closed during the next drain cycle.
-        Connections that are currently checked out are *retired* instead: they keep
-        working for whoever holds them and are queued for closing when returned via
-        :meth:`put` or :meth:`remove`. Closing them here would sever a connection that
-        is still streaming, so a caller changing options mid-session would interrupt
-        the request in flight. A handshake that was already in flight is discarded
-        and retried, since the socket it produced carries the old settings and no
-        caller has been handed it yet.
+        Idle connections are closed on the next drain. Checked-out ones keep working for their
+        holder and are closed when returned, so a request in flight is not interrupted. A
+        handshake in flight is discarded and retried, since its socket has the old settings.
         """
         self._native.invalidate()
 
     def prewarm(self) -> None:
-        """Initiate prewarming of the connection pool without blocking.
-
-        This method starts a background task that creates a new connection if none exist.
-        The task automatically cleans itself up when the connection pool is closed.
-        """
+        """Open a connection in the background if the pool has none."""
         task = self._prewarm_task() if self._prewarm_task is not None else None
         if (task is not None and not task.done()) or not self._native.empty():
             return
@@ -507,7 +462,7 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
         self._prewarm_task = weakref.ref(asyncio.create_task(_prewarm_impl()))
 
     async def aclose(self) -> None:
-        """Close all connections, draining any pending connection closures."""
+        """Close every connection, including checked-out ones."""
         if self._prewarm_task is not None and (task := self._prewarm_task()) is not None:
             await cancel_and_wait(task)
         # the retired connections too, rather than waiting for holders that may never return them

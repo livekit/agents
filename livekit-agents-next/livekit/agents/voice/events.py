@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 
-# The generated event models take this module's path, so their string annotations resolve
-# here: `Annotated`, `Literal`, `Field` and `timedelta` stay bound.
+# the generated event models resolve their string annotations in this module's namespace
 from datetime import timedelta as timedelta
 from typing import TYPE_CHECKING, Annotated as Annotated, Any, Literal as Literal
 
@@ -48,8 +47,6 @@ _AGENT_EVENT: TypeAdapter[AgentEvent] = TypeAdapter(AgentEvent)
 
 
 def event_dict(event: AgentEvent, *, json: bool = False) -> dict[str, Any]:
-    """``event``'s fields as a dict, whether a dataclass or a model: what the session report
-    records."""
     out: dict[str, Any] = _AGENT_EVENT.dump_python(event, mode="json" if json else "python")
     return out
 
@@ -58,11 +55,10 @@ Context_T = TypeVar("Context_T", default=Any)
 
 
 class RunContext(_facades.RunContext[Context_T]):
-    """What a tool, an instructions function or an output function receives (agents.md
-    "RunContext").
+    """What a tool, an instructions function or an output function receives.
 
     ``ctx.context`` is the application object supplied for this invocation. On a call it also
-    carries the live session and the speech; a text run carries the run.
+    carries the live session and the speech.
     """
 
     # private ctor
@@ -78,11 +74,10 @@ class RunContext(_facades.RunContext[Context_T]):
         self._speech_handle = speech_handle
         self._function_call = function_call
         self._run = run
-        # Captured at the body's entry, for both direct runs and live-session updates.
         self._invocation: Invocation | None = None
         steps = speech_handle.num_steps if speech_handle is not None else 1
         self._initial_step_idx = steps - 1 if steps else None
-        # on a call: the person's reply to the question this delegated call's expert asked
+        # on a call: the person's reply to the delegated expert's question
         self._expert_answer: asyncio.Future[str] | None = None
 
     @property
@@ -136,8 +131,8 @@ class RunContext(_facades.RunContext[Context_T]):
 
     @property
     def usage(self) -> Usage:
-        """The latest immutable usage snapshot of the owning scope: the invocation, the
-        text-session turn or the call (usage.md "Scope and delegation")."""
+        """The latest usage snapshot of the owning scope: the invocation, the text-session turn
+        or the call."""
         if self._run is not None:
             return self._run.usage
         return self._call().usage
@@ -196,11 +191,10 @@ class RunContext(_facades.RunContext[Context_T]):
         )
 
     async def update(self, message: str) -> None:
-        """A progress message while the tool runs: a ``working`` frame on the text door, speech
-        on a call (agents.md "RunContext").
+        """Report progress while the tool runs: a ``working`` frame on A2A, speech on a call.
 
         On a call, the first update releases control to the model with ``message`` as the
-        tool's interim return; later ones are coalesced into a deferred reply by the core.
+        tool's interim return; later ones are coalesced into a deferred reply.
         """
         from .._generated.tool_context import UPDATE_TEMPLATE
         from . import _BindingContextVar, _VoiceBinding
@@ -218,7 +212,6 @@ class RunContext(_facades.RunContext[Context_T]):
         if rendered is None:
             rendered = UPDATE_TEMPLATE.format(**args)
         if self._session is None:
-            # agent.run(): the run streams it as progress; the door that runs the turn forwards it
             if (
                 self._run is not None
                 and self._run.runner is not None

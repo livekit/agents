@@ -1,8 +1,3 @@
-"""The server side: HTTP and WebSocket routes an application serves next to its agent.
-
-It never calls out; providers are reached through ``client``.
-"""
-
 from __future__ import annotations
 
 import logging

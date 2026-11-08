@@ -50,9 +50,6 @@ __all__ += _public.__all__
 
 
 def _essential_fields(item: ChatItem) -> tuple[object, ...]:
-    """What identifies an item's content beyond its id and type: what
-    :meth:`ChatContext.is_equivalent` compares. Timestamps, metrics and other metadata are left
-    out."""
     match item:
         case ChatMessage():
             return (item.role, item.interrupted, item.content)
@@ -151,14 +148,14 @@ class ChatContext:
         return ChatContext([self.items[i] for i in plan])
 
     def truncate(self, *, max_items: int) -> ChatContext:
-        """Truncate the chat context to the last N items in place.
+        """Truncate the chat context to the last `max_items` items in place.
 
-        Removes leading function calls to avoid partial function outputs.
-        Preserves the first instruction message (system/developer) by adding it back
-        to the beginning.
+        Leading function calls are dropped to avoid partial function outputs, and the first
+        instruction message (system/developer) is kept at the beginning. A `max_items` of 0
+        keeps only that instruction.
 
-        A `max_items` of 0 leaves nothing but that instruction: it asks for no conversational
-        items, so none are kept. A negative value is a programming error and raises ValueError.
+        Raises:
+            ValueError: If `max_items` is negative.
         """
         if max_items < 0:
             raise ValueError("max_items must be non-negative")
@@ -175,7 +172,7 @@ class ChatContext:
         exclude_instructions: bool = False,
         exclude_config_update: bool = False,
     ) -> ChatContext:
-        """Add messages from `other_chat_ctx` into this one, avoiding duplicates, and keep items sorted by created_at."""
+        """Add the items of `other_chat_ctx` missing from this one, sorted by `created_at`."""
         plan = _core.chat_ctx_merge_plan(
             self._items,
             other_chat_ctx.items,
@@ -198,8 +195,8 @@ class ChatContext:
         exclude_config_update: bool = False,
         strip_markup: bool = False,
     ) -> dict[str, object]:
-        """``{"items": [...]}``, each item's JSON dump (the core's ``chat_ctx_to_dict``).
-        ``strip_markup`` strips the ``<expr/>`` dialect from assistant messages."""
+        """``{"items": [...]}``, each item's JSON dump. ``strip_markup`` strips the ``<expr/>``
+        dialect from assistant messages."""
         return _core.chat_ctx_to_dict(
             self.items,
             exclude_image=exclude_image,
@@ -266,7 +263,6 @@ class ChatContext:
         GoogleFormatData | BedrockFormatData | AnthropicFormatData | MistralFormatData | None,
     ]:
         """Convert history to the upstream SDK's request types for the selected provider."""
-        # The native dialect writes the SDK wire schema; annotations preserve that contract.
         from .utils import to_chat_ctx
 
         messages, data = await to_chat_ctx(
@@ -279,11 +275,9 @@ class ChatContext:
         return messages, data
 
     def find_insertion_index(self, *, created_at: float) -> int:
-        """
-        Returns the index to insert an item by creation time.
+        """The index after the last item with `created_at <=` the given timestamp.
 
-        Iterates in reverse, assuming items are sorted by `created_at`.
-        Finds the position after the last item with `created_at <=` the given timestamp.
+        Assumes items are sorted by `created_at`.
         """
         for i in reversed(range(len(self._items))):
             if self._items[i].created_at <= created_at:
@@ -302,16 +296,11 @@ class ChatContext:
         return False
 
     def is_equivalent(self, other: ChatContext) -> bool:
-        """
-        Return True if `other` has the same sequence of items with matching
-        essential fields (IDs, types, and payload) as this context.
+        """True if `other` has the same items by id, type and payload.
 
-        Comparison rules:
-          - Messages: compares the full `content` list, `role` and `interrupted`.
-          - Function calls: compares `name`, `call_id`, and `arguments`.
-          - Function call outputs: compares `name`, `call_id`, `output`, and `is_error`.
-
-        Does not consider timestamps or other metadata.
+        Messages compare `content`, `role` and `interrupted`; function calls `name`, `call_id`
+        and `arguments`; function call outputs `name`, `call_id`, `output` and `is_error`.
+        Timestamps and other metadata are ignored.
         """
         if self is other:
             return True
@@ -326,8 +315,6 @@ class ChatContext:
 
 
 class _ReadOnlyChatContext(ChatContext):
-    """A read-only wrapper for ChatContext that prevents modifications."""
-
     error_msg = (
         "trying to modify a read-only chat context, "
         "edit the turn's context in on_user_turn_completed or hand a new history to "
@@ -339,7 +326,6 @@ class _ReadOnlyChatContext(ChatContext):
             logger.error(_ReadOnlyChatContext.error_msg)
             raise RuntimeError(_ReadOnlyChatContext.error_msg)
 
-        # override all mutating methods to raise errors
         append = extend = insert = pop = remove = clear = sort = reverse = _raise_error  # type: ignore
         __setitem__ = __delitem__ = __iadd__ = __imul__ = _raise_error  # type: ignore
 

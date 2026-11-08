@@ -1,9 +1,3 @@
-"""The ``Plugin`` a provider package registers itself with (docs/models.md, "Plugin authors").
-
-The server reads the registry: it logs each registered plugin at start, and the job processes'
-forkserver imports each plugin's package and its lazy exports once, ahead of any job.
-"""
-
 from __future__ import annotations
 
 import logging

@@ -1,6 +1,3 @@
-"""LiveKit Inference: the gateway's LLM, STT and TTS, its VAD, end-of-turn and interruption
-detectors, and the lazily loaded avatar and realtime integrations."""
-
 from __future__ import annotations
 
 import platform
@@ -66,8 +63,6 @@ def _resolve_credentials(
     api_key: NotGivenOr[str] | None,
     api_secret: NotGivenOr[str] | None,
 ) -> Credentials:
-    """Each given value, else the ladders and ``get_default_inference_url``; raises when the key
-    or the secret is missing."""
     given = [v if is_given(v) else None for v in (base_url, api_key, api_secret)]
     return _core.inference_credentials(*given)
 
@@ -95,8 +90,7 @@ def get_inference_headers(*, inference_class: str | None = None) -> dict[str, st
 
 
 class VAD(_facades.VAD):
-    """Silero voice activity detection, the detection machine in the core (``_core.InferenceVad``)
-    and the model native to the core when the build links it, else ``livekit-local-inference``'s."""
+    """Silero voice activity detection."""
 
     @property
     def provider(self) -> str:
@@ -245,7 +239,7 @@ def _json(overrides: float | dict[str, float]) -> JsonValue:
     return dict[str, JsonValue](overrides) if isinstance(overrides, dict) else overrides
 
 
-# The provider modules build on the gateway helpers and detectors above.
+# imported last: these modules use the helpers above
 from .llm import (  # noqa: E402
     LLM,
     LLMModels,

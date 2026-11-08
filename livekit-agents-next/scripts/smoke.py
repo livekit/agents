@@ -1,13 +1,3 @@
-"""Smoke run of the copy, with no LiveKit server and no room (room coverage is the DST's): a
-session with ``room=None``, with a scripted LLM, a scripted STT and a silent TTS written as
-plugins (so all three cross the core's provider views). It starts, says something, replies,
-runs a tool, explicitly switches to a second agent whose ``on_enter`` speaks, and closes; then
-``agent.run()``, the realtime legs, ``lk agent console``'s socket, a job run over the IPC
-socket, the CLI, the standalone provider retries and a job process's own log lines.
-
-    python livekit-agents-next/scripts/smoke.py
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -162,7 +152,6 @@ class _Chunked(tts.ChunkedStream):
 
 
 async def until(done: Callable[[], bool], what: str, timeout: float = 10) -> None:
-    """Wait, in real time, until ``done()``."""
     try:
         async with asyncio.timeout(timeout):
             while not done():
@@ -315,8 +304,6 @@ async def realtime() -> None:
 
 
 class _DyingSession(_RealtimeSession):
-    """Fails for good as soon as it opens."""
-
     def __init__(self, model: ScriptedRealtime) -> None:
         super().__init__(model)
         asyncio.get_running_loop().call_soon(
@@ -352,7 +339,7 @@ async def realtime_fallback() -> None:
 
 
 def _square(level: float, ms: int = 100) -> rtc.AudioFrame:
-    """A frame whose RMS is ``level``: a duplex model's output, its own silence included."""
+    """A square-wave frame whose RMS is ``level``."""
     n = SAMPLE_RATE * ms // 1000
     amp = int(level * 32767)
     data = b"".join(
@@ -507,16 +494,13 @@ async def openai_protocol_realtime() -> None:
     assert sessions[0]["audio"]["output"]["voice"] == "cedar", sessions[0]
     await session.aclose()
     await runner.cleanup()
-    # the connection's record, accounted in the realtime model's usage
     usage = session.usage
     assert usage.settled and [u.model for u in usage.models] == ["gpt-realtime"], usage
     print(f"usage_requests={usage.requests}")
 
 
 async def console() -> None:
-    """``lk agent console``: the CLI's socket is the session's audio and its remote session's
-    transport. The CLI asks for the session's state and a typed turn, sees the session's events,
-    acks the played audio, and the socket ends when the session closes."""
+    """``lk agent console``'s socket: session state, a typed turn, events, playback acks, close."""
     import struct
 
     from livekit.agents.voice._session_bindings import ConsoleCall
@@ -595,9 +579,8 @@ async def console() -> None:
 
 
 async def job() -> None:
-    """A console job, as a job process runs it: the entrypoint connects (twice: once is made) and
-    waits for the participant in the room, an API call is skipped, the shutdown it asks for runs
-    the shutdown callback and tells the parent."""
+    """A console job over IPC: connect (twice, deduplicated), wait for the participant, a skipped
+    API call, and a requested shutdown that runs the callbacks and reaches the parent."""
     from livekit.agents._generated.worker_server import AcceptArguments, JobInfo, RunningJobInfo
     from livekit.agents.ipc import JobRunnerOptions, JobStatus
     from livekit.agents.ipc.child import JobArgs, _JobProc
@@ -632,8 +615,6 @@ async def job() -> None:
     )
 
     class Logs(logging.Handler):
-        """What the core's supervisor logs on the worker's logger."""
-
         def __init__(self) -> None:
             super().__init__(logging.DEBUG)
             self.records: list[logging.LogRecord] = []
@@ -647,8 +628,6 @@ async def job() -> None:
     agents_logger.setLevel(logging.DEBUG)
 
     class Parent:
-        """The worker's side, the core's supervisor's host."""
-
         def __init__(self) -> None:
             self.endpoint: asyncio.Future[int] = asyncio.get_running_loop().create_future()
             self.launch: Any = None
@@ -660,8 +639,7 @@ async def job() -> None:
         async def _core_completed(self, completion: Any) -> None:
             pass
 
-    # the worker's side is the core's supervisor of a job thread: no pings, nothing killed; the
-    # "thread" is this loop serving the job's end
+    # a thread job served on this loop: no pings, nothing to kill
     parent = Parent()
     sup = _core.JobSupervisor(
         parent,
@@ -738,7 +716,6 @@ async def job() -> None:
 
 
 async def workflows() -> None:
-    """The workflow checks (the core's)."""
     from livekit.agents.beta import workflows as wf
     from livekit.agents.llm import ToolError
 
@@ -758,8 +735,7 @@ async def workflows() -> None:
 
 
 async def toolsets() -> None:
-    """Tool search: a search loads the matching tools (ranked by the core); the proxy returns
-    their schemas and calls one by name, its arguments checked by the core."""
+    """A search loads the matching tools; the proxy returns their schemas and calls one by name."""
     from livekit.agents.beta import KeywordSearchStrategy, ToolProxyToolset, ToolSearchToolset
     from livekit.agents.llm import ToolError
 
@@ -803,8 +779,7 @@ async def toolsets() -> None:
 
 
 async def cli() -> None:
-    """What ``lk agent`` drives, short of a LiveKit server: the command line, the structured JSON log lines, the dev channel to a stand-in
-    CLI, and the exit policy."""
+    """What ``lk agent`` drives: argument parsing, JSON log lines, the dev channel, shutdown."""
     import struct
     import traceback
 
@@ -830,7 +805,7 @@ async def cli() -> None:
     line = json.loads(agents_cli._LogFormatter(ensure_ascii=True).format(record))
     assert (line["message"], line["level"], line["job_id"]) == ("x=3", "ERROR", "AJ_1"), line
     assert "ValueError: boom" in line["exception"], line
-    assert traceback  # the record carries a real traceback
+    assert traceback
 
     async def read(reader: asyncio.StreamReader) -> agent_dev.AgentDevMessage:
         (length,) = struct.unpack("!I", await reader.readexactly(4))
@@ -866,7 +841,7 @@ async def cli() -> None:
 
     stand_in = await asyncio.start_server(lk_cli, "127.0.0.1", 0)
     port = stand_in.sockets[0].getsockname()[1]
-    # the dev channel reads the server runtime's own job processes: none before it runs
+    # no job process runs yet, so the dev channel reports none
     from livekit.agents import AgentServer
 
     server = AgentServer(
@@ -896,8 +871,7 @@ async def cli() -> None:
 
 
 async def decoder() -> None:
-    """``AudioStreamDecoder``: a 16 kHz WAV comes out at its own rate with ``sample_rate=None``,
-    as the reference's, and at the rate asked otherwise."""
+    """``sample_rate=None`` keeps a 16 kHz WAV's own rate; otherwise it is resampled."""
     import io
     import wave
 
@@ -1022,8 +996,8 @@ def metrics_events(provider: Any) -> list[Any]:
 
 
 async def providers() -> None:
-    """A provider called on its own retries per ``conn_options``, as the core's policy decides:
-    each retried failure an ``error`` event marked recoverable, the last one not."""
+    """A standalone provider retries per ``conn_options``: each retried failure emits a
+    recoverable ``error`` event, the last one a non-recoverable one."""
     print("== standalone provider retries")
     chat_ctx = llm.ChatContext.empty()
     chat_ctx.add_message(role="user", content="hello")
@@ -1032,7 +1006,7 @@ async def providers() -> None:
     measured = metrics_events(model)
     reply = await model.chat(chat_ctx=chat_ctx).collect()
     assert (reply.text, model.calls, seen) == ("You said: hello", 3, [True, True]), (reply, seen)
-    # a provider meters its own requests: one record for the request that answered
+    # one metrics record, for the request that answered
     assert [type(m).__name__ for m in measured] == ["LLMMetrics"], measured
 
     model = FlakyLLM(fails=9)
@@ -1068,8 +1042,7 @@ async def providers() -> None:
     assert said.alternatives[0].text == "batch words" and seen == [True], seen
     assert [type(m).__name__ for m in measured] == ["STTMetrics"], measured
 
-    # the core runs a gateway client as its own, each session with its job's identity, unless a
-    # subclass overrides what the core would bypass
+    # a gateway LLM gets a native leg per session, unless a subclass overrides chat()
     from livekit.agents import _bindings, inference
 
     class Logged(inference.LLM):
@@ -1084,8 +1057,7 @@ async def providers() -> None:
 
 
 async def llm_prewarm() -> None:
-    """The gateway LLM is prewarmed as the session starts (``GET /models``, the reference's
-    ``models.list()``), so a call's first reply finds a connection open."""
+    """The gateway LLM is prewarmed (``GET /models``) as the session starts."""
     from livekit.agents import inference
 
     print("== llm prewarm")
@@ -1164,8 +1136,8 @@ if __name__ == "__main__":
 
 
 def job_logs() -> None:
-    """A job process writes its own log lines to the stdout it inherits, as the worker does
-    stamped with its pid and its job; non-JSON extras use their string representation."""
+    """A job process logs JSON to its inherited stdout, stamped with its pid and job; non-JSON
+    extras use their string representation."""
     import os
     import tempfile
 
@@ -1176,7 +1148,7 @@ def job_logs() -> None:
     with tempfile.TemporaryDirectory() as root:
         script = Path(root, "job_logs.py")
         script.write_text(_JOB_LOGS)
-        # "none": a worker that set up no logging, its processes still log (JSON off a terminal)
+        # "none": with no logging set up, job processes still log (JSON off a terminal)
         for style in ("json", "none"):
             run = subprocess.run(
                 [sys.executable, str(script), style], capture_output=True, text=True, timeout=120
@@ -1199,7 +1171,6 @@ async def main() -> int:
         print(f"function_tools_executed {calls}")
 
     def on_state(ev: object) -> None:
-        # the session's state is the event's by the time a listener runs
         assert session.agent_state == ev.new_state  # type: ignore[attr-defined]
         print(f"agent_state {ev.new_state}")  # type: ignore[attr-defined]
 
@@ -1213,17 +1184,15 @@ async def main() -> int:
     await session.start(front_desk(), room=None)
 
     print("== say")
-    # With no audio output the core can end the say before the next line runs: the callbacks
-    # still wait for the session's speech_done, so the removal reaches a pending one.
+    # without audio output the say can end before the next line; callbacks wait for speech_done
     handle = session.say("Let me say something.")
-    # set before the core created the speech: the speech is created with it
+    # set before the speech is created
     handle.allow_interruptions = False
     calls: list[str] = []
     handle.add_done_callback(lambda h: calls.append(f"first {h.id}"))
     handle.add_done_callback(dropped := lambda h: calls.append("dropped"))
     handle.add_done_callback(lambda h: calls.append("second"))
     handle.remove_done_callback(dropped)
-    # the callbacks run when the session reports the speech done, after `done()` turns true
     await until(lambda: len(calls) >= 2, "say()'s done callbacks did not run")
     assert handle.done() and not handle.allow_interruptions, "the setter before creation was lost"
     assert calls == [f"first {handle.id}", "second"], calls
@@ -1236,8 +1205,7 @@ async def main() -> int:
     print("== wait_if_not_interrupted")
 
     async def unfinished() -> AsyncIterator[str]:
-        # Words that never end, so the speech is still running when it is interrupted: with no
-        # audio output a fixed sentence can end before `interrupt()`, which is then a no-op.
+        # never ends, so the speech is still running at interrupt() even without audio output
         yield "A long sentence the agent will not finish saying."
         await asyncio.Event().wait()
 
@@ -1316,8 +1284,7 @@ async def main() -> int:
 
 
 class _Tracebacks(logging.StreamHandler):  # type: ignore[type-arg]
-    """Prints the warnings and errors, and counts those carrying an exception (a callback the
-    emitter or the loop swallowed): the smoke fails on any."""
+    """Counts logged exceptions (swallowed callback errors): the smoke fails on any."""
 
     count = 0
 

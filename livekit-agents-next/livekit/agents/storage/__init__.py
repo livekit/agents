@@ -1,6 +1,3 @@
-"""Session storage: ``AgentDBStorage`` and ``SQLiteStorage``, durable thread and lane handles, and
-the errors a door's user catches."""
-
 from __future__ import annotations
 
 import functools
@@ -37,8 +34,7 @@ class Storage:
         if type(self) is Storage:
             raise TypeError("Storage is abstract: construct AgentDBStorage or SQLiteStorage")
         self._core = _core.Storage(**args)
-        # what a job process rebuilds the storage from (``__reduce__``); an omitted holder
-        # stays omitted, so a job process takes its own pid's default
+        # rebuilt from in job processes; an omitted holder stays omitted so each takes its pid
         self._args = args
 
     @property
@@ -56,7 +52,6 @@ class Storage:
         return self._core
 
     async def _open(self, thread_id: str) -> _core.Thread:
-        """The thread's handle, its writes under this worker's holder. Takes no lease."""
         return await self._core.open(thread_id, self.holder)
 
     async def aclose(self) -> None:
@@ -71,8 +66,6 @@ def _rebuild(cls: type[Storage], args: dict[str, Any]) -> Storage:
 
 
 class _StorageHandle(Storage):
-    """A borrowed native namespace hydrated by the runtime."""
-
     def __init__(self, native: _core.Storage) -> None:
         self._core = native
         self._args = {}
@@ -82,13 +75,12 @@ class _StorageHandle(Storage):
 
 
 class AgentDBStorage(Storage):
-    """Threads on LiveKit Cloud's agentstore, reached through the public API of ``LIVEKIT_URL``'s
-    project. It is built before the server runs: ``AgentServer(ws_url=, api_key=, api_secret=)``
-    does not configure it.
+    """Threads on LiveKit Cloud, in ``LIVEKIT_URL``'s project. ``AgentServer``'s credentials do
+    not configure it.
 
     Args:
         api_key, api_secret: The project's key pair, ``LIVEKIT_API_KEY`` and
-            ``LIVEKIT_API_SECRET`` when omitted; the worker mints its own tokens from them.
+            ``LIVEKIT_API_SECRET`` when omitted.
         lease_ttl: Lease lifetime; ``LIVEKIT_AGENTDB_LEASE_TTL`` (float seconds) when omitted,
             else 10 seconds.
         renew_interval: Renewal interval; ``LIVEKIT_AGENTDB_RENEW_INTERVAL`` (float seconds)
@@ -153,8 +145,7 @@ class SQLiteStorage(Storage):
 
 
 class Thread(_facades.Thread):
-    """``ctx.thread``: the durable thread (docs/threads.md). Each read opens the thread's
-    database for the call; there is nothing to open or close."""
+    """``ctx.thread``: the durable thread. There is nothing to open or close."""
 
     def __init__(self, storage: Storage, thread_id: str, *, agent_name: str) -> None:
         self._storage = storage
@@ -174,10 +165,8 @@ class Thread(_facades.Thread):
 
 @dataclass(frozen=True)
 class _CallThreadEntrypoint:
-    """The ``rtc_session`` entrypoint of a server with storage: the call's thread is resolved
-    first, the ``thread_id`` of the dispatch metadata, else a new thread, as ``ctx.thread``.
-    An unknown or deleted id, or a storage failure, is logged and the call runs with no
-    thread."""
+    """Resolves the call's thread (dispatch ``thread_id``, else a new one) as ``ctx.thread``; on
+    a storage failure the call runs with no thread."""
 
     entrypoint: Callable[[JobContext], Awaitable[None]]
     storage: Storage

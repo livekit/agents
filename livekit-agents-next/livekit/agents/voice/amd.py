@@ -1,12 +1,3 @@
-"""``AMD``: the answering-machine detector a call attaches to its session.
-
-The core runs the detector (``_core.VoiceSession.attach_amd``): the wait on the room for the
-callee's answer, the classifier, its timers, the authorization hold, the IVR navigator's close,
-AMD's own STT and the interrupt on a machine verdict. This class resolves the models and hands a
-``machine-ivr`` verdict to the navigator. The classifier's tools here are the objects a host LLM is
-handed beside the core's specs, and are never executed.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -35,6 +26,8 @@ __all__ = [
     "AMDPredictionEvent",
 ]
 __all__ += _public.__all__
+
+# the classifier's tools are only handed to the LLM for their schemas; they are never executed
 
 
 @function_tool
@@ -145,9 +138,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     async def execute(self) -> AMDPredictionEvent:
         """Wait for the verdict and return it.
 
-        Speech playout stays unauthorized until the verdict; the core then interrupts the agent
-        on a machine (``interrupt_on_machine``) and resumes. A ``machine-ivr`` verdict starts
-        IVR navigation first (``ivr_detection``).
+        Speech playout is held until the verdict; on a machine the agent is interrupted
+        (``interrupt_on_machine``). A ``machine-ivr`` verdict starts IVR navigation first
+        (``ivr_detection``).
         """
         if self._attached:
             await self._verdict_ready.wait()
@@ -220,7 +213,6 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         session._amd = self
 
     def _on_prediction(self, result: AMDPredictionEvent) -> None:
-        """The core's ``amd_result``."""
         self._result = result
         logger.info(
             "amd prediction",

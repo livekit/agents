@@ -1,8 +1,3 @@
-"""The worker's job processes, as the core (``_core.JobSupervisor``, the server runtime's pool)
-supervises and pools them: this module starts them (``multiprocessing``, the forkserver's
-preloads, a job thread), finishes the start method's bookkeeping and hands the core the user's
-callbacks. What runs inside a process is ``ipc.child``."""
-
 from __future__ import annotations
 
 import asyncio
@@ -28,8 +23,6 @@ from . import child
 
 
 class _JobThread:
-    """A job thread: it reports its return on its launch, it is never killed."""
-
     def __init__(self, args: child.JobArgs, launch: _core.ThreadLaunch) -> None:
         def run() -> None:
             try:
@@ -44,11 +37,7 @@ class _JobThread:
 
 
 class JobLauncher:
-    """Starts one job runner for its ``_core.JobSupervisor``: a process of ``mp_ctx``'s start
-    method (``spawn``, or ``forkserver`` on Linux) or a thread of this process, on the job's end
-    of the channel the core made; ``user_arguments`` is the job's ``JobProcess.user_arguments``.
-    The core owns everything after: the runner's state, its
-    supervision and its end. The ``_core_*`` methods are the core's calls."""
+    """Starts one job runner: a process of ``mp_ctx``'s start method, or a thread."""
 
     def __init__(
         self,
@@ -79,11 +68,9 @@ class JobLauncher:
     async def _core_launch(
         self, endpoint: int, launch: _core.ProcessLaunch | _core.ThreadLaunch
     ) -> None:
-        # the job's end: a socket on Unix, a named pipe on Windows
         child_end = child.PipeEnd(endpoint) if os.name == "nt" else socket.socket(fileno=endpoint)
         if isinstance(launch, _core.ThreadLaunch):
             try:
-                # the thread shares this process's logging and owns the job's end
                 self._proc = _JobThread(
                     child.JobArgs(**{**vars(self._args), "mp_cch": child_end}), launch
                 )
@@ -101,16 +88,15 @@ class JobLauncher:
             def register(pid: int, sentinel: int, owned_handles: list[int]) -> None:
                 launch.process_started(pid, sentinel, method, owned_handles)
 
-            # The parent must keep receiving shutdown signals while children start.
-            # Job processes install their own signal policy in ipc.child.
+            # Off the loop so the parent keeps handling shutdown signals while children start.
             await self._loop.run_in_executor(None, start_process, self._proc, method, register)
         finally:
-            # the process got its own copy of the end
+            # The child process holds its own copy.
             child_end.close()
 
     async def _core_completed(self, completion: JobCompletion) -> None:
         if isinstance(self._proc, BaseProcess):
-            # Start-method bookkeeping only: the native owner has already reaped the child.
+            # Bookkeeping only: the core has already reaped the child.
             self._proc._popen.returncode = completion.exit_code  # type: ignore[attr-defined]
             self._proc._popen.finalizer()  # type: ignore[attr-defined]
 
@@ -144,7 +130,6 @@ class _ForkServerState(Protocol):
 
 
 def preload_module_names(modules: Sequence[str]) -> tuple[str, ...]:
-    """Validate the launch configuration before allocating a child process."""
     if isinstance(modules, str):
         raise TypeError("preload_modules must be a sequence of module names, not a string")
     names = tuple(modules)
@@ -157,8 +142,7 @@ def preload_module_names(modules: Sequence[str]) -> tuple[str, ...]:
 
 
 def load_preload_modules(modules: Sequence[str]) -> None:
-    """Import in order and retain the failing module and original cause, then every registered
-    plugin's lazy exports, so a job's first use of a plugin imports nothing on its loop."""
+    # Plugin lazy exports are resolved too, so a job's first use imports nothing on its loop.
     for module in modules:
         try:
             importlib.import_module(module)
@@ -172,8 +156,7 @@ def load_preload_modules(modules: Sequence[str]) -> None:
 
 
 def _load_exports(module: ModuleType) -> None:
-    """Resolves ``module.__all__`` and, below it, its own subpackages' exports. An export whose
-    optional dependency is missing stays unresolved: it fails only where it is used."""
+    # An export whose optional dependency is missing stays unresolved; it fails only when used.
     for name in getattr(module, "__all__", ()):
         try:
             value = getattr(module, name)
@@ -185,13 +168,12 @@ def _load_exports(module: ModuleType) -> None:
 
 
 def configure_forkserver(context: BaseContext, modules: Sequence[str]) -> None:
-    """Install one fail-closed preload entrypoint before the forkserver starts."""
     modules = preload_module_names(modules)
     from multiprocessing.forkserver import _forkserver
 
     state = cast(_ForkServerState, _forkserver)
-    # Retain the ordered configuration in multiprocessing's own preload inventory. The
-    # bootstrap already imports these modules, so its trailing imports are cached no-ops.
+    # _preload_forkserver already imports `modules` (failing closed), so the trailing entries
+    # are cached no-ops kept only for the consistency check below.
     inventory = ["livekit.agents.ipc._preload_forkserver", *modules]
     if state._forkserver_pid is not None:
         if state._preload_modules != inventory:
@@ -213,7 +195,6 @@ def start_process(
     elif method == "forkserver":
         from multiprocessing.popen_forkserver import Popen
     else:
-        # Both POSIX concrete classes have the same bootstrap contract.
         from multiprocessing.popen_spawn_posix import Popen  # type: ignore[assignment]
 
     class OwnedPopen(Popen):
@@ -221,13 +202,13 @@ def start_process(
             try:
                 super().__init__(process_obj)
             finally:
-                # Upstream may fail after OS launch but before BaseProcess.start assigns Popen.
-                # No asynchronous hop or descriptor allocation can intervene in this handoff.
+                # Upstream may fail after the OS launch but before BaseProcess.start assigns
+                # Popen; hand any started process to the core regardless.
                 try:
                     sentinel = self.sentinel
                     finalizer = self.finalizer
                 except AttributeError:
-                    pass  # No process identity was published by this start method.
+                    pass  # no process was started
                 else:
                     try:
                         pid = self.pid
@@ -242,7 +223,7 @@ def start_process(
                     register(pid, sentinel, owned)
 
     def factory(process_obj: BaseProcess) -> OwnedPopen:
-        # The temporary factory contains a native handle and must never enter the child pickle.
+        # The factory holds a native handle and must never enter the child pickle.
         del process_obj._Popen  # type: ignore[attr-defined]
         return OwnedPopen(process_obj)
 
@@ -250,7 +231,7 @@ def start_process(
     try:
         process.start()
     finally:
-        # Native supervision is the only waiter, including when Popen.__init__ raised.
+        # The core is the only waiter, even when Popen.__init__ raised.
         from multiprocessing.process import _children  # type: ignore[attr-defined]
 
         _children.discard(process)

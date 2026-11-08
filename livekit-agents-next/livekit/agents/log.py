@@ -69,19 +69,12 @@ logger: Logger = logging.getLogger("livekit.agents")  # type: ignore[assignment]
 logging.setLoggerClass(_logger_class)
 
 
-# LiveKit Cloud injects LIVEKIT_REGION_NAME into deployed agents (e.g. "ca-central").
-# The variable is inherited by the job processes, so every process reads
-# it directly. It is unset outside of LiveKit Cloud, in which case no field is added.
+# Set by LiveKit Cloud on deployed agents and inherited by job processes; unset elsewhere.
 _deployed_region = os.environ.get("LIVEKIT_REGION_NAME") or None
 
 
 class _GlobalLogFieldsFilter(logging.Filter):
-    """Adds the process-wide log fields to every record passing through a handler.
-
-    Attributes already on the record are never overwritten, so an explicit
-    ``extra={"region": ...}`` still wins.
-    """
-
+    # Never overwrites an attribute already on the record, so extra={"region": ...} wins.
     def filter(self, record: logging.LogRecord) -> bool:
         if _deployed_region is not None and not hasattr(record, "region"):
             record.region = _deployed_region
@@ -93,14 +86,8 @@ _global_log_fields_filter = _GlobalLogFieldsFilter()
 
 
 def _add_global_log_fields(handler: logging.Handler) -> None:
-    """Attach the global log fields (currently the deployed region) to ``handler``.
-
-    A filter is used instead of a log record factory because the factory runs before
-    ``Logger.makeRecord`` applies ``extra``, which would make any user-provided
-    ``extra={"region": ...}`` raise a KeyError.
-
-    No-op when there is nothing to add, and safe to call more than once.
-    """
+    # A filter, not a record factory: the factory runs before makeRecord applies `extra`,
+    # so a user-provided extra={"region": ...} would raise KeyError.
     if _deployed_region is None:
         return
 

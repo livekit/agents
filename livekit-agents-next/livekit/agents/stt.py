@@ -1,6 +1,3 @@
-"""Speech to text: the base classes a provider subclasses (generated from the core's
-declarations) and the adapters, whose fallback chain is the core's (``_core.FallbackStt``)."""
-
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
@@ -19,11 +16,9 @@ __all__ = [
 __all__ += _public.__all__
 
 
-# A structural type, which has no core counterpart to be generated from.
 @runtime_checkable
 class SpeakerContext(Protocol):
-    """A speaker model an STT context provides, which the expressive system turns into LLM
-    instructions."""
+    """A speaker model an STT context provides, turned into LLM instructions."""
 
     def to_instructions(self) -> str: ...
 
@@ -57,7 +52,7 @@ class FallbackAdapter(_facades.FallbackAdapter):
 
 class StreamAdapter(_facades.StreamAdapter):
     """A recognize-only STT as a streaming one: the VAD cuts the audio into utterances, each
-    recognized on its own (``_core.SttStreamAdapter``)."""
+    recognized on its own."""
 
     @property
     def model(self) -> str:

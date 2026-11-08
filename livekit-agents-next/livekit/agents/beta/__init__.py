@@ -1,11 +1,3 @@
-"""Prebuilt tools and toolsets. ``EndCallTool`` ends the call after the agent's goodbye and
-``send_dtmf_events`` sends keypad (DTMF) tones; the core decides when the call closes and sends the
-tones. ``ToolSearchToolset`` loads the tools a search finds and ``ToolProxyToolset`` keeps two fixed
-tools (search and call), keeping a large tool collection out of the model's context: the ranking,
-the arguments' checks and the replies to the model are the core's, and a custom ``SearchStrategy``
-(an embedding search, say) can stand in for the built-in ones. ``workflows`` holds the building
-blocks for capture flows: result records, capture checks, DTMF reception and warm transfer."""
-
 from __future__ import annotations
 
 import inspect
@@ -63,16 +55,17 @@ class EndCallTool(Toolset):
         on_tool_called: Callable[[ToolCalledEvent], Awaitable[None]] | None = None,
         on_tool_completed: Callable[[ToolCompletedEvent], Awaitable[None]] | None = None,
     ):
-        """
-        This tool allows the agent to end the call and disconnect from the room.
+        """Lets the agent end the call after its goodbye.
 
         Args:
-            extra_description: Additional description to add to the end call tool.
-            delete_room: Whether to delete the room when the user ends the call. deleting the room disconnects all remote users, including SIP callers.
-            end_instructions: Tool output to the LLM for generating the tool response.
-            ignore_on_enter: Hide the tool during ``on_enter`` so the model can't end the call while greeting.
-            on_tool_called: Callback to call when the tool is called.
-            on_tool_completed: Callback to call when the tool is completed.
+            extra_description: Appended to the tool's description.
+            delete_room: Delete the room when the call ends, disconnecting every remote
+                participant, SIP callers included.
+            end_instructions: The tool output the LLM words its goodbye from.
+            ignore_on_enter: Hide the tool during ``on_enter`` so the model cannot end the call
+                while greeting.
+            on_tool_called: Called when the tool is called.
+            on_tool_completed: Called when the tool completes; may change its output.
         """
         end_call_tool = function_tool(
             self._end_call,
@@ -88,8 +81,7 @@ class EndCallTool(Toolset):
 
     async def _end_call(self, ctx: RunContext) -> Any | None:
         logger.debug("end_call tool called")
-        # the core closes the session once this speech (or a realtime model's own reply to the
-        # tool result) is done
+        # the session closes once this speech (or a realtime model's reply to the result) is done
         session = ctx.live_session
         if session is None:
             raise RuntimeError("end_call ends a call; this tool runs outside one")
@@ -106,7 +98,6 @@ class EndCallTool(Toolset):
         return completed_ev.output
 
     def _on_session_close(self, ev: CloseEvent) -> None:
-        """The call is over: the job ends, deleting the room on its way out when asked."""
         job_ctx = get_job_context(required=False)
         if job_ctx is None:
             return
@@ -145,15 +136,10 @@ class SearchStrategy(Protocol):
 
 
 class ToolSearchToolset(Toolset):
-    """Wraps tools/toolsets and exposes a tool_search function for dynamic loading.
+    """Exposes a single ``tool_search`` tool; the tools it finds are loaded into the context.
 
-    Instead of loading all tool definitions into LLM context, this exposes a single
-    ``tool_search`` function. When the LLM calls it, matching tools are dynamically
-    loaded into the context.
-
-    Each tool (FunctionTool, RawFunctionTool, ProviderTool) is indexed as its own
-    SearchItem. If a matched tool belongs to a Toolset, the entire Toolset is loaded
-    atomically.
+    Each tool is indexed as its own ``SearchItem``. A matched tool that belongs to a Toolset
+    loads the whole Toolset.
     """
 
     def __init__(
@@ -252,10 +238,8 @@ class ToolSearchToolset(Toolset):
 
 
 class KeywordSearchStrategy:
-    """Keyword search using regex matching (the core's ``keyword_search``).
-
-    Scoring: name match = 3pts, description match = 2pts, parameter name/desc match = 1pt each.
-    """
+    """Keyword search. A name match scores 3, a description match 2, and each parameter name or
+    description match 1."""
 
     def build_index(self, items: list[SearchItem]) -> None:
         for item in items:
@@ -270,20 +254,13 @@ class KeywordSearchStrategy:
 
 
 class BM25SearchStrategy:
-    """BM25-based search strategy (the core's ``BM25Index``).
-
-    BM25 ranks items by term frequency, inverse document frequency, and document
-    length normalization. Better than simple keyword matching for larger tool
-    collections because it down-weights common terms and rewards rare, specific matches.
-
-    Each SearchItem is treated as a document composed of its name (weighted 3x),
-    description (weighted 2x), and parameter names/descriptions (weighted 1x).
+    """BM25 search, better than keyword matching for large tool collections: common terms
+    weigh less and rare, specific matches more. An item's name weighs 3x, its description 2x
+    and its parameters 1x.
 
     Args:
-        k1: Term frequency saturation parameter. Higher values give more weight to
-            repeated terms. Default 1.5.
-        b: Length normalization parameter (0-1). Higher values penalize longer
-            documents more. Default 0.75.
+        k1: Term frequency saturation; higher gives repeated terms more weight.
+        b: Length normalization (0-1); higher penalizes longer documents more.
     """
 
     def __init__(self, *, k1: float = 1.5, b: float = 0.75) -> None:
@@ -304,14 +281,8 @@ class BM25SearchStrategy:
 
 
 class ToolProxyToolset(ToolSearchToolset):
-    """Exposes exactly two fixed tools: tool_search and call_tool.
-
-    Unlike ToolSearchToolset which dynamically modifies the tool list,
-    ToolProxyToolset keeps a constant tool list. ``tool_search`` returns
-    tool schemas as text, and ``call_tool`` executes tools by name.
-
-    This is useful for maximizing prompt cache hit rates with providers
-    that cache based on tool definitions (e.g. Anthropic, OpenAI).
+    """Exposes two fixed tools: ``tool_search`` returns tool schemas as text and ``call_tool``
+    runs a tool by name. The constant tool list keeps provider prompt caches warm.
     """
 
     def __init__(
@@ -342,13 +313,10 @@ class ToolProxyToolset(ToolSearchToolset):
 
     @property
     def tools(self) -> list[Tool | Toolset]:
-        # constant tool list — only tool_search and call_tool
         return [self._search_tool, self._call_tool]
 
     async def setup(self) -> Self:
         await super().setup()
-
-        # build a ToolContext from all wrapped tools for call_tool execution
         self._tool_ctx = ToolContext(self._tools)
         return self
 

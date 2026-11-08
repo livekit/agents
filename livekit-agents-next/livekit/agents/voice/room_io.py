@@ -1,10 +1,3 @@
-"""The room a session runs in: its options (``RoomOptions`` and the per-track input and output
-options), and ``livekit.rtc`` as the core's room traits see it (``RtcRoom`` and its participants,
-publications and sources). Each adapter holds its SDK object as ``sdk``: the core's generated
-proxies read and call the SDK through it, and each ``_core_<method>`` here is an SDK call that
-builds or converts more than a name. Stream writers and video sources are SDK objects the core
-calls directly; the SDK's events reach the core through the generated ``rtc_events``."""
-
 from __future__ import annotations
 
 import functools
@@ -37,12 +30,7 @@ NoiseCancellationSelector: TypeAlias = Callable[
 
 
 class Room:
-    """An ``rtc.Room`` (``sdk``) as the core's ``RtcRoom``, which takes the SDK room through it:
-    its event bus (``bus``), RPC router and local participant. Its SDK events are delivered into
-    the bus; one per room, so the handlers are registered once. The core reads the SDK room's
-    attributes through ``sdk``; the methods here are the calls that build SDK objects or register
-    SDK handlers."""
-
+    # one adapter per rtc.Room, so its SDK event handlers are registered once
     sdk: rtc.Room
     bus: _core.RoomEventBus
     rpc_router: _core._core_RoomRpcRouter
@@ -101,15 +89,12 @@ class Room:
 
 
 class LocalParticipant:
-    """The room's ``rtc.LocalParticipant`` (``sdk``, resolved on each read: it exists once the
-    room connects) as the core's ``LocalParticipant``. The methods here build SDK tracks,
-    transcriptions, streams and RPC handlers."""
-
     def __init__(self, room: Room) -> None:
         self._room = room
 
     @property
     def sdk(self) -> rtc.LocalParticipant:
+        # resolved on each read: it exists only once the room connects
         return self._room.sdk.local_participant
 
     def _core_track_publications(self) -> list[TrackPublication]:
@@ -160,8 +145,6 @@ class LocalParticipant:
 
 
 class AudioSource:
-    """An ``rtc.AudioSource`` (``sdk``), with the ledger of what it played and threw away."""
-
     def __init__(self, source: rtc.AudioSource) -> None:
         self.sdk = source
         self._ledger = _core.PlayoutLedger()
@@ -183,8 +166,6 @@ class AudioSource:
 
 
 class RemoteParticipant:
-    """An ``rtc.RemoteParticipant`` (``sdk``) of ``room``, whose publications it hands out."""
-
     def __init__(self, room: Room, participant: rtc.RemoteParticipant) -> None:
         self._room = room
         self.sdk = participant
@@ -194,9 +175,6 @@ class RemoteParticipant:
 
 
 class TrackPublication:
-    """A local or remote ``rtc.TrackPublication`` (``sdk``) of ``room``; each side answers its own
-    half. The methods here open its SDK streams and change its subscription."""
-
     def __init__(self, room: Room, publication: rtc.TrackPublication) -> None:
         self._room = room
         self.sdk = publication
@@ -252,12 +230,9 @@ class TrackPublication:
 
 
 class _AudioStream(AsyncIterator[rtc_wire.AudioStreamItem]):
-    """One input track's frames, through its processors. A processor that fails on a frame is
-    reported ahead of it, and the frame goes on as that processor received it.
-
-    The SDK stream opens on the first read, on the event loop: the core opens this from its own
-    thread, and an SDK stream binds the loop it is created on."""
-
+    # The SDK stream opens on the first read: the core creates this off the event loop, and an
+    # SDK stream binds the loop it is created on. A failing processor is reported ahead of the
+    # frame, which continues as that processor received it.
     def __init__(
         self,
         open_stream: Callable[[], rtc.AudioStream],
@@ -300,7 +275,7 @@ class _AudioStream(AsyncIterator[rtc_wire.AudioStreamItem]):
         items: list[rtc_wire.AudioStreamItem] = []
         nc = self._noise_cancellation
         if isinstance(nc, rtc.FrameProcessor) and nc.enabled:
-            # Processors may mutate their input before raising; keep the span they received.
+            # processors may mutate their input before raising; keep a copy of what they received
             kept = _copy(frame)
             try:
                 frame = nc._process(frame)
@@ -361,8 +336,7 @@ def _processor_failed(processor: object, cause: Exception) -> rtc_wire.AudioStre
 
 
 class _VideoStream(AsyncIterator[rtc.VideoFrameEvent]):
-    """One input track's frames; the SDK stream opens on the first read, as `_AudioStream`."""
-
+    # opens the SDK stream on the first read, like `_AudioStream`
     def __init__(self, open_stream: Callable[[], rtc.VideoStream]) -> None:
         self._open = open_stream
         self._stream: rtc.VideoStream | None = None

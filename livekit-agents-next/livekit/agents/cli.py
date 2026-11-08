@@ -1,5 +1,3 @@
-"""Python launcher adapter: runs the supplied server, normalizes logs, and owns asyncio."""
-
 from __future__ import annotations
 
 import asyncio
@@ -29,7 +27,6 @@ from .worker import AgentServer
 
 __all__ = ["run_app"]
 
-# noisy loggers are set to warn by default
 NOISY_LOGGERS = [
     "httpx",
     "httpx2",
@@ -49,7 +46,7 @@ NOISY_LOGGERS = [
 
 
 def run_app(server: AgentServer) -> None:
-    """Launch an explicitly supplied server through the same command interface."""
+    """Run ``server`` with the command (start, console) given on the command line."""
     http_client._export_ca_paths()
     if status := _launch(sys.argv[1:], server):
         raise SystemExit(status)
@@ -75,10 +72,6 @@ def _dispatch(server: AgentServer, args: CliArgs) -> int:
     return _run_worker(server, args)
 
 
-# --- logs --------------------------------------------------------------------------------------
-
-
-# `logging.LogRecord`'s own attributes, which a line never repeats as extras.
 _RECORD_ATTRIBUTES = frozenset(logging.makeLogRecord({}).__dict__) | {"asctime", "message"}
 
 
@@ -109,8 +102,6 @@ def _lenient_mapping(value: Mapping[object, object]) -> dict[str, object]:
 
 
 def _lenient(value: object) -> object:
-    """A record's attribute as JSON, as the reference's encoder writes it: a date by its
-    ``isoformat()``, anything else not JSON by its ``str()``."""
     if value is None or isinstance(value, (bool, int, str)):
         return value
     if isinstance(value, float):
@@ -125,8 +116,6 @@ def _lenient(value: object) -> object:
 
 
 class _LogFormatter(logging.Formatter):
-    """Render JSON, escaping Unicode only when the host stream requires it."""
-
     def __init__(self, *, ensure_ascii: bool) -> None:
         super().__init__()
         self._ensure_ascii = ensure_ascii
@@ -139,9 +128,8 @@ class _LogFormatter(logging.Formatter):
 
 
 class _LineHandler(logging.StreamHandler):  # type: ignore[type-arg]
-    """Writes each record to stdout in one ``write(2)``: the job processes share the worker's
-    stdout, and lines written whole do not interleave (atomically up to the pipe's buffer, and
-    in practice beyond it on Linux and macOS for a single write)."""
+    # One write(2) per record: job processes share the worker's stdout, and whole-line writes
+    # do not interleave.
 
     def __init__(self) -> None:
         super().__init__(sys.stdout)
@@ -153,7 +141,6 @@ class _LineHandler(logging.StreamHandler):  # type: ignore[type-arg]
             try:
                 fd = self.stream.fileno()
             except (AttributeError, OSError, ValueError):
-                # not a file (a captured stdout): written as a stream
                 self.stream.write(line.decode(encoding))
                 self.flush()
                 return
@@ -166,12 +153,11 @@ class _LineHandler(logging.StreamHandler):  # type: ignore[type-arg]
             self.handleError(record)
 
 
-# what the worker logs with, for the job processes it starts: each writes its own lines
+# Passed to the job processes so each configures its own logging the same way.
 _log_config: LogLevel | None = None
 
 
 def setup_logging(log_level: LogLevel) -> logging.Handler:
-    """Write structured JSON logs to inherited stdout at the requested level."""
     global _log_config
     _log_config = log_level
     reconfigure = getattr(sys.stdout, "reconfigure", None)
@@ -197,11 +183,7 @@ def setup_logging(log_level: LogLevel) -> logging.Handler:
     return handler
 
 
-# --- the worker --------------------------------------------------------------------------------
-
-
 def _run_worker(server: AgentServer, args: CliArgsStart, *, unregistered: bool = False) -> int:
-    """Serve, stop admission, drain, and clean up within one process deadline."""
     try:
         server._config.update(args.options, args.process)
     except ValueError as configuration_error:
@@ -226,7 +208,7 @@ def _run_worker(server: AgentServer, args: CliArgsStart, *, unregistered: bool =
             loop.run_until_complete(_finish_server(server, shutdown, drain=not devmode))
         error = main_task.exception() if main_task.done() and not main_task.cancelled() else None
         if error is not None:
-            # the reason leads: a launcher shows the message, the traceback only on request
+            # Message first: the launcher shows it, and the traceback only on request.
             logger.error("worker failed: %s", error, exc_info=error)
     finally:
         _close_loop(loop, shutdown)
@@ -234,7 +216,7 @@ def _run_worker(server: AgentServer, args: CliArgsStart, *, unregistered: bool =
 
 
 async def _wait_for_exit(main_task: asyncio.Task[None], shutdown: _core.Shutdown) -> None:
-    # Construct the native awaitable inside the running host loop.
+    # The native awaitable must be constructed inside the running loop.
     exit_task = asyncio.ensure_future(shutdown.wait())
     try:
         await asyncio.wait({main_task, exit_task}, return_when=asyncio.FIRST_COMPLETED)
@@ -245,7 +227,6 @@ async def _wait_for_exit(main_task: asyncio.Task[None], shutdown: _core.Shutdown
 async def _serve(
     server: AgentServer, devmode: bool, cli_addr: str | None, *, unregistered: bool = False
 ) -> None:
-    """The worker, beside the dev channel to the ``lk`` CLI at ``cli_addr`` when given."""
     channel = None
     if cli_addr:
         config = server._config
@@ -298,12 +279,7 @@ def _close_loop(loop: asyncio.AbstractEventLoop, shutdown: _core.Shutdown) -> No
         raise ExceptionGroup("event-loop task cleanup failed", failures)
 
 
-# --- the console -------------------------------------------------------------------------------
-
-
 def _run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
-    """``console --connect-addr``: one call over the ``lk`` CLI's socket, run as a fake job in
-    this process."""
     from .voice._session_bindings import ConsoleCall
 
     setup_logging("debug")
@@ -317,7 +293,7 @@ def _run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
 
     async def _call() -> None:
         await server._simulate_job("console-room", agent_identity="console", fake_job=True)
-        # the console is one call: the process exits once its job ended
+        # The console is one call: exit once its job ends.
         await server._drain(None)
         shutdown.begin()
 

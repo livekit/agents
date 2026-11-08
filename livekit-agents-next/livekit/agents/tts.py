@@ -1,8 +1,3 @@
-"""Text to speech: the base classes a provider subclasses (generated from the core's
-declarations), the expressive markup helpers over the core's per-provider tables
-(``_core.Markup``), and the adapters, whose engines are the core's (``_core.FallbackTts``,
-``_core.TtsStreamAdapter``, ``_core._core_PacedSentences``)."""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -32,9 +27,6 @@ __all__ += _public.__all__
 
 
 class _EmitterOutput:
-    """Where the native emitter's output goes: ``SynthesizedAudio`` into the synthesis channel,
-    and the provider's request ids onto its current span."""
-
     def __init__(self, ch: utils.aio.Chan[SynthesizedAudio]) -> None:
         self._ch = ch
 
@@ -77,7 +69,7 @@ class FallbackAdapter(_facades.FallbackAdapter):
 
 class StreamAdapter(_facades.StreamAdapter):
     """A non-streaming TTS as a streaming one: the text is split into sentences, each
-    synthesized on its own (``_core.TtsStreamAdapter``)."""
+    synthesized on its own."""
 
     class Markup(TTS.Markup):
         # a pass-through speaks whatever dialect it wraps
@@ -86,7 +78,6 @@ class StreamAdapter(_facades.StreamAdapter):
             return self._tts._tts.markup._provider_key()
 
     def _core_lowers_markup(self) -> bool:
-        # its sentences are lowered here, unlike a natively streaming plugin's input
         return True
 
     @property
@@ -124,7 +115,6 @@ class SentenceStreamPacer:
         self.max_text_length = max_text_length
 
     def wrap(self, sent_stream: SentenceStream, audio_emitter: AudioEmitter) -> StreamPacerWrapper:
-        """``sent_stream``'s sentences, paced by the audio ``audio_emitter`` pushed. The core
-        reads ``sent_stream`` and runs the pacing (``_core._core_PacedSentences``); text pushed
+        """``sent_stream``'s sentences, paced by the audio ``audio_emitter`` pushed. Text pushed
         to the wrapper goes to ``sent_stream``, and closing the wrapper closes it."""
         return StreamPacerWrapper(sent_stream, audio_emitter, pacer=self)

@@ -40,7 +40,7 @@ _EntrypointT = TypeVar("_EntrypointT", bound=Entrypoint)
 
 
 class RtcSessionOptions(TypedDict, total=False):
-    """``rtc_session``'s parameters (docs/voice-session.md)."""
+    """``rtc_session``'s parameters."""
 
     endpoint: str
     """The door's name under the agent, ``{agent_name}/{endpoint}``; the agent's name when empty."""
@@ -59,8 +59,7 @@ class RtcSession:
 
 
 def rtc_session(**options: Unpack[RtcSessionOptions]) -> Callable[[Entrypoint], RtcSession]:
-    """The voice door as a decorator with no handler: the entrypoint a job runs, as an
-    ``RtcSession`` that ``AgentServer.add()`` serves."""
+    """Decorate a job entrypoint as an ``RtcSession`` for ``AgentServer.add()`` to serve."""
     return lambda entrypoint: RtcSession(entrypoint, **options)
 
 
@@ -74,9 +73,8 @@ class AgentHandler:
         @back_office.a2a_session(endpoint="backend", description="The back office.")
         async def text(ctx: A2ASessionContext) -> str: ...
 
-    ``lane`` names the lane the doors write (docs/internals/storage.md#lanes); the worker's own when left out.
-    The voice door writes the worker's lane, so a handler with a lane of its own has text
-    doors only. ``AgentServer`` is the handler of the worker's own lane that serves its doors.
+    ``lane`` names the lane the doors write; the worker's own when left out. The voice door
+    writes the worker's lane, so a handler with a lane of its own has text doors only.
     """
 
     def __init__(self, *, lane: str | None = None) -> None:
@@ -112,11 +110,10 @@ class AgentHandler:
     def a2a_session(
         self, *, endpoint: str, description: str, **options: Unpack[A2ASessionOptions]
     ) -> Callable[[_Handler], A2AEndpoint]:
-        """The text door on this handler's lane, as ``livekit.agents.a2a_session``: one A2A
-        endpoint served under ``/<endpoint>``::
+        """An A2A text door on this handler's lane, served under ``/<endpoint>``::
 
-            @server.a2a_session(endpoint="scheduling", description="Book or move an appointment.")
-            async def scheduling(ctx: A2ASessionContext) -> str: ...
+        @server.a2a_session(endpoint="scheduling", description="Book or move an appointment.")
+        async def scheduling(ctx: A2ASessionContext) -> str: ...
         """
         from .a2a import A2AEndpoint
 
@@ -132,10 +129,12 @@ class AgentHandler:
 
 class AgentServer(AgentHandler):
     """The worker: its doors (one voice door, text doors under ``/<endpoint>``), the job
-    processes, and the connection to LiveKit, whose lifecycle is the core's
-    (``_core.ServerRuntime``). An option left out is the core's default, from the environment
-    where one applies (``LIVEKIT_URL``, ``LIVEKIT_AGENT_NAME``, ...) and per mode otherwise
-    (``load_threshold``, ``num_idle_processes`` and the listeners differ in development)."""
+    processes, and the connection to LiveKit.
+
+    Options left out default from the environment where one applies (``LIVEKIT_URL``,
+    ``LIVEKIT_AGENT_NAME``, ...); ``load_threshold``, ``num_idle_processes`` and the listeners
+    default differently in development.
+    """
 
     def __init__(
         self,
@@ -157,8 +156,6 @@ class AgentServer(AgentHandler):
         self._load_fnc = _load_fnc
         self._on_started: list[Callable[[], Any]] = []
         self._rtc: RtcSession | None = None
-        # HTTP routes served alongside the agent through the LiveKit server at
-        # /agents/{agent_name}/{deployment}/{path}, beside the text doors the worker serves
         self._http = AgentRoutes()
         self._a2a_endpoints: dict[str, A2AEndpoint] = {}
         self._runtime: _core.ServerRuntime | None = None
@@ -188,9 +185,10 @@ class AgentServer(AgentHandler):
     def add(
         self, *doors: AgentHandler | RtcSession | A2AEndpoint
     ) -> tuple[AgentHandler | RtcSession | A2AEndpoint, ...]:
-        """Serve what a module defined: ``AgentHandler``s and the doors of ``rtc_session`` and
-        ``a2a_session``, the one voice door of the worker and text doors under ``/<endpoint>``.
-        Returns them."""
+        """Serve ``AgentHandler``s and the doors of ``rtc_session`` and ``a2a_session``.
+
+        At most one voice door per server. Returns ``doors``.
+        """
         from .a2a import A2AEndpoint
 
         served = len(self.doors)
@@ -211,13 +209,6 @@ class AgentServer(AgentHandler):
         return doors
 
     async def _run(self, *, devmode: bool = False, unregistered: bool = False) -> None:
-        """Start the job processes and the health listener and, unless ``unregistered``, register
-        with LiveKit; return once ``aclose()`` ran, or raise when the connection fails for good.
-
-        Args:
-            devmode: Development defaults (no idle processes, no load limit, debug logs).
-            unregistered: Run without registering, invisible to the dispatcher (the console).
-        """
         _core.init(_core.Role.Worker)
         telemetry._install()
         from .a2a import _referenced
@@ -274,7 +265,6 @@ class AgentServer(AgentHandler):
     def _update_options(
         self, process: ProcessOptions | None = None, **options: Unpack[ServerOptionsKwargs]
     ) -> None:
-        """Change the server's options and process tuning before the server starts."""
         self._config.update(ServerOptions(**options), process or ProcessOptions())
 
     @property
@@ -290,8 +280,6 @@ class AgentServer(AgentHandler):
         return self._runtime is not None and self._runtime.draining
 
     async def _drain(self, timeout: NotGivenOr[float | None] = NOT_GIVEN) -> None:
-        """Stop taking jobs and wait for the running ones; past ``timeout`` (the server's
-        ``drain_timeout`` when not given) raises ``asyncio.TimeoutError``."""
         if self._runtime is not None:
             await self._runtime.drain(timeout if is_given(timeout) else self._config.drain_timeout)
 
@@ -305,7 +293,6 @@ class AgentServer(AgentHandler):
         room_info: models.Room | None = None,
         token: str | None = None,
     ) -> None:
-        """Run a job in ``room`` with no dispatch: the console's."""
         assert self._runtime is not None, "_simulate_job() needs a running server"
         await self._runtime.simulate_job(
             room,
@@ -321,18 +308,13 @@ class AgentServer(AgentHandler):
 
 
 class _ServerCallbacks:
-    """What the core's server runtime calls on the host: the job processes' launcher and the
-    user's callbacks. The process pool, which jobs to take and when are the core's."""
-
     def __init__(self, server: AgentServer) -> None:
         self._server = server
 
     async def _core_start(
         self, opts: ProcessStartOptions
     ) -> Callable[[], Awaitable[ipc.JobLauncher]] | None:
-        """The factory of the job processes' launchers, once the core wants them. The server's
-        settings (``opts.env``) become a job process's environment; this process's is never
-        changed."""
+        # opts.env becomes the job processes' environment; this process's is never changed.
         logger.info(
             "starting worker", extra={"version": __version__, "rtc-version": rtc.__version__}
         )
@@ -343,8 +325,8 @@ class _ServerCallbacks:
             return None
         mp_ctx = mp.get_context(opts.multiprocessing_context)
         if opts.multiprocessing_context == "forkserver":
-            # the framework's warm-up runs once in the forkserver and is inherited via COW;
-            # under `spawn` each job process imports it itself (see ipc._preload)
+            # Warm-up runs once in the forkserver and is inherited via COW; under spawn each
+            # job process imports it itself.
             from .ipc import configure_forkserver
 
             plugin_packages = [p.package for p in Plugin.registered_plugins]
@@ -376,7 +358,6 @@ class _ServerCallbacks:
         pass
 
     async def _core_load(self) -> float:
-        """The user's ``load_fnc``, which the core asks only when there is one."""
         load_fnc: Callable[..., float] | None = self._server._load_fnc
         assert load_fnc is not None
         args = (self._server,) if inspect.signature(load_fnc).parameters else ()

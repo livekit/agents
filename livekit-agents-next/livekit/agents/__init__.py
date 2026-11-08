@@ -12,12 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""LiveKit Agents for Python
-
-See [https://docs.livekit.io/agents/](https://docs.livekit.io/agents/) for quickstarts,
-documentation, and examples.
-"""
-
 import typing
 
 from . import cli, http, inference, llm, metrics, stt, tokenize, tts, utils, voice
@@ -141,7 +135,6 @@ def __getattr__(name: str) -> object:
         return mcp
 
     if name == "a2a_session":
-        # the text door, loaded on first use like the rest of the A2A stack
         from .a2a import a2a_session
 
         return a2a_session

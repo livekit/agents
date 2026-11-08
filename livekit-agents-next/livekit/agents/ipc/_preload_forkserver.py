@@ -1,5 +1,3 @@
-"""Import the forkserver image in order, refusing failures before any job can fork."""
-
 from __future__ import annotations
 
 import gc
@@ -17,7 +15,7 @@ load_preload_modules(
 
 
 def _native_threads() -> list[str]:
-    """The process's threads by name, the native ones included (Linux); else by count."""
+    # Native threads by name on Linux; elsewhere only their count is known.
     try:
         tasks = os.listdir("/proc/self/task")
     except OSError:
@@ -37,8 +35,7 @@ def _native_threads() -> list[str]:
     return names
 
 
-# The image is frozen only after every framework, plugin and application import above.
-# Finalizers must run before the last inspection: they can themselves start threads.
+# Forking with live threads is unsafe. Collect first: finalizers can start threads.
 gc.collect()
 _threads = _native_threads()
 if not _threads:

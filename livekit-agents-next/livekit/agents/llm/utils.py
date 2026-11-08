@@ -114,8 +114,8 @@ def tool_schema(tool: FunctionTool | RawFunctionTool) -> tuple[str, str, dict[st
 def build_legacy_openai_schema(
     function_tool: FunctionTool, *, internally_tagged: bool = False
 ) -> dict[str, object]:
-    """non-strict mode tool description
-    see https://serde.rs/enum-representations.html for the internally tagged representation"""
+    """Non-strict tool schema. ``internally_tagged`` follows
+    https://serde.rs/enum-representations.html."""
     return _core.build_legacy_openai_schema(
         *tool_schema(function_tool), internally_tagged=internally_tagged
     )
@@ -124,7 +124,7 @@ def build_legacy_openai_schema(
 def build_strict_openai_schema(
     function_tool: FunctionTool,
 ) -> dict[str, object]:
-    """strict mode tool description"""
+    """Strict tool schema."""
     return _core.build_strict_openai_schema(*tool_schema(function_tool))
 
 
@@ -145,7 +145,6 @@ def to_response_format_param(
     if isinstance(response_format, dict):
         raise TypeError("Unsupported response_format type")
 
-    # add support for TypedDict
     if is_typed_dict(response_format):
         response_format = create_model(
             response_format.__name__,
@@ -177,8 +176,7 @@ def to_openai_response_format(response_format: type | dict[str, object]) -> dict
 
 
 def function_arguments_to_pydantic_model(func: Callable[..., object]) -> type[BaseModel]:
-    """Create a Pydantic model from a function's signature. (excluding context types)"""
-
+    """Create a Pydantic model from a function's signature, excluding context parameters."""
     from docstring_parser import parse_from_object
 
     fnc_names = func.__name__.split("_")
@@ -191,7 +189,6 @@ def function_arguments_to_pydantic_model(func: Callable[..., object]) -> type[Ba
     signature = inspect.signature(func)
     type_hints = get_type_hints(func, include_extras=True)
 
-    # field_name -> (type, FieldInfo or default)
     fields: dict[str, Any] = {}
 
     for param_name, param in signature.parameters.items():
@@ -227,20 +224,13 @@ def prepare_function_arguments(
     json_arguments: str | dict[str, object],
     call_ctx: RunContext[_ContextT] | None = None,
     fnc_call: FunctionCall | None = None,
-) -> tuple[tuple[object, ...], dict[str, object]]:  # returns args, kwargs
-    """Create the positional and keyword arguments to call a function tool from
-    the raw function output from the LLM.
+) -> tuple[tuple[object, ...], dict[str, object]]:
+    """The positional and keyword arguments to call a function tool with the LLM's arguments.
 
-    Argument-validation failures (bad JSON, pydantic ValidationError, missing
-    required params) are surfaced as :class:`ToolError` so the LLM gets a
-    concrete error message and can self-correct on its next turn.
-
-    When ``fnc_call`` is provided and ``json_arguments`` is a string, the
-    canonicalized JSON (post json_repair) is written back to
-    ``fnc_call.arguments`` BEFORE validation runs.
+    Validation failures (bad JSON, invalid or missing parameters) raise :class:`ToolError` so
+    the LLM gets a concrete message and can self-correct. When ``fnc_call`` is given and
+    ``json_arguments`` is a string, the repaired JSON is written back to ``fnc_call.arguments``.
     """
-    # phase 1: parse — raw JSON failures raise ToolError immediately (no
-    # canonical to provide since the input itself was unparseable)
     if isinstance(json_arguments, dict):
         args_dict = json_arguments
     else:
@@ -253,14 +243,12 @@ def prepare_function_arguments(
             )
             raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
 
-        # write canonical BEFORE validation so a downstream validation failure
-        # still leaves valid JSON in chat history
+        # before validation, so a validation failure still leaves valid JSON in the history
         if fnc_call is not None:
             canonical = json.dumps(args_dict, default=str)
             if canonical != json_arguments:
                 fnc_call.arguments = canonical
 
-    # phase 2: validate + bind
     try:
         return _prepare_function_arguments(fnc=fnc, args_dict=args_dict, call_ctx=call_ctx)
     except ToolError:
@@ -284,23 +272,21 @@ def validated_arguments(
 ) -> dict[str, object]:
     """A tool call's arguments after schema validation, keyed by parameter name.
 
-    Every declared parameter is present — an omitted one carries its default — and
-    values are coerced to their annotated types, so ``{"order_id": "5"}`` and
-    ``{"order_id": "5", "locale": None}`` produce the same mapping, as do ``1`` and
-    ``1.0`` for a ``float`` parameter. That makes this the form to compare two calls
-    on (see ``DuplicateScope``), not the raw arguments the LLM emitted.
+    Every declared parameter is present (an omitted one carries its default) and values are
+    coerced to their annotated types, so ``{"order_id": "5"}`` and
+    ``{"order_id": "5", "locale": None}`` produce the same mapping, as do ``1`` and ``1.0``
+    for a ``float`` parameter. Compare two calls on this form (see ``DuplicateScope``), not
+    on the raw arguments the LLM emitted.
 
-    Raises the same validation errors as calling the tool would. Raw function tools
-    have no per-parameter schema, so their arguments are returned exactly as sent.
+    Raises the same validation errors as calling the tool would. Raw function tools have no
+    per-parameter schema, so their arguments are returned exactly as sent.
     """
     if isinstance(fnc, RawFunctionTool):
         return args_dict
 
     model_type = function_arguments_to_pydantic_model(fnc)
 
-    # Strict LLM schemas represent defaulted fields as nullable (see
-    # _ensure_strict_json_schema): null means "use the default". Resolve
-    # the sentinel, including in nested models, before validation.
+    # strict schemas make defaulted fields nullable, null meaning "use the default"
     schema = model_type.model_json_schema()
     resolved = _core.inject_schema_defaults(args_dict, schema)
 
@@ -330,13 +316,11 @@ def bind_function_arguments(
     if isinstance(fnc, FunctionTool):
         raw_fields = fields
     elif isinstance(fnc, RawFunctionTool):
-        # e.g async def open_gate(self, raw_arguments: dict[str, object]):
-        # raw_arguments is required when using raw function tools
+        # raw tools take a required ``raw_arguments: dict[str, object]`` parameter
         raw_fields = {"raw_arguments": fields}
     else:
         raise ValueError(f"Unsupported function tool type: {type(fnc)}")
 
-    # inject RunContext (or subclasses) if needed
     context_dict = {}
     for param_name, _ in signature.parameters.items():
         type_hint = type_hints[param_name]
@@ -386,8 +370,6 @@ def _is_valid_function_output(value: object) -> bool:
 
 
 def _value_text(value: object) -> str | None:
-    """What the model reads of a value: the value itself, a model or dataclass as its JSON;
-    ``None`` when the model cannot be told about it."""
     if not _is_valid_function_output(value):
         # dataclasses and models, alone or in lists and dicts, reach the model as their JSON
         with contextlib.suppress(PydanticSerializationError):

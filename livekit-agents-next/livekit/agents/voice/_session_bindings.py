@@ -1,6 +1,3 @@
-"""Native voice-session construction: public configuration and callback signatures, their
-adaptation to native arguments, session startup and the remote session protocol."""
-
 from __future__ import annotations
 
 import asyncio
@@ -66,8 +63,7 @@ if TYPE_CHECKING:
     from .agent_session import VoiceSession
 
 
-# the session's pipeline callbacks (voice-session.md "Customizing the pipeline"): each receives
-# the call's `RunContext`, whose `agent` is the agent holding the call
+# pipeline callbacks; each receives the call's `RunContext`, whose `agent` holds the call
 _C = TypeVar("_C")
 _Item = TypeVar("_Item")
 _Node = AsyncIterable[_Item] | Coroutine[Any, Any, AsyncIterable[_Item] | None]
@@ -110,7 +106,6 @@ def initialize(
     stt_context_options: NotGivenOr[STTContextOptions | None] = NOT_GIVEN,
     options: SessionKwargs,
 ) -> None:
-    """``VoiceSession.__init__``: resolves the providers and options onto ``session``."""
     session._conn_options = conn_options or SessionConnectOptions()
     session._options = _core.SessionOptions(options, session._conn_options)
     session._stt_context = stt_context_options if is_given(stt_context_options) else None
@@ -124,14 +119,14 @@ def initialize(
     defaults = _core.default_session_models(
         is_given(vad), is_given(detection), isinstance(session._llm, RealtimeModel)
     )
-    # the VAD the session made itself, while the session runs on it
+    # the VAD the session created itself, if any
     session._default_vad = (
         inference.VAD(model=defaults.vad_model) if defaults.vad_model is not None else None
     )
     vad_model = session._default_vad or (vad if is_given(vad) else None)
     if not is_given(detection):
         detection = inference.TurnDetector() if defaults.turn_detector else None
-    # the session options refused anything else: the detector's stream is the core's detector
+    # SessionOptions already rejected any other detector type
     session._turn_detector = (
         detection.stream() if isinstance(detection, inference.TurnDetector) else None
     )
@@ -149,16 +144,15 @@ def initialize(
     session._native = _core._core_SessionOwner(session._options)
     session._room = None
     session._amd = None
-    # the native options own the providers from here: `session.stt`, `tts` and `vad` read them
+    # the native options own the providers: `session.stt`, `tts` and `vad` read them
     session._options.update_providers({"stt": stt_model, "tts": tts_model, "vad": vad_model})
     session._input = io.AgentInput(session)
     session._output = io.AgentOutput(session)
-    # what a job's session report reads of the events
+    # read by the job's session report
     session._event_snapshots = deque()
-    # the session's span once started, which the job's RPC handlers parent under
+    # the job's RPC handlers parent their spans under this once started
     session._root_span_context = None
     session._text_input_cb = None
-    # the pipeline callbacks registered on this session, by step name
     session._steps = {}
     session._audio_input_options = None
     session._tasks = set()
@@ -179,7 +173,6 @@ class SessionAdapter:
     def _interruption_detector(
         self, agent: Agent, model: Any
     ) -> inference.AdaptiveInterruptionDetector | None:
-        """The adaptive interruption detector, when the reference's gate builds one."""
         session = self.session
         stt_caps = session.stt.capabilities if session.stt is not None else None
         has_vad = session.vad is not None
@@ -222,9 +215,6 @@ class SessionAdapter:
         return [*agent.tools, *session._tools]
 
     def _voice_agent(self, agent: Agent, *, task: bool = False) -> _NativeAgent:
-        """``agent`` as its callbacks run on this session: its definition over its tools and the
-        session's it lacks, its ``AgentCallbacks`` and the context they run in, whose binding is this
-        session's."""
         session = self.session
         from .agent_run import _voice_tools
 
@@ -239,13 +229,9 @@ class SessionAdapter:
         )
 
     def _frame(self, agent: Agent, *, task: bool = False) -> UpdateAgentArgs:
-        """``agent`` as the core installs it; the core has its toolsets acquired by the native
-        registry before Python reflects their tools. ``task``: it runs a ``VoiceTask``."""
         session = self.session
-        # its tools, instructions and hooks are what the core runs from now on
         agent._config.freeze()
-        # every leg a node may wrap is given, so the previous frame's node never stays on it; the
-        # session's STT and TTS stay as they are, under the agent's nodes
+        # give every leg a node may wrap, so the previous frame's node never stays on it
         binding = _VoiceBinding(session, agent)
         model = binding.llm
         return UpdateAgentArgs(
@@ -268,15 +254,13 @@ class SessionAdapter:
         )
 
     def _nodes(self, agent: Agent) -> dict[str, Any]:
-        """The registered nodes, as the core opens them for ``agent``, each call in its
-        binding."""
         session = self.session
         registered = [n for n in _NODES if n in session._steps]
         if not registered:
             return {}
         context = contextvars.copy_context()
         context.run(_BindingContextVar.set, _VoiceBinding(session, agent))
-        # taken in the agent's binding: each node call runs in a copy of it
+        # created in the agent's binding: each node call runs in a copy of it
         return dict.fromkeys(registered, context.run(_core.AgentNodes, _SessionNodes(session)))
 
     def _legs(self) -> SessionLegs:
@@ -295,8 +279,6 @@ class SessionAdapter:
         return session._default_vad is not None and session.vad is session._default_vad
 
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
-        """Start IVR detection: the DTMF tool joins the session's tools and the core's navigator
-        runs, counting ``transcript`` (AMD's greeting) as heard."""
         session = self.session
         from ..beta import send_dtmf_events
 
@@ -330,9 +312,6 @@ async def _record_keyterms(pending: list[str], confirm: list[str], remove: list[
 
 
 def _detection_llm(stt_context: STTContextOptions | None) -> LLM | None:
-    """The detection LLM ``stt_context_options`` asks for: the ``LLM`` given, else the model the
-    core names (``_core.resolve_keyterm_detection``) through the inference gateway. ``None`` with
-    detection off, or when the model cannot be created (detection is then skipped)."""
     config = (stt_context or {}).get("keyterm_detection")
     resolved = _core.resolve_keyterm_detection(config)
     if not resolved.enabled:
@@ -344,7 +323,7 @@ def _detection_llm(stt_context: STTContextOptions | None) -> LLM | None:
         from ..inference import LLM as InferenceLLM
 
         return InferenceLLM.from_model_string(model)
-    except Exception:  # noqa: BLE001 — never let detection setup break the session
+    except Exception:  # noqa: BLE001 - never let detection setup break the session
         logger.warning("keyterm detection: could not create detection LLM %r; skipping", model)
         return None
 
@@ -387,7 +366,7 @@ class SessionHost:
         session._audio_input_options = options.get_audio_input_options()
         text_input = options.get_text_input_options()
         session._text_input_cb = text_input.text_input_cb if text_input is not None else None
-        # the job's session runs on its room, or the console's; the owner claims it for the job
+        # the job's session runs on its room, or the console's
         job = (
             job_ctx
             if job_ctx is not None and (console is not None or room is job_ctx.room)
@@ -409,7 +388,6 @@ class SessionHost:
         hooks = _AgentHooks(session)
         frame = session._frame(agent)
         model = frame.llm if is_given(frame.llm) else session._llm
-        # the core's own model (OpenAI-protocol, fallback, duplex) or a host realtime provider
         realtime = model._core_leg() if isinstance(model, llm.RealtimeModel) else None
         keyterm_llm = _detection_llm(session._stt_context)
         session._room = room
@@ -418,7 +396,7 @@ class SessionHost:
             dynamic_instructions=frame.dynamic_instructions,
             agent=frame.agent,
             agent_host=frame.agent_host,
-            # without one, `update_agent(chat_ctx=)`'s; a stored call starts on its lane's history
+            # None: a stored call starts on its lane's history
             chat_ctx=chat_ctx.items if chat_ctx is not None else None,
             stt=frame.stt if is_given(frame.stt) else None,
             vad=_bindings.core_leg(session.vad),
@@ -449,7 +427,6 @@ class SessionHost:
             tts_node=frame.tts_node,
             stt_node=frame.stt_node,
             transcription_node=frame.transcription_node,
-            # served when the owner decides the session hosts it
             remote_session=RemoteSessionAccess(session),
             console=console,
             job=job,
@@ -491,10 +468,7 @@ class SessionHost:
 
 
 class ConsoleCall:
-    """The ``console`` subcommand's call: ``lk agent console`` owns the microphone, the speakers
-    and the TUI, and reaches the agent over one socket, which the first session started takes as
-    its audio and its remote session's transport."""
-
+    # `lk agent console` reaches the agent over one socket; the first session started claims it
     addr: ClassVar[str | None] = None
     """The CLI's ``host:port`` while the subcommand runs."""
     record: ClassVar[bool] = False
@@ -508,9 +482,6 @@ class ConsoleCall:
 
 
 class RemoteSessionAccess:
-    """What a remote client asks of ``session`` that needs its objects. The core reads the
-    session's history and usage directly; the methods here flatten or act on the session."""
-
     def __init__(self, session: VoiceSession[Any]) -> None:
         self.session = session
 

@@ -1,7 +1,3 @@
-"""OpenTelemetry for the framework (docs/internals/telemetry.md "What Python keeps"): the API's
-provider, recorded and exported by the Rust core; the bridge for an application's SDK provider;
-the framework's spans around Python-only code."""
-
 from __future__ import annotations
 
 import asyncio
@@ -24,7 +20,6 @@ __all__ += _public.__all__
 
 
 async def _shutdown() -> None:
-    """Flushes the process's exporter at exit, within its bound."""
     await _core._core_telemetry_shutdown()
 
 
@@ -32,8 +27,7 @@ _provider_adopted = False
 
 
 def _install() -> None:
-    """Starts the exporter. Once per process, takes the global tracer provider when the
-    application set none, bridges an SDK provider, and reports any other as a conflict."""
+    # Adopts the global provider if unset, bridges an SDK provider, else reports a conflict.
     global _provider_adopted
     from .version import __version__
 
@@ -51,19 +45,14 @@ def _install() -> None:
 
 
 class _LoopMonitor:
-    """Beats the running loop's stall watch every 20 ms; the core's detector records a beat
-    100 ms old as a stall, with the loop's stack (docs/internals/telemetry.md "Event-loop
-    stalls"). The watch's stalls go under the span current at ``start()``."""
-
-    _TICK = 0.02
+    _TICK = 0.02  # the core reports a beat older than 100 ms as a stall
 
     def __init__(self) -> None:
         self._handle: asyncio.TimerHandle | None = None
         self._watch: _core._core_LoopWatch | None = None
 
     def start(self, job: str | None, *, whole_process: bool) -> None:
-        """``whole_process``: the process runs this job alone (the process executor), so the
-        job's profile also holds the process's other running threads."""
+        # whole_process: this job owns the process, so its profile includes the other threads.
         self._watch = _core._core_LoopWatch(
             threading.get_native_id(), parent=_current(), job=job, whole_process=whole_process
         )
@@ -84,18 +73,15 @@ class _LoopMonitor:
 
 
 def _context(span: SpanContext) -> otel_context.Context:
-    """A context whose current span is the framework span ``span``."""
     return trace.set_span_in_context(NonRecordingSpan(span))
 
 
 def _activate(span: SpanContext) -> None:
-    """Makes a framework span current in the copied context one host call runs in
-    (HostInvoker). Nothing detaches it: the copy ends with the call."""
+    # Never detached: the copied context it runs in ends with the host call.
     otel_context.attach(_context(span))
 
 
 def _current() -> SpanContext:
-    """The current span, read at a ``_core`` entry; the core ignores an invalid one."""
     return trace.get_current_span().get_span_context()
 
 
@@ -191,7 +177,6 @@ def _is_sdk(provider: trace.TracerProvider) -> bool:
 
 
 def _bridge() -> Any:
-    """A processor forwarding each ended SDK span to the Rust exporter."""
     from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 
     class Bridge(SpanProcessor):
@@ -201,15 +186,13 @@ def _bridge() -> Any:
     return Bridge()
 
 
-# the framework's spans around Python-only code: always recorded in Rust, whatever the global
-# provider is
+# Independent of the global provider, so framework spans are always recorded.
 _tracer = _Tracer("livekit-agents")
 
 
 @contextmanager
 def _detached_span(name: str, attributes: Mapping[str, Any]) -> Iterator[trace.Span]:
-    """A span under the current one that is never made current itself, so the long-lived tasks
-    started inside it (the room's) do not parent their spans under it."""
+    # Never made current, so long-lived tasks started inside do not parent under it.
     span = _tracer.start_span(name, attributes=attributes)
     try:
         yield span

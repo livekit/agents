@@ -1,6 +1,3 @@
-"""Shared helpers: ``is_given``, ``shortuuid``, ``log_exceptions``, participant and track waits,
-and the ``aio`` and ``media`` modules."""
-
 from __future__ import annotations
 
 import functools
@@ -31,16 +28,12 @@ def is_given(obj: NotGivenOr[_T]) -> TypeIs[_T]:
 
 
 def is_dev_mode() -> bool:
-    """Return whether the agent is running in development mode.
-
-    True when launched via ``console``, ``dev``.
-    Reads the ``LIVEKIT_DEV_MODE`` environment variable.
-    """
+    """Whether the agent runs in development mode (``console`` or ``dev``)."""
     return os.getenv("LIVEKIT_DEV_MODE") == "1"
 
 
 def is_hosted() -> bool:
-    """Return whether the agent is hosted on LiveKit Cloud."""
+    """Whether the agent is hosted on LiveKit Cloud."""
     return os.getenv("LIVEKIT_REMOTE_EOT_URL") is not None
 
 
@@ -110,16 +103,12 @@ async def wait_for_agent(
     *,
     agent_name: str | None = None,
 ) -> rtc.RemoteParticipant:
-    """
-    Wait for an agent participant to join the room.
+    """Wait for an agent participant to join the room.
 
     Args:
-        room: The room to wait for the agent in.
-        agent_name: If provided, waits for an agent with matching lk.agent.name attribute.
-                   If None, returns the first agent participant found.
-
-    Returns:
-        The agent participant.
+        room: The room to wait in.
+        agent_name: Wait for the agent whose ``lk.agent.name`` attribute matches; None returns
+            the first agent participant.
 
     Raises:
         RuntimeError: If the room is not connected.
@@ -155,13 +144,8 @@ async def wait_for_participant(
     kind: list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType | None = None,
     include_local: bool = False,
 ) -> rtc.Participant:
-    """
-    Returns a participant that matches the given identity. If identity is None, the first
-    participant that joins the room will be returned.
-    If the participant has already joined, the function will return immediately.
-
-    When `include_local` is True, the local participant is also considered.
-    """
+    """The participant with ``identity``, or the first to join when it is None. Returns at once
+    if it already joined; ``include_local`` also considers the local participant."""
     found = await _core.wait_for_participant(
         _core._core_create_room_session(room), identity, _kinds(kind), include_local
     )
@@ -198,17 +182,14 @@ async def wait_for_track_publication(
     include_local: bool = False,
     wait_for_subscription: bool = False,
 ) -> rtc.TrackPublication:
-    """Returns a track publication matching the given identity and kind.
-    If identity is None, the first track matching the kind will be returned.
-    If a matching track is already published (and subscribed when
-    ``wait_for_subscription`` is set), the function returns immediately.
+    """A track publication matching ``identity`` (any participant when None) and ``kind``.
 
-    When `include_local` is True, tracks published by the local participant are also considered;
-    local publications resolve on publish and ignore ``wait_for_subscription``.
+    Returns at once if one is already published (and subscribed, with
+    ``wait_for_subscription``). ``include_local`` also considers local publications, which
+    resolve on publish and ignore ``wait_for_subscription``.
 
-    When ``identity`` is set, raises :class:`RuntimeError` if that participant
-    disconnects before a matching publication is found, so callers don't wait
-    on a participant that is gone.
+    Raises:
+        RuntimeError: ``identity`` disconnected before a matching publication was found.
     """
     found = await _core.wait_for_track_publication(
         _core._core_create_room_session(room),

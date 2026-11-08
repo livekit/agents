@@ -111,8 +111,7 @@ TokenizeCallable = Callable[[str], list[str] | list[TokenSpan]]
 
 
 class BufferedTokenStream:
-    """Streamed text cut into tokens by a tokenizer; the batching is the core's
-    (``_core.TokenBuffer``)."""
+    """Streamed text cut into tokens by a tokenizer."""
 
     def __init__(
         self,
@@ -224,12 +223,12 @@ def replace_words(
     text: str | AsyncIterable[str],
     replacements: dict[str, str],
 ) -> str | AsyncIterable[str]:
-    """
-    Replace words in the given (async) text. The replacements are case-insensitive and the
-    replacement will keep the case of the original word.
+    """Replace words in a text or a text stream, case-insensitively, keeping each original
+    word's case.
+
     Args:
-        text: text to replace words in
-        words: dictionary of words to replace
+        text: The text, or a stream of text chunks.
+        replacements: Words to replace, mapped to their replacements.
     """
 
     def replace_all(text: str) -> str:
@@ -255,9 +254,6 @@ def replace_words(
 
 
 class _CoreSentenceTokenizer(SentenceTokenizer):
-    """The base of a sentence tokenizer the core runs (``self._native``): its stream batches
-    the native spans."""
-
     _native: _core.BasicSentenceTokenizer | _core.BlingfireSentenceTokenizer
 
     def stream(self, *, language: str | None = None) -> SentenceStream:
@@ -271,9 +267,6 @@ class _CoreSentenceTokenizer(SentenceTokenizer):
 
 
 class _CoreWordTokenizer(WordTokenizer):
-    """The base of a word tokenizer the core runs (``self._native``): its stream batches the
-    native spans."""
-
     _native: _core.BasicWordTokenizer
 
     def stream(self, *, language: str | None = None) -> WordStream:
@@ -284,7 +277,7 @@ class _CoreWordTokenizer(WordTokenizer):
         )
 
 
-# the tokenizers build on the definitions above: ``tokenize.basic`` and ``tokenize.blingfire``
+# imported last: these modules subclass the definitions above
 from ._generated import (  # noqa: E402
     public_tokenize_basic as basic,
     public_tokenize_blingfire as blingfire,

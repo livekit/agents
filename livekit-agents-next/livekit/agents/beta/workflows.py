@@ -1,7 +1,3 @@
-"""Building blocks for voice flows that collect or act on what a caller says: the result
-records, the checks a capture tool runs on what the model heard, keypad (DTMF) reception, and the
-warm transfer to a human agent. The checks, the reception and the transfer are the core's."""
-
 from __future__ import annotations
 
 import os
@@ -94,7 +90,7 @@ async def _ask_digits(session: VoiceSession) -> None:
 
 
 class GetDtmfTask(VoiceTask[GetDtmfResult]):
-    """Collect digits the caller presses on the keypad, or says (docs/voice-tasks.md)::
+    """Collect digits the caller presses on the keypad, or says::
 
         result = await GetDtmfTask(num_digits=4).run()
 
@@ -172,7 +168,7 @@ async def _confirm_email_address(
 
 
 class GetEmailTask(VoiceTask[GetEmailResult]):
-    """Collect and confirm the caller's email address on the call (docs/voice-tasks.md)::
+    """Collect and confirm the caller's email address on the call::
 
     result = await GetEmailTask().run()
     """
@@ -217,19 +213,14 @@ class WarmTransfer:
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
     ) -> None:
-        """Initialize a WarmTransfer to dial a human agent via SIP.
-
+        """
         Args:
             sip_call_to: The phone number or SIP URI to dial for the human agent
                 (e.g. ``"+15105550123"`` or ``"sip:user@example.com"``).
-            sip_trunk_id: ID of a pre-configured LiveKit SIP outbound trunk used to
-                originate the call. Falls back to the ``LIVEKIT_SIP_OUTBOUND_TRUNK``
-                environment variable when not provided.
-            sip_connection: Low-level SIP connection config (``api.SIPOutboundConfig``)
-                for originating calls from a **custom SIP domain** instead of through a
-                saved trunk. Use this when you need to specify a custom hostname,
-                transport, or authentication credentials directly, bypassing the
-                trunk-based configuration.
+            sip_trunk_id: The LiveKit SIP outbound trunk that originates the call; defaults to
+                ``LIVEKIT_SIP_OUTBOUND_TRUNK``.
+            sip_connection: Originate from a custom SIP domain (hostname, transport,
+                credentials) instead of a saved trunk.
             sip_number: The caller ID to dial from; defaults to ``LIVEKIT_SIP_NUMBER``.
             dtmf: DTMF tones to send once the human agent's call is answered, e.g. to dial
                 an extension or navigate an IVR menu (``"1234#"``). Insert ``w`` characters
@@ -296,6 +287,8 @@ class TwilioConnectorWarmTransfer(WarmTransfer):
     ) -> None:
         """Dial a human agent using Twilio's Calls API and the LiveKit Twilio Connector.
 
+        Arguments not listed have the same meaning as in ``WarmTransfer``.
+
         Args:
             phone_number: The human agent's phone number to dial.
             twilio_from_number: Agent/business Twilio number or verified caller ID.
@@ -313,11 +306,9 @@ class TwilioConnectorWarmTransfer(WarmTransfer):
             ringing_timeout: How long to wait for the human agent to answer; Twilio reports
                 no answer only to status webhooks, so 30 seconds unless set.
 
-        Note:
-            If Twilio rejects the preserved caller ID (HTTP 400 with error 21210 or
-            21212), the call is retried once from ``twilio_from_number`` without the
-            token. Other failures propagate without a retry to avoid duplicate calls.
-            Other arguments have the same meaning as in ``WarmTransfer``.
+        If Twilio rejects the preserved caller ID (HTTP 400, error 21210 or 21212), the call is
+        retried once from ``twilio_from_number`` without the token. Other failures are not
+        retried, to avoid duplicate calls.
         """
         self._hold_audio = hold_audio
         self._transfer = _core.WarmTransfer(
@@ -347,7 +338,6 @@ def _briefing_agent(
     tools: list[llm.Tool | llm.Toolset] | None,
     llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None],
 ) -> Agent:
-    """The agent that briefs the human agent: the transfer's instructions and tools."""
     return Agent(
         instructions=transfer.instructions,
         tools=[*(tools or []), *(_transfer_tool(transfer, spec) for spec in transfer.tools())],
@@ -367,9 +357,6 @@ def _transfer_tool(transfer: _core.WarmTransfer, spec: dict[str, Any]) -> llm.Ra
 
 
 class _TransferHost:
-    """What the core's transfer asks of the SDK: the rooms, the human agent's session and the
-    hold music. Each ``_core_<method>`` is one call or two."""
-
     def __init__(self, transfer: WarmTransfer, session: VoiceSession, job_ctx: JobContext) -> None:
         self._transfer = transfer
         self._session = session

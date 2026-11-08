@@ -1,13 +1,3 @@
-"""Avatars: the session and its video generator, the runner an avatar worker drives, the queue
-audio output, and the agent and an avatar worker exchanging audio over LiveKit DataStream: one
-byte stream per segment on ``lk.audio_stream``, ``lk.clear_buffer`` from the agent,
-``lk.playback_started`` and ``lk.playback_finished`` back. Both DataStream ends run in the core
-(``_core.DataStreamAudioOutput``, ``_core.DataStreamAudioReceiver``), as does the runner
-(``_core.AvatarRunner``): RTC source capabilities, native pacing and queue state are shared
-with the Rust runtime. An ``AvatarSession``'s join wait, metrics, shutdown close and participant
-removal are its ``_core.AvatarLifecycle``'s. Python adapts user callbacks and delivers SDK
-events."""
-
 from __future__ import annotations
 
 import time
@@ -31,6 +21,10 @@ from .io import AudioOutput, AudioOutputCapabilities
 if TYPE_CHECKING:
     from .agent_session import VoiceSession
 
+# Agent <-> avatar worker protocol over DataStream: one byte stream per segment on
+# `lk.audio_stream`, `lk.clear_buffer` from the agent, `lk.playback_started` and
+# `lk.playback_finished` back. Both ends and the runner live in the core.
+
 __all__ = [
     "AvatarRunner",
     "AvatarSession",
@@ -48,12 +42,11 @@ _ReceiverEventT = TypeVar("_ReceiverEventT", default=Never, contravariant=True)
 class AudioReceiver(
     ABC, rtc.EventEmitter[Literal["clear_buffer"] | _ReceiverEventT], Generic[_ReceiverEventT]
 ):
-    """The avatar worker's audio from the agent, which ``AvatarRunner`` feeds its generator.
+    """Audio the avatar worker receives from the agent, fed by ``AvatarRunner`` to its generator.
 
-    A subclass iterates the audio: frames, then ``AudioSegmentEnd`` at each segment's end.
-    The runner keys each segment from its first frame to its end, or to a ``"clear_buffer"``
-    the receiver emits, which cuts it; ``notify_playback_started`` and
-    ``notify_playback_finished`` receive that segment's key.
+    A subclass yields frames, then ``AudioSegmentEnd`` at each segment's end. Emitting
+    ``"clear_buffer"`` cuts the current segment. ``notify_playback_started`` and
+    ``notify_playback_finished`` receive the segment's key.
     """
 
     async def start(self) -> None:
@@ -101,20 +94,17 @@ TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent], Generic[TEvent]):
     """Base class for avatar plugin sessions.
 
-    ``start()`` begins the avatar's lifecycle in the session's runtime:
+    ``start()`` begins the avatar's lifecycle:
 
-    - It waits in the background for the avatar participant (``avatar_identity``) to join the
-      room and publish its video, once the room is connected; ``wait_for_join()`` awaits it.
-    - Inside a job, the job's shutdown runs ``aclose()`` (a subclass's own).
-    - ``metrics_collected`` emits ``AvatarMetrics``: once when the avatar joined
-      (``session_started_time`` when the room was connected, ``avatar_joined_time`` when its
-      video was published), then for each assistant message the session adds with a
-      ``playback_latency`` (the delay between the first audio frame sent to the avatar and its
-      playback start), until ``aclose()``. Each is also recorded with the session's metrics once
-      the session runs.
+    - The avatar participant (``avatar_identity``) is awaited in the background until it joins
+      and publishes its video; ``wait_for_join()`` awaits it.
+    - Inside a job, the job's shutdown runs ``aclose()``.
+    - ``metrics_collected`` emits ``AvatarMetrics`` once when the avatar joins, then for each
+      assistant message with a ``playback_latency`` (first audio frame sent to playback start),
+      until ``aclose()``.
 
-    A subclass calls ``super().start()`` and ``super().aclose()``; ``start()`` again after
-    ``aclose()`` begins a new lifecycle.
+    Subclasses call ``super().start()`` and ``super().aclose()``; calling ``start()`` again
+    after ``aclose()`` begins a new lifecycle.
     """
 
     def __init__(self) -> None:
@@ -158,19 +148,20 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
     async def wait_for_join(self, *, timeout: float | None = 30.0) -> None:
         """Wait until the avatar participant has joined the room and published its video track.
 
-        Raises ``TimeoutError`` if it doesn't within ``timeout`` seconds (``None`` waits
-        indefinitely); the join wait itself goes on. Raises ``asyncio.CancelledError`` once the
-        avatar closed before it joined, and the room's error if the room failed first. Returns at
-        once before ``start()``, or after ``aclose()``.
+        Returns at once before ``start()`` or after ``aclose()``.
+
+        Raises:
+            TimeoutError: Not joined within ``timeout`` seconds (``None`` waits indefinitely);
+                the background wait continues.
+            asyncio.CancelledError: The avatar was closed before it joined.
         """
         if self._lifecycle is None:
             return
         await self._lifecycle.wait_for_join(timeout)
 
     async def aclose(self) -> None:
-        """Close the avatar's audio output, then stop the join wait and the metrics and, inside a
-        job while the room is connected, remove the avatar participant from the room (one that
-        already left is skipped; another failure is logged). Idempotent."""
+        """Close the avatar's audio output and lifecycle; inside a job, also remove the avatar
+        participant from the room. Idempotent."""
         try:
             output = self._audio_output
             if output is not None:
@@ -189,10 +180,9 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
 
 
 class DataStreamAudioReceiver(AudioReceiver):
-    """
-    Audio receiver that receives streamed audio from a sender participant using LiveKit DataStream.
-    If the sender_identity is provided, subscribe to the specified participant. If not provided,
-    subscribe to the first agent participant in the room.
+    """Receives the agent's audio over LiveKit DataStream.
+
+    Subscribes to ``sender_identity`` if given, else to the first agent participant in the room.
     """
 
     def __init__(
@@ -239,7 +229,7 @@ class QueueAudioOutput(
     AudioOutput[Literal["clear_buffer"]],
     AudioReceiver[Literal["playback_finished", "playback_started", "playback_progressed"]],
 ):
-    """Audio output and receiver backed by the native segment queue."""
+    """An in-process audio output that is also the avatar's ``AudioReceiver``."""
 
     def __init__(
         self, *, sample_rate: int | None = None, wait_playback_start: bool = False
@@ -307,7 +297,7 @@ class QueueAudioOutput(
 
 
 class AvatarRunner:
-    """Worker that generates synchronized avatar video based on received audio"""
+    """Worker that generates synchronized avatar video from received audio."""
 
     def __init__(
         self,
@@ -316,10 +306,10 @@ class AvatarRunner:
         audio_recv: AudioReceiver,
         video_gen: VideoGenerator,
         options: AvatarOptions,
-        _queue_size_ms: int = 100,
         # queue size of the AV synchronizer
+        _queue_size_ms: int = 100,
+        # defer publishing the tracks until the first frame is pushed
         _lazy_publish: bool = True,
-        # publish video and audio tracks until the first frame pushed
     ) -> None:
         self._audio_recv = audio_recv
         self._host_receiver: _core.HostAudioReceiver | None = None
@@ -345,7 +335,6 @@ class AvatarRunner:
         return self._core.av_sync
 
     async def start(self) -> None:
-        """Start the worker"""
         await self._audio_recv.start()
         if self._host_receiver is not None:
             self._audio_recv.on("clear_buffer", self._host_receiver.clear_buffer)

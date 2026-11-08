@@ -1,5 +1,3 @@
-"""Host type validation and hydration for the runtime's persisted context scopes."""
-
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
@@ -72,7 +70,7 @@ Row: TypeAlias = list[SqlValue]
 
 
 class ContextStore(_context_facades.ContextStore):
-    """A runtime-supplied store; application values remain host objects after validation."""
+    """``ctx.store``: loads and saves persisted context fields and opens transactions."""
 
     def __init__(
         self,
@@ -91,7 +89,6 @@ class ContextStore(_context_facades.ContextStore):
         self._disposed = False
 
     def _for_scope(self, scope_id: str) -> ContextStore:
-        """Select the scope recorded by the runtime without allocating a replacement identity."""
         self._ensure_open()
         view = ContextStore(scope_id=scope_id, activation=self._activation)
         view._hydration = self._hydration
@@ -100,7 +97,7 @@ class ContextStore(_context_facades.ContextStore):
         return view
 
     async def load_context(self, context: T) -> T:
-        """Check saved contracts, then restore marked fields without touching runtime services."""
+        """Restore ``context``'s persisted fields, checked against their saved schemas."""
         self._ensure_open()
         adapters = _field_adapters(context)
         declarations = [
@@ -121,7 +118,7 @@ class ContextStore(_context_facades.ContextStore):
         return context
 
     async def save_context(self, context: object) -> None:
-        """Validate all marked fields, then stage or durably commit through the runtime owner."""
+        """Validate and save ``context``'s persisted fields; ``load_context`` must run first."""
         self._ensure_open()
         loaded = self._objects.loaded.get(id(context))
         if loaded is None or loaded.context is not context:

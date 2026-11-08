@@ -1,10 +1,7 @@
-"""Acceptance of a built livekit-agents-next wheel, run by CI from a clean venv with it installed.
+"""Check a built livekit-agents-next wheel installed in a clean venv.
 
-Checks the file name's ``cp311-abi3`` tag and the ``WHEEL`` metadata, that the wheel ships
-exactly the package's tracked files plus the one extension module and its bundled libraries
-(resources as real audio, not LFS pointers), and that ``dir(_core)`` of the installed extension is the surface its
-shipped ``_core.pyi`` declares. Prints the wheel's size record (and adds it to the GitHub step
-summary). ``--no-import`` skips the ``dir(_core)`` check, for wheels the runner cannot run.
+Checks the cp311-abi3 tag, that the wheel ships exactly the tracked files plus the _core
+extension and its bundled libraries, and that dir(_core) matches _core.pyi.
 
     python -I livekit-agents-next/scripts/check_wheel.py dist/livekit_agents_next-*.whl
 """
@@ -40,7 +37,7 @@ def check_contents(archive: zipfile.ZipFile) -> list[str]:
     tracked = subprocess.run(
         ["git", "ls-files", "livekit"], cwd=PACKAGE, capture_output=True, text=True, check=True
     ).stdout.split()
-    # metadata, and the shared libraries auditwheel (`<dist>.libs/`) or delocate (`.dylibs/`) bundle
+    # Skip metadata and the libraries auditwheel (`<dist>.libs/`) or delocate (`.dylibs/`) bundle.
     shipped = {
         n
         for n in archive.namelist()

@@ -1,6 +1,3 @@
-"""Voice and agent authoring: ``Agent``, ``VoiceSession`` and ``VoiceTask``, their events, and the
-media, room, avatar, answering-machine and background-audio integrations."""
-
 from __future__ import annotations
 
 import contextvars
@@ -92,20 +89,17 @@ _OutputValidatorFn = Callable[["RunContext", Any], Any]
 Output_T = TypeVar("Output_T", default=Any)
 _Context = TypeVar("_Context")
 
-# what runs the agents of this context: a voice session, or a text run
+# the voice session or text run executing the current agent callback
 _BindingContextVar: contextvars.ContextVar[Any] = contextvars.ContextVar("lk_agent_binding")
 
 
 class _VoiceBinding(NamedTuple):
-    """The voice session running ``agent``'s hook or tool, and what its commands are sent as."""
-
     session: VoiceSession
     agent: Agent
     origin: VoiceCommandOrigin | None = None
-    # the agent runs a `VoiceTask`: a `Completed` from its tools, validated, ends the task
+    # the agent runs a `VoiceTask`: a validated `Completed` from its tools ends the task
     task: bool = False
 
-    # the providers the agent's default nodes call: the session's, and the agent's own LLM
     @property
     def stt(self) -> stt.STT | None:
         return self.session.stt
@@ -124,17 +118,12 @@ class _VoiceBinding(NamedTuple):
 
     @property
     def llm_conn_options(self) -> APIConnectOptions:
-        # no LLM takes a policy of its own: not given is the defaults
         return self.session.conn_options.llm_conn_options or DEFAULT_API_CONNECT_OPTIONS
 
 
 class _LiveHook:
-    """``Agent.on_enter`` and ``Agent.on_exit``: the decorator registering the function the
-    hook runs, which receives the ``VoiceSession``, or, called bare, the hook to await.
-
-    A descriptor so a subclass still overrides ``async def on_enter(self) -> None``; the
-    bound form is untyped on purpose, both uses go through it.
-    """
+    # A descriptor (not a method) so a subclass can still override `async def on_enter(self)`;
+    # bound, it is either the registering decorator or, called bare, the hook to await.
 
     def __set_name__(self, owner: type[Agent], name: str) -> None:
         self._name = name
@@ -173,12 +162,8 @@ class _BoundLiveHook:
 
 
 def _assignment_namespace(frame: Any) -> dict[str, Any] | None:
-    """The namespace a module-level ``Agent(...)`` is assigned into, or ``None``.
-
-    Only a module (or an ``exec``) frame has a live namespace to scan later; a function frame's
-    locals are a snapshot, and holding its proxy would keep the frame alive. ``Agent[Ctx](...)``
-    constructs through ``typing``'s generic alias, whose frame is skipped.
-    """
+    # Only a module (or exec) frame has a live namespace; a function frame's locals are a
+    # snapshot and holding them would keep the frame alive. `Agent[Ctx](...)` adds a typing frame.
     while frame is not None and frame.f_globals.get("__name__") in ("typing", "typing_extensions"):
         frame = frame.f_back
     if frame is None or frame.f_locals is not frame.f_globals:
@@ -190,21 +175,18 @@ def _assignment_namespace(frame: Any) -> dict[str, Any] | None:
 class Agent(Generic[Context_T, Output_T]):
     """Shared agent configuration, parameterized by application context and final output.
 
-    As pydantic-ai's, the constructor infers both parameters: ``context_type`` gives the
-    application context and ``output_type`` the output (``str`` when omitted), so
-    ``Agent(context_type=Ctx, output_type=X)`` is an ``Agent[Ctx, X]``. ``context_type`` exists
-    only for the type checker.
+    ``Agent(context_type=Ctx, output_type=X)`` is an ``Agent[Ctx, X]``; the output is ``str``
+    when ``output_type`` is omitted. ``context_type`` exists only for the type checker.
 
-    ``tools`` are offered on every run, with a call's session tools; two different tools sharing
-    a name are refused with ``ValueError`` when the agent runs.
+    ``tools`` are offered on every run, alongside a call's session tools; two different tools
+    sharing a name raise ``ValueError`` when the agent runs.
 
     ``retries`` sets the retry budgets of every run (``AgentRetries``); an int sets both.
-    ``tool_handling`` sets the templates rendered around its tools' background calls on a voice
+    ``tool_handling`` sets the templates rendered around background tool calls on a voice
     session (``ToolHandlingOptions``); an ``AsyncToolset`` overrides them for its own tools.
     """
 
-    # One overload per inferred shape: without `output_type` the output is `str`; an async output
-    # function comes before the union, which mypy cannot solve for one.
+    # The async output-function overload precedes the union one, which mypy cannot solve for it.
     @overload
     def __init__(
         self: Agent[Any, str],
@@ -278,9 +260,8 @@ class Agent(Generic[Context_T, Output_T]):
         if not isinstance(instructions, str):
             raise TypeError("instructions must be a string")
         tools = tools or []
-        # an unnamed agent takes the name of the module-level variable it is assigned to: the
-        # assigning frame's namespace is kept and scanned the first time the name is read, since
-        # the assignment completes only after the constructor returns
+        # an unnamed agent takes its module-level variable name, which exists only after the
+        # constructor returns: keep the namespace and scan it when the name is first read
         self._config = _core._core_AgentConfig(instructions, name, retries)
         self._defining_namespace = _assignment_namespace(sys._getframe(1)) if name is None else None
 
@@ -288,7 +269,7 @@ class Agent(Generic[Context_T, Output_T]):
         for tool in [*tools, *find_function_tools(self)]:
             token = self._config.register(CallbackKind.TOOL).token
             self._tools[token] = tool
-        # registered at import by the decorators below; frozen once the agent is first bound
+        # filled by the decorators at import; frozen once the agent is first bound
         self._instruction_fns: dict[int, _InstructionsFn] = {}
         self._instructions_view: _InstructionsView[Any] | None = None
         self._hook_fns: dict[int, _HookFn] = {}
@@ -310,8 +291,7 @@ class Agent(Generic[Context_T, Output_T]):
 
     @property
     def name(self) -> str:
-        """The agent's identity (agents.md "Definition"): ``name=``, else the module-level
-        variable it is assigned to, else ``default_agent``."""
+        """``name=``, else the module-level variable it is assigned to, else ``default_agent``."""
         discovered = None
         if self._defining_namespace is not None:
             for var_name, value in self._defining_namespace.items():
@@ -338,20 +318,14 @@ class Agent(Generic[Context_T, Output_T]):
 
     @property
     def tools(self) -> list[llm.Tool | llm.Toolset]:
-        """
-        Returns:
-            list[llm.Tool | llm.ToolSet]:
-                A list of function tools available to the agent.
-        """
+        """The tools and toolsets available to the agent."""
         return [self._tools[token] for token in self._config.callbacks(CallbackKind.TOOL)]
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        """A read-only view of the history the current run works on (agents.md "History"):
-        the agent's own view of the conversation, not the session's history of every agent.
+        """A read-only view of the agent's own history in the current run.
 
-        This resolves through the activity bound in the current context, so it is only available
-        inside the agent's hooks and tools.
+        Only available inside the agent's hooks and tools.
 
         Raises:
             RuntimeError: If the agent is not running in this context.
@@ -376,8 +350,7 @@ class Agent(Generic[Context_T, Output_T]):
         chat_history: Literal["fresh", "fork"] = "fresh",
         merge_chat_history: bool = False,
     ) -> llm.FunctionTool[..., Awaitable[Output_T]]:
-        """A typed child conversation managed by TextSession (text-session.md)."""
-
+        """This agent as a tool running a typed child conversation inside a TextSession."""
         return _LocalAgentTool(
             self,
             tool_name=tool_name,
@@ -396,8 +369,7 @@ class Agent(Generic[Context_T, Output_T]):
         context: Context_T | None = None,
         retries: int | AgentRetries | None = None,
     ) -> RunResult[Output_T]:
-        """One invocation on the given history: the model and tool loop until the accepted
-        output or a request for human input (agents.md "Running a turn").
+        """Run the model and tool loop until an accepted output or a request for human input.
 
         Args:
             message: The user's message.
@@ -415,7 +387,6 @@ class Agent(Generic[Context_T, Output_T]):
             retries=retries,
         ) as stream:
             if hooks is not None and hooks.on_token is not None:
-                # inside a managed turn the reply reaches the client as it is written
                 async for delta in stream.stream_text(delta=True):
                     await hooks.on_token(delta)
             return await stream.result()
@@ -428,13 +399,12 @@ class Agent(Generic[Context_T, Output_T]):
         context: Context_T | None = None,
         retries: int | AgentRetries | None = None,
     ) -> RunStream[RunResult[Output_T]]:
-        """``run()`` as an async context manager streaming its text and events; execution
-        starts on entry (agents.md "Streaming runs")::
+        """``run()`` as an async context manager streaming text and events; it starts on entry::
 
-            async with agent.run_stream(message, message_history=history) as stream:
-                async for delta in stream.stream_text(delta=True):
-                    print(delta, end="")
-                result = await stream.result()
+        async with agent.run_stream(message, message_history=history) as stream:
+            async for delta in stream.stream_text(delta=True):
+                print(delta, end="")
+            result = await stream.result()
         """
         from .agent_run import settled_result, start_run
         from .run_result import RunStream, _Started
@@ -480,7 +450,6 @@ class Agent(Generic[Context_T, Output_T]):
 
     @property
     def _host(self) -> AgentCallbacks:
-        """The host side of this agent's invocations, built once its registrations froze."""
         if self._host_instance is None:
             from .agent_run import AgentCallbacks
 
@@ -491,11 +460,9 @@ class Agent(Generic[Context_T, Output_T]):
     def _definition(
         self, tools: llm.ToolContext, retries: int | AgentRetries | None = None
     ) -> AgentDefinition:
-        """The core's ``AgentDefinition`` of this agent with ``tools``, under a run's
-        ``retries=``."""
         from .agent_run import tool_infos
 
-        _ = self.name  # Resolve the module-assignment fact before projecting native configuration.
+        _ = self.name  # resolve the discovered name before the configuration is read
         return AgentDefinition(
             **self._config.configuration(retries),
             tools=tool_infos(tools),
@@ -503,17 +470,12 @@ class Agent(Generic[Context_T, Output_T]):
         )
 
     async def _validate_output(self, ctx: RunContext, output: Any) -> Any:
-        """The output through every validator; raises ``ModelRetry`` from the first that does."""
         for token in self._config.callbacks(CallbackKind.VALIDATOR):
             validated = self._output_validators[token](ctx, output)
             if inspect.isawaitable(validated):
                 validated = await validated
             output = validated
         return output
-
-    # -- Registration at import --
-    # `@agent.tool`, `@agent.instructions` and `@agent.on_enter` register on a module-level
-    # instance; the lists freeze when the agent is first bound to a session
 
     def _check_not_frozen(self, what: str) -> None:
         _ = self.name
@@ -543,7 +505,7 @@ class Agent(Generic[Context_T, Output_T]):
             self._check_not_frozen("a tool")
             tool: FunctionTool[_P, _R] | RawFunctionTool[_P, _R]
             if isinstance(func, (FunctionTool, RawFunctionTool)):
-                # an already built tool, registered as it is: its options were given when built
+                # an already built tool keeps the options it was built with
                 self._config.check_tool_options(ToolOptions(**options))
                 tool = func
             else:
@@ -562,7 +524,6 @@ class Agent(Generic[Context_T, Output_T]):
         return f
 
     async def _render_dynamic_instructions(self, ctx: RunContext) -> str:
-        """The registered instruction functions, rendered for one turn and joined."""
         parts: list[str] = []
         for token in self._config.callbacks(CallbackKind.INSTRUCTIONS):
             rendered = self._instruction_fns[token](ctx)
@@ -572,12 +533,8 @@ class Agent(Generic[Context_T, Output_T]):
                 parts.append(str(rendered))
         return self._config.join_instructions(parts)
 
-    # -- Pipeline nodes --
-    # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
-    # constructor of the VoiceAgent
-
     on_enter = _LiveHook()
-    """Called when the agent takes the active live role (agents.md "Hooks").
+    """Called when the agent takes the active live role.
 
     A decorator registering the function to run then, which receives the session::
 
@@ -588,7 +545,7 @@ class Agent(Generic[Context_T, Output_T]):
 
     on_exit = _LiveHook()
     """Called when the agent relinquishes the active live role, on an orderly replacement or
-    session close (agents.md "Hooks").
+    session close.
 
     A decorator registering the function to run then, which receives the session::
 
@@ -614,14 +571,12 @@ class Agent(Generic[Context_T, Output_T]):
         return result
 
     def _has_on_enter(self) -> bool:
-        """An ``on_enter`` was registered or overridden."""
         return self._config.has_enter(
             not isinstance(inspect.getattr_static(type(self), "on_enter"), _LiveHook)
         )
 
     async def _enter(self, ctx: RunContext[Any]) -> Any:
-        """``on_enter`` as it was written: an override takes the context when it declares one,
-        the decorator form takes the call's session and is nothing in text."""
+        # an override may declare the context; the decorator form needs a live session
         hook = type(self).on_enter
         if isinstance(hook, _LiveHook):
             return await self._run_hook("on_enter") if ctx._session is not None else None
@@ -630,11 +585,7 @@ class Agent(Generic[Context_T, Output_T]):
         return await hook(self)
 
     def _bound_binding(self) -> _VoiceBinding | _TextRun[Any] | None:
-        """What runs this agent in the current context: a voice session or a run (internal).
-
-        Resolved through the contextvar both set around every hook and tool, so one shared
-        instance serving several sessions reads the right one.
-        """
+        # per-context, so one shared instance serving several sessions reads the right one
         binding = _BindingContextVar.get(None)
         if binding is None or binding.agent is not self:
             return None
@@ -659,20 +610,11 @@ class Agent(Generic[Context_T, Output_T]):
 
     @property
     def llm(self) -> NotGivenOr[llm.LLM | llm.RealtimeModel | None]:
-        """
-        Retrieves the Language Model or RealtimeModel used for text generation.
-
-        If this property was not set at Agent creation, but an ``VoiceSession`` provides an LLM or RealtimeModel,
-        the session's model will be used at runtime instead.
-
-        Returns:
-            NotGivenOr[llm.LLM | llm.RealtimeModel | None]: The language model for text generation.
-        """  # noqa: E501
+        """The agent's LLM or RealtimeModel; when not given, the session's model is used."""
         return self._llm
 
 
 def _output_type_of(output: Any) -> type[Any]:
-    """The type of ``result.output``: the type itself, or an output function's return type."""
     if isinstance(output, type) or not callable(output):
         return output  # type: ignore[no-any-return]
     from typing import get_type_hints
@@ -684,8 +626,6 @@ _RenderedT = TypeVar("_RenderedT", bound=str | Awaitable[str])
 
 
 class _InstructionsView(str, Generic[Context_T]):
-    """The static instructions, callable to register a dynamic instruction function."""
-
     _source: str
     _agent: Agent
 
@@ -760,7 +700,7 @@ class _LocalAgentTool(FunctionTool[..., Awaitable[object]]):
         return encoded
 
 
-# The session and its features build on Agent: imported once it is defined.
+# imported after Agent is defined: these modules import it
 from .agent_session import (  # noqa: E402
     VoiceSession,
     VoiceTask,

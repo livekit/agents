@@ -17,7 +17,7 @@ __all__ += _public.__all__
 
 
 class STT(_facades.STT):
-    """LiveKit Inference STT over the core's gateway client (``_core.InferenceStt``)."""
+    """LiveKit Inference STT."""
 
     @classmethod
     def from_model_string(cls, model: str) -> STT:
@@ -29,12 +29,9 @@ class STT(_facades.STT):
         return "livekit"
 
     def _core_conn_options(self) -> APIConnectOptions | None:
-        """The policy this provider was given, which a session or run that supplies none
-        keeps (models.md)."""
         return self._native.conn_options
 
     def _core_native(self) -> _core.InferenceStt:
-        """The client as a session of the current job holds it: its connections carry that job."""
         return self._native.identified(list(get_inference_headers().items()), self)
 
     async def _recognize_impl(self, buffer: Any, **_: Any) -> stt.SpeechEvent:

@@ -1,11 +1,3 @@
-"""What an ``a2a_session`` handler receives, and the host the Rust turn drives.
-
-``_core.Turn`` runs the policies and the commit. It runs the handler through one awaited
-``_TurnHost._core_handle`` call on the ``TurnContext`` and a native ``_core_HandlerTurn``, which
-carries the handler's checkpoints, progress and tokens back to the turn; the call returns the
-``HandlerOutput``.
-"""
-
 from __future__ import annotations
 
 from collections.abc import AsyncIterable, Awaitable, Callable
@@ -23,7 +15,6 @@ from . import StorageError, Thread
 from .context import ContextStore
 
 _Handler = Callable[["A2ASessionContext"], Awaitable[object]]
-"""The developer's handler: the context in, the answer out (docs/server.md)."""
 
 
 class A2ASessionContext:
@@ -31,7 +22,7 @@ class A2ASessionContext:
     report back. ``message`` is the batch as one user message, ``messages`` each message with its
     channel and time; ``message_history`` the lane's history; ``store`` supports explicit
     context persistence; ``caller_history`` a delegating caller's conversation when it
-    sent one (plan 7.5)."""
+    sent one."""
 
     def __init__(
         self,
@@ -52,8 +43,6 @@ class A2ASessionContext:
             ChatContext.from_dict(turn.caller_history) if turn.caller_history is not None else None
         )
         self._events: list[ToolExecution] = []
-        """What the turn appends to the journal (docs/internals/storage.md#journal): each ``update`` here, the
-        tool calls from the runs' results."""
         self._interrupted = False
         self._reports = reports
 
@@ -78,9 +67,6 @@ class A2ASessionContext:
 
 
 class _TurnHost:
-    """What ``_core.Turn`` runs for one door: the developer's handler, its run hooks installed
-    around it."""
-
     def __init__(self, handler: _Handler, *, thread: Thread) -> None:
         self._handler = handler
         self._thread = thread
@@ -88,7 +74,6 @@ class _TurnHost:
     async def _core_handle(
         self, ctx: TurnContext, reports: _core._core_HandlerTurn
     ) -> HandlerOutput:
-        """The handler on one turn, reporting through ``reports``; its output."""
         thread = self._thread
         if thread.id != ctx.thread_id:
             thread = Thread(thread._storage, ctx.thread_id, agent_name=ctx.lane)
@@ -150,7 +135,6 @@ class _TurnHost:
         interrupted: bool,
         error: str | None = None,
     ) -> HandlerOutput:
-        """The answer, new history, explicitly saved fields and any pending question."""
         return _core.normalize_handler_output(
             HandlerOutput(
                 output=None,

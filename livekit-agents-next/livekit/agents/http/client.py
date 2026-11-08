@@ -1,19 +1,3 @@
-"""The client side: how plugins call their providers, held to the same contract as the Rust
-transport. It never serves; the routes an application serves are in ``server``.
-
-Native providers use ``lk-agents-net``. Python plugins use ``HttpSession``, which runs on
-aiohttp and behaves the same way:
-
-- every call enforces each ``APIConnectOptions`` limit (pool, connect, write, read) on the wait
-  it names, and raises ``APITimeoutError`` naming the one that expired. The total limit and
-  retries belong to the caller's retry owner, not to this module;
-- failures are framework errors (``APIConnectionError``, ``APIStatusError``), never aiohttp's;
-- every client in the process trusts the same CA certificates (see ``_export_ca_paths``).
-
-Plugins never see aiohttp, so the transport underneath can change without touching them.
-See docs/models.md, "HTTP and WebSockets".
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -44,6 +28,10 @@ from .._generated.types import TimeoutPhase
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
+# Same contract as the Rust transport: each APIConnectOptions limit applies to the wait it names,
+# failures are framework errors (never aiohttp's), and the total limit and retries belong to the
+# caller's retry owner.
+
 __all__ = [
     "FormData",
     "HttpResponse",
@@ -54,8 +42,6 @@ __all__ = [
     "http_session",
     "open",
 ]
-
-# --- the session ------------------------------------------------------------------------------
 
 
 class HttpSession:
@@ -166,15 +152,12 @@ class HttpSession:
 
 
 class _Pool:
-    """The connections a session and its ``with_request_id`` views share."""
-
     def __init__(self, proxy: str | None) -> None:
         self._proxy = proxy
         self._client: aiohttp.ClientSession | None = None
         self.closed = False
 
     def client(self) -> aiohttp.ClientSession:
-        """The aiohttp session underneath, created in the running loop on first use."""
         if self.closed:
             raise RuntimeError("the http session is closed")
         if self._client is None:
@@ -284,9 +267,6 @@ class FormData:
         return form
 
 
-# --- websockets -------------------------------------------------------------------------------
-
-
 class WebSocketMessageType(enum.Enum):
     TEXT = "text"
     BINARY = "binary"
@@ -384,23 +364,11 @@ class WebSocket:
             raise APIConnectionError("websocket send failed") from redacted_cause(e)
 
 
-# --- limits -----------------------------------------------------------------------------------
-#
-# aiohttp only has a read limit (``sock_read``), so the others are added here:
-#
-# - a request runs under one asyncio timeout (``_Deadline``), moved to the limit of whatever
-#   it is waiting on;
-# - aiohttp's trace events say when it waits for the pool or opens a connection;
-# - the request body's writer is wrapped, so each chunk waits under the write limit;
-# - ``WebSocket`` bounds each frame it sends by the write limit itself.
-
-
+# aiohttp only has a read limit (sock_read): pool and connect limits come from its trace events,
+# the write limit from wrapping the body writer.
 class _Deadline:
-    """One request's timeout, set to the limit of the wait in progress.
-
-    aiohttp writes the body in its own task, so a stalled body write expires this shared
-    timeout: the request task is the one that fails, naming the limit that ran out.
-    """
+    # aiohttp writes the body in its own task, so a stalled write expires this shared timeout
+    # and the request task fails, naming the limit that ran out.
 
     def __init__(
         self,
@@ -440,7 +408,6 @@ _current = contextvars.ContextVar[_Deadline | None]("http_deadline", default=Non
 async def _under_limits(
     options: APIConnectOptions, after_connect: TimeoutPhase | None, request_id_header: str | None
 ) -> AsyncIterator[_Deadline]:
-    """Run a request under ``options``' limits and turn aiohttp's failures into ours."""
     try:
         async with asyncio.timeout(None) as timeout:
             deadline = _Deadline(options, timeout, after_connect)
@@ -500,8 +467,6 @@ def _payload(data: object) -> aiohttp.payload.Payload:
 
 
 class _TimedBody(aiohttp.payload.Payload):
-    """A request body written through ``_TimedBodyWriter``."""
-
     def __init__(self, body: aiohttp.payload.Payload, deadline: _Deadline) -> None:
         super().__init__(body, headers=body.headers)
         self._size = body.size
@@ -522,8 +487,6 @@ class _TimedBody(aiohttp.payload.Payload):
 
 
 class _TimedBodyWriter:
-    """Each body chunk waits for the transport under the write limit."""
-
     def __init__(self, writer: AbstractStreamWriter, deadline: _Deadline) -> None:
         self._writer = writer
         self._deadline = deadline
@@ -539,17 +502,10 @@ class _TimedBodyWriter:
         return getattr(self._writer, name)
 
 
-# --- trusted CA certificates ------------------------------------------------------------------
-
-
 def _export_ca_paths() -> None:
-    """Export the CA paths Python resolved, or certifi when there are none, to
-    ``SSL_CERT_FILE``/``SSL_CERT_DIR``. Explicit values are kept.
-
-    ``cli.run_app`` calls it once at startup. Job processes inherit the variables, and OpenSSL
-    and rustls-native-certs both read them, so aiohttp, livekit-rtc and the native clients trust
-    the same roots, including in minimal containers without ca-certificates.
-    """
+    # Called once at startup; job processes inherit SSL_CERT_FILE/SSL_CERT_DIR, which OpenSSL and
+    # rustls-native-certs both read, so aiohttp, livekit-rtc and the native clients trust the
+    # same roots (certifi when the container has no trust store).
     if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
         return
     paths = ssl.get_default_verify_paths()
@@ -562,14 +518,10 @@ def _export_ca_paths() -> None:
         logger.debug("no system trust store found, using the certifi bundle")
 
 
+# cached: parsing the CA bundle is slow
 @functools.cache
 def _ssl_context() -> ssl.SSLContext:
-    """Built once (parsing the bundle is slow) and shared by every session. Like the native
-    roots, it is not reloaded."""
     return ssl.create_default_context()
-
-
-# --- the job's session ------------------------------------------------------------------------
 
 
 _ContextVar = contextvars.ContextVar[HttpSession | None]("agent_http_session", default=None)

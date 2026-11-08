@@ -1,5 +1,3 @@
-"""Model contracts: the generic LLM, chat context, tools, realtime and duplex models, and their fallback adapters."""
-
 from __future__ import annotations
 
 import asyncio
@@ -134,8 +132,7 @@ __all__ += _public.__all__
 
 
 class FallbackAdapter(_facades.FallbackAdapter):
-    """Several LLMs behind one: a failed one is skipped until it recovers. The chain is the
-    core's (``_core.FallbackLlm``)."""
+    """Several LLMs behind one: a failed one is skipped until it recovers."""
 
     def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
         self._members[0].prewarm(loop=loop)

@@ -1,19 +1,10 @@
-"""End-to-end calls on LiveKit Cloud: one agent file served by livekit-agents-next, scripted
-callers driving it.
+"""End-to-end calls on LiveKit Cloud: scripted callers driving one agent served by this file.
 
-This file runs as a worker (``e2e.py agent``) on the current interpreter, registered on the
-project. Each scenario makes a room, dispatches the agent with the scenario in the metadata, and
-drives a ``livekit.rtc`` caller through it: speech from WAVs (synthesized once and cached), chat on
-``lk.chat``, host commands over RPC, DTMF, leaving, rejoining, and a small avatar worker that
-publishes video from the audio it receives.
-
-Recorded per run: every ``session.on(...)`` event with its payload, ``session.history``, the
-item metrics (latency per stage), what the caller saw (``lk.transcription`` streams, the agent
-state attribute, the agent's audio, the avatar's audio and video) and the worker's error lines.
-Each run is judged on its own: the scenario did what it is for (its checks), what the caller saw
-is what the history says, no error events, no timeouts. There is no comparison with any other
-implementation (owner decision 22). A failing scenario is run again; both attempts are kept and
-reported, and a scenario fails when either attempt fails.
+Each scenario makes a room, dispatches the agent (``e2e.py agent``, a worker on the current
+interpreter) and drives a ``livekit.rtc`` caller through it: cached synthesized speech, chat,
+host commands over RPC, DTMF, leaving, rejoining and an avatar worker. A run passes when its
+checks hold, what the caller saw matches the history, and there are no error events or
+timeouts. A failing scenario runs again; it fails when either attempt fails.
 
     python livekit-agents-next/scripts/e2e.py                    # everything
     python livekit-agents-next/scripts/e2e.py turns barge_in     # some scenarios
@@ -25,7 +16,7 @@ reported, and a scenario fails when either attempt fails.
 Needs LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET (a project with LiveKit Inference),
 from the environment or ``--env-file``, and livekit-agents-next with
 livekit-plugins-noise-cancellation installed in the current interpreter. Exits 0 when every
-scenario passed, 1 otherwise. Replaced by the tests/e2e pytest suite (K-18).
+scenario passed, 1 otherwise.
 """
 
 import argparse
@@ -116,12 +107,8 @@ EVENTS = (
 )
 
 
-# ====================================================================================== agent
-# Runs in each stack's venv: everything here is the developer's side of one agent file.
-
-
 def jsonable(v: Any, depth: int = 0) -> Any:
-    """A payload as JSON, whatever the stack built it from (pydantic, dataclass, plain)."""
+    """A payload as JSON (pydantic, dataclass or plain object)."""
     if depth > 8:
         return repr(v)[:120]
     if v is None or isinstance(v, (bool, int, float, str)):
@@ -160,14 +147,14 @@ class Recorder:
         self._f.write(json.dumps(line, default=repr) + "\n")
 
 
-try:  # either stack's livekit.agents; the orchestrator's own python may have none
+try:  # the driving process may have no livekit.agents
     from livekit.agents import Agent, RunContext, function_tool
 except ImportError:
     function_tool = None
 
-if function_tool is not None:  # module level: the reference pickles an agent's on_enter
+if function_tool is not None:
     try:
-        from livekit.agents.llm.async_toolset import AsyncToolset  # the reference
+        from livekit.agents.llm.async_toolset import AsyncToolset
     except ImportError:
         from livekit.agents.llm.tool_context import AsyncToolset  # type: ignore[no-redef]
 
@@ -202,7 +189,7 @@ if function_tool is not None:  # module level: the reference pickles an agent's 
         await asyncio.sleep(3.0)
         return f"A table is booked at {time}."
 
-    try:  # 2.0's live task; the reference has none, and runs no scenario using it
+    try:
         from livekit.agents import Completed, VoiceTask
     except ImportError:
         VoiceTask = None
@@ -228,7 +215,7 @@ if function_tool is not None:  # module level: the reference pickles an agent's 
     @function_tool
     async def transfer_to_billing(ctx: RunContext) -> str:
         """Transfer the caller to the billing desk."""
-        ctx.session.update_agent(billing)  # 2.0 hands off explicitly; returning an Agent is 1.x
+        ctx.session.update_agent(billing)
         return "Transferred to billing."
 
 
@@ -265,7 +252,7 @@ async def entry(ctx: Any) -> None:
             if name == "close":
                 snapshot("close")
 
-        # 2.0 removed metrics_collected from the session
+        # metrics_collected is not a session event
         with contextlib.suppress(ValueError):
             session.on(name, on_event)
 
@@ -309,9 +296,8 @@ async def entry(ctx: Any) -> None:
                 ctx.room, destination_identity=AVATAR, wait_remote_track=rtc.TrackKind.KIND_VIDEO
             )
         )
-    # the session connects the room itself: before it, the pre-connect audio would be missed
+    # start() connects the room; connecting before it would miss the pre-connect audio
     await session.start(**start)
-    # after the session's own close, which start() registered first
     rec.write("started")
     if not ctx.room.isconnected():
         rec.write("note", what="session.start() left the room unconnected")
@@ -339,10 +325,6 @@ def run_agent(name: str) -> None:
     server.rtc_session()(entry)
     sys.argv = [sys.argv[0], "start"]
     cli.run_app(server)
-
-
-# ===================================================================================== caller
-# Runs in the driving process: the person, the avatar, and the scenario scripts.
 
 
 async def speech_frames(cache: Path) -> dict[str, list[Any]]:
@@ -386,7 +368,7 @@ def rms(data: Any) -> float:
 
 
 class Call:
-    """One scenario on one stack: its room, its caller, what the caller saw."""
+    """One scenario: its room, its caller, what the caller saw."""
 
     def __init__(
         self, stack: str, scenario: str, agent_name: str, lkapi: Any, speech: Any, out: Path
@@ -413,8 +395,6 @@ class Call:
         task = asyncio.ensure_future(coro)
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
-
-    # ------------------------------------------------------------------------------ the room
 
     def token(self, identity: str, attributes: dict[str, str] | None = None) -> str:
         from livekit import api
@@ -467,7 +447,6 @@ class Call:
         self.spawn(self._mic(source))
 
     async def _mic(self, source: Any) -> None:
-        """A microphone: the queued speech, silence the rest of the time, in real time."""
         from livekit import rtc
 
         silence = rtc.AudioFrame(b"\x00\x00" * 240, SAMPLE_RATE, 1, 240)
@@ -480,8 +459,8 @@ class Call:
                 self.drained.set()
 
     async def send_buffered(self) -> None:
-        """What a client SDK does with a pre-connect microphone (the Python SDK only flags the
-        track): the audio from before the agent joined, as one byte stream to it."""
+        """Sends the pre-connect audio as one byte stream, as client SDKs do (the Python SDK
+        only flags the track)."""
         data, self.buffered = bytes(self.buffered or b""), None
         mic = next(x["sid"] for x in reversed(self.log) if x["kind"] == "mic")
         writer = await self.room.local_participant.stream_bytes(
@@ -543,8 +522,6 @@ class Call:
 
         kind = rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
         return next((p for p in self.room.remote_participants.values() if p.kind == kind), None)
-
-    # ------------------------------------------------------------------------ the person acts
 
     async def until(self, predicate: Callable[[], bool], timeout: float, what: str) -> bool:
         deadline = time.time() + timeout
@@ -619,11 +596,9 @@ class Call:
             await asyncio.sleep(0.5)
         return False
 
-    # ------------------------------------------------------------------------------ the avatar
-
     async def start_avatar(self) -> None:
         """An avatar worker in the room: the agent's audio back out, with a video frame per 40 ms
-        whose brightness is that audio's loudness, through AvatarRunner."""
+        whose brightness is that audio's loudness."""
         from livekit import rtc
         from livekit.agents.voice.avatar import (
             AudioSegmentEnd,
@@ -737,9 +712,6 @@ def _who(identity: str) -> str:
     if identity == "caller":
         return "caller"
     return "agent"
-
-
-# ================================================================================== scenarios
 
 
 @dataclasses.dataclass
@@ -995,9 +967,6 @@ SCENARIOS: dict[str, Scenario] = {
 }
 
 
-# ================================================================================ judge
-
-
 def _norm(text: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9' ]+", " ", text.lower()).split())
 
@@ -1094,8 +1063,7 @@ def view(stack_dir: dict[str, Any]) -> dict[str, Any]:
     seen = caller["log"]
     transcripts = [x for x in seen if x["kind"] == "transcript"]
     mics = {x["sid"] for x in seen if x["kind"] == "mic"}
-    # the agent's words stream in (a stream per segment, not marked final), the person's are
-    # interim streams then a final one; both are published by the agent
+    # agent words: one unmarked stream per segment; the person's: interim streams, then a final
     agent_said = [x["text"] for x in transcripts if not _of_mic(x, mics)]
     user_said = [
         x["text"]
@@ -1149,7 +1117,6 @@ def view(stack_dir: dict[str, Any]) -> dict[str, Any]:
             "timeouts": [x["what"] for x in seen if x["kind"] == "timeout"],
             "rpc_errors": [x["op"] for x in seen if x["kind"] == "rpc_error"],
         },
-        # for the checks on one stack, not compared: the words themselves
         "words": {
             "agent_said": [_norm(x) for x in agent_said],
             "replies": [
@@ -1179,7 +1146,7 @@ def _get(v: dict[str, Any], path: str) -> Any:
 
 
 def consistency(v: dict[str, Any]) -> list[str]:
-    """What must hold on one stack alone."""
+    """What must hold for any run."""
     problems = []
     words = v["words"]
     said = " | ".join(words["agent_said"])
@@ -1204,8 +1171,6 @@ def consistency(v: dict[str, Any]) -> list[str]:
     return problems
 
 
-# ======================================================================= latency per stage
-
 STAGES = {
     "end_of_turn": ("user", "end_of_turn_delay"),
     "transcription_delay": ("user", "transcription_delay"),
@@ -1229,9 +1194,6 @@ def latencies(runs: dict[str, dict[str, Any]]) -> dict[str, list[float]]:
                     out[stage].append(float(metrics[key]))
         out["caller_heard"].extend(run["caller"]["heard"])
     return out
-
-
-# ============================================================================== the runner
 
 
 def load_env(path: str | None) -> None:
@@ -1340,7 +1302,6 @@ async def drive(args: argparse.Namespace) -> int:
 
 
 def _problems(name: str, run: dict[str, Any]) -> list[str]:
-    """What the run's checks and its consistency say is wrong with it."""
     v = view(run[STACK])
     failed = [f"did not: {k}" for k, f in SCENARIOS[name].expect.items() if not _safe(f, v)]
     return failed + consistency(v)

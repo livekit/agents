@@ -1,5 +1,3 @@
-"""Request-scoped text conversations, executed by the Rust TextSession coordinator."""
-
 from __future__ import annotations
 
 import asyncio
@@ -76,7 +74,7 @@ class TextSession(Generic[Context_T, Output_T]):
             root_scope = (
                 hooks.store._scope_id if hooks is not None and hooks.store is not None else "root"
             )
-            # each agent's run resolves its toolsets (Toolset.for_run) from the request's context
+            # runs resolve their toolsets (Toolset.for_run) from the request's context
             frames = [
                 _TextRun(
                     agent,

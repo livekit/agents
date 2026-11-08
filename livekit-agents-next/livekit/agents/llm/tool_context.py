@@ -89,7 +89,7 @@ class Toolset:
     async def aclose(self) -> None:
         """Release nested toolsets acquired by the default setup.
 
-        The native lifetime calls this after the last run or activation releases its lease.
+        Called after the last run or activation using the toolset ends.
         """
         if self._children is not None:
             await self._children.aclose()
@@ -110,9 +110,6 @@ class Toolset:
         return _FilteredToolset(self, predicate)
 
 
-# Used by ToolChoice
-
-
 ToolChoice = NamedToolChoice | Literal["auto", "required", "none"]
 
 
@@ -129,14 +126,10 @@ class Completed(Generic[Transition_T]):
 
 
 Transition = Completed[object] | Failed | Rejected | InputRequired | Working
-
-
 """What a tool or a hook returns to change the state of the turn or the task."""
 
 
 ReadBack = Callable[..., "str | InputRequired | Awaitable[str | InputRequired]"]
-
-
 """``needs_approval=`` as a function: the read-back the person approves. It takes the tool's
 own parameters, ``self`` and the context included, and is called with the call's arguments.
 An ``InputRequired`` instead asks for what is missing before there is anything to approve."""
@@ -152,8 +145,6 @@ _R = TypeVar("_R", default=object, covariant=True)
 
 
 class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
-    """Base class for function tool wrappers with descriptor support."""
-
     def __init__(self, func: Callable[_P, _R], info: _InfoT, instance: Any = None) -> None:
         functools.update_wrapper(self, func)
         self._func = func
@@ -172,10 +163,8 @@ class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
         if obj is None:
             return self
 
-        # bind the tool to an instance
         bound_tool = self.__class__(self._func, self._info, instance=obj)
         sig = inspect.signature(self._func)
-        # skip the instance parameter (e.g. usually the 'self')
         params = list(sig.parameters.values())[1:]
         bound_tool.__signature__ = sig.replace(parameters=params)  # type: ignore[attr-defined]
         return bound_tool
@@ -268,13 +257,16 @@ def function_tool(
     | RawFunctionTool[..., object]
     | Callable[[Callable[..., object]], FunctionTool[..., object] | RawFunctionTool[..., object]]
 ):
-    """``needs_approval``: the framework asks the person to confirm each call with a read-back
-    and runs the body only on a repeat of the same validated call after the answer (tools.md
-    "Approval"). ``True`` reads back the description and the arguments; a ``ReadBack`` function
-    writes it. Typed tools only.
+    """Turn a function into a tool the model can call.
 
-    ``retries``: how many consecutive retries the model gets for this tool (invalid arguments,
-    ``ModelRetry``) before the run fails; the agent's ``retries['tools']`` when ``None``."""
+    Args:
+        needs_approval: Ask the person to confirm each call with a read-back; the body runs
+            only on a repeat of the same validated call after the answer. ``True`` reads back
+            the description and the arguments; a ``ReadBack`` function writes it. Typed tools
+            only.
+        retries: Consecutive retries the model gets for this tool (invalid arguments,
+            ``ModelRetry``) before the run fails; the agent's ``retries['tools']`` when ``None``.
+    """
 
     if retries is not None and (isinstance(retries, bool) or retries < 0):
         raise ValueError(f"retries must be a non-negative integer, got {retries!r}")
@@ -291,7 +283,6 @@ def function_tool(
             raise ValueError("raw function name must be a non-empty string")
 
         if "parameters" not in raw_schema:
-            # support empty parameters
             raise ValueError("raw function description must contain a parameters key")
 
         schema = {**raw_schema}
@@ -334,8 +325,7 @@ def function_tool(
 
 
 def _wrap_with_confirm_duplicate(func: Callable[..., object]) -> Callable[..., object]:
-    """Extend ``func``'s signature with a CONFIRM_DUPLICATE_PARAM kwarg, stripped
-    by the wrapper before delegating so direct calls with the original args still work."""
+    # the extra kwarg is stripped before delegating so direct calls with the original args work
     try:
         resolved = get_type_hints(func, include_extras=True)
     except Exception:
@@ -362,8 +352,8 @@ def _wrap_with_confirm_duplicate(func: Callable[..., object]) -> Callable[..., o
         annotation=annotation,
     )
     wrapper.__signature__ = sig.replace(parameters=[*sig.parameters.values(), extra])  # type: ignore[attr-defined]
-    # set both for PEP 649: __annotations__ for 3.10-3.13, __annotate__ for 3.14.
-    # __annotate__ must come last — assigning __annotations__ nulls it on 3.14.
+    # PEP 649: set __annotations__ (<=3.13) then __annotate__ (3.14+); assigning
+    # __annotations__ nulls __annotate__ on 3.14, so order matters.
     wrapper.__annotations__ = new_annotations
     wrapper.__annotate__ = lambda _format=1: dict(new_annotations)  # type: ignore[attr-defined]
     return wrapper
@@ -535,17 +525,16 @@ class ToolContext:
 class AsyncToolset(Toolset):
     """Session-scoped toolset whose tools survive agent handoff.
 
-    Background updates from tools in this toolset are delivered to whichever agent
-    is current at delivery time, so a ``ctx.update()`` started under agent A still
-    completes after a handoff to agent B. Tools placed on ``Agent(tools=...)``
-    instead use the activity-scoped executor and are cancelled/awaited on handoff.
+    Background updates from these tools reach whichever agent is current at delivery time,
+    so a ``ctx.update()`` started under agent A still completes after a handoff to agent B.
+    Tools on ``Agent(tools=...)`` are instead cancelled or awaited on handoff.
     ``tool_handling`` overrides the agent's templates for this toolset's tools.
 
     Example::
 
         @function_tool(on_duplicate="confirm")
         async def book_flight(ctx, origin: str, destination: str) -> dict:
-            await ctx.update(f"Looking up flights {origin} → {destination}...")
+            await ctx.update(f"Looking up flights {origin} to {destination}...")
             flights = await search(origin, destination)
             await ctx.update(f"Found {len(flights)}, picking the best...")
             return await book_best(flights)
@@ -565,9 +554,6 @@ class AsyncToolset(Toolset):
 
 
 class _FilteredToolset(AsyncToolset):
-    """A toolset's tools that pass a predicate. It keeps the toolset's structure and
-    ``tool_handling``, and leases the toolset itself."""
-
     def __init__(self, inner: Toolset, predicate: Callable[[Tool], bool]) -> None:
         handling = inner._tool_handling if isinstance(inner, AsyncToolset) else None
         super().__init__(id=inner.id, tool_handling=handling)

@@ -1,22 +1,3 @@
-"""Job process start methods compared: ``forkserver`` against ``spawn``, each with the
-framework's real preload (``ipc/_preload.py``, which the forkserver runs once and a spawned
-process runs itself), as the worker starts its job processes.
-
-For each method it measures:
-
-- cold start: one process at a time, from ``start()`` to initialized (ready for a job);
-- memory: ``--warm`` processes initialized side by side, their summed PSS (Linux) or USS
-  (elsewhere, where psutil has no PSS; RSS where reading the pages is denied), the forkserver
-  itself included;
-- burst: ``--burst`` processes started at once, as jobs beyond the warm pool are, each one's
-  time to initialized (median and max).
-
-    python livekit-agents-next/scripts/proc_bench.py
-    python livekit-agents-next/scripts/proc_bench.py --warm 20 --burst 10 --methods forkserver
-
-The numbers are only representative on Linux, the platform the forkserver is the default on.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -30,6 +11,10 @@ import psutil
 
 from livekit.agents import _core
 from livekit.agents.ipc import JobLauncher, JobRunnerOptions, configure_forkserver
+
+# Compares job process start methods (cold start, warm memory, burst start):
+#   python livekit-agents-next/scripts/proc_bench.py --warm 20 --burst 10 --methods forkserver
+# Numbers are only representative on Linux, where forkserver is the default.
 
 
 async def _entrypoint(ctx: Any) -> None:
@@ -58,8 +43,7 @@ async def _ready(method: str) -> tuple[_core.JobSupervisor, float]:
 
 
 def _footprint_mb(pids: list[int]) -> tuple[float, str]:
-    """The summed footprint: PSS, else USS, else RSS (where reading another process's pages is
-    denied, as on macOS without the task_for_pid entitlement)."""
+    # PSS, else USS, else RSS where reading another process's pages is denied (macOS).
     total, metric = 0.0, "rss"
     for pid in pids:
         try:
@@ -79,7 +63,7 @@ def _forkserver_pid() -> list[int]:
 async def bench(method: str, cold: int, warm: int, burst: int) -> dict[str, Any]:
     if method == "forkserver":
         configure_forkserver(mp.get_context(method), [])
-    # the first process also starts the forkserver: not counted
+    # The first process also starts the forkserver, so it is not counted.
     first, _ = await _ready(method)
     await first.aclose()
 

@@ -1,5 +1,3 @@
-"""Python-only adapter for ``python -m livekit.agents start agent.py``."""
-
 from __future__ import annotations
 
 import argparse
@@ -12,7 +10,6 @@ from ._generated.cli import CliParseResultDisplay
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the entrypoint's normal ``__main__`` block with its command arguments."""
     argv = sys.argv[1:] if argv is None else argv
     parser = argparse.ArgumentParser(prog="python -m livekit.agents")
     parser.add_argument("command", help="agent command, such as start or console")
@@ -23,7 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     entrypoint: Path = invocation.entrypoint
     command = [invocation.command, *argv[2:]]
 
-    # Let the shared CLI handle diagnostics before executing application code.
+    # Diagnostics (--help, bad args) must run before any application code executes.
     parsed = _core.parse_cli([str(entrypoint), *command])
     if isinstance(parsed, CliParseResultDisplay):
         print(parsed.message, file=sys.stderr if parsed.stderr else sys.stdout, end="")

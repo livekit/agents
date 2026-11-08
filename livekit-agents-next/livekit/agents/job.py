@@ -80,9 +80,7 @@ get_current_job_context = get_job_context
 
 
 def _server_setting(name: str) -> str | None:
-    """The server setting ``name`` (``LIVEKIT_URL``, ``LIVEKIT_API_KEY``, ...): in a job, the
-    value its ``AgentServer`` runs with (an option given in code, else the worker's environment);
-    elsewhere, the environment variable."""
+    # In a job, options given to AgentServer in code are visible only through _server_env.
     ctx = get_job_context(required=False)
     if ctx is not None:
         return ctx._server_env.get(name)
@@ -94,8 +92,6 @@ def _server_credentials(
     api_key: NotGivenOr[str | None] = None,
     api_secret: NotGivenOr[str | None] = None,
 ) -> tuple[str, str, str]:
-    """Each given value, else the server's ``LIVEKIT_URL``/``API_KEY``/``API_SECRET``; ``""``
-    when neither has one."""
     return (
         url or _server_setting("LIVEKIT_URL") or "",
         api_key or _server_setting("LIVEKIT_API_KEY") or "",
@@ -106,10 +102,7 @@ def _server_credentials(
 def current_simulation() -> SimulationContext | None:
     """The :class:`SimulationContext` of the job running on this task, or ``None``.
 
-    ``None`` covers everything that is not a simulation: a production job, and code
-    running outside a job context at all (console mode, tests). Unlike
-    :attr:`JobContext.simulation_context` this does not need the job context in hand,
-    so it can be called from deep inside the stack.
+    ``None`` outside a simulation, including outside any job (console mode, tests).
     """
     ctx = get_job_context(required=False)
     if ctx is None:
@@ -119,14 +112,12 @@ def current_simulation() -> SimulationContext | None:
 
 
 class _ContextLogFieldsFilter(logging.Filter):
-    """Filter that adds job context fields to log records without overwriting."""
-
     def __init__(self, job_ctx: JobContext) -> None:
         super().__init__()
         self.job_ctx = job_ctx
 
     def filter(self, record: logging.LogRecord) -> bool:
-        # only add fields for the current job context
+        # Threaded executors share the root handlers across jobs: tag only this job's records.
         if self.job_ctx.proc.executor_type != JobExecutorType.PROCESS:
             try:
                 ctx = get_job_context()
@@ -136,7 +127,6 @@ class _ContextLogFieldsFilter(logging.Filter):
                 if ctx != self.job_ctx:
                     return True
 
-        # add context fields only if they don't already exist in the record
         for key, value in self.job_ctx._log_fields.items():
             if not hasattr(record, key):
                 setattr(record, key, value)
@@ -145,7 +135,6 @@ class _ContextLogFieldsFilter(logging.Filter):
 
 
 def callable_name(callable: Any) -> str:
-    """A callable's name, as the shutdown spans and logs label it."""
     for attr in ("__qualname__", "__name__"):
         if isinstance(name := getattr(callable, attr, None), str):
             return name
@@ -153,7 +142,6 @@ def callable_name(callable: Any) -> str:
 
 
 class JobContext:
-    # private ctor
     def __init__(
         self,
         *,
@@ -164,15 +152,12 @@ class JobContext:
         server_env: dict[str, str],
     ) -> None:
         self._proc = proc
-        # the server's settings by variable name (``AgentServer(ws_url=, api_key=, ...)`` or the
-        # worker's environment): a job thread reads options given in code only from here
+        # A job thread reads options given to AgentServer in code only from here.
         self._server_env = server_env
         self._info = info
         self._room = room
-        # the connection, the API calls and the recording's setup
         self._run = run
-        # every session started for the job, which the job closes; the first is the primary one,
-        # which it reports
+        # The first session is the primary one, which the job reports.
         self._sessions: list[VoiceSession] = []
 
         self._log_fields: dict[str, JsonValue] = {}
@@ -181,7 +166,6 @@ class JobContext:
 
         self._thread: Thread | None = None
 
-        # on_simulation_end callback, injected by the job runner from AgentServer.
         self._simulation_end_fnc: Callable[[SimulationContext], Any] | None = None
 
         self._tempdir = tempfile.TemporaryDirectory()
@@ -189,7 +173,6 @@ class JobContext:
         self._session_directory = Path(self._tempdir.name)
 
         self._tagger = _core.Tagger()
-        # the job's session as it closed, which every report of the job reads
         self._session_report: SessionReport | None = None
 
     def _on_setup(self) -> None:
@@ -199,8 +182,6 @@ class JobContext:
             self._handlers_with_filter.append(handler)
 
     async def _snapshot_session(self) -> None:
-        """Once the job's session closed: finish its recording, then snapshot it. Every report of
-        the job reads this snapshot; ``on_session_end`` runs after it."""
         session = self._primary_agent_session
         if session is None or self._session_report is not None:
             return
@@ -244,7 +225,6 @@ class JobContext:
         return self._sessions[0] if self._sessions else None
 
     def _core_claim_primary(self, session: VoiceSession) -> bool:
-        """A session started for the job: whether it is the job's primary one."""
         if session not in self._sessions:
             self._sessions.append(session)
         return self._sessions[0] is session
@@ -255,9 +235,7 @@ class JobContext:
 
     @property
     def tagger(self) -> _core.Tagger:
-        """Returns the Tagger for adding tags and outcomes to the session.
-
-        Tags are uploaded to LiveKit Cloud at session end.
+        """The Tagger for adding tags and outcomes to the session, uploaded at session end.
 
         Example:
             ```python
@@ -277,8 +255,10 @@ class JobContext:
         return session
 
     def make_session_report(self, session: VoiceSession | None = None) -> SessionReport:
-        """The session's report: its snapshot once the job's session closed, else its state now.
-        Tags, evaluations and the outcome are the tagger's as of this call."""
+        """The session's report: its final snapshot once closed, else its state now.
+
+        Tags, evaluations and the outcome are the tagger's as of this call.
+        """
         session = self._report_session(session)
         report = self._session_report
         if report is None or session is not self._primary_agent_session:
@@ -302,8 +282,9 @@ class JobContext:
 
     @functools.cached_property
     def api(self) -> api.LiveKitAPI:
-        """Returns an LiveKitAPI for making API calls to LiveKit, with the server's URL and key
-        pair: the values passed to `AgentServer`, else LIVEKIT_URL, LIVEKIT_API_KEY and
+        """A LiveKitAPI client using the server's URL and credentials.
+
+        Those are the values passed to `AgentServer`, else LIVEKIT_URL, LIVEKIT_API_KEY and
         LIVEKIT_API_SECRET.
         """
         from livekit import api
@@ -313,7 +294,7 @@ class JobContext:
             env.get("LIVEKIT_URL"),
             env.get("LIVEKIT_API_KEY"),
             env.get("LIVEKIT_API_SECRET"),
-            # livekit-api only takes an aiohttp session: the job's, from inside the framework
+            # livekit-api only accepts an aiohttp session.
             session=http_client.http_session()._pool.client(),
         )
 
@@ -334,17 +315,19 @@ class JobContext:
 
     @property
     def thread(self) -> Thread | None:
-        """The call's durable thread, resolved before the entrypoint runs: the ``thread_id`` of
-        the dispatch metadata, else a new thread. ``None`` on a server without storage. Pass it
-        to ``VoiceSession(thread=)``."""
+        """The call's durable thread, resolved before the entrypoint runs.
+
+        The dispatch's ``thread_id``, else a new thread; ``None`` on a server without storage.
+        Pass it to ``VoiceSession(thread=)``.
+        """
         return self._thread
 
     @property
     def room(self) -> rtc.Room:
-        """The Room object is the main interface that the worker should interact with.
+        """The job's room.
 
-        When the entrypoint is called, the worker has not connected to the Room yet.
-        Certain properties of Room would not be available before calling JobContext.connect()
+        Not connected when the entrypoint starts; some properties are unavailable until
+        ``connect()``.
         """
         return self._room
 
@@ -361,14 +344,10 @@ class JobContext:
 
     @functools.cached_property
     def simulation_context(self) -> SimulationContext | None:
-        """The :class:`SimulationContext` when this job runs under a simulation, ``None`` for
-        an ordinary job.
+        """The :class:`SimulationContext` when this job runs under a simulation, else ``None``.
 
-        Read from the job's ``lk.simulator.dispatch`` attribute (a protojson
-        ``SimulationDispatch``), so it is final as soon as the entrypoint runs.
+        Final as soon as the entrypoint runs.
         """
-        # The simulation attributes ride the agent dispatch and land on the job
-        # itself, so this is final before the room even connects.
         metadata = self._info.job.attributes.get(ATTRIBUTE_SIMULATOR_DISPATCH, "")
         if not metadata:
             return None
@@ -380,7 +359,7 @@ class JobContext:
         from .evals import SimulationContext
 
         try:
-            # ignore unknown fields so dispatches from newer servers still parse
+            # Dispatches from newer servers may carry unknown fields.
             dispatch = json_format.Parse(
                 metadata, sim_pb.SimulationDispatch(), ignore_unknown_fields=True
             )
@@ -394,21 +373,16 @@ class JobContext:
 
     @property
     def inference_headers(self) -> dict[str, str]:
-        """Extra headers this job puts on every LiveKit Inference request it makes.
+        """Extra headers this job puts on every LiveKit Inference request.
 
-        Merged last by ``inference.get_inference_headers``, so what the job asserts
-        about itself outranks what an individual model was configured with. Empty for
-        an ordinary job.
+        They override per-model headers. Empty for an ordinary job.
         """
         from .inference import HEADER_INFERENCE_PRIORITY
 
         headers: dict[str, str] = {}
 
-        # A text simulation is batch load: a run fans out many jobs at once and nobody
-        # is waiting on the answers, so it must not compete with live traffic for
-        # gateway capacity, and it must not be able to ask for priority either. Audio
-        # simulations are excluded: they run in real time against the audio pipeline,
-        # so their latency has to stay representative of production.
+        # Text simulations are batch load and must not compete with live traffic; audio
+        # simulations stay at normal priority so their latency matches production.
         sim = self.simulation_context
         if sim is not None and sim.simulation_mode == "text":
             headers[HEADER_INFERENCE_PRIORITY] = "low"
@@ -424,27 +398,14 @@ class JobContext:
 
     @property
     def log_context_fields(self) -> dict[str, JsonValue]:
-        """
-        Returns the current dictionary of log fields that will be injected into log records.
+        """Fields added to every log record of this job.
 
-        These fields enable enriched structured logging and can include job metadata,
-        worker ID, trace IDs, or other diagnostic context.
-
-        The returned dictionary can be directly edited, or entirely replaced via assignment
-        (e.g., `job_context.log_context_fields = {...}`)
+        Edit the returned dict in place, or replace it by assignment.
         """
         return self._log_fields
 
     @log_context_fields.setter
     def log_context_fields(self, fields: dict[str, JsonValue]) -> None:
-        """
-        Sets the log fields to be injected into future log records.
-
-        Args:
-            fields (dict[str, JsonValue]): A dictionary of key-value pairs representing
-                structured data to attach to each log entry. Typically includes contextual
-                information like job ID, trace information, or worker metadata.
-        """
         self._log_fields = fields
 
     def add_shutdown_callback(
@@ -452,10 +413,7 @@ class JobContext:
         callback: Callable[[], Coroutine[None, None, None]]
         | Callable[[str], Coroutine[None, None, None]],
     ) -> None:
-        """
-        Add a callback to be called when the job is shutting down.
-        Optionally the callback can take a single argument, the shutdown reason.
-        """
+        """Add a callback run when the job shuts down; it may take the shutdown reason."""
         bound = 1 if inspect.ismethod(callback) else 0
         module = getattr(callback, "__module__", "") or ""
         self._run.add_shutdown_callback(
@@ -472,17 +430,13 @@ class JobContext:
         kind: list[rtc.ParticipantKind.ValueType]
         | rtc.ParticipantKind.ValueType = DEFAULT_PARTICIPANT_KINDS,
     ) -> rtc.RemoteParticipant:
-        """
-        Returns a participant that matches the given identity. If identity is None, the first
-        participant that joins the room will be returned.
-        If the participant has already joined, the function will return immediately.
-        """
+        """Wait for a participant with ``identity``, or the first to join when ``None``.
 
-        # handle connection automatically, otherwise wait_for_participant will raise an error
+        Connects to the room first if needed; returns at once if the participant is present.
+        """
         if not self._room.isconnected():
             await self.connect()
 
-        # under the span current here: the session's start, else the job's entrypoint
         with telemetry._detached_span(
             semconv.SPAN_WAIT_FOR_PARTICIPANT,
             {semconv.LK_ROOM_IO_PARTICIPANT_FILTER: identity is not None},
@@ -505,14 +459,15 @@ class JobContext:
         rtc_config: rtc.RtcConfiguration | None = None,
         single_peer_connection: bool | None = None,
     ) -> None:
-        """Connect to the room. This method should be called only once.
+        """Connect to the room. Call at most once.
 
         Args:
-            encryption: End-to-end encryption options. If provided, the Agent will utilize end-to-end encryption. Note: clients will also need to handle E2EE.
-            auto_subscribe: Whether to automatically subscribe to tracks. Default is AutoSubscribe.SUBSCRIBE_ALL.
-            rtc_config: Custom RTC configuration to use when connecting to the room.
-            single_peer_connection: Use a single peer connection for both publish and subscribe. When None, uses the default (False).
-        """  # noqa: E501
+            encryption: End-to-end encryption options; clients must handle E2EE too.
+            auto_subscribe: Which tracks to subscribe to automatically.
+            rtc_config: Custom RTC configuration for the connection.
+            single_peer_connection: One peer connection for publish and subscribe
+                (default False).
+        """
         await self._run.connect(
             functools.partial(
                 self._connect,
@@ -537,7 +492,6 @@ class JobContext:
             single_peer_connection=single_peer_connection,
         )
 
-        # the room's name and id are the job identity the exporter stamps on every span
         with telemetry._detached_span(
             semconv.SPAN_ROOM_CONNECT,
             {
@@ -555,7 +509,7 @@ class JobContext:
             )
         self._room.local_participant.add_rpc_interceptor(_core._core_RpcTracing(self._run))
 
-        # a simulator leaving ends the job; the agent under test may add other participants
+        # A simulator leaving ends the job; other participants leaving do not.
         self._room.on(
             "participant_disconnected", lambda p: self._run.participant_left(dict(p.attributes))
         )
@@ -591,19 +545,15 @@ class JobContext:
         participant_identity: str,
         participant_name: NotGivenOr[str] = "SIP-participant",
     ) -> asyncio.Future[api.SIPParticipantInfo]:  # type: ignore
-        """
-        Add a SIP participant to the room.
+        """Dial out and add a SIP participant to the room.
+
+        Requires an outbound SIP trunk; see https://docs.livekit.io/sip/trunk-outbound/.
 
         Args:
-            call_to: The number or SIP destination to transfer the participant to.
-                         This can either be a number (+12345555555) or a
-                         sip host (sip:<user>@<host>)
-            trunk_id: The ID of the SIP trunk to use
-            participant_identity: The identity of the participant to add
-            participant_name: The name of the participant to add
-
-        Make sure you have an outbound SIP trunk created in LiveKit.
-        See https://docs.livekit.io/sip/trunk-outbound/ for more information.
+            call_to: The number (+12345555555) or SIP URI (sip:<user>@<host>) to call.
+            trunk_id: The ID of the SIP trunk to use.
+            participant_identity: The identity of the participant to add.
+            participant_name: The name of the participant to add.
         """
         from livekit import api
 
@@ -631,19 +581,16 @@ class JobContext:
     ) -> asyncio.Future[TransferSIPParticipantResponse]:
         """Transfer a SIP participant to another number.
 
-        Args:
-            participant: The participant to transfer
-            transfer_to: The number or SIP destination to transfer the participant to.
-                         This can either be a number (+12345555555) or a
-                         sip host (sip:<user>@<host>)
-            play_dialtone: Whether to play a dialtone during transfer. Defaults to True.
+        Requires call transfer enabled on the provider's SIP trunk; see
+        https://docs.livekit.io/sip/transfer-cold/.
 
+        Args:
+            participant: The participant to transfer, or its identity.
+            transfer_to: The number (+12345555555) or SIP URI (sip:<user>@<host>).
+            play_dialtone: Whether to play a dialtone during the transfer.
 
         Returns:
-            Future that completes when the transfer is complete
-
-        Make sure you have enabled call transfer on your provider SIP trunk.
-        See https://docs.livekit.io/sip/transfer-cold/ for more information.
+            A future that completes when the transfer is complete.
         """
         from livekit import api
 

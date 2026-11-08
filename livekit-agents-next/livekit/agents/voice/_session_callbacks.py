@@ -1,6 +1,3 @@
-"""The session's host callbacks: application hooks, Python async iterators and provider adapters,
-and the translation of native events into Python SDK events."""
-
 from __future__ import annotations
 
 import asyncio
@@ -75,9 +72,6 @@ _NodeCallsVar: contextvars.ContextVar[Any] = contextvars.ContextVar("lk_node_cal
 
 
 class _DynamicInstructions:
-    """An agent's ``@agent.instructions`` functions, rendered by the core before each model
-    request of a reply (``_core_render``)."""
-
     def __init__(self, session: VoiceSession[Any], agent: Agent) -> None:
         self._session = session
         self._agent = agent
@@ -90,7 +84,6 @@ class _DynamicInstructions:
 
 
 def _live_binding(operation: str) -> _VoiceBinding:
-    """The live session interaction the current hook or tool runs in; raises outside one."""
     binding = _BindingContextVar.get(None)
     if not isinstance(binding, _VoiceBinding):
         raise RuntimeError(
@@ -101,13 +94,11 @@ def _live_binding(operation: str) -> _VoiceBinding:
 
 
 def _origin() -> VoiceCommandOrigin | None:
-    """What the running hook or tool sends its commands as; ``None`` from outside the session."""
     binding = _BindingContextVar.get(None)
     return binding.origin if isinstance(binding, _VoiceBinding) else None
 
 
 def _items(chat_ctx: ChatContext) -> list[llm.ChatItem]:
-    """The items a command sends for ``chat_ctx``."""
     return chat_ctx.items
 
 
@@ -122,9 +113,6 @@ def _in_hook(hook: str, session: VoiceSession[Any], agent: Agent) -> Any:
 
 
 class _AgentHooks:
-    """The agent's hooks as the core awaits them (``_core.SessionHooks``): each runs in the agent's
-    binding and returns the core's answer; ``render_tool_reply`` is the core's default."""
-
     def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
         self._toolsets = _core._core_ToolsetScopes()
@@ -133,7 +121,6 @@ class _AgentHooks:
         return [tool for tool in self._for_call(tools) if isinstance(tool, llm.Toolset)]
 
     def _for_call(self, tools: Iterable[llm.Tool | llm.Toolset]) -> list[llm.Tool | llm.Toolset]:
-        """``tools`` as this call uses them (``Toolset.for_run``)."""
         return tools_for_run(list(tools), RunContext(function_call=None, session=self._session))
 
     async def _core_on_enter(self, agent: Agent) -> None:
@@ -211,11 +198,6 @@ class _AgentHooks:
 
 
 class _SessionNodes:
-    """The session's registered nodes as the core calls them (``_core.AgentNodes``), each call in
-    a copy of the agent's binding: one completion, one spoken segment, one recognition stream, one
-    segment's transcript. The core feeds what they read (its
-    streams, read with ``recv()``) and drains what they return."""
-
     def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
 
@@ -254,7 +236,7 @@ class _SessionNodes:
 
 
 class DefaultPipeline:
-    """``session.default``: the built-in pipeline steps, with the callbacks' signatures."""
+    """The built-in pipeline steps, exposed as ``session.default``."""
 
     def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
@@ -266,7 +248,7 @@ class DefaultPipeline:
         tools: list[llm.Tool],
         model_settings: ModelSettings,
     ) -> AsyncIterator[llm.ChatChunk | str | FlushSentinel]:
-        """A request to the session's LLM."""
+        """Send a request to the session's LLM."""
         model = self._session.llm
         assert isinstance(model, llm.LLM), "llm_node needs an LLM (not a realtime model)"
         choice = model_settings.tool_choice
@@ -287,7 +269,7 @@ class DefaultPipeline:
         audio: AsyncIterable[rtc.AudioFrame],
         model_settings: ModelSettings,
     ) -> AsyncIterator[stt.SpeechEvent]:
-        """The session's STT; one that does not stream is wrapped with its VAD."""
+        """Run the session's STT; a non-streaming STT is wrapped with the session's VAD."""
         session = self._session
         if session.stt is None:
             raise RuntimeError("stt_node called but no STT is available")
@@ -302,7 +284,7 @@ class DefaultPipeline:
     def tts_node(
         self, ctx: RunContext[Any], text: AsyncIterable[str], model_settings: ModelSettings
     ) -> AsyncIterator[rtc.AudioFrame]:
-        """The session's TTS; one that does not stream is fed sentence by sentence."""
+        """Run the session's TTS; a non-streaming TTS is fed sentence by sentence."""
         session = self._session
         if session.tts is None:
             raise RuntimeError("tts_node called but no TTS is available")
@@ -317,12 +299,12 @@ class DefaultPipeline:
         text: AsyncIterable[TranscriptChunk],
         model_settings: ModelSettings,
     ) -> AsyncIterator[str | TranscriptChunk]:
-        """The transcript as spoken."""
+        """Yield the transcript unchanged."""
         async for delta in text:
             yield delta
 
     async def on_user_turn_exceeded(self, ctx: RunContext[Any], ev: UserTurnExceededEvent) -> None:
-        """A short reply cutting in on the person, from the turn's transcript."""
+        """Generate a short reply that cuts in on the user, from the turn's transcript."""
         await self._session.generate_reply(
             user_input=ev.transcript,
             **_core.user_turn_exceeded_reply(),
@@ -330,8 +312,6 @@ class DefaultPipeline:
 
 
 def _stamped(node_frame: Any) -> rtc.AudioFrame:
-    """A default `tts_node` frame as the reference yields it: its `userdata` carries the words it
-    covers and when its synthesis started (a `perf_counter()` stamp)."""
     frame: rtc.AudioFrame = node_frame.frame
     if node_frame.timed_transcript:
         frame.userdata[USERDATA_TIMED_TRANSCRIPT] = node_frame.timed_transcript
@@ -342,22 +322,18 @@ def _stamped(node_frame: Any) -> rtc.AudioFrame:
 
 
 async def _node_input(stream: Any, item: Callable[[Any], Any] = lambda x: x) -> AsyncIterator[Any]:
-    """A core stream as the node reads it."""
     while (value := await stream.recv()) is not None:
         yield item(value)
 
 
 def _transcript_chunk(value: str | TranscriptChunk) -> TranscriptChunk:
-    """Normalize plain text once; existing chunks retain every metadata field."""
     return TranscriptChunk(value) if isinstance(value, str) else value
 
 
 async def _node_output(
     node: Callable[[], Any], item: Callable[[Any], Any] = lambda x: x
 ) -> AsyncIterator[Any]:
-    """What a node returned, read as the reference's node task reads it: an awaitable is awaited
-    first, an async iterable is read to its end (and closed with this one), a single value is the
-    one item, ``None`` is none."""
+    # a node may return an awaitable, an async iterable, a single value or None
     out = node()
     if inspect.isawaitable(out):
         out = await out
@@ -389,7 +365,7 @@ def dispatch(self: VoiceSession[Any], wire: HostWire) -> None:
 
 
 def _on_item_added(self: VoiceSession[Any], wire: ItemAddedWire) -> None:
-    # the history's own object: the event and `session.history` share it
+    # the same object as in `session.history`
     if (item := wire.host_item) is None:
         return
     if item.type in ("message", "agent_handoff"):
@@ -419,9 +395,8 @@ def _on_tool_update(self: VoiceSession[Any], wire: ToolExecutionUpdatedWire) -> 
 
 
 def _on_metrics(self: VoiceSession[Any], wire: MetricsCollectedWire) -> None:
-    # the usage counters are the core's, recorded where the session emits the record
     record = wire.metrics
-    # a record the session metered for a provider (its VAD's) is that provider's event
+    # a record metered for a provider (e.g. the VAD) is re-emitted on that provider
     if (leg := wire.leg) is not None and (
         provider := getattr(_VoiceBinding(self, self.current_agent), leg)
     ) is not None:
@@ -429,7 +404,6 @@ def _on_metrics(self: VoiceSession[Any], wire: MetricsCollectedWire) -> None:
 
 
 def _error_record(self: VoiceSession[Any], wire: SessionErrorWire) -> tuple[Any, Any]:
-    """The reference's payload: the provider's error record, and the provider that failed."""
     if (failure := wire.processor_failure) is not None:
         error = AudioProcessingError(label=failure.label, error=cast(Exception, failure.error))
         return error, failure.processor
@@ -448,8 +422,6 @@ def _core_error_message(self: VoiceSession[Any], wire: SessionErrorWire) -> str:
 
 
 def _on_error(self: VoiceSession[Any], wire: SessionErrorWire) -> None:
-    # A recoverable error is one the call goes on through; a processor's own exception keeps
-    # its traceback.
     failure = wire.processor_failure
     logger.log(
         logging.WARNING if wire.recoverable else logging.ERROR,
@@ -505,7 +477,7 @@ def _on_close(self: VoiceSession[Any], wire: CloseWire) -> None:
     self.emit("close", CloseEvent(reason=wire.reason, error=error))
 
 
-# each provider error record by its `type`, the wire's `source`
+# keyed by the record's `type`, which the wire carries as `source`
 _ERROR_RECORDS: dict[str, Any] = {
     record.model_fields["type"].default: record
     for record in (llm.LLMError, tts.TTSError, stt.STTError, llm.RealtimeModelError)
@@ -513,11 +485,10 @@ _ERROR_RECORDS: dict[str, Any] = {
 
 
 def _wire_run(run: object | None) -> asyncio.Future[RunFinished] | None:
-    """A wire's run: the future `VoiceSession._run()` handed the core."""
+    # the future `VoiceSession._run()` handed the core
     return cast("asyncio.Future[RunFinished] | None", run)
 
 
-# The `HostWire` members with host behaviour, by record class.
 _HANDLERS: dict[type, Callable[[VoiceSession[Any], Any], None]] = {
     ItemAddedWire: _on_item_added,
     RunRefusedWire: _on_run_refused,
@@ -538,6 +509,6 @@ def report_snapshots(self: VoiceSession[Any]) -> list[dict[str, Any]]:
 
 
 def record_snapshot(self: VoiceSession[Any], arg: AgentEvent) -> None:
-    # the event as the report records it: no live objects (a model client, an exception)
+    # snapshot as JSON so the report holds no live objects (model clients, exceptions)
     if self._native.admit_event(arg.type):
         self._event_snapshots.append(event_dict(arg, json=True))

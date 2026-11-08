@@ -46,7 +46,6 @@ RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent
 
 
 def _events(items: list[llm.ChatItem]) -> list[RunEvent]:
-    """The events of an invocation's recorded items: its assistant messages, calls and outputs."""
     events: list[RunEvent] = []
     for item in items:
         if item.type == "message" and item.role == "assistant":
@@ -66,7 +65,7 @@ _EXPECTATIONS: dict[EventType, type[EventExpectation]] = {
 
 
 class RunAssert:
-    """``result.expect``: assertions over the events of the run, in order (testing.md)."""
+    """``result.expect``: assertions over the events of the run, in order."""
 
     def __init__(self, events: list[RunEvent]) -> None:
         self._events = events
@@ -246,8 +245,6 @@ _Event_T = TypeVar("_Event_T", ChatMessageEvent, FunctionCallEvent, FunctionCall
 
 
 class _Matched(Generic[_Event_T]):
-    """An event whose kind the assertion established."""
-
     def __init__(self, parent: RunAssert, index: int) -> None:
         self._parent = parent
         self._index = index
@@ -270,18 +267,11 @@ class ChatMessageAssert(_Matched[ChatMessageEvent]):
         raise AssertionError(self._parent._core.failure(message, self._index))
 
     async def judge(self, llm_v: llm.LLM[Any], *, intent: str) -> ChatMessageAssert:
-        """
-        Evaluate whether the message fulfills the given intent.
+        """Assert, with ``llm_v`` as the judge, that the message fulfills ``intent``.
 
-        Args:
-            llm_v (llm.LLM): LLM instance for judgment.
-            intent (str): Description of the expected intent.
+        Returns self for chaining::
 
-        Returns:
-            ChatMessageAssert: Self for chaining further assertions.
-
-        Example:
-            >>> await msg_assert.judge(llm, intent="should ask for size")
+            await msg_assert.judge(llm, intent="should ask for size")
         """
         __tracebackhide__ = True
 
@@ -329,8 +319,7 @@ def mock_tools(
 def _mock_session_tools(
     session: VoiceSession, agent: Agent, mocks: dict[str, Callable[..., Any]]
 ) -> None:
-    """The mocks of ``agent``'s tools on that call, for its lifetime; ``{}`` removes them. A
-    ``mock_tools`` block's mocks take precedence."""
+    # for the call's lifetime; `{}` removes them, and a `mock_tools` block takes precedence
     _SessionMockTools.setdefault(session, {})[agent] = dict(mocks)
 
 
@@ -348,7 +337,6 @@ def _mock_tools_ctx(
 def _tool_body(
     agent: Agent, name: str, tool: Callable[..., Any], session: VoiceSession | None = None
 ) -> Callable[..., Any]:
-    """What a call of ``agent``'s tool ``name`` runs: the tool, or the mock selected for it."""
     mock = _MockToolsContextVar.get({}).get(agent, {}).get(name)
     if mock is None and session is not None:
         mock = _SessionMockTools.get(session, {}).get(agent, {}).get(name)
@@ -416,11 +404,11 @@ class RunStream(_facades.RunStream, Generic[ResultT]):
         return _Iterator(self, self._native.text(delta))
 
     def stream_events(self) -> AsyncIterator[StreamEvent]:
-        """Typed semantic events from this run's single presentation view."""
+        """Typed events of the run: text deltas, tool calls, tool results and progress."""
         return _Iterator(self, self._native.events())
 
     async def result(self) -> ResultT:
-        """Finish unconsumed work and hydrate the settled result once."""
+        """Wait for the run to settle and return its result."""
         if self._error is not None:
             raise self._error
         if self._settled is not None:
@@ -469,8 +457,6 @@ class RunStream(_facades.RunStream, Generic[ResultT]):
 
 
 class _Iterator(Generic[ItemT]):
-    """Python exceptions/results around a native cursor; the cursor owns admission and reads."""
-
     def __init__(
         self,
         owner: RunStream[Any],
@@ -504,8 +490,6 @@ class _Iterator(Generic[ItemT]):
 
 @dataclass
 class _Started(Generic[ResultT]):
-    """Only language-specific result hydration; Rust owns the operation."""
-
     settle: Callable[[Any], ResultT]
 
 

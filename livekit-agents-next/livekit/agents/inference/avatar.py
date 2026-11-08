@@ -22,13 +22,11 @@ if TYPE_CHECKING:
 
 
 class AvatarSession(BaseAvatarSession):
-    """An avatar session provisioned through LiveKit Inference.
+    """An avatar session provisioned through LiveKit Inference with LiveKit credentials,
+    instead of a provider API key. Media and RPC flow in-room over DataStream.
 
-    Unlike the BYOK avatar plugins (which call the avatar provider directly with
-    a customer API key), this calls the LiveKit Inference gateway with LiveKit
-    credentials; the gateway creates the provider session with LiveKit's
-    wholesale key. Media and RPC still flow in-room over DataStream, exactly as
-    the BYOK plugins do.
+    The gateway mints the avatar worker's room token, so the project that serves inference
+    must be the project that owns the room.
 
     Example::
 
@@ -38,21 +36,6 @@ class AvatarSession(BaseAvatarSession):
         )
         await avatar.start(session, room=ctx.room)
         await avatar.wait_for_join()
-
-    Unlike the BYOK plugins, this does **not** mint the avatar worker's room
-    token. The gateway mints it, scoped to this room and identity and stamped
-    with ``lk.publish_on_behalf`` and ``lk.avatar_provider``; a token the client
-    signed could not be trusted to carry those. The room fields this class sends
-    (``room_name`` / ``avatar_identity`` / ``agent_identity``) are the inputs to
-    that mint, so all three are required.
-
-    Credentials are gateway auth only (``api_key`` / ``api_secret``): resolved
-    from the arguments, then ``LIVEKIT_INFERENCE_API_KEY`` /
-    ``LIVEKIT_INFERENCE_API_SECRET``, then ``LIVEKIT_API_KEY`` /
-    ``LIVEKIT_API_SECRET``. Because the gateway signs the worker token with the
-    key it authenticated, the project that serves inference must be the project
-    that owns the room — pointing ``LIVEKIT_INFERENCE_*`` at a different project
-    than the room is no longer supported.
     """
 
     def __init__(
@@ -69,27 +52,17 @@ class AvatarSession(BaseAvatarSession):
     ) -> None:
         """
         Args:
-            model: ``"<provider>"`` or ``"<provider>/<avatar_id>"``
-                (e.g. ``"lemonslice"`` or ``"lemonslice/agent_abc"``). For
-                LemonSlice the ``<avatar_id>`` is the agent id (the gateway maps
-                it onto LemonSlice's ``agent_id``); pass a pre-built agent as
-                ``"lemonslice/<agent_id>"``.
-            avatar_participant_identity: Room identity for the avatar worker.
-                Defaults to ``"<provider>-inference-avatar"`` (the ``inference``
-                marker distinguishes it from the BYOK plugins' worker identity).
+            model: ``"<provider>"`` or ``"<provider>/<avatar_id>"`` (e.g. ``"lemonslice"`` or
+                ``"lemonslice/<agent_id>"``).
+            avatar_participant_identity: Room identity for the avatar worker; defaults to
+                ``"<provider>-inference-avatar"``.
             avatar_participant_name: Display name for the avatar worker.
-            extra_kwargs: Provider-specific options. For LemonSlice use
-                :class:`LemonSliceOptions` (``image_url`` / ``prompt`` /
-                ``idle_prompt`` / ``idle_timeout``); known keys map onto the
-                gateway's first-class request fields and anything else is
-                forwarded verbatim, subject to the gateway's per-provider
-                allowlist. ``image_url`` is mutually exclusive with a catalog id
-                in the model string — passing both raises here (and the gateway
-                rejects the combination too).
-            base_url: Inference gateway base URL. Defaults to the environment's
-                gateway (see ``get_default_inference_url``).
-            api_key: Gateway API key (see the class docstring for resolution).
-            api_secret: Gateway API secret (see the class docstring).
+            extra_kwargs: Provider-specific options, such as :class:`LemonSliceOptions`; unknown
+                keys are forwarded, subject to the gateway's allowlist. ``image_url`` cannot be
+                combined with an avatar id in ``model``.
+            base_url: Inference gateway base URL; defaults to ``get_default_inference_url()``.
+            api_key: ``LIVEKIT_INFERENCE_API_KEY``, else ``LIVEKIT_API_KEY`` by default.
+            api_secret: ``LIVEKIT_INFERENCE_API_SECRET``, else ``LIVEKIT_API_SECRET`` by default.
             conn_options: Retry and phase limits of the create and terminate requests.
         """
         super().__init__()
@@ -157,8 +130,8 @@ class AvatarSession(BaseAvatarSession):
             headers=list(get_inference_headers().items()),
         )
         await super().start(agent_session, room)
-        # The audio tail goes to the avatar worker at the gateway's rate: in the canonical flow
-        # avatar.start() runs before session.start(), so no audio has flowed yet.
+        # at the gateway's rate; avatar.start() normally runs before session.start(), so no audio
+        # has flowed yet
         self._attach_audio_output(
             agent_session,
             DataStreamAudioOutput(

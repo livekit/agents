@@ -1,6 +1,3 @@
-"""``agent.run()`` and ``agent.run_stream()``: one invocation of an agent on the core's AgentRun,
-its application callbacks and the tool templates rendered around background calls."""
-
 from __future__ import annotations
 
 import asyncio
@@ -104,15 +101,12 @@ if TYPE_CHECKING:
 class RunHooks:
     """What a door installs around the ``agent.run()`` calls made inside its turn.
 
-    The native loop awaits ``checkpoint`` before model requests and result delivery. ``True``
-    yields at that boundary; the settled result carries its history and marks ``interrupted``.
-    ``on_result`` receives every result, so the door can commit what the run added.
-    ``on_update`` receives a tool's ``ctx.update(text)``; ``on_token`` the model's text as it
-    arrives, from ``run()`` (``run_stream()`` hands delivery to its consumer). ``thread`` and
-    ``task_id`` are the thread and the A2A task of the turn, what ``ctx.thread`` and
-    ``ctx.task_id`` read. ``answer_tool`` names the tool the message is handed to before the
-    model runs. ``delegated`` says the turn's message came from another agent: the
-    run does not phrase its questions, the agent facing the person does.
+    ``checkpoint`` is awaited before model requests and result delivery; ``True`` yields there
+    and marks ``interrupted``. ``on_result`` receives every result. ``on_update`` receives a
+    tool's ``ctx.update(text)``; ``on_token`` the model's text from ``run()`` (``run_stream()``
+    leaves delivery to its consumer). ``answer_tool`` names the tool the message is handed to
+    before the model runs. ``delegated`` marks a message from another agent: the run does not
+    phrase its questions, the agent facing the person does.
     """
 
     checkpoint: Callable[[], Awaitable[bool]] | None = None
@@ -131,8 +125,7 @@ _run_hooks = contextvars.ContextVar[RunHooks | None]("agents_run_hooks", default
 
 
 def door_hooks() -> RunHooks | None:
-    """The door's hooks for a run started here; none inside another run's tool, a delegation
-    the caller controls."""
+    # none inside another run's tool: that delegation is controlled by its caller
     return None if isinstance(_BindingContextVar.get(None), _TextRun) else _run_hooks.get()
 
 
@@ -140,8 +133,7 @@ _HooksToken = tuple[contextvars.Token[RunHooks | None], contextvars.Token[Any]]
 
 
 def set_run_hooks(hooks: RunHooks | None) -> _HooksToken:
-    """Installs the door's hooks for a turn. The turn is a root: a door reached in process
-    from another run's tool, as a test does, is not nested in it."""
+    # the turn is a root: a door reached in process from another run's tool is not nested in it
     return _run_hooks.set(hooks), _BindingContextVar.set(None)
 
 
@@ -151,10 +143,6 @@ def reset_run_hooks(token: _HooksToken) -> None:
 
 
 class _TextRun(Generic[Context_T]):
-    """One invocation as its tools, instruction functions and validators see it: what
-    ``RunContext`` and ``agent.chat_ctx`` read. Installed in the context the invocation's host
-    callbacks run in."""
-
     def __init__(
         self,
         agent: Agent[Context_T, Any],
@@ -171,10 +159,8 @@ class _TextRun(Generic[Context_T]):
         self.thread = hooks.thread if hooks is not None else None
         self._store: ContextStore | None = None
         self.llm_conn_options = conn_options
-        # the agent's tools as this run uses them, resolved once (Toolset.for_run)
         self.agent_tools = tools_for_run(agent.tools, RunContext(function_call=None, run=self))
         self.tools = ToolContext(self.agent_tools)
-        # the runner of this invocation, once started: where its tools report progress
         self.runner: _core.AgentRunner | _core.TextSessionRunner | None = None
         self._history = history
         self.execution_id: str | None = None
@@ -184,8 +170,6 @@ class _TextRun(Generic[Context_T]):
 
     @property
     def usage(self) -> Usage:
-        """The latest snapshot of the scope this run belongs to: the invocation, or the
-        text-session turn it is a frame of; empty before it started."""
         if isinstance(self.runner, _core.AgentRunner):
             return self.runner.usage(self.id)
         if self.runner is not None:
@@ -201,7 +185,6 @@ class _TextRun(Generic[Context_T]):
 
     @property
     def chat_ctx(self) -> ChatContext:
-        """A read-only view of the history this run started from."""
         return _ReadOnlyChatContext(self._history)
 
     @property
@@ -220,7 +203,6 @@ class _TextRun(Generic[Context_T]):
         thread: Thread | None = None,
         store: ContextStore | None = None,
     ) -> None:
-        """Hydrate Python handles after the native request owner has acquired its resources."""
         from ..storage import Thread, _StorageHandle
         from ..storage.context import ContextStore
 
@@ -242,7 +224,6 @@ class _TextRun(Generic[Context_T]):
 def run_resources(
     agent: Agent[Any, Any], hooks: RunHooks | None, runs: Sequence[_TextRun[Any]]
 ) -> _core._core_RunResources:
-    """Translate Python thread/store handles and authored toolsets to native capabilities."""
     thread = hooks.thread if hooks is not None else None
     store = hooks.store if hooks is not None else None
     return _core._core_RunResources(
@@ -264,8 +245,6 @@ async def start_run(
     retries: int | AgentRetries | None,
     conn_options: APIConnectOptions,
 ) -> _TextRun[Context_T]:
-    """Start one native invocation; its core owns managed checkpoints and settlement."""
-
     hooks = door_hooks()
     if isinstance(message, str):
         message = ChatMessage(role="user", content=[message])
@@ -311,15 +290,12 @@ async def start_run(
 
 
 def settled_result(finished: RunFinished, hooks: RunHooks | None) -> RunResult[Any]:
-    """The caller's ``RunResult``, a text run's or a voice run's; a turn that yielded marks its
-    hooks."""
     if finished.interrupted and hooks is not None:
         hooks.interrupted = True
     return finished.result
 
 
 def tool_infos(tools: ToolContext) -> list[FunctionToolInfo]:
-    """The core's ``FunctionToolInfo`` of each function tool."""
     from .._bindings import tool_specs
     from ..a2a import _ExpertTool
 
@@ -349,8 +325,6 @@ class ToolArgumentError(Exception):
 
 @dataclass
 class _Prepared:
-    """A call's validated arguments, held by the runtime between preparation and the body."""
-
     tool: FunctionTool[..., Any] | RawFunctionTool[..., Any]
     ctx: RunContext[Any]
     args: tuple[Any, ...]
@@ -362,10 +336,11 @@ def prepare_arguments(
     arguments: dict[str, Any],
     ctx: RunContext[Any],
 ) -> PreparedArguments:
-    """Binds a call's arguments (the framework's parse, with the schema's defaults) to the tool's
-    signature and validates them, for a run and on a call alike: the prepared call and the
-    identity approval binds to (the validated arguments as JSON, decision 15). Raises
-    ``ToolArgumentError`` with the model's feedback."""
+    """Validate and bind a call's arguments, with the identity approval binds to.
+
+    Raises:
+        ToolArgumentError: with the feedback for the model.
+    """
     from . import _LocalAgentTool
 
     name = ctx.function_call.name
@@ -387,14 +362,12 @@ def prepare_arguments(
     try:
         identity = ArgumentIdentityJson(value=to_jsonable_python(identified))
     except PydanticSerializationError:
-        # no JSON for these arguments: a fresh fingerprint matches no earlier read-back, so the
-        # call can never be approved by mistake
+        # a fresh fingerprint matches no earlier read-back, so the call is never approved by mistake
         identity = ArgumentIdentityFingerprint(value=uuid.uuid4().hex)
     return PreparedArguments(prepared=_Prepared(tool, ctx, args, kwargs), identity=identity)
 
 
 async def render_read_back(prepared: _Prepared) -> ReadBackAnswer:
-    """The tool's read-back function on the prepared arguments."""
     assert isinstance(prepared.tool, FunctionTool) and prepared.tool.info.read_back
     question = prepared.tool.info.read_back(*prepared.args, **prepared.kwargs)
     if inspect.isawaitable(question):
@@ -410,10 +383,9 @@ class AgentCallbacks:
     def __init__(self, agent: Agent[Any, Any]) -> None:
         self._agent = agent
         self._output = OutputContract.of(agent)
-        # the callback task of each operation in flight, for `cancel`; on a voice session, the
-        # body of a tool call, which outlives its callback once its first `ctx.update()` returned
+        # for `cancel`; on a voice session a tool body outlives its callback after `ctx.update()`
         self._running: dict[tuple[str, int], asyncio.Task[Any]] = {}
-        # the context of each tool body running on a voice session, which a reply may answer
+        # running tool bodies, for `answer_expert`
         self._bodies: dict[tuple[str, int], RunContext[Any]] = {}
 
     async def render_instructions(self, invocation: Invocation) -> str:
@@ -422,7 +394,6 @@ class AgentCallbacks:
             return await self._agent._render_dynamic_instructions(ctx)
 
     async def checkpoint(self, invocation: Invocation) -> bool:
-        """Forward the framework's verdict under this callback's captured invocation."""
         async with self._operation(invocation):
             hooks = _current_run().hooks
             return (
@@ -432,8 +403,6 @@ class AgentCallbacks:
             )
 
     async def list_tools(self, invocation: Invocation) -> list[FunctionToolInfo]:
-        """Refresh this run's callable tools after toolset discovery."""
-
         async with self._operation(invocation) as binding:
             assert not isinstance(binding, _VoiceBinding), "a voice frame carries its tools"
             binding.tools.update_tools(binding.agent_tools)
@@ -442,7 +411,6 @@ class AgentCallbacks:
     async def prepare_tool(
         self, invocation: Invocation, arguments: dict[str, Any]
     ) -> PreparedArguments:
-        """Binds and validates the call's arguments in the call's scope (``prepare_arguments``)."""
         async with self._operation(invocation) as binding:
             call = _function_call(invocation)
             ctx: RunContext[Any]
@@ -460,12 +428,10 @@ class AgentCallbacks:
             return prepare_arguments(tool, arguments, ctx)
 
     async def read_back(self, invocation: Invocation, prepared: _Prepared) -> ReadBackAnswer:
-        """The tool's read-back function on the call's arguments."""
         async with self._operation(invocation):
             return await render_read_back(prepared)
 
     async def run_tool(self, invocation: Invocation, prepared: _Prepared) -> ToolCompletion:
-        """Runs the body, sync or async, and classifies what it returned or raised."""
         async with self._operation(invocation) as binding:
             prepared.ctx._function_call = _function_call(invocation)
             prepared.ctx._invocation = invocation
@@ -499,15 +465,12 @@ class AgentCallbacks:
     async def validate_tool_completion(
         self, invocation: Invocation, prepared: _Prepared, report: ToolReport
     ) -> ToolReport:
-        """Application type validation, requested by the voice core for a task completion."""
         async with self._operation(invocation):
             return await self._validated_completion(prepared.ctx, report.transition, report)
 
     async def _validated_completion(
         self, ctx: RunContext[Any], value: Any, report: ToolReport
     ) -> ToolReport:
-        """A task's ``Completed(value)`` through its agent's ``output_type`` and output
-        validators: the value the task returns, or the error its model reads and corrects."""
         try:
             value = TypeAdapter(self._agent.output_type).validate_python(value)
             value = await self._agent._validate_output(ctx, value)
@@ -520,8 +483,6 @@ class AgentCallbacks:
     async def validate_output(
         self, invocation: Invocation, candidate: OutputCandidate
     ) -> ValidatedOutput:
-        """The output contract and the output validators on a candidate; the accepted value is
-        kept for the run (a text output's too)."""
         async with self._operation(invocation) as binding:
             ctx: RunContext[Any]
             if isinstance(binding, _VoiceBinding):
@@ -556,8 +517,6 @@ class AgentCallbacks:
     async def render_template(
         self, invocation: Invocation, key: ToolTemplateKey, template: ToolTemplate
     ) -> str | None:
-        """The agent's ``tool_handling`` template, or the call's toolset's, rendered with the
-        template's arguments; ``None`` keeps the framework's text."""
         call = invocation.function_call
         return render_template(
             self._agent._tool_handling,
@@ -568,14 +527,11 @@ class AgentCallbacks:
         )
 
     def cancel(self, invocation: Invocation) -> None:
-        """Cancels the callback in flight for ``invocation``; it still settles."""
         task = self._running.get(_operation_key(invocation))
         if task is not None:
             task.cancel()
 
     def answer_expert(self, invocation: Invocation, answer: str) -> None:
-        """The person's reply to the question the expert of ``invocation``'s delegated call
-        asked, for the call's body waiting on it."""
         ctx = self._bodies.get(_operation_key(invocation))
         waiting = None if ctx is None else ctx._expert_answer
         if waiting is not None and not waiting.done():
@@ -586,9 +542,6 @@ class AgentCallbacks:
 
 
 class _Operation:
-    """Enters one callback's binding, and registers the current task as the callback of its
-    operation while it runs."""
-
     def __init__(self, running: dict[tuple[str, int], asyncio.Task[Any]], invocation: Invocation):
         self._running = running
         self._key = _operation_key(invocation)
@@ -644,10 +597,8 @@ class _Operation:
 
 
 class OutputContract:
-    """``output_type`` as the core sees it (``OutputSpec``) and as the host accepts a candidate:
-    ``str``, a type validated as its schema, or an output function whose parameters are the
-    final output's arguments and whose return value is the output (agents.md "Structured
-    output")."""
+    """``output_type`` as a schema and an acceptor: ``str``, a validated type, or an output
+    function whose parameters are the final output's arguments and whose return is the output."""
 
     def __init__(
         self,
@@ -699,7 +650,6 @@ class OutputContract:
         return cls(schema=schema, accept=call)
 
     def spec(self, *, validated: bool) -> OutputSpec:
-        """The core's ``OutputSpec``."""
         if self.schema is None:
             return OutputSpecText(validated=validated)
         return OutputSpecStructured(schema=self.schema)
@@ -710,8 +660,7 @@ async def _unexpected_value(ctx: RunContext[Any], value: Any) -> Any:
 
 
 def _voice_tools(binding: _VoiceBinding) -> ToolContext:
-    """A voice frame's tools: the agent's and the session's (with a session tool added since the
-    frame was installed, as IVR's DTMF tool). Two tools sharing a name are refused."""
+    # resolved per call: session tools may be added after the frame was installed (IVR's DTMF)
     agent_tools, session_tools = _call_tools(binding.agent, binding.session)
     return ToolContext([*agent_tools, *session_tools])
 
@@ -719,14 +668,11 @@ def _voice_tools(binding: _VoiceBinding) -> ToolContext:
 def _call_tools(
     agent: Agent[Any, Any], session: VoiceSession[Any]
 ) -> tuple[list[Tool | Toolset], list[Tool | Toolset]]:
-    """The agent's and the session's tools as the call uses them (``Toolset.for_run``)."""
     ctx = RunContext[Any](function_call=None, session=session)
     return tools_for_run(agent.tools, ctx), tools_for_run(session._tools, ctx)
 
 
 def _template_tools(agent: Agent[Any, Any], binding: object) -> list[Tool | Toolset]:
-    """Where a tool's ``tool_handling`` override is looked up: the agent's tools, and on a call the
-    session's (an ``AsyncToolset`` passed to ``VoiceSession(tools=)``)."""
     if isinstance(binding, _VoiceBinding):
         agent_tools, session_tools = _call_tools(agent, binding.session)
         return [*agent_tools, *session_tools]
@@ -737,8 +683,6 @@ def _template_tools(agent: Agent[Any, Any], binding: object) -> list[Tool | Tool
 
 
 def _classified(call: FunctionCall, output: Any, exc: BaseException | None) -> ToolReport:
-    """What the body returned or raised, classified; an internal error or an invalid output is
-    logged."""
     report = tool_report(exc if exc is not None else output)
     if isinstance(report.outcome, ToolOutcomeInternal):
         logger.error(
@@ -755,7 +699,6 @@ def _classified(call: FunctionCall, output: Any, exc: BaseException | None) -> T
 
 
 def _current_run() -> _TextRun:
-
     run = _BindingContextVar.get(None)
     if not isinstance(run, _TextRun):
         raise RuntimeError("an agent callback ran outside its invocation's context")
@@ -780,8 +723,8 @@ def render_template(
     key: ToolTemplateKey,
     args: dict[str, Any],
 ) -> str | None:
-    """The ``key`` template rendered with ``args``: the innermost ``AsyncToolset`` among
-    ``tools`` holding ``tool`` that sets it, else the agent's; ``None`` when neither does."""
+    """The innermost ``AsyncToolset`` holding ``tool`` that sets ``key`` wins over the agent's;
+    ``None`` when neither sets it."""
     template = _toolset_template(tools, tool, key) if tool is not None else None
     if template is None:
         template = _template(agent_options, key)

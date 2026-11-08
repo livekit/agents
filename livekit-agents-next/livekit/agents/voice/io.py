@@ -1,6 +1,3 @@
-"""The io legs a developer implements (an avatar's sink, a custom input), and the session's
-``input``/``output`` slots that hand them to the core."""
-
 from __future__ import annotations
 
 import asyncio
@@ -64,8 +61,7 @@ class AudioInput:
 
 
 class VideoInput:
-    """A source of video frames, each an ``rtc.VideoFrameEvent`` (the frame and its capture
-    stamp): iterate ``source``, or override ``__anext__``."""
+    """A source of ``rtc.VideoFrameEvent``: iterate ``source``, or override ``__anext__``."""
 
     def __init__(self, *, label: str, source: VideoInput | None = None) -> None:
         self.__label = label
@@ -107,8 +103,8 @@ class AudioOutput(
     Generic[_AudioEventT],
 ):
     """An audio sink. Implement ``capture_frame``, ``flush`` and ``clear_buffer``, and report
-    playback with ``on_playback_started`` / ``on_playback_finished``: the core paces the
-    transcript and decides interruptions from those reports."""
+    playback with ``on_playback_started`` / ``on_playback_finished``: transcript pacing and
+    interruptions are driven by those reports."""
 
     def __init__(
         self,
@@ -123,7 +119,6 @@ class AudioOutput(
         self._capabilities = capabilities
         self._sample_rate = sample_rate
         self._next_in_chain = next_in_chain
-        # the core's segment count and playout bookkeeping for this sink
         self._tracker = _core.PlaybackTracker()
         if next_in_chain is not None:
             next_in_chain.on("playback_started", lambda ev: self.on_playback_started(**vars(ev)))
@@ -198,8 +193,7 @@ class AudioOutput(
             )
 
     async def wait_for_playout(self) -> PlaybackFinishedEvent:
-        """Wait for the segments captured so far to finish playing out; returns the last one's
-        event."""
+        """Wait for the segments captured so far to play out; returns the last one's event."""
         return await self._tracker.wait_for_playout()
 
     @abstractmethod
@@ -295,8 +289,7 @@ class VideoOutput(ABC):
 
 
 class AgentInput:
-    """``session.input``: the legs the core reads. Before ``start()`` they are handed over
-    with the session; after, each change is one command."""
+    """The session's inputs, exposed as ``session.input``."""
 
     def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
@@ -306,7 +299,7 @@ class AgentInput:
 
     @property
     def audio(self) -> AudioInput | _core.RoomAudioInput | None:
-        # the room's microphone when the host gave none, as ``RoomIO`` sets it
+        # defaults to the room's microphone
         if self._audio is None and self._session._core is not None:
             return self._session._core.audio_input
         return self._audio
@@ -319,8 +312,7 @@ class AgentInput:
 
     @property
     def video(self) -> VideoInput | _core.RoomVideoInput | None:
-        # the room's camera (``RoomOptions(video_input=True)``) when the host gave none, as
-        # ``RoomIO`` sets it
+        # defaults to the room's camera with ``RoomOptions(video_input=True)``
         if self._video is None and self._session._core is not None:
             return self._session._core.video_input
         return self._video
@@ -341,7 +333,7 @@ class AgentInput:
 
 
 class AgentOutput:
-    """``session.output``: the sinks the core plays into."""
+    """The session's outputs, exposed as ``session.output``."""
 
     def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
@@ -361,8 +353,8 @@ class AgentOutput:
             self._session._core.set_audio_output(sink)
 
     def replace_audio_tail(self, sink: AudioOutput | _core.DataStreamAudioOutput) -> None:
-        """Switch the sink at the bottom of the chain, keeping the wrappers above it: the core
-        owns those (transcript synchroniser, recorder), so this is ``audio = sink``."""
+        """Replace the bottom audio sink; same as ``audio = sink``, the session keeps its
+        wrappers (transcript sync, recorder) above it."""
         self.audio = sink
 
     @property
@@ -393,31 +385,28 @@ class AgentOutput:
 
 
 class SpeechHandle(_facades.SpeechHandle):
-    """One speech of the session, over the core's handle: its state is the core's, and awaiting
-    it waits for the core to finish playing it out. Awaiting never raises; read
-    ``exception()`` for a failure. The core hands this object back wherever the speech is named
-    (``speech_created``, a tool's ``RunContext``), for as long as it lives.
+    """One speech of the session. Awaiting it waits for playout and never raises; read
+    ``exception()`` for a failure. The same object is returned wherever the speech appears
+    (``speech_created``, a tool's ``RunContext``).
 
-    The speech ends twice, in this order: ``done()`` turns true and ``wait_for_playout()``
-    returns once the core finished it; its done callbacks run once the session has also handed
-    the host the speech's end, after the callbacks of every session event before it."""
+    ``done()`` turns true and ``wait_for_playout()`` returns first; done callbacks run after,
+    once the callbacks of every earlier session event have run."""
 
     SPEECH_PRIORITY_LOW = speech_defaults.SPEECH_PRIORITY_LOW
-    """Priority for messages that should be played after all other messages in the queue"""
+    """Priority for messages played after all other messages in the queue."""
     SPEECH_PRIORITY_NORMAL = speech_defaults.SPEECH_PRIORITY_NORMAL
-    """Every speech generates by the VoiceAgent defaults to this priority."""
+    """Default priority of every speech."""
     SPEECH_PRIORITY_HIGH = speech_defaults.SPEECH_PRIORITY_HIGH
     """Priority for important messages that should be played before others."""
 
     def __init__(self, core: _core.SpeechHandle) -> None:
         self._native = core
-        # the core's report of the speech's end, awaited once a done callback is added
+        # created lazily, once a done callback is added
         self._reported: asyncio.Future[None] | None = None
         core.host = weakref.ref(self)
 
     @staticmethod
     def _of(core: _core.SpeechHandle) -> SpeechHandle:
-        """The handle over ``core``: the one already made, else a new one."""
         ref = core.host
         handle = ref() if ref is not None else None
         return handle or SpeechHandle(core)
@@ -435,11 +424,9 @@ class SpeechHandle(_facades.SpeechHandle):
         return _await().__await__()
 
     def add_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
-        """Run ``callback(handle)`` on the event loop once the session has handed the host the
-        speech's end, after the callbacks of the session events before it; soon, if it already
-        has. Callbacks run in the order added; one that raises is logged and the rest still run.
-        A speech the session ended before creating, and a handle constructed directly, are
-        reported at once; the session's close reports every speech it still holds."""
+        """Run ``callback(handle)`` on the event loop once the speech has ended, after the
+        callbacks of earlier session events; soon, if it already has. Callbacks run in the order
+        added; one that raises is logged and the rest still run."""
         if self._reported is None:
             self._reported = asyncio.ensure_future(self._native.wait_reported())
         self._reported.add_done_callback(_DoneCallback(self, callback))
@@ -467,9 +454,7 @@ class SpeechHandle(_facades.SpeechHandle):
 
 
 class _DoneCallback:
-    """A done callback as the report's future runs it: on the handle, and equal to another
-    registration of the same callback, so ``remove_done_callback`` finds it."""
-
+    # equal to any registration of the same callback, so `remove_done_callback` finds it
     __slots__ = ("callback", "handle")
 
     def __init__(self, handle: SpeechHandle, callback: Callable[[SpeechHandle], None]) -> None:
@@ -489,19 +474,16 @@ class _DoneCallback:
 
 
 TurnDetectionMode: TypeAlias = "_session_options.TurnDetectionMode | TurnDetector"
-"""
-The mode of turn detection to use.
+"""The mode of turn detection to use.
 
-- "stt": use speech-to-text result to detect the end of the user's turn
+- "stt": use the speech-to-text result to detect the end of the user's turn
 - "vad": use VAD to detect the start and end of the user's turn
 - "realtime_llm": use server-side turn detection provided by the realtime LLM
-- "manual": manually manage the turn detection
-- an ``inference.TurnDetector`` (the default): the end of the user's turn predicted on their
-  audio
+- "manual": manage turn detection manually
+- an ``inference.TurnDetector``: predict the end of the user's turn from their audio
 
-(default) If not provided, automatically choose the best mode based on
-    available models (realtime_llm -> vad -> stt -> manual)
-If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to the default mode.
+If not provided, the best mode is chosen from the available models. If the model a mode needs
+(VAD, STT or RealtimeModel) is missing, the default mode is used.
 """
 
 
