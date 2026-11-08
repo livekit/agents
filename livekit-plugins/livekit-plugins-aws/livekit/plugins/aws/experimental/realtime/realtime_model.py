@@ -604,7 +604,6 @@ class RealtimeSession(  # noqa: F811
         self._audio_input_chan = utils.aio.Chan[bytes]()
         self._current_generation: _ResponseGeneration | None = None
         # Session recycling: proactively restart before credential expiry or 8-min limit
-        self._session_start_time: float | None = None
         self._session_recycle_task: asyncio.Task[None] | None = None
         # Held only so the loop's weak reference cannot collect them mid-flight.
         # Their lifecycle - cancellation, coalescing, shutdown - is #7052's subject.
@@ -1055,7 +1054,6 @@ class RealtimeSession(  # noqa: F811
                 await self._send_raw_event(event)
 
             # Start session recycling timer
-            self._session_start_time = time.time()
             self._start_session_recycle_timer()
 
             # Step 2: Send history events with small delays between them

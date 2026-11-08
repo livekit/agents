@@ -315,9 +315,6 @@ class RealtimeSession(
 
         # Server-event gating for generate_reply race condition fix
         self._pending_generation_epoch: float | None = None
-        # Track last seen ordinals per role to avoid cross-role drops
-        self._last_seen_user_ord: int = -1
-        self._last_seen_agent_ord: int = -1
 
         self._bstream = utils.media.AudioByteStream(
             self._opts.input_sample_rate,
@@ -697,9 +694,6 @@ class RealtimeSession(
         while not self._msg_ch.closed:
             # Clear restart signal for new session
             self._session_should_close.clear()
-            # Reset ordinal tracking on reconnect to avoid stale event issues
-            self._last_seen_user_ord = -1
-            self._last_seen_agent_ord = -1
 
             try:
                 # Create new Ultravox session
@@ -1267,18 +1261,3 @@ class RealtimeSession(
             yield from self._input_resampler.push(frame)
         else:
             yield frame
-
-    async def send_tool_result(self, call_id: str, result: str) -> None:
-        """Send tool execution result back to Ultravox."""
-        if lk_ultravox_debug:
-            preview = (result[:200] + "...") if len(result) > 200 else result
-            logger.debug(
-                f"[ultravox] send_tool_result: call_id={call_id}", extra={"lk.pii.result": preview}
-            )
-
-        event = ClientToolResultEvent(
-            invocation_id=call_id,
-            result=result,
-            agent_reaction="speaks",
-        )
-        self._send_client_event(event)
