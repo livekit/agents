@@ -906,6 +906,36 @@ def test_render_missing_placeholders_become_empty(template: str, expected: str):
     assert Instructions(template).render(data={"name": "Alex"}) == expected
 
 
+@pytest.mark.parametrize(
+    "modality, expected",
+    [
+        (None, "Clinic: .\nCaller: ."),
+        ("audio", "Clinic: .\n\nVolume: .\nCaller: ."),
+        ("text", "Clinic: .\n\nChannel: .\nCaller: ."),
+    ],
+)
+def test_render_with_empty_template_data(modality, expected):
+    from livekit.agents.llm.chat_context import Instructions
+
+    instructions = Instructions(
+        "Clinic: {clinic}.",
+        audio="Volume: {volume:.1f}.",
+        text="Channel: {channel}.",
+        dynamic="Caller: {caller!s}.",
+    )
+
+    assert instructions.render(modality=modality, data={}) == expected
+
+
+def test_render_without_template_data_preserves_placeholders():
+    from livekit.agents.llm.chat_context import Instructions
+
+    instructions = Instructions("Clinic: {clinic}.", dynamic="Caller: {caller!s}.")
+
+    assert instructions.render() == "Clinic: {clinic}.\nCaller: {caller!s}."
+    assert instructions.render(data=None) == "Clinic: {clinic}.\nCaller: {caller!s}."
+
+
 def test_upsert_places_a_backdated_item_where_it_happened():
     """A realtime user turn is stamped when it began, which can predate what is already there."""
     ctx = ChatContext.empty()
