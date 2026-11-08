@@ -24,14 +24,14 @@ import weakref
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import aiohttp
-
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
     APIStatusError,
+    APITimeoutError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -76,7 +76,7 @@ class STT(stt.STT):
         sample_rate: int = SUPPORTED_SAMPLE_RATE,
         encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
         buffer_size_seconds: float = 0.08,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         vad_threshold: float = 0.9,
         vad_bucket: int | None = 2,
         vad_flush: bool = True,
@@ -140,9 +140,9 @@ class STT(stt.STT):
         return "Gradium"
 
     @property
-    def session(self) -> aiohttp.ClientSession:
+    def session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     async def _recognize_impl(
@@ -202,7 +202,7 @@ class SpeechStream(stt.RecognizeStream):
         api_key: str,
         model_endpoint: str,
         model_name: str,
-        http_session: aiohttp.ClientSession,
+        http_session: http.HttpSession,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
@@ -246,7 +246,7 @@ class SpeechStream(stt.RecognizeStream):
 
         closing_ws = False
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             samples_per_buffer = 1920
 
             audio_bstream = utils.media.AudioByteStream(
@@ -272,33 +272,29 @@ class SpeechStream(stt.RecognizeStream):
                     }
                     await ws.send_str(json.dumps(audio_msg))
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             buffered_text: list[str] = []
             speaking = False
             remaining_vad_steps: int | None = None
             while True:
                 try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
-                except TimeoutError:
+                    msg = await ws.receive(timeout=5)
+                except APITimeoutError:
                     if closing_ws:
                         break
                     continue
 
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     if closing_ws:
                         return
                     raise APIStatusError(
                         "Gradium connection closed unexpectedly",
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=f"{msg.data=}",
                     )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.error("Unexpected Gradium message type: %s", msg.type)
                     continue
 
@@ -378,7 +374,7 @@ class SpeechStream(stt.RecognizeStream):
                 except Exception:
                     logger.exception("Failed to process message from Gradium")
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
+        ws: http.WebSocket | None = None
 
         while True:
             try:
@@ -411,11 +407,11 @@ class SpeechStream(stt.RecognizeStream):
                 if ws is not None:
                     await ws.close()
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self) -> http.WebSocket:
         headers = {"x-api-key": self._api_key, "x-api-source": "livekit"}
 
-        ws = await utils.http_context.ws_connect(
-            self._session, self._model_endpoint, headers=headers, conn_options=self._conn_options
+        ws = await self._session.ws_connect(
+            self._model_endpoint, headers=headers, conn_options=self._conn_options
         )
 
         # Build and send the setup payload as the first message

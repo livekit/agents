@@ -14,13 +14,12 @@ import dataclasses
 import json
 import logging
 
-import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectionError, http
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
 from livekit.plugins import synthesia
@@ -160,11 +159,11 @@ class TestApiClient:
             self.server = TestServer(app)
             await self.server.start_server()
             self.url = str(self.server.make_url("")).rstrip("/")
-            self.http = aiohttp.ClientSession()
+            self.http = http.HttpSession()
 
         async def close(self):
             if self.http is not None:
-                await self.http.close()
+                await self.http.aclose()
             if self.server is not None:
                 await self.server.close()
 
@@ -512,14 +511,14 @@ class TestApiClient:
             "could not start a Synthesia session after 2 attempts; last attempt: HTTP 503"
         )
         assert exc.value.status == 503
-        assert isinstance(exc.value.__cause__, aiohttp.ClientPayloadError)
+        assert isinstance(exc.value.__cause__, APIConnectionError)
 
     async def test_last_attempt_decides_the_message_when_outcomes_mix(self):
         body = self._problem("service_unavailable", status=503, title="Service unavailable")
         answered = self._Reply(503, body=body, content_type="application/problem+json")
         two_attempts = dataclasses.replace(self.NO_SLEEP, max_retry=1)
 
-        session = self._Peer([aiohttp.ClientError(), answered])
+        session = self._Peer([ConnectionError(), answered])
         with pytest.raises(SynthesiaError) as exc:
             await self._start(session, self._request(), two_attempts)
         assert str(exc.value) == (
@@ -528,17 +527,17 @@ class TestApiClient:
         )
         assert (exc.value.body, exc.value.status) == (body, 503)
 
-        session = self._Peer([answered, aiohttp.ClientError()])
+        session = self._Peer([answered, ConnectionError()])
         with pytest.raises(SynthesiaError) as exc:
             await self._start(session, self._request(), two_attempts)
         assert str(exc.value) == (
             "could not start a Synthesia session after 2 attempts; last attempt: connection error"
         )
         assert (exc.value.body, exc.value.status) == (None, None)
-        assert isinstance(exc.value.__cause__, aiohttp.ClientError)
+        assert isinstance(exc.value.__cause__, APIConnectionError)
 
     async def test_transport_error_retries_then_connection_error(self):
-        session = self._Peer([aiohttp.ClientError() for _ in range(self.NO_SLEEP.max_retry + 1)])
+        session = self._Peer([ConnectionError() for _ in range(self.NO_SLEEP.max_retry + 1)])
         with pytest.raises(SynthesiaError) as exc:
             await self._start(session, self._request())
         assert exc.value.type is ErrorType.CONNECTION
@@ -546,7 +545,7 @@ class TestApiClient:
 
     async def test_retry_count_honors_conn_options(self):
         conn = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0, max_retry=1)
-        session = self._Peer([aiohttp.ClientError() for _ in range(2)])
+        session = self._Peer([ConnectionError() for _ in range(2)])
         with pytest.raises(SynthesiaError):
             await self._start(session, self._request(), conn)
         assert len(session.calls) == 2

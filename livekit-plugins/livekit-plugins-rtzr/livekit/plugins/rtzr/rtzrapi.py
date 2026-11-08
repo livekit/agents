@@ -6,26 +6,19 @@ import time
 from collections.abc import Iterable
 from types import TracebackType
 from typing import cast
+from urllib.parse import urlencode
 
-import aiohttp
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
-from livekit.agents import APIConnectOptions
+from livekit.agents import APIConnectOptions, http
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-from livekit.agents.utils import http_context
 
 logger = logging.getLogger(__name__)
 
 
 class RTZRAPIError(Exception):
     """Base exception for RTZR API errors."""
-
-    pass
-
-
-class RTZRConnectionError(RTZRAPIError):
-    """Exception raised when connection to RTZR API fails."""
 
     pass
 
@@ -128,7 +121,7 @@ class RTZROpenAPIClient:
         self,
         client_id: str | None = None,
         client_secret: str | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         self.client_id = client_id or os.environ.get("RTZR_CLIENT_ID")
         self.client_secret = client_secret or os.environ.get("RTZR_CLIENT_SECRET")
@@ -137,7 +130,6 @@ class RTZROpenAPIClient:
             raise ValueError("RTZR_CLIENT_ID and RTZR_CLIENT_SECRET must be set")
 
         self._http_session = http_session
-        self._owns_session = http_session is None  # Track if we own the session
         self._token: _Token | None = None
         self._api_base = "https://openapi.vito.ai"
         self._ws_base = "wss://" + self._api_base.split("://", 1)[1]
@@ -172,41 +164,28 @@ class RTZROpenAPIClient:
         sess = self._ensure_http_session()
         url = f"{self._api_base}/v1/authenticate"
 
-        try:
-            async with http_context.request(
-                sess,
-                "POST",
-                url,
-                conn_options=conn_options,
-                data={"client_id": self.client_id, "client_secret": self.client_secret},
-            ) as resp:
-                resp.raise_for_status()
-                try:
-                    self._token = _TOKEN.validate_python(await resp.json(), strict=True)
-                except ValidationError:
-                    raise RTZRStatusError("Invalid token response payload") from None
-                logger.debug("Successfully refreshed RTZR access token")
-        except aiohttp.ClientResponseError as e:
-            logger.error("RTZR authentication failed: %s %s", e.status, e.message)
-            raise RTZRStatusError(
-                message=f"Authentication failed: {e.message}",
-                status_code=e.status,
-            ) from e
-        except aiohttp.ClientError as e:
-            logger.error("RTZR authentication connection error: %s", e)
-            raise RTZRConnectionError("Failed to authenticate with RTZR API") from e
+        form = {"client_id": self.client_id or "", "client_secret": self.client_secret or ""}
+        async with sess.post(
+            url,
+            conn_options=conn_options,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data=urlencode(form),
+        ) as resp:
+            await resp.raise_for_status()
+            try:
+                self._token = _TOKEN.validate_python(await resp.json(), strict=True)
+            except ValidationError:
+                raise RTZRStatusError("Invalid token response payload") from None
+            logger.debug("Successfully refreshed RTZR access token")
 
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
+    def _ensure_http_session(self) -> http.HttpSession:
         """Ensure HTTP session is available."""
         if not self._http_session:
-            self._http_session = aiohttp.ClientSession()
+            self._http_session = http.http_session()
         return self._http_session
 
     async def close(self) -> None:
-        """Close the HTTP session if we own it."""
-        if self._http_session and self._owns_session:
-            await self._http_session.close()
-            self._http_session = None
+        """Nothing to release: the HTTP session belongs to the caller or the job."""
 
     async def connect_websocket(
         self,
@@ -214,7 +193,7 @@ class RTZROpenAPIClient:
         headers: dict[str, str] | None = None,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> aiohttp.ClientWebSocketResponse:
+    ) -> http.WebSocket:
         """Connect to the streaming WebSocket endpoint."""
         # Build URL like reference client
         query_string = "&".join(f"{k}={v}" for k, v in config.items())
@@ -228,21 +207,9 @@ class RTZROpenAPIClient:
 
         session = self._ensure_http_session()
 
-        try:
-            ws = await http_context.ws_connect(
-                session, url, headers=ws_headers, conn_options=conn_options
-            )
-            logger.debug("Connected to RTZR WebSocket at %s", url)
-            return ws
-        except aiohttp.ClientResponseError as e:
-            logger.error("RTZR WebSocket connection failed: %s %s", e.status, e.message)
-            raise RTZRStatusError(
-                message=f"WebSocket connection failed: {e.message}",
-                status_code=e.status,
-            ) from e
-        except aiohttp.ClientError as e:
-            logger.error("RTZR WebSocket client error: %s", e)
-            raise RTZRConnectionError("WebSocket connection failed") from e
+        ws = await session.ws_connect(url, headers=ws_headers, conn_options=conn_options)
+        logger.debug("Connected to RTZR WebSocket at %s", url)
+        return ws
 
     def build_config(
         self,

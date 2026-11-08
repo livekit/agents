@@ -22,14 +22,13 @@ import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
     APIStatusError,
     APITimeoutError,
+    http,
     tokenize,
     tts,
     utils,
@@ -68,7 +67,7 @@ async def list_voices(
     model: TTSModels | str = "/public/tts/en-rt",
     api_key: NotGivenOr[str] = NOT_GIVEN,
     base_url: str = API_BASE_URL,
-    http_session: aiohttp.ClientSession | None = None,
+    http_session: http.HttpSession | None = None,
 ) -> list[Voice]:
     """List available voices for the given Respeecher model.
 
@@ -76,13 +75,13 @@ async def list_voices(
         model: The Respeecher TTS model whose voices should be listed.
         api_key: Respeecher API key. If not provided, uses RESPEECHER_API_KEY env variable.
         base_url: The base URL for the Respeecher API.
-        http_session: Optional aiohttp session to use for the request.
+        http_session: Optional HttpSession to use for the request.
     """
     resolved_api_key = api_key if is_given(api_key) else os.environ.get("RESPEECHER_API_KEY")
     if not resolved_api_key:
         raise ValueError("RESPEECHER_API_KEY must be set")
 
-    session = http_session or utils.http_context.http_session()
+    session = http_session or http.http_session()
     async with session.get(
         f"{base_url}{model}/voices",
         headers={
@@ -90,7 +89,7 @@ async def list_voices(
             API_VERSION_HEADER: API_VERSION,
         },
     ) as resp:
-        resp.raise_for_status()
+        await resp.raise_for_status()
         data = await resp.json()
         voices = [Voice(voice_data) for voice_data in data]
         if not voices:
@@ -109,7 +108,7 @@ class TTS(tts.TTS):
         voice_settings: NotGivenOr[VoiceSettings] = NOT_GIVEN,
         sample_rate: int = 24000,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         base_url: str = API_BASE_URL,
     ) -> None:
         """
@@ -122,7 +121,7 @@ class TTS(tts.TTS):
             encoding: Audio encoding format.
             voice_settings: Optional voice settings including sampling parameters.
             sample_rate: Audio sample rate in Hz.
-            http_session: Optional aiohttp session to use for requests.
+            http_session: Optional HttpSession to use for requests.
             base_url: The base URL for the Respeecher API.
         """
 
@@ -160,7 +159,7 @@ class TTS(tts.TTS):
         self._sentence_tokenizer = (
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        self._pool = utils.ConnectionPool[http.WebSocket](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
@@ -173,7 +172,7 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Respeecher"
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         session = self._ensure_session()
         # WebSocket protocol does not support custom headers, using query parameter
         ws_url = self._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
@@ -182,14 +181,14 @@ class TTS(tts.TTS):
             raise APIConnectionError("Secure WebSocket connection (wss://) required")
 
         full_ws_url = f"{ws_url}{self._opts.model}/tts/websocket?api_key={self._opts.api_key}&source={API_VERSION_HEADER}&version={API_VERSION}"
-        return await utils.http_context.ws_connect(session, full_ws_url, conn_options=conn_options)
+        return await session.ws_connect(full_ws_url, conn_options=conn_options)
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_ws(self, ws: http.WebSocket) -> None:
         await ws.close()
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     def update_options(
@@ -258,7 +257,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
         opts: _TTSOptions,
-        ensure_session: Callable[[], aiohttp.ClientSession],
+        ensure_session: Callable[[], http.HttpSession],
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts = opts
@@ -282,9 +281,7 @@ class ChunkedStream(tts.ChunkedStream):
         http_url = f"{self._opts.base_url}{self._opts.model}/tts/bytes"
 
         try:
-            async with utils.http_context.request(
-                self._ensure_session(),
-                "POST",
+            async with self._ensure_session().post(
                 http_url,
                 headers={
                     API_AUTH_HEADER: self._opts.api_key,
@@ -294,7 +291,7 @@ class ChunkedStream(tts.ChunkedStream):
                 json=json_data,
                 conn_options=self._conn_options,
             ) as resp:
-                resp.raise_for_status()
+                await resp.raise_for_status()
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -304,16 +301,14 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type="audio/wav",
                 )
 
-                async for data, _ in resp.content.iter_chunks():
+                async for data in resp.iter_bytes():
                     output_emitter.push(data)
 
                 output_emitter.flush()
         except TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+        except (APIStatusError, APIConnectionError):
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -327,7 +322,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         tts: TTS,
         conn_options: APIConnectOptions,
         opts: _TTSOptions,
-        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        pool: utils.ConnectionPool[http.WebSocket],
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
@@ -366,7 +361,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 sent_tokenizer_stream.push_text(data)
             sent_tokenizer_stream.end_input()
 
-        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _sentence_stream_task(ws: http.WebSocket) -> None:
             nonlocal input_ended
             output_format = {
                 "encoding": self._opts.encoding,
@@ -399,24 +394,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             )
             input_ended = True
 
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _recv_task(ws: http.WebSocket) -> None:
             while True:
                 msg = await ws.receive(timeout=self._conn_options.read_timeout)
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     raise APIStatusError(
                         "Respeecher connection closed unexpectedly", request_id=context_id
                     )
 
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    raise APIConnectionError(
-                        f"Respeecher WebSocket transport error: {ws.exception()}"
-                    )
-
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("Unexpected Respeecher message type %s", msg.type)
                     continue
 
@@ -456,10 +442,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await utils.aio.cancel_and_wait(*tasks)
         except TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
         except APIError:
             raise
         except Exception as e:

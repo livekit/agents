@@ -22,7 +22,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
-import aiohttp
 from pydantic import BaseModel, ValidationError
 
 from livekit.agents import (
@@ -30,7 +29,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APIStatusError,
-    APITimeoutError,
+    http,
     tts,
     utils,
 )
@@ -104,7 +103,7 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: str = DEFAULT_BASE_URL,
         streaming: bool = True,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """Create a new instance of the Bland TTS.
 
@@ -124,7 +123,7 @@ class TTS(tts.TTS):
                 utterance with a single HTTP request instead — no session is held open,
                 and no concurrency slot with it, which suits a pipeline that speaks
                 rarely. ``synthesize()`` uses HTTP either way.
-            http_session: Optional ``aiohttp.ClientSession`` to reuse.
+            http_session: Optional ``http.HttpSession`` to reuse.
         """
         if sample_rate not in SAMPLE_RATES:
             raise ValueError(f"sample_rate must be one of {SAMPLE_RATES}, got {sample_rate}")
@@ -150,12 +149,12 @@ class TTS(tts.TTS):
             stability=stability,
             base_url=base_url.rstrip("/"),
         )
-        self._session = http_session
+        self._session = http_session.with_request_id("x-request-id") if http_session else None
         self._streams = weakref.WeakSet[SynthesizeStream]()
         # No pool when streaming is off: nothing would ever check a socket out of it,
         # and an open session holds a concurrency slot for as long as it lives.
         self._pool = (
-            utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            utils.ConnectionPool[http.WebSocket](
                 connect_cb=self._connect_ws,
                 close_cb=self._close_ws,
                 max_session_duration=_MAX_SESSION_DURATION,
@@ -169,28 +168,18 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Bland"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session().with_request_id("x-request-id")
         return self._session
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         """Open a session and hold it at `ready`, so a turn starts on the first `speak`."""
-        try:
-            ws = await utils.http_context.ws_connect(
-                self._ensure_session(),
-                _ws_url(self._opts.base_url),
-                headers={"Authorization": f"Bearer {self._api_key}"},
-                conn_options=conn_options,
-            )
-        except aiohttp.WSServerHandshakeError as e:
-            # Bland answers an upgrade carrying no credential with a real 401 rather
-            # than accepting and closing, so this is the path a bad key takes.
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=e.headers.get("x-request-id") if e.headers else None,
-            ) from e
+        ws = await self._ensure_session().ws_connect(
+            _ws_url(self._opts.base_url),
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            conn_options=conn_options,
+        )
         try:
             init: dict[str, Any] = {
                 "type": "init",
@@ -201,8 +190,8 @@ class TTS(tts.TTS):
                 init["controls"] = controls
             await ws.send_str(json.dumps(init))
 
-            msg = await asyncio.wait_for(ws.receive(), conn_options.read_timeout)
-            if msg.type is not aiohttp.WSMsgType.TEXT:
+            msg = await ws.receive(timeout=conn_options.read_timeout)
+            if msg.type is not http.WebSocketMessageType.TEXT:
                 raise APIError(f"Bland did not acknowledge init: {msg.type}")
 
             data = json.loads(msg.data)
@@ -227,13 +216,13 @@ class TTS(tts.TTS):
         logger.debug("Bland TTS session ready", extra={"session_id": data.get("session_id")})
         return ws
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_ws(self, ws: http.WebSocket) -> None:
         """Settle the session rather than dropping the socket, so usage is reconciled once."""
         if ws.closed:
             return
         try:
             await ws.send_str(json.dumps({"type": "close"}))
-            await asyncio.wait_for(ws.receive(), timeout=1.0)
+            await ws.receive(timeout=1.0)
         except Exception as e:
             logger.debug("Bland TTS close handshake skipped", extra={"error": str(e)})
         finally:
@@ -308,7 +297,7 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
-        get_session: Callable[[], aiohttp.ClientSession],
+        get_session: Callable[[], http.HttpSession],
         api_key: str,
         opts: _TTSOptions,
         tts: TTS,
@@ -331,9 +320,7 @@ class ChunkedStream(tts.ChunkedStream):
             body["controls"] = controls
 
         try:
-            async with utils.http_context.request(
-                self._get_session(),
-                "POST",
+            async with self._get_session().post(
                 f"{self._opts.base_url}/tts",
                 headers={
                     "authorization": self._api_key,
@@ -357,13 +344,11 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type="audio/pcm",
                 )
 
-                async for data, _ in resp.content.iter_chunks():
+                async for data in resp.iter_bytes():
                     output_emitter.push(data)
 
                 output_emitter.flush()
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except APIStatusError:
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -380,7 +365,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(
         self,
         *,
-        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        pool: utils.ConnectionPool[http.WebSocket],
         opts: _TTSOptions,
         tts: TTS,
         conn_options: APIConnectOptions,
@@ -395,12 +380,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # One stream is one segment, which is one Bland turn: the socket carries a
         # single turn at a time and the framework opens a stream per segment.
-        if self._conn_options.read_timeout == 0:
-            # aiohttp reads a zero receive timeout as no limit
-            raise APIError(
-                "bland streaming cannot enforce read_timeout=0",
-                retryable=False,
-            )
         context_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=context_id,
@@ -413,7 +392,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         input_sent = asyncio.Event()
         text_sent = False
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             nonlocal text_sent
             async for data in self.input:
                 if isinstance(data, self.Flush):
@@ -435,28 +414,24 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(json.dumps({"type": "end_of_turn", "context_id": context_id}))
             input_sent.set()
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             await input_sent.wait()
             if not text_sent:
                 return
             while True:
                 msg = await ws.receive(timeout=self._conn_options.read_timeout)
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     raise APIStatusError(
                         "Bland connection closed unexpectedly",
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=f"{msg.data=}",
                     )
 
-                if msg.type is aiohttp.WSMsgType.BINARY:
-                    output_emitter.push(msg.data)
+                if msg.type is http.WebSocketMessageType.BINARY:
+                    output_emitter.push(msg.binary)
                     continue
 
-                if msg.type is not aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected Bland message type %s", msg.type)
                     continue
 
@@ -478,24 +453,20 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.warning("unexpected Bland message %s", data)
 
-        async def cancel_and_drain(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def cancel_and_drain(ws: http.WebSocket) -> None:
             """Cancel the active turn and consume its terminal event before reuse."""
             await ws.send_str(json.dumps({"type": "cancel", "context_id": context_id}))
             while True:
                 msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     raise APIStatusError(
                         "Bland connection closed while cancelling a turn",
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=f"{msg.data=}",
                     )
-                if msg.type is aiohttp.WSMsgType.BINARY:
+                if msg.type is http.WebSocketMessageType.BINARY:
                     continue
-                if msg.type is not aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     continue
 
                 data = json.loads(msg.data)
@@ -585,8 +556,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await utils.aio.cancel_and_wait(*tasks)
             if cancelled is not None:
                 raise cancelled
-        except TimeoutError:
-            raise APITimeoutError() from None
         except APIError:
             raise
         except Exception as e:
@@ -627,7 +596,7 @@ def _api_error(data: object) -> APIError:
     )
 
 
-async def _error_message(resp: aiohttp.ClientResponse) -> str:
+async def _error_message(resp: http.HttpResponse) -> str:
     """Unwrap the v2 ``{"error": {"code", "message"}}`` envelope, falling back to the raw body."""
     try:
         payload = await resp.json()

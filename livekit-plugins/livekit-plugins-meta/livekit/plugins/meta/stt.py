@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from typing import Never
 from urllib.parse import urlparse
 
-import aiohttp
 from pydantic import TypeAdapter
 
 from livekit import rtc
@@ -36,6 +35,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -204,17 +204,16 @@ def _close_error(
 
 
 def _parse_ws_message(
-    raw: aiohttp.WSMessage,
+    raw: http.WebSocketMessage,
     *,
     phase: str,
     close_code: int | None = None,
     retryable_on_normal_close: bool = False,
 ) -> dict[str, object]:
-    if raw.type != aiohttp.WSMsgType.TEXT or not isinstance(raw.data, str):
-        if raw.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED):
-            raw_close_code = raw.data if isinstance(raw.data, int) else close_code
+    if raw.type is not http.WebSocketMessageType.TEXT or not isinstance(raw.data, str):
+        if raw.type is http.WebSocketMessageType.CLOSE:
             raise _close_error(
-                raw_close_code,
+                close_code,
                 phase=phase,
                 retryable_on_normal_close=retryable_on_normal_close,
             )
@@ -228,7 +227,7 @@ def _parse_ws_message(
     return _MESSAGE.validate_python(message)
 
 
-async def _close_quietly(ws: aiohttp.ClientWebSocketResponse) -> None:
+async def _close_quietly(ws: http.WebSocket) -> None:
     try:
         await ws.close()
     except Exception:
@@ -268,7 +267,7 @@ class STT(stt.STT[Never]):
         url: str = DEFAULT_URL,
         keywords: list[str] | None = None,
         language_bias: list[str] | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """Create a Meta Muse streaming STT provider.
 
@@ -279,8 +278,8 @@ class STT(stt.STT[Never]):
             url: Realtime Muse ASR WebSocket endpoint. Must use ``wss://``.
             keywords: Static recognition keywords sent when each stream starts.
             language_bias: Static supported language names sent when each stream starts.
-            http_session: Optional aiohttp session. By default, the LiveKit HTTP
-                context session is used.
+            http_session: Optional HttpSession. By default, the job's shared session
+                is used.
         """
         if api_key is not None:
             resolved_key = api_key.strip()
@@ -332,9 +331,9 @@ class STT(stt.STT[Never]):
     def provider(self) -> str:
         return "Meta"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if self._http_session is None:
-            self._http_session = utils.http_context.http_session()
+            self._http_session = http.http_session()
         return self._http_session
 
     async def _recognize_impl(
@@ -395,7 +394,7 @@ class SpeechStream(stt.RecognizeStream):
         url: str,
         keywords: list[str],
         language_bias: list[str],
-        http_session: aiohttp.ClientSession,
+        http_session: http.HttpSession,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=_SAMPLE_RATE)
         self._api_key = api_key
@@ -417,7 +416,7 @@ class SpeechStream(stt.RecognizeStream):
     async def _run(self) -> None:
         self._end_stream_sent = False
         self._last_audio_processed_ms = 0.0
-        ws: aiohttp.ClientWebSocketResponse | None = None
+        ws: http.WebSocket | None = None
         tasks: list[asyncio.Task[None]] = []
         try:
             ws = await self._connect_ws()
@@ -447,27 +446,13 @@ class SpeechStream(stt.RecognizeStream):
             if ws is not None:
                 await _close_quietly(ws)
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        try:
-            ws = await utils.http_context.ws_connect(
-                self._session,
-                self._url,
-                max_msg_size=_MAX_MESSAGE_BYTES,
-                heartbeat=_WS_HEARTBEAT,
-                conn_options=self._conn_options,
-            )
-        except TimeoutError:
-            raise APITimeoutError("Meta Muse realtime ASR connection timed out") from None
-        except aiohttp.ClientResponseError as exc:
-            raise APIStatusError(
-                "Meta Muse realtime ASR connection was rejected",
-                status_code=exc.status,
-                body=None,
-            ) from None
-        except Exception as exc:
-            raise APIConnectionError(
-                f"Meta Muse realtime ASR connection failed ({type(exc).__name__})"
-            ) from None
+    async def _connect_ws(self) -> http.WebSocket:
+        ws = await self._session.ws_connect(
+            self._url,
+            heartbeat=_WS_HEARTBEAT,
+            max_msg_size=_MAX_MESSAGE_BYTES,
+            conn_options=self._conn_options,
+        )
 
         try:
             await ws.send_str(json.dumps(self._handshake(), separators=(",", ":")))
@@ -544,7 +529,7 @@ class SpeechStream(stt.RecognizeStream):
                 ) from None
         self._validate_clean_close()
 
-    async def _send_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _send_audio(self, ws: http.WebSocket) -> None:
         pending = bytearray()
         loop = asyncio.get_running_loop()
         pacing_origin: float | None = None
@@ -597,7 +582,7 @@ class SpeechStream(stt.RecognizeStream):
                 ) from None
             self._end_stream_sent = True
 
-    async def _receive_events(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _receive_events(self, ws: http.WebSocket) -> None:
         while True:
             try:
                 raw = await ws.receive()
@@ -607,8 +592,8 @@ class SpeechStream(stt.RecognizeStream):
                     retryable=not self._audio_consumed,
                 ) from None
 
-            if raw.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED):
-                close_code = raw.data if isinstance(raw.data, int) else ws.close_code
+            if raw.type is http.WebSocketMessageType.CLOSE:
+                close_code = ws.close_code
                 if self._end_stream_sent and close_code == 1000:
                     return
                 raise _close_error(
@@ -616,14 +601,6 @@ class SpeechStream(stt.RecognizeStream):
                     phase="stream",
                     retryable_on_normal_close=not self._audio_consumed,
                 )
-            if raw.type == aiohttp.WSMsgType.CLOSING:
-                continue
-            if raw.type == aiohttp.WSMsgType.ERROR:
-                raise APIConnectionError(
-                    "Meta Muse realtime ASR WebSocket failed",
-                    retryable=not self._audio_consumed,
-                ) from None
-
             message = _parse_ws_message(raw, phase="stream")
             event_type = message.get("type")
             if event_type == "error":

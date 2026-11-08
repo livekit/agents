@@ -117,13 +117,11 @@ async def test_ws_create_packet_omits_delivery_mode_when_not_given():
 
 
 def _patch_session_to_capture_post(tts, captured: dict[str, object]) -> None:
-    """Replace the TTS's aiohttp session with a stub that captures the body of
-    the first ``post()`` call and short-circuits the rest of the request."""
+    """Replace the TTS's HttpSession with a stub that captures the body of the
+    first ``post()`` call and short-circuits the rest of the request."""
 
-    class _FakePostCM:
+    class _CaptureRequest:
         async def __aenter__(self):
-            # Raise after capture so ChunkedStream._run unwinds quickly; the
-            # body has already been recorded by _fake_post.
             raise RuntimeError("short-circuit")
 
         async def __aexit__(self, *exc):
@@ -132,34 +130,10 @@ def _patch_session_to_capture_post(tts, captured: dict[str, object]) -> None:
     def _fake_post(url, *, json=None, **kwargs):
         captured["url"] = url
         captured["json"] = json
-        return _FakePostCM()
+        return _CaptureRequest()
 
     fake_session = MagicMock()
     fake_session.post = _fake_post
-    fake_session.trace_configs = []
-
-    class _Writer:
-        async def write(self, chunk):
-            self.chunks.append(chunk)
-
-    class _CaptureRequest:
-        def __init__(self, url, data):
-            self.url, self.data = url, data
-
-        async def __aenter__(self):
-            writer = _Writer()
-            writer.chunks = []
-            if self.data is not None:
-                await self.data.write(writer)
-                captured["json"] = json.loads(b"".join(writer.chunks))
-            captured["url"] = self.url
-            raise RuntimeError("short-circuit")
-
-        async def __aexit__(self, *exc):
-            return None
-
-    fake_session.json_serialize = json.dumps
-    fake_session.request = lambda method, url, data=None, **kwargs: _CaptureRequest(url, data)
     tts._session = fake_session
 
 
@@ -211,16 +185,12 @@ async def test_http_stream_bills_the_request_count_once() -> None:
         return json.dumps({"result": {"audioContent": audio, "usage": usage}}).encode() + b"\n"
 
     class _Response:
-        def raise_for_status(self) -> None:
+        async def raise_for_status(self) -> None:
             pass
 
-        @property
-        def content(self):
-            async def lines():
-                for n in (11, 0, 0):
-                    yield line(n)
-
-            return lines()
+        async def iter_lines(self):
+            for n in (11, 0, 0):
+                yield line(n).rstrip(b"\n")
 
     class _Request:
         async def __aenter__(self):
@@ -231,8 +201,7 @@ async def test_http_stream_bills_the_request_count_once() -> None:
 
     tts = TTS(api_key="test-key", model="inworld-tts-2", encoding="PCM")
     session = MagicMock()
-    session.json_serialize = json.dumps
-    session.request = lambda *args, **kwargs: _Request()
+    session.post = lambda *args, **kwargs: _Request()
     tts._session = session
 
     frames = [audio async for audio in tts.synthesize("Hello world")]

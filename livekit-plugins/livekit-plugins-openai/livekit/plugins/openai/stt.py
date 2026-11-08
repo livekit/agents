@@ -26,7 +26,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import urlencode, urlparse
 
-import aiohttp
 import httpx2 as httpx
 from pydantic import BaseModel, TypeAdapter
 
@@ -44,6 +43,7 @@ from livekit.agents import (
     TokenUsage,
     VADEventType,
     VADStream,
+    http,
     inference,
     stt,
     utils,
@@ -330,8 +330,8 @@ class STT(stt.STT):
         )
 
         self._streams = weakref.WeakSet[SpeechStream]()
-        self._session: aiohttp.ClientSession | None = None
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        self._session: http.HttpSession | None = None
+        self._pool = utils.ConnectionPool[http.WebSocket](
             max_session_duration=_max_session_duration,
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
@@ -581,7 +581,7 @@ class STT(stt.STT):
         for stream in self._streams:
             stream.update_options()
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         query_params: dict[str, str] = {
             "intent": "transcription",
         }
@@ -603,11 +603,9 @@ class STT(stt.STT):
         session = self._ensure_session()
         # the config is sent once the stream acquires the connection, since the pool also
         # hands back sockets it opened earlier
-        return await utils.http_context.ws_connect(
-            session, url, headers=headers, conn_options=conn_options
-        )
+        return await session.ws_connect(url, headers=headers, conn_options=conn_options)
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_ws(self, ws: http.WebSocket) -> None:
         await ws.close()
 
     async def aclose(self) -> None:
@@ -618,9 +616,9 @@ class STT(stt.STT):
         """
         await self._pool.aclose()
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
@@ -692,7 +690,7 @@ class SpeechStream(stt.RecognizeStream):
         *,
         stt: STT,
         conn_options: APIConnectOptions,
-        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        pool: utils.ConnectionPool[http.WebSocket],
         opts: _STTOptions,
         options_factory: Callable[[], _STTOptions],
         vad_instance: VAD | None = None,
@@ -707,7 +705,7 @@ class SpeechStream(stt.RecognizeStream):
         self._language = _transcript_language(opts.languages)
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._ws: http.WebSocket | None = None
         self._update_task: asyncio.Task[None] | None = None
         # serializes the config a connection is set up with against any later change to it
         self._config_lock = asyncio.Lock()
@@ -783,9 +781,7 @@ class SpeechStream(stt.RecognizeStream):
         closing_ws = False
 
         @utils.log_exceptions(logger=logger)
-        async def send_task(
-            ws: aiohttp.ClientWebSocketResponse, vad_stream: VADStream | None
-        ) -> None:
+        async def send_task(ws: http.WebSocket, vad_stream: VADStream | None) -> None:
             nonlocal closing_ws
 
             # forward audio to OAI in chunks of 50ms
@@ -811,12 +807,10 @@ class SpeechStream(stt.RecognizeStream):
                             "audio": base64.b64encode(frame.data.tobytes()).decode("utf-8"),
                         }
                         await ws.send_json(encoded_frame)
-            except (aiohttp.ClientError, ConnectionError) as e:
+            except APIConnectionError:
                 if closing_ws:
                     return
-                raise APIConnectionError(
-                    "OpenAI Realtime STT connection closed unexpectedly"
-                ) from e
+                raise
             finally:
                 if vad_stream is not None:
                     vad_stream.end_input()
@@ -824,7 +818,7 @@ class SpeechStream(stt.RecognizeStream):
             closing_ws = True
 
         @utils.log_exceptions(logger=logger)
-        async def vad_task(ws: aiohttp.ClientWebSocketResponse, vad_stream: VADStream) -> None:
+        async def vad_task(ws: http.WebSocket, vad_stream: VADStream) -> None:
             try:
                 async for ev in vad_stream:
                     if ev.type == VADEventType.START_OF_SPEECH:
@@ -834,15 +828,13 @@ class SpeechStream(stt.RecognizeStream):
                         # a server-endpointed model closes the segment itself; this would cut it twice
                         if _is_realtime_only(self._opts.model):
                             await ws.send_json({"type": "input_audio_buffer.commit"})
-            except (aiohttp.ClientError, ConnectionError) as e:
+            except APIConnectionError:
                 if closing_ws:
                     return
-                raise APIConnectionError(
-                    "OpenAI Realtime STT connection closed unexpectedly"
-                ) from e
+                raise
 
         @utils.log_exceptions(logger=logger)
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             current_text = ""
             current_item_id = ""
@@ -851,11 +843,7 @@ class SpeechStream(stt.RecognizeStream):
             item_audio_timing: dict[str, dict[str, int]] = {}
             while True:
                 msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     if closing_ws:  # close is expected, see SpeechStream.aclose
                         return
 
@@ -863,10 +851,10 @@ class SpeechStream(stt.RecognizeStream):
                     raise APIStatusError(
                         message="OpenAI Realtime STT connection closed unexpectedly",
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=f"{msg.data=}",
                     )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected OpenAI message type %s", msg.type)
                     continue
 
@@ -1011,13 +999,10 @@ class SpeechStream(stt.RecognizeStream):
                                 by_alias=True, exclude_unset=True
                             )
                         )
-                except (aiohttp.ClientError, ConnectionError) as e:
+                except APIConnectionError:
                     # the retry gets its own connection; no update should reach this one
                     self._ws = None
-                    # a pooled socket can die while idle; keep that retryable
-                    raise APIConnectionError(
-                        "OpenAI Realtime STT connection closed unexpectedly"
-                    ) from e
+                    raise
                 vad_stream = self._vad.stream() if self._vad is not None else None
                 tasks = [
                     asyncio.create_task(send_task(ws, vad_stream)),

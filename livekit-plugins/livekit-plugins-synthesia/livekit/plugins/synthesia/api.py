@@ -17,11 +17,14 @@ from __future__ import annotations
 import asyncio
 import json
 
-import aiohttp
 from pydantic import JsonValue, TypeAdapter
 
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, utils
-from livekit.agents.utils import http_context
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
+    APIConnectOptions,
+    http,
+)
 
 from .errors import ErrorType, SynthesiaError
 from .log import logger
@@ -72,7 +75,7 @@ class SynthesiaAPI:
     """Async client for the Synthesia interactive-avatar session API.
 
     Opens one session per ``start_session`` call. Pass ``session`` to reuse an
-    ``aiohttp.ClientSession``; when omitted the LiveKit Agents shared session is
+    ``http.HttpSession``; when omitted the LiveKit Agents shared session is
     used.
     """
 
@@ -81,7 +84,7 @@ class SynthesiaAPI:
         *,
         api_key: str,
         api_url: str,
-        session: aiohttp.ClientSession | None = None,
+        session: http.HttpSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._api_key = api_key
@@ -89,8 +92,8 @@ class SynthesiaAPI:
         self._session = session
         self._conn_options = conn_options
 
-    def _http(self) -> aiohttp.ClientSession:
-        return self._session or utils.http_context.http_session()
+    def _http(self) -> http.HttpSession:
+        return self._session or http.http_session()
 
     async def start_session(
         self,
@@ -115,9 +118,7 @@ class SynthesiaAPI:
             for attempt in range(conn_options.max_retry + 1):
                 status: int | None = None
                 try:
-                    async with http_context.request(
-                        self._http(),
-                        "POST",
+                    async with self._http().post(
                         url,
                         headers=headers,
                         json=payload,
@@ -134,7 +135,7 @@ class SynthesiaAPI:
                             "synthesia session request failed, retrying",
                             extra={"status": status},
                         )
-                except (TimeoutError, aiohttp.ClientError) as e:
+                except (TimeoutError, APIConnectionError) as e:
                     # A 5xx whose body fails to arrive is still a 5xx, not a transport failure.
                     last_status = status if status is not None and status >= 500 else None
                     last_body, last_exc = None, e
@@ -161,7 +162,7 @@ class SynthesiaAPI:
                 return StartSessionResponse(session_id=session_id)
         raise SynthesiaError("Synthesia response did not contain a session id")
 
-    def _mapped_error(self, resp: aiohttp.ClientResponse, body: JsonValue) -> SynthesiaError:
+    def _mapped_error(self, resp: http.HttpResponse, body: JsonValue) -> SynthesiaError:
         code = _body_code(body)
         error_type = _CODE_TO_ERROR.get(code or "")
         if error_type is None:
@@ -257,7 +258,7 @@ def _public_avatar_id(avatar_id: str) -> str:
     return avatar_id if avatar_id.startswith(_AVATAR_ID_PREFIX) else _AVATAR_ID_PREFIX + avatar_id
 
 
-def _parse_retry_after(resp: aiohttp.ClientResponse, body: JsonValue) -> float | None:
+def _parse_retry_after(resp: http.HttpResponse, body: JsonValue) -> float | None:
     header = resp.headers.get("Retry-After")
     if header is not None:
         try:
@@ -275,10 +276,8 @@ def _parse_retry_after(resp: aiohttp.ClientResponse, body: JsonValue) -> float |
     return None
 
 
-async def _read_json(resp: aiohttp.ClientResponse) -> JsonValue:
-    # Errors arrive as application/problem+json, which aiohttp refuses by default,
-    # so the content type is checked here rather than delegated.
+async def _read_json(resp: http.HttpResponse) -> JsonValue:
     try:
-        return _JSON_VALUE.validate_python(await resp.json(content_type=resp.content_type))
-    except (aiohttp.ContentTypeError, ValueError):
+        return _JSON_VALUE.validate_python(await resp.json())
+    except ValueError:
         return None

@@ -104,10 +104,10 @@ using the plugin in a standalone script or test, open LiveKit's HTTP context and
 close the Avatar explicitly:
 
 ```python
-from livekit.agents import utils
+from livekit.agents import http
 
 
-async with utils.http_context.open():
+async with http.open():
     await avatar.start(session, room)
     try:
         # Run the standalone session.

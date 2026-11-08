@@ -2402,15 +2402,11 @@ requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next
 name = "livekit-plugins-asyncai"
 source = { editable = "livekit-plugins/livekit-plugins-asyncai" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "livekit-agents-next" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "aiohttp" },
-    { name = "livekit-agents-next", editable = "livekit-agents-next" },
-]
+requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next" }]
 
 [[package]]
 name = "livekit-plugins-avatario"
@@ -2483,14 +2479,12 @@ requires-dist = [
 name = "livekit-plugins-baseten"
 source = { editable = "livekit-plugins/livekit-plugins-baseten" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "livekit" },
     { name = "livekit-agents-next", extra = ["openai"] },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp" },
     { name = "livekit" },
     { name = "livekit-agents-next", extras = ["openai"], editable = "livekit-agents-next" },
 ]
@@ -2535,15 +2529,11 @@ requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next
 name = "livekit-plugins-boson-avatar"
 source = { editable = "livekit-plugins/livekit-plugins-boson-avatar" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "livekit-agents-next" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.10" },
-    { name = "livekit-agents-next", editable = "livekit-agents-next" },
-]
+requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next" }]
 
 [[package]]
 name = "livekit-plugins-cambai"
@@ -2671,7 +2661,6 @@ requires-dist = [
 name = "livekit-plugins-gladia"
 source = { editable = "livekit-plugins/livekit-plugins-gladia" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "livekit-agents-next" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -2679,7 +2668,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "numpy", specifier = ">=1.26" },
 ]
@@ -2726,14 +2714,12 @@ requires-dist = [
 name = "livekit-plugins-gradium"
 source = { editable = "livekit-plugins/livekit-plugins-gradium" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "livekit" },
     { name = "livekit-agents-next" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp" },
     { name = "livekit" },
     { name = "livekit-agents-next", editable = "livekit-agents-next" },
 ]
@@ -2742,7 +2728,6 @@ requires-dist = [
 name = "livekit-plugins-groq"
 source = { editable = "livekit-plugins/livekit-plugins-groq" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "httpx2" },
     { name = "livekit" },
     { name = "livekit-agents-next", extra = ["openai"] },
@@ -2750,7 +2735,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp" },
     { name = "httpx2", specifier = ">=2.12,<3" },
     { name = "livekit" },
     { name = "livekit-agents-next", extras = ["openai"], editable = "livekit-agents-next" },
@@ -2760,15 +2744,11 @@ requires-dist = [
 name = "livekit-plugins-hume"
 source = { editable = "livekit-plugins/livekit-plugins-hume" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "livekit-agents-next" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.8.0" },
-    { name = "livekit-agents-next", editable = "livekit-agents-next" },
-]
+requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next" }]
 
 [[package]]
 name = "livekit-plugins-inworld"
@@ -2891,14 +2871,12 @@ requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next
 name = "livekit-plugins-microsoft-ai"
 source = { editable = "livekit-plugins/livekit-plugins-microsoft-ai" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "livekit-agents-next" },
     { name = "python-dotenv" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = ">=3.10,<4" },
     { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
 ]
@@ -2951,15 +2929,11 @@ requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next
 name = "livekit-plugins-nabrah"
 source = { editable = "livekit-plugins/livekit-plugins-nabrah" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "livekit-agents-next" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "aiohttp" },
-    { name = "livekit-agents-next", editable = "livekit-agents-next" },
-]
+requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next" }]
 
 [[package]]
 name = "livekit-plugins-neuphonic"
@@ -3063,7 +3037,6 @@ requires-dist = [
 name = "livekit-plugins-phonic"
 source = { editable = "livekit-plugins/livekit-plugins-phonic" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "livekit-agents-next" },
     { name = "phonic" },
     { name = "websockets" },
@@ -3071,7 +3044,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "phonic", specifier = ">=0.32.34" },
     { name = "websockets", specifier = ">=11.0" },
@@ -3101,15 +3073,11 @@ requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next
 name = "livekit-plugins-respeecher"
 source = { editable = "livekit-plugins/livekit-plugins-respeecher" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "livekit-agents-next" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "aiohttp" },
-    { name = "livekit-agents-next", editable = "livekit-agents-next" },
-]
+requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next" }]
 
 [[package]]
 name = "livekit-plugins-rime"
@@ -3131,15 +3099,11 @@ requires-dist = [
 name = "livekit-plugins-rtzr"
 source = { editable = "livekit-plugins/livekit-plugins-rtzr" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "livekit-agents-next" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.9.0" },
-    { name = "livekit-agents-next", editable = "livekit-agents-next" },
-]
+requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next" }]
 
 [[package]]
 name = "livekit-plugins-runway"
@@ -3205,15 +3169,11 @@ requires-dist = [
 name = "livekit-plugins-slng"
 source = { editable = "livekit-plugins/livekit-plugins-slng" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "livekit-agents-next" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.10" },
-    { name = "livekit-agents-next", editable = "livekit-agents-next" },
-]
+requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next" }]
 
 [[package]]
 name = "livekit-plugins-smallestai"
@@ -3322,14 +3282,12 @@ requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next
 name = "livekit-plugins-telnyx"
 source = { editable = "livekit-plugins/livekit-plugins-telnyx" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "livekit-agents-next" },
     { name = "livekit-api" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = ">=3.10.0" },
     { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "livekit-api", editable = "../python-sdks/livekit-api" },
 ]

@@ -3,10 +3,9 @@ from __future__ import annotations
 import json
 import logging
 
-import aiohttp
 import pytest
 
-from livekit.agents import APIConnectOptions
+from livekit.agents import APIConnectOptions, http
 from livekit.plugins.slng import tts as slng_tts
 
 pytestmark = pytest.mark.unit
@@ -22,32 +21,32 @@ class Socket:
     async def send_str(self, text: str) -> None:
         pass
 
-    async def receive(self, **kwargs) -> aiohttp.WSMessage:
+    async def receive(self, **kwargs) -> http.WebSocketMessage:
         if not self._sent_audio:
             self._sent_audio = True
-            return aiohttp.WSMessage(aiohttp.WSMsgType.BINARY, PCM, "")
-        return aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps({"type": "audio_end"}), "")
+            return http.WebSocketMessage(http.WebSocketMessageType.BINARY, PCM)
+        return http.WebSocketMessage(
+            http.WebSocketMessageType.TEXT, json.dumps({"type": "audio_end"})
+        )
 
     async def close(self) -> None:
         self.closed = True
 
 
-async def test_synthesis_forwards_phase_options_to_its_connection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_synthesis_forwards_phase_options_to_its_connection() -> None:
     socket = Socket()
     policies: list[APIConnectOptions] = []
 
-    async def connect(*args, conn_options: APIConnectOptions, **kwargs):
-        policies.append(conn_options)
-        return socket
+    class Session:
+        async def ws_connect(self, url: str, *, conn_options: APIConnectOptions, **kwargs):
+            policies.append(conn_options)
+            return socket
 
-    monkeypatch.setattr(slng_tts.utils.http_context, "ws_connect", connect)
     model = slng_tts.TTS(
         api_key="test",
         model="deepgram/aura:2",
         voice="test",
-        http_session=object(),
+        http_session=Session(),  # type: ignore[arg-type]
     )
     options = APIConnectOptions(max_retry=0, connect_timeout=0.25, read_timeout=0.5)
     try:

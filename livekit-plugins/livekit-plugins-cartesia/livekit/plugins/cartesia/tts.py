@@ -24,15 +24,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any, cast
 
-import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
     APIStatusError,
-    APITimeoutError,
     LanguageCode,
+    http,
     tokenize,
     tts,
     utils,
@@ -100,7 +98,7 @@ class TTS(tts.TTS):
         sample_rate: int = 24000,
         word_timestamps: bool = True,
         pronunciation_dict_id: str | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         text_pacing: tts.SentenceStreamPacer | bool = False,
         base_url: str = "https://api.cartesia.ai",
@@ -122,7 +120,7 @@ class TTS(tts.TTS):
             word_timestamps (bool, optional): Whether to add word timestamps to the output. Defaults to True.
             pronunciation_dict_id (str, optional): The pronunciation dictionary ID to use for custom pronunciations. Defaults to None.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
-            http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
+            http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, the job's shared session is used.
             tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             text_pacing (tts.SentenceStreamPacer | bool, optional): Stream pacer for the TTS. Set to True to use the default pacer, False to disable.
             base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
@@ -165,7 +163,7 @@ class TTS(tts.TTS):
             self._check_generation_config()
 
         self._session = http_session
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        self._pool = utils.ConnectionPool[http.WebSocket](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
             max_session_duration=300,
@@ -211,43 +209,29 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Cartesia"
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
-        session = self._ensure_session()
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         url = self._opts.get_ws_url(f"/tts/websocket?cartesia_version={self._opts.api_version}")
-        try:
-            ws = await utils.http_context.ws_connect(
-                session,
-                url,
-                headers={
-                    "User-Agent": USER_AGENT,
-                    API_AUTH_HEADER: self._opts.api_key,
-                },
-                conn_options=conn_options,
-            )
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            # authentication headers can appear in RequestInfo.
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
-        except Exception as e:
-            # transport errors can contain credentials in URLs.
-            raise APIConnectionError(type(e).__name__) from None
-
-        c_request_id = utils.http_context.websocket_headers(ws).get(REQUEST_ID_HEADER)
+        ws = await self._ensure_session().ws_connect(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                API_AUTH_HEADER: self._opts.api_key,
+            },
+            conn_options=conn_options,
+        )
+        c_request_id = ws.headers.get(REQUEST_ID_HEADER)
         logger.debug(
             "Established new Cartesia TTS WebSocket connection",
             extra={"cartesia_request_id": c_request_id},
         )
         return ws
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_ws(self, ws: http.WebSocket) -> None:
         await ws.close()
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
@@ -376,7 +360,7 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
-        get_session: Callable[[], aiohttp.ClientSession],
+        get_session: Callable[[], http.HttpSession],
         opts: _TTSOptions,
         tts: TTS,
         input_text: str,
@@ -392,9 +376,7 @@ class ChunkedStream(tts.ChunkedStream):
         json["transcript"] = self._input_text
 
         try:
-            async with utils.http_context.request(
-                self._get_session(),
-                "POST",
+            async with self._get_session().post(
                 self._opts.get_http_url("/tts/bytes"),
                 headers={
                     API_AUTH_HEADER: self._opts.api_key,
@@ -404,7 +386,7 @@ class ChunkedStream(tts.ChunkedStream):
                 json=json,
                 conn_options=self._conn_options,
             ) as resp:
-                resp.raise_for_status()
+                await resp.raise_for_status()
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -413,16 +395,12 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type="audio/pcm",
                 )
 
-                async for data, _ in resp.content.iter_chunks():
+                async for data in resp.iter_bytes():
                     output_emitter.push(data)
 
                 output_emitter.flush()
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+        except APIError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -433,7 +411,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         *,
         sentence_tokenizer: tokenize.SentenceTokenizer,
         stream_pacer: tts.SentenceStreamPacer | None,
-        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        pool: utils.ConnectionPool[http.WebSocket],
         opts: _TTSOptions,
         tts: TTS,
         conn_options: APIConnectOptions,
@@ -465,9 +443,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 audio_emitter=output_emitter,
             )
 
-        async def _sentence_stream_task(
-            ws: aiohttp.ClientWebSocketResponse, cartesia_context_id: str
-        ) -> None:
+        async def _sentence_stream_task(ws: http.WebSocket, cartesia_context_id: str) -> None:
             base_pkt = _to_cartesia_options(self._opts, streaming=True)
             if flush_on_chunk is True:
                 base_pkt["max_buffer_delay_ms"] = 0
@@ -498,17 +474,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                 sent_tokenizer_stream.push_text(data)
             sent_tokenizer_stream.end_input()
 
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse, cartesia_context_id: str) -> None:
+        async def _recv_task(ws: http.WebSocket, cartesia_context_id: str) -> None:
             current_segment_id: str | None = None
             await input_sent_event.wait()
             skip_aligning = False
             while True:
-                msg = await asyncio.wait_for(ws.receive(), self._conn_options.read_timeout)
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                msg = await ws.receive(timeout=self._conn_options.read_timeout)
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     logger.error(
                         "Cartesia connection closed unexpectedly. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
                         extra={"cartesia_context_id": cartesia_context_id},
@@ -517,10 +489,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         "Cartesia connection closed unexpectedly",
                         request_id=request_id,
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=f"{msg.data=}",
                     )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected Cartesia message type %s", msg.type)
                     continue
 
@@ -594,12 +566,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     input_sent_event.set()
                     await sent_tokenizer_stream.aclose()
                     await utils.aio.cancel_and_wait(*tasks)
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
         except APIError:
             raise
         except Exception as e:

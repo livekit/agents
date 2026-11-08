@@ -9,45 +9,38 @@ from urllib.parse import parse_qs, urlparse
 import aiohttp
 import pytest
 
-from livekit.agents import APIConnectOptions
+from livekit.agents import APIConnectOptions, http
 
 pytestmark = pytest.mark.plugin("deepgram")
 
 
-class _FakeMsg:
-    def __init__(self, type: aiohttp.WSMsgType, data=None, extra=None) -> None:
-        self.type = type
-        self.data = data
-        self.extra = extra
+def _text(payload: dict) -> http.WebSocketMessage:
+    return http.WebSocketMessage(http.WebSocketMessageType.TEXT, json.dumps(payload))
 
-    @classmethod
-    def text(cls, payload: dict) -> _FakeMsg:
-        return cls(aiohttp.WSMsgType.TEXT, json.dumps(payload))
 
-    @classmethod
-    def binary(cls, data: bytes) -> _FakeMsg:
-        return cls(aiohttp.WSMsgType.BINARY, data)
+def _binary(data: bytes) -> http.WebSocketMessage:
+    return http.WebSocketMessage(http.WebSocketMessageType.BINARY, data)
 
 
 class _FakeWS:
-    """Minimal aiohttp.ClientWebSocketResponse stand-in for the receive loop."""
+    """Minimal http.WebSocket stand-in for the receive loop."""
 
-    def __init__(self, incoming: list[_FakeMsg]) -> None:
-        self._incoming: deque[_FakeMsg] = deque(incoming)
+    def __init__(self, incoming: list[http.WebSocketMessage]) -> None:
+        self._incoming: deque[http.WebSocketMessage] = deque(incoming)
         self.sent: list[str] = []
 
     async def send_str(self, data: str) -> None:
         self.sent.append(data)
 
-    async def receive(self, timeout: float | None = None) -> _FakeMsg:
+    async def receive(self, timeout: float | None = None) -> http.WebSocketMessage:
         if self._incoming:
             return self._incoming.popleft()
         # Nothing left to hand out: emulate a closed socket so a runaway loop
         # surfaces instead of hanging.
-        return _FakeMsg(aiohttp.WSMsgType.CLOSED)
+        return http.WebSocketMessage(http.WebSocketMessageType.CLOSE, "")
 
     @property
-    def unconsumed(self) -> list[_FakeMsg]:
+    def unconsumed(self) -> list[http.WebSocketMessage]:
         return list(self._incoming)
 
 
@@ -142,9 +135,9 @@ async def test_update_options_invalidates_pool_on_change():
 async def test_recv_ends_segment_on_speech_metadata_and_leaves_flushed():
     ws = _FakeWS(
         [
-            _FakeMsg.text({"type": "SpeechStarted"}),
-            _FakeMsg.binary(b"\x00\x01\x02\x03"),
-            _FakeMsg.text(
+            _text({"type": "SpeechStarted"}),
+            _binary(b"\x00\x01\x02\x03"),
+            _text(
                 {
                     "type": "SpeechMetadata",
                     "audio_duration_ms": 120,
@@ -153,7 +146,7 @@ async def test_recv_ends_segment_on_speech_metadata_and_leaves_flushed():
                 }
             ),
             # server emits Flushed after SpeechMetadata; the loop must not depend on it
-            _FakeMsg.text({"type": "Flushed"}),
+            _text({"type": "Flushed"}),
         ]
     )
     stream = _make_stream(ws)
@@ -179,9 +172,9 @@ async def test_flushed_is_a_noop_before_speech_metadata():
     # A Flushed seen mid-turn must not end the segment early.
     ws = _FakeWS(
         [
-            _FakeMsg.text({"type": "Flushed"}),
-            _FakeMsg.binary(b"\xaa\xbb"),
-            _FakeMsg.text({"type": "SpeechMetadata"}),
+            _text({"type": "Flushed"}),
+            _binary(b"\xaa\xbb"),
+            _text({"type": "SpeechMetadata"}),
         ]
     )
     stream = _make_stream(ws)
@@ -250,7 +243,7 @@ async def _request_urls(**options) -> list[str]:
 
     app = web.Application()
     app.router.add_route("*", "/speak", speak)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         provider = TTS(
             api_key="test-key",
             base_url=str(server.make_url("/speak")),
@@ -330,7 +323,7 @@ async def test_rest_billed_characters_reach_the_final_frame():
 
     app = web.Application()
     app.router.add_post("/speak", speak)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         provider = TTS(
             api_key="test-key", base_url=str(server.make_url("/speak")), http_session=session
         )

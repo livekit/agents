@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-import aiohttp
 from pydantic import JsonValue
 
 import livekit.rtc as rtc
@@ -13,7 +12,7 @@ from livekit.agents import (
     NotGivenOr,
     VoiceSession,
     get_job_context,
-    utils,
+    http,
 )
 from livekit.agents.job import _server_credentials
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
@@ -69,7 +68,7 @@ class AvatarSession(BaseAvatarSession):
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         super().__init__()
-        self._http_session: aiohttp.ClientSession | None = None
+        self._http_session: http.HttpSession | None = None
         self.conversation_id: str | None = None
         self._simli_config = simli_config
         self.api_url = api_url or "https://api.simli.ai"
@@ -85,9 +84,9 @@ class AvatarSession(BaseAvatarSession):
     def provider(self) -> str:
         return "simli"
 
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
+    def _ensure_http_session(self) -> http.HttpSession:
         if self._http_session is None:
-            self._http_session = utils.http_context.http_session()
+            self._http_session = http.http_session()
 
         return self._http_session
 
@@ -123,23 +122,22 @@ class AvatarSession(BaseAvatarSession):
         )
 
         logger.debug("starting avatar session")
-        token_response = await self._ensure_http_session().post(
+        async with self._ensure_http_session().post(
             f"{self.api_url}/compose/token",
             json=self._simli_config.create_json(),
             headers={"x-simli-api-key": self._simli_config.api_key},
-        )
-        body = await token_response.text()
-        token_response.raise_for_status()
-        connection_response = await self._ensure_http_session().post(
+        ) as token_response:
+            await token_response.raise_for_status()
+            body = await token_response.text()
+        async with self._ensure_http_session().post(
             f"{self.api_url}/integrations/livekit/agents",
             json={
                 "session_token": json.loads(body)["session_token"],
                 "livekit_token": livekit_token,
                 "livekit_url": livekit_url,
             },
-        )
-        await connection_response.read()
-        connection_response.raise_for_status()
+        ) as connection_response:
+            await connection_response.raise_for_status()
         await super().start(agent_session, room)
         self._attach_audio_output(
             agent_session,

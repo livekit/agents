@@ -22,7 +22,6 @@ import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-import aiohttp
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 from livekit.agents import (
@@ -30,14 +29,13 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APIStatusError,
-    APITimeoutError,
-    create_api_error_from_http,
     tokenize,
     tts,
     utils,
 )
 from livekit.agents import LanguageCode
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents import http
 from livekit.agents.utils import is_given
 
 from .log import logger  # noqa: I001
@@ -84,7 +82,7 @@ class TTS(tts.TTS):
         voice_id: str = "8e9c4bc8-3979-48ab-8626-df53befc2090",
         speed: float | None = 1.0,
         sample_rate: int = 22050,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         base_url: str = "https://api.neuphonic.com",
@@ -102,7 +100,7 @@ class TTS(tts.TTS):
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 22050.
             api_key (str, optional): The NeuPhonic API key. If not provided, it will be read from the NEUPHONIC_API_KEY environment variable.
             jwt_token (str, optional): The NeuPhonic JWT token.
-            http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
+            http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, the job's shared session is used.
             word_tokenizer (tokenize.WordTokenizer, optional): The word tokenizer to use. Defaults to tokenize.basic.WordTokenizer().
             tokenizer (tokenize.SentenceTokenizer, optional): The sentence tokenizer to use. Defaults to tokenize.blingfire.SentenceTokenizer().
             base_url (str, optional): The base URL for the NeuPhonic API. Defaults to "https://api.neuphonic.com".
@@ -135,7 +133,7 @@ class TTS(tts.TTS):
             word_tokenizer=word_tokenizer,
         )
         self._session = http_session
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        self._pool = utils.ConnectionPool[http.WebSocket](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
             max_session_duration=300,
@@ -146,8 +144,7 @@ class TTS(tts.TTS):
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
-        session = self._ensure_session()
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         url = self._opts.get_ws_url(
             f"/speak/{self._opts.lang_code.language}?speed={self._opts.speed}&lang_code={self._opts.lang_code.language}&encoding={self._opts.encoding}&sampling_rate={self._opts.sample_rate}&voice_id={self._opts.voice_id}"
         )
@@ -159,11 +156,11 @@ class TTS(tts.TTS):
         else:
             headers = None
 
-        return await utils.http_context.ws_connect(
-            session, url, headers=headers, conn_options=conn_options
+        return await self._ensure_session().ws_connect(
+            url, headers=headers, conn_options=conn_options
         )
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_ws(self, ws: http.WebSocket) -> None:
         await ws.close()
 
     @property
@@ -174,9 +171,9 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Neuphonic"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
@@ -271,7 +268,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
         opts: _TTSOptions,
-        ensure_session: Callable[[], aiohttp.ClientSession],
+        ensure_session: Callable[[], http.HttpSession],
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts = opts
@@ -284,9 +281,7 @@ class ChunkedStream(tts.ChunkedStream):
             else:
                 headers = None
 
-            async with utils.http_context.request(
-                self._ensure_session(),
-                "POST",
+            async with self._ensure_session().post(
                 f"{self._opts.base_url}/sse/speak/{self._opts.lang_code.language}",
                 headers=headers,
                 json={
@@ -298,10 +293,8 @@ class ChunkedStream(tts.ChunkedStream):
                     "speed": self._opts.speed,
                 },
                 conn_options=self._conn_options,
-                # large read_bufsize to avoid `ValueError: Chunk too big`
-                read_bufsize=10 * 1024 * 1024,
             ) as resp:
-                resp.raise_for_status()
+                await resp.raise_for_status()
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -310,7 +303,7 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=_encoding_to_mime_type(self._opts.encoding),
                 )
 
-                async for line in resp.content:
+                async for line in resp.iter_lines():
                     message = line.decode("utf-8")
                     if not message:
                         continue
@@ -323,10 +316,6 @@ class ChunkedStream(tts.ChunkedStream):
                             output_emitter.push(base64.b64decode(audio))
 
                 output_emitter.flush()
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(e.message, status=e.status) from None
         except APIError:
             raise
         except Exception as e:
@@ -384,7 +373,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         tts: TTS,
         conn_options: APIConnectOptions,
         opts: _TTSOptions,
-        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        pool: utils.ConnectionPool[http.WebSocket],
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
@@ -428,12 +417,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
         try:
             await asyncio.gather(*tasks)
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(
-                e.message, status=e.status, request_id=request_id
-            ) from None
         except APIError:
             raise
         except Exception as e:
@@ -450,7 +433,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         read_deadline = self._core_attempts
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             async for sentence in chunks_stream:
                 self.mark_started()
 
@@ -461,22 +444,18 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await ws.send_str(json.dumps(msg))
                 read_deadline.expect_response()
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             while True:
                 msg = await ws.receive()
 
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     raise APIStatusError(
                         "NeuPhonic websocket connection closed unexpectedly",
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=f"{msg.data=}",
                     )
 
-                if msg.type == aiohttp.WSMsgType.TEXT:
+                if msg.type is http.WebSocketMessageType.TEXT:
                     try:
                         resp = _RESPONSE.validate_json(msg.data)
                     except ValidationError as error:
@@ -507,10 +486,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if data.get("context_id") != segment_id or chunks == 0:
                         output_emitter.end_segment()
                         break
-                elif msg.type == aiohttp.WSMsgType.BINARY:
+                elif msg.type is http.WebSocketMessageType.BINARY:
                     pass
-                else:
-                    logger.warning("Unexpected NeuPhonic message type: %s", msg.type)
 
         async with self._pool.connection(conn_options=self._conn_options) as ws:
             tasks = [

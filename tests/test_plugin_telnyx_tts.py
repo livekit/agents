@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import asyncio
 
-import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 from pydantic import ValidationError
 
-from livekit.agents import APIConnectionError, APIConnectOptions, utils
+from livekit.agents import APIConnectionError, APIConnectOptions, http, utils
 from livekit.plugins.telnyx import TTS
 
 pytestmark = pytest.mark.plugin("telnyx")
@@ -39,7 +38,7 @@ async def test_invalid_audio_field_is_a_terminal_typed_failure(
 
     app = web.Application()
     app.router.add_get("/tts", handle)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         provider = TTS(api_key="test", base_url=str(server.make_url("/tts")), http_session=session)
         try:
             async with asyncio.timeout(3):

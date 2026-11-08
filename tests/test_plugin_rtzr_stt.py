@@ -7,7 +7,7 @@ from aiohttp.test_utils import TestServer
 from pydantic import ValidationError
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions
+from livekit.agents import APIConnectionError, APIConnectOptions, http
 from livekit.plugins.rtzr import STT
 
 pytestmark = pytest.mark.unit
@@ -34,7 +34,7 @@ async def test_malformed_transcript_is_a_typed_connection_failure(
 
     app = web.Application()
     app.router.add_get("/v1/transcribe:streaming", handle)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         provider = STT(http_session=session)
         endpoint = str(server.make_url("/")).rstrip("/")
         monkeypatch.setattr(provider._client, "_ws_base", endpoint)

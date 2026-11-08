@@ -28,13 +28,12 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
 
-import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    http,
     tokenize,
     tts,
     utils,
@@ -101,7 +100,7 @@ class TTS(tts.TTS):
         base_url: str | None = None,
         allow_insecure_base_url: bool = False,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """Create a Vakyam TTS instance.
 
@@ -116,7 +115,7 @@ class TTS(tts.TTS):
             base_url: API base URL. Defaults to ``https://api.vakyam.ai``.
             allow_insecure_base_url: Allow non-localhost ``http://`` base URLs.
             tokenizer: Sentence tokenizer used for streaming synthesis.
-            http_session: Optional aiohttp session for HTTP ``synthesize()``.
+            http_session: Optional HttpSession for HTTP ``synthesize()``.
         """
         resolved_key = api_key or os.environ.get("VAKYAM_API_KEY")
         if not resolved_key:
@@ -168,9 +167,9 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Vakyam"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     def update_options(
@@ -344,7 +343,7 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         opts: _TTSOptions,
-        http_session: Callable[[], aiohttp.ClientSession],
+        http_session: Callable[[], http.HttpSession],
         input_text: str,
         conn_options: APIConnectOptions,
     ) -> None:
@@ -368,47 +367,38 @@ class ChunkedStream(tts.ChunkedStream):
             "Content-Type": "application/json",
             "User-Agent": f"LiveKit-Agents-Vakyam/{__version__}",
         }
-        try:
-            async with utils.http_context.request(
-                self._http_session(),
-                "POST",
-                http_stream_url(self._opts.base_url),
-                json=payload,
-                headers=headers,
-                conn_options=self._conn_options,
-            ) as resp:
-                if resp.status >= 400:
-                    body = await resp.text()
-                    raise_http_error(resp.status, body)
+        async with self._http_session().post(
+            http_stream_url(self._opts.base_url),
+            json=payload,
+            headers=headers,
+            conn_options=self._conn_options,
+        ) as resp:
+            if resp.status >= 400:
+                body = await resp.text()
+                raise_http_error(resp.status, body)
 
-                content_type = resp.headers.get("Content-Type", "").lower()
-                if content_type and not (
-                    content_type.startswith("audio/")
-                    or content_type.startswith("application/octet-stream")
-                ):
-                    body = await resp.text()
-                    raise APIStatusError(
-                        "Vakyam TTS returned a non-audio response",
-                        status_code=502,
-                        body=body,
-                    )
-
-                output_emitter.initialize(
-                    request_id=request_id,
-                    sample_rate=int(self._opts.sample_rate),
-                    num_channels=NUM_CHANNELS,
-                    mime_type="audio/pcm",
+            content_type = resp.headers.get("Content-Type", "").lower()
+            if content_type and not (
+                content_type.startswith("audio/")
+                or content_type.startswith("application/octet-stream")
+            ):
+                body = await resp.text()
+                raise APIStatusError(
+                    "Vakyam TTS returned a non-audio response",
+                    status_code=502,
+                    body=body,
                 )
-                async for chunk, _ in resp.content.iter_chunks():
-                    if chunk:
-                        output_emitter.push(chunk)
-                output_emitter.flush()
-        except (APIStatusError, APIConnectionError, APITimeoutError):
-            raise
-        except TimeoutError as exc:
-            raise APITimeoutError("Vakyam TTS HTTP stream timed out") from exc
-        except aiohttp.ClientError as exc:
-            raise APIConnectionError(f"Vakyam TTS HTTP stream connection error: {exc}") from exc
+
+            output_emitter.initialize(
+                request_id=request_id,
+                sample_rate=int(self._opts.sample_rate),
+                num_channels=NUM_CHANNELS,
+                mime_type="audio/pcm",
+            )
+            async for chunk in resp.iter_bytes():
+                if chunk:
+                    output_emitter.push(chunk)
+            output_emitter.flush()
 
 
 class SynthesizeStream(tts.SynthesizeStream):

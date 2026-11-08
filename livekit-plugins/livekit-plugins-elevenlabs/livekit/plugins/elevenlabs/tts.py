@@ -25,8 +25,6 @@ from dataclasses import dataclass, field, replace
 from functools import cached_property
 from typing import Any, Literal
 
-import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -34,6 +32,8 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    create_api_error_from_http,
+    http,
     tokenize,
     tts,
     utils,
@@ -42,7 +42,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
-from ._utils import trace_id_from_headers
+from ._utils import TRACE_ID_HEADER, trace_id_from_headers
 from .log import logger
 from .models import TTSEncoding, TTSFrame, TTSModels, is_dialogue_model
 
@@ -116,7 +116,7 @@ class TTS(tts.TTS):
         enable_ssml_parsing: bool = False,
         enable_logging: bool = True,
         chunk_length_schedule: NotGivenOr[list[int]] = NOT_GIVEN,  # range is [50, 500]
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         language: NotGivenOr[str] = NOT_GIVEN,
         sync_alignment: bool = True,
         preferred_alignment: NotGivenOr[Literal["normalized", "original"]] = NOT_GIVEN,
@@ -146,7 +146,7 @@ class TTS(tts.TTS):
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             enable_logging (bool): Enable logging of the request. When set to false, zero retention mode will be used. Defaults to True.
             chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults are [120, 160, 250, 290].
-            http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
+            http_session (http.HttpSession | None): Custom HTTP session for API requests. Optional.
             language (NotGivenOr[str]): Language code used to enforce a language for the model and text normalization. If the model does not support language overrides, it will be ignored.
             sync_alignment (bool): Enable sync alignment for the TTS model. Defaults to True.
             preferred_alignment (Literal["normalized", "original"]): Use normalized or original alignment. Defaults to "normalized", or "original" for CJK (ja, ko, zh) languages.
@@ -207,7 +207,7 @@ class TTS(tts.TTS):
             preferred_alignment=preferred_alignment,
             pronunciation_dictionary_locators=pronunciation_dictionary_locators,
         )
-        self._session = http_session
+        self._session = http_session.with_request_id(TRACE_ID_HEADER) if http_session else None
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
         self.__current_connection: _Connection | _DialogueConnection | None = None
@@ -224,9 +224,9 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "ElevenLabs"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session().with_request_id(TRACE_ID_HEADER)
         return self._session
 
     def _warn_if_dialogue_model_ignores_options(self) -> None:
@@ -431,7 +431,7 @@ class ChunkedStream(tts.ChunkedStream):
         self,
         *,
         opts: _TTSOptions,
-        get_session: Callable[[], aiohttp.ClientSession],
+        get_session: Callable[[], http.HttpSession],
         tts: TTS,
         input_text: str,
         conn_options: APIConnectOptions,
@@ -458,15 +458,19 @@ class ChunkedStream(tts.ChunkedStream):
             json_body = _build_synthesize_body(self._opts, self._input_text, voice_settings)
 
         try:
-            async with utils.http_context.request(
-                self._get_session(),
-                "POST",
+            async with self._get_session().post(
                 url,
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
                 json=json_body,
                 conn_options=self._conn_options,
             ) as resp:
-                resp.raise_for_status()
+                if not resp.ok:
+                    raise create_api_error_from_http(
+                        resp.reason or "",
+                        status=resp.status,
+                        request_id=trace_id_from_headers(resp.headers),
+                        body=await resp.text(),
+                    )
 
                 if not resp.content_type.startswith("audio/"):
                     content = await resp.text()
@@ -479,22 +483,15 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=_encoding_to_mimetype(self._opts.encoding),
                 )
 
-                async for data, _ in resp.content.iter_chunks():
+                async for data in resp.iter_bytes():
                     output_emitter.push(data)
 
                 if (billed := resp.headers.get("character-cost")) is not None:
                     output_emitter.report_usage(characters_count=int(billed))
                 output_emitter.flush()
 
-        except TimeoutError as e:
-            raise APITimeoutError() from e
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=trace_id_from_headers(e.headers),
-                body=None,
-            ) from e
+        except APIError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -545,14 +542,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             connection = await self._get_connection()
         except APIError:
             raise
-        except TimeoutError as e:
-            raise APITimeoutError() from e
-        except aiohttp.WSServerHandshakeError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=trace_id_from_headers(e.headers),
-            ) from e
         except Exception as e:
             raise APIConnectionError("could not connect to ElevenLabs") from e
 
@@ -794,13 +783,13 @@ class _Connection:
     def __init__(
         self,
         opts: _TTSOptions,
-        session: aiohttp.ClientSession,
+        session: http.HttpSession,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._opts = opts
         self._session = session
         self._conn_options = conn_options
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._ws: http.WebSocket | None = None
         self._is_current = True
         self._active_contexts: set[str] = set()
         self._input_queue = utils.aio.Chan[_SynthesizeContent | _CloseContext]()
@@ -859,8 +848,8 @@ class _Connection:
             return
 
         headers = {AUTHORIZATION_HEADER: self._opts.api_key}
-        self._ws = await utils.http_context.ws_connect(
-            self._session, self._connect_url(), conn_options=self._conn_options, headers=headers
+        self._ws = await self._session.ws_connect(
+            self._connect_url(), conn_options=self._conn_options, headers=headers
         )
 
         self._send_task = asyncio.create_task(self._send_loop())
@@ -951,11 +940,7 @@ class _Connection:
             while not self._closed and self._ws and not self._ws.closed:
                 msg = await self._ws.receive()
 
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type == http.WebSocketMessageType.CLOSE:
                     if not self._closed and len(self._context_data) > 0:
                         # websocket will be closed after all contexts are closed
                         raise APIStatusError(
@@ -964,7 +949,7 @@ class _Connection:
                         )
                     break
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type != http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected message type %s", msg.type)
                     continue
 
@@ -1137,7 +1122,7 @@ class _DialogueConnection(_Connection):
     def __init__(
         self,
         opts: _TTSOptions,
-        session: aiohttp.ClientSession,
+        session: http.HttpSession,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         super().__init__(opts, session, conn_options)
@@ -1237,11 +1222,7 @@ class _DialogueConnection(_Connection):
             while not self._closed and self._ws and not self._ws.closed:
                 msg = await self._ws.receive()
 
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type == http.WebSocketMessageType.CLOSE:
                     if not self._closed and len(self._context_data) > 0:
                         # websocket will be closed after all contexts are closed
                         raise APIStatusError(
@@ -1250,7 +1231,7 @@ class _DialogueConnection(_Connection):
                         )
                     break
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type != http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected message type %s", msg.type)
                     continue
 

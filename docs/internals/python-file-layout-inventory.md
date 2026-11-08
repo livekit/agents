@@ -139,7 +139,7 @@ livekit/agents/
   types.py
   utils/__init__.py
   utils/aio.py
-  utils/http_context.py
+  http/client.py
   utils/media.py
   version.py
   voice/__init__.py
@@ -258,7 +258,7 @@ these are substantial integrations, rather than forwarding layers.
 | `utils/__init__.py` | Small shared utilities and participant/track waits | 253 |
 | `utils/aio.py` | Async channels/tasks/cancellation and connection pool | 569 |
 | `utils/media.py` | Audio frames/files, audio decoder and image/frame-reader adaptation | 215 |
-| `utils/http_context.py` | Provider HTTP/SSL/WebSocket lifetime | 367 |
+| `http/client.py` | Provider HTTP/SSL/WebSocket lifetime | 367 |
 | `_bindings.py` | Model method bodies, host proxy views and exception hooks | 1,178 |
 | `_proto.py` | Shared wire conversion and storage item payload conversion | About 230 |
 | `evals.py` | Judges and simulation context/verdict authoring | 505 |
@@ -334,7 +334,6 @@ utils/
   __init__.py       # Common helpers, participant waits, public exports
   aio.py            # Channels, intervals, tasks, cleanup and ConnectionPool
   media.py          # Audio frames/files, decoder and image encoding
-  http_context.py   # HTTP sessions, SSL and WebSocket lifetime
 ```
 
 `utils/aio/__init__.py` is already the package's only source file. Moving it to aio.py
@@ -584,7 +583,7 @@ These source classifications are not additive savings; the exact target contains
 | `_proto.py` | 208 | Removed | Storage hands back typed chat items; the ABI protocol module encodes and decodes them. |
 | [cli.py](../../livekit-agents-next/livekit/agents/cli.py) | 406 | Retain | `cli.py`. Keep the Python process/asyncio launcher as one concrete lifecycle owner. |
 | [evals.py](../../livekit-agents-next/livekit/agents/evals.py) | 394 | Retain | `evals.py`. One evaluation API contains judges and simulation scenario/user verdict context. |
-| [http.py](../../livekit-agents-next/livekit/agents/http.py) | 282 | Retain | `http.py`. Route authoring and the ASGI adapter over the worker's parsed exchanges; the worker owns HTTP and WebSocket protocol. |
+| [http/server.py](../../livekit-agents-next/livekit/agents/http/server.py) | 282 | Retain | `http/server.py`. Route authoring and the ASGI adapter over the worker's parsed exchanges; the worker owns HTTP and WebSocket protocol. |
 | [job.py](../../livekit-agents-next/livekit/agents/job.py) | 1124 | Retain | `job.py`. Keep job/resource owner. It refers to simulation context from evals without absorbing unrelated judge behavior. |
 | [log.py](../../livekit-agents-next/livekit/agents/log.py) | 108 | Retain | `log.py`. Keep import-time Python log levels/logger/filter setup independent of SDK exporter/provider loading. |
 | [metrics.py](../../livekit-agents-next/livekit/agents/metrics.py) | 45 | Retain | `metrics.py`. Retain the v1 public provider metric records and log_metrics API; OTel/Prometheus collection stays separate. |
@@ -711,7 +710,7 @@ These source classifications are not additive savings; the exact target contains
 | [utils/audio.py](../../livekit-agents-next/livekit/agents/utils/audio.py) | 94 | Move | `utils/media.py`. SDK media helpers combine audio frame/file utilities, native audio decoding and image adaptation. |
 | [utils/codecs.py](../../livekit-agents-next/livekit/agents/utils/codecs.py) | 83 | Move | `utils/media.py`. AudioStreamDecoder is audio-only and already used by audio file iteration, so keep it in the same media helper owner. |
 | [utils/connection_pool.py](../../livekit-agents-next/livekit/agents/utils/connection_pool.py) | 201 | Move | `utils/aio.py`. Generic asynchronous pool reuse/TTL/resource closure belongs with async resource helpers. |
-| [utils/http_context.py](../../livekit-agents-next/livekit/agents/utils/http_context.py) | 367 | Retain | `utils/http_context.py`. Keep aiohttp request/session/SSL/WebSocket resource owner independent from generic pool primitives and ASGI server. |
+| [http/client.py](../../livekit-agents-next/livekit/agents/http/client.py) | 367 | Retain | `http/client.py`. Keep aiohttp request/session/SSL/WebSocket resource owner independent from generic pool primitives and ASGI server. |
 | [utils/images.py](../../livekit-agents-next/livekit/agents/utils/images.py) | 38 | Move | `utils/media.py`. Image encoder/frame adapter and audio codec adapters are one small SDK-media boundary, with clear audio and image sections. |
 | [utils/misc.py](../../livekit-agents-next/livekit/agents/utils/misc.py) | 97 | Merge | `utils/__init__.py`. Tiny miscellaneous functions/decorator form the utility root API instead of another import hop. |
 | [utils/participant.py](../../livekit-agents-next/livekit/agents/utils/participant.py) | 136 | Merge | `utils/__init__.py`. Participant/track waits are simple public utilities and fit in the root alongside existing helpers. |

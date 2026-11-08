@@ -97,17 +97,19 @@ When using this plugin outside of the LiveKit agent framework, it's important to
 3. If you prefer to provide your own HTTP session, you can pass it using the `http_session` parameter:
 
 ```python
-import aiohttp
+from livekit.agents import http
 
 async def with_custom_session():
-    async with aiohttp.ClientSession() as session:
+    session = http.HttpSession()
+    try:
         async with TTS(
             api_key="your_api_key",
             voice_uuid="your_voice_uuid",
             http_session=session
         ) as tts:
             # Use TTS...
-            # No need to manually close anything - context managers handle it all
+    finally:
+        await session.aclose()
 ```
 
 ## Implementation Details

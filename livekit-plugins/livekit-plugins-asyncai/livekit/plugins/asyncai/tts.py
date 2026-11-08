@@ -25,14 +25,12 @@ from dataclasses import dataclass, replace
 from typing import cast
 from urllib.parse import urlencode
 
-import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
+    http,
     tokenize,
     tts,
     utils,
@@ -80,7 +78,7 @@ class TTS(tts.TTS):
         encoding: TTSEncoding = "pcm_s16le",
         voice: str = TTSDefaultVoiceId,
         sample_rate: int = 32000,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         base_url: str = "https://api.async.com",
     ) -> None:
@@ -98,8 +96,8 @@ class TTS(tts.TTS):
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 32000.
             api_key (str, optional): The Async API key. If not provided, it will be
                 read from the ASYNCAI_API_KEY environment variable.
-            http_session (aiohttp.ClientSession | None, optional): An existing aiohttp
-                ClientSession to use. If not provided, a new session will be created.
+            http_session (http.HttpSession | None, optional): An existing HttpSession to
+                use. If not provided, the job's shared session is used.
             tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             base_url (str, optional): The base URL for the Async API. Defaults to "https://api.async.com".
         """
@@ -126,7 +124,7 @@ class TTS(tts.TTS):
             base_url=base_url,
         )
         self._session = http_session
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        self._pool = utils.ConnectionPool[http.WebSocket](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
             max_session_duration=300,
@@ -146,7 +144,7 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "AsyncAI"
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         session = self._ensure_session()
         query = urlencode({API_AUTH_HEADER: self._opts.api_key, API_VERSION_HEADER: API_VERSION})
         url = self._opts.get_ws_url(f"/text_to_speech/websocket/ws?{query}")
@@ -163,16 +161,16 @@ class TTS(tts.TTS):
 
         if self._opts.language is not None:
             init_payload["language"] = self._opts.language
-        ws = await utils.http_context.ws_connect(session, url, conn_options=conn_options)
+        ws = await session.ws_connect(url, conn_options=conn_options)
         await ws.send_str(json.dumps(init_payload))
         return ws
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_ws(self, ws: http.WebSocket) -> None:
         await ws.close()
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
@@ -247,7 +245,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self,
         *,
         sentence_tokenizer: tokenize.SentenceTokenizer,
-        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        pool: utils.ConnectionPool[http.WebSocket],
         opts: _TTSOptions,
         tts: TTS,
         conn_options: APIConnectOptions,
@@ -259,12 +257,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._pool = pool
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        if self._conn_options.read_timeout == 0:
-            # aiohttp reads a zero receive timeout as no limit
-            raise APIError(
-                "asyncai streaming cannot enforce read_timeout=0",
-                retryable=False,
-            )
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -279,9 +271,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         sent_tokenizer_stream = self._sentence_tokenizer.stream()
 
-        async def _sentence_stream_task(
-            ws: aiohttp.ClientWebSocketResponse, asyncai_context_id: str
-        ) -> None:
+        async def _sentence_stream_task(ws: http.WebSocket, asyncai_context_id: str) -> None:
             async for ev in sent_tokenizer_stream:
                 token_pkt: dict[str, object] = {}
                 token_pkt["transcript"] = ev.token + " "
@@ -308,25 +298,21 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             sent_tokenizer_stream.end_input()
 
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse, asyncai_context_id: str) -> None:
+        async def _recv_task(ws: http.WebSocket, asyncai_context_id: str) -> None:
             current_segment_id: str | None = None
             await input_sent_event.wait()
 
             while True:
                 msg = await ws.receive(timeout=self._conn_options.read_timeout)
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     raise APIStatusError(
                         "Async connection closed unexpectedly",
                         request_id=request_id,
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=msg.data,
                     )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected Async message type %s", msg.type)
                     continue
 
@@ -369,9 +355,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await utils.aio.cancel_and_wait(*tasks)
         except TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+        except (APIStatusError, APIConnectionError):
+            raise
         except Exception as e:
             raise APIConnectionError() from e

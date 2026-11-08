@@ -8,10 +8,9 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
-import aiohttp
 import pytest
 
-from livekit.agents import APIConnectOptions
+from livekit.agents import APIConnectOptions, http
 from livekit.plugins.xai import tts as xai_tts
 
 pytestmark = pytest.mark.plugin("xai")
@@ -31,7 +30,7 @@ class _FakeWebSocket:
         if packet["type"] == "text.done":
             await self._messages.put(
                 SimpleNamespace(
-                    type=aiohttp.WSMsgType.TEXT,
+                    type=http.WebSocketMessageType.TEXT,
                     data=json.dumps(
                         {
                             "type": "audio.delta",
@@ -42,7 +41,7 @@ class _FakeWebSocket:
             )
             await self._messages.put(
                 SimpleNamespace(
-                    type=aiohttp.WSMsgType.TEXT,
+                    type=http.WebSocketMessageType.TEXT,
                     data=json.dumps({"type": "audio.done"}),
                 )
             )

@@ -24,16 +24,15 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-import aiohttp
-
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
-    APITimeoutError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -108,7 +107,7 @@ class STT(stt.STT):
         profanity_filter: bool = False,
         redact: NotGivenOr[str | list[str]] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         base_url: str = "https://api.deepgram.com/v1/listen",
         numerals: bool = False,
         mip_opt_out: bool = False,
@@ -142,7 +141,7 @@ class STT(stt.STT):
                 list of values. Supported values: "pci", "numbers", "ssn", "true" (redact all).
                 See https://developers.deepgram.com/docs/redaction for details.
             api_key: Your Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY environment variable.
-            http_session: Optional aiohttp ClientSession to use for requests.
+            http_session: Optional HttpSession to use for requests.
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
             numerals: Whether to include numerals in the transcription. Defaults to False.
             mip_opt_out: Whether to take part in the model improvement program
@@ -233,9 +232,9 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Deepgram"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
@@ -268,10 +267,8 @@ class STT(stt.STT):
             recognize_config["language"] = config.language
 
         try:
-            async with utils.http_context.request(
-                self._ensure_session(),
-                "POST",
-                url=to_deepgram_url(
+            async with self._ensure_session().post(
+                to_deepgram_url(
                     recognize_config,
                     self._opts.endpoint_url,
                     websocket=False,
@@ -291,15 +288,8 @@ class STT(stt.STT):
                     use_punctuated_word=config.punctuate or config.smart_format,
                 )
 
-        except TimeoutError as e:
-            raise APITimeoutError() from e
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=None,
-                body=None,
-            ) from e
+        except APIError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -458,7 +448,7 @@ class SpeechStream(stt.RecognizeStream):
         opts: STTOptions,
         conn_options: APIConnectOptions,
         api_key: str,
-        http_session: aiohttp.ClientSession,
+        http_session: http.HttpSession,
         base_url: str,
     ) -> None:
         if opts.detect_language or opts.language is None:
@@ -583,7 +573,7 @@ class SpeechStream(stt.RecognizeStream):
     async def _run(self) -> None:
         closing_ws = False
 
-        async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def keepalive_task(ws: http.WebSocket) -> None:
             # if we want to keep the connection alive even if no audio is sent,
             # Deepgram expects a keepalive message.
             # https://developers.deepgram.com/reference/listen-live#stream-keepalive
@@ -592,7 +582,7 @@ class SpeechStream(stt.RecognizeStream):
                 while True:
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
                     await asyncio.sleep(5)
-            except (aiohttp.ClientError, ConnectionError) as e:
+            except APIConnectionError as e:
                 # when no audio is flowing this write is the only thing touching the
                 # socket, so it is where a drop surfaces first. if the close is
                 # expected just return; otherwise re-raise as a retryable APIError so
@@ -605,7 +595,7 @@ class SpeechStream(stt.RecognizeStream):
                 return
 
         @utils.log_exceptions(logger=logger)
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
 
             # forward audio to deepgram in chunks of 50ms
@@ -638,7 +628,7 @@ class SpeechStream(stt.RecognizeStream):
                 # tell deepgram we are done sending audio/inputs
                 closing_ws = True
                 await ws.send_str(SpeechStream._CLOSE_MSG)
-            except (aiohttp.ClientError, ConnectionError) as e:
+            except APIConnectionError as e:
                 # a mid-write socket drop surfaces here as a raw connection error.
                 # if the close is expected (aclose or the http session closing) just
                 # return; otherwise re-raise as a retryable APIError so _main_task
@@ -648,15 +638,18 @@ class SpeechStream(stt.RecognizeStream):
                 raise APIConnectionError("deepgram connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             while True:
-                msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                try:
+                    msg = await ws.receive()
+                except APIConnectionError:
+                    # the heartbeat closes the socket when a ping goes unanswered
+                    if closing_ws or self._session.closed:
+                        return
+                    raise
+
+                if msg.type == http.WebSocketMessageType.CLOSE:
                     # close is expected, see SpeechStream.aclose
                     # or when the agent session ends, the http session is closed
                     if closing_ws or self._session.closed:
@@ -666,19 +659,10 @@ class SpeechStream(stt.RecognizeStream):
                     raise APIStatusError(
                         message="deepgram connection closed unexpectedly",
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=f"{msg.data=}",
                     )
 
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    if closing_ws or self._session.closed:
-                        return
-
-                    # the heartbeat closes the socket when a ping goes unanswered,
-                    # and that surfaces here rather than as a close frame.
-                    # ws.exception() is the only place the reason survives.
-                    raise APIConnectionError("deepgram connection lost") from ws.exception()
-
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type != http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)
                     continue
 
@@ -687,7 +671,7 @@ class SpeechStream(stt.RecognizeStream):
                 except Exception:
                     logger.exception("failed to process deepgram message")
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
+        ws: http.WebSocket | None = None
 
         while True:
             conn_start_time = 0.0
@@ -736,7 +720,7 @@ class SpeechStream(stt.RecognizeStream):
                             self._on_audio_duration_report(remainder)
                         self._reported_duration = 0.0
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self) -> http.WebSocket:
         live_config: dict[str, object] = {
             "model": self._opts.model,
             "punctuate": self._opts.punctuate,
@@ -772,42 +756,24 @@ class SpeechStream(stt.RecognizeStream):
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
 
-        try:
-            ws = await utils.http_context.ws_connect(
-                self._session,
-                to_deepgram_url(
-                    live_config,
-                    base_url=self._opts.endpoint_url,
-                    websocket=True,
-                    keywords=self._opts.keywords,
-                    replace=self._opts.replace,
-                ),
-                headers={"Authorization": f"Token {self._api_key}"},
-                # without this, a silently dropped socket (a half-open TCP
-                # connection, no FIN/RST) is never noticed: recv_task parks on
-                # ws.receive() forever and the reconnect loop below, which is
-                # exception-driven, never runs. matches stt_v2.
-                heartbeat=30.0,
-                conn_options=self._conn_options,
-            )
-        except TimeoutError:
-            raise APIConnectionError("failed to connect to deepgram") from None
-        except aiohttp.ClientResponseError as e:
-            # RequestInfo carries the request headers, so chaining this error or
-            # formatting it puts the API key in the exception repr (#6739).
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
-        except Exception as e:
-            raise APIConnectionError(
-                f"failed to connect to deepgram ({type(e).__name__})"
-            ) from None
+        ws = await self._session.ws_connect(
+            to_deepgram_url(
+                live_config,
+                base_url=self._opts.endpoint_url,
+                websocket=True,
+                keywords=self._opts.keywords,
+                replace=self._opts.replace,
+            ),
+            headers={"Authorization": f"Token {self._api_key}"},
+            # without this, a silently dropped socket (a half-open TCP
+            # connection, no FIN/RST) is never noticed: recv_task parks on
+            # ws.receive() forever and the reconnect loop below, which is
+            # exception-driven, never runs. matches stt_v2.
+            heartbeat=30.0,
+            conn_options=self._conn_options,
+        )
 
-        ws_headers = {
-            k: v
-            for k, v in utils.http_context.websocket_headers(ws).items()
-            if k.startswith("dg-") or k == "Date"
-        }
+        ws_headers = {k: v for k, v in ws.headers.items() if k.startswith("dg-") or k == "Date"}
         logger.debug(
             "Established new Deepgram STT WebSocket connection:",
             extra={"headers": ws_headers},

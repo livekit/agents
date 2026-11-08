@@ -12,15 +12,13 @@ from pydantic import BaseModel, JsonValue, ValidationError
 if TYPE_CHECKING:
     from .avatar import VideoQuality
 
-import aiohttp
-
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
-    utils,
+    http,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,7 +61,7 @@ class LiveAvatarAPI:
         *,
         api_url: str = DEFAULT_API_URL,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        session: aiohttp.ClientSession | None = None,
+        session: http.HttpSession | None = None,
     ) -> None:
         resolved_api_key = api_key or os.getenv("LIVEAVATAR_API_KEY")
         if resolved_api_key is None:
@@ -74,9 +72,9 @@ class LiveAvatarAPI:
         self._conn_options = conn_options
         self._session = session
 
-    def http_session(self) -> aiohttp.ClientSession:
+    def http_session(self) -> http.HttpSession:
         if self._session is None:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     async def create_streaming_session(
@@ -158,7 +156,7 @@ class LiveAvatarAPI:
         for i in range(self._conn_options.max_retry + 1):
             try:
                 async with self.http_session().post(
-                    url=url, headers=headers, json=payload
+                    url, headers=headers, json=payload, conn_options=self._conn_options
                 ) as response:
                     if not response.ok:
                         text = await response.text()
@@ -168,14 +166,14 @@ class LiveAvatarAPI:
                             body=text,
                         )
                     return response_type.model_validate(await response.json())
-            except (ValidationError, JSONDecodeError, aiohttp.ContentTypeError) as exc:
+            except (ValidationError, JSONDecodeError) as exc:
                 raise APIConnectionError(
                     "LiveAvatar returned an invalid response", retryable=False
                 ) from exc
             except APIStatusError as e:
                 if not e.retryable or i >= self._conn_options.max_retry:
                     raise
-            except (TimeoutError, aiohttp.ClientError) as e:
+            except APIConnectionError as e:
                 logger.warning(
                     f"API request to {url} failed on attempt {i}",
                     extra={"error": str(e)},

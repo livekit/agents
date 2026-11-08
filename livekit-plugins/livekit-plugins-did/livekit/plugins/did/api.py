@@ -2,7 +2,6 @@ import asyncio
 import os
 from json import JSONDecodeError
 
-import aiohttp
 from pydantic import BaseModel, JsonValue, ValidationError
 
 from livekit.agents import (
@@ -12,9 +11,9 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     NotGivenOr,
+    http,
     utils,
 )
-from livekit.agents.utils import http_context
 
 from .errors import DIDException
 from .log import logger
@@ -33,7 +32,7 @@ class DIDAPI:
         api_url: NotGivenOr[str] = NOT_GIVEN,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        session: aiohttp.ClientSession | None = None,
+        session: http.HttpSession | None = None,
     ) -> None:
         did_api_key = api_key if utils.is_given(api_key) else os.getenv("DID_API_KEY")
         if not did_api_key:
@@ -42,7 +41,7 @@ class DIDAPI:
 
         self._api_url = api_url if utils.is_given(api_url) else DEFAULT_API_URL
         self._conn_options = conn_options
-        self._session = session or aiohttp.ClientSession()
+        self._session = session
 
     async def join_session(
         self,
@@ -67,9 +66,7 @@ class DIDAPI:
         num_attempts = self._conn_options.max_retry + 1
         for attempt in range(num_attempts):
             try:
-                async with http_context.request(
-                    self._session,
-                    "POST",
+                async with (self._session or http.http_session()).post(
                     url,
                     headers={
                         "Content-Type": "application/json",
@@ -86,13 +83,11 @@ class DIDAPI:
                             body=text,
                         )
                     return _JoinSessionResponse.model_validate(await response.json())
-            except (ValidationError, JSONDecodeError, aiohttp.ContentTypeError) as exc:
+            except (ValidationError, JSONDecodeError) as exc:
                 raise APIConnectionError(
                     "Did returned an invalid response", retryable=False
                 ) from exc
-            except APIStatusError:
-                raise
-            except (TimeoutError, aiohttp.ClientError) as e:
+            except APIConnectionError as e:
                 logger.warning(
                     f"D-ID API request failed (attempt {attempt + 1}/{num_attempts})",
                     extra={"error": str(e)},

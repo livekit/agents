@@ -37,7 +37,6 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
-import aiohttp
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from livekit.agents import (
@@ -46,6 +45,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    http,
     tts as tts_module,
     utils,
 )
@@ -128,7 +128,7 @@ class _TTSOptions:
 
 @dataclass
 class _WarmSocket:
-    ws: aiohttp.ClientWebSocketResponse
+    ws: http.WebSocket
     config: dict[str, JsonValue] | None
     last_activity: float
     conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -176,7 +176,7 @@ class Qwen3Backend:
         ref_text: str | None = None,
         word_timestamps: bool = False,
         extra_config: Mapping[str, JsonValue] | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """
         Args:
@@ -212,7 +212,7 @@ class Qwen3Backend:
             extra_config: Merged into ``session.config`` last, for server-side
                 fields newer than this plugin. Note that an unrecognized field
                 invalidates the whole config.
-            http_session: Optional aiohttp session to reuse.
+            http_session: Optional HttpSession to reuse.
 
         Raises:
             ValueError: If no API key or endpoint can be resolved, or if
@@ -340,15 +340,15 @@ class Qwen3Backend:
         config.update(o.extra_config)
         return config
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     async def acquire(
         self,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> tuple[aiohttp.ClientWebSocketResponse, dict[str, JsonValue] | None]:
+    ) -> tuple[http.WebSocket, dict[str, JsonValue] | None]:
         """Reuse the parked socket if live, else dial. Returns its applied config."""
         async with self._warm_lock:
             warm, self._warm = self._warm, None
@@ -363,19 +363,17 @@ class Qwen3Backend:
                 return warm.ws, warm.config
             await self._shutdown_ws(warm.ws, notify=False)
 
-        ws = await utils.http_context.ws_connect(
-            self._ensure_session(),
+        ws = await self._ensure_session().ws_connect(
             self._model_endpoint,
             conn_options=conn_options,
             headers={"Authorization": f"Api-Key {self._api_key}"},
             max_msg_size=_WS_MAX_MSG_SIZE,
-            compress=0,
         )
         return ws, None
 
     async def release(
         self,
-        ws: aiohttp.ClientWebSocketResponse,
+        ws: http.WebSocket,
         config: dict[str, JsonValue] | None,
         *,
         discard: bool,
@@ -449,7 +447,7 @@ class Qwen3Backend:
                 # redundant.
                 await self._shutdown_ws(warm.ws, notify=True)
 
-    async def _empty_flush(self, ws: aiohttp.ClientWebSocketResponse) -> bool:
+    async def _empty_flush(self, ws: http.WebSocket) -> bool:
         try:
             await ws.send_str(json.dumps({"type": "input.done"}))
             deadline = time.monotonic() + _KEEPALIVE_TIMEOUT
@@ -458,11 +456,11 @@ class Qwen3Backend:
                 if remaining <= 0:
                     return False
                 msg = await ws.receive(timeout=remaining)
-                if msg.type is aiohttp.WSMsgType.BINARY:
+                if msg.type is http.WebSocketMessageType.BINARY:
                     continue
-                if msg.type is not aiohttp.WSMsgType.TEXT:
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     return False
-                event = _decode_response(msg.data)
+                event = _decode_response(msg.text)
                 if event.type == "session.done":
                     return True
                 if event.type == "error":
@@ -472,7 +470,7 @@ class Qwen3Backend:
             logger.debug("keepalive failed (%s); dropping socket", e)
             return False
 
-    async def _shutdown_ws(self, ws: aiohttp.ClientWebSocketResponse, *, notify: bool) -> None:
+    async def _shutdown_ws(self, ws: http.WebSocket, *, notify: bool) -> None:
         with contextlib.suppress(Exception):
             if notify and not ws.closed:
                 await ws.send_str(json.dumps({"type": "session.close"}))
@@ -511,10 +509,6 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
             raise
         except TimeoutError as e:
             raise APITimeoutError() from e
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -561,11 +555,11 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
             while True:
                 msg = await ws.receive()
 
-                if msg.type is aiohttp.WSMsgType.BINARY:
+                if msg.type is http.WebSocketMessageType.BINARY:
                     if not segment_open:
                         open_segment()
-                    output_emitter.push(msg.data)
-                    segment_bytes += len(msg.data)
+                    output_emitter.push(msg.binary)
+                    segment_bytes += len(msg.binary)
                     # Audio counts as progress. The server only sends
                     # session.done once the whole utterance is synthesized, so
                     # Progress extends the read window while synthesis is pending;
@@ -573,18 +567,10 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
                     # the framework won't retry once audio has been pushed.
                     state.progress.set()
                     continue
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     raise APIConnectionError("Baseten closed the TTS websocket")
-                if msg.type is aiohttp.WSMsgType.ERROR:
-                    raise APIConnectionError(f"websocket error: {ws.exception()}")
-                if msg.type is not aiohttp.WSMsgType.TEXT:
-                    continue
 
-                event = _decode_response(msg.data)
+                event = _decode_response(msg.text)
                 etype = event.type
 
                 if etype == "audio.start":
@@ -639,10 +625,6 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
             raise
         except TimeoutError as e:
             raise APITimeoutError() from e
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
         except Exception as e:
             raise APIConnectionError() from e
         finally:
@@ -720,25 +702,21 @@ async def _control(
     api_key = api_key or os.environ.get("BASETEN_API_KEY")
     if not api_key:
         raise ValueError("Pass `api_key` or set BASETEN_API_KEY.")
-    async with aiohttp.ClientSession() as session:
-        async with await utils.http_context.ws_connect(
-            session,
+    async with http.open() as session:
+        ws = await session.ws_connect(
             model_endpoint,
             conn_options=DEFAULT_API_CONNECT_OPTIONS,
             headers={"Authorization": f"Api-Key {api_key}"},
             max_msg_size=_WS_MAX_MSG_SIZE,
-        ) as ws:
+        )
+        try:
             await ws.send_str(json.dumps(message))
-            try:
-                msg = await ws.receive(timeout=DEFAULT_API_CONNECT_OPTIONS.read_timeout)
-            except TimeoutError as e:
-                raise APITimeoutError("Qwen3 control read timed out", phase="read") from e
-            if msg.type is not aiohttp.WSMsgType.TEXT:
-                # .data is None on CLOSED, the close code on CLOSE, an exception
-                # on ERROR — json.loads would raise a bare TypeError and hide
-                # what actually went wrong.
+            msg = await ws.receive(timeout=DEFAULT_API_CONNECT_OPTIONS.read_timeout)
+            if msg.type is not http.WebSocketMessageType.TEXT:
                 raise RuntimeError(f"unexpected reply to {message.get('type')!r}: {msg.type.name}")
             return _JSON_OBJECT.validate_json(msg.data)
+        finally:
+            await ws.close()
 
 
 async def register_voice(

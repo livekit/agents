@@ -19,7 +19,6 @@ import time
 from dataclasses import dataclass
 from enum import Enum, auto
 
-import aiohttp
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
@@ -29,8 +28,8 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
-    APITimeoutError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -41,7 +40,7 @@ from livekit.agents.types import (
 from livekit.agents.voice.io import TranscriptChunk
 
 from .log import logger
-from .rtzrapi import DEFAULT_SAMPLE_RATE, RTZRConnectionError, RTZROpenAPIClient, RTZRStatusError
+from .rtzrapi import DEFAULT_SAMPLE_RATE, RTZROpenAPIClient, RTZRStatusError
 
 _DEFAULT_CHUNK_MS = 100
 _IDLE_TIMEOUT_SECONDS = 25.0
@@ -111,7 +110,7 @@ class STT(stt.STT):
         active_threshold: float = 0.80,
         use_punctuation: bool = False,
         keywords: list[str] | list[tuple[str, float]] | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -185,7 +184,7 @@ class SpeechStream(stt.RecognizeStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=params.sample_rate)
         self._params = params
         self._client = client
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._ws: http.WebSocket | None = None
         self._recv_task: asyncio.Task[None] | None = None
         self._state = _StreamState.IDLE
         self._connection_lock = asyncio.Lock()
@@ -193,7 +192,7 @@ class SpeechStream(stt.RecognizeStream):
         self._last_audio_at: float | None = None
         self._idle_task: asyncio.Task[None] | None = None
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self) -> http.WebSocket:
         config = self._client.build_config(
             model_name=self._params.model_name,
             domain=self._params.domain,
@@ -219,8 +218,6 @@ class SpeechStream(stt.RecognizeStream):
                 self._params.use_punctuation,
             )
             return ws
-        except TimeoutError as e:
-            raise APITimeoutError("WebSocket connection timeout") from e
         except RTZRStatusError as e:
             logger.error("RTZR API status error: %s", e)
             raise APIStatusError(
@@ -229,9 +226,6 @@ class SpeechStream(stt.RecognizeStream):
                 request_id=None,
                 body=None,
             ) from e
-        except RTZRConnectionError as e:
-            logger.error("RTZR API connection error: %s", e)
-            raise APIConnectionError("RTZR API connection failed") from e
 
     async def _run(self) -> None:
         send_task = asyncio.create_task(self._send_audio_task(), name="RTZR.send_audio")
@@ -446,12 +440,12 @@ class SpeechStream(stt.RecognizeStream):
         return events, in_speech, speech_started_at
 
     @utils.log_exceptions(logger=logger)
-    async def _recv_loop(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _recv_loop(self, ws: http.WebSocket) -> None:
         in_speech = False
         speech_started_at: float | None = None
 
         async for msg in ws:
-            if msg.type == aiohttp.WSMsgType.TEXT:
+            if msg.type == http.WebSocketMessageType.TEXT:
                 try:
                     data = _TRANSCRIPT.validate_json(msg.data)
                 except ValidationError as error:
@@ -465,14 +459,5 @@ class SpeechStream(stt.RecognizeStream):
                 for event in events:
                     self.send(event)
 
-            elif msg.type in (
-                aiohttp.WSMsgType.CLOSE,
-                aiohttp.WSMsgType.CLOSING,
-                aiohttp.WSMsgType.CLOSED,
-            ):
-                break
-            elif msg.type == aiohttp.WSMsgType.ERROR:
-                logger.error("WebSocket error: %s", ws.exception())
-                raise APIConnectionError("WebSocket error occurred")
             else:
                 logger.debug("Ignored WebSocket message type: %s", msg.type)

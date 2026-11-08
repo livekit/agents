@@ -6,14 +6,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import cast
 
-import aiohttp
-
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
-    APITimeoutError,
+    http,
     tts,
     utils,
 )
@@ -62,7 +61,7 @@ class TTS(tts.TTS):
         model: TTSModels | str = DEFAULT_ORPHEUS_MODEL,
         voice: str | None = None,
         api_key: str | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         # sample_rate is used by the audio framework for playback; not sent to the server
         sample_rate: int = 24000,
         # Simplismart TTS options
@@ -85,7 +84,7 @@ class TTS(tts.TTS):
             model: TTS model identifier.
             voice: Voice/speaker identifier.
             api_key: API key for authentication (defaults to ``SIMPLISMART_API_KEY`` env var).
-            http_session: Optional aiohttp session for reuse.
+            http_session: Optional HttpSession for reuse.
             sample_rate: Expected sample rate of the returned PCM audio (default: 24000).
                 Used by the framework for playback; not sent to the server.
             temperature: Controls output randomness.
@@ -143,9 +142,9 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "SimpliSmart"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     def synthesize(
@@ -175,7 +174,7 @@ class ChunkedStream(tts.ChunkedStream):
         opts: _TTSOptions,
         api_key: str,
         base_url: str,
-        ensure_session: Callable[[], aiohttp.ClientSession],
+        ensure_session: Callable[[], http.HttpSession],
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts = opts
@@ -217,9 +216,7 @@ class ChunkedStream(tts.ChunkedStream):
         logger.debug("TTS request to %s (model: %s)", self._base_url, self._opts.model)
 
         try:
-            async with utils.http_context.request(
-                self._ensure_session(),
-                "POST",
+            async with self._ensure_session().post(
                 self._base_url,
                 json=payload,
                 headers=headers,
@@ -242,19 +239,13 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type="audio/pcm",
                 )
 
-                async for audio_data, _ in resp.content.iter_chunks():
+                async for audio_data in resp.iter_bytes():
                     if audio_data:
                         output_emitter.push(audio_data)
 
                 output_emitter.flush()
 
-        except TimeoutError as e:
-            logger.error("Simplismart TTS API timeout: %s", e)
-            raise APITimeoutError("Simplismart TTS API request timed out") from e
-        except aiohttp.ClientError as e:
-            logger.error("Simplismart TTS API client error: %s", e)
-            raise APIConnectionError(f"Simplismart TTS API connection error: {e}") from e
-        except APIStatusError:
+        except APIError:
             raise
         except Exception as e:
             logger.error("Error during Simplismart TTS processing: %s", traceback.format_exc())

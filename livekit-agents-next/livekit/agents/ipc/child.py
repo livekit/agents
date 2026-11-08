@@ -31,6 +31,7 @@ from livekit import rtc
 from .. import _core, telemetry
 from .._generated.cli import LogLevel
 from .._generated.worker_ipc import StartJob
+from ..http import client as http_client
 from ..job import (
     JobContext,
     JobExecutorType,
@@ -41,7 +42,7 @@ from ..job import (
     callable_name,
 )
 from ..log import logger
-from ..utils import aio, http_context, log_exceptions
+from ..utils import aio, log_exceptions
 
 _T = TypeVar("_T")
 
@@ -189,10 +190,10 @@ class _JobProc:
         self._job_ctx._on_setup()
 
         job_ctx_token = _JobContextVar.set(self._job_ctx)
-        http_context._new_session_ctx()
+        http_client._new_session_ctx()
         # the core calls the steps below from its own tasks: user code gets the job's context
         # (get_job_context() and its http session) back
-        self._http_session = http_context._ContextVar.get()
+        self._http_session = http_client._ContextVar.get()
 
         try:
             # the core records the job's spans and runs each step in its span
@@ -204,7 +205,7 @@ class _JobProc:
             self._loop_monitor.stop()
 
             await self._job_ctx._on_cleanup()
-            await http_context._close_http_ctx()
+            await http_client._close_http_ctx()
             _JobContextVar.reset(job_ctx_token)
 
     # --- the steps the core runs -------------------------------------------------------
@@ -212,7 +213,7 @@ class _JobProc:
     def _in_job(self, awaitable: Awaitable[_T], name: str) -> asyncio.Task[_T]:
         ctx = contextvars.copy_context()
         ctx.run(_JobContextVar.set, self._job_ctx)
-        ctx.run(http_context._ContextVar.set, self._http_session)
+        ctx.run(http_client._ContextVar.set, self._http_session)
 
         async def run() -> _T:
             return await awaitable
@@ -225,12 +226,6 @@ class _JobProc:
             self._job_ctx.job.id, whole_process=self._executor_type == JobExecutorType.PROCESS
         )
         return self._in_job(self._args.job_entrypoint_fnc(self._job_ctx), "job_user_entrypoint")
-
-    async def _core_wait(self, task: asyncio.Task[None]) -> None:
-        await asyncio.shield(task)
-
-    async def _core_cancel(self, task: asyncio.Task[None]) -> None:
-        await aio.cancel_and_wait(task)
 
     async def _core_close_session(self) -> None:
         # every session of the job closes, so each one's spans end and reach the exporter

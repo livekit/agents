@@ -18,13 +18,11 @@ from dataclasses import dataclass, replace
 from typing import Literal
 from urllib.parse import urlparse
 
-import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
+    APIError,
     LanguageCode,
+    http,
     tts,
     utils,
 )
@@ -147,7 +145,7 @@ class TTS(tts.TTS):
         speech_endpoint: str | None = None,
         deployment_id: str | None = None,
         speech_auth_token: str | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
@@ -239,9 +237,9 @@ class TTS(tts.TTS):
         if is_given(lexicon_uri):
             self._opts.lexicon_uri = lexicon_uri
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     def synthesize(
@@ -267,7 +265,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
         options: _TTSOptions,
-        session_factory: Callable[[], aiohttp.ClientSession],
+        session_factory: Callable[[], http.HttpSession],
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
@@ -327,26 +325,17 @@ class ChunkedStream(tts.ChunkedStream):
         )
 
         try:
-            async with utils.http_context.request(
-                self._session_factory(),
-                "POST",
-                url=self._opts.get_endpoint_url(),
+            async with self._session_factory().post(
+                self._opts.get_endpoint_url(),
                 headers=headers,
                 data=self._build_ssml(),
                 conn_options=self._conn_options,
             ) as resp:
-                resp.raise_for_status()
-                async for data, _ in resp.content.iter_chunks():
+                await resp.raise_for_status()
+                async for data in resp.iter_bytes():
                     output_emitter.push(data)
 
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=None,
-                body=None,
-            ) from None
+        except APIError:
+            raise
         except Exception as e:
             raise APIConnectionError(str(e)) from e

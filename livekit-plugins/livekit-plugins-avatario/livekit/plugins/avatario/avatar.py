@@ -3,8 +3,6 @@ from __future__ import annotations
 import os
 from dataclasses import asdict, dataclass
 
-import aiohttp
-
 import livekit.rtc as rtc
 from livekit import api
 from livekit.agents import (
@@ -14,6 +12,7 @@ from livekit.agents import (
     NotGivenOr,
     VoiceSession,
     get_job_context,
+    http,
     utils,
 )
 from livekit.agents.job import _server_credentials
@@ -63,10 +62,10 @@ class AvatarSession(BaseAvatarSession):
                                          join the room. Defaults to "avatario-avatar-agent"
             avatar_participant_name: Name of the avatario participant that will join the
                                      room. Defaults to "avatario-avatar-agent"
-            conn_options: Connection options for the aiohttp session.
+            conn_options: Connection options for the Avatario API requests.
         """
         super().__init__()
-        self._http_session: aiohttp.ClientSession | None = None
+        self._http_session: http.HttpSession | None = None
         self._conn_options = conn_options
         video_info = video_info if utils.is_given(video_info) else self.VideoInfo()
         self._video_info = asdict(video_info)
@@ -102,9 +101,9 @@ class AvatarSession(BaseAvatarSession):
     def provider(self) -> str:
         return "avatario"
 
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
+    def _ensure_http_session(self) -> http.HttpSession:
         if self._http_session is None:
-            self._http_session = utils.http_context.http_session()
+            self._http_session = http.http_session()
 
         return self._http_session
 

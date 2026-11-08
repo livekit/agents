@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import aiohttp
-
 import livekit.rtc as rtc
 from livekit import api
 from livekit.agents import (
@@ -11,7 +9,7 @@ from livekit.agents import (
     NotGivenOr,
     VoiceSession,
     get_job_context,
-    utils,
+    http,
 )
 from livekit.agents.job import _server_credentials
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
@@ -40,7 +38,7 @@ class AvatarSession(BaseAvatarSession):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         super().__init__()
-        self._http_session: aiohttp.ClientSession | None = None
+        self._http_session: http.HttpSession | None = None
         self._conn_options = conn_options
         self.conversation_id: str | None = None
         self._pal_id = pal_id
@@ -63,9 +61,9 @@ class AvatarSession(BaseAvatarSession):
     def provider(self) -> str:
         return "tavus"
 
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
+    def _ensure_http_session(self) -> http.HttpSession:
         if self._http_session is None:
-            self._http_session = utils.http_context.http_session()
+            self._http_session = http.http_session()
 
         return self._http_session
 

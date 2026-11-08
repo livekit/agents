@@ -11,10 +11,8 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse, urlunparse
 
-import aiohttp
-
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIError, TokenUsage, llm, utils
+from livekit.agents import APIConnectionError, APIError, TokenUsage, http, llm, utils
 from livekit.agents.metrics import LLMMetrics, Metadata, RealtimeModelMetrics
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -160,7 +158,7 @@ class GPTLiveModel(llm.DuplexModel):
         service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         azure_deployment: str | None = None,
@@ -279,7 +277,7 @@ class GPTLiveModel(llm.DuplexModel):
         delegation: types.DelegationTarget = "responses",
         responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,
         service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> GPTLiveModel:
@@ -349,12 +347,12 @@ class GPTLiveModel(llm.DuplexModel):
     def provider(self) -> str:
         return urlparse(self._opts.base_url).netloc
 
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
+    def _ensure_http_session(self) -> http.HttpSession:
         if not self._http_session:
             try:
-                self._http_session = utils.http_context.http_session()
+                self._http_session = http.http_session()
             except RuntimeError:
-                self._http_session = aiohttp.ClientSession()
+                self._http_session = http.HttpSession()
                 self._http_session_owned = True
         return self._http_session
 
@@ -371,7 +369,7 @@ class GPTLiveModel(llm.DuplexModel):
 
     async def aclose(self) -> None:
         if self._http_session_owned and self._http_session:
-            await self._http_session.close()
+            await self._http_session.aclose()
 
 
 class GPTVoiceSession(
@@ -396,7 +394,7 @@ class GPTVoiceSession(
         *,
         options: _LiveOptions,
         provider_label: str,
-        session_factory: Callable[[], aiohttp.ClientSession],
+        session_factory: Callable[[], http.HttpSession],
     ) -> None:
         super().__init__(duplex_model)
         self._live_model = duplex_model
@@ -592,7 +590,7 @@ class GPTVoiceSession(
         self._usage_total = types.Usage()
         self._session_id = None
 
-    async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
+    async def _create_ws_conn(self) -> http.WebSocket:
         options = self._opts.conn_options
         if options.total_timeout is not None:
             # a live session has no operation that a total deadline could bound
@@ -603,8 +601,8 @@ class GPTVoiceSession(
         elif self._opts.entra_token:
             headers["Authorization"] = f"Bearer {self._opts.entra_token}"
         elif self._opts.api_key:
-            # Azure answers a bearer api key with a redirect to ?api-key=, which aiohttp does not
-            # follow for a websocket, so the key goes in its own header
+            # Azure answers a bearer api key with a redirect to ?api-key=, which is not
+            # followed for a websocket, so the key goes in its own header
             headers["api-key"] = self._opts.api_key
         if self._opts.service_tier:
             headers["OpenAI-Service-Tier"] = self._opts.service_tier
@@ -613,16 +611,11 @@ class GPTVoiceSession(
             logger.debug("connecting to GPT-Live API", extra={"lk.pii.url": url})
 
         t0 = time.perf_counter()
-        try:
-            ws = await utils.http_context.ws_connect(
-                self._session_factory(), url, conn_options=options, headers=headers
-            )
-            self._report_connection_acquired(time.perf_counter() - t0)
-            return ws
-        except (TimeoutError, aiohttp.ClientError):
-            raise APIConnectionError(f"{self._provider_label} connection error") from None
+        ws = await self._session_factory().ws_connect(url, conn_options=options, headers=headers)
+        self._report_connection_acquired(time.perf_counter() - t0)
+        return ws
 
-    async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
+    async def _run_ws(self, ws_conn: http.WebSocket) -> None:
         closing = False
 
         async def _close_ws() -> None:
@@ -686,21 +679,14 @@ class GPTVoiceSession(
 
         async def _recv_task() -> None:
             while True:
-                try:
-                    msg = await ws_conn.receive()
-                except (TimeoutError, aiohttp.ClientError, ConnectionError):
-                    raise APIConnectionError("GPT-Live receive failed") from None
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                msg = await ws_conn.receive()
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     if closing or self._session_closed_fut.done():
                         return
                     raise APIConnectionError(
                         f"{self._provider_label} connection closed unexpectedly"
                     )
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     continue
 
                 try:
@@ -744,16 +730,13 @@ class GPTVoiceSession(
             await ws_conn.close()
 
     async def _ws_send(
-        self, ws_conn: aiohttp.ClientWebSocketResponse, event: types.ClientEvent | dict[str, Any]
+        self, ws_conn: http.WebSocket, event: types.ClientEvent | dict[str, Any]
     ) -> None:
         raw = event if isinstance(event, dict) else event.model_dump(exclude_none=True)
         self.emit("openai_client_event_queued", raw)
         if lk_oai_debug and raw.get("type") != "session.input_audio.append":
             logger.debug("gpt-live client event", extra={"lk.pii.event": raw})
-        try:
-            await ws_conn.send_str(json.dumps(raw))
-        except (TimeoutError, aiohttp.ClientError, ConnectionError):
-            raise APIConnectionError("GPT-Live send failed") from None
+        await ws_conn.send_str(json.dumps(raw))
 
     # inbound events
 

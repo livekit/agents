@@ -5,10 +5,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 
-import aiohttp
 import pytest
 
-from livekit.agents import APIConnectOptions, APITimeoutError
+from livekit.agents import APIConnectOptions, APITimeoutError, http
 
 pytestmark = pytest.mark.unit
 
@@ -41,7 +40,7 @@ async def silent_upgrade() -> AsyncIterator[str]:
 
 @pytest.mark.parametrize("provider", ["elevenlabs", "soniox", "baseten", "gradium", "minimax"])
 async def test_silent_tts_upgrade_reports_read_timeout(provider: str, silent_upgrade: str) -> None:
-    async with aiohttp.ClientSession() as session:
+    async with http.open() as session:
         if provider == "elevenlabs":
             from livekit.plugins.elevenlabs import TTS
 
@@ -104,7 +103,7 @@ async def test_rtzr_silent_upgrade_reports_read_timeout(silent_upgrade: str) -> 
         write_timeout=None,
         read_timeout=0.02,
     )
-    async with aiohttp.ClientSession() as session:
+    async with http.open() as session:
         client = RTZROpenAPIClient("test", "test", http_session=session)
         client._token = {"access_token": "cached", "expire_at": time.time() + 10000}
         client._ws_base = silent_upgrade

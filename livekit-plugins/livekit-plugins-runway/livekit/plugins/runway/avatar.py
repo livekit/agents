@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 
-import aiohttp
 from pydantic import JsonValue, TypeAdapter
 
 import livekit.rtc as rtc
@@ -18,10 +17,10 @@ from livekit.agents import (
     NotGivenOr,
     VoiceSession,
     get_job_context,
-    utils,
+    http,
 )
 from livekit.agents.job import _server_credentials
-from livekit.agents.utils import http_context, is_given
+from livekit.agents.utils import is_given
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.events import CloseEvent
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
@@ -83,7 +82,7 @@ class AvatarSession(BaseAvatarSession):
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
-        self._http_session: aiohttp.ClientSession | None = None
+        self._http_session: http.HttpSession | None = None
         self._conn_options = conn_options
         self._room: rtc.Room | None = None
         self._realtime_session_id: str | None = None
@@ -97,9 +96,9 @@ class AvatarSession(BaseAvatarSession):
     def provider(self) -> str:
         return "runway"
 
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
+    def _ensure_http_session(self) -> http.HttpSession:
         if self._http_session is None:
-            self._http_session = utils.http_context.http_session()
+            self._http_session = http.http_session()
         return self._http_session
 
     async def start(
@@ -170,9 +169,7 @@ class AvatarSession(BaseAvatarSession):
         async with self._conn_options.total_deadline():
             for attempt in range(self._conn_options.max_retry + 1):
                 try:
-                    async with http_context.request(
-                        self._ensure_http_session(),
-                        "POST",
+                    async with self._ensure_http_session().post(
                         f"{self._api_url}/v1/realtime_sessions",
                         headers={
                             "Authorization": f"Bearer {self._api_key}",
@@ -255,9 +252,7 @@ class AvatarSession(BaseAvatarSession):
             logger.warning("could not cancel Runway realtime session; no session id available")
             return
         try:
-            async with http_context.request(
-                self._ensure_http_session(),
-                "DELETE",
+            async with self._ensure_http_session().delete(
                 f"{self._api_url}/v1/realtime_sessions/{session_id}",
                 headers={
                     "Authorization": f"Bearer {self._api_key}",

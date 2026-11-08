@@ -20,7 +20,7 @@ documentation, and examples.
 
 import typing
 
-from . import cli, inference, llm, metrics, stt, tokenize, tts, utils, voice
+from . import cli, http, inference, llm, metrics, stt, tokenize, tts, utils, voice
 from ._bindings import (
     APIConnectionError,
     APIError,
@@ -229,6 +229,7 @@ __all__ = [
     "DEFAULT_API_CONNECT_OPTIONS",
     "io",
     "cli",
+    "http",
     "llm",
     "metrics",
     "stt",

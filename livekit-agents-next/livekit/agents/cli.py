@@ -21,12 +21,11 @@ from ._generated.cli import (
     LogLevel,
     LogRecord,
 )
-from ._generated.job_records import RunningJobInfo
 from ._generated.worker_options import ProcessOptions
+from .http import client as http_client
 from .job import JobExecutorType
-from .log import DEV_LEVEL, _add_global_log_fields, logger
-from .utils import http_context
-from .worker import AgentServer, Plugin
+from .log import _add_global_log_fields, logger
+from .worker import AgentServer
 
 __all__ = ["run_app"]
 
@@ -51,7 +50,7 @@ NOISY_LOGGERS = [
 
 def run_app(server: AgentServer) -> None:
     """Launch an explicitly supplied server through the same command interface."""
-    http_context._export_ca_paths()
+    http_client._export_ca_paths()
     if status := _launch(sys.argv[1:], server):
         raise SystemExit(status)
 
@@ -192,16 +191,9 @@ def setup_logging(log_level: LogLevel) -> logging.Handler:
         noisy = logging.getLogger(name)
         if noisy.level == logging.NOTSET:
             noisy.setLevel(logging.WARN)
-    if logger.level == logging.NOTSET:
-        logger.setLevel(level)
-
-    def _plugin_level(plugin: Plugin) -> None:
-        if plugin.logger is not None and plugin.logger.level == logging.NOTSET:
-            plugin.logger.setLevel(level)
-
-    for plugin in Plugin.registered_plugins:
-        _plugin_level(plugin)
-    Plugin.emitter.on("plugin_registered", _plugin_level)
+    for framework in (logger, logging.getLogger("livekit.plugins")):
+        if framework.level == logging.NOTSET:
+            framework.setLevel(level)
     return handler
 
 
@@ -263,7 +255,7 @@ async def _serve(
             config.ws_url,
             config.api_key,
             config.api_secret,
-            _DevServer(server),
+            server._ensure_runtime(),
         )
         channel = asyncio.ensure_future(dev)
     try:
@@ -304,25 +296,6 @@ def _close_loop(loop: asyncio.AbstractEventLoop, shutdown: _core.Shutdown) -> No
     failures = [result for result in results if isinstance(result, Exception)]
     if failures:
         raise ExceptionGroup("event-loop task cleanup failed", failures)
-
-
-class _DevServer:
-    """The worker as the core's dev channel sees it: its running jobs as the protocol's
-    fields."""
-
-    def __init__(self, server: AgentServer) -> None:
-        self._server = server
-
-    def _core_running_jobs(self) -> list[RunningJobInfo]:
-        return self._server._active_jobs
-
-    async def _core_reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
-        """The jobs a dev reload carried over, on this server and a fresh token: relaunched."""
-        for info in jobs:
-            extra = {"job_id": info.job.id, "agent_name": info.job.agent_name}
-            logger.log(DEV_LEVEL, "reloading job", extra=extra)
-            assert self._server._jobs is not None
-            await self._server._jobs.launch(info)
 
 
 # --- the console -------------------------------------------------------------------------------

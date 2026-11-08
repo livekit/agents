@@ -18,14 +18,13 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
     APIStatusError,
     APITimeoutError,
+    http,
     tts,
     utils,
 )
@@ -59,7 +58,7 @@ class TTS(tts.TTS):
         model: TTSModels | str = "canopylabs/orpheus-v1-english",
         voice: TTSVoices | str = "autumn",
         api_key: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """
         Create a new instance of Groq TTS.
@@ -106,9 +105,9 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Groq"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
@@ -150,7 +149,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
         options: _TTSOptions,
-        session_factory: Callable[[], aiohttp.ClientSession],
+        session_factory: Callable[[], http.HttpSession],
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
@@ -160,9 +159,7 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         api_url = f"{self._opts.base_url}/audio/speech"
         try:
-            async with utils.http_context.request(
-                self._session_factory(),
-                "POST",
+            async with self._session_factory().post(
                 api_url,
                 headers={
                     "Authorization": f"Bearer {self._opts.api_key}",
@@ -176,7 +173,7 @@ class ChunkedStream(tts.ChunkedStream):
                 },
                 conn_options=self._conn_options,
             ) as resp:
-                resp.raise_for_status()
+                await resp.raise_for_status()
 
                 if not resp.content_type.startswith("audio"):
                     content = await resp.text()
@@ -189,15 +186,13 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type="audio/wav",
                 )
 
-                async for data, _ in resp.content.iter_chunks():
+                async for data in resp.iter_bytes():
                     output_emitter.push(data)
 
                 output_emitter.flush()
         except TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+        except (APIStatusError, APIConnectionError):
+            raise
         except Exception as e:
             raise APIConnectionError() from e

@@ -40,9 +40,10 @@ from ._generated.public_job import *  # noqa: F403
 from ._generated.room_io import DEFAULT_PARTICIPANT_KINDS
 from ._generated.telemetry import ReportJob, SessionReport as SessionReport
 from ._generated.types import ATTRIBUTE_SIMULATOR_DISPATCH
+from .http import client as http_client
 from .log import logger
 from .types import NotGivenOr
-from .utils import http_context, is_given, wait_for_participant
+from .utils import is_given, wait_for_participant
 from .version import __version__
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
@@ -248,23 +249,6 @@ class JobContext:
             self._sessions.append(session)
         return self._sessions[0] is session
 
-    def _core_on_shutdown(self, session: VoiceSession) -> None:
-        from .voice.events import CloseReason
-
-        # the native close, run in the shutdown's span (a framework callback opens none of its own)
-        self._run.add_shutdown_callback(
-            functools.partial(session._native.aclose, CloseReason.JOB_SHUTDOWN.value),
-            takes_reason=False,
-            framework=True,
-            name="VoiceSession.aclose",
-        )
-
-    def _core_on_avatar_shutdown(self, close: Callable[[], Coroutine[None, None, None]]) -> None:
-        # an avatar's aclose, run in the shutdown's span like the session's close
-        self._run.add_shutdown_callback(
-            close, takes_reason=False, framework=True, name="AvatarSession.aclose"
-        )
-
     @property
     def session_directory(self) -> Path:
         return Path(self._session_directory)
@@ -329,7 +313,8 @@ class JobContext:
             env.get("LIVEKIT_URL"),
             env.get("LIVEKIT_API_KEY"),
             env.get("LIVEKIT_API_SECRET"),
-            session=http_context.http_session(),
+            # livekit-api only takes an aiohttp session: the job's, from inside the framework
+            session=http_client.http_session()._pool.client(),
         )
 
     @property
@@ -568,7 +553,7 @@ class JobContext:
                     semconv.LK_ROOM_REMOTE_PARTICIPANT_COUNT: len(self._room.remote_participants),
                 }
             )
-        telemetry._trace_rpcs(self._room.local_participant)
+        self._room.local_participant.add_rpc_interceptor(_core._core_RpcTracing(self._run))
 
         # a simulator leaving ends the job; the agent under test may add other participants
         self._room.on(

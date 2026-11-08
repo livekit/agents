@@ -10,7 +10,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Literal, Required
 
-import aiohttp
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import TypedDict
 
@@ -24,6 +23,7 @@ from livekit.agents import (
     NotGivenOr,
     VoiceSession,
     get_job_context,
+    http,
     utils,
 )
 from livekit.agents.job import _server_credentials
@@ -260,8 +260,8 @@ class AvatarSession(BaseAvatarSession):
             self._msg_ch.send_nowait(msg)
 
     async def _main_task(self) -> None:
-        ws_conn = await utils.http_context.ws_connect(
-            self._api.http_session(), self._ws_url, conn_options=self._conn_options
+        ws_conn = await self._api.http_session().ws_connect(
+            self._ws_url, conn_options=self._conn_options
         )
         closing = False
         ping_interval = utils.aio.interval(KEEP_ALIVE_INTERVAL)
@@ -369,11 +369,7 @@ class AvatarSession(BaseAvatarSession):
         async def _recv_task() -> None:
             while True:
                 msg = await ws_conn.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     if closing:
                         return
                     if self._is_sandbox:

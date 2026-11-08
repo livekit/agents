@@ -27,10 +27,9 @@ from enum import Enum
 from typing import Any, Literal, cast, get_args
 from urllib.parse import urljoin
 
-import aiohttp
 from pydantic import TypeAdapter
 
-from livekit.agents import ProviderAttempts, tokenize, tts, utils
+from livekit.agents import ProviderAttempts, http, tokenize, tts, utils
 from livekit.agents._bindings import APIConnectionError, APIError, APIStatusError, APITimeoutError
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -179,7 +178,7 @@ class _InworldConnection:
 
     def __init__(
         self,
-        session: aiohttp.ClientSession,
+        session: http.HttpSession,
         ws_url: str,
         authorization: str,
         on_capacity_available: Callable[[], None] | None = None,
@@ -188,7 +187,7 @@ class _InworldConnection:
         self._ws_url = ws_url
         self._authorization = authorization
         self._on_capacity_available = on_capacity_available
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._ws: http.WebSocket | None = None
 
         # Context pool
         self._contexts: dict[str, _ContextInfo] = {}
@@ -262,8 +261,7 @@ class _InworldConnection:
 
             url = urljoin(self._ws_url, "/tts/v1/voice:streamBidirectional")
             request_id = str(uuid.uuid4())
-            self._ws = await utils.http_context.ws_connect(
-                self._session,
+            self._ws = await self._session.ws_connect(
                 url,
                 headers={
                     "Authorization": self._authorization,
@@ -455,19 +453,11 @@ class _InworldConnection:
         """Process inbound messages and route to correct context."""
         try:
             while not self._closed and self._ws:
-                try:
-                    msg = await self._ws.receive()
-                except TimeoutError:
-                    continue
-
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                msg = await self._ws.receive()
+                if msg.type == http.WebSocketMessageType.CLOSE:
                     break
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type != http.WebSocketMessageType.TEXT:
                     continue
 
                 data = json.loads(msg.data)
@@ -685,7 +675,7 @@ class _ConnectionPool:
 
     def __init__(
         self,
-        session: aiohttp.ClientSession,
+        session: http.HttpSession,
         ws_url: str,
         authorization: str,
         max_connections: int = DEFAULT_MAX_CONNECTIONS,
@@ -881,7 +871,7 @@ class TTS(tts.TTS):
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
         base_url: str = DEFAULT_URL,
         ws_url: str = DEFAULT_WS_URL,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         retain_format: NotGivenOr[bool] = NOT_GIVEN,
         max_connections: int = DEFAULT_MAX_CONNECTIONS,
@@ -928,7 +918,7 @@ class TTS(tts.TTS):
                 Defaults to "https://api.inworld.ai/".
             ws_url (str, optional): The WebSocket URL for streaming TTS.
                 Defaults to "wss://api.inworld.ai/".
-            http_session (aiohttp.ClientSession, optional): The HTTP session to use.
+            http_session (http.HttpSession, optional): The HTTP session to use.
             tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use for streaming.
                 Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             retain_format (bool, optional): Whether to retain the format of the text when tokenizing.
@@ -1123,9 +1113,9 @@ class TTS(tts.TTS):
         if is_given(max_buffer_delay_ms):
             self._opts.max_buffer_delay_ms = max_buffer_delay_ms
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
@@ -1225,7 +1215,7 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         opts: _TTSOptions,
-        get_session: Callable[[], aiohttp.ClientSession],
+        get_session: Callable[[], http.HttpSession],
         base_url: str,
         authorization: str,
         input_text: str,
@@ -1265,9 +1255,7 @@ class ChunkedStream(tts.ChunkedStream):
                 body_params["deliveryMode"] = self._opts.delivery_mode
             body_params["timestampTransportStrategy"] = self._opts.timestamp_transport_strategy
 
-            async with utils.http_context.request(
-                self._get_session(),
-                "POST",
+            async with self._get_session().post(
                 urljoin(self._base_url, "/tts/v1/voice:stream"),
                 headers={
                     "Authorization": self._authorization,
@@ -1276,10 +1264,8 @@ class ChunkedStream(tts.ChunkedStream):
                 },
                 json=body_params,
                 conn_options=self._conn_options,
-                # large read_bufsize to avoid `ValueError: Chunk too big`
-                read_bufsize=10 * 1024 * 1024,
             ) as resp:
-                resp.raise_for_status()
+                await resp.raise_for_status()
 
                 request_id = utils.shortuuid()
                 output_emitter.initialize(
@@ -1289,7 +1275,7 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=self._opts.mime_type,
                 )
 
-                async for raw_line in resp.content:
+                async for raw_line in resp.iter_lines():
                     line = raw_line.strip()
                     if not line:
                         continue
@@ -1328,10 +1314,8 @@ class ChunkedStream(tts.ChunkedStream):
                         )
         except TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=x_request_id, body=None
-            ) from None
+        except APIError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 

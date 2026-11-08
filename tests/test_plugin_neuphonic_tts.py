@@ -28,12 +28,11 @@ from __future__ import annotations
 import base64
 import json
 
-import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectOptions
+from livekit.agents import APIConnectOptions, http
 from livekit.plugins.neuphonic import TTS
 
 pytestmark = pytest.mark.plugin("neuphonic")
@@ -91,7 +90,7 @@ async def test_null_sse_audio_keeps_synthesis_successful() -> None:
 
     app = web.Application()
     app.router.add_post("/sse/speak/en", speak)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         provider = TTS(
             api_key="test", base_url=str(server.make_url("/")).rstrip("/"), http_session=session
         )

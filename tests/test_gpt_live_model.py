@@ -11,13 +11,19 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
-import aiohttp
 import numpy as np
 import pytest
 from aiohttp import web
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, APIError, llm
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIError,
+    http,
+    llm,
+    redacted_cause,
+)
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
 from livekit.plugins.openai.realtime import gpt_live_model
 from livekit.plugins.openai.realtime.gpt_live_model import (
@@ -79,13 +85,15 @@ class _LifecycleWS:
         self.start = start
         self.disconnect_on_start = disconnect_on_start
         self.sent: list[dict[str, Any]] = []
-        self.incoming: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
+        self.incoming: asyncio.Queue[http.WebSocketMessage] = asyncio.Queue()
         self.started = asyncio.Event()
         self.close_requested = asyncio.Event()
         self.closed = asyncio.Event()
 
     def emit(self, event: dict[str, Any]) -> None:
-        self.incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(event), ""))
+        self.incoming.put_nowait(
+            http.WebSocketMessage(http.WebSocketMessageType.TEXT, json.dumps(event))
+        )
 
     async def send_str(self, data: str) -> None:
         event = json.loads(data)
@@ -99,12 +107,12 @@ class _LifecycleWS:
         elif event["type"] == "session.close":
             self.close_requested.set()
 
-    async def receive(self) -> aiohttp.WSMessage:
+    async def receive(self) -> http.WebSocketMessage:
         return await self.incoming.get()
 
     async def close(self) -> None:
         self.closed.set()
-        self.incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, ""))
+        self.incoming.put_nowait(http.WebSocketMessage(http.WebSocketMessageType.CLOSE, ""))
 
 
 def _chat_ctx() -> llm.ChatContext:
@@ -573,7 +581,7 @@ async def test_a_malformed_server_event_is_a_final_protocol_error(
     try:
         await session._update_session()
         await asyncio.wait_for(ws.started.wait(), timeout=1)
-        ws.incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, "{not json", ""))
+        ws.incoming.put_nowait(http.WebSocketMessage(http.WebSocketMessageType.TEXT, "{not json"))
         with pytest.raises(APIError, match="malformed"):
             await asyncio.wait_for(asyncio.shield(session._main_atask), timeout=1)
         assert [e.recoverable for e in errors] == [False]
@@ -651,7 +659,8 @@ async def test_transport_errors_do_not_expose_provider_payloads(
     ws = _LifecycleWS()
 
     async def fail(*args: Any, **kwargs: Any) -> Any:
-        raise aiohttp.ClientConnectionError(private)
+        # what the http layer raises for a transport failure
+        raise APIConnectionError("websocket failed") from redacted_cause(ConnectionError(private))
 
     async def connect(self: GPTVoiceSession) -> _LifecycleWS:
         return ws
@@ -664,7 +673,7 @@ async def test_transport_errors_do_not_expose_provider_payloads(
         monkeypatch.setattr(
             model,
             "_ensure_http_session",
-            lambda: SimpleNamespace(ws_connect=fail, trace_configs=[]),
+            lambda: SimpleNamespace(ws_connect=fail),
         )
     else:
         monkeypatch.setattr(ws, "send_str" if operation == "send" else "receive", fail)
@@ -1753,7 +1762,7 @@ async def test_with_azure_connects_to_the_v1_sessions_path_with_an_api_key_heade
     endpoint_path: str,
 ) -> None:
     """Every endpoint form Azure hands out reaches /openai/v1/live/sessions: the service 404s
-    /openai/live/sessions, and answers a bearer api key with a redirect aiohttp won't follow."""
+    /openai/live/sessions, and answers a bearer api key with a redirect a websocket won't follow."""
     async with _live_server() as (base, seen):
         model = GPTLiveModel.with_azure(
             azure_deployment="my-live",

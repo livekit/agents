@@ -21,8 +21,8 @@ import os
 import uuid
 import weakref
 from dataclasses import dataclass
+from urllib.parse import urlencode
 
-import aiohttp
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from livekit import rtc
@@ -33,6 +33,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -105,7 +106,7 @@ class STT(stt.STT):
         smart_turn_timeout: NotGivenOr[int] = NOT_GIVEN,
         keyterm: NotGivenOr[list[str]] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """Create a new instance of xAI STT.
 
@@ -120,7 +121,7 @@ class STT(stt.STT):
             smart_turn_timeout: Maximum silence in milliseconds (1-5000) before an utterance-final event is forced even when Smart Turn predicts the speaker is continuing.
             keyterm: Key terms/phrases (max 100, 50 chars each) to bias transcription accuracy toward.
             api_key: Your xAI API key. If not provided, will look for XAI_API_KEY environment variable.
-            http_session: Optional aiohttp ClientSession to use for requests.
+            http_session: Optional HttpSession to use for requests.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -158,9 +159,9 @@ class STT(stt.STT):
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
@@ -172,7 +173,7 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         lang = language if is_given(language) else self._opts.language
-        form = aiohttp.FormData()
+        form = http.FormData()
         form.add_field(
             "file",
             rtc.combine_audio_frames(buffer).to_wav_bytes(),
@@ -183,10 +184,8 @@ class STT(stt.STT):
         form.add_field("format", "true")
 
         try:
-            async with utils.http_context.request(
-                self._ensure_session(),
-                "POST",
-                url=XAI_REST_URL,
+            async with self._ensure_session().post(
+                XAI_REST_URL,
                 data=form,
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
@@ -194,18 +193,14 @@ class STT(stt.STT):
                 },
                 conn_options=conn_options,
             ) as res:
+                await res.raise_for_status()
                 return _prerecorded_transcription_to_speech_event(
                     await res.json(), enable_diarization=self._opts.enable_diarization
                 )
         except TimeoutError as e:
             raise APITimeoutError() from e
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=None,
-                body=None,
-            ) from e
+        except (APIConnectionError, APIStatusError):
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -294,7 +289,7 @@ class SpeechStream(stt.RecognizeStream):
         opts: STTOptions,
         conn_options: APIConnectOptions,
         api_key: str,
-        http_session: aiohttp.ClientSession,
+        http_session: http.HttpSession,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
@@ -357,7 +352,7 @@ class SpeechStream(stt.RecognizeStream):
         closing_ws = False
 
         @utils.log_exceptions(logger=logger)
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
 
             await self._server_ready.wait()
@@ -385,31 +380,23 @@ class SpeechStream(stt.RecognizeStream):
             closing_ws = True
 
         @utils.log_exceptions(logger=logger)
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             while True:
-                msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                # a heartbeat timeout raises APIConnectionError here, so _main_task reconnects
+                try:
+                    msg = await ws.receive()
+                except APIConnectionError:
+                    if closing_ws or self._session.closed:
+                        return
+                    raise
+                if msg.type == http.WebSocketMessageType.CLOSE:
                     if closing_ws or self._session.closed:
                         return
 
                     raise APIStatusError(message="xAI connection closed unexpectedly")
 
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    if closing_ws or self._session.closed:
-                        return
-                    # The heartbeat closes the socket when a ping goes unanswered, and
-                    # that arrives here rather than as a close frame. Raising a
-                    # retryable error here (instead of logging and waiting for the
-                    # CLOSED that follows) lets _main_task reconnect with the reason
-                    # attached; ws.exception() is the only place it survives.
-                    raise APIConnectionError("xAI connection lost") from ws.exception()
-
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type != http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected xAI message type %s", msg.type)
                     continue
 
@@ -418,7 +405,7 @@ class SpeechStream(stt.RecognizeStream):
                 except Exception:
                     logger.exception("failed to process xAI message")
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
+        ws: http.WebSocket | None = None
 
         while True:
             try:
@@ -453,7 +440,7 @@ class SpeechStream(stt.RecognizeStream):
                 if ws is not None:
                     await ws.close()
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self) -> http.WebSocket:
         # keyterm may repeat, so params is a list of pairs rather than a dict
         params = [
             ("encoding", "pcm"),
@@ -471,30 +458,16 @@ class SpeechStream(stt.RecognizeStream):
             params.append(("smart_turn_timeout", str(self._opts.smart_turn_timeout)))
         if is_given(self._opts.keyterm):
             params.extend(("keyterm", term) for term in self._opts.keyterm)
-        try:
-            ws = await utils.http_context.ws_connect(
-                self._session,
-                XAI_WEBSOCKET_URL,
-                headers={"Authorization": f"Bearer {self._api_key}"},
-                params=params,
-                # Without this a silently dropped socket (half-open TCP, no FIN/RST)
-                # is never noticed: recv_task parks on ws.receive() forever, and the
-                # retry in _main_task only runs when something raises. Matches the
-                # Deepgram and Muse STT plugins.
-                heartbeat=30.0,
-                conn_options=self._conn_options,
-            )
-        except TimeoutError:
-            raise APIConnectionError("failed to connect to xAI") from None
-        except aiohttp.ClientResponseError as e:
-            # RequestInfo carries the request headers, so chaining this error or
-            # formatting it puts the API key in the exception repr (#6739).
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
-        except Exception as e:
-            raise APIConnectionError(f"failed to connect to xAI ({type(e).__name__})") from None
-        return ws
+        return await self._session.ws_connect(
+            f"{XAI_WEBSOCKET_URL}?{urlencode(params)}",
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            # Without this a silently dropped socket (half-open TCP, no FIN/RST)
+            # is never noticed: recv_task parks on ws.receive() forever, and the
+            # retry in _main_task only runs when something raises. Matches the
+            # Deepgram and Muse STT plugins.
+            heartbeat=30.0,
+            conn_options=self._conn_options,
+        )
 
     def _on_audio_duration_report(self, duration: float) -> None:
         self.send(

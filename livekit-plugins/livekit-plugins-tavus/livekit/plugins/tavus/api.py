@@ -3,7 +3,6 @@ import os
 from json import JSONDecodeError
 from typing import TypeVar
 
-import aiohttp
 from pydantic import BaseModel, JsonValue, ValidationError
 
 from livekit.agents import (
@@ -13,9 +12,9 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     NotGivenOr,
+    http,
     utils,
 )
-from livekit.agents.utils import http_context
 
 from .log import logger
 
@@ -49,7 +48,7 @@ class TavusAPI:
         api_url: NotGivenOr[str] = NOT_GIVEN,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        session: aiohttp.ClientSession | None = None,
+        session: http.HttpSession | None = None,
     ) -> None:
         tavus_api_key = api_key or os.getenv("TAVUS_API_KEY")
         if tavus_api_key is None:
@@ -58,7 +57,7 @@ class TavusAPI:
 
         self._api_url = api_url or DEFAULT_API_URL
         self._conn_options = conn_options
-        self._session = session or aiohttp.ClientSession()
+        self._session = session or http.HttpSession()
 
     async def create_conversation(
         self,
@@ -141,9 +140,7 @@ class TavusAPI:
         async with self._conn_options.total_deadline():
             for attempt in range(self._conn_options.max_retry + 1):
                 try:
-                    async with http_context.request(
-                        self._session,
-                        "POST",
+                    async with self._session.post(
                         f"{self._api_url}/{endpoint}",
                         headers={
                             "Content-Type": "application/json",
@@ -159,7 +156,7 @@ class TavusAPI:
                             )
                         try:
                             return response_type.model_validate(await response.json())
-                        except (ValidationError, JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        except (ValidationError, JSONDecodeError) as e:
                             # Tavus already accepted the POST; retrying could create a duplicate.
                             raise APIConnectionError(
                                 "Tavus returned an invalid response", retryable=False
@@ -175,7 +172,9 @@ class TavusAPI:
                     if attempt >= self._conn_options.max_retry:
                         raise
                     await asyncio.sleep(self._conn_options.retry_interval)
-                except (TimeoutError, aiohttp.ClientError) as e:
+                except APIConnectionError as e:
+                    if not e.retryable:
+                        raise
                     logger.warning(
                         "failed to call tavus api", extra={"attempt": attempt + 1, "error": str(e)}
                     )

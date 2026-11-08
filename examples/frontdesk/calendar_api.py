@@ -10,9 +10,7 @@ from typing import Protocol
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
-import aiohttp
-
-from livekit.agents.utils import http_context
+from livekit.agents import http
 
 TIMEZONE = ZoneInfo("UTC")
 SLOT_MINUTES = 30
@@ -101,9 +99,9 @@ class CalComCalendar:
         self._event_id: int | None = None
         self.appointments: list[Appointment] = []
         try:
-            self._http = http_context.http_session()
+            self._http = http.http_session()
         except RuntimeError:
-            self._http = aiohttp.ClientSession()
+            self._http = http.HttpSession()
 
     def now(self) -> datetime.datetime:
         return datetime.datetime.now(TIMEZONE)
@@ -116,13 +114,13 @@ class CalComCalendar:
         if self._event_id is not None:
             return self._event_id
         async with self._http.get(CAL_COM + "me/", headers=self._headers("2024-06-14")) as resp:
-            resp.raise_for_status()
+            await resp.raise_for_status()
             username = (await resp.json())["data"]["username"]
         query = urlencode({"username": username})
         async with self._http.get(
             CAL_COM + f"event-types/?{query}", headers=self._headers("2024-06-14")
         ) as resp:
-            resp.raise_for_status()
+            await resp.raise_for_status()
             found = next(
                 (e for e in (await resp.json())["data"] if e.get("slug") == EVENT_SLUG), None
             )
@@ -136,7 +134,7 @@ class CalComCalendar:
                     "slug": EVENT_SLUG,
                 },
             ) as resp:
-                resp.raise_for_status()
+                await resp.raise_for_status()
                 found = (await resp.json())["data"]
             logging.getLogger("cal.com").info("created the %s event type", EVENT_SLUG)
         self._event_id = int(found["id"])
@@ -153,7 +151,7 @@ class CalComCalendar:
         async with self._http.get(
             CAL_COM + f"slots/?{query}", headers=self._headers("2024-09-04")
         ) as resp:
-            resp.raise_for_status()
+            await resp.raise_for_status()
             days = (await resp.json())["data"]
         return [
             Slot(datetime.datetime.fromisoformat(s["start"]).astimezone(TIMEZONE))
@@ -174,7 +172,7 @@ class CalComCalendar:
             data = await resp.json()
             if "already has booking" in str(data.get("error", {}).get("message", "")):
                 raise SlotUnavailable
-            resp.raise_for_status()
+            await resp.raise_for_status()
         self.appointments.append(Appointment(slot, email))
 
 

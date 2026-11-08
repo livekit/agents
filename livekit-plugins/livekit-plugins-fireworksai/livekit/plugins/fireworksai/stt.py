@@ -23,7 +23,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
-import aiohttp
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from livekit import rtc
@@ -32,6 +31,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -130,7 +130,7 @@ class STT(stt.STT):
         text_timeout_seconds: float = 1.0,
         timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN,
         response_format: str = "verbose_json",
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         base_url: str = "wss://audio-streaming.us-virginia-1.direct.fireworks.ai/v1",
     ):
         """
@@ -153,7 +153,7 @@ class STT(stt.STT):
                 Defaults to "wss://audio-streaming.us-virginia-1.direct.fireworks.ai/v1".
             api_key: The Fireworks AI API key. If not provided, it will be read from
                 the FIREWORKS_API_KEY environment variable.
-            http_session: Optional aiohttp ClientSession to use for requests.
+            http_session: Optional HttpSession to use for requests.
 
         Raises:
             ValueError: If no API key is provided, found in environment variables, or if a parameter is invalid.
@@ -205,9 +205,9 @@ class STT(stt.STT):
         return "FireworksAI"
 
     @property
-    def session(self) -> aiohttp.ClientSession:
+    def session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     async def _recognize_impl(
@@ -292,7 +292,7 @@ class SpeechStream(stt.RecognizeStream):
         opts: STTOptions,
         conn_options: APIConnectOptions,
         api_key: str,
-        http_session: aiohttp.ClientSession,
+        http_session: http.HttpSession,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
@@ -348,7 +348,7 @@ class SpeechStream(stt.RecognizeStream):
 
         closing_ws = False
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
 
             samples_per_buffer = self._opts.sample_rate // 20  # 50ms chunk
@@ -371,7 +371,7 @@ class SpeechStream(stt.RecognizeStream):
             closing_ws = True
             await ws.send_str(self._CLOSE_MSG)
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             while True:
                 try:
@@ -381,21 +381,17 @@ class SpeechStream(stt.RecognizeStream):
                         break
                     continue
 
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type == http.WebSocketMessageType.CLOSE:
                     if closing_ws:
                         return
 
                     raise APIStatusError(
                         "Fireworks connection closed unexpectedly",
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=f"{msg.data=}",
                     )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type != http.WebSocketMessageType.TEXT:
                     logger.error("unexpected FireworksAI message type %s", msg.type)
                     continue
 
@@ -404,7 +400,7 @@ class SpeechStream(stt.RecognizeStream):
                 except Exception:
                     logger.exception("failed to process FireworksAI message")
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
+        ws: http.WebSocket | None = None
 
         while True:
             try:
@@ -441,7 +437,7 @@ class SpeechStream(stt.RecognizeStream):
 
                 await self._audio_duration_collector.flush()
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self) -> http.WebSocket:
         live_config = {
             "model": self._opts.model if is_given(self._opts.model) else None,
             "language": self._opts.language if is_given(self._opts.language) else None,
@@ -466,9 +462,7 @@ class SpeechStream(stt.RecognizeStream):
         ws_url = str(self._opts.base_url).rstrip("/") + _STREAMING_PATH
         filtered_config = {k: v for k, v in live_config.items() if v is not None}
         url = f"{ws_url}?{urlencode(filtered_config, doseq=True)}"
-        ws = await utils.http_context.ws_connect(
-            self._session, url, headers=headers, conn_options=self._conn_options
-        )
+        ws = await self._session.ws_connect(url, headers=headers, conn_options=self._conn_options)
         logger.info("connected to Fireworks AI STT")
         return ws
 

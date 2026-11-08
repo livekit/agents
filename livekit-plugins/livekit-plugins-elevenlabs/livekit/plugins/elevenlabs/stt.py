@@ -25,7 +25,6 @@ from dataclasses import dataclass
 from typing import Literal, TypedDict
 from urllib.parse import quote
 
-import aiohttp
 from pydantic import BaseModel
 
 from livekit import rtc
@@ -33,18 +32,19 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
-    APITimeoutError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import http_context, is_given
+from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
-from ._utils import PeriodicCollector, trace_id_from_headers
+from ._utils import TRACE_ID_HEADER, PeriodicCollector, trace_id_from_headers
 from .log import logger
 from .models import STTBatchResponse, STTRealtimeSampleRates, STTResponse, STTWord
 
@@ -143,7 +143,7 @@ class STT(stt.STT):
         audio_chunk_duration_ms: int = 50,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         include_timestamps: bool = False,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         model: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
@@ -175,7 +175,7 @@ class STT(stt.STT):
                 message frequency but increase buffering latency. Flushes send any shorter
                 remaining chunk before committing. Only used for Scribe v2 realtime.
             server_vad (NotGivenOr[VADOptions]): Server-side VAD options, only supported for Scribe v2 realtime model.
-            http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
+            http_session (http.HttpSession | None): Custom HTTP session for API requests. Optional.
             model (ElevenLabsSTTModels | str): ElevenLabs STT model to use; "scribe_v2_realtime"
                 streams, any other model transcribes in batch. Defaults to "scribe_v1".
             keyterms (NotGivenOr[list[str]]): A list of keywords or phrases to bias the transcription towards.
@@ -254,7 +254,7 @@ class STT(stt.STT):
             enable_logging=enable_logging,
             previous_text=resolved_previous_text,
         )
-        self._session = http_session
+        self._session = http_session.with_request_id(TRACE_ID_HEADER) if http_session else None
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
@@ -265,9 +265,9 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "ElevenLabs"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = http_context.http_session()
+            self._session = http.http_session().with_request_id(TRACE_ID_HEADER)
 
         return self._session
 
@@ -282,7 +282,7 @@ class STT(stt.STT):
             self._opts.language_code = LanguageCode(language)
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
-        form = aiohttp.FormData()
+        form = http.FormData()
         form.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/x-wav")
         form.add_field("model_id", self._opts.model_id)
         form.add_field("tag_audio_events", str(self._opts.tag_audio_events).lower())
@@ -299,6 +299,7 @@ class STT(stt.STT):
                 _synthesize_url(self._opts),
                 data=form,
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
+                conn_options=conn_options,
             ) as response:
                 if response.status != 200:
                     # check the status first: an error body may be empty or not JSON
@@ -325,16 +326,7 @@ class STT(stt.STT):
                     start_time = min(word.start for word in words)
                     end_time = max(word.end for word in words)
 
-        except TimeoutError as e:
-            raise APITimeoutError() from e
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=trace_id_from_headers(e.headers),
-                body=None,
-            ) from e
-        except APIStatusError:
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -450,7 +442,7 @@ class SpeechStream(stt.RecognizeStream):
         opts: STTOptions,
         conn_options: APIConnectOptions,
         language: LanguageCode | None,
-        http_session: aiohttp.ClientSession,
+        http_session: http.HttpSession,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
@@ -526,7 +518,7 @@ class SpeechStream(stt.RecognizeStream):
         """Run the streaming transcription session"""
         closing_ws = False
 
-        async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def keepalive_task(ws: http.WebSocket) -> None:
             try:
                 while True:
                     # scribe_v2_realtime model requires a keepalive message instead of a ping
@@ -545,7 +537,7 @@ class SpeechStream(stt.RecognizeStream):
                 return
 
         @utils.log_exceptions(logger=logger)
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
 
             # Buffer audio into chunks of the configured duration.
@@ -596,32 +588,28 @@ class SpeechStream(stt.RecognizeStream):
                         has_ended = False
 
                 closing_ws = True
-            except (aiohttp.ClientError, ConnectionError) as e:
+            except APIConnectionError as e:
                 if closing_ws or self._session.closed:
                     return
                 raise APIConnectionError("ElevenLabs STT connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
 
             while True:
                 msg = await ws.receive()
 
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type == http.WebSocketMessageType.CLOSE:
                     if closing_ws or self._session.closed:
                         return
                     raise APIStatusError(
                         message="ElevenLabs STT connection closed unexpectedly",
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=f"{msg.data=}",
                     )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type != http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected ElevenLabs STT message type %s", msg.type)
                     continue
 
@@ -631,7 +619,7 @@ class SpeechStream(stt.RecognizeStream):
                 except Exception:
                     logger.exception("failed to process ElevenLabs STT message")
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
+        ws: http.WebSocket | None = None
 
         while True:
             try:
@@ -680,7 +668,7 @@ class SpeechStream(stt.RecognizeStream):
                 if ws is not None:
                     await ws.close()
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self) -> http.WebSocket:
         """Establish WebSocket connection to ElevenLabs Scribe v2 API"""
         commit_strategy = "vad" if self._server_vad is not None else "manual"
         params = [
@@ -731,23 +719,11 @@ class SpeechStream(stt.RecognizeStream):
         base_url = self._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
         ws_url = f"{base_url}/speech-to-text/realtime?{query_string}"
 
-        try:
-            ws = await utils.http_context.ws_connect(
-                self._session,
-                ws_url,
-                headers={AUTHORIZATION_HEADER: self._opts.api_key},
-                conn_options=self._conn_options,
-            )
-        except aiohttp.WSServerHandshakeError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=trace_id_from_headers(e.headers),
-            ) from e
-        except (TimeoutError, aiohttp.ClientConnectorError) as e:
-            raise APIConnectionError("Failed to connect to ElevenLabs") from e
-
-        return ws
+        return await self._session.ws_connect(
+            ws_url,
+            headers={AUTHORIZATION_HEADER: self._opts.api_key},
+            conn_options=self._conn_options,
+        )
 
     def _process_stream_event(self, data: object) -> None:
         """Process incoming WebSocket messages from ElevenLabs"""

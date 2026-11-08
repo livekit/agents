@@ -20,7 +20,6 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 
-import aiohttp
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from livekit.agents import (
@@ -29,6 +28,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    http,
     redacted_cause,
     tokenize,
     tts,
@@ -42,7 +42,7 @@ from .log import logger
 
 NUM_CHANNELS = 1
 
-_Pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse]
+_Pool = utils.ConnectionPool[http.WebSocket]
 
 
 class WordTimestamps(BaseModel):
@@ -76,7 +76,7 @@ class LegacyWebSocketAdapter:
         *,
         websocket_url: str,
         api_key: str,
-        ensure_session: Callable[[], aiohttp.ClientSession],
+        ensure_session: Callable[[], http.HttpSession],
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
         self._websocket_url = websocket_url
@@ -88,10 +88,10 @@ class LegacyWebSocketAdapter:
     def _new_pool(self) -> _Pool:
         websocket_url = self._websocket_url
 
-        async def _connect(conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
+        async def _connect(conn_options: APIConnectOptions) -> http.WebSocket:
             return await self._connect(websocket_url=websocket_url, conn_options=conn_options)
 
-        return utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        return utils.ConnectionPool[http.WebSocket](
             connect_cb=_connect,
             close_cb=self._close,
             max_session_duration=300,
@@ -100,20 +100,19 @@ class LegacyWebSocketAdapter:
 
     async def _connect(
         self, *, websocket_url: str, conn_options: APIConnectOptions
-    ) -> aiohttp.ClientWebSocketResponse:
-        return await utils.http_context.ws_connect(
-            self._ensure_session(),
+    ) -> http.WebSocket:
+        return await self._ensure_session().ws_connect(
             websocket_url,
             headers={"Authorization": f"Bearer {self._api_key}"},
             conn_options=conn_options,
         )
 
-    async def _close(self, websocket: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close(self, websocket: http.WebSocket) -> None:
         try:
             await websocket.send_str(json.dumps({"operation": "eos"}))
             try:
-                await asyncio.wait_for(websocket.receive(), timeout=1.0)
-            except TimeoutError:
+                await websocket.receive(timeout=1.0)
+            except APITimeoutError:
                 pass
         except Exception as error:
             logger.warning(
@@ -166,7 +165,7 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
         *,
         tts_instance: tts.TTS,
         pool: _Pool,
-        pool_manager: PoolManager[aiohttp.ClientWebSocketResponse],
+        pool_manager: PoolManager[http.WebSocket],
         options: LegacySynthesisOptions,
         conn_options: APIConnectOptions,
         sentence_tokenizer: tokenize.SentenceTokenizer,
@@ -203,7 +202,7 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                 sent_stream.push_text(data)
             sent_stream.end_input()
 
-        async def _send_task(websocket: aiohttp.ClientWebSocketResponse) -> None:
+        async def _send_task(websocket: http.WebSocket) -> None:
             nonlocal empty_input
             sent_count = 0
             async for event in sent_stream:
@@ -219,26 +218,18 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                 return
             await websocket.send_str(json.dumps({"operation": "flush", "contextId": context_id}))
 
-        async def _recv_task(websocket: aiohttp.ClientWebSocketResponse) -> None:
+        async def _recv_task(websocket: http.WebSocket) -> None:
             await input_sent_event.wait()
             if empty_input:
                 return
             while True:
-                message = await asyncio.wait_for(
-                    websocket.receive(), self._conn_options.read_timeout
-                )
-                if message.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                message = await websocket.receive(timeout=self._conn_options.read_timeout)
+                if message.type is http.WebSocketMessageType.CLOSE:
                     raise APIStatusError(
                         "Rime ws closed unexpectedly",
                         request_id=request_id,
                     )
-                if message.type == aiohttp.WSMsgType.ERROR:
-                    raise APIConnectionError("Rime WebSocket transport error")
-                if message.type != aiohttp.WSMsgType.TEXT:
+                if message.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected Rime ws message type %s", message.type)
                     continue
                 try:
@@ -277,15 +268,6 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                     input_sent_event.set()
                     await sent_stream.aclose()
                     await utils.aio.cancel_and_wait(*tasks)
-        except TimeoutError as cause:
-            raise APITimeoutError() from redacted_cause(cause)
-        except aiohttp.ClientResponseError as error:
-            raise APIStatusError(
-                message="Rime WebSocket request failed",
-                status_code=error.status,
-                request_id=None,
-                body=None,
-            ) from redacted_cause(error)
         except APIError:
             raise
         except Exception as cause:

@@ -16,12 +16,11 @@ from dataclasses import dataclass, field, replace
 from typing import Literal
 from urllib.parse import quote, urlencode
 
-import aiohttp
 import numpy as np
 import sphn
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, llm, utils
+from livekit.agents import APIConnectionError, http, llm, utils
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 
@@ -89,7 +88,7 @@ class RealtimeModel(llm.RealtimeModel):
         text_prompt: str = "You are a helpful assistant.",
         seed: int | None = None,
         silence_threshold_ms: int = DEFAULT_SILENCE_THRESHOLD_MS,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """Initialize the PersonaPlex RealtimeModel.
 
@@ -104,7 +103,7 @@ class RealtimeModel(llm.RealtimeModel):
             seed: Optional seed for reproducible generation.
             silence_threshold_ms: Duration of silence (no audio from server)
                 before finalizing a generation. Default 500ms.
-            http_session: Optional aiohttp session to reuse.
+            http_session: Optional HttpSession to reuse.
         """
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -135,7 +134,6 @@ class RealtimeModel(llm.RealtimeModel):
             use_ssl=use_ssl,
         )
 
-        self._http_session_owned = False
         self._http_session = http_session
         self._label = f"personaplex-{voice}"
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -148,10 +146,9 @@ class RealtimeModel(llm.RealtimeModel):
     def provider(self) -> str:
         return "nvidia"
 
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
+    def _ensure_http_session(self) -> http.HttpSession:
         if self._http_session is None:
-            self._http_session_owned = True
-            self._http_session = utils.http_context.http_session()
+            self._http_session = http.http_session()
         return self._http_session
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
@@ -161,10 +158,6 @@ class RealtimeModel(llm.RealtimeModel):
         )
         self._sessions.add(sess)
         return sess
-
-    async def aclose(self) -> None:
-        if self._http_session_owned and self._http_session:
-            await self._http_session.close()
 
 
 class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
@@ -179,7 +172,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         realtime_model: RealtimeModel,
         *,
         options: _PersonaplexOptions,
-        http_session: Callable[[], aiohttp.ClientSession],
+        http_session: Callable[[], http.HttpSession],
     ) -> None:
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModel = realtime_model
@@ -360,8 +353,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 http_session = self._get_http_session()
 
                 t0 = time.perf_counter()
-                ws_conn = await utils.http_context.ws_connect(
-                    http_session, ws_url, conn_options=DEFAULT_API_CONNECT_OPTIONS
+                ws_conn = await http_session.ws_connect(
+                    ws_url, conn_options=DEFAULT_API_CONNECT_OPTIONS
                 )
                 self._report_connection_acquired(time.perf_counter() - t0)
                 self._closing = False
@@ -414,10 +407,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 old_ch.close()
                 self._msg_ch = utils.aio.Chan[bytes]()
 
-                is_recoverable = isinstance(
-                    e,
-                    aiohttp.ClientConnectionError | asyncio.TimeoutError | APIConnectionError,
-                )
+                is_recoverable = isinstance(e, asyncio.TimeoutError | APIConnectionError)
 
                 if isinstance(e, APIConnectionError):
                     error = e
@@ -442,7 +432,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
 
     @utils.log_exceptions(logger=logger)
-    async def _send_task(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
+    async def _send_task(self, ws_conn: http.WebSocket) -> None:
         # The server's is_alive() check consumes WS messages during system
         # prompt processing without feeding them to the opus decoder.  Wait
         # for the handshake before sending audio so nothing gets dropped.
@@ -462,15 +452,15 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         self._closing = True
 
     @utils.log_exceptions(logger=logger)
-    async def _recv_task(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
+    async def _recv_task(self, ws_conn: http.WebSocket) -> None:
         while True:
             if self._session_should_close.is_set():
                 break
 
             msg = await ws_conn.receive()
 
-            if msg.type == aiohttp.WSMsgType.BINARY:
-                data = msg.data
+            if msg.type == http.WebSocketMessageType.BINARY:
+                data = msg.binary
                 if len(data) == 0:
                     continue
 
@@ -493,11 +483,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 except Exception:
                     logger.exception("Error handling PersonaPlex message")
 
-            elif msg.type in (
-                aiohttp.WSMsgType.CLOSED,
-                aiohttp.WSMsgType.CLOSE,
-                aiohttp.WSMsgType.CLOSING,
-            ):
+            elif msg.type == http.WebSocketMessageType.CLOSE:
                 if self._closing:
                     return
 
@@ -510,11 +496,6 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                     return
 
                 raise APIConnectionError(message="PersonaPlex connection closed unexpectedly")
-
-            elif msg.type == aiohttp.WSMsgType.ERROR:
-                raise APIConnectionError(
-                    message=f"PersonaPlex WebSocket error: {ws_conn.exception()}"
-                )
 
     # -- Internal: audio encode/decode --
 

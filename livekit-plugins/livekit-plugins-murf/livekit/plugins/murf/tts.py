@@ -23,13 +23,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
-import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
-    APITimeoutError,
+    http,
     tokenize,
     tts,
     utils,
@@ -86,7 +85,7 @@ class TTS(tts.TTS):
         sample_rate: int = 24000,
         encoding: TTSEncoding = "pcm",
         base_url: str = "https://global.api.murf.ai",
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         text_pacing: tts.SentenceStreamPacer | bool = False,
         min_buffer_size: int = 3,
@@ -108,7 +107,7 @@ class TTS(tts.TTS):
             pitch (int | None, optional): The speech pitch control. Higher values = higher pitch. None for default pitch.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             encoding (str, optional): The audio encoding format. Defaults to "pcm".
-            http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
+            http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, the job's shared session is used.
             base_url (str, optional): The base URL for the Murf AI API. Defaults to "https://global.api.murf.ai".
             tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to tokenize.blingfire.SentenceTokenizer(min_sentence_len=min_buffer_size).
             text_pacing (tts.SentenceStreamPacer | bool, optional): Stream pacer for the TTS. Set to True to use the default pacer, False to disable.
@@ -142,7 +141,7 @@ class TTS(tts.TTS):
             max_buffer_delay_in_ms=max_buffer_delay_in_ms,
         )
         self._session = http_session
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        self._pool = utils.ConnectionPool[http.WebSocket](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
             max_session_duration=300,
@@ -168,22 +167,20 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Murf"
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         session = self._ensure_session()
         url = self._opts.get_ws_url(
             f"/v1/speech/stream-input?sample_rate={self._opts.sample_rate}&format={self._opts.encoding}&model={self._opts.model}"
         )
         headers = {API_AUTH_HEADER: self._opts.api_key}
-        return await utils.http_context.ws_connect(
-            session, url, headers=headers, conn_options=conn_options
-        )
+        return await session.ws_connect(url, headers=headers, conn_options=conn_options)
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_ws(self, ws: http.WebSocket) -> None:
         await ws.close()
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
@@ -262,7 +259,7 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
-        get_session: Callable[[], aiohttp.ClientSession],
+        get_session: Callable[[], http.HttpSession],
         opts: _TTSOptions,
         tts: TTS,
         input_text: str,
@@ -277,9 +274,7 @@ class ChunkedStream(tts.ChunkedStream):
         request_id = utils.shortuuid()
 
         try:
-            async with utils.http_context.request(
-                self._get_session(),
-                "POST",
+            async with self._get_session().post(
                 self._opts.get_http_url("/v1/speech/stream"),
                 headers={API_AUTH_HEADER: self._opts.api_key},
                 json={
@@ -295,7 +290,7 @@ class ChunkedStream(tts.ChunkedStream):
                 },
                 conn_options=self._conn_options,
             ) as resp:
-                resp.raise_for_status()
+                await resp.raise_for_status()
 
                 output_emitter.initialize(
                     request_id=request_id,
@@ -304,16 +299,12 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type="audio/pcm",
                 )
 
-                async for data, _ in resp.content.iter_chunks():
+                async for data in resp.iter_bytes():
                     output_emitter.push(data)
 
                 output_emitter.flush()
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+        except APIError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -324,7 +315,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         *,
         sentence_tokenizer: tokenize.SentenceTokenizer,
         stream_pacer: tts.SentenceStreamPacer | None,
-        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        pool: utils.ConnectionPool[http.WebSocket],
         opts: _TTSOptions,
         tts: TTS,
         conn_options: APIConnectOptions,
@@ -357,7 +348,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         read_deadline = self._core_attempts
 
-        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _sentence_stream_task(ws: http.WebSocket) -> None:
             context_id = utils.shortuuid()
             base_pkt = _to_murf_websocket_pkt(self._opts)
             async for ev in sent_tokenizer_stream:
@@ -386,21 +377,17 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             sent_tokenizer_stream.end_input()
 
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _recv_task(ws: http.WebSocket) -> None:
             current_segment_id: str | None = None
             await input_sent_event.wait()
             while True:
                 msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     raise APIStatusError(
                         "Murf AI connection closed unexpectedly", request_id=request_id
                     )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected Murf AI message type %s", msg.type)
                     continue
 
@@ -434,13 +421,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     input_sent_event.set()
                     await sent_tokenizer_stream.aclose()
                     await utils.aio.cancel_and_wait(*tasks)
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
-        except APIConnectionError:
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e

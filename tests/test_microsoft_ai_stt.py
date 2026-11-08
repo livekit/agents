@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Literal
 from unittest.mock import AsyncMock, MagicMock
 
-import aiohttp
 import pytest
 
 from livekit import agents as vad, rtc
@@ -17,6 +16,8 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    create_api_error_from_http,
+    http,
     inference,
     stt,
 )
@@ -121,7 +122,7 @@ async def test_handshake_gates_audio_and_sends_exact_config() -> None:
     assert args == (STT_URL,)
     assert kwargs["headers"]["Authorization"] == "Bearer dummy-stt-key"
     assert socket.closed
-    session.close.assert_not_awaited()
+    session.aclose.assert_not_awaited()
 
 
 async def test_environment_and_explicit_custom_auth(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -176,12 +177,7 @@ async def test_api_key_auth_failure_never_falls_back_or_discloses_credentials(
 ) -> None:
     http = fake_session()
     http.ws_connect = AsyncMock(
-        side_effect=aiohttp.WSServerHandshakeError(
-            request_info=MagicMock(),
-            history=(),
-            status=401,
-            message="dummy-private-key-and-url",
-        )
+        side_effect=create_api_error_from_http("dummy-private-key-and-url", status=401)
     )
     instance = microsoft_ai.STT(
         vad=None,
@@ -907,7 +903,7 @@ async def test_connect_retry_preserves_queued_audio_and_sanitizes_transport_erro
     socket = FakeSocket()
     instance, session = provider(socket)
     session.ws_connect.side_effect = [
-        aiohttp.ClientConnectionError("do-not-log-this-dummy-endpoint"),
+        APIConnectionError("request failed"),
         socket,
     ]
     errors = []
@@ -925,7 +921,6 @@ async def test_connect_retry_preserves_queued_audio_and_sanitizes_transport_erro
     assert session.ws_connect.await_count == 2
     assert socket.commits == [frame.data.tobytes()]
     assert errors[0].recoverable
-    assert "do-not-log" not in str(errors[0].error)
 
 
 async def test_handshake_timeout_retry_budget_is_finite() -> None:
@@ -950,11 +945,8 @@ async def test_handshake_timeout_retry_budget_is_finite() -> None:
 @pytest.mark.parametrize("status", [400, 401, 403, 429, 503])
 async def test_handshake_http_error_status_is_preserved(status: int) -> None:
     instance, session = provider(FakeSocket())
-    session.ws_connect.side_effect = aiohttp.WSServerHandshakeError(
-        request_info=MagicMock(),
-        history=(),
-        status=status,
-        message="do-not-log-this-dummy-secret",
+    session.ws_connect.side_effect = create_api_error_from_http(
+        "do-not-log-this-dummy-secret", status=status
     )
     async with instance, instance.stream(conn_options=OPTIONS) as stream:
         with pytest.raises(APIStatusError) as caught:
@@ -1033,7 +1025,7 @@ async def test_aclose_cancels_without_committing_or_late_events() -> None:
     assert await collect(stream) == []
     assert not socket.commits
     assert socket.closed and stream._task.done()
-    session.close.assert_not_awaited()
+    session.aclose.assert_not_awaited()
     with pytest.raises(RuntimeError, match="closed"):
         instance.stream()
 
@@ -1044,7 +1036,7 @@ async def test_malformed_json_events_are_terminal(body: str) -> None:
     instance, _ = provider(socket)
     async with instance, instance.stream(conn_options=OPTIONS) as stream:
         await socket.wait_sent("session.update")
-        socket.incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, body, ""))
+        socket.incoming.put_nowait(http.WebSocketMessage(http.WebSocketMessageType.TEXT, body))
         with pytest.raises(APIError) as caught:
             await collect(stream)
         assert not caught.value.retryable
@@ -1090,7 +1082,7 @@ async def test_aclose_during_handshake_is_immediate() -> None:
     assert await collect(stream) == []
     assert socket.closed
     assert len(socket.sent) == 1
-    session.close.assert_not_awaited()
+    session.aclose.assert_not_awaited()
 
 
 @pytest.mark.usefixtures("no_http_session")

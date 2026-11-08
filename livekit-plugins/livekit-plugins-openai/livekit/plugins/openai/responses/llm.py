@@ -7,7 +7,6 @@ from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, cast
 
-import aiohttp
 import httpx2 as httpx
 from pydantic import JsonValue, TypeAdapter
 from yarl import URL
@@ -20,6 +19,7 @@ from livekit.agents import (
     APITimeoutError,
     ProviderAttempts,
     TokenUsage,
+    http,
     llm,
     utils,
 )
@@ -64,7 +64,7 @@ Verbosity = Literal["low", "medium", "high"]
 
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
 
-# ws ping interval; keeps idle pooled sockets warm and lets aiohttp detect dead peers
+# ws ping interval; keeps idle pooled sockets warm and lets the client detect dead peers
 _WS_HEARTBEAT = 30.0
 # max connections to try when a reused socket is stale, before the outer retry takes over
 _WS_SEND_MAX_ATTEMPTS = 6
@@ -89,35 +89,29 @@ class _ResponsesWebsocket:
             url = url.update_query(model=model)
         self.base_url = str(url)
 
-        self._session: aiohttp.ClientSession | None = None
+        self._session: http.HttpSession | None = None
 
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        self._pool = utils.ConnectionPool[http.WebSocket](
             connect_cb=self._create_ws,
             close_cb=self._close_ws,
             max_session_duration=3600,
             conn_options=APIConnectOptions(connect_timeout=self._timeout),
         )
 
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
+    def _ensure_http_session(self) -> http.HttpSession:
         if self._session is None:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
-    async def _create_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
-        try:
-            return await utils.http_context.ws_connect(
-                self._ensure_http_session(),
-                self.base_url,
-                headers={"Authorization": f"Bearer {self._api_key}"},
-                heartbeat=_WS_HEARTBEAT,
-                conn_options=conn_options,
-            )
-        except aiohttp.ClientError as e:
-            raise APIConnectionError("failed to connect to OpenAI Responses WebSocket") from e
-        except TimeoutError as e:
-            raise APIConnectionError("timed out connecting to OpenAI Responses WebSocket") from e
+    async def _create_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
+        return await self._ensure_http_session().ws_connect(
+            self.base_url,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            heartbeat=_WS_HEARTBEAT,
+            conn_options=conn_options,
+        )
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_ws(self, ws: http.WebSocket) -> None:
         await ws.close()
 
     def prewarm(self) -> None:
@@ -163,23 +157,13 @@ class _ResponsesWebsocket:
         try:
             while True:
                 raw_msg = await ws.receive()
-                if raw_msg.type == aiohttp.WSMsgType.ERROR:
-                    exc = raw_msg.data
-                    status_code = exc.status if isinstance(exc, aiohttp.ClientResponseError) else -1
-                    raise APIStatusError(
-                        str(exc), status_code=status_code, retryable=False
-                    ) from exc
-                if raw_msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if raw_msg.type is http.WebSocketMessageType.CLOSE:
                     raise APIStatusError(
                         "OpenAI Responses WebSocket connection closed unexpectedly",
-                        status_code=raw_msg.data or -1,
-                        body=f"{raw_msg.data=} {raw_msg.extra=}",
+                        status_code=ws.close_code or -1,
+                        body=f"{raw_msg.data=}",
                     )
-                if raw_msg.type != aiohttp.WSMsgType.TEXT:
+                if raw_msg.type is not http.WebSocketMessageType.TEXT:
                     continue
 
                 event = _WS_EVENT.validate_json(raw_msg.data)
@@ -203,7 +187,7 @@ class _ResponsesWebsocket:
 
     async def _acquire_and_send(
         self, data: str, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> aiohttp.ClientWebSocketResponse:
+    ) -> http.WebSocket:
         # a socket closed while idle surfaces only as a send failure on reuse
         last_exc: Exception | None = None
         for _ in range(_WS_SEND_MAX_ATTEMPTS):
@@ -213,7 +197,7 @@ class _ResponsesWebsocket:
                 async with asyncio.timeout(conn_options.write_timeout):
                     await ws.send_str(data)
                 return ws
-            except TimeoutError as e:
+            except (TimeoutError, APITimeoutError) as e:
                 self._pool.remove(ws)
                 raise APITimeoutError(
                     "OpenAI Responses WebSocket write timed out", phase="write"

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from types import TracebackType
 
-import aiohttp
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from livekit.agents import (
@@ -13,9 +12,9 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     NotGivenOr,
+    http,
     utils,
 )
-from livekit.agents.utils import http_context
 
 from .log import logger
 
@@ -43,7 +42,7 @@ class AvatarioAPI:
         video_info: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        session: aiohttp.ClientSession | None = None,
+        session: http.HttpSession | None = None,
     ) -> None:
         """
         Initializes the AvatarioAPI client.
@@ -58,7 +57,7 @@ class AvatarioAPI:
 
     async def __aenter__(self) -> AvatarioAPI:
         if self._owns_session:
-            self._session = aiohttp.ClientSession()
+            self._session = http.HttpSession()
         return self
 
     async def __aexit__(
@@ -68,7 +67,7 @@ class AvatarioAPI:
         exc_tb: TracebackType | None,
     ) -> None:
         if self._owns_session and self._session:
-            await self._session.close()
+            await self._session.aclose()
 
     async def start_session(
         self,
@@ -122,9 +121,7 @@ class AvatarioAPI:
         async with self._conn_options.total_deadline():
             for i in range(self._conn_options.max_retry + 1):
                 try:
-                    async with http_context.request(
-                        self._session,
-                        "POST",
+                    async with self._session.post(
                         f"{DEFAULT_API_URL}/start-session",
                         headers={
                             "Content-Type": "application/json",

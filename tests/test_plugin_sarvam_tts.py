@@ -8,10 +8,9 @@ from types import SimpleNamespace
 from typing import Any, get_args
 from unittest.mock import MagicMock
 
-import aiohttp
 import pytest
 
-from livekit.agents import APIStatusError
+from livekit.agents import APIStatusError, APITimeoutError, http
 from livekit.agents.tts import AudioEmitter
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins.sarvam import models as sarvam_models, tts as sarvam_tts
@@ -185,10 +184,14 @@ class _FakeSocket:
             self._replies.put_nowait({"type": "audio", "data": {"audio": "AAAA"}})
             self._replies.put_nowait({"type": "event", "data": {"event_type": "final"}})
 
-    async def receive(self, timeout: float | None = None) -> SimpleNamespace:
+    async def receive(self, timeout: float | None = None) -> http.WebSocketMessage:
         # between requests this blocks like an idle socket, which is what a keepalive sees
-        reply = await self._replies.get()
-        return SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=json.dumps(reply), extra=None)
+        try:
+            async with asyncio.timeout(timeout):
+                reply = await self._replies.get()
+        except TimeoutError as e:
+            raise APITimeoutError("read timed out", phase="read") from e
+        return http.WebSocketMessage(http.WebSocketMessageType.TEXT, json.dumps(reply))
 
     async def close(self) -> None:
         self.closed = True
@@ -202,7 +205,6 @@ class _FakeSession:
 
     def __init__(self) -> None:
         self.sockets: list[_FakeSocket] = []
-        self.trace_configs: list[aiohttp.TraceConfig] = []
 
     async def ws_connect(self, url: str, **kwargs: Any) -> _FakeSocket:
         self.sockets.append(_FakeSocket(url))

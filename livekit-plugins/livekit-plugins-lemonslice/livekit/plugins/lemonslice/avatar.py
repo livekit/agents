@@ -4,7 +4,6 @@ import asyncio
 from dataclasses import replace
 from datetime import timedelta
 
-import aiohttp
 from PIL import Image
 from pydantic import JsonValue
 
@@ -17,6 +16,7 @@ from livekit.agents import (
     NotGivenOr,
     VoiceSession,
     get_job_context,
+    http,
 )
 from livekit.agents.job import _server_credentials
 from livekit.agents.voice import room_io
@@ -63,7 +63,7 @@ class AvatarSession(BaseAvatarSession):
         self._idle_timeout = idle_timeout
         self._api_url = api_url
         self._api_key = api_key
-        self._http_session: aiohttp.ClientSession | None = None
+        self._http_session: http.HttpSession | None = None
         self._conn_options = conn_options
         self._extra_payload: NotGivenOr[dict[str, JsonValue]] = kwargs if kwargs else NOT_GIVEN
 

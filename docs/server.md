@@ -175,8 +175,8 @@ if __name__ == "__main__":
 Every option but `storage`, `project_id`, `thread_api_port` and `preload_modules` is a key of
 `ServerOptionsKwargs`, declared once with the server's defaults; a type checker flags an
 unknown one. Process tuning (connection retries, the job processes' start method, executor,
-timeouts, HTTP proxy and participant permissions) is not an `AgentServer` option: the launcher
-sets it (see [Launching and shutdown](#launching-and-shutdown)).
+timeouts and HTTP proxy) is not an `AgentServer` option: the launcher sets it (see
+[Launching and shutdown](#launching-and-shutdown)).
 
 ## Worker load and admission
 
@@ -471,7 +471,7 @@ A route of kind `text` goes to its A2A door
 ([`lk-agents-runtime/src/a2a/door/serve.rs`](../rust/crates/lk-agents-runtime/src/a2a/door/serve.rs))
 instead of the binding.
 Python route authoring and the ASGI adapter are in
-[`livekit/agents/http.py`](../livekit-agents-next/livekit/agents/http.py):
+[`livekit/agents/http/server.py`](../livekit-agents-next/livekit/agents/http/server.py):
 `AgentRoutes` defines the routes and runs the application once per exchange.
 
 ## Voice entrypoints

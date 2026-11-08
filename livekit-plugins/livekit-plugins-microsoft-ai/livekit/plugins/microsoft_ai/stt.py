@@ -27,7 +27,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
-import aiohttp
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from livekit import rtc
@@ -36,10 +35,12 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
+    APIStatusError,
     APITimeoutError,
     LanguageCode,
     VADEvent,
     VADEventType,
+    http,
     stt,
     utils,
 )
@@ -56,10 +57,10 @@ _MAX_TEXT_LENGTH = 65536
 
 class _WSMessage(Protocol):
     @property
-    def type(self) -> aiohttp.WSMsgType: ...
+    def type(self) -> http.WebSocketMessageType: ...
 
     @property
-    def data(self) -> object: ...
+    def data(self) -> str | bytes: ...
 
 
 class _WebSocket(Protocol):
@@ -67,7 +68,7 @@ class _WebSocket(Protocol):
 
     async def receive(self) -> _WSMessage: ...
 
-    async def close(self) -> bool: ...
+    async def close(self) -> None: ...
 
 
 def _session_update(model: str, language: str | None) -> dict[str, object]:
@@ -164,7 +165,7 @@ class STT(stt.STT):
         headers: Explicit authentication headers instead of api_key/auth_header
             environment lookup. Cannot be combined with either constructor argument.
         language: Optional transcription language hint, or MICROSOFT_AI_STT_LANGUAGE.
-        http_session: Optional caller-owned aiohttp session.
+        http_session: Optional caller-owned HttpSession.
         env_file: Explicit dotenv file, or MICROSOFT_AI_ENV_FILE. Constructor
             arguments override environment variables, which override this file.
         max_buffered_audio: Client-side queued-audio and VAD start-prefix limits
@@ -182,7 +183,7 @@ class STT(stt.STT):
         auth_header: Literal["Authorization", "api-key"] | None = None,
         headers: Mapping[str, str] | None = None,
         language: str | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         env_file: str | Path | None = None,
         max_buffered_audio: float = 5.0,
     ) -> None:
@@ -356,12 +357,8 @@ class SpeechStream(stt.RecognizeStream):
             else:
                 await receiver
                 raise APIConnectionError("Microsoft AI STT receiver stopped unexpectedly")
-        except aiohttp.WSServerHandshakeError as error:
-            raise status_error("STT", error.status) from None
         except TimeoutError:
             raise APITimeoutError("Microsoft AI STT operation timed out") from None
-        except (aiohttp.ClientError, ConnectionError, OSError):
-            raise APIConnectionError("Microsoft AI STT transport failed") from None
         finally:
             await utils.aio.cancel_and_wait(*tasks)
             if self._commit_future is not None:
@@ -370,19 +367,21 @@ class SpeechStream(stt.RecognizeStream):
             if self._ws is not None:
                 try:
                     await asyncio.wait_for(self._ws.close(), self._conn_options.total_timeout)
-                except (TimeoutError, aiohttp.ClientError, ConnectionError):
+                except (TimeoutError, ConnectionError):
                     logger.warning("Microsoft AI STT socket cleanup failed")
                 self._ws = None
 
     async def _handshake(self) -> None:
-        ws = await utils.http_context.ws_connect(
-            self._client.session(),
-            self._client.url,
-            headers=self._client.headers,
-            heartbeat=10.0,
-            max_msg_size=1024 * 1024,
-            conn_options=self._conn_options,
-        )
+        try:
+            ws = await self._client.session().ws_connect(
+                self._client.url,
+                headers=self._client.headers,
+                heartbeat=10.0,
+                max_msg_size=1024 * 1024,
+                conn_options=self._conn_options,
+            )
+        except APIStatusError as error:
+            raise status_error("STT", error.status_code) from None
         self._ws = ws
         created = await asyncio.wait_for(self._receive_event(ws), self._conn_options.read_timeout)
         if created.type != "session.created":
@@ -394,14 +393,9 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _receive_event(self, ws: _WebSocket) -> _Event:
         message = await ws.receive()
-        if message.type in (
-            aiohttp.WSMsgType.CLOSE,
-            aiohttp.WSMsgType.CLOSED,
-            aiohttp.WSMsgType.CLOSING,
-            aiohttp.WSMsgType.ERROR,
-        ):
+        if message.type is http.WebSocketMessageType.CLOSE:
             raise APIConnectionError("Microsoft AI STT connection closed unexpectedly")
-        if message.type != aiohttp.WSMsgType.TEXT or not isinstance(message.data, (str, bytes)):
+        if message.type is not http.WebSocketMessageType.TEXT:
             raise APIError("Microsoft AI STT expected a JSON text event", retryable=False)
         try:
             event = _Event.model_validate_json(message.data)

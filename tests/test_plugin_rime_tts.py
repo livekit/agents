@@ -26,6 +26,8 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    http,
+    redacted_cause,
     tts as tts_module,
 )
 from livekit.plugins.rime import TTS
@@ -53,19 +55,17 @@ class _FailingWS3:
         if self._failure == "send" and "text" in payload:
             raise RuntimeError(_SECRET)
 
-    async def receive(self, *, timeout: float | None = None) -> aiohttp.WSMessage:
+    async def receive(self, *, timeout: float | None = None) -> http.WebSocketMessage:
         if self._failure == "provider":
-            return aiohttp.WSMessage(
-                aiohttp.WSMsgType.TEXT,
+            return http.WebSocketMessage(
+                http.WebSocketMessageType.TEXT,
                 json.dumps({"type": "error", "message": _SECRET}),
-                None,
             )
         if self._failure == "transport":
-            return aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, None, None)
-        return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, None)
-
-    def exception(self) -> BaseException:
-        return RuntimeError(_SECRET)
+            raise APIConnectionError("websocket receive failed") from redacted_cause(
+                RuntimeError(_SECRET)
+            )
+        return http.WebSocketMessage(http.WebSocketMessageType.CLOSE, "")
 
     async def close(self) -> None:
         pass
@@ -167,7 +167,7 @@ async def test_chunked_stream_sends_default_mistv2_sample_rate() -> None:
     port = runner.addresses[0][1]
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with http.open() as session:
             tts = TTS(
                 api_key="test-key",
                 model="mistv2",
@@ -203,7 +203,7 @@ async def test_chunked_stream_fails_when_rime_answers_without_audio() -> None:
     port = runner.addresses[0][1]
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with http.open() as session:
             tts = TTS(
                 api_key="test-key",
                 model="mistv2",
@@ -246,7 +246,7 @@ async def test_chunked_stream_keeps_sample_rate_after_parent_update() -> None:
     port = runner.addresses[0][1]
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with http.open() as session:
             tts = TTS(
                 api_key="test-key",
                 model="coda",
@@ -298,7 +298,7 @@ async def test_chunked_stream_keeps_endpoint_and_timeout_after_parent_update(
     conn_options = APIConnectOptions(max_retry=0)
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with http.open() as session:
             tts = TTS(
                 api_key="test-key",
                 model="coda",
@@ -611,8 +611,8 @@ async def test_ws3_errors_do_not_expose_provider_or_transport_data(
 
     async def connect_ws(
         self: LegacyWebSocketAdapter, *, websocket_url: str, timeout: float
-    ) -> aiohttp.ClientWebSocketResponse:
-        return cast(aiohttp.ClientWebSocketResponse, websocket)
+    ) -> http.WebSocket:
+        return cast(http.WebSocket, websocket)
 
     monkeypatch.setattr(LegacyWebSocketAdapter, "_connect", connect_ws)
     tts = TTS(api_key="test-key", model="coda", use_websocket=True)
@@ -675,7 +675,7 @@ async def test_ws3_stream_keeps_options_after_parent_update(stream_count: int) -
     port = runner.addresses[0][1]
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with http.open() as session:
             tts = TTS(
                 api_key="test-key",
                 model="coda",
@@ -789,11 +789,11 @@ class _RimeV1Server:
         await self._site.start()
         port = self._runner.addresses[0][1]
         self.websocket_url = f"ws://127.0.0.1:{port}/coda/ws"
-        self.session = aiohttp.ClientSession()
+        self.session = http.HttpSession()
         return self
 
     async def __aexit__(self, *exc: object) -> None:
-        await self.session.close()
+        await self.session.aclose()
         await self._runner.cleanup()
         assert not self.unexpected_requests, (
             f"fake Rime v1 server received unexpected requests: {self.unexpected_requests!r}"
@@ -1596,11 +1596,9 @@ async def test_v1_blocked_write_times_out(
     write_started = asyncio.Event()
     release_write = asyncio.Event()
     send_method = "send_bytes" if websocket_protocol == "binary" else "send_str"
-    original_send = getattr(aiohttp.ClientWebSocketResponse, send_method)
+    original_send = getattr(http.WebSocket, send_method)
 
-    async def blocked_send(
-        websocket: aiohttp.ClientWebSocketResponse, data: bytes | str, **kwargs: Any
-    ) -> None:
+    async def blocked_send(websocket: http.WebSocket, data: bytes | str, **kwargs: Any) -> None:
         request = proto.WebSocketRequest()
         if isinstance(data, bytes):
             request.ParseFromString(data)
@@ -1611,7 +1609,7 @@ async def test_v1_blocked_write_times_out(
             await release_write.wait()
         await original_send(websocket, data, **kwargs)
 
-    monkeypatch.setattr(aiohttp.ClientWebSocketResponse, send_method, blocked_send)
+    monkeypatch.setattr(http.WebSocket, send_method, blocked_send)
     async with _RimeV1Server(response_mode="no_audio") as server:
         tts = _v1_tts(server, websocket_protocol=websocket_protocol)
         stream = tts.stream(
@@ -1789,7 +1787,7 @@ async def test_v1_accepts_done_before_end_write_returns(
             await done_received.wait()
             end_write_pending = False
 
-    def decode_response(self: Any, message: aiohttp.WSMessage) -> proto.WebSocketResponse:
+    def decode_response(self: Any, message: http.WebSocketMessage) -> proto.WebSocketResponse:
         response = original_decode(self, message)
         if response.WhichOneof("payload") == "done":
             assert end_write_pending
@@ -2160,11 +2158,11 @@ async def test_v1_connection_error_does_not_expose_transport_data(
 ) -> None:
     from livekit.plugins.rime import _websocket_v1
 
-    async def _fail_connect(*args: Any, **kwargs: Any) -> aiohttp.ClientWebSocketResponse:
+    async def _fail_connect(*args: Any, **kwargs: Any) -> http.WebSocket:
         raise RuntimeError(f"credential-bearing transport error: {_SECRET}")
 
-    monkeypatch.setattr(aiohttp.ClientSession, "ws_connect", _fail_connect)
-    async with aiohttp.ClientSession() as session:
+    monkeypatch.setattr(http.HttpSession, "ws_connect", _fail_connect)
+    async with http.open() as session:
         with pytest.raises(APIConnectionError) as exc_info:
             await _websocket_v1.connect(
                 session,
@@ -2185,13 +2183,13 @@ async def test_v1_connect_rejects_untrusted_host_before_transport(
 
     transport_called = False
 
-    async def _connect(*args: Any, **kwargs: Any) -> aiohttp.ClientWebSocketResponse:
+    async def _connect(*args: Any, **kwargs: Any) -> http.WebSocket:
         nonlocal transport_called
         transport_called = True
         raise AssertionError("transport must not receive credentials")
 
-    monkeypatch.setattr(aiohttp.ClientSession, "ws_connect", _connect)
-    async with aiohttp.ClientSession() as session:
+    monkeypatch.setattr(http.HttpSession, "ws_connect", _connect)
+    async with http.open() as session:
         with pytest.raises(ValueError, match="trusted Rime host"):
             await _websocket_v1.connect(
                 session,
@@ -2223,7 +2221,7 @@ async def test_v1_wraps_write_failures_as_safe_api_errors(
             raise ConnectionResetError(f"write failed with {_SECRET}")
 
     connection = _websocket_v1.Connection(
-        websocket=cast(aiohttp.ClientWebSocketResponse, _FailingWebSocket()),
+        websocket=cast(http.WebSocket, _FailingWebSocket()),
         codec=_websocket_v1._JsonEnvelopeCodec(),
     )
     with pytest.raises(APIConnectionError) as exc_info:
@@ -2237,22 +2235,19 @@ async def test_v1_wraps_write_failures_as_safe_api_errors(
 async def test_v1_retries_after_write_failure_before_audio(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_send_str = aiohttp.ClientWebSocketResponse.send_str
+    original_send_str = http.WebSocket.send_str
     fail_first_text = True
 
-    async def _send_str(
-        self: aiohttp.ClientWebSocketResponse,
-        data: str,
-        *args: Any,
-        **kwargs: Any,
-    ) -> None:
+    async def _send_str(self: http.WebSocket, data: str) -> None:
         nonlocal fail_first_text
         if fail_first_text and "text" in json.loads(data):
             fail_first_text = False
-            raise ConnectionResetError(f"write failed with {_SECRET}")
-        await original_send_str(self, data, *args, **kwargs)
+            raise APIConnectionError("websocket send failed") from redacted_cause(
+                ConnectionResetError(f"write failed with {_SECRET}")
+            )
+        await original_send_str(self, data)
 
-    monkeypatch.setattr(aiohttp.ClientWebSocketResponse, "send_str", _send_str)
+    monkeypatch.setattr(http.WebSocket, "send_str", _send_str)
 
     async with _RimeV1Server() as server:
         tts = _v1_tts(server, websocket_protocol="json")
@@ -2280,14 +2275,13 @@ async def test_v1_websocket_error_does_not_expose_transport_data() -> None:
     from livekit.plugins.rime import _websocket_v1
 
     class _ErrorWebSocket:
-        async def receive(self, *, timeout: float) -> aiohttp.WSMessage:
-            return aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, None, None)
-
-        def exception(self) -> BaseException:
-            return RuntimeError(f"socket failed with {_SECRET}")
+        async def receive(self, *, timeout: float) -> http.WebSocketMessage:
+            raise APIConnectionError("websocket receive failed") from redacted_cause(
+                RuntimeError(f"socket failed with {_SECRET}")
+            )
 
     connection = _websocket_v1.Connection(
-        websocket=cast(aiohttp.ClientWebSocketResponse, _ErrorWebSocket()),
+        websocket=cast(http.WebSocket, _ErrorWebSocket()),
         codec=_websocket_v1._JsonEnvelopeCodec(),
     )
     with pytest.raises(APIConnectionError) as exc_info:
@@ -2300,15 +2294,14 @@ async def test_v1_invalid_json_does_not_retain_provider_frame() -> None:
     from livekit.plugins.rime import _websocket_v1
 
     class _InvalidJsonWebSocket:
-        async def receive(self, *, timeout: float) -> aiohttp.WSMessage:
-            return aiohttp.WSMessage(
-                aiohttp.WSMsgType.TEXT,
+        async def receive(self, *, timeout: float) -> http.WebSocketMessage:
+            return http.WebSocketMessage(
+                http.WebSocketMessageType.TEXT,
                 f'{{"providerData":"{_SECRET}"',
-                None,
             )
 
     connection = _websocket_v1.Connection(
-        websocket=cast(aiohttp.ClientWebSocketResponse, _InvalidJsonWebSocket()),
+        websocket=cast(http.WebSocket, _InvalidJsonWebSocket()),
         codec=_websocket_v1._JsonEnvelopeCodec(),
     )
     with pytest.raises(APIConnectionError) as exc_info:
@@ -2529,7 +2522,7 @@ async def test_fixed_wire_envelope(fixture: dict[str, Any], protocol: str) -> No
     expected = fixture["json"]
     if fixture["message"] == "WebSocketRequest":
         request = json_format.ParseDict(expected, proto.WebSocketRequest())
-        websocket = AsyncMock(spec=aiohttp.ClientWebSocketResponse)
+        websocket = AsyncMock(spec=http.WebSocket)
         await codec.send_request(websocket, request)
         if protocol == "binary":
             websocket.send_bytes.assert_awaited_once_with(binary)
@@ -2540,10 +2533,11 @@ async def test_fixed_wire_envelope(fixture: dict[str, Any], protocol: str) -> No
         if request.HasField("start"):
             assert not request.start.HasField("arcana_parameters")
     else:
-        message = aiohttp.WSMessage(
-            aiohttp.WSMsgType.BINARY if protocol == "binary" else aiohttp.WSMsgType.TEXT,
+        message = http.WebSocketMessage(
+            http.WebSocketMessageType.BINARY
+            if protocol == "binary"
+            else http.WebSocketMessageType.TEXT,
             binary if protocol == "binary" else json.dumps(expected),
-            "",
         )
         response = codec.decode_response(message)
         assert json_format.MessageToDict(response) == expected
@@ -2552,21 +2546,18 @@ async def test_fixed_wire_envelope(fixture: dict[str, Any], protocol: str) -> No
 
 
 @pytest.mark.parametrize(
-    ("mode", "status", "raise_for_status"),
+    ("mode", "status"),
     [
-        ("http", 400, False),
-        ("http", 500, False),
-        ("handshake", 400, False),
-        ("handshake", 500, False),
-        ("handshake", 400, True),
-        ("handshake", 500, True),
-        ("transport", 302, False),
+        ("http", 400),
+        ("http", 500),
+        ("handshake", 400),
+        ("handshake", 500),
+        ("redirect", 302),
     ],
 )
 async def test_rime_errors_do_not_expose_provider_or_transport_details(
     mode: str,
     status: int,
-    raise_for_status: bool,
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2575,8 +2566,8 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
     async def fail_request(request: web.Request) -> web.Response:
         nonlocal requests
         requests += 1
-        if mode == "transport":
-            # aiohttp rejects this redirect and includes the URL in its exception.
+        if mode == "redirect":
+            # never followed: the status is the error, and its Location (a token) stays out of it
             return web.Response(
                 status=302, headers={"Location": f"ftp://localhost/file?token={_SECRET}"}
             )
@@ -2596,7 +2587,7 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
     )
 
     try:
-        async with aiohttp.ClientSession(raise_for_status=raise_for_status) as session:
+        async with http.open() as session:
             if mode == "handshake":
                 tts = TTS(
                     api_key="test-key",
@@ -2619,13 +2610,10 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
         await runner.cleanup()
 
     error = exc_info.value
-    expected_retryable = mode == "transport" or status == 500
-    if mode == "transport":
-        assert isinstance(error, APIConnectionError)
-    else:
-        assert isinstance(error, APIStatusError)
-        assert error.status_code == status
-        assert error.request_id is None
+    expected_retryable = mode == "redirect" or status == 500
+    assert isinstance(error, APIStatusError)
+    assert error.status_code == status
+    assert error.request_id is None
     assert error.body is None
     assert error.retryable is expected_retryable
     assert requests == (2 if expected_retryable else 1)
@@ -2663,7 +2651,7 @@ async def test_ws3_rejects_invalid_word_timestamps() -> None:
 
     app = web.Application()
     app.router.add_get("/ws3", websocket)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         provider = TTS(
             api_key="test-key",
             model="coda",

@@ -12,7 +12,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-import aiohttp
 from pydantic import BaseModel
 
 from livekit import rtc
@@ -21,6 +20,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -59,7 +59,7 @@ class STT(stt.STT):
         api_key: str | None = None,
         base_url: str = STT_ENDPOINT,
         sample_rate: int = SAMPLE_RATE,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -180,7 +180,7 @@ class SpeechStream(stt.RecognizeStream):
         conn_options: APIConnectOptions,
         language: LanguageCode,
         opts: _STTOptions,
-        ensure_session: Callable[[], aiohttp.ClientSession],
+        ensure_session: Callable[[], http.HttpSession],
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
@@ -192,7 +192,7 @@ class SpeechStream(stt.RecognizeStream):
         closing_ws = False
 
         @utils.log_exceptions(logger=logger)
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
 
             wav_header = _create_streaming_wav_header(self._opts.sample_rate, NUM_CHANNELS)
@@ -221,20 +221,23 @@ class SpeechStream(stt.RecognizeStream):
             closing_ws = True
 
         @utils.log_exceptions(logger=logger)
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             while True:
-                msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                try:
+                    msg = await ws.receive()
+                except APIConnectionError:
+                    # The heartbeat fails the socket when a ping goes unanswered; that is
+                    # only an error before the input is done.
+                    if closing_ws:
+                        return
+                    raise
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     if closing_ws:
                         return
                     raise APIStatusError(message="Telnyx STT WebSocket closed unexpectedly")
 
-                if msg.type == aiohttp.WSMsgType.TEXT:
+                if msg.type is http.WebSocketMessageType.TEXT:
                     try:
                         data = _Transcript.model_validate_json(msg.data)
                         logger.debug(
@@ -245,17 +248,8 @@ class SpeechStream(stt.RecognizeStream):
                         self._process_stream_event(data)
                     except Exception:
                         logger.exception("Failed to process Telnyx STT message")
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    if closing_ws:
-                        return
-                    # The heartbeat closes the socket when a ping goes unanswered, and
-                    # that arrives here rather than as a close frame. Raising a
-                    # retryable error here (instead of logging and waiting for the
-                    # CLOSED that follows) lets _main_task reconnect with the reason
-                    # attached; ws.exception() is the only place it survives.
-                    raise APIConnectionError("Telnyx STT connection lost") from ws.exception()
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
+        ws: http.WebSocket | None = None
         try:
             ws = await self._connect_ws()
             tasks = [
@@ -270,7 +264,7 @@ class SpeechStream(stt.RecognizeStream):
             if ws is not None:
                 await ws.close()
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self) -> http.WebSocket:
         opts = self._opts
         params = {
             "transcription_engine": opts.transcription_engine,
@@ -281,22 +275,18 @@ class SpeechStream(stt.RecognizeStream):
         url = f"{opts.base_url}?{query_string}"
         headers = {"Authorization": f"Bearer {opts.api_key}"}
 
-        try:
-            ws = await utils.http_context.ws_connect(
-                self._ensure_session(),
-                url,
-                headers=headers,
-                # Without this a silently dropped socket (half-open TCP, no FIN/RST)
-                # is never noticed: recv_task parks on ws.receive() forever, and the
-                # retry in _main_task only runs when something raises. Matches the
-                # Deepgram and Muse STT plugins.
-                heartbeat=30.0,
-                conn_options=self._conn_options,
-            )
-            logger.debug("Established Telnyx STT WebSocket connection")
-            return ws
-        except (TimeoutError, aiohttp.ClientConnectorError) as e:
-            raise APIConnectionError("Failed to connect to Telnyx STT") from e
+        ws = await self._ensure_session().ws_connect(
+            url,
+            headers=headers,
+            # Without this a silently dropped socket (half-open TCP, no FIN/RST)
+            # is never noticed: recv_task parks on ws.receive() forever, and the
+            # retry in _main_task only runs when something raises. Matches the
+            # Deepgram and Muse STT plugins.
+            heartbeat=30.0,
+            conn_options=self._conn_options,
+        )
+        logger.debug("Established Telnyx STT WebSocket connection")
+        return ws
 
     def _process_stream_event(self, data: _Transcript) -> None:
         transcript = data.transcript

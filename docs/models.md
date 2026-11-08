@@ -125,7 +125,8 @@ plugin's classes, not these bases.
 | `livekit.agents.stt`, `livekit.agents.tts` | `STT`, `RecognizeStream`, `SpeechEvent` (`SpeechEventType`, `SpeechData` alternatives, `RecognitionUsage`), `STTCapabilities`, `STTError`, `SpeakerContext`; `TTS`, `ChunkedStream`, `SynthesizeStream`, `SynthesizedAudio`, `AudioEmitter`, `TTSCapabilities`, `MarkupInfo`, `TTSError`, `SentenceStreamPacer`; each module's `FallbackAdapter` and `StreamAdapter` |
 | `livekit.agents` | `Plugin`, `VAD`, `VADStream`, `VADEvent`, `VADEventType`, `VADCapabilities`, `LanguageCode`, `get_job_context`, `NOT_GIVEN`/`NotGivenOr`/`NotGiven`, `DEFAULT_API_CONNECT_OPTIONS`, `create_api_error_from_http`, `redacted_cause`, `ProviderAttempts` (a stream's `_core_attempts`, see [provider attempts](#provider-attempts)) |
 | `livekit.agents.tokenize` | `SentenceTokenizer`, `SentenceStream`, `WordTokenizer`, `WordStream`, `TokenData`, `BufferedSentenceStream`, `BufferedWordStream`, the `basic` and `blingfire` tokenizers, `replace_words` |
-| `livekit.agents.utils` | `ConnectionPool`, `http_context`, `shortuuid`, `is_given`, `log_exceptions`, `EventEmitter`; `aio`: `Chan`, `ChanClosed`, `ChanEmpty`, `Interval`, `cancel_and_wait`; `media`: `AudioStreamDecoder`, `encode` |
+| `livekit.agents.utils` | `ConnectionPool`, `shortuuid`, `is_given`, `log_exceptions`, `EventEmitter`; `aio`: `Chan`, `ChanClosed`, `ChanEmpty`, `Interval`, `cancel_and_wait`; `media`: `AudioStreamDecoder`, `encode` |
+| `livekit.agents.http` | the client: `HttpSession`, `HttpResponse`, `FormData`, `WebSocket`, `WebSocketMessage`, `WebSocketMessageType`, `http_session`, `open`; see [HTTP and WebSockets](#http-and-websockets) |
 | `livekit.agents.voice.avatar` | `AvatarSession` (its join wait, metrics and close: [Avatars](voice-session.md#avatars)), `DataStreamAudioOutput`; an avatar replaces the call's audio with `session.output.replace_audio_tail(sink)`. The avatar worker's side: `AvatarRunner`, `AvatarOptions`, `VideoGenerator`, `AudioReceiver`/`DataStreamAudioReceiver`, `AudioSegmentEnd`, `QueueAudioOutput`; it publishes on the agent's behalf (`livekit.agents.types.ATTRIBUTE_PUBLISH_ON_BEHALF`) |
 | `livekit.agents.types` | the TTS audio frame `userdata` keys: `USERDATA_TIMED_TRANSCRIPT` (the frame's `TranscriptChunk` words) and `USERDATA_TTS_STARTED_TIME` |
 
@@ -151,6 +152,39 @@ A plugin keeps the cause of the errors it raises, redacted:
 `raise APIConnectionError(...) from redacted_cause(error)` chains the original
 error's type and traceback without its message, which can carry credentials or
 provider data.
+
+### HTTP and WebSockets
+
+A plugin talks to its provider through the client in `livekit.agents.http`, never
+through an HTTP library directly. The same package holds the server side, the routes an
+application serves (`AgentRoutes`, see [Server](server.md)); neither side imports the
+other. Every call runs under the `conn_options` it is given
+(`DEFAULT_API_CONNECT_OPTIONS` when omitted): each limit applies to the wait it
+names, and failures are framework errors, never the transport's exceptions.
+
+| Name | Contract |
+| --- | --- |
+| `http_session()` | The job's shared `HttpSession`, created on first use and closed with the job; `RuntimeError` outside a job |
+| `open()` | `async with http.open() as session:` binds one outside a job (tests, scripts); inside a job it yields the job's |
+| `HttpSession(proxy=None)` | A session of its own; `await session.aclose()` closes it. A plugin's `http_session=` argument takes one. The HTTP library underneath is internal: nothing accepts or returns its objects |
+| `session.request(method, url, *, conn_options=, headers=, params=, json=, data=)`, `get`, `post`, `put`, `patch`, `delete` | `async with session.post(...) as response:`; `data` is `bytes`, `str`, a `FormData` or an async iterable of `bytes` |
+| `HttpResponse` | `status`, `ok`, `reason`, `headers`, `content_type`; `await read()`, `text()`, `json()`; `async for chunk in response.iter_bytes()`; `await raise_for_status()` raises `APIStatusError` carrying the status and body |
+| `FormData` | `add_field(name, value, *, filename=, content_type=)`, a multipart body |
+| `await session.ws_connect(url, *, conn_options=, headers=, params=, heartbeat=, protocols=)` | A `WebSocket`; a rejected handshake raises `APIStatusError` |
+| `WebSocket` | `headers` (the upgrade response's), `closed`, `close_code`; `await send_str()`, `send_bytes()`, `send_json()`, `close(code=1000)`; `await receive(timeout=None)` returns a `WebSocketMessage`; `async for message in ws` yields until the socket closes |
+| `WebSocketMessage` | `type` (`WebSocketMessageType.TEXT`, `BINARY` or `CLOSE`), `data` (`str` text, `bytes` binary, the close reason), `json()` |
+
+A transport failure raises `APIConnectionError`; a transport error on a socket
+raises it from `receive()`. A limit that expires raises `APITimeoutError` with
+its `phase`: `pool` while waiting for a connection, `connect` for DNS, TCP and
+TLS, `write` while a request body or frame waits for the transport, `read` while
+a response or handshake is expected and when `receive(timeout=)` expires. A
+non-2xx response is returned, so the plugin can read its body.
+
+Every client in the process trusts the same CA certificates: `run_app` exports
+the system's paths, or certifi's bundle when there are none, as
+`SSL_CERT_FILE`/`SSL_CERT_DIR`, which Python, the native clients and
+`livekit-rtc` read.
 
 ### Provider attempts
 

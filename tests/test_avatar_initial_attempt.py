@@ -1,11 +1,10 @@
 from types import SimpleNamespace
 
-import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectOptions
+from livekit.agents import APIConnectOptions, http
 from livekit.plugins.avatario.api import AvatarioAPI
 from livekit.plugins.bey import AvatarSession as BeySession
 from livekit.plugins.bithuman import AvatarSession as BitHumanSession
@@ -27,32 +26,34 @@ async def test_zero_retries_still_creates_avatar(provider, monkeypatch):
 
     app = web.Application()
     app.router.add_post("/{path:.*}", create)
-    async with TestServer(app) as server, aiohttp.ClientSession() as http:
+    async with TestServer(app) as server, http.open() as session:
         options = APIConnectOptions(max_retry=0)
         url = str(server.make_url("")).rstrip("/")
         if provider == "avatario":
             monkeypatch.setattr("livekit.plugins.avatario.api.DEFAULT_API_URL", url)
-            api = AvatarioAPI(api_key="key", avatar_id="avatar", session=http, conn_options=options)
+            api = AvatarioAPI(
+                api_key="key", avatar_id="avatar", session=session, conn_options=options
+            )
             await api.start_session(livekit_agent_identity="agent")
         elif provider == "bey":
             avatar = BeySession(api_key="key", api_url=url, conn_options=options)
-            avatar._http_session = http
+            avatar._http_session = session
             await avatar._start_agent("wss://livekit.test", "token")
         elif provider == "bithuman":
             avatar = BitHumanSession(
                 api_secret="secret", avatar_id="avatar", api_url=url, conn_options=options
             )
-            avatar._http_session = http
+            avatar._http_session = session
             await avatar._send_request_with_retry({}, json_data={"avatar_id": "avatar"})
         elif provider == "runway":
             avatar = RunwaySession(
                 api_key="key", avatar_id="avatar", api_url=url, conn_options=options
             )
-            avatar._http_session = http
+            avatar._http_session = session
             avatar._local_participant_identity = "agent"
             await avatar._create_session("wss://livekit.test", "token", "room")
         else:
-            api = LiveAvatarAPI(api_key="key", api_url=url, conn_options=options, session=http)
+            api = LiveAvatarAPI(api_key="key", api_url=url, conn_options=options, session=session)
             await api.create_streaming_session(
                 livekit_url="wss://livekit.test",
                 livekit_token="token",

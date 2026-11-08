@@ -5,16 +5,17 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from xml.etree import ElementTree
 
-import aiohttp
 import pytest
 
 from livekit.agents import (
     Agent,
+    APIConnectionError,
     APIConnectOptions,
     APIError,
     APIStatusError,
     APITimeoutError,
     VoiceSession,
+    http,
     tts,
 )
 from livekit.agents.voice.agent_session import SessionConnectOptions
@@ -96,11 +97,9 @@ async def test_complete_wav_request_and_exact_audio_framing() -> None:
     assert kwargs["headers"]["Accept"] == "audio/wav"
     assert kwargs["headers"]["Content-Type"] == "application/ssml+xml"
     assert kwargs["headers"]["X-Microsoft-OutputFormat"] == "riff-24khz-16bit-mono-pcm"
-    assert kwargs["allow_redirects"] is False
-    assert kwargs["timeout"].total is None
-    assert kwargs["timeout"].sock_read == OPTIONS.read_timeout
+    assert kwargs["conn_options"] == OPTIONS
     assert response.closed
-    session.close.assert_not_awaited()
+    session.aclose.assert_not_awaited()
 
 
 async def test_environment_configuration_and_custom_headers(
@@ -182,7 +181,7 @@ async def test_retry_after_rate_limit_emits_only_successful_audio() -> None:
 
 
 async def test_interrupted_http_body_does_not_emit_stale_audio_on_retry() -> None:
-    failed = FakeResponse(wav_bytes(PCM)[:200], error=aiohttp.ClientPayloadError("dummy"))
+    failed = FakeResponse(wav_bytes(PCM)[:200], error=APIConnectionError("dummy"))
     success = FakeResponse(wav_bytes(PCM))
     instance, session = provider(failed)
     session.post.side_effect = [failed, success]
@@ -274,7 +273,7 @@ async def test_cancellation_closes_http_and_emits_no_late_audio() -> None:
     assert response.closed
     assert stream._synthesize_task.done()
     await instance.aclose()
-    session.close.assert_not_awaited()
+    session.aclose.assert_not_awaited()
 
 
 async def test_close_discards_already_buffered_audio() -> None:
@@ -296,7 +295,7 @@ async def test_provider_close_cancels_all_requests_and_borrows_session() -> None
     assert all(response.closed for response in responses)
     for stream in streams:
         assert await collect(stream) == []
-    session.close.assert_not_awaited()
+    session.aclose.assert_not_awaited()
     with pytest.raises(RuntimeError, match="closed"):
         instance.synthesize("Hello.")
 
@@ -305,7 +304,7 @@ async def test_owned_session_is_lazy_and_closed(monkeypatch: pytest.MonkeyPatch)
     session = fake_session()
     session.post.return_value = FakeResponse(wav_bytes(PCM))
     factory = MagicMock(return_value=session)
-    monkeypatch.setattr(aiohttp, "ClientSession", factory)
+    monkeypatch.setattr(http, "HttpSession", factory)
     instance = microsoft_ai.TTS(
         url=TTS_URL, model="test", voice="en-US-Dummy:test", sample_rate=24000, headers={}
     )
@@ -313,7 +312,7 @@ async def test_owned_session_is_lazy_and_closed(monkeypatch: pytest.MonkeyPatch)
     async with instance, instance.synthesize("Hello.", conn_options=OPTIONS) as stream:
         await collect(stream)
     factory.assert_called_once()
-    session.close.assert_awaited_once()
+    session.aclose.assert_awaited_once()
 
 
 async def test_existing_sentence_stream_adapter_supports_incremental_text() -> None:

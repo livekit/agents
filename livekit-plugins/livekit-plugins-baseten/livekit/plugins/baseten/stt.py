@@ -20,12 +20,10 @@ import asyncio
 import dataclasses
 import json
 import os
-import ssl
 import weakref
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-import aiohttp
 import numpy as np
 
 from livekit import rtc
@@ -35,6 +33,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -55,10 +54,6 @@ bytes_per_frame = {
     "pcm_s16le": 2,
     "pcm_mulaw": 1,
 }
-
-ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-ssl_context.check_hostname = False
-ssl_context.verify_mode = ssl.CERT_NONE
 
 
 @dataclass
@@ -107,7 +102,7 @@ class STT(stt.STT):
         vad_threshold: float = 0.5,
         vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ):
         """Baseten Speech-to-Text provider.
 
@@ -166,7 +161,7 @@ class STT(stt.STT):
                 utterance. Defaults to 300 (``whisper``) / 500 (``qwen3-asr``).
             vad_speech_pad_ms: Padding (ms) around detected speech. Defaults to
                 30 (``whisper``) / 100 (``qwen3-asr``).
-            http_session: Optional :class:`aiohttp.ClientSession` to reuse.
+            http_session: Optional :class:`http.HttpSession` to reuse.
         """
         self._model_name = model
         self._qwen3: Qwen3Backend | None = None
@@ -282,9 +277,9 @@ class STT(stt.STT):
         return "Baseten"
 
     @property
-    def session(self) -> aiohttp.ClientSession:
+    def session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     async def _recognize_impl(
@@ -394,7 +389,7 @@ class SpeechStream(stt.RecognizeStream):
         conn_options: APIConnectOptions,
         api_key: str,
         model_endpoint: str,
-        http_session: aiohttp.ClientSession,
+        http_session: http.HttpSession,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
@@ -441,7 +436,7 @@ class SpeechStream(stt.RecognizeStream):
 
         closing_ws = False
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             samples_per_buffer = 512
 
@@ -466,12 +461,12 @@ class SpeechStream(stt.RecognizeStream):
                         await ws.send_bytes(int16_array.tobytes())
                 closing_ws = True
                 await ws.send_str(self._CLOSE_MSG)
-            except (aiohttp.ClientError, ConnectionError) as e:
+            except APIConnectionError:
                 if self._session.closed:
                     return
-                raise APIConnectionError("Baseten connection closed unexpectedly") from e
+                raise
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             while True:
                 try:
@@ -481,24 +476,20 @@ class SpeechStream(stt.RecognizeStream):
                         break
                     continue
 
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     if closing_ws:
                         return
                     raise APIStatusError(
                         "Baseten connection closed unexpectedly",
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=msg.data,
                     )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.error("Unexpected Baseten message type: %s", msg.type)
                     continue
 
-                data = decode_transcript(msg.data)
+                data = decode_transcript(msg.text)
 
                 # Skip non-transcription messages (e.g. error, status)
                 msg_type = data.type
@@ -580,7 +571,7 @@ class SpeechStream(stt.RecognizeStream):
                         self._final_events.append(event)
                         self.send(event)
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
+        ws: http.WebSocket | None = None
 
         while True:
             closing_ws = False
@@ -612,7 +603,7 @@ class SpeechStream(stt.RecognizeStream):
                 if ws is not None:
                     await ws.close()
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self) -> http.WebSocket:
         """Open a WebSocket and send the ``StreamingWhisperInput`` metadata message.
 
         The metadata schema must match the Baseten server's ``StreamingWhisperInput``
@@ -626,12 +617,8 @@ class SpeechStream(stt.RecognizeStream):
             "Authorization": f"Api-Key {self._api_key}",
         }
 
-        ws = await utils.http_context.ws_connect(
-            self._session,
-            self._model_endpoint,
-            headers=headers,
-            ssl=ssl_context,
-            conn_options=self._conn_options,
+        ws = await self._session.ws_connect(
+            self._model_endpoint, headers=headers, conn_options=self._conn_options
         )
 
         # Build metadata matching Baseten's StreamingWhisperInput schema.

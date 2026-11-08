@@ -20,16 +20,12 @@ import os
 import time
 import wave
 
-import aiohttp
-
 from livekit import rtc
 from livekit.agents import (
     APIConnectOptions,
-    APIStatusError,
-    APITimeoutError,
     LanguageCode,
+    http,
     stt,
-    utils,
 )
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import (
@@ -52,7 +48,7 @@ class STT(stt.STT):
         language: ClovaSttLanguages | str = "en-US",
         secret: NotGivenOr[str] = NOT_GIVEN,
         invoke_url: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         threshold: float = 0.5,
     ):
         """
@@ -94,9 +90,9 @@ class STT(stt.STT):
             normalized = LanguageCode(language).iso
             self._language = clova_languages_mapping.get(normalized, normalized)
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     def url_builder(self, process_method: ClovaSpeechAPIType = "recognizer/upload") -> str:
@@ -109,70 +105,57 @@ class STT(stt.STT):
         language: NotGivenOr[ClovaSttLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        try:
-            url = self.url_builder()
-            lang = self._language
-            if is_given(language):
-                normalized = LanguageCode(language).iso
-                lang = clova_languages_mapping.get(normalized, normalized)
-            payload = json.dumps({"language": lang, "completion": "sync"})
+        url = self.url_builder()
+        lang = self._language
+        if is_given(language):
+            normalized = LanguageCode(language).iso
+            lang = clova_languages_mapping.get(normalized, normalized)
+        payload = json.dumps({"language": lang, "completion": "sync"})
 
-            buffer = rtc.combine_audio_frames(buffer)
-            buffer_bytes = resample_audio(
-                buffer.data.tobytes(), buffer.sample_rate, CLOVA_INPUT_SAMPLE_RATE
+        buffer = rtc.combine_audio_frames(buffer)
+        buffer_bytes = resample_audio(
+            buffer.data.tobytes(), buffer.sample_rate, CLOVA_INPUT_SAMPLE_RATE
+        )
+
+        io_buffer = io.BytesIO()
+        with wave.open(io_buffer, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)  # 16-bit
+            wav.setframerate(CLOVA_INPUT_SAMPLE_RATE)
+            wav.writeframes(buffer_bytes)
+        io_buffer.seek(0)
+
+        headers = {"X-CLOVASPEECH-API-KEY": self._secret}
+        form_data = http.FormData()
+        form_data.add_field("params", payload)
+        form_data.add_field("media", io_buffer, filename="audio.wav", content_type="audio/wav")
+        start = time.time()
+        async with self._ensure_session().post(
+            url,
+            data=form_data,
+            headers=headers,
+            conn_options=conn_options,
+        ) as response:
+            response_data = await response.json()
+            end = time.time()
+            text = response_data.get("text")
+            confidence = response_data.get("confidence")
+            logger.info(
+                "clova stt result",
+                extra={
+                    "lk.pii.text": text,
+                    "confidence": confidence,
+                    "total_seconds": end - start,
+                },
             )
-
-            io_buffer = io.BytesIO()
-            with wave.open(io_buffer, "wb") as wav:
-                wav.setnchannels(1)
-                wav.setsampwidth(2)  # 16-bit
-                wav.setframerate(CLOVA_INPUT_SAMPLE_RATE)
-                wav.writeframes(buffer_bytes)
-            io_buffer.seek(0)
-
-            headers = {"X-CLOVASPEECH-API-KEY": self._secret}
-            form_data = aiohttp.FormData()
-            form_data.add_field("params", payload)
-            form_data.add_field("media", io_buffer, filename="audio.wav", content_type="audio/wav")
-            start = time.time()
-            async with utils.http_context.request(
-                self._ensure_session(),
-                "POST",
-                url,
-                data=form_data,
-                headers=headers,
-                conn_options=conn_options,
-            ) as response:
-                response_data = await response.json()
-                end = time.time()
-                text = response_data.get("text")
-                confidence = response_data.get("confidence")
-                logger.info(
-                    "clova stt result",
-                    extra={
-                        "lk.pii.text": text,
-                        "confidence": confidence,
-                        "total_seconds": end - start,
-                    },
+            if not text or "error" in response_data:
+                raise ValueError(f"Unexpected response: {response_data}")
+            if confidence < self.threshold:
+                raise ValueError(
+                    f"Confidence: {confidence} is bellow threshold {self.threshold}. Skipping."
                 )
-                if not text or "error" in response_data:
-                    raise ValueError(f"Unexpected response: {response_data}")
-                if confidence < self.threshold:
-                    raise ValueError(
-                        f"Confidence: {confidence} is bellow threshold {self.threshold}. Skipping."
-                    )
-                logger.info("clova stt final event", extra={"lk.pii.data": response_data})
-                return self._transcription_to_speech_event(text=text, language=lang)
-
-        except TimeoutError as e:
-            raise APITimeoutError() from e
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=None,
-                body=None,
-            ) from e
+            logger.info("clova stt final event", extra={"lk.pii.data": response_data})
+            return self._transcription_to_speech_event(text=text, language=lang)
 
     def _transcription_to_speech_event(
         self,

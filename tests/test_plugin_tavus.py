@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, http
 from livekit.plugins.tavus.api import TavusAPI
 
 pytestmark = pytest.mark.plugin("tavus")
@@ -31,11 +30,11 @@ async def peer():
 
     app = web.Application()
     app.router.add_post("/{path:.*}", respond)
-    async with TestServer(app) as server, aiohttp.ClientSession() as http:
+    async with TestServer(app) as server, http.open() as session:
         api = TavusAPI(
             api_key="key",
             api_url=str(server.make_url("/v2")).rstrip("/"),
-            session=http,
+            session=session,
             conn_options=_OPTS,
         )
         yield api, script, calls
@@ -81,5 +80,5 @@ async def test_network_error_is_retried_and_chained(peer):
     script.append("disconnect")
     with pytest.raises(APIConnectionError) as error:
         await api.create_conversation()
-    assert isinstance(error.value.__cause__, aiohttp.ClientError)
+    assert isinstance(error.value.__cause__, APIConnectionError)
     assert len(calls) == _OPTS.max_retry + 1

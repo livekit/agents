@@ -21,15 +21,13 @@ import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 
-import aiohttp
 from pydantic import JsonValue
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
-    APITimeoutError,
+    http,
     tokenize,
     tts,
     utils,
@@ -62,7 +60,7 @@ class TTS(tts.TTS):
         voice_id: str | None = "4SZHfMpw-p46Ywgs",
         pronunciation_id: str | None = None,
         json_config: dict[str, JsonValue] | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         word_tokenizer: tokenize.WordTokenizer | None = None,
     ) -> None:
         """
@@ -121,20 +119,19 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Gradium"
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
-        return await utils.http_context.ws_connect(
-            self._ensure_session(),
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
+        return await self._ensure_session().ws_connect(
             self._model_endpoint,
             headers={"x-api-key": self._api_key, "x-api-source": "livekit"},
             conn_options=conn_options,
         )
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_ws(self, ws: http.WebSocket) -> None:
         await ws.close()
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
@@ -182,7 +179,7 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
-        connect_ws: Callable[[APIConnectOptions], Awaitable[aiohttp.ClientWebSocketResponse]],
+        connect_ws: Callable[[APIConnectOptions], Awaitable[http.WebSocket]],
         opts: _TTSOptions,
         tts: TTS,
         api_key: str,
@@ -208,7 +205,7 @@ class ChunkedStream(tts.ChunkedStream):
         # TODO(laurent): once we support the POST requests, we should use it here rather than the websocket API.
         try:
             ws = await self._connect_ws(self._conn_options)
-            async with ws:
+            try:
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
                     sample_rate=SUPPORTED_SAMPLE_RATE,
@@ -236,17 +233,13 @@ class ChunkedStream(tts.ChunkedStream):
                 await ws.send_str(json.dumps(flush_msg))
 
                 while True:
-                    msg = await asyncio.wait_for(ws.receive(), self._conn_options.read_timeout)
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
+                    msg = await ws.receive(timeout=self._conn_options.read_timeout)
+                    if msg.type is http.WebSocketMessageType.CLOSE:
                         # TODO(laurent): once we support returning eos in the api, we should enable this back.
                         # raise APIStatusError("Gradium websocket connection closed unexpectedly")
                         break
 
-                    if msg.type == aiohttp.WSMsgType.TEXT:
+                    if msg.type is http.WebSocketMessageType.TEXT:
                         msg_data = json.loads(msg.data)
                         type_ = msg_data.get("type")
                         if type_ == "text":
@@ -262,15 +255,11 @@ class ChunkedStream(tts.ChunkedStream):
                         else:
                             logger.warning(f"unknown message type: {type_}")
                 output_emitter.flush()
+            finally:
+                await ws.close()
 
         except APIError:
             raise
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -281,7 +270,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(
         self,
         *,
-        connect_ws: Callable[[APIConnectOptions], Awaitable[aiohttp.ClientWebSocketResponse]],
+        connect_ws: Callable[[APIConnectOptions], Awaitable[http.WebSocket]],
         model_name: str,
         opts: _TTSOptions,
         tts: TTS,
@@ -332,12 +321,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         except APIError:
             raise
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=request_id, body=None
-            ) from None
         except Exception as e:
             raise APIConnectionError() from e
         finally:
@@ -351,7 +334,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         read_deadline = self._core_attempts
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             setup_msg: dict[str, JsonValue] = {
                 "type": "setup",
                 "model_name": self._model_name,
@@ -378,20 +361,16 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(json.dumps(flush_msg))
             read_deadline.expect_response(final=True)
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             while True:
                 msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     # TODO(laurent): once we support returning eos in the api, we should enable this back.
                     # raise APIStatusError("Gradium websocket connection closed unexpectedly")
                     output_emitter.end_segment()
                     break
 
-                if msg.type == aiohttp.WSMsgType.TEXT:
+                if msg.type is http.WebSocketMessageType.TEXT:
                     msg_data = json.loads(msg.data)
                     type_ = msg_data.get("type")
                     if type_ == "text":
@@ -410,7 +389,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         logger.warning(f"unknown message type: {type_}")
 
         ws = await self._connect_ws(self._conn_options)
-        async with ws:
+        try:
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),
@@ -420,3 +399,5 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await asyncio.gather(*tasks)
             finally:
                 await utils.aio.cancel_and_wait(*tasks)
+        finally:
+            await ws.close()

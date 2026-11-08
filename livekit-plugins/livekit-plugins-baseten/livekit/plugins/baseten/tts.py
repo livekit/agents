@@ -16,12 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-import ssl
 import weakref
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
-import aiohttp
 from pydantic import JsonValue
 
 from livekit.agents import (
@@ -29,6 +27,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    http,
     tts,
     utils,
 )
@@ -37,10 +36,6 @@ from livekit.agents.utils import is_given
 
 from ._qwen3_tts import NUM_CHANNELS, SAMPLE_RATE, Qwen3Backend
 from .models import TTSModels
-
-ssl_context = ssl.create_default_context()
-ssl_context.check_hostname = False
-ssl_context.verify_mode = ssl.CERT_NONE
 
 _END_SENTINEL = "__END__"
 
@@ -84,7 +79,7 @@ class TTS(tts.TTS):
         ref_text: str | None = None,
         word_timestamps: bool = False,
         extra_config: Mapping[str, JsonValue] | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """
         Initialize the Baseten TTS.
@@ -122,7 +117,7 @@ class TTS(tts.TTS):
             temperature: Sampling temperature. Defaults to 0.6.
             max_tokens: Maximum tokens for generation. Defaults to 2000.
             buffer_size: Number of words per chunk for streaming. Defaults to 10.
-            http_session: Optional aiohttp session to reuse.
+            http_session: Optional HttpSession to reuse.
 
         Raises:
             ValueError: If the API key or endpoint cannot be resolved, or if
@@ -207,9 +202,9 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Baseten"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
@@ -287,7 +282,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
         opts: _TTSOptions,
-        ensure_session: Callable[[], aiohttp.ClientSession],
+        ensure_session: Callable[[], http.HttpSession],
         model_endpoint: str,
         api_key: str,
     ) -> None:
@@ -304,9 +299,7 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            async with utils.http_context.request(
-                self._ensure_session(),
-                "POST",
+            async with self._ensure_session().post(
                 self._model_endpoint,
                 headers={
                     "Authorization": f"Api-Key {self._api_key}",
@@ -318,9 +311,8 @@ class ChunkedStream(tts.ChunkedStream):
                     "language": self._opts.language,
                 },
                 conn_options=self._conn_options,
-                ssl=ssl_context,
             ) as resp:
-                resp.raise_for_status()
+                await resp.raise_for_status()
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -329,16 +321,14 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type="audio/pcm",
                 )
 
-                async for data, _ in resp.content.iter_chunks():
+                async for data in resp.iter_bytes():
                     output_emitter.push(data)
 
                 output_emitter.flush()
         except TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+        except (APIStatusError, APIConnectionError):
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -350,7 +340,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         tts: TTS,
         conn_options: APIConnectOptions,
         opts: _TTSOptions,
-        ensure_session: Callable[[], aiohttp.ClientSession],
+        ensure_session: Callable[[], http.HttpSession],
         model_endpoint: str,
         api_key: str,
     ) -> None:
@@ -372,7 +362,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         read_deadline = self._core_attempts
 
-        async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _send_task(ws: http.WebSocket) -> None:
             async for data in self.input:
                 if isinstance(data, self.Flush):
                     continue
@@ -382,30 +372,21 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(_END_SENTINEL)
             read_deadline.expect_response(final=True)
 
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _recv_task(ws: http.WebSocket) -> None:
             output_emitter.start_segment(segment_id=request_id)
             async for msg in ws:
-                if msg.type == aiohttp.WSMsgType.BINARY:
+                if msg.type is http.WebSocketMessageType.BINARY:
                     read_deadline.audio_received()
-                    output_emitter.push(msg.data)
-                elif msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    break
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    raise APIConnectionError()
+                    output_emitter.push(msg.binary)
             output_emitter.end_input()
 
         try:
-            async with await utils.http_context.ws_connect(
-                self._ensure_session(),
+            ws = await self._ensure_session().ws_connect(
                 self._model_endpoint,
                 headers={"Authorization": f"Api-Key {self._api_key}"},
-                ssl=ssl_context,
                 conn_options=self._conn_options,
-            ) as ws:
+            )
+            try:
                 await ws.send_json(
                     {
                         "voice": self._opts.voice,
@@ -422,13 +403,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await asyncio.gather(*tasks)
                 finally:
                     await utils.aio.cancel_and_wait(*tasks)
+            finally:
+                await ws.close()
         except TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
-        except (APIConnectionError, APIStatusError, APITimeoutError):
+        except (APIConnectionError, APIStatusError):
             raise
         except Exception as e:
             raise APIConnectionError() from e

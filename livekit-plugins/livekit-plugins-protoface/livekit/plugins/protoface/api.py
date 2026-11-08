@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import os
 
-import aiohttp
 from pydantic import JsonValue, TypeAdapter
 
 from livekit.agents import (
@@ -12,11 +11,10 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
-    APITimeoutError,
     NotGivenOr,
+    http,
     utils,
 )
-from livekit.agents.utils import http_context
 
 from .errors import ProtofaceException
 from .log import logger
@@ -37,7 +35,7 @@ class ProtofaceAPI:
         api_key: NotGivenOr[str | None] = NOT_GIVEN,
         api_url: NotGivenOr[str | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        session: aiohttp.ClientSession | None = None,
+        session: http.HttpSession | None = None,
     ) -> None:
         """Create a Protoface API client.
 
@@ -112,9 +110,9 @@ class ProtofaceAPI:
         """
         return await self._json("POST", f"/v1/sessions/{session_id}/end")
 
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
+    def _ensure_http_session(self) -> http.HttpSession:
         if self._session is None:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     async def _json(
@@ -136,8 +134,7 @@ class ProtofaceAPI:
         async with self._conn_options.total_deadline():
             for attempt in range(self._conn_options.max_retry + 1):
                 try:
-                    async with http_context.request(
-                        self._ensure_http_session(),
+                    async with self._ensure_http_session().request(
                         method,
                         url,
                         json=json,
@@ -160,12 +157,8 @@ class ProtofaceAPI:
                             status_code=response.status,
                             body=payload,
                         )
-                except TimeoutError as exc:
-                    error = APITimeoutError()
-                    error.__cause__ = exc
-                except aiohttp.ClientError as exc:
-                    error = APIConnectionError()
-                    error.__cause__ = exc
+                except APIConnectionError as exc:
+                    error = exc
                 except APIStatusError as exc:
                     if not exc.retryable:
                         raise
@@ -189,13 +182,13 @@ def _resolve_optional_string(value: NotGivenOr[str | None], env_name: str) -> st
     return os.getenv(env_name)
 
 
-async def _read_payload(response: aiohttp.ClientResponse) -> JsonValue:
+async def _read_payload(response: http.HttpResponse) -> JsonValue:
     text = await response.text()
     if not text:
         return {}
 
     try:
-        return _JSON_VALUE.validate_python(await response.json(content_type=None))
+        return _JSON_VALUE.validate_python(await response.json())
     except ValueError:
         return {"raw": text}
 

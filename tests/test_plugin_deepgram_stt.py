@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from livekit.agents import APIConnectionError, http
+
 pytestmark = pytest.mark.plugin("deepgram")
 
 
@@ -305,14 +307,10 @@ class _DeadSocket:
         self._closed = asyncio.Event()
 
     async def send_str(self, data: str) -> None:
-        import aiohttp
-
-        raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+        raise APIConnectionError("Cannot write to closing transport")
 
     async def send_bytes(self, data: bytes) -> None:
-        import aiohttp
-
-        raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+        raise APIConnectionError("Cannot write to closing transport")
 
     async def receive(self):
         await self._closed.wait()
@@ -348,7 +346,6 @@ async def test_v1_socket_is_opened_with_a_heartbeat():
     """A real local handshake retains heartbeat-based detection of half-open sockets."""
     from unittest.mock import patch
 
-    import aiohttp
     from aiohttp import web
     from aiohttp.test_utils import TestServer
 
@@ -366,7 +363,7 @@ async def test_v1_socket_is_opened_with_a_heartbeat():
 
     app = web.Application()
     app.router.add_get("/listen", recognize)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         with patch.object(session, "ws_connect", wraps=session.ws_connect) as connect:
             provider = STT(
                 api_key="test-key", base_url=str(server.make_url("/listen")), http_session=session
@@ -396,10 +393,10 @@ async def test_keepalive_write_drop_reconnects_instead_of_stalling():
 
 
 class _HeartbeatTimeoutSocket:
-    """A socket in the state aiohttp leaves it in when a ping goes unanswered.
+    """A socket whose heartbeat went unanswered.
 
-    The heartbeat closes the connection itself, so this arrives as WSMsgType.ERROR
-    rather than as a close frame, and the reason lives only on ws.exception().
+    The heartbeat closes the connection itself, so receive() raises
+    APIConnectionError rather than returning a close frame.
     """
 
     def __init__(self) -> None:
@@ -412,28 +409,19 @@ class _HeartbeatTimeoutSocket:
     async def send_bytes(self, data: bytes) -> None:
         pass
 
-    def exception(self):
-        import aiohttp
-
-        return aiohttp.ServerTimeoutError("No PONG received after 15.0s")
-
     async def receive(self):
-        import aiohttp
-
         self.receives += 1
         # yield, so that a recv loop which steps over this rather than ending
         # fails the test instead of starving the event loop and hanging it
         await asyncio.sleep(0)
-        return aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, self.exception(), None)
+        raise APIConnectionError("No PONG received after 15.0s")
 
     async def close(self) -> None:
         self.closed = True
 
 
 async def test_heartbeat_timeout_reconnects_without_spinning():
-    # the ERROR has to end the recv loop. logging it as an unexpected type and
-    # continuing only works because aiohttp happens to report CLOSED next, and it
-    # throws away the one value that says why the socket went away.
+    # the receive failure has to end the recv loop and reconnect.
     sockets: list[_HeartbeatTimeoutSocket] = []
 
     async def _connect():
@@ -450,7 +438,6 @@ async def test_heartbeat_timeout_reconnects_without_spinning():
 
 
 async def test_vad_channel_pairs_start_and_end_speech_over_websocket() -> None:
-    import aiohttp
     from aiohttp import web
     from aiohttp.test_utils import TestServer
 
@@ -468,7 +455,7 @@ async def test_vad_channel_pairs_start_and_end_speech_over_websocket() -> None:
 
     app = web.Application()
     app.router.add_get("/listen", recognize)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         model = deepgram.STT(
             api_key="test",
             base_url=str(server.make_url("/listen")),
@@ -485,13 +472,12 @@ async def test_vad_channel_pairs_start_and_end_speech_over_websocket() -> None:
 
 
 async def test_batch_recognition_rejects_nontext_transcript() -> None:
-    import aiohttp
     from aiohttp import web
     from aiohttp.test_utils import TestServer
     from pydantic import ValidationError
 
     from livekit import rtc
-    from livekit.agents import APIConnectionError, APIConnectOptions
+    from livekit.agents import APIConnectOptions
     from livekit.plugins import deepgram
 
     async def recognize(request: web.Request) -> web.Response:
@@ -509,7 +495,7 @@ async def test_batch_recognition_rejects_nontext_transcript() -> None:
 
     app = web.Application()
     app.router.add_post("/{path:.*}", recognize)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         model = deepgram.STT(
             api_key="test", base_url=str(server.make_url("/recognize")), http_session=session
         )

@@ -18,14 +18,12 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
-    APITimeoutError,
-    create_api_error_from_http,
+    http,
     tts,
     utils,
 )
@@ -75,7 +73,7 @@ class TTS(tts.TTS):
         output_format: OutputFormat = DEFAULT_OUTPUT_FORMAT,
         enhance_named_entities: bool = False,
         sample_rate: int | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """
         Create a new instance of Camb.ai TTS.
@@ -95,7 +93,7 @@ class TTS(tts.TTS):
             output_format: Audio output format (default: 'pcm_s16le').
             enhance_named_entities: Enhanced pronunciation for named entities.
             sample_rate: Audio sample rate in Hz. If None, auto-detected from model.
-            http_session: Optional aiohttp.ClientSession to reuse.
+            http_session: Optional HttpSession to reuse.
         """
         resolved_sample_rate = sample_rate or MODEL_SAMPLE_RATES.get(model, 22050)
 
@@ -129,9 +127,9 @@ class TTS(tts.TTS):
             enhance_named_entities=enhance_named_entities,
         )
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     @property
@@ -185,7 +183,7 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
-        get_session: Callable[[], aiohttp.ClientSession],
+        get_session: Callable[[], http.HttpSession],
         api_key: str | None,
         base_url: str,
         opts: _TTSOptions,
@@ -235,9 +233,7 @@ class ChunkedStream(tts.ChunkedStream):
             if self._api_key:
                 headers[API_KEY_HEADER] = self._api_key
 
-            async with utils.http_context.request(
-                self._get_session(),
-                "POST",
+            async with self._get_session().post(
                 f"{self._base_url}/tts-stream",
                 headers=headers,
                 json=payload,
@@ -259,16 +255,12 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=mime_type,
                 )
 
-                async for data, _ in resp.content.iter_chunks():
+                async for data in resp.iter_bytes():
                     output_emitter.push(data)
 
                 output_emitter.flush()
 
-        except TimeoutError as e:
-            raise APITimeoutError() from e
-        except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(e.message, status=e.status) from e
+        except APIError:
+            raise
         except Exception as e:
-            if isinstance(e, (APIStatusError, APIConnectionError, APITimeoutError)):
-                raise
             raise APIConnectionError() from e

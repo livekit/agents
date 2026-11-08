@@ -45,7 +45,6 @@ import time
 from dataclasses import dataclass
 from typing import Annotated, Literal, Self
 
-import aiohttp
 from pydantic import BaseModel, Field, JsonValue, StrictBool, StrictStr, model_validator
 
 from livekit import rtc
@@ -56,6 +55,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -167,7 +167,7 @@ class STT(stt.STT):
         priority_words_strength: float = 0.5,
         max_transcript_inactivity_seconds: float | None = None,
         end_of_turn_confirm_delay_seconds: float | None = 0.4,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -208,9 +208,9 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "nabrah"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     async def _recognize_impl(
@@ -257,7 +257,7 @@ class SpeechStream(stt.RecognizeStream):
         opts: _STTOptions,
         conn_options: APIConnectOptions,
         language: str,
-        http_session: aiohttp.ClientSession,
+        http_session: http.HttpSession,
     ) -> None:
         super().__init__(stt=stt_instance, conn_options=conn_options, sample_rate=16000)
         self._opts = opts
@@ -299,13 +299,8 @@ class SpeechStream(stt.RecognizeStream):
             "priority_words_strength": self._opts.priority_words_strength,
         }
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        try:
-            return await utils.http_context.ws_connect(
-                self._session, self._opts.base_url, conn_options=self._conn_options
-            )
-        except (TimeoutError, aiohttp.ClientConnectorError, aiohttp.WSServerHandshakeError) as e:
-            raise APIConnectionError("failed to connect to nabrah STT") from e
+    async def _connect_ws(self) -> http.WebSocket:
+        return await self._session.ws_connect(self._opts.base_url, conn_options=self._conn_options)
 
     def _stream_failure(self, message: str) -> APIConnectionError:
         return APIConnectionError(message, retryable=self._audio_position == 0.0)
@@ -334,7 +329,7 @@ class SpeechStream(stt.RecognizeStream):
                         raise APIConnectionError(
                             f"nabrah STT ready handshake failed ({type(e).__name__})"
                         ) from None
-                    if msg.type != aiohttp.WSMsgType.TEXT:
+                    if msg.type is not http.WebSocketMessageType.TEXT:
                         raise APIConnectionError("nabrah STT closed before ready")
                     try:
                         payload = _Message.model_validate_json(msg.data)
@@ -393,7 +388,7 @@ class SpeechStream(stt.RecognizeStream):
             ):
                 self._flush_eos()
 
-    async def _send_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _send_task(self, ws: http.WebSocket) -> None:
         try:
             async for data in self.input:
                 if isinstance(data, rtc.AudioFrame):
@@ -406,7 +401,7 @@ class SpeechStream(stt.RecognizeStream):
         except Exception as e:
             raise self._stream_failure(f"nabrah STT send failed ({type(e).__name__})") from None
 
-    async def _recv_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _recv_task(self, ws: http.WebSocket) -> None:
         while True:
             try:
                 msg = await ws.receive()
@@ -414,17 +409,11 @@ class SpeechStream(stt.RecognizeStream):
                 raise self._stream_failure(
                     f"nabrah STT receive failed ({type(e).__name__})"
                 ) from None
-            if msg.type in (
-                aiohttp.WSMsgType.CLOSED,
-                aiohttp.WSMsgType.CLOSE,
-                aiohttp.WSMsgType.CLOSING,
-            ):
+            if msg.type is http.WebSocketMessageType.CLOSE:
                 if not self._input_done:
                     raise self._stream_failure("nabrah STT closed unexpectedly")
                 return
-            if msg.type == aiohttp.WSMsgType.ERROR:
-                raise self._stream_failure("nabrah STT WebSocket failed")
-            if msg.type != aiohttp.WSMsgType.TEXT:
+            if msg.type is not http.WebSocketMessageType.TEXT:
                 continue
             try:
                 self._process_message(_Message.model_validate_json(msg.data))

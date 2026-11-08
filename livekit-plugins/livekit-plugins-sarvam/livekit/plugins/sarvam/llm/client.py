@@ -20,7 +20,7 @@ from typing import Any
 
 from livekit.agents import __version__ as livekit_version, llm
 from livekit.agents.inference import InferenceClass
-from livekit.agents.inference.llm import ReasoningEffort
+from livekit.agents.inference.llm import ChatCompletionOptions, ReasoningEffort
 from livekit.agents.llm import ChatContext, ToolChoice
 from livekit.agents.llm.chat_context import ImageContent
 from livekit.agents.types import (
@@ -255,7 +255,7 @@ class LLM(OpenAILLM):
         self,
         *,
         model: NotGivenOr[str] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[ChatCompletionOptions | dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         """Update the model at runtime; ``extra_kwargs`` replaces the persistent kwargs.
 
@@ -274,11 +274,12 @@ class LLM(OpenAILLM):
         if new_version == self._sarvam_api_version:
             super().update_options(model=new_model)
             return
-        # Endpoint changed: the next chat builds the client for the new URL
+        # Endpoint changed: a client for the new URL, keeping the persistent kwargs
         self._base_url = _resolve_base_url(new_model)
         self._model = new_model
+        self._extra_kwargs = dict(self._native.extra_kwargs)
         self._sarvam_api_version = new_version
-        self.__dict__.pop("_native", None)
+        self._native = self._new_native()
 
     def chat(
         self,

@@ -1,5 +1,5 @@
 """Shared helpers: ``is_given``, ``shortuuid``, ``log_exceptions``, participant and track waits,
-and the ``aio``, ``media`` and ``http_context`` modules."""
+and the ``aio`` and ``media`` modules."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from livekit import rtc
 
 from .. import _core
 from ..types import NotGiven, NotGivenOr
-from . import aio, http_context, media
+from . import aio, media
 from .aio import ConnectionPool
 
 EventEmitter = rtc.EventEmitter
@@ -214,7 +214,7 @@ async def wait_for_track_publication(
     disconnects before a matching publication is found, so callers don't wait
     on a participant that is gone.
     """
-    publisher, sid = await _core.wait_for_track_publication(
+    found = await _core.wait_for_track_publication(
         _core._core_create_room_session(room),
         identity,
         _kinds(kind),
@@ -222,14 +222,15 @@ async def wait_for_track_publication(
         wait_for_subscription,
     )
     participant: rtc.Participant = (
-        room.local_participant if publisher is None else room.remote_participants[publisher]
+        room.local_participant
+        if found.publisher is None
+        else room.remote_participants[found.publisher]
     )
-    return participant.track_publications[sid]
+    return participant.track_publications[found.sid]
 
 
 __all__ = [
     "shortuuid",
-    "http_context",
     "EventEmitter",
     "log_exceptions",
     "aio",

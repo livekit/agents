@@ -30,7 +30,6 @@ from dataclasses import dataclass, replace
 from typing import Literal
 from urllib.parse import urlencode
 
-import aiohttp
 from pydantic import ValidationError
 
 from livekit import rtc
@@ -42,6 +41,7 @@ from livekit.agents import (
     APITimeoutError,
     LanguageCode,
     __version__ as livekit_version,
+    http,
     stt,
     utils,
 )
@@ -407,7 +407,7 @@ class STT(stt.STT):
         mode: Mode for saaras:v3/v4 (transcribe/translate/verbatim/translit/codemix)
         api_key: Sarvam.ai API key (falls back to SARVAM_API_KEY env var)
         base_url: API endpoint URL
-        http_session: Optional aiohttp session to use
+        http_session: Optional HTTP session to use
         prompt: Optional prompt for STT translate (saaras models only)
     """
 
@@ -419,7 +419,7 @@ class STT(stt.STT):
         mode: SarvamSTTModes | str = "transcribe",
         api_key: str | None = None,
         base_url: str | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         prompt: str | None = None,
         high_vad_sensitivity: bool | None = None,
         sample_rate: int = 16000,
@@ -477,7 +477,7 @@ class STT(stt.STT):
         self._session = http_session
         self._logger = logger.getChild(self.__class__.__name__)
         # Strong ownership: a stream that finishes and gets garbage-collected would
-        # otherwise take its still-open per-stream aiohttp.ClientSession with it.
+        # otherwise take its still-open per-stream HttpSession with it.
         # Streams discard themselves in SpeechStream.aclose() once closed.
         self._streams: set[SpeechStream] = set()
         _warn_if_sunset_stt_model(model)
@@ -490,9 +490,9 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Sarvam"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     @staticmethod
@@ -578,7 +578,7 @@ class STT(stt.STT):
         audio = rtc.combine_audio_frames(buffer)
         wav_bytes = audio.to_wav_bytes()
 
-        form_data = aiohttp.FormData()
+        form_data = http.FormData()
         form_data.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/wav")
 
         # Add model and language_code to the form data
@@ -598,10 +598,8 @@ class STT(stt.STT):
 
         try:
             base_url, _ = _get_urls_for_model(opts_model)
-            async with utils.http_context.request(
-                self._ensure_session(),
-                "POST",
-                url=base_url,
+            async with self._ensure_session().post(
+                base_url,
                 data=form_data,
                 headers=headers,
                 conn_options=conn_options,
@@ -659,12 +657,6 @@ class STT(stt.STT):
                     alternatives=alternatives,
                 )
 
-        except TimeoutError as e:
-            self._logger.error(f"Sarvam API timeout: {e}")
-            raise APITimeoutError("Sarvam API request timed out") from e
-        except aiohttp.ClientError as e:
-            self._logger.error(f"Sarvam API client error: {e}")
-            raise APIConnectionError(f"Sarvam API connection error: {e}") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
             # Preserve provider-originated status/body/retry metadata.
             raise
@@ -789,7 +781,7 @@ class STT(stt.STT):
         )
 
         # Create a fresh session for this stream to avoid conflicts
-        stream_session = aiohttp.ClientSession()
+        stream_session = http.HttpSession()
 
         if not self._api_key:
             raise ValueError("API key cannot be None")
@@ -807,7 +799,7 @@ class STT(stt.STT):
     async def aclose(self) -> None:
         """Close every stream this instance created.
 
-        ``stream()`` gives each ``SpeechStream`` its own ``aiohttp.ClientSession``,
+        ``stream()`` gives each ``SpeechStream`` its own ``http.HttpSession``,
         and only ``SpeechStream.aclose()`` closes it. Streams are owned strongly
         (see ``self._streams``) so a finished, garbage-collected stream cannot
         take its open session with it; closed streams discard themselves, so the
@@ -834,7 +826,7 @@ class SpeechStream(stt.RecognizeStream):
         opts: SarvamSTTOptions,
         conn_options: APIConnectOptions,
         api_key: str,
-        http_session: aiohttp.ClientSession,
+        http_session: http.HttpSession,
         release_stream: Callable[[SpeechStream], None],
         client_request_id: str | None = None,
         server_request_id: str | None = None,
@@ -856,9 +848,7 @@ class SpeechStream(stt.RecognizeStream):
         self._server_request_id = server_request_id
 
         # Add flush mechanism
-        self._ws: aiohttp.ClientWebSocketResponse | None = (
-            None  # Store WebSocket reference for flush
-        )
+        self._ws: http.WebSocket | None = None  # Store WebSocket reference for flush
         self._should_flush = False  # Flag to trigger flush
 
         self._utterance_speech_start_wall: float | None = None
@@ -1040,17 +1030,15 @@ class SpeechStream(stt.RecognizeStream):
 
         # Close session last
         try:
-            if self._session and not self._session.closed:
-                await self._session.close()
-                self._logger.debug("HTTP session closed", extra=self._build_log_context())
+            await self._session.aclose()
+            self._logger.debug("HTTP session closed", extra=self._build_log_context())
+            # Release the STT's strong ownership only after session cleanup succeeds.
+            self._release_stream(self)
         except Exception as e:
             self._logger.warning(f"Error closing session: {e}", extra=self._build_log_context())
         finally:
             self._client_request_id = None
             self._server_request_id = None
-            # Release the STT's strong ownership only after session cleanup succeeds.
-            if self._session.closed:
-                self._release_stream(self)
 
     def update_options(
         self,
@@ -1083,7 +1071,7 @@ class SpeechStream(stt.RecognizeStream):
         )
         self._reconnect_event.set()
 
-    async def _send_initial_config(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _send_initial_config(self, ws: http.WebSocket) -> None:
         """Send initial configuration message with prompt for saaras models."""
         try:
             config_message = {"prompt": self._opts.prompt, "type": "config"}
@@ -1107,11 +1095,6 @@ class SpeechStream(stt.RecognizeStream):
         self._server_request_id = None
         try:
             await self._run_connection()
-        except (TimeoutError, aiohttp.ClientConnectorError) as e:
-            async with self._connection_lock:
-                self._connection_state = ConnectionState.FAILED
-            self._logger.error(f"Connection failed: {e}", extra=self._build_log_context())
-            raise APIConnectionError(f"Failed to connect to STT WebSocket: {e}") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
             async with self._connection_lock:
                 self._connection_state = ConnectionState.FAILED
@@ -1129,7 +1112,6 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _run_connection(self) -> None:
         """Run a single WebSocket connection attempt."""
-        # Check if session is still valid
         if self._session.closed:
             raise APIConnectionError("Session is closed, cannot establish WebSocket connection")
 
@@ -1152,8 +1134,8 @@ class SpeechStream(stt.RecognizeStream):
             extra={**self._build_log_context(), "url": ws_url, "user-agent": USER_AGENT},
         )
 
-        ws = await utils.http_context.ws_connect(
-            self._session, ws_url, headers=headers, conn_options=self._conn_options
+        ws = await self._session.ws_connect(
+            ws_url, headers=headers, conn_options=self._conn_options
         )
 
         # Store WebSocket reference for cleanup - ensure it's always cleaned up
@@ -1249,7 +1231,7 @@ class SpeechStream(stt.RecognizeStream):
                 )
 
     @utils.log_exceptions(logger=logger)
-    async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _process_audio(self, ws: http.WebSocket) -> None:
         """Process audio frames and send them in chunks."""
         import base64
 
@@ -1346,7 +1328,7 @@ class SpeechStream(stt.RecognizeStream):
             )
 
     @utils.log_exceptions(logger=logger)
-    async def _process_messages(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _process_messages(self, ws: http.WebSocket) -> None:
         """Process incoming messages from the WebSocket."""
         self._logger.info(
             "Starting message processing",
@@ -1356,7 +1338,7 @@ class SpeechStream(stt.RecognizeStream):
         try:
             while True:
                 msg = await ws.receive()
-                if msg.type == aiohttp.WSMsgType.TEXT:
+                if msg.type == http.WebSocketMessageType.TEXT:
                     try:
                         await self._handle_message(STT_MESSAGE.validate_json(msg.data))
                     except ValidationError as e:
@@ -1366,7 +1348,7 @@ class SpeechStream(stt.RecognizeStream):
                             ) from e
                         if looks_like_error_text(msg.data):
                             raise APIStatusError(
-                                message=(f"Sarvam STT non-JSON error message: {msg.data}"),
+                                message=(f"Sarvam STT non-JSON error message: {msg.data!s}"),
                                 body={"raw_message": msg.data},
                             ) from e
                         self._logger.warning(
@@ -1388,22 +1370,13 @@ class SpeechStream(stt.RecognizeStream):
                             exc_info=True,
                         )
                         raise APIStatusError(
-                            message=f"Message processing error: {e}. Raw server message: {msg.data}",
+                            message=f"Message processing error: {e}. Raw server message: {msg.data!s}",
                             body={"raw_message": msg.data},
                         ) from e
 
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    error_msg = f"WebSocket error: {msg.data}"
-                    self._logger.error(error_msg, extra=self._build_log_context())
-                    raise APIConnectionError(error_msg)
-
-                elif msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    close_code = ws.close_code if ws.close_code is not None else msg.data
-                    close_reason = msg.extra
+                elif msg.type == http.WebSocketMessageType.CLOSE:
+                    close_code = ws.close_code
+                    close_reason = msg.data
                     is_expected_close = close_code in (1000, 1001, None)
                     has_error_reason = looks_like_error_text(close_reason)
 

@@ -5,9 +5,7 @@ import os
 import struct
 from dataclasses import dataclass
 
-import aiohttp
-
-from livekit.agents import utils
+from livekit.agents import http
 
 from . import models
 
@@ -24,9 +22,9 @@ async def create_embeddings(
     model: models.EmbeddingModels = "text-embedding-3-small",
     dimensions: int | None = None,
     api_key: str | None = None,
-    http_session: aiohttp.ClientSession | None = None,
+    http_session: http.HttpSession | None = None,
 ) -> list[EmbeddingData]:
-    http_session = http_session or utils.http_context.http_session()
+    http_session = http_session or http.http_session()
 
     api_key = api_key or os.environ.get("OPENAI_API_KEY")
     if not api_key:

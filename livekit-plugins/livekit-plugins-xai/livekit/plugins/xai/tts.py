@@ -22,13 +22,12 @@ import weakref
 from dataclasses import dataclass, replace
 from urllib.parse import urlencode
 
-import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    http,
     tokenize,
     tts,
     utils,
@@ -67,7 +66,7 @@ class TTS(tts.TTS):
         speed: NotGivenOr[float] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
         tokenizer: tokenize.WordTokenizer | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """
         Create a new instance of the xAI TTS.
@@ -81,7 +80,7 @@ class TTS(tts.TTS):
             speed (float, optional): Speaking-rate multiplier for the generated audio.
             text_normalization (bool, optional): Whether to normalize text before synthesis.
             api_key (str | None, optional): The xAI API key. If not provided, it will be read from the xAI environment variable.
-            http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
+            http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, the job's shared session is used.
         """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -109,7 +108,7 @@ class TTS(tts.TTS):
 
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        self._pool = utils.ConnectionPool[http.WebSocket](
             connect_cb=self._connect_pooled_ws,
             close_cb=self._close_pooled_ws,
             # xAI's TTS server enforces an undocumented ~2100s deadline per websocket
@@ -133,7 +132,7 @@ class TTS(tts.TTS):
 
     async def _connect_ws(
         self, conn_options: APIConnectOptions, opts: _TTSOptions
-    ) -> aiohttp.ClientWebSocketResponse:
+    ) -> http.WebSocket:
         params: dict[str, str | int | float] = {
             "voice": opts.voice,
             "language": opts.language,
@@ -148,41 +147,24 @@ class TTS(tts.TTS):
             params["text_normalization"] = str(opts.text_normalization).lower()
 
         url = f"{XAI_WEBSOCKET_URL}?{urlencode(params)}"
-        try:
-            ws = await utils.http_context.ws_connect(
-                self._ensure_session(),
-                url,
-                headers={"Authorization": f"Bearer {self._api_key}"},
-                conn_options=conn_options,
-            )
-        except TimeoutError:
-            raise APIConnectionError("failed to connect to xAI") from None
-        except aiohttp.ClientResponseError as e:
-            # RequestInfo carries the request headers, so chaining this error or
-            # formatting it puts the API key in the exception repr (#6739).
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
-        except APITimeoutError:
-            raise
-        except Exception as e:
-            raise APIConnectionError(f"failed to connect to xAI ({type(e).__name__})") from None
-        return ws
+        return await self._ensure_session().ws_connect(
+            url,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            conn_options=conn_options,
+        )
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_ws(self, ws: http.WebSocket) -> None:
         await ws.close()
 
-    async def _connect_pooled_ws(
-        self, conn_options: APIConnectOptions
-    ) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_pooled_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         return await self._connect_ws(conn_options, self._opts)
 
-    async def _close_pooled_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_pooled_ws(self, ws: http.WebSocket) -> None:
         await self._close_ws(ws)
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     def update_options(
@@ -272,7 +254,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         tts: TTS,
         conn_options: APIConnectOptions,
         opts: _TTSOptions,
-        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        pool: utils.ConnectionPool[http.WebSocket],
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts = opts
@@ -317,13 +299,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         except TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=request_id,
-                body=None,
-            ) from None
         except APIConnectionError:
             raise
         except Exception as e:
@@ -340,7 +315,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         read_deadline = self._core_attempts
 
-        async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _send_task(ws: http.WebSocket) -> None:
             nonlocal input_ended
 
             async for word in input_stream:
@@ -351,21 +326,17 @@ class SynthesizeStream(tts.SynthesizeStream):
             input_ended = True
             read_deadline.expect_response(final=True)
 
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _recv_task(ws: http.WebSocket) -> None:
             while True:
                 msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type == http.WebSocketMessageType.CLOSE:
                     raise APIStatusError(
                         "xAI connection closed unexpectedly",
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=f"{msg.data=}",
                     )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type != http.WebSocketMessageType.TEXT:
                     logger.warning("Unexpected xAI message type %s", msg.type)
                     continue
 

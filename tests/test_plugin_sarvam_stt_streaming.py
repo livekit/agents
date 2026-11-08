@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlparse
 import numpy as np
 import pytest
 
-from livekit.agents import APIStatusError
+from livekit.agents import APIConnectionError, APIStatusError, http
 from livekit.plugins import sarvam
 from livekit.plugins.sarvam import stt_streaming, tts
 from livekit.plugins.sarvam.models import RealtimeMessage
@@ -1057,7 +1057,7 @@ async def test_streaming_safe_send_str_ignores_closed_transport() -> None:
     assert calls == []
 
     async def _raise_reset(payload: str) -> None:
-        raise stt_streaming.aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+        raise APIConnectionError("websocket send failed")
 
     closing_ws = SimpleNamespace(closed=False, send_str=_raise_reset)
     await stream._safe_send_str(closing_ws, {"event": "end"})
@@ -1238,11 +1238,7 @@ async def test_streaming_process_messages_raises_on_realtime_rejection_close() -
     ws = SimpleNamespace(
         receive=lambda: asyncio.sleep(
             0,
-            result=SimpleNamespace(
-                type=stt_streaming.aiohttp.WSMsgType.CLOSE,
-                data=4000,
-                extra="beta access denied",
-            ),
+            result=http.WebSocketMessage(http.WebSocketMessageType.CLOSE, "beta access denied"),
         ),
         close_code=4000,
     )
@@ -1264,13 +1260,13 @@ async def test_streaming_process_messages_stops_after_session_end() -> None:
         def __init__(self) -> None:
             self.receive_count = 0
 
-        async def receive(self) -> SimpleNamespace:
+        async def receive(self) -> http.WebSocketMessage:
             self.receive_count += 1
             if self.receive_count > 1:
                 raise AssertionError("process_messages should stop after session.end")
-            return SimpleNamespace(
-                type=stt_streaming.aiohttp.WSMsgType.TEXT,
-                data=json.dumps(
+            return http.WebSocketMessage(
+                http.WebSocketMessageType.TEXT,
+                json.dumps(
                     {
                         "event": "session.end",
                         "request_id": "req_123",
@@ -1297,20 +1293,14 @@ async def test_streaming_connect_logs_handshake_failure(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     stream = _make_stream()
-    response_error = stt_streaming.aiohttp.ClientResponseError(
-        request_info=None,
-        history=(),
-        status=403,
-        message="Forbidden",
-    )
 
     async def _raise_response_error(*args: object, **kwargs: object) -> None:
-        raise response_error
+        raise APIStatusError("Forbidden", status_code=403)
 
-    stream._session = SimpleNamespace(ws_connect=_raise_response_error, trace_configs=[])
+    stream._session = SimpleNamespace(ws_connect=_raise_response_error)
 
     with caplog.at_level(logging.ERROR, logger=stt_streaming.logger.name):
-        with pytest.raises(stt_streaming.aiohttp.ClientResponseError):
+        with pytest.raises(APIStatusError):
             await stream._connect_ws()
 
     records = [
@@ -1376,11 +1366,7 @@ async def test_clean_close_commits_final_buffered_without_speech_end() -> None:
     ws = SimpleNamespace(
         receive=lambda: asyncio.sleep(
             0,
-            result=SimpleNamespace(
-                type=stt_streaming.aiohttp.WSMsgType.CLOSE,
-                data=1000,
-                extra=None,
-            ),
+            result=http.WebSocketMessage(http.WebSocketMessageType.CLOSE, ""),
         ),
         close_code=1000,
     )
@@ -1668,7 +1654,7 @@ async def test_streaming_safe_send_bytes_ignores_closed_transport() -> None:
     assert calls == []
 
     async def _raise_reset(payload: bytes) -> None:
-        raise stt_streaming.aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+        raise APIConnectionError("websocket send failed")
 
     closing_ws = SimpleNamespace(closed=False, send_bytes=_raise_reset)
     await stream._safe_send_bytes(closing_ws, b"\x00\x01")
@@ -1686,7 +1672,7 @@ async def test_process_audio_stops_pumping_after_session_end() -> None:
     sent: list[object] = []
 
     async def _raise_reset(payload: object) -> None:
-        raise stt_streaming.aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+        raise APIConnectionError("websocket send failed")
 
     ws = SimpleNamespace(
         closed=False,
@@ -1725,7 +1711,7 @@ async def test_process_audio_survives_reset_race_on_peer_close() -> None:
     sent: list[str] = []
 
     async def _raise_reset(payload: object) -> None:
-        raise stt_streaming.aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+        raise APIConnectionError("websocket send failed")
 
     ws = SimpleNamespace(
         closed=False,
@@ -1798,7 +1784,6 @@ async def test_process_audio_forwards_small_frames_regardless_of_stream_type(
     [("request_id", 42), ("session_id", 42), ("config", 42), ("text", 42), ("is_fatal", "false")],
 )
 async def test_realtime_rejects_malformed_server_fields(field: str, value: object) -> None:
-    import aiohttp
     from aiohttp import web
     from aiohttp.test_utils import TestServer
     from pydantic import ValidationError
@@ -1816,7 +1801,7 @@ async def test_realtime_rejects_malformed_server_fields(field: str, value: objec
 
     app = web.Application()
     app.router.add_get("/listen", recognize)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         provider = sarvam.STTRealtime(
             api_key="test-key", base_url=str(server.make_url("/listen")), http_session=session
         )
@@ -1835,7 +1820,6 @@ async def test_realtime_rejects_malformed_server_fields(field: str, value: objec
 async def test_nullable_realtime_metadata_preserves_transcripts_and_error_status_fallback(
     metadata_value: object,
 ) -> None:
-    import aiohttp
     from aiohttp import web
     from aiohttp.test_utils import TestServer
 
@@ -1873,7 +1857,7 @@ async def test_nullable_realtime_metadata_preserves_transcripts_and_error_status
 
     app = web.Application()
     app.router.add_get("/listen", recognize)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         provider = sarvam.STTRealtime(
             api_key="test",
             base_url=str(server.make_url("/listen")),

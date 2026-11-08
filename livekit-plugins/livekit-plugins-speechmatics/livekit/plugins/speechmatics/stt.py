@@ -191,9 +191,9 @@ class STT(stt.STT):
                 — in practice from the `vad` passed below, since LiveKit does not call
                 `finalize()` itself. With no `vad` and none loadable, `EXTERNAL` never
                 closes a turn, so nothing is finalized. `VAD` instead lets the service
-                and close turns itself; pair it with `turn_detection="stt"` on the
-                `VoiceSession`, which otherwise ignores the end-of-speech events this
-                plugin emits. Defaults to `DEFAULT_TURN_DETECTION_MODE`.
+                and close turns itself; pair it with
+                `turn_handling={"turn_detection": "stt"}` on the `VoiceSession`, which
+                otherwise ignores the end-of-speech events this plugin emits. Defaults to `DEFAULT_TURN_DETECTION_MODE`.
 
             model: The transcription model to use, e.g. `"linden-1"`. A name agent-STT
                 does not accept falls back to the default model with a warning. Defaults

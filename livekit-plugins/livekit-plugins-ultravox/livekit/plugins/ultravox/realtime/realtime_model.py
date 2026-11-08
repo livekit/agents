@@ -16,11 +16,10 @@ from collections.abc import AsyncIterable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
-import aiohttp
 from pydantic import JsonValue
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIError, llm, utils
+from livekit.agents import APIConnectionError, APIError, http, llm, utils
 from livekit.agents.llm.realtime import InputSpeechStartedEvent, InputSpeechStoppedEvent
 from livekit.agents.llm.utils import compute_chat_ctx_diff
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
@@ -133,7 +132,7 @@ class RealtimeModel(llm.RealtimeModel):
         time_exceeded_message: NotGivenOr[str] = NOT_GIVEN,
         enable_greeting_prompt: NotGivenOr[bool] = NOT_GIVEN,
         first_speaker: NotGivenOr[str] = "FIRST_SPEAKER_USER",
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """Initialize the Ultravox RealtimeModel.
 
@@ -169,7 +168,7 @@ class RealtimeModel(llm.RealtimeModel):
             Whether to enable greeting prompt if no initial message. Default True.
         first_speaker : str, optional
             Who speaks first ('FIRST_SPEAKER_AGENT' or 'FIRST_SPEAKER_UNSPECIFIED'). If not set, model decides.
-        http_session : aiohttp.ClientSession, optional
+        http_session : http.HttpSession, optional
             HTTP session to use for requests.
         """
         output_medium = output_medium if is_given(output_medium) else "voice"
@@ -237,11 +236,11 @@ class RealtimeModel(llm.RealtimeModel):
     def provider(self) -> str:
         return "Ultravox"
 
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
+    def _ensure_http_session(self) -> http.HttpSession:
         """Ensure HTTP session is available."""
         if self._http_session is None:
             self._http_session_owned = True
-            self._http_session = utils.http_context.http_session()
+            self._http_session = http.http_session()
         return self._http_session
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
@@ -272,7 +271,7 @@ class RealtimeModel(llm.RealtimeModel):
 
     async def aclose(self) -> None:
         if self._http_session_owned and self._http_session:
-            await self._http_session.close()
+            await self._http_session.aclose()
 
 
 class RealtimeSession(
@@ -287,7 +286,7 @@ class RealtimeSession(
         realtime_model: RealtimeModel,
         *,
         options: _UltravoxOptions,
-        http_session: Callable[[], aiohttp.ClientSession],
+        http_session: Callable[[], http.HttpSession],
     ) -> None:
         """Initialize the Ultravox RealtimeSession.
 
@@ -757,15 +756,13 @@ class RealtimeSession(
 
                 # Create call and connect to WebSocket
                 http_session = self._get_http_session()
-                async with utils.http_context.request(
-                    http_session,
-                    "POST",
+                async with http_session.post(
                     create_call_url,
                     json=payload,
                     headers=headers,
                     conn_options=DEFAULT_API_CONNECT_OPTIONS,
                 ) as resp:
-                    resp.raise_for_status()
+                    await resp.raise_for_status()
                     response_json = await resp.json()
                     join_url = response_json.get("joinUrl")
                     if not join_url:
@@ -776,8 +773,8 @@ class RealtimeSession(
                     self._send_client_event(SetOutputMediumEvent(medium="text"))
 
                 t0 = time.perf_counter()
-                ws_conn = await utils.http_context.ws_connect(
-                    http_session, join_url, conn_options=DEFAULT_API_CONNECT_OPTIONS
+                ws_conn = await http_session.ws_connect(
+                    join_url, conn_options=DEFAULT_API_CONNECT_OPTIONS
                 )
                 self._report_connection_acquired(time.perf_counter() - t0)
                 self._closing = False
@@ -814,15 +811,11 @@ class RealtimeSession(
                 logger.error(f"Ultravox WebSocket error: {e}", exc_info=True)
 
                 # Determine if error is recoverable based on type
-                is_recoverable = False
-                if isinstance(e, (aiohttp.ClientConnectionError, asyncio.TimeoutError)):
-                    is_recoverable = True
+                is_recoverable = isinstance(e, (APIConnectionError, TimeoutError))
 
                 # Convert to appropriate API error type
-                if isinstance(e, (APIConnectionError, APIError)):
+                if isinstance(e, APIError):
                     error = e
-                elif isinstance(e, aiohttp.ClientResponseError):
-                    error = APIError(f"HTTP {e.status}: {e.message}", retryable=is_recoverable)
                 else:
                     error = APIConnectionError(f"Connection failed: {str(e)}")
 
@@ -844,7 +837,7 @@ class RealtimeSession(
                 await asyncio.sleep(1.0)
 
     @utils.log_exceptions(logger=logger)
-    async def _send_task(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
+    async def _send_task(self, ws_conn: http.WebSocket) -> None:
         """Task for sending messages to Ultravox WebSocket."""
         async for msg in self._msg_ch:
             # Check if restart is needed
@@ -880,7 +873,7 @@ class RealtimeSession(
         self._closing = True
 
     @utils.log_exceptions(logger=logger)
-    async def _recv_task(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
+    async def _recv_task(self, ws_conn: http.WebSocket) -> None:
         """Task for receiving messages from Ultravox WebSocket."""
         while True:
             # Check if restart is needed
@@ -890,7 +883,7 @@ class RealtimeSession(
             msg = await ws_conn.receive()
             # Generation will be started when we receive state change to "speaking" or first transcript
 
-            if msg.type == aiohttp.WSMsgType.TEXT:
+            if msg.type == http.WebSocketMessageType.TEXT:
                 try:
                     data = json.loads(msg.data)
                     self.emit("ultravox_server_event_received", data)
@@ -902,22 +895,15 @@ class RealtimeSession(
                 except Exception as e:
                     logger.error(f"Error handling message: {e}", exc_info=True)
 
-            elif msg.type == aiohttp.WSMsgType.BINARY:
-                self._handle_audio_data(msg.data)
+            elif msg.type == http.WebSocketMessageType.BINARY:
+                self._handle_audio_data(msg.binary)
 
-            elif msg.type in (
-                aiohttp.WSMsgType.CLOSED,
-                aiohttp.WSMsgType.CLOSE,
-                aiohttp.WSMsgType.CLOSING,
-            ):
+            elif msg.type == http.WebSocketMessageType.CLOSE:
                 # If we're already closing due to send loop shutdown, just return
                 if self._closing:
                     return
                 # Unexpected close
                 raise APIConnectionError(message="Ultravox S2S connection closed unexpectedly")
-            elif msg.type == aiohttp.WSMsgType.ERROR:
-                logger.error(f"Ultravox WebSocket error: {ws_conn.exception()}")
-                break
 
     def _start_new_generation(self, *, created_ts: float | None = None) -> None:
         """Start a new response generation."""

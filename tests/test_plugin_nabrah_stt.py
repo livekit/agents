@@ -4,10 +4,9 @@ from collections.abc import Coroutine
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import aiohttp
 import pytest
 
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIStatusError, stt
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIStatusError, http, stt
 from livekit.plugins.nabrah.stt import STT, SpeechStream, _Message
 
 pytestmark = pytest.mark.unit
@@ -21,7 +20,7 @@ async def stream() -> SpeechStream:
         coroutine.close()
         return MagicMock()
 
-    provider = STT(api_key="test-key", http_session=MagicMock(spec=aiohttp.ClientSession))
+    provider = STT(api_key="test-key", http_session=MagicMock(spec=http.HttpSession))
     with patch("livekit.agents._generated.stt.asyncio.create_task", side_effect=_discard_task):
         return provider.stream(conn_options=DEFAULT_API_CONNECT_OPTIONS)
 
@@ -139,11 +138,11 @@ async def test_malformed_message_does_not_expose_provider_content(
     stream: SpeechStream, caplog: pytest.LogCaptureFixture
 ) -> None:
     transcript = "private customer transcript"
-    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws = MagicMock(spec=http.WebSocket)
     ws.receive = AsyncMock(
         side_effect=[
-            MagicMock(type=aiohttp.WSMsgType.TEXT, data='{"type": "transcript"}'),
-            MagicMock(type=aiohttp.WSMsgType.CLOSED),
+            http.WebSocketMessage(http.WebSocketMessageType.TEXT, '{"type": "transcript"}'),
+            http.WebSocketMessage(http.WebSocketMessageType.CLOSE, ""),
         ]
     )
     stream._input_done = True

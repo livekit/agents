@@ -24,6 +24,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APITimeoutError,
+    http,
     llm,
     stt,
     tts,
@@ -254,7 +255,7 @@ async def test_provider_request_reaches_the_network_under_shipped_policies(
     for key, value in _CREDENTIALS.items():
         monkeypatch.setenv(key, value)
     transport = _Transport(monkeypatch)
-    async with utils.http_context.open():
+    async with http.open():
         model = MODELS[name]()
         try:
             for operation in _operations(name, model, POLICIES[policy]):

@@ -10,10 +10,10 @@ from collections.abc import AsyncIterator
 from types import TracebackType
 from unittest.mock import AsyncMock, MagicMock
 
-import aiohttp
 import pytest
 
 from livekit import agents as vad, rtc
+from livekit.agents import http
 from livekit.plugins.microsoft_ai._http import HTTPClient
 
 DUMMY_CONFIG = """\
@@ -34,7 +34,8 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     async def forbidden(*args: object, **kwargs: object) -> None:
         raise AssertionError("Hermetic Microsoft AI tests must not make network requests")
 
-    monkeypatch.setattr(aiohttp.ClientSession, "_request", forbidden)
+    monkeypatch.setattr(http.HttpSession, "request", forbidden)
+    monkeypatch.setattr(http.HttpSession, "ws_connect", forbidden)
     for name in list(os.environ):
         if name.startswith("MICROSOFT_AI_"):
             monkeypatch.delenv(name)
@@ -67,38 +68,8 @@ def wav_bytes(pcm: bytes, *, sample_rate: int = 24000, channels: int = 1, width:
 
 
 def fake_session() -> MagicMock:
-    session = MagicMock(spec=aiohttp.ClientSession)
-    session.closed = False
-    session.trace_configs = []
-
-    class _Writer:
-        def __init__(self):
-            self.chunks = []
-
-        async def write(self, chunk):
-            self.chunks.append(chunk)
-
-    class _Request:
-        def __init__(self, url, kwargs):
-            self.url, self.kwargs = url, kwargs
-
-        async def __aenter__(self):
-            if (data := self.kwargs.get("data")) is not None:
-                writer = _Writer()
-                await data.write(writer)
-                self.kwargs["data"] = b"".join(writer.chunks)
-            self.response = session.post(self.url, **self.kwargs)
-            return await self.response.__aenter__()
-
-        async def __aexit__(self, *exc):
-            return await self.response.__aexit__(*exc)
-
-    session.request = lambda method, url, **kwargs: _Request(url, kwargs)
-
-    async def close() -> None:
-        session.closed = True
-
-    session.close = AsyncMock(side_effect=close)
+    session = MagicMock(spec=http.HttpSession)
+    session.aclose = AsyncMock()
     return session
 
 
@@ -106,7 +77,7 @@ class FakeSocket:
     def __init__(self, *, auto_update: bool = True, auto_commit: bool = True) -> None:
         self.auto_update = auto_update
         self.auto_commit = auto_commit
-        self.incoming: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
+        self.incoming: asyncio.Queue[http.WebSocketMessage] = asyncio.Queue()
         self.sent: list[dict[str, object]] = []
         self.changed = asyncio.Condition()
         self.append_started = asyncio.Event()
@@ -117,10 +88,12 @@ class FakeSocket:
         self.emit({"type": "session.created", "session": {"id": "test-session"}})
 
     def emit(self, event: dict[str, object]) -> None:
-        self.incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(event), ""))
+        self.incoming.put_nowait(
+            http.WebSocketMessage(http.WebSocketMessageType.TEXT, json.dumps(event))
+        )
 
     def disconnect(self) -> None:
-        self.incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, ""))
+        self.incoming.put_nowait(http.WebSocketMessage(http.WebSocketMessageType.CLOSE, ""))
 
     def transcript(self, type: str, *, item: str = "item-1", **fields: object) -> None:
         self.emit(
@@ -156,12 +129,11 @@ class FakeSocket:
             if self.auto_commit:
                 self.complete(item=f"item-{len(self.commits)}", text=f"turn {len(self.commits)}")
 
-    async def receive(self) -> aiohttp.WSMessage:
+    async def receive(self) -> http.WebSocketMessage:
         return await self.incoming.get()
 
-    async def close(self) -> bool:
+    async def close(self) -> None:
         self.closed = True
-        return True
 
     async def wait_sent(self, type: str, count: int = 1) -> None:
         async def wait() -> None:
@@ -287,7 +259,7 @@ class FakeContent:
         self.gate = gate
         self.started = asyncio.Event()
 
-    async def iter_chunked(self, size: int) -> AsyncIterator[bytes]:
+    async def iter_bytes(self) -> AsyncIterator[bytes]:
         self.started.set()
         for chunk in self.chunks:
             if self.gate is not None:
@@ -310,9 +282,12 @@ class FakeResponse:
     ) -> None:
         self.status = status
         self.content_type = content_type
-        self.content_length = content_length
+        self.headers = {} if content_length is None else {"Content-Length": str(content_length)}
         self.content = FakeContent([data[:17], data[17:]], error=error, gate=gate)
         self.closed = False
+
+    def iter_bytes(self) -> AsyncIterator[bytes]:
+        return self.content.iter_bytes()
 
     async def __aenter__(self) -> FakeResponse:
         return self

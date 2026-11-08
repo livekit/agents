@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-import aiohttp
+from livekit.agents import http
 
 API_BASE_URL = "wss://api.telnyx.com/v2"
 TTS_ENDPOINT = f"{API_BASE_URL}/text-to-speech/speech"
@@ -20,17 +20,17 @@ def get_api_key(api_key: str | None = None) -> str:
 
 
 class SessionManager:
-    def __init__(self, http_session: aiohttp.ClientSession | None = None) -> None:
+    def __init__(self, http_session: http.HttpSession | None = None) -> None:
         self._session = http_session
         self._owns_session = False
 
-    def ensure_session(self) -> aiohttp.ClientSession:
+    def ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = aiohttp.ClientSession()
+            self._session = http.HttpSession()
             self._owns_session = True
         return self._session
 
     async def close(self) -> None:
         if self._owns_session and self._session:
-            await self._session.close()
+            await self._session.aclose()
             self._session = None

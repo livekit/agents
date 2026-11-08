@@ -8,7 +8,7 @@ import threading
 from abc import ABC
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, TypedDict, TypeVar
 
 from typing_extensions import Unpack
 
@@ -22,7 +22,7 @@ from ._generated.worker_server import ProcessStartOptions
 from .evals import SimulationContext
 from .http import AgentRoutes
 from .ipc import preload_module_names
-from .job import JobContext, JobExecutorType
+from .job import JobContext
 from .log import logger
 from .storage import _CallThreadEntrypoint
 from .storage.session import _Handler
@@ -164,7 +164,6 @@ class AgentServer(AgentHandler):
         self._http = AgentRoutes()
         self._a2a_endpoints: dict[str, A2AEndpoint] = {}
         self._runtime: _core.ServerRuntime | None = None
-        self._jobs: _ServerCallbacks | None = None
 
     @property
     def storage(self) -> Storage | None:
@@ -232,8 +231,7 @@ class AgentServer(AgentHandler):
                 extra={"endpoints": unserved},
             )
         storage = self._ensure_storage()
-        self._jobs = _ServerCallbacks(self)
-        self._runtime = _core.ServerRuntime(self._config, self._jobs)
+        runtime = self._ensure_runtime()
         from .storage import SQLiteStorage
 
         try:
@@ -252,7 +250,7 @@ class AgentServer(AgentHandler):
                         "project_id": storage.threads.project_id,
                     },
                 )
-            await self._runtime.run(
+            await runtime.run(
                 devmode=devmode,
                 unregistered=unregistered,
                 has_rtc=self._rtc is not None,
@@ -261,12 +259,19 @@ class AgentServer(AgentHandler):
                 has_load_fnc=self._load_fnc is not None,
                 endpoints=self._http,
                 text_doors=[await door.service.native() for door in self._a2a_endpoints.values()],
+                asyncio_debug=asyncio.get_running_loop().get_debug(),
             )
         finally:
             if self._thread_server is not None:
                 await self._thread_server.aclose()
                 self._thread_server = None
             await telemetry._shutdown()
+
+    def _ensure_runtime(self) -> _core.ServerRuntime:
+        if self._runtime is None:
+            _core.init(_core.Role.Worker)
+            self._runtime = _core.ServerRuntime(self._config, _ServerCallbacks(self))
+        return self._runtime
 
     def _update_options(
         self, process: ProcessOptions | None = None, **options: Unpack[ServerOptionsKwargs]
@@ -280,7 +285,7 @@ class AgentServer(AgentHandler):
 
     @property
     def _active_jobs(self) -> list[RunningJobInfo]:
-        return self._jobs.active_jobs() if self._jobs is not None else []
+        return self._runtime.active_jobs if self._runtime is not None else []
 
     @property
     def draining(self) -> bool:
@@ -318,26 +323,18 @@ class AgentServer(AgentHandler):
 
 
 class _ServerCallbacks:
-    """What the core's server runtime calls on the host: the job processes and the user's
-    callbacks. Which jobs to take, when they were taken and whether job processes start at all
-    are the core's decisions."""
+    """What the core's server runtime calls on the host: the job processes' launcher and the
+    user's callbacks. The process pool, which jobs to take and when are the core's."""
 
     def __init__(self, server: AgentServer) -> None:
         self._server = server
-        self._proc_pool: ipc.ProcPool | None = None
 
-    def active_jobs(self) -> list[RunningJobInfo]:
-        return self._proc_pool.active_jobs if self._proc_pool is not None else []
-
-    async def launch(self, info: RunningJobInfo) -> None:
-        assert self._proc_pool is not None
-        await self._proc_pool.launch_job(info)
-
-    # --- the lifecycle
-
-    async def _core_start(self, opts: ProcessStartOptions) -> None:
-        """The job processes, when the core wants them. The server's settings (``opts.env``)
-        become a job process's environment; this process's is never changed."""
+    async def _core_start(
+        self, opts: ProcessStartOptions
+    ) -> Callable[[], Awaitable[ipc.JobLauncher]] | None:
+        """The factory of the job processes' launchers, once the core wants them. The server's
+        settings (``opts.env``) become a job process's environment; this process's is never
+        changed."""
         logger.info(
             "starting worker", extra={"version": __version__, "rtc-version": rtc.__version__}
         )
@@ -345,7 +342,7 @@ class _ServerCallbacks:
             logger.info("plugin registered", extra={"plugin": p.title, "version": p.version})
         door = self._server._rtc
         if not opts.job_processes or door is None:
-            return
+            return None
         mp_ctx = mp.get_context(opts.multiprocessing_context)
         if opts.multiprocessing_context == "forkserver":
             # the framework's warm-up runs once in the forkserver and is inherited via COW;
@@ -357,69 +354,28 @@ class _ServerCallbacks:
             configure_forkserver(mp_ctx, [*plugin_packages, *self._server._preload_modules])
         loop = asyncio.get_running_loop()
         storage = self._server._storage
-        self._proc_pool = ipc.ProcPool(
-            job_entrypoint_fnc=(
-                _CallThreadEntrypoint(door.entrypoint, storage) if storage else door.entrypoint
-            ),
-            session_end_fnc=door.on_session_end,
-            simulation_end_fnc=door.on_simulation_end,
-            preload_modules=self._server._preload_modules,
-            loop=loop,
-            mp_ctx=mp_ctx,
-            num_idle_processes=opts.pool.num_idle_processes,
-            options=ipc.JobRunnerOptions(
-                thread=opts.job_executor_type == JobExecutorType.THREAD,
-                initialize_timeout=opts.pool.initialize_timeout,
-                close_timeout=opts.pool.close_timeout,
-                memory_warn_mb=opts.pool.memory_warn_mb,
-                memory_limit_mb=opts.pool.memory_limit_mb,
-                http_proxy=opts.pool.http_proxy,
-                asyncio_debug=loop.get_debug(),
-            ),
-            session_end_timeout=opts.pool.session_end_timeout,
-            env=opts.env,
-        )
-        for event in ("process_started", "process_closed", "process_job_launched"):
-            self._proc_pool.on(event, self._job_status)
-        await self._proc_pool.start()
+        entrypoint = _CallThreadEntrypoint(door.entrypoint, storage) if storage else door.entrypoint
+
+        async def launcher() -> ipc.JobLauncher:
+            return ipc.JobLauncher(
+                job_entrypoint_fnc=entrypoint,
+                session_end_fnc=door.on_session_end,
+                simulation_end_fnc=door.on_simulation_end,
+                session_end_timeout=opts.session_end_timeout,
+                preload_modules=self._server._preload_modules,
+                env=opts.env,
+                mp_ctx=mp_ctx,
+                loop=loop,
+            )
+
+        return launcher
 
     async def _core_started(self) -> None:
         for callback in self._server._on_started:
             callback()
 
-    async def _core_idle_processes(self, target: int) -> None:
-        if self._proc_pool is not None:
-            self._proc_pool.set_target_idle_processes(target)
-
     async def _core_heartbeat(self) -> None:
         pass
-
-    async def _core_health(self) -> int:
-        return len(self.active_jobs())
-
-    async def _core_join_jobs(self) -> None:
-        if self._proc_pool is not None:
-            await self._proc_pool.join_jobs()
-
-    async def _core_close(self) -> None:
-        if self._proc_pool is not None:
-            await self._proc_pool.aclose()
-
-    def _job_status(self, proc: _core.JobSupervisor) -> None:
-        job, status = proc.running_job, proc.status
-        if job is not None and status is not None and self._server._runtime is not None:
-            self._server._runtime.job_status(job.job.id, status.value)
-
-    # --- jobs and the user's load_fnc
-
-    async def _core_launch_job(self, info: RunningJobInfo) -> str:
-        """A job the core took, with the timeline it stamped."""
-        await self.launch(info)
-        return info.job.id  # `job_status` is keyed on the LiveKit job id
-
-    async def _core_terminate_job(self, job_id: str) -> None:
-        if self._proc_pool is not None and (proc := self._proc_pool.get_by_job_id(job_id)):
-            await proc.aclose()
 
     async def _core_load(self) -> float:
         """The user's ``load_fnc``, which the core asks only when there is one."""
@@ -429,14 +385,9 @@ class _ServerCallbacks:
         return await asyncio.get_running_loop().run_in_executor(None, load_fnc, *args)
 
 
-PluginEventTypes = Literal["plugin_registered"]
-
-
 class Plugin(ABC):  # noqa: B024
     registered_plugins: list[Plugin] = []
-    emitter: utils.EventEmitter[PluginEventTypes] = utils.EventEmitter()
 
-    # TODO(theomonnom): make logger mandatory once all plugins have been updated
     def __init__(
         self,
         title: str,
@@ -455,7 +406,6 @@ class Plugin(ABC):  # noqa: B024
             raise RuntimeError("Plugins must be registered on the main thread")
 
         cls.registered_plugins.append(plugin)
-        cls.emitter.emit("plugin_registered", plugin)
 
     @property
     def package(self) -> str:

@@ -5,13 +5,12 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-import aiohttp
 import httpx2 as httpx
 import openai
 import pytest
 
 from livekit import agents as vad, rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, inference
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectionError, http, inference
 from livekit.agents.stt import SpeechEvent, SpeechEventType
 from livekit.plugins.openai import stt
 
@@ -19,7 +18,7 @@ pytestmark = pytest.mark.unit
 
 
 class _FakeMessage:
-    type = aiohttp.WSMsgType.TEXT
+    type = http.WebSocketMessageType.TEXT
 
     def __init__(self, payload: dict[str, Any]) -> None:
         self.data = json.dumps(payload)
@@ -39,7 +38,7 @@ class _FakeWebSocket:
     async def send_json(self, data: dict[str, Any]) -> None:
         if self.fail_next:
             self.fail_next = False
-            raise ConnectionResetError("socket went away")
+            raise APIConnectionError("socket went away")
         if self.block_first is not None:
             blocked, self.block_first = self.block_first, None
             self.blocked.set()
@@ -62,7 +61,6 @@ class _FakeSession:
         self.opened: asyncio.Queue[_FakeWebSocket] = asyncio.Queue()
         self.sockets: list[_FakeWebSocket] = []
         self.setup = setup
-        self.trace_configs: list[aiohttp.TraceConfig] = []
 
     @property
     def connects(self) -> int:

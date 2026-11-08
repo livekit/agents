@@ -7,14 +7,14 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
-import aiohttp
 import msgpack
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
-    APITimeoutError,
+    http,
     tokenize,
     tts,
     utils,
@@ -97,7 +97,7 @@ class TTS(tts.TTS):
         condition_on_previous_chunks: NotGivenOr[bool] = NOT_GIVEN,
         early_stop_threshold: NotGivenOr[float] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """
         Create a new instance of Fish Audio TTS.
@@ -150,7 +150,7 @@ class TTS(tts.TTS):
                 processing (0-1). Unset uses Fish's server default (1.0).
             tokenizer (tokenize.SentenceTokenizer): Sentence tokenizer used to detect
                 sentence boundaries. Defaults to ``tokenize.blingfire.SentenceTokenizer()``.
-            http_session (aiohttp.ClientSession | None): Optional aiohttp session.
+            http_session (http.HttpSession | None): Optional HTTP session.
         """
         if is_given(sample_rate):
             if output_format == "opus" and sample_rate != 48000:
@@ -215,7 +215,7 @@ class TTS(tts.TTS):
         )
 
         self._session = http_session
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        self._pool = utils.ConnectionPool[http.WebSocket](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
             max_session_duration=300,
@@ -251,15 +251,13 @@ class TTS(tts.TTS):
     def latency_mode(self) -> LatencyMode:
         return self._opts.latency_mode
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
-        session = self._ensure_session()
-        return await utils.http_context.ws_connect(
-            session,
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
+        return await self._ensure_session().ws_connect(
             self._opts.get_ws_url("/v1/tts/live"),
             headers={
                 "Authorization": f"Bearer {self._opts.api_key}",
@@ -270,7 +268,7 @@ class TTS(tts.TTS):
             conn_options=conn_options,
         )
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_ws(self, ws: http.WebSocket) -> None:
         await ws.close()
 
     def prewarm(self) -> None:
@@ -443,7 +441,7 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
-        get_session: Callable[[], aiohttp.ClientSession],
+        get_session: Callable[[], http.HttpSession],
         opts: _TTSOptions,
         tts: TTS,
         input_text: str,
@@ -458,9 +456,7 @@ class ChunkedStream(tts.ChunkedStream):
         payload = _build_tts_request(self._opts, text=self._input_text)
 
         try:
-            async with utils.http_context.request(
-                self._get_session(),
-                "POST",
+            async with self._get_session().post(
                 self._opts.get_http_url("/v1/tts"),
                 headers={
                     "Authorization": f"Bearer {self._opts.api_key}",
@@ -470,7 +466,7 @@ class ChunkedStream(tts.ChunkedStream):
                 data=msgpack.packb(payload, use_bin_type=True),
                 conn_options=self._conn_options,
             ) as resp:
-                resp.raise_for_status()
+                await resp.raise_for_status()
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -479,17 +475,13 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=f"audio/{self._opts.output_format}",
                 )
 
-                async for data, _ in resp.content.iter_chunks():
+                async for data in resp.iter_bytes():
                     output_emitter.push(data)
 
                 output_emitter.flush()
 
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+        except APIError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -500,7 +492,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(
         self,
         *,
-        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        pool: utils.ConnectionPool[http.WebSocket],
         sentence_tokenizer: tokenize.SentenceTokenizer,
         opts: _TTSOptions,
         tts: TTS,
@@ -527,13 +519,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             async with self._pool.connection(conn_options=self._conn_options) as ws:
                 await self._run_ws(ws, output_emitter)
 
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=request_id, body=None
-            ) from None
-        except (APIStatusError, APITimeoutError):
+        except (APIStatusError, APIConnectionError):
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -542,7 +528,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run_ws(
         self,
-        ws: aiohttp.ClientWebSocketResponse,
+        ws: http.WebSocket,
         output_emitter: tts.AudioEmitter,
     ) -> None:
         # Tokenize incoming text by sentence and flush after each sentence so
@@ -590,23 +576,19 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def recv_task() -> None:
             while True:
                 msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type == http.WebSocketMessageType.CLOSE:
                     raise APIStatusError(
                         "Fish Audio websocket connection closed unexpectedly",
                         status_code=ws.close_code or -1,
                         request_id=None,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=f"{msg.data=}",
                     )
 
-                if msg.type != aiohttp.WSMsgType.BINARY:
+                if msg.type != http.WebSocketMessageType.BINARY:
                     logger.debug("unexpected Fish Audio message type %s", msg.type)
                     continue
 
-                data = msgpack.unpackb(msg.data, raw=False)
+                data = msgpack.unpackb(msg.binary, raw=False)
                 event = data.get("event")
                 if event == "audio":
                     audio = data.get("audio")

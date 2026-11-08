@@ -4,14 +4,11 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
-    APITimeoutError,
+    http,
     tokenize,
     tts,
     utils,
@@ -48,7 +45,7 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         base_url: str = BASE_URL,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """
         Create a new instance of Speechmatics TTS.
@@ -59,7 +56,7 @@ class TTS(tts.TTS):
             api_key (str): Speechmatics API key. If not provided, will look for SPEECHMATICS_API_KEY in environment.
             base_url (str): Base URL for Speechmatics TTS API. Defaults to "https://preview.tts.speechmatics.com"
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to `livekit.agents.tokenize.basic.WordTokenizer`.
-            http_session (aiohttp.ClientSession): Optional aiohttp session to use for requests.
+            http_session (http.HttpSession): Optional HTTP session to use for requests.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
@@ -93,9 +90,9 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Speechmatics"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     def update_options(
@@ -130,7 +127,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
         options: _TTSOptions,
-        http_session: Callable[[], aiohttp.ClientSession],
+        http_session: Callable[[], http.HttpSession],
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._get_http_session = http_session
@@ -149,15 +146,10 @@ class ChunkedStream(tts.ChunkedStream):
 
             url = get_tts_url(self._opts.base_url, self._opts.voice, self._opts.sample_rate)
 
-            async with utils.http_context.request(
-                self._get_http_session(),
-                "POST",
-                url,
-                json=payload,
-                headers=headers,
-                conn_options=self._conn_options,
+            async with self._get_http_session().post(
+                url, json=payload, headers=headers, conn_options=self._conn_options
             ) as resp:
-                resp.raise_for_status()
+                await resp.raise_for_status()
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -169,7 +161,7 @@ class ChunkedStream(tts.ChunkedStream):
                 # Process the response in streaming chunks
                 buffer = b""
 
-                async for data, _ in resp.content.iter_chunks():
+                async for data in resp.iter_bytes():
                     if not data:
                         continue
 
@@ -193,11 +185,5 @@ class ChunkedStream(tts.ChunkedStream):
 
         except APIError:
             raise
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
         except Exception as e:
             raise APIConnectionError() from e

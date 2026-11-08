@@ -1378,6 +1378,11 @@ generation. New keys require multiple concrete uses, not feature-specific glue.
 - A Python object that carries a record's data converts through `record(host_type = ...)`:
   SDK objects, OpenTelemetry API types, public events and outcome classes. No handwritten
   field-by-field copy or `isinstance` ladder converts between a host object and a record.
+  A boundary field reads a nested attribute (`path = "trace_flags.sampled"`, emitted through
+  `emit_class`), `fixed(..)` names constructor constants, a transparent union tells host classes
+  apart (`host_type`, a member's `path`, a last `otherwise` member), `native_enum(host_type = ..)`
+  reads a foreign enum by member name, and `record(.., typed_dict, tag = "type")` is a dict
+  union keyed by its tag (ASGI messages).
 
 ### Facades
 
@@ -1412,9 +1417,12 @@ pub trait StreamPacerWrapper {
 
 The generated class (`_generated/facades_<x>.py`, re-exported from `path`) subclasses `base`;
 its public `__init__` takes the `#[host(new)]` parameters with their ABI defaults and builds the
-native object from them, by name. A provider engine is built lazily instead, from the host
-object's `self._<param>` attributes: once (`cached`) or once per running loop (`per_loop`), with
-the provider keys `legs`, `leg`, `resolve`, `annotation` and `availability`. Method adaptations
+native object from them, by name; `base_args(..)` then builds its base from the native getters
+of the same names, and `keep(..)` keeps parameters as `self._<param>` for an extending class. A
+facade with no `#[host(new)]` declares `_native`, which its handwritten subclass sets. A chain
+facade declares `availability(observer, members, kind, event, record)`: it is its chain's
+observer, keeps `members` as `_members`, emits each availability change as `record`, and names
+the serving member's `model`, `provider` and `metrics_metadata`. Method adaptations
 are a fixed vocabulary: `none_ends_iteration` (a native `None` raises `StopAsyncIteration`),
 `wrap` (the result becomes a record), `native = m` (another native method), `future`,
 `discard`, `not_given`, `origin`, `returns`, `annotation`, `resolve`, and the context-manager
@@ -1431,7 +1439,19 @@ A stream facade (`base` a provider stream: `llm.LLMStream`, `RecognizeStream`,
 on its owner, the facade of the same native class: `stream(op = synthesize, owner = "_tts",
 native_retries)`. The operation's arguments are the stream's `self._<param>` attributes; the base
 class pumps input and output (`_core_run_native`), and `native_retries` marks a native operation
-that retries on its own, so the base's attempts do not.
+that retries on its own, so the base's attempts do not. Per-call arguments are declared once, as
+the operation's parameters: with `method = "stream"` the owner facade gets that provider method,
+taking every parameter but those read from the base stream's `state(..)`, and the stream's
+constructor passes `base_args(..)` to its base and keeps the rest:
+
+```rust
+#[host(facade(path = "livekit.agents.stt", base = "stt.RecognizeStream", native = FallbackStt,
+              stream(op = stream, owner = "_stt", native_retries, method = "stream",
+                     base_args(conn_options), state(start_time_offset),
+                     default(conn_options = "..types.DEFAULT_API_CONNECT_OPTIONS"),
+                     annotation(language = "str"), not_given)))]
+pub trait FallbackRecognizeStream {}
+```
 
 Logic a facade cannot declare goes in a handwritten subclass of the generated class when it is
 specific to Python (SDK objects, user callbacks, reflection): the facade is then `extended`, not
@@ -1909,6 +1929,11 @@ including `finally` blocks. Dropping a waiter alone is not evidence of settlemen
 Capabilities returned by either synchronous or asynchronous host calls inherit
 the returning operation’s captured context, including capabilities inside
 optional values and containers.
+A proxy taken with no running loop (a provider facade built at import) captures
+none: each call runs in the context of the operation driving it, the task-local
+host context a `_core` entry sets for its native future
+(`lk_agents_net::task::host_context`), which tasks spawned on the process spawner
+inherit (a fallback chain's recovery probes).
 
 Async I/O crates
 contain no host-language code: they hold ABI-declared proxy traits whose generated

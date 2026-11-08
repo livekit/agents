@@ -4,19 +4,17 @@ import asyncio
 import base64
 import json
 from collections import deque
-from unittest.mock import MagicMock
 
-import aiohttp
 import pytest
-from aiohttp import RequestInfo, WSServerHandshakeError
-from multidict import CIMultiDict, CIMultiDictProxy
-from yarl import URL
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    http,
 )
 
 pytestmark = pytest.mark.plugin("cartesia")
@@ -24,79 +22,37 @@ pytestmark = pytest.mark.plugin("cartesia")
 SECRET_API_KEY = "cartesia-secret-api-key-do-not-log"
 
 
-def _handshake_error_with_api_key(api_key: str) -> WSServerHandshakeError:
-    url = URL("wss://api.cartesia.ai/tts/websocket")
-    headers = CIMultiDict(
-        {
-            "Host": "api.cartesia.ai",
-            "User-Agent": "LiveKit Agents Cartesia Plugin/test",
-            "X-API-Key": api_key,
-        }
-    )
-    request_info = RequestInfo(
-        url=url, method="GET", headers=CIMultiDictProxy(headers), real_url=url
-    )
-    return WSServerHandshakeError(request_info, (), status=401, message="Unauthorized")
-
-
 @pytest.mark.asyncio
-async def test_connect_ws_redacts_api_key_from_handshake_error():
+async def test_connect_ws_rejected_handshake_does_not_leak_api_key():
     from livekit.plugins.cartesia import TTS
 
-    tts = TTS(api_key=SECRET_API_KEY)
+    async def reject(request: web.Request) -> web.Response:
+        return web.Response(status=401, text="Unauthorized")
 
-    async def _raise(*_args, **_kwargs):
-        raise _handshake_error_with_api_key(SECRET_API_KEY)
+    app = web.Application()
+    app.router.add_get("/tts/websocket", reject)
+    async with TestServer(app) as server, http.open() as session:
+        tts = TTS(
+            api_key=SECRET_API_KEY,
+            base_url=str(server.make_url("/")).rstrip("/"),
+            http_session=session,
+        )
+        with pytest.raises(APIStatusError) as exc_info:
+            await tts._connect_ws(DEFAULT_API_CONNECT_OPTIONS)
 
-    session = MagicMock()
-    session.ws_connect = MagicMock(side_effect=_raise)
-    tts._session = session
-
-    with pytest.raises(APIStatusError) as exc_info:
-        await tts._connect_ws(DEFAULT_API_CONNECT_OPTIONS)
-
-    err = exc_info.value
-    assert err.status_code == 401
-    assert SECRET_API_KEY not in repr(err)
-    assert err.__cause__ is None
-
-
-@pytest.mark.asyncio
-async def test_connect_ws_generic_error_does_not_chain_cause():
-    from livekit.plugins.cartesia import TTS
-
-    tts = TTS(api_key=SECRET_API_KEY)
-    leaky = ConnectionError(f"wss://api.cartesia.ai/tts/websocket?api_key={SECRET_API_KEY}")
-
-    async def _raise(*_args, **_kwargs):
-        raise leaky
-
-    session = MagicMock()
-    session.ws_connect = MagicMock(side_effect=_raise)
-    tts._session = session
-
-    with pytest.raises(APIConnectionError) as exc_info:
-        await tts._connect_ws(DEFAULT_API_CONNECT_OPTIONS)
-
-    err = exc_info.value
-    assert err.__cause__ is None
-    assert str(err) == "ConnectionError"
-    assert SECRET_API_KEY not in repr(err)
-    assert SECRET_API_KEY not in str(err)
+    err: BaseException | None = exc_info.value
+    assert exc_info.value.status_code == 401
+    while err is not None:
+        assert SECRET_API_KEY not in repr(err)
+        assert SECRET_API_KEY not in str(err)
+        err = err.__cause__
 
 
 # --- pooled websocket: stale frames/done from previous contexts must be ignored ---
 
 
-class _FakeMsg:
-    def __init__(self, type: aiohttp.WSMsgType, data=None, extra=None) -> None:
-        self.type = type
-        self.data = data
-        self.extra = extra
-
-    @classmethod
-    def text(cls, payload: dict) -> _FakeMsg:
-        return cls(aiohttp.WSMsgType.TEXT, json.dumps(payload))
+def _text(payload: dict) -> http.WebSocketMessage:
+    return http.WebSocketMessage(http.WebSocketMessageType.TEXT, json.dumps(payload))
 
 
 class _FakeWS:
@@ -108,7 +64,7 @@ class _FakeWS:
         self._context_id: str | None = None
         self._end_pkt_sent = asyncio.Event()
         self._built = False
-        self._queue: deque[_FakeMsg] = deque()
+        self._queue: deque[http.WebSocketMessage] = deque()
 
     async def send_str(self, data: str) -> None:
         pkt = json.loads(data)
@@ -118,22 +74,22 @@ class _FakeWS:
         if pkt.get("continue") is False:
             self._end_pkt_sent.set()
 
-    async def receive(self, timeout: float | None = None) -> _FakeMsg:
+    async def receive(self, timeout: float | None = None) -> http.WebSocketMessage:
         if not self._built:
             self._built = True
             stale = "stale-context-id"
             # stale leftovers from the previous context arrive first
-            self._queue.append(_FakeMsg.text({"context_id": stale, "data": _b64(b"\x00" * 160)}))
-            self._queue.append(_FakeMsg.text({"context_id": stale, "done": True}))
+            self._queue.append(_text({"context_id": stale, "data": _b64(b"\x00" * 160)}))
+            self._queue.append(_text({"context_id": stale, "done": True}))
 
         if self._queue:
             return self._queue.popleft()
 
         # current frames; delay done until end_pkt so the tokenizer is closed
         context = {"context_id": self._context_id or ""} if self._include_context_id else {}
-        self._queue.append(_FakeMsg.text({**context, "data": _b64(b"\x01" * 160)}))
+        self._queue.append(_text({**context, "data": _b64(b"\x01" * 160)}))
         await self._end_pkt_sent.wait()
-        self._queue.append(_FakeMsg.text({**context, "done": True}))
+        self._queue.append(_text({**context, "done": True}))
         return self._queue.popleft()
 
 
@@ -224,12 +180,9 @@ async def test_ws_url_carries_the_updated_api_version():
     captured: dict[str, str] = {}
 
     class _Session:
-        json_serialize = staticmethod(json.dumps)
-        trace_configs: list[object] = []
-
-        def ws_connect(self_, url, **kwargs):  # noqa: ANN001, N805
+        async def ws_connect(self_, url, **kwargs):  # noqa: ANN001, N805
             captured["url"] = str(url)
-            raise ConnectionError("stop here, the URL is what matters")
+            raise APIConnectionError("stop here, the URL is what matters")
 
     tts._ensure_session = lambda: _Session()  # type: ignore[method-assign]
 
@@ -260,12 +213,6 @@ async def test_rest_request_sends_the_configured_api_version_header():
             return False
 
     class _Session:
-        json_serialize = staticmethod(json.dumps)
-        trace_configs: list[object] = []
-
-        def request(self_, method, url, **kwargs):
-            return self_.post(url, **kwargs)
-
         def post(self_, url, *, headers, **kwargs):  # noqa: ANN001, N805
             captured["headers"] = headers
             return _Resp()

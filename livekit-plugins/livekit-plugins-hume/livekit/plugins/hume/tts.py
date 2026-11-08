@@ -22,13 +22,13 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any, Literal, TypedDict
 
-import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
+    APIStatusError,
     APITimeoutError,
+    http,
     tts,
     utils,
 )
@@ -118,7 +118,7 @@ class TTS(tts.TTS):
         instant_mode: NotGivenOr[bool] = NOT_GIVEN,
         audio_format: AudioFormat = AudioFormat.mp3,
         base_url: str = DEFAULT_BASE_URL,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ):
         """Initialize the Hume AI TTS client. Options will be used for all future synthesis
         (until updated with update_options).
@@ -139,7 +139,7 @@ class TTS(tts.TTS):
                 False otherwise. Requires a voice to be specified when enabled.
             audio_format: Output audio format (mp3, wav, or pcm). Defaults to mp3.
             base_url: Base URL for Hume AI API. Defaults to https://api.hume.ai
-            http_session: Optional aiohttp ClientSession to use for requests.
+            http_session: Optional HttpSession to use for requests.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
@@ -183,9 +183,9 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Hume"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
@@ -243,7 +243,7 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
-        get_session: Callable[[], aiohttp.ClientSession],
+        get_session: Callable[[], http.HttpSession],
         opts: _TTSOptions,
         tts: TTS,
         input_text: str,
@@ -281,17 +281,13 @@ class ChunkedStream(tts.ChunkedStream):
             payload["context"] = {"utterances": self._opts.context}
 
         try:
-            async with utils.http_context.request(
-                self._get_session(),
-                "POST",
+            async with self._get_session().post(
                 self._opts.http_url(STREAM_PATH),
                 headers={**DEFAULT_HEADERS, API_AUTH_HEADER: self._opts.api_key},
                 json=payload,
                 conn_options=self._conn_options,
-                # large read_bufsize to avoid `ValueError: Chunk too big`
-                read_bufsize=10 * 1024 * 1024,
             ) as resp:
-                resp.raise_for_status()
+                await resp.raise_for_status()
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -300,7 +296,7 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=f"audio/{self._opts.audio_format.value}",
                 )
 
-                async for raw_line in resp.content:
+                async for raw_line in resp.iter_lines():
                     line = raw_line.strip()
                     if not line:
                         continue
@@ -315,6 +311,8 @@ class ChunkedStream(tts.ChunkedStream):
 
                 output_emitter.flush()
 
+        except (APIStatusError, APIConnectionError):
+            raise
         except TimeoutError:
             raise APITimeoutError() from None
         except Exception as e:

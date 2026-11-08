@@ -12,7 +12,6 @@ import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
 
-import aiohttp
 from pydantic import BaseModel, ValidationError
 
 from livekit.agents import (
@@ -20,13 +19,13 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    http,
     tts,
     utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from .common import NUM_CHANNELS, SAMPLE_RATE, TTS_ENDPOINT, SessionManager, get_api_key
-from .log import logger
 
 
 @dataclass
@@ -47,7 +46,7 @@ class TTS(tts.TTS):
         voice: str = "Telnyx.NaturalHD.astra",
         api_key: str | None = None,
         base_url: str = TTS_ENDPOINT,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -104,7 +103,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         *,
         tts: TTS,
         opts: _TTSOptions,
-        ensure_session: Callable[[], aiohttp.ClientSession],
+        ensure_session: Callable[[], http.HttpSession],
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
@@ -145,13 +144,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         except TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=request_id, body=None
-            ) from None
-        except APIConnectionError:
-            raise
-        except (APIStatusError, APITimeoutError):
+        except (APIConnectionError, APIStatusError):
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -173,16 +166,16 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         read_deadline = self._core_attempts
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             await ws.send_str(json.dumps({"text": " "}))
             self.mark_started()
             await ws.send_str(json.dumps({"text": text}))
             await ws.send_str(json.dumps({"text": ""}))
             read_deadline.expect_response(final=True)
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             async for msg in ws:
-                if msg.type == aiohttp.WSMsgType.TEXT:
+                if msg.type is http.WebSocketMessageType.TEXT:
                     try:
                         data = _AudioMessage.model_validate_json(msg.data)
                         audio_data = data.audio
@@ -196,16 +189,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                             "Invalid Telnyx audio message", retryable=False
                         ) from exc
 
-                elif msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    break
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error("Telnyx TTS WebSocket error: %s", ws.exception())
-                    break
-
             decoder.end_input()
 
         async def decode_task() -> None:
@@ -213,29 +196,22 @@ class SynthesizeStream(tts.SynthesizeStream):
                 output_emitter.push(frame.data.tobytes())
 
         try:
-            ws = await utils.http_context.ws_connect(
-                self._ensure_session(),
-                url,
-                headers=headers,
-                conn_options=self._conn_options,
+            ws = await self._ensure_session().ws_connect(
+                url, headers=headers, conn_options=self._conn_options
             )
-            async with ws:
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                    asyncio.create_task(decode_task()),
-                ]
-                try:
-                    await asyncio.gather(*tasks)
-                finally:
-                    await utils.aio.cancel_and_wait(*tasks)
+            tasks = [
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+                asyncio.create_task(decode_task()),
+            ]
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await utils.aio.cancel_and_wait(*tasks)
+                await ws.close()
         except TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
-        except (APIConnectionError, APIStatusError, APITimeoutError):
+        except (APIConnectionError, APIStatusError):
             raise
         except Exception as e:
             raise APIConnectionError() from e

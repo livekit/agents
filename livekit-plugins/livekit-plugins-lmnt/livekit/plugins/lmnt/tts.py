@@ -18,13 +18,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Final
 
-import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APITimeoutError,
-    create_api_error_from_http,
+    APIError,
+    http,
     tts,
     utils,
 )
@@ -75,7 +73,7 @@ class TTS(tts.TTS):
         format: LMNTAudioFormats = "mp3",
         sample_rate: LMNTSampleRate = 24000,
         api_key: str | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         temperature: float = 1.0,
         top_p: float = 0.8,
     ) -> None:
@@ -94,7 +92,7 @@ class TTS(tts.TTS):
             sample_rate: Output sample rate in Hz. Default is 24000.
                 See: https://docs.lmnt.com/api-reference/speech/synthesize-speech-bytes#body-sample-rate
             api_key: API key for authentication. Defaults to the LMNT_API_KEY environment variable.
-            http_session: Optional aiohttp ClientSession. A new session is created if not provided.
+            http_session: Optional HttpSession. The job's shared session is used if not provided.
             temperature: Influences how expressive and emotionally varied the speech becomes.
                 Lower values (like 0.3) create more neutral, consistent speaking styles.
                 Higher values (like 1.0) allow for more dynamic emotional range and speaking styles.
@@ -197,9 +195,9 @@ class TTS(tts.TTS):
         if is_given(top_p):
             self._opts.top_p = top_p
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
@@ -210,7 +208,7 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
-        get_session: Callable[[], aiohttp.ClientSession],
+        get_session: Callable[[], http.HttpSession],
         opts: _TTSOptions,
         tts: TTS,
         input_text: str,
@@ -234,9 +232,7 @@ class ChunkedStream(tts.ChunkedStream):
         }
 
         try:
-            async with utils.http_context.request(
-                self._get_session(),
-                "POST",
+            async with self._get_session().post(
                 LMNT_BASE_URL,
                 headers={
                     "Content-Type": "application/json",
@@ -245,20 +241,18 @@ class ChunkedStream(tts.ChunkedStream):
                 json=data,
                 conn_options=self._conn_options,
             ) as resp:
-                resp.raise_for_status()
+                await resp.raise_for_status()
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=NUM_CHANNELS,
                     mime_type=MIME_TYPE[self._opts.format],
                 )
-                async for chunk, _ in resp.content.iter_chunks():
+                async for chunk in resp.iter_bytes():
                     output_emitter.push(chunk)
 
                 output_emitter.flush()
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(e.message, status=e.status) from None
+        except APIError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e

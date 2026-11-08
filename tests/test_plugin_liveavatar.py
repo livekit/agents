@@ -13,7 +13,7 @@ from aiohttp.test_utils import TestServer
 from pydantic import JsonValue, ValidationError
 
 from livekit import rtc
-from livekit.agents import utils
+from livekit.agents import http
 from livekit.agents.voice.avatar import QueueAudioOutput
 from livekit.plugins.liveavatar.avatar import (
     _SERVER_EVENT,
@@ -153,7 +153,7 @@ async def peer(monkeypatch: pytest.MonkeyPatch):
 
     app = web.Application()
     app.router.add_get("/events", websocket)
-    async with TestServer(app) as server, utils.http_context.open():
+    async with TestServer(app) as server, http.open():
         session = AvatarSession(api_key="test", avatar_id="test")
         audio = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
         session._audio_buffer = audio

@@ -19,12 +19,11 @@ import os
 import weakref
 from typing import TYPE_CHECKING
 
-import aiohttp
-
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -97,7 +96,7 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         api_key: str | None = None,
         audio_chunk_duration_ms: int = 160,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         base_url: str = "https://api.cartesia.ai",
         language: STTLanguages | str | None = None,
         turn_start_threshold: NotGivenOr[float] = NOT_GIVEN,
@@ -130,7 +129,7 @@ class STT(stt.STT):
                 the ``CARTESIA_API_KEY`` environment variable.
             audio_chunk_duration_ms: Duration in milliseconds of each audio chunk
                 sent to the Cartesia STT websocket. Defaults to 160 ms.
-            http_session: Optional aiohttp ClientSession to use for requests.
+            http_session: Optional HttpSession to use for requests.
             base_url: The base URL for the Cartesia API.
                 Defaults to ``https://api.cartesia.ai``.
             language: The language code for recognition.
@@ -276,7 +275,7 @@ class STT(stt.STT):
         self._warn_on_unexpected_args(language=resolved_language)
 
         if self._session is None:
-            session = utils.http_context.http_session()
+            session = http.http_session()
             self._session = session
         else:
             session = self._session

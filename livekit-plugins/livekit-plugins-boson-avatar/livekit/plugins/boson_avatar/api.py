@@ -23,7 +23,6 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
-import aiohttp
 from pydantic import JsonValue, TypeAdapter
 
 from livekit.agents import (
@@ -32,10 +31,11 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    APITimeoutError,
     NotGivenOr,
+    http,
     utils,
 )
-from livekit.agents.utils import http_context
 
 from .errors import BosonAvatarException
 from .log import logger
@@ -80,7 +80,7 @@ class BosonAvatarAPI:
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_url: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        session: aiohttp.ClientSession | None = None,
+        session: http.HttpSession | None = None,
     ) -> None:
         self._api_key = _resolve_api_key(api_key)
         if not self._api_key:
@@ -230,9 +230,9 @@ class BosonAvatarAPI:
         if invalid_response:
             raise BosonAvatarException("Boson Avatar API returned an invalid terminated session")
 
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
+    def _ensure_http_session(self) -> http.HttpSession:
         if self._session is None:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     async def _json(
@@ -256,8 +256,7 @@ class BosonAvatarAPI:
             for attempt in range(self._conn_options.max_retry + 1):
                 retry_after: float | None = None
                 try:
-                    async with http_context.request(
-                        self._ensure_http_session(),
+                    async with self._ensure_http_session().request(
                         method,
                         url,
                         json=json,
@@ -292,9 +291,9 @@ class BosonAvatarAPI:
                             body=payload,
                             retryable=not 200 <= response.status < 400,
                         )
-                except TimeoutError:
+                except APITimeoutError:
                     error_type = "timeout"
-                except aiohttp.ClientError:
+                except APIConnectionError:
                     error_type = "client_error"
                 except APIStatusError as exc:
                     if not exc.retryable:
@@ -387,21 +386,24 @@ async def list_avatars(
     conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
 ) -> list[AvatarInfo]:
     """List project Avatars using the configured provider endpoint."""
-    async with aiohttp.ClientSession() as session:
+    session = http.HttpSession()
+    try:
         return await BosonAvatarAPI(
             api_key=api_key,
             api_url=api_url,
             conn_options=conn_options,
             session=session,
         ).list_avatars()
+    finally:
+        await session.aclose()
 
 
-async def _read_payload(response: aiohttp.ClientResponse) -> JsonValue:
+async def _read_payload(response: http.HttpResponse) -> JsonValue:
     text = await response.text()
     if not text:
         return None
     try:
-        payload = _JSON_VALUE.validate_python(await response.json(content_type=None))
+        payload = _JSON_VALUE.validate_python(await response.json())
         return payload
     except ValueError:
         return {"raw": text}

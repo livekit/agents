@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import os
 
-import aiohttp
-
 import livekit.rtc as rtc
 from livekit import api
 from livekit.agents import (
@@ -44,7 +42,6 @@ class AvatarSession(BaseAvatarSession):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         super().__init__()
-        self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
         self.session_id: str | None = None
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
@@ -70,12 +67,6 @@ class AvatarSession(BaseAvatarSession):
     @property
     def provider(self) -> str:
         return "anam"
-
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
-        if self._http_session is None:
-            self._http_session = utils.http_context.http_session()
-
-        return self._http_session
 
     async def start(
         self,

@@ -24,15 +24,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
-import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
     APIStatusError,
-    APITimeoutError,
     ProviderAttempts,
+    http,
     tokenize,
     tts,
     utils,
@@ -106,7 +104,7 @@ class TTS(tts.TTS):
         reduce_silence: bool = False,
         api_key: str | None = None,
         websocket_url: str = WEBSOCKET_URL,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         stream_idle_timeout: float = DEFAULT_STREAM_IDLE_TIMEOUT,
     ) -> None:
@@ -126,7 +124,7 @@ class TTS(tts.TTS):
                 rejects it on other models. Defaults to False.
             api_key (str): Soniox API key. If not provided, will look for SONIOX_API_KEY env variable.
             websocket_url (str): Base WebSocket URL for Soniox TTS API.
-            http_session (aiohttp.ClientSession): Optional aiohttp.ClientSession to use for requests.
+            http_session (http.HttpSession): Optional HttpSession to use for requests.
             tokenizer (tokenize.SentenceTokenizer): Tokenizer used to buffer input into complete
                 sentences before sending. Defaults to
                 `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
@@ -187,9 +185,9 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Soniox"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     async def _current_connection(
@@ -481,12 +479,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             connection = await self._current_connection(self._conn_options)
         except APIError:
             raise
-        except TimeoutError as e:
-            raise APITimeoutError() from e
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=request_id, body=None
-            ) from None
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -591,13 +583,13 @@ class _Connection:
     def __init__(
         self,
         opts: _TTSOptions,
-        session: aiohttp.ClientSession,
+        session: http.HttpSession,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._opts = opts
         self._session = session
         self.conn_options = conn_options
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._ws: http.WebSocket | None = None
         self._streams: dict[str, _StreamData] = {}
         self._input_queue = utils.aio.Chan[_OutboundMsg]()
         self._send_task: asyncio.Task[None] | None = None
@@ -642,8 +634,7 @@ class _Connection:
             return
 
         try:
-            self._ws = await utils.http_context.ws_connect(
-                self._session,
+            self._ws = await self._session.ws_connect(
                 self._opts.websocket_url,
                 conn_options=self.conn_options,
                 headers={"Authorization": f"Bearer {self._opts.api_key}"},
@@ -774,21 +765,17 @@ class _Connection:
             while not self._closed and self._ws is not None and not self._ws.closed:
                 msg = await self._ws.receive()
 
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     self._fail_all(
                         APIStatusError(
                             "Soniox TTS WebSocket connection closed unexpectedly",
                             status_code=(self._ws.close_code if self._ws else -1) or -1,
-                            body=f"{msg.data=} {msg.extra=}",
+                            body=f"{msg.data=}",
                         )
                     )
                     break
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     continue
 
                 resp = json.loads(msg.data)
@@ -833,7 +820,7 @@ class _Connection:
                             APIStatusError(
                                 message=resp.get("error_message", "Unknown error"),
                                 status_code=code,
-                                body=f"stream_id={stream_id} {msg.data}",
+                                body=f"stream_id={stream_id} {msg.text}",
                                 retryable=retryable,
                             )
                         )

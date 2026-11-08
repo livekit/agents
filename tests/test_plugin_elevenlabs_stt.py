@@ -11,14 +11,13 @@ from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
-import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 from yarl import URL
 
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIStatusError, LanguageCode, stt
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIStatusError, LanguageCode, http, stt
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
 from tests.utils.attempts import observed_attempts
@@ -246,7 +245,7 @@ async def _connect_ws_url(stream: elevenlabs_stt.SpeechStream) -> str:
 
     app = web.Application()
     app.router.add_get("/{path:.*}", connect)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         stream._opts.base_url = str(server.make_url("/")).rstrip("/")
         stream._session = session
         socket = await stream._connect_ws()
@@ -270,7 +269,7 @@ async def test_connect_ws_includes_keyterms() -> None:
 async def test_connect_ws_escapes_query_delimiters_in_keyterms() -> None:
     # Keyterms are free-form text. Unescaped, "&" would split the term and inject
     # a bogus query param and "#" would truncate it, so both must be encoded and
-    # must survive a round trip through the URL parser aiohttp uses.
+    # must survive a round trip through the URL parser the transport uses.
     stream = _new_stream()
     stream._opts.keyterms = ["Smith & Sons", "C#"]
 
@@ -647,7 +646,7 @@ async def test_recognize_does_not_retry_a_client_error(
 
     app = web.Application()
     app.router.add_post("/speech-to-text", handler)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         url = str(server.make_url(""))
         batch_stt = elevenlabs_stt.STT(api_key="bad-key", base_url=url, http_session=session)
         with pytest.raises(APIStatusError) as exc_info:
@@ -660,7 +659,6 @@ async def test_recognize_does_not_retry_a_client_error(
 
 
 async def test_batch_recognition_rejects_nontext_transcript() -> None:
-    import aiohttp
     from aiohttp import web
     from aiohttp.test_utils import TestServer
     from pydantic import ValidationError
@@ -675,7 +673,7 @@ async def test_batch_recognition_rejects_nontext_transcript() -> None:
 
     app = web.Application()
     app.router.add_post("/{path:.*}", recognize)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         model = elevenlabs.STT(
             api_key="test", base_url=str(server.make_url("/")), http_session=session
         )

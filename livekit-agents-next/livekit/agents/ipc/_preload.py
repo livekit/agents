@@ -86,7 +86,7 @@ def _rtc_runtime() -> None:
 
 
 def _shared_ssl_context() -> None:
-    from ..utils.http_context import _ssl_context
+    from ..http.client import _ssl_context
 
     _ssl_context()
 

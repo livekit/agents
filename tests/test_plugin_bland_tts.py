@@ -12,7 +12,7 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-from livekit.agents import APIConnectionError, APIConnectOptions, APIError, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError, APIStatusError, http
 from livekit.agents.types import NOT_GIVEN
 
 pytestmark = pytest.mark.plugin("bland")
@@ -38,11 +38,11 @@ class _Server:
         await self._site.start()
         port = self._runner.addresses[0][1]
         self.base_url = f"http://127.0.0.1:{port}/v2"
-        self.session = aiohttp.ClientSession()
+        self.session = http.HttpSession()
         return self
 
     async def __aexit__(self, *exc: object) -> None:
-        await self.session.close()
+        await self.session.aclose()
         await self._runner.cleanup()
 
 
@@ -425,11 +425,11 @@ class _WSServer:
         await self._site.start()
         port = self._runner.addresses[0][1]
         self.base_url = f"http://127.0.0.1:{port}/v2"
-        self.session = aiohttp.ClientSession()
+        self.session = http.HttpSession()
         return self
 
     async def __aexit__(self, *exc: object) -> None:
-        await self.session.close()
+        await self.session.aclose()
         await self._runner.cleanup()
 
     def of_type(self, type: str) -> list[dict[str, Any]]:
@@ -795,11 +795,11 @@ class _RefusingWSServer:
         self._site = web.TCPSite(self._runner, "127.0.0.1", 0)
         await self._site.start()
         self.base_url = f"http://127.0.0.1:{self._runner.addresses[0][1]}/v2"
-        self.session = aiohttp.ClientSession()
+        self.session = http.HttpSession()
         return self
 
     async def __aexit__(self, *exc: object) -> None:
-        await self.session.close()
+        await self.session.aclose()
         await self._runner.cleanup()
 
 

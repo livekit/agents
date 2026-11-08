@@ -27,8 +27,6 @@ import os
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, cast
 
-import aiohttp
-
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -37,6 +35,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -140,7 +139,7 @@ class STT(stt.STT):
             itn_native_numerals=itn_native_numerals,
             use_streaming=use_streaming,
         )
-        self._session: aiohttp.ClientSession | None = None
+        self._session: http.HttpSession | None = None
 
     @property
     def model(self) -> str:
@@ -150,9 +149,9 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Gnani"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     @staticmethod
@@ -183,7 +182,7 @@ class STT(stt.STT):
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
-        form_data = aiohttp.FormData()
+        form_data = http.FormData()
         form_data.add_field("audio_file", wav_bytes, filename="audio.wav", content_type="audio/wav")
         form_data.add_field("language_code", lang)
         form_data.add_field("format", self._opts.format)
@@ -198,10 +197,8 @@ class STT(stt.STT):
         }
 
         try:
-            async with utils.http_context.request(
-                self._ensure_session(),
-                "POST",
-                url=f"{self._opts.base_url}/stt/v3",
+            async with self._ensure_session().post(
+                f"{self._opts.base_url}/stt/v3",
                 data=form_data,
                 headers=headers,
                 conn_options=conn_options,
@@ -231,9 +228,7 @@ class STT(stt.STT):
                     ],
                 )
 
-        except TimeoutError as e:
-            raise APITimeoutError("Gnani STT API request timed out") from e
-        except (APIStatusError, APIConnectionError, APITimeoutError):
+        except (APIStatusError, APIConnectionError):
             raise
         except Exception as e:
             raise APIConnectionError(f"Gnani STT error: {e}") from e

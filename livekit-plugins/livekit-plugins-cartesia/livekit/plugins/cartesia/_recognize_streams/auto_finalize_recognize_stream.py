@@ -19,13 +19,11 @@ import json
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
-import aiohttp
-
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
-    APIStatusError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -215,7 +213,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         model: TurnDetectingSTTModel | str,
         api_key: str,
         ws_base_url: str,
-        session: aiohttp.ClientSession,
+        session: http.HttpSession,
         language: LanguageCode,
         turn_start_threshold: NotGivenOr[float] = NOT_GIVEN,
         turn_eager_end_threshold: NotGivenOr[float] = NOT_GIVEN,
@@ -247,16 +245,8 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         if self.input.closed:
             return
 
-        async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            try:
-                while not self._closing_ws:
-                    await ws.ping()
-                    await asyncio.sleep(30)
-            except Exception:
-                return
-
         @utils.log_exceptions(logger=logger)
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             samples_per_chunk = self._sample_rate * self._audio_chunk_duration_ms // 1000
             audio_bstream = utils.media.AudioByteStream(
                 sample_rate=self._sample_rate,
@@ -282,7 +272,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
 
                 self._closing_ws = True
                 await ws.send_str('{"type":"close"}')
-            except (aiohttp.ClientError, ConnectionError) as e:
+            except APIConnectionError as e:
                 if self._closing_ws or self._session.closed:
                     return
                 raise APIConnectionError(
@@ -291,26 +281,22 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                 ) from e
 
         @utils.log_exceptions(logger=logger)
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             while True:
                 msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     if self._closing_ws or self._session.closed:
                         return
                     raise APIConnectionError(
                         message=(
                             "Cartesia STT connection closed unexpectedly "
                             f"(close_code={ws.close_code}, "
-                            f"data={msg.data!r}, extra={msg.extra!r})"
+                            f"reason={msg.data!r})"
                         ),
                         retryable=True,
                     )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected Cartesia STT message type %s", msg.type)
                     continue
 
@@ -332,20 +318,15 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         self._speech_duration = 0.0
         self._closing_ws = False
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
+        ws: http.WebSocket | None = None
 
         try:
             ws = await self._connect_ws()
             send = asyncio.create_task(send_task(ws))
             recv = asyncio.create_task(recv_task(ws))
-            keepalive = asyncio.create_task(keepalive_task(ws))
-            tasks = [send, recv, keepalive]
+            tasks = [send, recv]
             try:
-                # Only wait on send/recv. keepalive_task sleeps up to 30s
-                # between pings, so awaiting it here would keep gather() (and
-                # the teardown/finalization below) blocked for up to 30s after
-                # send/recv have already finished.
-                await asyncio.gather(send, recv)
+                await asyncio.gather(*tasks)
             finally:
                 await utils.aio.cancel_and_wait(*tasks)
                 self._send_recognition_usage_event()
@@ -366,7 +347,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
             if ws is not None:
                 await ws.close()
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self) -> http.WebSocket:
         # keyterm may repeat, so params is a list of pairs rather than a dict
         params: list[tuple[str, str]] = [
             ("model", str(self._model)),
@@ -386,35 +367,20 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
 
         ws_url = f"{self._ws_base_url}/stt/turns/websocket?{urlencode(params)}"
 
-        try:
-            ws = await utils.http_context.ws_connect(
-                self._session,
-                ws_url,
-                headers={
-                    API_VERSION_HEADER: API_VERSION,
-                    API_AUTH_HEADER: self._api_key,
-                    "User-Agent": USER_AGENT,
-                },
-                conn_options=self._conn_options,
-            )
-            c_request_id = utils.http_context.websocket_headers(ws).get(REQUEST_ID_HEADER)
-            logger.debug(
-                "Established new Cartesia STT WebSocket connection",
-                extra={"cartesia_request_id": c_request_id},
-            )
-        except TimeoutError:
-            raise APIConnectionError("failed to connect to cartesia", retryable=True) from None
-        except aiohttp.ClientResponseError as e:
-            # authentication headers can appear in RequestInfo.
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
-        except Exception as e:
-            # transport errors can contain credentials in URLs.
-            raise APIConnectionError(
-                f"failed to connect to cartesia ({type(e).__name__})",
-                retryable=True,
-            ) from None
+        ws = await self._session.ws_connect(
+            ws_url,
+            headers={
+                API_VERSION_HEADER: API_VERSION,
+                API_AUTH_HEADER: self._api_key,
+                "User-Agent": USER_AGENT,
+            },
+            conn_options=self._conn_options,
+            heartbeat=30,
+        )
+        logger.debug(
+            "Established new Cartesia STT WebSocket connection",
+            extra={"cartesia_request_id": ws.headers.get(REQUEST_ID_HEADER)},
+        )
         return ws
 
     def _send_transcript_event(self, event_type: stt.SpeechEventType, transcript: str) -> None:

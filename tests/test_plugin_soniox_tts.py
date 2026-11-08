@@ -19,7 +19,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectOptions, APIStatusError, ProviderAttempts
+from livekit.agents import APIConnectOptions, APIStatusError, ProviderAttempts, http
 from livekit.agents.tts import AudioEmitter
 from livekit.plugins import soniox
 from livekit.plugins.soniox.tts import _Connection
@@ -55,7 +55,7 @@ async def test_websocket_authenticates_once_for_multiple_streams() -> None:
 
     app = web.Application()
     app.router.add_get("/tts", handle)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         tts = soniox.TTS(
             api_key="test-key",
             http_session=session,
@@ -107,13 +107,13 @@ async def test_connection_error_reaches_all_streams(
     if stream_id is not None:
         payload["stream_id"] = stream_id
 
-    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws = MagicMock(spec=http.WebSocket)
     ws.closed = False
     ws.close_code = 1008
     ws.receive = AsyncMock(
         side_effect=[
-            aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(payload), ""),
-            aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1008, ""),
+            http.WebSocketMessage(http.WebSocketMessageType.TEXT, json.dumps(payload)),
+            http.WebSocketMessage(http.WebSocketMessageType.CLOSE, ""),
         ]
     )
     connection._ws = ws

@@ -6,10 +6,9 @@ import json
 import logging
 from types import SimpleNamespace
 
-import aiohttp
 import pytest
 
-from livekit.agents import tts as agents_tts, utils
+from livekit.agents import http, tts as agents_tts, utils
 from livekit.plugins.elevenlabs import tts as elevenlabs_tts
 
 pytestmark = pytest.mark.plugin("elevenlabs")
@@ -24,7 +23,7 @@ class _FakeWebSocket:
     async def receive(self) -> object:
         if self._messages:
             return self._messages.pop(0)
-        return SimpleNamespace(type=aiohttp.WSMsgType.CLOSE, data="")
+        return SimpleNamespace(type=http.WebSocketMessageType.CLOSE, data="")
 
     async def close(self) -> None:
         self.closed = True
@@ -72,7 +71,7 @@ class _FakeConnection:
 
 
 def _websocket_text_message(payload: dict[str, object]) -> object:
-    return SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=json.dumps(payload))
+    return SimpleNamespace(type=http.WebSocketMessageType.TEXT, data=json.dumps(payload))
 
 
 def test_synthesize_url_carries_no_streaming_latency_optimization() -> None:
@@ -138,7 +137,7 @@ async def test_option_update_during_connect_discards_stale_socket(
 
     monkeypatch.setattr(elevenlabs_tts, "_Connection", _StubConnection)
 
-    async with aiohttp.ClientSession() as session:
+    async with http.open() as session:
         tts = elevenlabs_tts.TTS(api_key="test-key", voice_id="old", http_session=session)
         connection_task = asyncio.create_task(tts._current_connection())
         await asyncio.wait_for(connect_started.wait(), timeout=1)
@@ -485,7 +484,7 @@ async def test_recv_loop_resets_timeout_timer_on_audio(
 )
 async def test_send_loop_arms_timeout_on_close_context(connection_cls: type, model: str) -> None:
     tts = elevenlabs_tts.TTS(api_key="test-key", model=model, voice_id="voice-1")
-    async with aiohttp.ClientSession() as session:
+    async with http.open() as session:
         connection = connection_cls(tts._opts, session)
         connection._ws = _RecordingWs()
         ctx = elevenlabs_tts._StreamData(
@@ -796,7 +795,7 @@ async def test_dialogue_send_loop_sends_close_context_without_waiting() -> None:
     tts = elevenlabs_tts.TTS(
         api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
     )
-    async with aiohttp.ClientSession() as session:
+    async with http.open() as session:
         connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
             tts._opts, session
         )
@@ -829,7 +828,7 @@ async def test_dialogue_send_loop_sends_keep_alive_for_idle_context(
     tts = elevenlabs_tts.TTS(
         api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
     )
-    async with aiohttp.ClientSession() as session:
+    async with http.open() as session:
         connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
             tts._opts, session
         )
@@ -855,7 +854,7 @@ async def test_dialogue_send_loop_keeps_idle_context_alive_during_other_traffic(
     tts = elevenlabs_tts.TTS(
         api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
     )
-    async with aiohttp.ClientSession() as session:
+    async with http.open() as session:
         connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
             tts._opts, session
         )
@@ -886,7 +885,7 @@ async def test_dialogue_send_loop_stops_keep_alive_once_context_closes(
     tts = elevenlabs_tts.TTS(
         api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
     )
-    async with aiohttp.ClientSession() as session:
+    async with http.open() as session:
         connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
             tts._opts, session
         )

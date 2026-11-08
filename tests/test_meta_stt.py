@@ -4,13 +4,13 @@ import asyncio
 import json
 from collections import deque
 from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 from typing import Any, cast
 
-import aiohttp
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, APIStatusError, stt
+from livekit.agents import APIConnectOptions, APIError, APIStatusError, http, stt
 from livekit.plugins import meta
 from livekit.plugins.meta import stt as meta_stt
 
@@ -21,6 +21,12 @@ _TEST_OPTIONS = APIConnectOptions(
 )
 _CLOSE_AFTER_END = object()
 _CLOSE_1011_AFTER_END = object()
+
+
+@dataclass
+class _Close:
+    code: int
+    reason: str = ""
 
 
 class _FakeWebSocket:
@@ -66,20 +72,22 @@ class _FakeWebSocket:
             raise self._send_error
         self.sent_bytes.append(data)
 
-    async def receive(self) -> aiohttp.WSMessage:
+    async def receive(self) -> http.WebSocketMessage:
         item = await self._incoming.get()
         if item is _CLOSE_AFTER_END:
             await self.end_stream_sent.wait()
-            self.close_code = 1000
-            return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1000, "")
+            item = _Close(1000)
         if item is _CLOSE_1011_AFTER_END:
             await self.end_stream_sent.wait()
-            self.close_code = 1011
-            return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1011, "unsafe close reason")
+            item = _Close(1011, "unsafe close reason")
         if isinstance(item, BaseException):
             raise item
-        assert isinstance(item, aiohttp.WSMessage)
-        if item.type == aiohttp.WSMsgType.TEXT:
+        if isinstance(item, _Close):
+            if self.close_code is None:
+                self.close_code = item.code
+            return http.WebSocketMessage(http.WebSocketMessageType.CLOSE, item.reason)
+        assert isinstance(item, http.WebSocketMessage)
+        if item.type is http.WebSocketMessageType.TEXT:
             try:
                 payload = json.loads(item.data)
             except (json.JSONDecodeError, TypeError):
@@ -87,22 +95,15 @@ class _FakeWebSocket:
             else:
                 if isinstance(payload, dict) and payload.get("sessionId"):
                     self.handshake_accepted.set()
-        if (
-            item.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED)
-            and self.close_code is None
-        ):
-            self.close_code = item.data if isinstance(item.data, int) else 1000
         return item
 
-    async def close(self) -> bool:
+    async def close(self) -> None:
         self.closed = True
         self.release_audio.set()
-        return True
 
 
 class _FakeSession:
     def __init__(self, outcomes: list[_FakeWebSocket | BaseException]) -> None:
-        self.trace_configs: list[object] = []  # aiohttp request tracing
         self._outcomes = deque(outcomes)
         self.connect_calls: list[tuple[str, dict[str, object]]] = []
 
@@ -114,16 +115,16 @@ class _FakeSession:
         return outcome
 
 
-def _text_message(payload: dict[str, object]) -> aiohttp.WSMessage:
-    return aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(payload), "")
+def _text_message(payload: dict[str, object]) -> http.WebSocketMessage:
+    return http.WebSocketMessage(http.WebSocketMessageType.TEXT, json.dumps(payload))
 
 
-def _raw_text_message(payload: str) -> aiohttp.WSMessage:
-    return aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, payload, "")
+def _raw_text_message(payload: str) -> http.WebSocketMessage:
+    return http.WebSocketMessage(http.WebSocketMessageType.TEXT, payload)
 
 
-def _close_message(code: int = 1000, reason: str = "") -> aiohttp.WSMessage:
-    return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, code, reason)
+def _close_message(code: int = 1000, reason: str = "") -> _Close:
+    return _Close(code, reason)
 
 
 def _websocket(events: list[dict[str, object]] | None = None) -> _FakeWebSocket:
@@ -194,9 +195,9 @@ def test_api_key_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setenv("MODEL_API_KEY", "model-environment-key")
     monkeypatch.setenv("META_API_KEY", "meta-environment-key")
-    provider = meta.STT(http_session=cast(aiohttp.ClientSession, _FakeSession([])))
+    provider = meta.STT(http_session=cast(http.HttpSession, _FakeSession([])))
     explicit = meta.STT(
-        api_key="explicit-key", http_session=cast(aiohttp.ClientSession, _FakeSession([]))
+        api_key="explicit-key", http_session=cast(http.HttpSession, _FakeSession([]))
     )
 
     assert provider._api_key == "Bearer model-environment-key"
@@ -207,7 +208,7 @@ def test_meta_api_key_environment_fallback(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setenv("MODEL_API_KEY", "  ")
     monkeypatch.setenv("META_API_KEY", " meta-environment-key ")
 
-    provider = meta.STT(http_session=cast(aiohttp.ClientSession, _FakeSession([])))
+    provider = meta.STT(http_session=cast(http.HttpSession, _FakeSession([])))
 
     assert provider._api_key == "Bearer meta-environment-key"
 
@@ -249,7 +250,7 @@ def test_normalizes_and_validates_static_hints() -> None:
         api_key="test-key",
         keywords=[" Muse ", "Muse"],
         language_bias=[" english ", "English", "French"],
-        http_session=cast(aiohttp.ClientSession, _FakeSession([])),
+        http_session=cast(http.HttpSession, _FakeSession([])),
     )
     assert provider._keywords == ["Muse"]
     assert provider._language_bias == ["English", "French"]
@@ -279,7 +280,7 @@ async def test_handshake_precedes_audio_and_matches_contract() -> None:
         api_key="explicit-secret",
         keywords=["Muse", "Muse"],
         language_bias=["English", "French"],
-        http_session=cast(aiohttp.ClientSession, session),
+        http_session=cast(http.HttpSession, session),
     )
     stream = provider.stream(language="fr-FR", conn_options=_TEST_OPTIONS)
     stream.push_frame(_frame(b"x" * 3840))
@@ -318,7 +319,7 @@ async def test_handshake_precedes_audio_and_matches_contract() -> None:
 async def test_packetizes_pcm16_into_80ms_chunks_and_preserves_tail() -> None:
     websocket = _websocket()
     provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+        api_key="test-key", http_session=cast(http.HttpSession, _FakeSession([websocket]))
     )
 
     events, _ = await _collect(provider, b"x" * (3840 * 2 + 100))
@@ -332,7 +333,7 @@ async def test_packetizes_pcm16_into_80ms_chunks_and_preserves_tail() -> None:
 async def test_resamples_48khz_mono_input_to_24khz_wire_audio() -> None:
     websocket = _websocket()
     provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+        api_key="test-key", http_session=cast(http.HttpSession, _FakeSession([websocket]))
     )
     stream = provider.stream(conn_options=_TEST_OPTIONS)
     stream.push_frame(_frame(b"\0" * (48_000 * 2 // 5), sample_rate=48_000))
@@ -349,7 +350,7 @@ async def test_resamples_48khz_mono_input_to_24khz_wire_audio() -> None:
 async def test_flush_sends_tail_without_ending_and_audio_can_continue() -> None:
     websocket = _websocket()
     provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+        api_key="test-key", http_session=cast(http.HttpSession, _FakeSession([websocket]))
     )
     stream = provider.stream(conn_options=_TEST_OPTIONS)
 
@@ -375,7 +376,7 @@ async def test_flush_sends_tail_without_ending_and_audio_can_continue() -> None:
 async def test_rejects_stereo_after_input_is_consumed_without_retry() -> None:
     websocket = _websocket()
     session = _FakeSession([websocket, _websocket()])
-    provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
+    provider = meta.STT(api_key="test-key", http_session=cast(http.HttpSession, session))
     stream = provider.stream(
         conn_options=APIConnectOptions(
             max_retry=1, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
@@ -441,7 +442,7 @@ async def test_absolute_pacing_accounts_for_send_time(monkeypatch: pytest.Monkey
     monkeypatch.setattr(meta_stt.asyncio, "get_running_loop", lambda: clock)
     monkeypatch.setattr(meta_stt.asyncio, "sleep", clock.sleep)
 
-    await stream._send_audio(cast(aiohttp.ClientWebSocketResponse, websocket))
+    await stream._send_audio(cast(http.WebSocket, websocket))
 
     assert [len(packet) for packet in websocket.packets] == [3840, 3840, 3840]
     assert clock.sleeps == pytest.approx([0.05, 0.05])
@@ -458,7 +459,7 @@ async def test_audio_progress_does_not_duplicate_sent_byte_usage() -> None:
         ]
     )
     provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+        api_key="test-key", http_session=cast(http.HttpSession, _FakeSession([websocket]))
     )
 
     events, _ = await _collect(provider, b"x" * 7680)
@@ -489,7 +490,7 @@ async def test_usage_is_emitted_once_per_completed_turn() -> None:
         ]
     )
     provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+        api_key="test-key", http_session=cast(http.HttpSession, _FakeSession([websocket]))
     )
 
     events, _ = await _collect(provider, b"x" * 7680)
@@ -537,7 +538,7 @@ async def test_normal_turn_deduplicates_partials_final_and_end_then_evicts_state
     ]
     websocket = _websocket(events)
     provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+        api_key="test-key", http_session=cast(http.HttpSession, _FakeSession([websocket]))
     )
 
     collected, stream = await _collect(provider)
@@ -587,7 +588,7 @@ async def test_interleaved_turns_are_globally_serialized() -> None:
     ]
     websocket = _websocket(events)
     provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+        api_key="test-key", http_session=cast(http.HttpSession, _FakeSession([websocket]))
     )
 
     collected, _ = await _collect(provider)
@@ -622,7 +623,7 @@ async def test_usage_uses_positive_audio_progress_deltas() -> None:
         ]
     )
     provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+        api_key="test-key", http_session=cast(http.HttpSession, _FakeSession([websocket]))
     )
 
     events, _ = await _collect(provider, b"x" * 3840)
@@ -645,7 +646,7 @@ async def test_pending_usage_is_flushed_before_stream_error() -> None:
         ]
     )
     provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+        api_key="test-key", http_session=cast(http.HttpSession, _FakeSession([websocket]))
     )
     stream = provider.stream(conn_options=_TEST_OPTIONS)
     stream.end_input()
@@ -670,7 +671,7 @@ async def test_pending_usage_is_flushed_before_stream_error() -> None:
 async def test_invalid_audio_progress_is_non_retryable(processed_ms: object) -> None:
     websocket = _websocket([{"type": "audioProgress", "audioProcessedMs": processed_ms}])
     provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+        api_key="test-key", http_session=cast(http.HttpSession, _FakeSession([websocket]))
     )
     stream = provider.stream(conn_options=_TEST_OPTIONS)
     stream.end_input()
@@ -689,7 +690,7 @@ async def test_empty_turnless_transcript_outside_speech_is_ignored() -> None:
         [{"type": "transcript", "transcript": "", "final": False, "audioProcessedMs": 1000}]
     )
     provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+        api_key="test-key", http_session=cast(http.HttpSession, _FakeSession([websocket]))
     )
 
     collected, _ = await _collect(provider)
@@ -707,7 +708,7 @@ async def test_missing_turn_id_is_rejected_outside_an_active_turn() -> None:
         ]
     )
     provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+        api_key="test-key", http_session=cast(http.HttpSession, _FakeSession([websocket]))
     )
     stream = provider.stream(conn_options=_TEST_OPTIONS)
     stream.end_input()
@@ -722,36 +723,10 @@ async def test_missing_turn_id_is_rejected_outside_an_active_turn() -> None:
     await provider.aclose()
 
 
-async def test_raw_normal_close_code_wins_over_stale_socket_property() -> None:
-    websocket = _FakeWebSocket(
-        [
-            _text_message({"sessionId": "session-1"}),
-            _text_message(
-                {
-                    "type": "transcript",
-                    "transcript": "",
-                    "final": False,
-                    "audioProcessedMs": 1000,
-                }
-            ),
-            _CLOSE_AFTER_END,
-        ]
-    )
-    websocket.close_code = 1006
-    provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
-    )
-
-    events, _ = await _collect(provider)
-
-    assert events == []
-    await provider.aclose()
-
-
 async def test_clean_close_with_incomplete_turn_is_non_retryable() -> None:
     websocket = _websocket([{"type": "speechStart", "turnId": "unfinished"}])
     provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+        api_key="test-key", http_session=cast(http.HttpSession, _FakeSession([websocket]))
     )
     stream = provider.stream(conn_options=_TEST_OPTIONS)
     stream.end_input()
@@ -768,7 +743,7 @@ async def test_clean_close_with_incomplete_turn_is_non_retryable() -> None:
 async def test_pre_audio_connection_failure_retries_without_losing_input() -> None:
     websocket = _websocket()
     session = _FakeSession([RuntimeError("transient connection detail"), websocket])
-    provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
+    provider = meta.STT(api_key="test-key", http_session=cast(http.HttpSession, session))
 
     events, _ = await _collect(
         provider,
@@ -788,7 +763,7 @@ async def test_normal_close_during_handshake_retries() -> None:
     first = _FakeWebSocket([_close_message(1000)])
     second = _websocket()
     session = _FakeSession([first, second])
-    provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
+    provider = meta.STT(api_key="test-key", http_session=cast(http.HttpSession, session))
 
     events, _ = await _collect(
         provider,
@@ -805,7 +780,7 @@ async def test_normal_close_during_handshake_retries() -> None:
 async def test_invalid_request_close_during_handshake_is_not_retried() -> None:
     first = _FakeWebSocket([_close_message(1008, "unsafe close reason")])
     session = _FakeSession([first, _websocket()])
-    provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
+    provider = meta.STT(api_key="test-key", http_session=cast(http.HttpSession, session))
     stream = provider.stream(
         conn_options=APIConnectOptions(
             max_retry=1, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
@@ -830,7 +805,7 @@ async def test_transient_close_during_handshake_retries(close_code: int) -> None
     first = _FakeWebSocket([_close_message(close_code, "unsafe close reason")])
     second = _websocket()
     session = _FakeSession([first, second])
-    provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
+    provider = meta.STT(api_key="test-key", http_session=cast(http.HttpSession, session))
 
     events, _ = await _collect(
         provider,
@@ -848,7 +823,7 @@ async def test_empty_input_retry_sends_end_stream_on_every_attempt() -> None:
     first = _FakeWebSocket([_text_message({"sessionId": "session-1"}), _CLOSE_1011_AFTER_END])
     second = _websocket()
     session = _FakeSession([first, second])
-    provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
+    provider = meta.STT(api_key="test-key", http_session=cast(http.HttpSession, session))
 
     events, _ = await _collect(
         provider,
@@ -887,7 +862,7 @@ async def test_transient_close_after_audio_consumption_is_not_retried(close_code
         block_audio=True,
     )
     session = _FakeSession([websocket, _websocket()])
-    provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
+    provider = meta.STT(api_key="test-key", http_session=cast(http.HttpSession, session))
     stream = provider.stream(
         conn_options=APIConnectOptions(
             max_retry=1, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
@@ -913,7 +888,7 @@ async def test_post_consumption_failure_is_not_retried() -> None:
         send_error=RuntimeError("secret send failure"),
     )
     session = _FakeSession([websocket, _websocket()])
-    provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
+    provider = meta.STT(api_key="test-key", http_session=cast(http.HttpSession, session))
     stream = provider.stream(
         conn_options=APIConnectOptions(
             max_retry=1, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
@@ -936,7 +911,7 @@ async def test_post_consumption_failure_is_not_retried() -> None:
 async def test_aclose_during_handshake_closes_socket() -> None:
     websocket = _FakeWebSocket()
     provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+        api_key="test-key", http_session=cast(http.HttpSession, _FakeSession([websocket]))
     )
     stream = provider.stream(conn_options=_TEST_OPTIONS)
     await _wait_until(websocket.handshake_sent.is_set)
@@ -953,7 +928,7 @@ async def test_aclose_cancels_blocked_transport_tasks_and_closes_socket() -> Non
         block_audio=True,
     )
     provider = meta.STT(
-        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+        api_key="test-key", http_session=cast(http.HttpSession, _FakeSession([websocket]))
     )
     stream = provider.stream(conn_options=_TEST_OPTIONS)
     stream.push_frame(_frame(b"x" * 3840))
@@ -1024,7 +999,7 @@ async def test_failures_redact_transport_and_provider_details(
 ) -> None:
     provider = meta.STT(
         api_key="api-key-secret",
-        http_session=cast(aiohttp.ClientSession, session),
+        http_session=cast(http.HttpSession, session),
     )
     stream = provider.stream(conn_options=_TEST_OPTIONS)
 
@@ -1055,7 +1030,7 @@ async def test_handshake_rejection_redacts_token_and_body() -> None:
     )
     provider = meta.STT(
         api_key="api-key-secret",
-        http_session=cast(aiohttp.ClientSession, _FakeSession([websocket])),
+        http_session=cast(http.HttpSession, _FakeSession([websocket])),
     )
     stream = provider.stream(conn_options=_TEST_OPTIONS)
 

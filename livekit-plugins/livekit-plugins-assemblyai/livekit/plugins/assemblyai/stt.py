@@ -25,7 +25,6 @@ from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlencode
 
-import aiohttp
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from livekit import rtc
@@ -34,7 +33,9 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    APITimeoutError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -197,7 +198,7 @@ class STT(stt.STT):
         voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN,
         voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN,
         mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
     ):
@@ -378,9 +379,9 @@ class STT(stt.STT):
         return "AssemblyAI"
 
     @property
-    def session(self) -> aiohttp.ClientSession:
+    def session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     async def _recognize_impl(
@@ -513,7 +514,7 @@ class SpeechStream(stt.RecognizeStream):
         opts: STTOptions,
         conn_options: APIConnectOptions,
         api_key: str,
-        http_session: aiohttp.ClientSession,
+        http_session: http.HttpSession,
         base_url: str,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
@@ -626,7 +627,7 @@ class SpeechStream(stt.RecognizeStream):
         """Run a single websocket connection to AssemblyAI."""
         closing_ws = False
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             anchored = False
 
@@ -662,19 +663,19 @@ class SpeechStream(stt.RecognizeStream):
                 closing_ws = True
                 logger.debug("AssemblyAI sending close message session=%s", self._session_id)
                 await ws.send_str(SpeechStream._CLOSE_MSG)
-            except (aiohttp.ClientError, ConnectionError) as e:
+            except APIConnectionError as e:
                 if closing_ws or self._session.closed:
                     return
                 raise APIConnectionError("AssemblyAI connection closed unexpectedly") from e
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             consecutive_timeouts = 0
             while True:
                 try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    msg = await ws.receive(timeout=5)
                     consecutive_timeouts = 0
-                except TimeoutError:
+                except APITimeoutError:
                     if closing_ws:
                         break
                     consecutive_timeouts += 1
@@ -699,29 +700,23 @@ class SpeechStream(stt.RecognizeStream):
                                 )
                     continue
 
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     if closing_ws:  # close is expected, see SpeechStream.aclose
                         return
 
                     logger.warning(
-                        "AssemblyAI WebSocket closed unexpectedly "
-                        "session=%s code=%s data=%s extra=%s",
+                        "AssemblyAI WebSocket closed unexpectedly session=%s code=%s data=%s",
                         self._session_id,
                         ws.close_code,
                         msg.data,
-                        msg.extra,
                     )
                     raise APIStatusError(
                         "AssemblyAI connection closed unexpectedly",
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=f"{msg.data=}",
                     )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.error(
                         "unexpected AssemblyAI message type=%s session=%s",
                         msg.type,
@@ -737,13 +732,13 @@ class SpeechStream(stt.RecognizeStream):
                         self._session_id,
                     )
 
-        async def send_config_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_config_task(ws: http.WebSocket) -> None:
             """Send config updates and control messages immediately, independent of audio."""
             while True:
                 config_msg = await self._config_update_queue.get()
                 await ws.send_str(json.dumps(config_msg))
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
+        ws: http.WebSocket | None = None
         try:
             ws = await self._connect_ws()
             config_task = asyncio.create_task(send_config_task(ws))
@@ -759,7 +754,7 @@ class SpeechStream(stt.RecognizeStream):
             if ws is not None:
                 await ws.close()
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self) -> http.WebSocket:
         # Universal-3 Pro family defaults: min=100, max=min (so both 100 unless overridden).
         # When a `mode` preset is selected, leave them unset (None) unless the
         # caller set them explicitly, so the server's per-mode silence tuning is
@@ -853,9 +848,7 @@ class SpeechStream(stt.RecognizeStream):
             self._opts.speech_model,
             self._base_url,
         )
-        ws = await utils.http_context.ws_connect(
-            self._session, url, headers=headers, conn_options=self._conn_options
-        )
+        ws = await self._session.ws_connect(url, headers=headers, conn_options=self._conn_options)
         logger.debug(
             "AssemblyAI WebSocket connected",
         )

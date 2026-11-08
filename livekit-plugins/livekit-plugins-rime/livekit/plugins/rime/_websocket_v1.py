@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from typing import Literal, Protocol, cast
 from urllib.parse import unquote, urlsplit
 
-import aiohttp
 import numpy as np
 from google.protobuf import json_format
 from google.protobuf.message import DecodeError
@@ -36,9 +35,9 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    http,
     redacted_cause,
     tts,
-    utils,
 )
 
 from .models import is_mist_model
@@ -90,7 +89,7 @@ class RunResult:
 
 @dataclass(frozen=True)
 class Connection:
-    websocket: aiohttp.ClientWebSocketResponse
+    websocket: http.WebSocket
     codec: _EnvelopeCodec
 
 
@@ -141,28 +140,28 @@ class _EnvelopeCodec(Protocol):
     subprotocol: str
 
     async def send_request(
-        self, websocket: aiohttp.ClientWebSocketResponse, request: proto.WebSocketRequest
+        self, websocket: http.WebSocket, request: proto.WebSocketRequest
     ) -> None: ...
 
-    def decode_response(self, message: aiohttp.WSMessage) -> proto.WebSocketResponse: ...
+    def decode_response(self, message: http.WebSocketMessage) -> proto.WebSocketResponse: ...
 
 
 class _BinaryEnvelopeCodec:
     subprotocol = BINARY_SUBPROTOCOL
 
     async def send_request(
-        self, websocket: aiohttp.ClientWebSocketResponse, request: proto.WebSocketRequest
+        self, websocket: http.WebSocket, request: proto.WebSocketRequest
     ) -> None:
         await websocket.send_bytes(request.SerializeToString())
 
-    def decode_response(self, message: aiohttp.WSMessage) -> proto.WebSocketResponse:
-        if message.type != aiohttp.WSMsgType.BINARY:
+    def decode_response(self, message: http.WebSocketMessage) -> proto.WebSocketResponse:
+        if message.type is not http.WebSocketMessageType.BINARY:
             raise _ContaminatedConnection(
                 f"Rime v1 sent unexpected WebSocket frame type {message.type}"
             )
         response = proto.WebSocketResponse()
         try:
-            response.ParseFromString(message.data)
+            response.ParseFromString(message.binary)
         except (DecodeError, TypeError) as cause:
             raise _ContaminatedConnection("Rime v1 sent invalid protobuf") from redacted_cause(
                 cause
@@ -174,7 +173,7 @@ class _JsonEnvelopeCodec:
     subprotocol = JSON_SUBPROTOCOL
 
     async def send_request(
-        self, websocket: aiohttp.ClientWebSocketResponse, request: proto.WebSocketRequest
+        self, websocket: http.WebSocket, request: proto.WebSocketRequest
     ) -> None:
         await websocket.send_str(
             json_format.MessageToJson(
@@ -184,8 +183,8 @@ class _JsonEnvelopeCodec:
             )
         )
 
-    def decode_response(self, message: aiohttp.WSMessage) -> proto.WebSocketResponse:
-        if message.type != aiohttp.WSMsgType.TEXT:
+    def decode_response(self, message: http.WebSocketMessage) -> proto.WebSocketResponse:
+        if message.type is not http.WebSocketMessageType.TEXT:
             raise _ContaminatedConnection(
                 f"Rime v1 sent unexpected WebSocket frame type {message.type}"
             )
@@ -312,7 +311,7 @@ def model_from_websocket_url(
 
 
 async def connect(
-    session: aiohttp.ClientSession,
+    session: http.HttpSession,
     *,
     websocket_url: str,
     api_key: str,
@@ -325,18 +324,17 @@ async def connect(
     validate_websocket_url(websocket_url, allow_custom_endpoint=allow_custom_endpoint)
     codec = codec_for_protocol(protocol)
     try:
-        ws = await utils.http_context.ws_connect(
-            session,
+        ws = await session.ws_connect(
             websocket_url,
             headers={"Authorization": f"Bearer {api_key}"},
             protocols=(codec.subprotocol,),
             conn_options=conn_options,
         )
-        if ws.protocol != codec.subprotocol:
+        selected = ws.headers.get("Sec-WebSocket-Protocol")
+        if selected != codec.subprotocol:
             await ws.close()
             raise APIConnectionError(
-                f"Rime selected WebSocket subprotocol {ws.protocol!r}, "
-                f"expected {codec.subprotocol!r}",
+                f"Rime selected WebSocket subprotocol {selected!r}, expected {codec.subprotocol!r}",
                 retryable=False,
             )
 
@@ -354,17 +352,6 @@ async def connect(
             await ws.close()
             raise
         return connection
-    except TimeoutError as cause:
-        raise APITimeoutError("Timed out waiting for the Rime v1 ready event") from redacted_cause(
-            cause
-        )
-    except aiohttp.ClientResponseError as e:
-        raise APIStatusError(
-            message="Rime v1 WebSocket handshake failed",
-            status_code=e.status,
-            request_id=None,
-            body=None,
-        ) from redacted_cause(e)
     except APIError:
         raise
     except Exception as cause:
@@ -616,23 +603,9 @@ async def _send_envelope(
 async def _receive_envelope(
     connection: Connection, *, timeout: float | None
 ) -> proto.WebSocketResponse:
-    websocket = connection.websocket
-    try:
-        if timeout is None:
-            message = await websocket.receive()
-        else:
-            message = await websocket.receive(timeout=timeout)
-    except TimeoutError as cause:
-        raise APITimeoutError("Timed out waiting for a Rime v1 event") from redacted_cause(cause)
-
-    if message.type in (
-        aiohttp.WSMsgType.CLOSE,
-        aiohttp.WSMsgType.CLOSED,
-        aiohttp.WSMsgType.CLOSING,
-    ):
+    message = await connection.websocket.receive(timeout=timeout)
+    if message.type is http.WebSocketMessageType.CLOSE:
         raise _ContaminatedConnection("Rime v1 closed the WebSocket unexpectedly")
-    if message.type == aiohttp.WSMsgType.ERROR:
-        raise _ContaminatedConnection("Rime v1 WebSocket transport error")
     return connection.codec.decode_response(message)
 
 

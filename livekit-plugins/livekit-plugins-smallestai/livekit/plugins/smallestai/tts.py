@@ -22,7 +22,6 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-import aiohttp
 from pydantic import BaseModel, Field, JsonValue
 
 from livekit.agents import (
@@ -32,6 +31,7 @@ from livekit.agents import (
     APITimeoutError,
     LanguageCode,
     create_api_error_from_http,
+    http,
     tts,
     utils,
 )
@@ -101,7 +101,7 @@ class TTS(tts.TTS):
         max_buffer_delay_ms: int = 3000,
         base_url: str = SMALLEST_BASE_URL,
         ws_url: str = SMALLEST_WS_URL,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """
         Create a new instance of Smallest AI Lightning TTS.
@@ -147,7 +147,7 @@ class TTS(tts.TTS):
                 (the server default).
             base_url: Base URL for the Smallest AI HTTP API.
             ws_url: WebSocket URL for low-latency streaming synthesis.
-            http_session: An existing aiohttp ClientSession to use.
+            http_session: An existing HttpSession to use.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -184,7 +184,7 @@ class TTS(tts.TTS):
             ws_url=ws_url,
         )
         self._session = http_session
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        self._pool = utils.ConnectionPool[http.WebSocket](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
             max_session_duration=3600,
@@ -199,14 +199,13 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "SmallestAI"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
-        return await utils.http_context.ws_connect(
-            self._ensure_session(),
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
+        return await self._ensure_session().ws_connect(
             self._opts.ws_url,
             headers={
                 "Authorization": f"Bearer {self._opts.api_key}",
@@ -216,7 +215,7 @@ class TTS(tts.TTS):
             conn_options=conn_options,
         )
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_ws(self, ws: http.WebSocket) -> None:
         await ws.close()
 
     def update_options(
@@ -296,7 +295,7 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         opts: _TTSOptions,
-        http_session: Callable[[], aiohttp.ClientSession],
+        http_session: Callable[[], http.HttpSession],
         input_text: str,
         conn_options: APIConnectOptions,
     ) -> None:
@@ -315,9 +314,7 @@ class ChunkedStream(tts.ChunkedStream):
                 "X-Source": "livekit",
                 "X-LiveKit-Version": __version__,
             }
-            async with utils.http_context.request(
-                self._http_session(),
-                "POST",
+            async with self._http_session().post(
                 f"{self._opts.base_url}/tts",
                 headers=headers,
                 json=data,
@@ -334,16 +331,14 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=f"audio/{self._opts.output_format}",
                 )
 
-                async for chunk, _ in resp.content.iter_chunks():
+                async for chunk in resp.iter_bytes():
                     output_emitter.push(chunk)
 
                 output_emitter.flush()
 
         except TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(e.message, status=e.status) from None
-        except APIStatusError:
+        except (APIStatusError, APIConnectionError):
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -365,7 +360,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         *,
         tts: TTS,
         opts: _TTSOptions,
-        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        pool: utils.ConnectionPool[http.WebSocket],
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
@@ -435,20 +430,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                             self._pool.prewarm()
         except TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=request_id, body=None
-            ) from None
-        except APIStatusError:
+        except (APIStatusError, APIConnectionError):
             raise
         except Exception as e:
             raise APIConnectionError() from e
 
         output_emitter.end_segment()
 
-    async def _try_cancel_context(
-        self, ws: aiohttp.ClientWebSocketResponse, context_id: str
-    ) -> None:
+    async def _try_cancel_context(self, ws: http.WebSocket, context_id: str) -> None:
         # Best-effort: interrupted before the context was closed cleanly (e.g. the
         # agent's speech was cut off by user barge-in). Tell the server to drop
         # whatever's still buffered instead of leaving the context open.
@@ -474,7 +463,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         return payload
 
     async def _send_task(
-        self, ws: aiohttp.ClientWebSocketResponse, context_id: str, ctx_state: dict[str, bool]
+        self, ws: http.WebSocket, context_id: str, ctx_state: dict[str, bool]
     ) -> bool:
         # Forward each token as it arrives (continuous streaming) instead of buffering
         # the whole segment, so the server can begin synthesis before the text is
@@ -506,7 +495,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _recv_task(
         self,
-        ws: aiohttp.ClientWebSocketResponse,
+        ws: http.WebSocket,
         output_emitter: tts.AudioEmitter,
         ctx_state: dict[str, bool],
     ) -> bool:
@@ -556,7 +545,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         while True:
             try:
                 msg = await self._recv_one(ws, timeout=_CONTINUATIONS_IDLE_TIMEOUT)
-            except TimeoutError:
+            except APITimeoutError:
                 if ctx_state["finalized"] and received_chunk:
                     return False
                 if inactivity_deadline is not None and event_loop.time() >= inactivity_deadline:
@@ -572,14 +561,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 received_chunk = True
 
     async def _recv_one(
-        self, ws: aiohttp.ClientWebSocketResponse, *, timeout: float | None
-    ) -> aiohttp.WSMessage:
+        self, ws: http.WebSocket, *, timeout: float | None
+    ) -> http.WebSocketMessage:
         msg = await ws.receive(timeout=timeout)
-        if msg.type in (
-            aiohttp.WSMsgType.CLOSE,
-            aiohttp.WSMsgType.CLOSED,
-            aiohttp.WSMsgType.CLOSING,
-        ):
+        if msg.type is http.WebSocketMessageType.CLOSE:
             raise APIStatusError(
                 "SmallestAI WebSocket closed unexpectedly",
                 status_code=ws.close_code or -1,
@@ -588,9 +573,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         return msg
 
     def _parse_status_event(
-        self, msg: aiohttp.WSMessage, output_emitter: tts.AudioEmitter
+        self, msg: http.WebSocketMessage, output_emitter: tts.AudioEmitter
     ) -> str | None:
-        if msg.type != aiohttp.WSMsgType.TEXT:
+        if msg.type is not http.WebSocketMessageType.TEXT:
             return None
 
         parsed = _TtsEvent.model_validate_json(msg.data)

@@ -2,13 +2,12 @@
 
 import asyncio
 
-import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 from pydantic import ValidationError
 
-from livekit.agents import APIConnectionError, APIConnectOptions
+from livekit.agents import APIConnectionError, APIConnectOptions, http
 from livekit.plugins import inworld
 
 pytestmark = pytest.mark.plugin("inworld")
@@ -27,7 +26,8 @@ async def test_malformed_stream_frame_is_terminal_provider_error(body: str) -> N
 
     app = web.Application()
     app.router.add_get("/stt/v1/transcribe:streamBidirectional", recognize)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    session = http.HttpSession()
+    async with TestServer(app) as server:
         model = inworld.STT(
             api_key="test", base_url=str(server.make_url("/")), http_session=session
         )
@@ -37,3 +37,4 @@ async def test_malformed_stream_frame_is_terminal_provider_error(body: str) -> N
             assert not failure.value.retryable
             assert isinstance(failure.value.__cause__, ValidationError)
         await model.aclose()
+    await session.aclose()

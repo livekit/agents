@@ -22,7 +22,6 @@ import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-import aiohttp
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit.agents import (
@@ -30,7 +29,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APIStatusError,
-    APITimeoutError,
+    http,
     tokenize,
     tts,
     utils,
@@ -76,7 +75,7 @@ class TTS(tts.TTS):
         model: TTSModels | str | None = None,
         tokenizer: tokenize.SentenceTokenizer | None = None,
         sample_rate: int = 44100,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         use_streaming: bool = True,
     ) -> None:
         """
@@ -89,7 +88,7 @@ class TTS(tts.TTS):
             model (TTSModels | str | None, optional): The model to use for synthesis. Can be "chatterbox" or "chatterbox-turbo". Defaults to None.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 44100.
             api_key (str | None, optional): The Resemble API key. If not provided, it will be read from the RESEMBLE_API_KEY environment variable.
-            http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
+            http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, a new session will be created.
             tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             use_streaming (bool, optional): Whether to use streaming or not. Defaults to True.
         """  # noqa: E501
@@ -122,7 +121,7 @@ class TTS(tts.TTS):
 
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        self._pool = utils.ConnectionPool[http.WebSocket](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
@@ -135,20 +134,19 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Resemble"
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
-        return await utils.http_context.ws_connect(
-            self._ensure_session(),
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
+        return await self._ensure_session().ws_connect(
             RESEMBLE_WEBSOCKET_URL,
             headers={"Authorization": f"Bearer {self._api_key}"},
             conn_options=conn_options,
         )
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_ws(self, ws: http.WebSocket) -> None:
         await ws.close()
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
@@ -208,7 +206,7 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         opts: _TTSOptions,
-        http_session: Callable[[], aiohttp.ClientSession],
+        http_session: Callable[[], http.HttpSession],
         api_key: str,
         input_text: str,
         conn_options: APIConnectOptions,
@@ -229,9 +227,7 @@ class ChunkedStream(tts.ChunkedStream):
             if self._opts.model is not None:
                 payload["model"] = self._opts.model
 
-            async with utils.http_context.request(
-                self._http_session(),
-                "POST",
+            async with self._http_session().post(
                 RESEMBLE_REST_API_URL,
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
@@ -241,7 +237,7 @@ class ChunkedStream(tts.ChunkedStream):
                 json=payload,
                 conn_options=self._conn_options,
             ) as resp:
-                resp.raise_for_status()
+                await resp.raise_for_status()
                 response = _SynthesisResponse.model_validate(await resp.json())
 
                 if not response.success:
@@ -265,12 +261,6 @@ class ChunkedStream(tts.ChunkedStream):
                 output_emitter.push(audio_bytes)
                 output_emitter.flush()
 
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
         except APIError:
             raise
         except Exception as e:
@@ -290,7 +280,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         *,
         tts: TTS,
         opts: _TTSOptions,
-        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        pool: utils.ConnectionPool[http.WebSocket],
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
@@ -338,12 +328,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
         try:
             await asyncio.gather(*tasks)
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=request_id, body=None
-            ) from None
         except APIError:
             raise
         except Exception as e:
@@ -362,7 +346,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         read_deadline = self._core_attempts
 
-        async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _send_task(ws: http.WebSocket) -> None:
             nonlocal input_ended, last_index
             async for data in input_stream:
                 last_index += 1
@@ -382,21 +366,17 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             input_ended = True
 
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _recv_task(ws: http.WebSocket) -> None:
             while True:
                 msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type == http.WebSocketMessageType.CLOSE:
                     raise APIStatusError(
                         "Resemble connection closed unexpectedly",
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=f"{msg.data=}",
                     )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type != http.WebSocketMessageType.TEXT:
                     logger.warning("Unexpected Resemble message type %s", msg.type)
                     continue
 

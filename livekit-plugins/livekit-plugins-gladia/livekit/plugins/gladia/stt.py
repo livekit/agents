@@ -25,7 +25,6 @@ from enum import Enum
 from typing import Any, Literal
 from urllib.parse import urlencode
 
-import aiohttp
 import numpy as np
 
 from livekit import rtc
@@ -39,6 +38,7 @@ from livekit.agents import (
     APITimeoutError,
     LanguageCode,
     NotGivenOr,
+    http,
     stt,
     utils,
 )
@@ -225,7 +225,7 @@ class STT(stt.STT):
         region: Literal["us-west", "eu-west"] = "eu-west",
         encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"] = "wav/pcm",
         api_key: str | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         base_url: str = BASE_URL,
         energy_filter: AudioEnergyFilter | bool = False,
         translation_enabled: bool = False,
@@ -260,7 +260,7 @@ class STT(stt.STT):
             encoding: The encoding of the audio. Defaults to "wav/pcm".
             api_key: Your Gladia API key. If not provided, will look for GLADIA_API_KEY
                         environment variable.
-            http_session: Optional aiohttp ClientSession to use for requests.
+            http_session: Optional HttpSession to use for requests.
             base_url: The base URL for Gladia API. Defaults to "https://api.gladia.io/v2/live".
             energy_filter: Audio energy filter configuration for voice activity detection.
                          Can be a boolean or AudioEnergyFilter instance. Defaults to False.
@@ -335,7 +335,7 @@ class STT(stt.STT):
             custom_vocabulary=custom_vocabulary,
             custom_spelling=custom_spelling,
         )
-        self._session = http_session
+        self._session = http_session.with_request_id("X-Request-ID") if http_session else None
         self._streams: weakref.WeakSet[SpeechStream] = weakref.WeakSet()
 
     @property
@@ -346,9 +346,9 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Gladia"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session().with_request_id("X-Request-ID")
 
         return self._session
 
@@ -371,11 +371,8 @@ class STT(stt.STT):
 
             # Connect to the WebSocket
             receive_timeout = conn_options.read_timeout
-            async with self._ensure_session().ws_connect(
-                session_url,
-                # aiohttp's attrs-generated timeout constructor is absent from pyright's SDK view.
-                timeout=aiohttp.ClientWSTimeout(ws_receive=receive_timeout, ws_close=10),  # pyright: ignore[reportCallIssue]
-            ) as ws:
+            ws = await self._ensure_session().ws_connect(session_url, conn_options=conn_options)
+            try:
                 # Combine audio frames to get a single frame with all raw PCM data
                 combined_frame = rtc.combine_audio_frames(buffer)
                 # Get the raw bytes from the combined frame
@@ -402,8 +399,9 @@ class STT(stt.STT):
                 # Receive messages until we get the post_final_transcript message
                 try:
                     # Set a timeout for waiting for the final results after sending stop_recording
-                    async for msg in ws:
-                        if msg.type == aiohttp.WSMsgType.TEXT:
+                    while True:
+                        msg = await ws.receive(timeout=receive_timeout)
+                        if msg.type == http.WebSocketMessageType.TEXT:
                             message = StreamMessage.model_validate_json(msg.data)
                             if message.type == "transcript":
                                 transcript = TranscriptMessage.model_validate(message.data)
@@ -416,23 +414,14 @@ class STT(stt.STT):
                                     f"Gladia WebSocket error: {message.data}"
                                 ) from None
 
-                        elif msg.type == aiohttp.WSMsgType.ERROR:
-                            logger.error(f"Gladia WebSocket connection error: {ws.exception()}")
-                            raise ws.exception() or APIConnectionError(
-                                "Gladia WebSocket connection error"
-                            )
-                        elif msg.type in (
-                            aiohttp.WSMsgType.CLOSE,
-                            aiohttp.WSMsgType.CLOSED,
-                            aiohttp.WSMsgType.CLOSING,
-                        ):
+                        elif msg.type == http.WebSocketMessageType.CLOSE:
                             logger.warning(
                                 "Gladia WebSocket closed unexpectedly during result receiving: "
                                 f"type={msg.type}"
                             )
                             break
 
-                except TimeoutError:
+                except APITimeoutError:
                     logger.warning(
                         f"Timeout waiting for Gladia final transcript ({receive_timeout}s)"
                     )
@@ -445,24 +434,9 @@ class STT(stt.STT):
                 return self._create_speech_event(
                     utterances, session_id, config.language_config.languages
                 )
+            finally:
+                await ws.close()
 
-        except TimeoutError as e:
-            # Catch timeout during connection or initial phase
-            logger.error(f"Timeout during Gladia connection/initialization: {e}")
-            raise APITimeoutError("Timeout connecting to or initializing Gladia session") from e
-        except aiohttp.ClientResponseError as e:
-            # Error during session initialization POST request
-            logger.error(f"Gladia API status error during session init: {e.status} {e.message}")
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=e.headers.get("X-Request-ID") if e.headers else None,
-                body=None,
-            ) from e
-        except aiohttp.ClientError as e:
-            # General client errors (connection refused, DNS resolution etc.)
-            logger.error(f"Gladia connection error: {e}")
-            raise APIConnectionError(f"Gladia connection error: {e}") from e
         except APIError:
             raise
         except Exception as e:
@@ -479,10 +453,8 @@ class STT(stt.STT):
         try:
             url = f"{self._base_url}?{urlencode({'region': config['region']})}"
             config = {k: v for k, v in config.items() if k != "region"}
-            async with utils.http_context.request(
-                self._ensure_session(),
-                "POST",
-                url=url,
+            async with self._ensure_session().post(
+                url,
                 json=config,
                 headers={"X-Gladia-Key": self._api_key},
                 conn_options=conn_options,
@@ -727,7 +699,7 @@ class SpeechStream(stt.RecognizeStream):
         opts: STTOptions,
         conn_options: APIConnectOptions,
         api_key: str,
-        http_session: aiohttp.ClientSession,
+        http_session: http.HttpSession,
         base_url: str,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
@@ -751,7 +723,7 @@ class SpeechStream(stt.RecognizeStream):
 
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._ws: http.WebSocket | None = None
 
     def update_options(
         self,
@@ -882,9 +854,8 @@ class SpeechStream(stt.RecognizeStream):
                 backoff_time = 1.0
 
                 # Connect to the WebSocket
-                async with await utils.http_context.ws_connect(
-                    self._session, session_url, conn_options=self._conn_options
-                ) as ws:
+                ws = await self._session.ws_connect(session_url, conn_options=self._conn_options)
+                try:
                     self._ws = ws
                     logger.info(f"Connected to Gladia session {self._request_id}")
 
@@ -911,6 +882,8 @@ class SpeechStream(stt.RecognizeStream):
                     finally:
                         await utils.aio.cancel_and_wait(send_task, recv_task, wait_reconnect_task)
                         self._ws = None
+                finally:
+                    await ws.close()
             except APIStatusError as e:
                 if e.status_code == 429:
                     logger.warning(
@@ -929,15 +902,13 @@ class SpeechStream(stt.RecognizeStream):
 
             url = f"{self._base_url}?{urlencode({'region': streaming_config['region']})}"
             streaming_config = {k: v for k, v in streaming_config.items() if k != "region"}
-            async with utils.http_context.request(
-                self._session,
-                "POST",
-                url=url,
+            async with self._session.post(
+                url,
                 json=streaming_config,
                 headers={"X-Gladia-Key": self._api_key},
                 conn_options=self._conn_options,
             ) as res:
-                res.raise_for_status()
+                await res.raise_for_status()
                 return LiveSession.model_validate(await res.json())
 
         except Exception as e:
@@ -1001,7 +972,7 @@ class SpeechStream(stt.RecognizeStream):
             closing_ws = True
             if self._ws:
                 await self._ws.send_str(json.dumps({"type": "stop_recording"}))
-        except (aiohttp.ClientError, ConnectionError) as e:
+        except APIConnectionError as e:
             if closing_ws or self._session.closed:
                 return
             raise APIConnectionError("Gladia connection closed unexpectedly") from e
@@ -1012,18 +983,12 @@ class SpeechStream(stt.RecognizeStream):
             return
 
         async for msg in self._ws:
-            if msg.type == aiohttp.WSMsgType.TEXT:
+            if msg.type == http.WebSocketMessageType.TEXT:
                 try:
                     data = json.loads(msg.data)
                     self._process_gladia_message(data)
                 except Exception as e:
                     logger.exception(f"Error processing Gladia message: {e}")
-            elif msg.type in (
-                aiohttp.WSMsgType.CLOSED,
-                aiohttp.WSMsgType.CLOSE,
-                aiohttp.WSMsgType.CLOSING,
-            ):
-                break
             else:
                 logger.warning(f"Unexpected message type from Gladia: {msg.type}")
 

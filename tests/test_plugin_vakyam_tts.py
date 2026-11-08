@@ -455,14 +455,9 @@ async def test_barge_in_drains_and_reuses_websocket(monkeypatch: pytest.MonkeyPa
 async def test_http_stream_accepts_octet_stream_and_uses_read_timeout() -> None:
     from livekit.plugins.vakyam import TTS
 
-    class FakeContent:
-        async def iter_chunks(self):
-            yield b"\0" * 2400, True
-
     class FakeResponse:
         status = 200
         headers = {"Content-Type": "application/octet-stream"}
-        content = FakeContent()
 
         async def __aenter__(self):
             return self
@@ -473,32 +468,26 @@ async def test_http_stream_accepts_octet_stream_and_uses_read_timeout() -> None:
         async def text(self) -> str:
             return ""
 
+        async def iter_bytes(self):
+            yield b"\0" * 2400
+
     class FakeSession:
-        trace_configs = []
-        json_serialize = staticmethod(json.dumps)
-
-        def request(self, method, url, **kwargs):
-            kwargs.pop("data", None)
-            return self.post(url, json=None, **kwargs)
-
         def __init__(self) -> None:
-            self.timeout = None
+            self.conn_options: APIConnectOptions | None = None
 
-        def post(self, url, *, json, headers, timeout):
-            self.timeout = timeout
+        def post(self, url, *, json, headers, conn_options):
+            self.conn_options = conn_options
             return FakeResponse()
 
     http_session = FakeSession()
     synth = TTS(api_key="test-key", http_session=http_session)  # type: ignore[arg-type]
-    stream = synth.synthesize(
-        "Hello.",
-        conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.25, read_timeout=0.25),
-    )
+    options = APIConnectOptions(max_retry=0, connect_timeout=0.25, read_timeout=0.25)
+    stream = synth.synthesize("Hello.", conn_options=options)
 
     frames = [event.frame async for event in stream]
     assert frames
-    assert http_session.timeout.total is None
-    assert http_session.timeout.sock_read == 0.25
+    assert http_session.conn_options is not None
+    assert http_session.conn_options.read_timeout == 0.25
     await synth.aclose()
 
 
@@ -506,15 +495,9 @@ async def test_http_stream_accepts_octet_stream_and_uses_read_timeout() -> None:
 async def test_http_stream_rejects_non_audio_success_response() -> None:
     from livekit.plugins.vakyam import TTS
 
-    class FakeContent:
-        async def iter_chunks(self):
-            if False:
-                yield b"", False
-
     class FakeResponse:
         status = 200
         headers = {"Content-Type": "application/json"}
-        content = FakeContent()
 
         async def __aenter__(self):
             return self
@@ -526,14 +509,7 @@ async def test_http_stream_rejects_non_audio_success_response() -> None:
             return '{"error":"upstream proxy failure"}'
 
     class FakeSession:
-        trace_configs = []
-        json_serialize = staticmethod(json.dumps)
-
-        def request(self, method, url, **kwargs):
-            kwargs.pop("data", None)
-            return self.post(url, json=None, **kwargs)
-
-        def post(self, url, *, json, headers, timeout):
+        def post(self, url, *, json, headers, conn_options):
             return FakeResponse()
 
     synth = TTS(api_key="test-key", http_session=FakeSession())  # type: ignore[arg-type]

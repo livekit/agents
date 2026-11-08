@@ -27,16 +27,16 @@ from collections.abc import Callable
 from typing import Literal
 from urllib.parse import urlparse
 
-import aiohttp
 from pydantic import BaseModel
 
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
-    APITimeoutError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -106,7 +106,7 @@ class STT(stt.STT):
         length_penalty: int = 1,
         repetition_penalty: float = 1.01,
         strict_hallucination_reduction: bool = False,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ):
         """
         Configuration options for the SimpliSmart STT (Speech-to-Text) engine.
@@ -184,7 +184,7 @@ class STT(stt.STT):
         self._base_url = base_url
         self._session = http_session
         # Strong ownership: a stream that finishes and gets garbage collected would
-        # otherwise take its still-open per-stream aiohttp.ClientSession with it.
+        # otherwise take its still-open per-stream HttpSession with it.
         # Streams discard themselves in SpeechStream.aclose() once closed.
         self._streams: set[SpeechStream] = set()
 
@@ -196,9 +196,9 @@ class STT(stt.STT):
     def model(self) -> str:
         return self._model
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     async def _recognize_impl(
@@ -219,9 +219,7 @@ class STT(stt.STT):
         payload["model"] = self._model
 
         try:
-            async with utils.http_context.request(
-                self._ensure_session(),
-                "POST",
+            async with self._ensure_session().post(
                 self._base_url,
                 json=payload,
                 headers={
@@ -266,13 +264,7 @@ class STT(stt.STT):
                     request_id=request_id,
                     alternatives=alternatives,
                 )
-        except TimeoutError as e:
-            logger.error(f"Simplismart API timeout: {e}")
-            raise APITimeoutError("Simplismart API request timed out") from e
-        except aiohttp.ClientError as e:
-            logger.error(f"Simplismart API client error: {e}")
-            raise APIConnectionError(f"Simplismart API connection error: {e}") from e
-        except APIStatusError:
+        except APIError:
             raise
         except Exception as e:
             logger.error(f"Error during Simplismart STT processing: {traceback.format_exc()}")
@@ -292,7 +284,7 @@ class STT(stt.STT):
         stream_opts = SimplismartSTTOptions(language=opts_language)
 
         # Create a fresh session for this stream to avoid conflicts
-        stream_session = aiohttp.ClientSession()
+        stream_session = http.HttpSession()
 
         if self._api_key is None:
             raise ValueError("API key cannot be None")
@@ -311,7 +303,7 @@ class STT(stt.STT):
     async def aclose(self) -> None:
         """Close every stream this instance created.
 
-        ``stream()`` gives each ``SpeechStream`` its own ``aiohttp.ClientSession``,
+        ``stream()`` gives each ``SpeechStream`` its own ``HttpSession``,
         and only ``SpeechStream.aclose()`` closes it. Streams are owned strongly
         (see ``self._streams``) so a finished, garbage-collected stream cannot take
         its open session with it; closed streams discard themselves, so the set
@@ -338,7 +330,7 @@ class SpeechStream(stt.RecognizeStream):
         opts: SimplismartSTTOptions,
         conn_options: APIConnectOptions,
         api_key: str,
-        http_session: aiohttp.ClientSession,
+        http_session: http.HttpSession,
         base_url: str,
         on_closed: Callable[["SpeechStream"], None],
     ) -> None:
@@ -354,7 +346,7 @@ class SpeechStream(stt.RecognizeStream):
     async def _run(self) -> None:
 
         @utils.log_exceptions(logger=logger)
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             # forward audio to simplismart in chunks of 50ms
             samples_50ms = self._SAMPLE_RATE // 20
             audio_bstream = utils.media.AudioByteStream(
@@ -374,14 +366,19 @@ class SpeechStream(stt.RecognizeStream):
                     await ws.send_bytes(frame.data.tobytes())
 
         @utils.log_exceptions(logger=logger)
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             while True:
-                msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                try:
+                    msg = await ws.receive()
+                except APIConnectionError as e:
+                    if self._session.closed:
+                        return
+                    # the heartbeat closes the socket when a ping goes unanswered
+                    logger.warning("simplismart connection lost: %r", e)
+                    self._reconnect_event.set()
+                    return
+
+                if msg.type == http.WebSocketMessageType.CLOSE:
                     # close is expected, see SpeechStream.aclose
                     # or when the agent session ends, the http session is closed
                     if self._session.closed:
@@ -391,27 +388,16 @@ class SpeechStream(stt.RecognizeStream):
                     self._reconnect_event.set()
                     return
 
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    if self._session.closed:
-                        return
-                    # The heartbeat closes the socket when a ping goes unanswered, and
-                    # that arrives here rather than as a close frame. Treating it as an
-                    # unexpected message type stepped over it and discarded the reason,
-                    # which only survives on ws.exception().
-                    logger.warning("simplismart connection lost: %r", ws.exception())
-                    self._reconnect_event.set()
-                    return
-
-                if msg.type != aiohttp.WSMsgType.BINARY:
+                if msg.type != http.WebSocketMessageType.BINARY:
                     logger.warning("unexpected simplismart message type %s", msg.type)
                     continue
 
                 try:
-                    self._handle_transcript_data(msg.data.decode("utf-8"))
+                    self._handle_transcript_data(msg.binary.decode("utf-8"))
                 except Exception:
                     logger.exception("failed to process simplismart message")
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
+        ws: http.WebSocket | None = None
 
         while True:
             try:
@@ -447,42 +433,25 @@ class SpeechStream(stt.RecognizeStream):
                 if ws is not None:
                     await ws.close()
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        try:
-            ws = await utils.http_context.ws_connect(
-                self._session,
-                self.ws_url,
-                headers={"Authorization": f"Bearer {self._api_key}"},
-                # Without this a silently dropped socket (half-open TCP, no FIN/RST)
-                # is never noticed: recv_task parks on ws.receive() forever, and the
-                # reconnect in _run is only ever triggered by that task ending.
-                # Matches the Deepgram and Muse STT plugins.
-                heartbeat=30.0,
-                conn_options=self._conn_options,
-            )
-        except TimeoutError:
-            raise APIConnectionError("failed to connect to simplismart") from None
-        except aiohttp.ClientResponseError as e:
-            # RequestInfo carries the request headers, so chaining this error or
-            # formatting it puts the API key in the exception repr (#6739).
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
-        except Exception as e:
-            raise APIConnectionError(
-                f"failed to connect to simplismart ({type(e).__name__})"
-            ) from None
-        return ws
+    async def _connect_ws(self) -> http.WebSocket:
+        return await self._session.ws_connect(
+            self.ws_url,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            # Without this a silently dropped socket (half-open TCP, no FIN/RST)
+            # is never noticed: recv_task parks on ws.receive() forever, and the
+            # reconnect in _run is only ever triggered by that task ending.
+            # Matches the Deepgram and Muse STT plugins.
+            heartbeat=30.0,
+            conn_options=self._conn_options,
+        )
 
     async def aclose(self) -> None:
         await super().aclose()
-        if self._session and not self._session.closed:
-            await self._session.close()
+        await self._session.aclose()
         # Release the STT's strong ownership only after session cleanup succeeds.
-        if self._session.closed:
-            self._on_closed(self)
+        self._on_closed(self)
 
-    async def _send_initial_config(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _send_initial_config(self, ws: http.WebSocket) -> None:
         """Send initial configuration message with language for Simplismart models."""
         try:
             config_message = {"language": self._opts.language}

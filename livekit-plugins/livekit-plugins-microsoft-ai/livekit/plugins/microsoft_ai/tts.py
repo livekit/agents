@@ -27,13 +27,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree
 
-import aiohttp
-
 from livekit.agents import (
-    APIConnectionError,
     APIConnectOptions,
     APIError,
     APITimeoutError,
+    http,
     tts,
     utils,
 )
@@ -142,7 +140,7 @@ class TTS(tts.TTS):
         sample_rate: Expected WAV sample rate, or MICROSOFT_AI_TTS_SAMPLE_RATE.
         api_key: Azure Speech subscription key, or MICROSOFT_AI_TTS_API_KEY.
         headers: Explicit headers instead of api_key/environment lookup.
-        http_session: Optional caller-owned aiohttp session.
+        http_session: Optional caller-owned HttpSession.
         env_file: Explicit dotenv file, or MICROSOFT_AI_ENV_FILE. Constructor
             arguments override environment variables, which override this file.
         max_text_length: Client-side character limit, not a claimed provider limit.
@@ -163,7 +161,7 @@ class TTS(tts.TTS):
         sample_rate: int | None = None,
         api_key: str | None = None,
         headers: Mapping[str, str] | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         env_file: str | Path | None = None,
         max_text_length: int = 4096,
         max_audio_bytes: int = 10 * 1024 * 1024,
@@ -283,26 +281,24 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            async with utils.http_context.request(
-                self._client.session(),
-                "POST",
+            async with self._client.session().post(
                 self._client.url,
                 headers=self._client.headers,
                 data=_ssml(self.input_text, self._opts),
                 conn_options=self._conn_options,
-                allow_redirects=False,
             ) as response:
                 if response.status != 200:
                     raise status_error("TTS", response.status)
                 if response.content_type not in ("audio/wav", "audio/x-wav", "audio/wave"):
                     raise APIError("Microsoft AI TTS expected a WAV response", retryable=False)
                 limit = self._max_audio_bytes
-                if response.content_length is not None and response.content_length > limit:
+                content_length = response.headers.get("Content-Length")
+                if content_length is not None and int(content_length) > limit:
                     raise APIError(
                         "Microsoft AI TTS response exceeds max_audio_bytes", retryable=False
                     )
                 data = bytearray()
-                async for chunk in response.content.iter_chunked(65536):
+                async for chunk in response.iter_bytes():
                     data.extend(chunk)
                     if len(data) > limit:
                         raise APIError(
@@ -311,8 +307,6 @@ class ChunkedStream(tts.ChunkedStream):
                 pcm = _decode_wav(bytes(data), self._tts.sample_rate)
         except TimeoutError:
             raise APITimeoutError("Microsoft AI TTS request timed out") from None
-        except (aiohttp.ClientError, ConnectionError, OSError):
-            raise APIConnectionError("Microsoft AI TTS transport failed") from None
 
         output_emitter.initialize(
             request_id=utils.shortuuid(),

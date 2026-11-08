@@ -34,14 +34,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Literal
 
-import aiohttp
-
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    http,
     tts,
     utils,
 )
@@ -145,7 +144,7 @@ class TTS(tts.TTS):
             base_url=base_url,
             synthesize_method=synthesize_method,
         )
-        self._session: aiohttp.ClientSession | None = None
+        self._session: http.HttpSession | None = None
 
     @property
     def model(self) -> str:
@@ -155,9 +154,9 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Gnani"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     def synthesize(
@@ -256,7 +255,7 @@ class RESTChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
-        get_session: Callable[[], aiohttp.ClientSession],
+        get_session: Callable[[], http.HttpSession],
         opts: GnaniTTSOptions,
         tts: TTS,
         input_text: str,
@@ -269,10 +268,8 @@ class RESTChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            async with utils.http_context.request(
-                self._get_session(),
-                "POST",
-                url=f"{self._opts.base_url}/api/v1/tts/inference",
+            async with self._get_session().post(
+                f"{self._opts.base_url}/api/v1/tts/inference",
                 json=_build_payload(self._opts, self._input_text),
                 headers=_build_headers(self._opts),
                 conn_options=self._conn_options,
@@ -298,8 +295,6 @@ class RESTChunkedStream(tts.ChunkedStream):
                 output_emitter.push(audio_bytes)
                 output_emitter.flush()
 
-        except TimeoutError as e:
-            raise APITimeoutError("Gnani TTS REST request timed out") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
         except Exception as e:
@@ -323,7 +318,7 @@ class SSEChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
-        get_session: Callable[[], aiohttp.ClientSession],
+        get_session: Callable[[], http.HttpSession],
         opts: GnaniTTSOptions,
         tts: TTS,
         input_text: str,
@@ -337,14 +332,11 @@ class SSEChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
         try:
-            async with utils.http_context.request(
-                self._get_session(),
-                "POST",
-                url=f"{self._opts.base_url}/api/v1/tts/sse",
+            async with self._get_session().post(
+                f"{self._opts.base_url}/api/v1/tts/sse",
                 json=_build_payload(self._opts, self._input_text),
                 headers=_build_headers(self._opts),
                 conn_options=self._conn_options,
-                read_bufsize=10 * 1024 * 1024,
             ) as res:
                 if res.status != 200:
                     error_text = await res.text()
@@ -363,7 +355,7 @@ class SSEChunkedStream(tts.ChunkedStream):
                 )
 
                 buf = ""
-                async for raw_bytes in res.content:
+                async for raw_bytes in res.iter_lines():
                     raw_line = raw_bytes.decode("utf-8").strip()
                     if not raw_line:
                         continue
@@ -404,8 +396,6 @@ class SSEChunkedStream(tts.ChunkedStream):
 
                 output_emitter.flush()
 
-        except TimeoutError as e:
-            raise APITimeoutError("Gnani TTS SSE request timed out") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
         except Exception as e:

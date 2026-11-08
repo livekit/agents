@@ -21,10 +21,9 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-import aiohttp
 from dotenv import dotenv_values
 
-from livekit.agents import APIError, APIStatusError
+from livekit.agents import APIError, APIStatusError, http
 
 
 class Configuration:
@@ -79,7 +78,7 @@ class HTTPClient:
         url: str | None,
         api_key: str | None,
         headers: Mapping[str, str] | None,
-        http_session: aiohttp.ClientSession | None,
+        http_session: http.HttpSession | None,
         auth_header: Literal["Authorization", "api-key"] | None = None,
     ) -> None:
         self.url = config.required(url, f"MICROSOFT_AI_{service}_URL")
@@ -131,14 +130,14 @@ class HTTPClient:
         self._owns_session = http_session is None
         self._closed = False
 
-    def session(self) -> aiohttp.ClientSession:
+    def session(self) -> http.HttpSession:
         if self._closed:
             raise RuntimeError("Microsoft AI provider is closed")
         if self._session is None:
-            self._session = aiohttp.ClientSession()
+            self._session = http.HttpSession()
         return self._session
 
     async def aclose(self) -> None:
         self._closed = True
         if self._owns_session and self._session is not None:
-            await self._session.close()
+            await self._session.aclose()

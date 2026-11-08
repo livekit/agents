@@ -10,7 +10,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, stt
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, http, stt
 from livekit.plugins.baseten import STT, TTS
 from livekit.plugins.baseten.models import STTModels
 
@@ -54,7 +54,7 @@ async def test_transcript_timing_is_validated_before_delivery(
 
     app = web.Application()
     app.router.add_get("/stt", transcribe)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         provider = STT(
             model=model,
             api_key="test",
@@ -105,7 +105,7 @@ async def test_qwen_voice_changes_apply_to_new_streams_without_changing_an_open_
 
     app = web.Application()
     app.router.add_get("/tts", synthesize)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         provider = TTS(
             model="qwen3-tts",
             api_key="test",
@@ -154,7 +154,7 @@ async def test_closed_transcription_peer_settles_all_transport_tasks(
     unhandled: list[dict[str, object]] = []
     loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
     try:
-        async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        async with TestServer(app) as server, http.open() as session:
             provider = STT(
                 model="whisper",
                 api_key="test",

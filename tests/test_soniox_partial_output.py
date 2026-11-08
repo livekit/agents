@@ -10,7 +10,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectOptions, APIStatusError, http
 from livekit.plugins.soniox import TTS
 
 pytestmark = pytest.mark.unit
@@ -55,7 +55,7 @@ async def test_a_failure_after_audio_is_not_replayed() -> None:
     assert site._server is not None
     port = site._server.sockets[0].getsockname()[1]
     try:
-        async with aiohttp.ClientSession() as session:
+        async with http.open() as session:
             tts = TTS(
                 api_key="test", websocket_url=f"ws://127.0.0.1:{port}/tts", http_session=session
             )
@@ -126,7 +126,7 @@ async def test_batch_failure_preserves_audio_and_continues_only_transient_errors
 
     app = web.Application()
     app.router.add_get("/tts", synthesize)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         tts = TTS(api_key="test", websocket_url=str(server.make_url("/tts")), http_session=session)
         try:
             options = APIConnectOptions(max_retry=1, retry_interval=0)

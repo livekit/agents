@@ -23,7 +23,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-import aiohttp
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from livekit import rtc
@@ -32,6 +31,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -108,7 +108,7 @@ class STT(stt.STT):
         min_end_of_turn_silence_when_confident: int = 200,
         end_of_turn_confidence_threshold: float = 0.3,
         base_url: str = DEFAULT_API_URL,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """Create a new instance of Inworld STT.
 
@@ -130,7 +130,7 @@ class STT(stt.STT):
             end_of_turn_confidence_threshold: Confidence threshold for end-of-turn detection.
                 Lower values trigger end-of-turn more eagerly. Defaults to 0.3.
             base_url: Base URL for the Inworld API. Defaults to "https://api.inworld.ai/".
-            http_session: Optional aiohttp.ClientSession to use.
+            http_session: Optional HttpSession to use.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -207,9 +207,9 @@ class STT(stt.STT):
         if utils.is_given(end_of_turn_confidence_threshold):
             self._opts.end_of_turn_confidence_threshold = end_of_turn_confidence_threshold
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._http_session:
-            self._http_session = utils.http_context.http_session()
+            self._http_session = http.http_session()
         return self._http_session
 
     async def _recognize_impl(
@@ -248,7 +248,7 @@ class SpeechStream(stt.RecognizeStream):
         *,
         stt: STT,
         opts: _STTOptions,
-        get_session: Callable[[], aiohttp.ClientSession],
+        get_session: Callable[[], http.HttpSession],
         base_url: str,
         authorization: str,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -261,7 +261,7 @@ class SpeechStream(stt.RecognizeStream):
         self._base_url = base_url
         self._authorization = authorization
         self._language = language
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._ws: http.WebSocket | None = None
         self._reconnect_event = asyncio.Event()
         self._speaking = False
         self._request_id = ""
@@ -297,12 +297,11 @@ class SpeechStream(stt.RecognizeStream):
 
         return config
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self) -> http.WebSocket:
         ws_url = self._base_url.replace("https://", "wss://").replace("http://", "ws://")
         ws_url = ws_url.rstrip("/") + "/" + WS_ENDPOINT
 
-        ws = await utils.http_context.ws_connect(
-            self._get_session(),
+        ws = await self._get_session().ws_connect(
             ws_url,
             headers={"Authorization": self._authorization},
             conn_options=self._conn_options,
@@ -348,15 +347,7 @@ class SpeechStream(stt.RecognizeStream):
             except TimeoutError as e:
                 logger.error(f"Timeout during Inworld STT connection: {e}")
                 raise APITimeoutError("Timeout connecting to Inworld STT API") from e
-            except aiohttp.ClientResponseError as e:
-                logger.error(f"Inworld STT status error: {e.status} {e.message}")
-                raise APIStatusError(
-                    message=e.message, status_code=e.status, request_id=None, body=None
-                ) from e
-            except aiohttp.ClientError as e:
-                logger.error(f"Inworld STT connection error: {e}")
-                raise APIConnectionError(f"Inworld STT connection error: {e}") from e
-            except APIConnectionError:
+            except (APIConnectionError, APIStatusError):
                 raise
             except Exception as e:
                 logger.exception(f"Unexpected error in Inworld STT: {e}")
@@ -412,7 +403,7 @@ class SpeechStream(stt.RecognizeStream):
 
         try:
             async for msg in self._ws:
-                if msg.type == aiohttp.WSMsgType.TEXT:
+                if msg.type == http.WebSocketMessageType.TEXT:
                     try:
                         event = _StreamEvent.model_validate_json(msg.data)
                     except ValidationError as exc:
@@ -420,18 +411,6 @@ class SpeechStream(stt.RecognizeStream):
                             "Inworld STT sent an invalid event", retryable=False
                         ) from exc
                     self._process_stream_event(event)
-                elif msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    return
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error(f"Inworld STT WebSocket error: {self._ws.exception()}")
-                    return
-        except aiohttp.ClientError as e:
-            logger.error(f"WebSocket error while receiving: {e}")
-            raise
         except Exception as e:
             logger.error(f"Unexpected error receiving messages: {e}")
             raise

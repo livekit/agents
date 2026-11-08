@@ -1,7 +1,7 @@
 """Tests for the Telnyx STT plugin: half-open socket detection.
 
 Runs a real `SpeechStream` (its real `_run` loop, driven by `_main_task`) against
-fake sockets handed out by a fake aiohttp session, so the connect kwargs and the
+fake sockets handed out by a fake HttpSession, so the connect kwargs and the
 reconnect behaviour are assertable without a network. Same shape as the Deepgram
 tests added in #7206.
 """
@@ -12,10 +12,9 @@ import asyncio
 import time
 from typing import Any
 
-import aiohttp
 import pytest
 
-from livekit.agents import APIConnectOptions
+from livekit.agents import APIConnectionError, APIConnectOptions, http
 
 pytestmark = pytest.mark.plugin("telnyx")
 
@@ -47,7 +46,7 @@ class _ParkedSocket:
     async def send_str(self, data: str) -> None:
         pass
 
-    async def receive(self) -> aiohttp.WSMessage:
+    async def receive(self) -> http.WebSocketMessage:
         await self._closed.wait()
         raise AssertionError("the test should never let recv_task resume")
 
@@ -57,12 +56,11 @@ class _ParkedSocket:
 
 
 class _HeartbeatTimeoutSocket:
-    """A socket in the state aiohttp leaves it in when a ping goes unanswered.
+    """A socket whose ping went unanswered.
 
-    The heartbeat closes the connection itself, so this arrives as WSMsgType.ERROR
-    rather than as a close frame, and the reason lives only on `exception()`. After a
-    few ERROR frames it reports CLOSED, which is what aiohttp does on the next pass;
-    a recv loop that steps over the ERROR only recovers because of that.
+    The heartbeat fails the connection itself, so `receive()` raises
+    `APIConnectionError` rather than returning a close frame. After a few failures it
+    reports CLOSE; a recv loop that steps over the error only recovers because of that.
     """
 
     def __init__(self) -> None:
@@ -75,27 +73,23 @@ class _HeartbeatTimeoutSocket:
     async def send_str(self, data: str) -> None:
         pass
 
-    def exception(self) -> BaseException:
-        return aiohttp.ServerTimeoutError("No PONG received after 15.0 seconds")
-
-    async def receive(self) -> aiohttp.WSMessage:
+    async def receive(self) -> http.WebSocketMessage:
         self.receives += 1
         # yield, so a recv loop that steps over the error instead of ending fails the
         # receive-count assertion rather than starving the event loop
         await asyncio.sleep(0)
         if self.receives > 3:
-            return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, None)
-        return aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, self.exception(), None)
+            return http.WebSocketMessage(http.WebSocketMessageType.CLOSE, "")
+        raise APIConnectionError("websocket failed")
 
     async def close(self) -> None:
         self.closed = True
 
 
 class _FakeSession:
-    """Stands in for the aiohttp session: records connect kwargs, hands out sockets."""
+    """Stands in for the HttpSession: records connect kwargs, hands out sockets."""
 
     def __init__(self, make_socket) -> None:
-        self.trace_configs: list[object] = []  # aiohttp request tracing
         self.closed = False
         self.kwargs: list[dict[str, Any]] = []
         self.sockets: list[Any] = []
@@ -107,7 +101,7 @@ class _FakeSession:
         self.sockets.append(ws)
         return ws
 
-    async def close(self) -> None:
+    async def aclose(self) -> None:
         self.closed = True
 
 
@@ -119,7 +113,7 @@ def _stream(session: _FakeSession):
 
 
 async def test_socket_is_opened_with_a_heartbeat():
-    """aiohttp defaults `heartbeat` to None, so without it the read side of a
+    """`heartbeat` defaults to None, so without it the read side of a
     half-open socket parks forever and the retry in `_main_task`, which only runs
     when something raises, never gets a turn."""
     session = _FakeSession(_ParkedSocket)
@@ -132,9 +126,8 @@ async def test_socket_is_opened_with_a_heartbeat():
 
 
 async def test_heartbeat_timeout_reconnects_without_spinning():
-    """The ERROR frame has to end the recv loop and surface as a retryable error.
-    Logging it and continuing only reconnected because aiohttp happened to report
-    CLOSED next, and it threw away the one value that says why the socket went."""
+    """The receive failure has to end the recv loop and surface as a retryable error,
+    not be stepped over until the socket happens to report CLOSE."""
     session = _FakeSession(_HeartbeatTimeoutSocket)
     stream = _stream(session)
     try:

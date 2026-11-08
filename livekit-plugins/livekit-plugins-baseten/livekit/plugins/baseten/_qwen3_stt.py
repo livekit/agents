@@ -39,7 +39,6 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-import aiohttp
 from pydantic import JsonValue
 
 from livekit import rtc
@@ -49,8 +48,8 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APIStatusError,
-    APITimeoutError,
     LanguageCode,
+    http,
     stt as stt_module,
     utils,
 )
@@ -129,7 +128,7 @@ class Qwen3Backend:
         vad_min_silence_duration_ms: int = 500,
         vad_speech_pad_ms: int = 100,
         word_timestamps: bool = False,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ) -> None:
         """
         Args:
@@ -154,7 +153,7 @@ class Qwen3Backend:
             word_timestamps: Request word-level alignment on finals. Requires
                 ``STREAM_ALIGNER=mms`` and ``STREAM_ALIGNER_DEVICE=cuda`` on the
                 deployment; otherwise the server ignores it.
-            http_session: Optional aiohttp session to reuse.
+            http_session: Optional HttpSession to reuse.
 
         Raises:
             ValueError: If no API key or endpoint can be resolved.
@@ -181,9 +180,9 @@ class Qwen3Backend:
             word_timestamps=word_timestamps,
         )
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     def update_options(
@@ -265,7 +264,7 @@ class Qwen3SpeechStream(stt_module.RecognizeStream):
         self,
         *,
         stt: stt_module.STT,
-        ensure_session: Callable[[], aiohttp.ClientSession],
+        ensure_session: Callable[[], http.HttpSession],
         model_endpoint: str,
         api_key: str,
         opts: _STTOptions,
@@ -278,23 +277,11 @@ class Qwen3SpeechStream(stt_module.RecognizeStream):
         self._opts = opts
 
     async def _run(self) -> None:
-        try:
-            ws = await utils.http_context.ws_connect(
-                self._ensure_session(),
-                self._model_endpoint,
-                headers={"Authorization": f"Api-Key {self._api_key}"},
-                conn_options=self._conn_options,
-            )
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
-        except APITimeoutError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
+        ws = await self._ensure_session().ws_connect(
+            self._model_endpoint,
+            headers={"Authorization": f"Api-Key {self._api_key}"},
+            conn_options=self._conn_options,
+        )
 
         input_ended = asyncio.Event()
 
@@ -342,20 +329,14 @@ class Qwen3SpeechStream(stt_module.RecognizeStream):
             speaking = False
             while True:
                 msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     if input_ended.is_set():
                         return
                     raise APIConnectionError("Baseten closed the STT websocket")
-                if msg.type is aiohttp.WSMsgType.ERROR:
-                    raise APIConnectionError(f"websocket error: {ws.exception()}")
-                if msg.type is not aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     continue
 
-                event = decode_transcript(msg.data)
+                event = decode_transcript(msg.text)
                 if event.type == "error":
                     raise APIStatusError(
                         message=event.message,

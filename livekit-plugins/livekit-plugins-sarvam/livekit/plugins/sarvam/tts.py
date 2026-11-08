@@ -31,7 +31,6 @@ import weakref
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 
-import aiohttp
 import numpy as np
 import numpy.typing as npt
 from pydantic import ValidationError
@@ -40,11 +39,11 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
     __version__ as livekit_version,
+    http,
     tokenize,
     tts,
     utils,
@@ -74,7 +73,7 @@ SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 # Sarvam TTS WebSocket connections idle out after 60 seconds. We defend against
 # this on two layers:
 #
-# 1. Protocol-level: aiohttp ``heartbeat`` sends WebSocket PING frames every
+# 1. Protocol-level: the websocket ``heartbeat`` sends WebSocket PING frames every
 #    ``_WS_HEARTBEAT_INTERVAL`` seconds and auto-handles PONGs even while no
 #    application-level ``receive()`` is in flight. This is what actually keeps
 #    the TCP connection alive while it sits idle in the pool.
@@ -391,7 +390,7 @@ class TTS(tts.TTS):
         api_key: Sarvam.ai API key (required)
         base_url: API endpoint URL
         ws_url: WebSocket endpoint URL
-        http_session: Optional aiohttp session to use
+        http_session: Optional HTTP session to use
         output_audio_codec: Optionally choose the output codec format (mp3)
     """
 
@@ -416,7 +415,7 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         base_url: str = SARVAM_TTS_BASE_URL,
         ws_url: str = SARVAM_TTS_WS_URL,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         send_completion_event: bool = True,
         output_audio_codec: str = "mp3",
     ) -> None:
@@ -514,14 +513,14 @@ class TTS(tts.TTS):
         # next acquisition, so a stream returning one closes it instead.
         self._retired_ws: set[int] = set()
 
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        self._pool = utils.ConnectionPool[http.WebSocket](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
             max_session_duration=3600,  # 1 hour
             mark_refreshed_on_get=False,
         )
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         session = self._ensure_session()
         headers = {
             "api-subscription-key": self._opts.api_key,
@@ -535,12 +534,11 @@ class TTS(tts.TTS):
         logger.info("Connecting to Sarvam TTS WebSocket")
 
         try:
-            ws = await utils.http_context.ws_connect(
-                session,
+            ws = await session.ws_connect(
                 ws_url,
                 headers=headers,
                 # Send protocol-level WebSocket PING frames every
-                # ``_WS_HEARTBEAT_INTERVAL`` seconds. aiohttp handles the
+                # ``_WS_HEARTBEAT_INTERVAL`` seconds. The transport handles the
                 # PONG accounting on its own and will close the connection
                 # locally if the server stops responding -- this is what
                 # actually keeps the TCP connection alive while it sits
@@ -562,13 +560,13 @@ class TTS(tts.TTS):
         self._open_ws_ids.add(id(ws))
         return ws
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_ws(self, ws: http.WebSocket) -> None:
         await self._stop_keepalive(ws)
         self._open_ws_ids.discard(id(ws))
         self._retired_ws.discard(id(ws))
         await ws.close()
 
-    def _start_keepalive(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    def _start_keepalive(self, ws: http.WebSocket) -> None:
         """Spawn a background task that keeps ``ws`` alive with periodic pings.
 
         Idempotent: if a live keepalive task is already registered for ``ws``
@@ -583,7 +581,7 @@ class TTS(tts.TTS):
         task = asyncio.create_task(self._keepalive_loop(ws), name="sarvam-tts-ws-keepalive")
         self._ws_keepalive_tasks[id(ws)] = task
 
-    async def _stop_keepalive(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _stop_keepalive(self, ws: http.WebSocket) -> None:
         """Cancel the keepalive task associated with ``ws`` (if any)."""
         task = self._ws_keepalive_tasks.pop(id(ws), None)
         if task is None or task.done():
@@ -592,13 +590,13 @@ class TTS(tts.TTS):
         with contextlib.suppress(BaseException):
             await task
 
-    async def _keepalive_loop(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _keepalive_loop(self, ws: http.WebSocket) -> None:
         """Keep a pooled WebSocket alive while it sits idle.
 
         This loop does two things in lockstep:
 
-        1. Actively calls ``ws.receive()`` so that aiohttp can process
-           server-initiated PONG frames (and any other messages). aiohttp
+        1. Actively calls ``ws.receive()`` so that the transport can process
+           server-initiated PONG frames (and any other messages). The transport
            only resets its internal "PONG not received" timer when a PONG
            is read via ``receive()`` -- without an active reader, the
            protocol-level heartbeat will tear the connection down even
@@ -609,15 +607,15 @@ class TTS(tts.TTS):
            ``_KEEPALIVE_INTERVAL`` seconds). This resets Sarvam's
            server-side application idle timer (documented as 60 s).
 
-        Any CLOSE/CLOSED/CLOSING/ERROR message from the server, or any
+        A CLOSE message or receive error from the server, or any
         write failure, evicts the connection from the pool so the next
         checkout creates a fresh one instead of handing the dead one out.
         """
         try:
             while not ws.closed:
                 try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=_KEEPALIVE_INTERVAL)
-                except TimeoutError:
+                    msg = await ws.receive(timeout=_KEEPALIVE_INTERVAL)
+                except APITimeoutError:
                     # No incoming message within the interval -- send our
                     # app-level ping to reset Sarvam's idle timer.
                     if ws.closed:
@@ -635,29 +633,26 @@ class TTS(tts.TTS):
                             self._pool.remove(ws)
                         return
                     continue
+                except APIConnectionError:
+                    msg = None
 
-                # We received something. CLOSE/CLOSED/CLOSING/ERROR means
-                # the server tore the connection down -- evict and exit.
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                    aiohttp.WSMsgType.ERROR,
-                ):
+                # A CLOSE or a receive error means the server tore the
+                # connection down -- evict and exit.
+                if msg is None or msg.type == http.WebSocketMessageType.CLOSE:
                     logger.debug(
                         "Sarvam TTS WebSocket closed while idle in pool; evicting connection",
                         extra={
-                            "msg_type": str(msg.type),
+                            "msg_type": "error" if msg is None else str(msg.type),
                             "close_code": ws.close_code,
                         },
                     )
                     with contextlib.suppress(Exception):
                         self._pool.remove(ws)
                     return
-                # Otherwise -- PONG, TEXT, BINARY, etc. -- discard. We are
-                # idle in the pool so any unsolicited TTS traffic from a
-                # previous request is no longer relevant. The act of
-                # receiving has already reset aiohttp's heartbeat.
+                # Otherwise -- TEXT or BINARY -- discard. We are idle in the
+                # pool so any unsolicited TTS traffic from a previous request
+                # is no longer relevant. The act of receiving has already
+                # reset the heartbeat.
         except asyncio.CancelledError:
             pass
 
@@ -669,9 +664,9 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Sarvam"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     def update_options(
@@ -833,7 +828,7 @@ class TTS(tts.TTS):
             output_audio_codec=stream_options.output_audio_codec,
         )
 
-    async def _return_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _return_ws(self, ws: http.WebSocket) -> None:
         if id(ws) in self._retired_ws:
             await self._close_ws(ws)
         else:
@@ -860,7 +855,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
         opts: SarvamTTSOptions,
-        get_session: Callable[[], aiohttp.ClientSession],
+        get_session: Callable[[], http.HttpSession],
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
@@ -888,46 +883,39 @@ class ChunkedStream(tts.ChunkedStream):
             "User-Agent": USER_AGENT,
         }
         mime_type = _codec_to_mime_type(self._opts.output_audio_codec)
-        try:
-            async with utils.http_context.request(
-                self._get_session(),
-                "POST",
-                url=self._opts.base_url,
-                json=payload,
-                headers=headers,
-                conn_options=self._conn_options,
-            ) as res:
-                if res.status != 200:
-                    error_text = await res.text()
-                    logger.error(f"Sarvam TTS API error: {res.status} - {error_text}")
-                    raise APIStatusError(
-                        message=f"Sarvam TTS API Error ({res.status}): {error_text}",
-                        status_code=res.status,
-                        body=error_text,
-                    )
-
-                response_json = TTSBatchResponse.model_validate(await res.json())
-                request_id = response_json.request_id
-                audios = response_json.audios
-                if not audios:
-                    raise APIConnectionError("Sarvam TTS API response invalid: no audio data")
-
-                output_emitter.initialize(
-                    request_id=request_id or "unknown",
-                    sample_rate=self._tts.sample_rate,
-                    num_channels=self._tts.num_channels,
-                    mime_type=mime_type,
+        async with self._get_session().post(
+            self._opts.base_url,
+            json=payload,
+            headers=headers,
+            conn_options=self._conn_options,
+        ) as res:
+            if res.status != 200:
+                error_text = await res.text()
+                logger.error(f"Sarvam TTS API error: {res.status} - {error_text}")
+                raise APIStatusError(
+                    message=f"Sarvam TTS API Error ({res.status}): {error_text}",
+                    status_code=res.status,
+                    body=error_text,
                 )
-                # handle multiple audio chunks
-                for b64 in audios:
-                    wav_bytes = base64.b64decode(b64)
-                    if self._opts.output_audio_codec in _TELEPHONY_CODECS:
-                        wav_bytes = _decode_telephony(self._opts.output_audio_codec, wav_bytes)
-                    output_emitter.push(wav_bytes)
-        except TimeoutError as e:
-            raise APITimeoutError("Sarvam TTS API request timed out") from e
-        except aiohttp.ClientError as e:
-            raise APIConnectionError(f"Sarvam TTS API connection error: {e}") from e
+
+            response_json = TTSBatchResponse.model_validate(await res.json())
+            request_id = response_json.request_id
+            audios = response_json.audios
+            if not audios:
+                raise APIConnectionError("Sarvam TTS API response invalid: no audio data")
+
+            output_emitter.initialize(
+                request_id=request_id or "unknown",
+                sample_rate=self._tts.sample_rate,
+                num_channels=self._tts.num_channels,
+                mime_type=mime_type,
+            )
+            # handle multiple audio chunks
+            for b64 in audios:
+                wav_bytes = base64.b64decode(b64)
+                if self._opts.output_audio_codec in _TELEPHONY_CODECS:
+                    wav_bytes = _decode_telephony(self._opts.output_audio_codec, wav_bytes)
+                output_emitter.push(wav_bytes)
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -939,10 +927,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         tts: TTS,
         conn_options: APIConnectOptions,
         opts: SarvamTTSOptions,
-        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        pool: utils.ConnectionPool[http.WebSocket],
         options_for_connection: Callable[[SarvamTTSOptions], SarvamTTSOptions],
-        stop_keepalive: Callable[[aiohttp.ClientWebSocketResponse], Awaitable[None]],
-        return_ws: Callable[[aiohttp.ClientWebSocketResponse], Awaitable[None]],
+        stop_keepalive: Callable[[http.WebSocket], Awaitable[None]],
+        return_ws: Callable[[http.WebSocket], Awaitable[None]],
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
@@ -962,15 +950,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         # Task management for cleanup
         self._send_task: asyncio.Task[None] | None = None
         self._recv_task: asyncio.Task[None] | None = None
-        self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
+        self._ws_conn: http.WebSocket | None = None
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        if self._conn_options.read_timeout == 0:
-            # aiohttp reads a zero receive timeout as no limit
-            raise APIError(
-                "sarvam streaming cannot enforce read_timeout=0",
-                retryable=False,
-            )
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         request_id = utils.shortuuid()
         self._client_request_id = request_id
@@ -1022,12 +1004,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=request_id, body=None
-            ) from None
         except Exception as e:
             raise APIConnectionError(f"TTS stream failed: {e}") from e
         finally:
@@ -1047,7 +1023,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         input_sent_event = asyncio.Event()
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             try:
                 data: dict[str, object] = {
                     "target_language_code": self._opts.target_language_code,
@@ -1084,27 +1060,19 @@ class SynthesizeStream(tts.SynthesizeStream):
                 flush_msg = {"type": "flush"}
                 await ws.send_str(json.dumps(flush_msg))
 
-            except (ConnectionResetError, RuntimeError) as e:
-                err_str = str(e).lower()
-                if "closing" in err_str or "closed" in err_str:
-                    # The transport is dead -- almost always a stale pooled
-                    # connection that the server already closed (60s idle
-                    # timeout). Raise so the pool evicts it via the
-                    # ``async with`` __aexit__; the framework will retry
-                    # against a fresh connection. Real user interruptions
-                    # propagate as ``CancelledError``, not this branch.
-                    logger.debug(
-                        "Sarvam TTS WebSocket transport closed before send "
-                        "completed; pool will replace this connection",
-                        extra=self._build_log_context(),
-                    )
-                    raise APIConnectionError(
-                        "Sarvam TTS WebSocket transport closed before send completed"
-                    ) from e
-                logger.error(
-                    f"Error in send task: {e}", extra=self._build_log_context(), exc_info=True
+            except (APIConnectionError, APITimeoutError):
+                # The transport is dead -- almost always a stale pooled
+                # connection that the server already closed (60s idle
+                # timeout). Raise so the pool evicts it via the
+                # ``async with`` __aexit__; the framework will retry
+                # against a fresh connection. Real user interruptions
+                # propagate as ``CancelledError``, not this branch.
+                logger.debug(
+                    "Sarvam TTS WebSocket transport failed before send "
+                    "completed; pool will replace this connection",
+                    extra=self._build_log_context(),
                 )
-                raise APIConnectionError(f"Send task failed: {e}") from e
+                raise
             except Exception as e:
                 logger.error(
                     f"Error in send task: {e}", extra=self._build_log_context(), exc_info=True
@@ -1113,19 +1081,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             finally:
                 input_sent_event.set()
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             await input_sent_event.wait()
             try:
                 while True:
                     msg = await ws.receive(timeout=self._conn_options.read_timeout)
 
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        close_code = ws.close_code if ws.close_code is not None else msg.data
-                        close_reason = msg.extra
+                    if msg.type == http.WebSocketMessageType.CLOSE:
+                        close_code = ws.close_code
+                        close_reason = msg.data
                         is_expected_close = close_code in (1000, 1001, None)
                         if not is_expected_close:
                             logger.error(
@@ -1159,40 +1123,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
                         break
 
-                    if msg.type == aiohttp.WSMsgType.TEXT:
+                    if msg.type == http.WebSocketMessageType.TEXT:
                         success = await self._handle_websocket_message(msg.data, output_emitter)
                         if not success:
                             break
 
-                    elif msg.type == aiohttp.WSMsgType.ERROR:
-                        error_msg = f"WebSocket error: {msg.data}"
-                        logger.error(error_msg, extra=self._build_log_context())
-                        raise APIConnectionError(error_msg)
-
-            except TimeoutError as e:
-                logger.error("WebSocket received timeout", extra=self._build_log_context())
-                raise APITimeoutError("WebSocket receive timeout") from e
             except (APIStatusError, APIConnectionError, APITimeoutError):
-                raise
-            except ConnectionResetError as e:
-                err_str = str(e).lower()
-                if "closing" in err_str or "closed" in err_str:
-                    # Same reasoning as ``send_task``: the transport is dead
-                    # (typically a stale pooled connection). Raise so the
-                    # pool evicts it and the framework retries against a
-                    # fresh connection. Real interruptions surface as
-                    # ``CancelledError``.
-                    logger.debug(
-                        "Sarvam TTS WebSocket transport closed during"
-                        " receive; pool will replace this connection",
-                        extra=self._build_log_context(),
-                    )
-                    raise APIConnectionError(
-                        "Sarvam TTS WebSocket transport closed during receive"
-                    ) from e
-                logger.error(
-                    f"Error in receive task: {e}", extra=self._build_log_context(), exc_info=True
-                )
                 raise
             except Exception as e:
                 logger.error(
@@ -1243,10 +1179,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # pool's next acquisition, which may not come, so close it now.
                 await self._return_ws(ws)
 
-        except (TimeoutError, aiohttp.ClientConnectorError) as e:
-            self._connection_state = ConnectionState.FAILED
-            logger.error(f"Connection failed: {e}", extra=self._build_log_context())
-            raise APIConnectionError(f"Failed to connect to TTS WebSocket: {e}") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
             self._connection_state = ConnectionState.FAILED
             raise
@@ -1263,7 +1195,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._ws_conn = None
 
     async def _handle_websocket_message(
-        self, msg_data: str, output_emitter: tts.AudioEmitter
+        self, msg_data: str | bytes, output_emitter: tts.AudioEmitter
     ) -> bool:
         """Handle WebSocket message with proper error handling.
 
@@ -1318,7 +1250,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 exc_info=True,
             )
             raise APIStatusError(
-                message=f"Message processing error: {e}. Raw server message: {msg_data}",
+                message=f"Message processing error: {e}. Raw server message: {msg_data!s}",
                 body={"raw_message": msg_data},
             ) from e
 

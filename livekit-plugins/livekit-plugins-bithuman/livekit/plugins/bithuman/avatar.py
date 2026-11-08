@@ -10,7 +10,6 @@ from importlib import import_module
 from typing import Literal, Protocol, cast
 from urllib.parse import parse_qs, urlparse
 
-import aiohttp
 import numpy as np
 from loguru import logger as _logger
 from numpy.typing import NDArray
@@ -27,11 +26,11 @@ from livekit.agents import (
     NotGivenOr,
     VoiceSession,
     get_job_context,
+    http,
     utils,
 )
 from livekit.agents.job import _server_credentials
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
-from livekit.agents.utils import http_context
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
@@ -301,7 +300,7 @@ class AvatarSession(BaseAvatarSession):
                 raise BitHumanException(f"Invalid avatar image: {avatar_image}")
 
         self._conn_options = conn_options
-        self._http_session: aiohttp.ClientSession | None = None
+        self._http_session: http.HttpSession | None = None
         self._avatar_runner: AvatarRunner | None = None
         self._runtime = self._provided_runtime
 
@@ -593,7 +592,7 @@ class AvatarSession(BaseAvatarSession):
             async_mode: Optional async_mode parameter (parsed from URL if async parameter present)
         """
         # Build form data with required fields
-        form_data = aiohttp.FormData()
+        form_data = http.FormData()
         form_data.add_field("livekit_url", livekit_url)
         form_data.add_field("livekit_token", livekit_token)
         form_data.add_field("room_name", room_name)
@@ -678,7 +677,7 @@ class AvatarSession(BaseAvatarSession):
         self,
         headers: dict[str, str],
         json_data: dict[str, str] | None = None,
-        form_data: aiohttp.FormData | None = None,
+        form_data: http.FormData | None = None,
     ) -> None:
         """
         Send HTTP request with retry logic.
@@ -696,9 +695,7 @@ class AvatarSession(BaseAvatarSession):
         async with self._conn_options.total_deadline():
             for i in range(self._conn_options.max_retry + 1):
                 try:
-                    async with http_context.request(
-                        self._ensure_http_session(),
-                        "POST",
+                    async with self._ensure_http_session().post(
                         self._api_url,
                         headers=headers,
                         json=json_data,
@@ -725,9 +722,9 @@ class AvatarSession(BaseAvatarSession):
 
         raise APIConnectionError("Failed to start Bithuman Avatar Session after all retries")
 
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
+    def _ensure_http_session(self) -> http.HttpSession:
         if self._http_session is None:
-            self._http_session = utils.http_context.http_session()
+            self._http_session = http.http_session()
 
         return self._http_session
 

@@ -8,7 +8,6 @@ from json import JSONDecodeError
 from types import TracebackType
 from typing import TypeVar
 
-import aiohttp
 from PIL import Image
 from pydantic import BaseModel, JsonValue, ValidationError
 
@@ -19,9 +18,9 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     NotGivenOr,
+    http,
     utils,
 )
-from livekit.agents.utils import http_context
 
 from .log import logger
 from .meeting.room import JoinMeetingResult
@@ -57,7 +56,7 @@ class LemonSliceAPI:
         api_url: NotGivenOr[str] = NOT_GIVEN,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        session: aiohttp.ClientSession | None = None,
+        session: http.HttpSession | None = None,
     ) -> None:
         """
         Initializes the LemonSliceAPI client.
@@ -66,8 +65,8 @@ class LemonSliceAPI:
             api_key: Your LemonSlice API key. If not provided, it is read from
                     the LEMONSLICE_API_KEY environment variable.
             api_url: The base URL of the LemonSlice API.
-            conn_options: Connection options for the aiohttp session.
-            session: An optional existing aiohttp.ClientSession to use for requests.
+            conn_options: Connection options for the requests.
+            session: An optional existing HttpSession to use for requests.
         """
         ls_api_key = api_key if utils.is_given(api_key) else os.getenv("LEMONSLICE_API_KEY")
         if not ls_api_key:
@@ -81,7 +80,7 @@ class LemonSliceAPI:
 
     async def __aenter__(self) -> LemonSliceAPI:
         if self._owns_session:
-            self._session = aiohttp.ClientSession()
+            self._session = http.HttpSession()
         return self
 
     async def __aexit__(
@@ -90,8 +89,8 @@ class LemonSliceAPI:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        if self._owns_session and self._session and not self._session.closed:
-            await self._session.close()
+        if self._owns_session and self._session:
+            await self._session.aclose()
 
     async def start_agent_session(
         self,
@@ -249,15 +248,15 @@ class LemonSliceAPI:
         Raises:
             APIConnectionError: If the request fails after all retries
         """
-        session = self._session or aiohttp.ClientSession()
+        session = self._session or http.HttpSession()
         try:
             async with self._conn_options.total_deadline():
                 for i in range(self._conn_options.max_retry + 1):
                     try:
                         headers = {"X-API-Key": self._api_key}
-                        form: aiohttp.FormData | None = None
+                        form: http.FormData | None = None
                         if image_bytes is not None:
-                            form = aiohttp.FormData()
+                            form = http.FormData()
                             form.add_field(
                                 "payload", json.dumps(payload), content_type="application/json"
                             )
@@ -271,9 +270,7 @@ class LemonSliceAPI:
                         else:
                             headers["Content-Type"] = "application/json"
 
-                        async with http_context.request(
-                            session,
-                            "POST",
+                        async with session.post(
                             url or self._api_url,
                             headers=headers,
                             conn_options=self._conn_options,
@@ -288,7 +285,7 @@ class LemonSliceAPI:
                                     body=text,
                                 )
                             return response_type.model_validate(await response.json())
-                    except (ValidationError, JSONDecodeError, aiohttp.ContentTypeError) as exc:
+                    except (ValidationError, JSONDecodeError) as exc:
                         raise APIConnectionError(
                             "Lemonslice returned an invalid response", retryable=False
                         ) from exc
@@ -312,7 +309,7 @@ class LemonSliceAPI:
                             await asyncio.sleep(self._conn_options.interval_for_retry(i))
         finally:
             if not self._session:  # if we created the session, we close it
-                await session.close()
+                await session.aclose()
 
         raise APIConnectionError("Failed to call LemonSlice API after all retries")
 

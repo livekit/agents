@@ -24,7 +24,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-import aiohttp
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
@@ -35,6 +34,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -196,7 +196,7 @@ class STT(stt.STT[Literal["slng_event"]]):
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         language: str = "en",
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         extra_headers: dict[str, str] | None = None,
         final_timeout_s: float | None = None,
         fallback_recovery_cooldown_s: float = 60.0,
@@ -359,9 +359,9 @@ class STT(stt.STT[Literal["slng_event"]]):
         return "SLNG"
 
     @property
-    def session(self) -> aiohttp.ClientSession:
+    def session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     async def _recognize_impl(
@@ -484,7 +484,7 @@ class SpeechStream(stt.RecognizeStream):
         active_endpoint_index: int,
         candidate_state: CandidateState,
         model_options: dict[str, JsonValue],
-        http_session: aiohttp.ClientSession,
+        http_session: http.HttpSession,
         extra_headers: dict[str, str],
         final_timeout_s: float | None,
     ) -> None:
@@ -676,7 +676,7 @@ class SpeechStream(stt.RecognizeStream):
                 task.exception()
 
         async def send_finalize_if_needed(
-            ws: aiohttp.ClientWebSocketResponse,
+            ws: http.WebSocket,
             *,
             reason: str,
         ) -> bool:
@@ -692,7 +692,7 @@ class SpeechStream(stt.RecognizeStream):
             logger.debug("Sent STT finalize (model=%s reason=%s)", current_model(), reason)
             return True
 
-        async def send_close(ws: aiohttp.ClientWebSocketResponse, *, reason: str) -> None:
+        async def send_close(ws: http.WebSocket, *, reason: str) -> None:
             nonlocal last_client_send_at, closing, protocol_close_sent
             closing = True
             async with send_lock:
@@ -703,7 +703,7 @@ class SpeechStream(stt.RecognizeStream):
                 protocol_close_sent = True
             logger.debug("Sent STT close (model=%s reason=%s)", current_model(), reason)
 
-        async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def keepalive_task(ws: http.WebSocket) -> None:
             nonlocal last_client_send_at
             while True:
                 await asyncio.sleep(_KEEPALIVE_INTERVAL_S)
@@ -724,7 +724,7 @@ class SpeechStream(stt.RecognizeStream):
                 )
 
         async def send_audio_payload(
-            ws: aiohttp.ClientWebSocketResponse,
+            ws: http.WebSocket,
             payload: bytes,
             *,
             count_usage: bool,
@@ -875,7 +875,7 @@ class SpeechStream(stt.RecognizeStream):
             return None
 
         async def send_task(
-            ws: aiohttp.ClientWebSocketResponse,
+            ws: http.WebSocket,
             *,
             pending_frames: list[rtc.AudioFrame],
             close_on_input_end: bool,
@@ -979,18 +979,14 @@ class SpeechStream(stt.RecognizeStream):
             self._emit_plugin_event("fallback.primary_recovered")
             self._reconnect_event.set()
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> bool:
+        async def recv_task(ws: http.WebSocket) -> bool:
             nonlocal awaiting_final, pending_non_empty_transcript, speech_started
             nonlocal recover_primary_after_final, candidate_attempts
             nonlocal finalize_requested_for_buffer, silent_reconnects
             nonlocal connection_had_transcript, same_endpoint_replays
             while True:
                 msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     if pending_non_empty_transcript:
                         raise APIStatusError("SLNG STT closed before final transcript")
                     if awaiting_final:
@@ -1001,7 +997,7 @@ class SpeechStream(stt.RecognizeStream):
                         return False
                     raise APIStatusError("SLNG connection closed unexpectedly")
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     continue
 
                 try:
@@ -1157,7 +1153,7 @@ class SpeechStream(stt.RecognizeStream):
             endpoint = self._connections[self._active_endpoint_index].endpoint
             model = current_model()
 
-            ws: aiohttp.ClientWebSocketResponse | None = None
+            ws: http.WebSocket | None = None
             try:
                 input_finished = False
                 closing = False
@@ -1415,9 +1411,7 @@ class SpeechStream(stt.RecognizeStream):
                             await send_close(ws, reason="shutdown")
                     await ws.close()
 
-    async def _connect_ws(
-        self, *, model_endpoint: str, model: str | None
-    ) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, *, model_endpoint: str, model: str | None) -> http.WebSocket:
         # Match e2e test headers exactly - send both Authorization and X-API-Key
         headers = {
             "Authorization": f"Bearer {self._api_token}",
@@ -1429,12 +1423,9 @@ class SpeechStream(stt.RecognizeStream):
 
         # Don't enable compression - e2e tests work without it and compress=15
         # was causing handshake errors with Deepgram Nova endpoint
-        try:
-            ws = await utils.http_context.ws_connect(
-                self._session, model_endpoint, headers=headers, conn_options=self._conn_options
-            )
-        except (TimeoutError, aiohttp.ClientConnectorError) as e:
-            raise APIConnectionError("failed to connect to SLNG STT") from e
+        ws = await self._session.ws_connect(
+            model_endpoint, headers=headers, conn_options=self._conn_options
+        )
 
         if connection.init is not None:
             init_message = dict(connection.init)
@@ -1462,7 +1453,7 @@ class SpeechStream(stt.RecognizeStream):
             raise
         return ws
 
-    async def _wait_for_bridge_ready(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _wait_for_bridge_ready(self, ws: http.WebSocket) -> None:
         while True:
             try:
                 msg = await asyncio.wait_for(
@@ -1472,14 +1463,10 @@ class SpeechStream(stt.RecognizeStream):
             except TimeoutError as exc:
                 raise APIConnectionError("timed out waiting for SLNG STT ready") from exc
 
-            if msg.type in (
-                aiohttp.WSMsgType.CLOSED,
-                aiohttp.WSMsgType.CLOSE,
-                aiohttp.WSMsgType.CLOSING,
-            ):
+            if msg.type is http.WebSocketMessageType.CLOSE:
                 raise APIConnectionError("SLNG STT closed before ready")
 
-            if msg.type != aiohttp.WSMsgType.TEXT:
+            if msg.type is not http.WebSocketMessageType.TEXT:
                 continue
 
             try:

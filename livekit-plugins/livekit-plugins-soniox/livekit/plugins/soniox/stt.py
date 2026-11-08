@@ -22,16 +22,14 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal, NamedTuple
 
-import aiohttp
-
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
     APIStatusError,
-    APITimeoutError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -168,7 +166,7 @@ class STT(stt.STT):
         *,
         api_key: str | None = None,
         base_url: str = BASE_URL,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         params: STTOptions | None = None,
     ) -> None:
         """Initialize instance of Soniox Speech-to-Text API service.
@@ -177,7 +175,7 @@ class STT(stt.STT):
             api_key: Soniox API key, if not provided, will look for SONIOX_API_KEY env variable.
             base_url: Base URL for Soniox Speech-to-Text API, default to BASE_URL defined in this
                 module.
-            http_session: Optional aiohttp.ClientSession to use for requests.
+            http_session: Optional HttpSession to use for requests.
             params: Additional configuration parameters, such as model, language hints, context and
                 speaker diarization.
         """
@@ -237,10 +235,10 @@ class STT(stt.STT):
             conn_options=conn_options,
         )
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        """Get or create an aiohttp ClientSession for WebSocket connections."""
+    def _ensure_session(self) -> http.HttpSession:
+        """Get or create an HttpSession for WebSocket connections."""
         if not self._http_session:
-            self._http_session = utils.http_context.http_session()
+            self._http_session = http.http_session()
 
         return self._http_session
 
@@ -253,7 +251,7 @@ class SpeechStream(stt.RecognizeStream):
         params: STTOptions,
         base_url: str,
         api_key: str,
-        ensure_session: Callable[[], aiohttp.ClientSession],
+        ensure_session: Callable[[], http.HttpSession],
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """Set up state and queues for a WebSocket-based transcription stream."""
@@ -262,14 +260,14 @@ class SpeechStream(stt.RecognizeStream):
         self._base_url = base_url
         self._api_key = api_key
         self._ensure_session = ensure_session
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._ws: http.WebSocket | None = None
         self._reconnect_event = asyncio.Event()
 
         self.audio_queue: asyncio.Queue[bytes | str] = asyncio.Queue()
 
         self._reported_duration_ms = 0
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self) -> http.WebSocket:
         """Open a WebSocket connection to the Soniox Speech-to-Text API and send the
         initial configuration."""
         context_raw = self._params.context
@@ -310,15 +308,14 @@ class SpeechStream(stt.RecognizeStream):
                 translation_dict["language_b"] = tr.language_b
             config["translation"] = translation_dict
         # Connect to the Soniox Speech-to-Text API.
-        ws = await utils.http_context.ws_connect(
-            self._ensure_session(),
+        ws = await self._ensure_session().ws_connect(
             self._base_url,
             headers={"Authorization": f"Bearer {self._api_key}"},
             # Without a heartbeat a silently dropped socket (half-open TCP, no
             # FIN/RST) is never noticed: `_recv_messages_task` parks on receive
             # forever and the reconnect in `_run` is only ever triggered by that
-            # task ending. aiohttp closes the socket itself when a ping goes
-            # unanswered, which surfaces as WSMsgType.ERROR in the recv loop.
+            # task ending. A ping that goes unanswered closes the socket, which
+            # surfaces as APIConnectionError in the recv loop.
             heartbeat=30.0,
             conn_options=self._conn_options,
         )
@@ -383,27 +380,6 @@ class SpeechStream(stt.RecognizeStream):
 
             except APIError:
                 raise
-            except TimeoutError as e:
-                logger.error(
-                    f"Timeout during Soniox Speech-to-Text API connection/initialization: {e}"
-                )
-                raise APITimeoutError(
-                    "Timeout connecting to or initializing Soniox Speech-to-Text API session"
-                ) from e
-
-            except aiohttp.ClientResponseError as e:
-                logger.error(
-                    "Soniox Speech-to-Text API status error during session init:"
-                    + f"{e.status} {e.message}"
-                )
-                raise APIStatusError(
-                    message=e.message, status_code=e.status, request_id=None, body=None
-                ) from e
-
-            except aiohttp.ClientError as e:
-                logger.error(f"Soniox Speech-to-Text API connection error: {e}")
-                raise APIConnectionError(f"Soniox Speech-to-Text API connection error: {e}") from e
-
             except Exception as e:
                 logger.exception(f"Unexpected error occurred: {e}")
                 raise APIConnectionError(f"An unexpected error occurred: {e}") from e
@@ -431,7 +407,7 @@ class SpeechStream(stt.RecognizeStream):
             while self._ws:
                 await self._ws.send_str(KEEPALIVE_MESSAGE)
                 await asyncio.sleep(5)
-        except (aiohttp.ClientError, ConnectionError) as e:
+        except APIConnectionError as e:
             # When no audio is flowing this write is the only thing touching the socket,
             # so a dropped connection surfaces here first. Swallowing it left the stream
             # parked on a dead socket with nothing ever logged.
@@ -467,7 +443,7 @@ class SpeechStream(stt.RecognizeStream):
                     await self._ws.send_str(data)
             except asyncio.CancelledError:
                 raise
-            except (aiohttp.ClientError, ConnectionError) as e:
+            except APIConnectionError as e:
                 self._request_reconnect(f"audio write failed ({e!r})")
                 break
             except Exception as e:
@@ -540,22 +516,7 @@ class SpeechStream(stt.RecognizeStream):
 
         try:
             async for msg in self._ws:
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    break
-
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    # The heartbeat closes the socket when a ping goes unanswered, and
-                    # that arrives here rather than as a close frame. Treating it as an
-                    # unexpected message type stepped over it and discarded the reason,
-                    # which only survives on `ws.exception()`.
-                    logger.warning("Soniox STT WebSocket error frame: %r", self._ws.exception())
-                    break
-
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning(
                         f"Unexpected message type from Soniox Speech-to-Text API: {msg.type}"
                     )
@@ -676,10 +637,11 @@ class SpeechStream(stt.RecognizeStream):
         except asyncio.CancelledError:
             # Normal shutdown — don't trigger reconnect.
             raise
+        except APIConnectionError as e:
+            # the heartbeat closes the socket when a ping goes unanswered; reconnect below
+            logger.warning("Soniox STT WebSocket error: %r", e)
         except APIError:
             raise
-        except aiohttp.ClientError as e:
-            logger.error(f"WebSocket error while receiving: {e}")
         except Exception as e:
             logger.error(f"Unexpected error while receiving messages: {e}")
 

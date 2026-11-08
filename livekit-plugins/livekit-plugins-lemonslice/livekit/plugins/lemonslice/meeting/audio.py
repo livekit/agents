@@ -7,12 +7,10 @@ import logging
 import struct
 from collections.abc import Callable
 
-import aiohttp
 import numpy as np
 
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from livekit.agents.utils import http_context
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, http
 from livekit.agents.voice.io import AudioInput
 
 logger = logging.getLogger(__name__)
@@ -143,35 +141,30 @@ async def stream_meeting_relay(
     backoff_time = reconnect_delay_s
     while not stop.is_set():
         try:
-            async with (
-                aiohttp.ClientSession() as http,
-                await http_context.ws_connect(
-                    http, websocket_url, conn_options=conn_options, heartbeat=20.0
-                ) as ws,
-            ):
-                backoff_time = reconnect_delay_s
-                audio_frames = 0
-                chat_messages = 0
-                logger.debug("connected to meeting relay")
-                async for msg in ws:
-                    if stop.is_set():
-                        break
-                    if msg.type == aiohttp.WSMsgType.BINARY:
-                        audio_sink(msg.data)
-                        audio_frames += 1
-                        if audio_frames == 1:
-                            logger.debug("received first pcm audio frame in meeting relay")
-                    elif msg.type == aiohttp.WSMsgType.TEXT and chat_sink is not None:
-                        chat_sink(msg.data)
-                        chat_messages += 1
-                        if chat_messages == 1:
-                            logger.debug("received first chat message in meeting relay")
-                    elif msg.type in (
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.ERROR,
-                    ):
-                        break
+            async with http.open() as session:
+                ws = await session.ws_connect(
+                    websocket_url, conn_options=conn_options, heartbeat=20.0
+                )
+                try:
+                    backoff_time = reconnect_delay_s
+                    audio_frames = 0
+                    chat_messages = 0
+                    logger.debug("connected to meeting relay")
+                    async for msg in ws:
+                        if stop.is_set():
+                            break
+                        if msg.type is http.WebSocketMessageType.BINARY:
+                            audio_sink(msg.binary)
+                            audio_frames += 1
+                            if audio_frames == 1:
+                                logger.debug("received first pcm audio frame in meeting relay")
+                        elif chat_sink is not None:
+                            chat_sink(msg.text)
+                            chat_messages += 1
+                            if chat_messages == 1:
+                                logger.debug("received first chat message in meeting relay")
+                finally:
+                    await ws.close()
         except asyncio.CancelledError:
             raise
         except Exception:

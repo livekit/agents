@@ -1,3 +1,8 @@
+"""The server side: HTTP and WebSocket routes an application serves next to its agent.
+
+It never calls out; providers are reached through ``client``.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -11,25 +16,9 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.types import Message, Scope
 from starlette.websockets import WebSocket
 
-from . import _core
-from ._generated.public_http import *  # noqa: F403
-from ._generated.worker_endpoint import (
-    ExchangeEvent,
-    ExchangeEventBinary,
-    ExchangeEventBody,
-    ExchangeEventClosed,
-    ExchangeEventDisconnected,
-    ExchangeEventText,
-    ExchangeMessage,
-    ExchangeMessageAccept,
-    ExchangeMessageBinary,
-    ExchangeMessageBody,
-    ExchangeMessageClose,
-    ExchangeMessageStart,
-    ExchangeMessageText,
-    RequestHead,
-)
-from ._generated.worker_server import EndpointRoute
+from .. import _core
+from .._generated.worker_endpoint import EndpointRequest, RequestHead
+from .._generated.worker_server import EndpointRoute
 
 logger = logging.getLogger(__name__)
 
@@ -109,14 +98,10 @@ class AgentRoutes:
         )
 
         async def receive() -> Message:
-            return pending.pop() if pending else _event(await exchange.receive())
-
-        async def send(message: Message) -> None:
-            if (outgoing := _message(message)) is not None:
-                await exchange.send(outgoing)
+            return pending.pop() if pending else await exchange.receive()
 
         try:
-            await self._app(scope, receive, send)
+            await self._app(scope, receive, exchange.send)
         except Exception:
             logger.exception("endpoint application failed: %s", request.request_id)
             raise
@@ -144,54 +129,3 @@ def _scope(head: RequestHead, request: EndpointRequest) -> Scope:
     else:
         scope["method"] = head.method
     return scope
-
-
-def _event(event: ExchangeEvent) -> Message:
-    match event:
-        case ExchangeEventBody(data=data, more=more):
-            return {"type": "http.request", "body": data, "more_body": more}
-        case ExchangeEventDisconnected():
-            return {"type": "http.disconnect"}
-        case ExchangeEventText(text=text):
-            return {"type": "websocket.receive", "text": text}
-        case ExchangeEventBinary(data=data):
-            return {"type": "websocket.receive", "bytes": data}
-        case ExchangeEventClosed(code=code):
-            return {"type": "websocket.disconnect", "code": code}
-
-
-def _message(message: Message) -> ExchangeMessage | None:
-    """The exchange message for an ASGI message; ``None`` for one the worker has no use for."""
-    match message["type"]:
-        case "http.response.start" | "websocket.http.response.start":
-            return ExchangeMessageStart(
-                status=message["status"], headers=_headers(message.get("headers", ()))
-            )
-        case "http.response.body" | "websocket.http.response.body":
-            return ExchangeMessageBody(
-                data=bytes(message.get("body", b"")), more=message.get("more_body", False)
-            )
-        case "http.response.trailers":
-            return None  # the worker writes its own completion trailers
-        case "websocket.accept":
-            return ExchangeMessageAccept(
-                subprotocol=message.get("subprotocol"),
-                headers=_headers(message.get("headers", ())),
-            )
-        case "websocket.send":
-            data, text = message.get("bytes"), message.get("text")
-            if data is not None and text is None:
-                return ExchangeMessageBinary(data=bytes(data))
-            if text is not None and data is None:
-                return ExchangeMessageText(text=text)
-            raise RuntimeError("websocket.send carries exactly one of bytes and text")
-        case "websocket.close":
-            return ExchangeMessageClose(
-                code=message.get("code", 1000), reason=message.get("reason") or ""
-            )
-        case kind:
-            raise RuntimeError(f"unexpected ASGI message {kind!r}")
-
-
-def _headers(headers: Iterable[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
-    return [(bytes(name), bytes(value)) for name, value in headers]

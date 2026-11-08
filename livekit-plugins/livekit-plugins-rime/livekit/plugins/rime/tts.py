@@ -22,14 +22,12 @@ from dataclasses import dataclass
 from typing import overload
 from urllib.parse import urlencode
 
-import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
     APIStatusError,
-    APITimeoutError,
+    http,
     redacted_cause,
     tokenize,
     tts,
@@ -186,7 +184,7 @@ class TTS(tts.TTS):
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         allow_custom_endpoint: bool = False,
     ) -> None: ...
@@ -210,7 +208,7 @@ class TTS(tts.TTS):
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         use_websocket: bool = False,
         segment: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
@@ -242,7 +240,7 @@ class TTS(tts.TTS):
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         use_websocket: bool = False,
         segment: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
@@ -392,9 +390,9 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Rime"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
@@ -636,7 +634,7 @@ class ChunkedStream(tts.ChunkedStream):
         opts: _TTSOptions,
         base_url: str,
         api_key: str,
-        ensure_session: Callable[[], aiohttp.ClientSession],
+        ensure_session: Callable[[], http.HttpSession],
     ) -> None:
         self._sample_rate = tts.sample_rate
         self._opts = opts
@@ -661,9 +659,7 @@ class ChunkedStream(tts.ChunkedStream):
                 payload["reduceLatency"] = mist_opts.reduce_latency
 
         try:
-            async with utils.http_context.request(
-                self._ensure_session(),
-                "POST",
+            async with self._ensure_session().post(
                 self._base_url,
                 headers={
                     "accept": format,
@@ -673,7 +669,13 @@ class ChunkedStream(tts.ChunkedStream):
                 json=payload,
                 conn_options=self._conn_options,
             ) as resp:
-                resp.raise_for_status()
+                try:
+                    await resp.raise_for_status()
+                except APIStatusError as e:
+                    # the provider's reason and body stay out of the error
+                    raise APIStatusError(
+                        "Rime HTTP request failed", status_code=e.status_code
+                    ) from redacted_cause(e)
 
                 if not resp.content_type.startswith("audio"):
                     content = await resp.text()
@@ -687,18 +689,9 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=format,
                 )
 
-                async for data, _ in resp.content.iter_chunks():
+                async for data in resp.iter_bytes():
                     output_emitter.push(data)
 
-        except TimeoutError as cause:
-            raise APITimeoutError() from redacted_cause(cause)
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message="Rime HTTP request failed",
-                status_code=e.status,
-                request_id=None,
-                body=None,
-            ) from redacted_cause(e)
         except APIError:
             raise
         except Exception as cause:

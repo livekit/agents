@@ -8,8 +8,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
-import aiohttp
-
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -17,6 +15,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    http,
     tokenize,
     tts,
     utils,
@@ -188,7 +187,7 @@ class TTS(tts.TTS):
         text_pacing: tts.SentenceStreamPacer | bool = False,
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
     ):
         """Minimax TTS plugin
 
@@ -217,7 +216,7 @@ class TTS(tts.TTS):
             text_pacing (tts.SentenceStreamPacer | bool, optional): Enable text pacing for sentence-level timing control. Defaults to False.
             api_key (str | None, optional): The Minimax API key. Defaults to None.
             base_url (NotGivenOr[str], optional): The base URL for the Minimax API. Defaults to NOT_GIVEN.
-            http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
+            http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, the job's shared session is used.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=False),
@@ -345,13 +344,13 @@ class TTS(tts.TTS):
         if utils.is_given(language_boost):
             self._opts.language_boost = language_boost
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
 
         return self._session
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         url = self._opts.base_url
         if url.startswith("http"):
             url = url.replace("http", "ws", 1)
@@ -359,16 +358,14 @@ class TTS(tts.TTS):
 
         headers = {"Authorization": f"Bearer {self._opts.api_key}"}
         session = self._ensure_session()
-        ws = await utils.http_context.ws_connect(
-            session, url, headers=headers, conn_options=conn_options
-        )
+        ws = await session.ws_connect(url, headers=headers, conn_options=conn_options)
 
         # Log WebSocket connection establishment
         logger.debug(f"MiniMax WebSocket connected to {url}")
 
         return ws
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _close_ws(self, ws: http.WebSocket) -> None:
         await ws.close()
 
     def synthesize(
@@ -410,8 +407,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         *,
         sentence_tokenizer: tokenize.SentenceTokenizer,
         stream_pacer: tts.SentenceStreamPacer | None,
-        connect_ws: Callable[[APIConnectOptions], Awaitable[aiohttp.ClientWebSocketResponse]],
-        close_ws: Callable[[aiohttp.ClientWebSocketResponse], Awaitable[None]],
+        connect_ws: Callable[[APIConnectOptions], Awaitable[http.WebSocket]],
+        close_ws: Callable[[http.WebSocket], Awaitable[None]],
         opts: _TTSOptions,
         tts: TTS,
         conn_options: APIConnectOptions,
@@ -457,7 +454,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 sentence_stream.push_text(data)
             sentence_stream.end_input()
 
-        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _sentence_stream_task(ws: http.WebSocket) -> None:
             start_msg = _to_minimax_options(self._opts)
             start_msg["event"] = "task_start"
             await ws.send_str(json.dumps(start_msg))
@@ -473,17 +470,13 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(json.dumps({"event": "task_finish"}))
             read_deadline.expect_response(final=True)
 
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _recv_task(ws: http.WebSocket) -> None:
             # Initialize trace_id to ensure it's available in all code paths
             current_trace_id = trace_id
 
             while True:
                 msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     error_msg = (
                         f"MiniMax connection closed unexpectedly (trace_id: {current_trace_id})"
                     )
@@ -492,10 +485,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         error_msg,
                         request_id=current_trace_id,
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=f"{msg.data=}",
                     )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected Minimax message type %s", msg.type)
                     continue
 
@@ -576,21 +569,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         except APIError:
             raise
-        except TimeoutError:
-            raise APITimeoutError(
-                f"WebSocket TTS synthesis timed out (trace_id: {trace_id})"
-            ) from None
-        except aiohttp.ClientResponseError as e:
-            logger.error(
-                f"WebSocket HTTP error: status={e.status}, message={e.message}, trace_id={trace_id}",
-                exc_info=True,
-            )
-            raise APIStatusError(
-                message=f"WebSocket HTTP {e.status}: {e.message} (trace_id: {trace_id})",
-                status_code=e.status,
-                request_id=trace_id,
-                body=None,
-            ) from e
         except Exception as e:
             if not isinstance(e, (APIStatusError, APITimeoutError, APIConnectionError)):
                 logger.error(
@@ -609,7 +587,7 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
-        get_session: Callable[[], aiohttp.ClientSession],
+        get_session: Callable[[], http.HttpSession],
         opts: _TTSOptions,
         tts: TTS,
         input_text: str,
@@ -636,19 +614,15 @@ class ChunkedStream(tts.ChunkedStream):
             }
         )
         try:
-            async with utils.http_context.request(
-                self._get_session(),
-                "POST",
+            async with self._get_session().post(
                 url,
                 headers={
                     "Authorization": f"Bearer {self._opts.api_key}",
                 },
                 json=msg,
                 conn_options=self._conn_options,
-                # large read_bufsize to avoid `ValueError: Chunk too big`
-                read_bufsize=10 * 1024 * 1024,
             ) as resp:
-                resp.raise_for_status()
+                await resp.raise_for_status()
 
                 # Extract trace_id from response headers (all requests have this)
                 # Note: api.minimax.io also returns trace_id in response body root.trace_id
@@ -672,7 +646,7 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=f"audio/{self._opts.audio_format}",
                 )
 
-                async for chunk in resp.content:
+                async for chunk in resp.iter_lines():
                     line = chunk.decode().strip()
                     if not line:
                         continue
@@ -712,16 +686,6 @@ class ChunkedStream(tts.ChunkedStream):
 
         except APIError:
             raise
-        except TimeoutError:
-            raise APITimeoutError("TTS synthesis timed out") from None
-        except aiohttp.ClientResponseError as e:
-            logger.error(f"HTTP error: status={e.status}, message={e.message}", exc_info=True)
-            raise APIStatusError(
-                message=f"HTTP {e.status}: {e.message}",
-                status_code=e.status,
-                request_id=None,
-                body=None,
-            ) from e
         except Exception as e:
             if not isinstance(e, (APIStatusError, APITimeoutError, APIConnectionError)):
                 logger.error(

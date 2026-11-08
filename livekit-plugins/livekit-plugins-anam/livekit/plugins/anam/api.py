@@ -4,7 +4,6 @@ import asyncio
 from json import JSONDecodeError
 from types import TracebackType
 
-import aiohttp
 from pydantic import BaseModel, Field, JsonValue, ValidationError
 
 from livekit.agents import (
@@ -12,8 +11,8 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    http,
 )
-from livekit.agents.utils import http_context
 
 from .log import logger
 from .types import PersonaConfig, SessionOptions
@@ -38,7 +37,7 @@ class AnamAPI:
         api_url: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        session: aiohttp.ClientSession | None = None,
+        session: http.HttpSession | None = None,
     ) -> None:
         """
         Initializes the AnamAPI client.
@@ -47,18 +46,15 @@ class AnamAPI:
             api_key: Your Anam API key. If not provided, it will be read from
                      the ANAM_API_KEY environment variable.
             api_url: The base URL of the Anam API.
-            conn_options: Connection options for the aiohttp session.
-            session: An optional existing aiohttp.ClientSession to use for requests.
+            conn_options: Connection options for the requests.
+            session: An optional HttpSession to use for requests, else the job's.
         """
         self._api_key = api_key
         self._api_url = api_url
         self._conn_options = conn_options
         self._session = session
-        self._own_session = session is None
 
     async def __aenter__(self) -> AnamAPI:
-        if self._own_session:
-            self._session = aiohttp.ClientSession()
         return self
 
     async def __aexit__(
@@ -67,8 +63,7 @@ class AnamAPI:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        if self._own_session and self._session:
-            await self._session.close()
+        pass
 
     async def start_session(
         self,
@@ -153,53 +148,42 @@ class AnamAPI:
         Internal method to make a POST request with retry logic.
         """
         url = f"{self._api_url}{endpoint}"
-        session = self._session or aiohttp.ClientSession()
-        try:
-            async with self._conn_options.total_deadline():
-                for attempt in range(self._conn_options.max_retry + 1):
-                    try:
-                        async with http_context.request(
-                            session,
-                            "POST",
-                            url,
-                            headers=headers,
-                            json=payload,
-                            conn_options=self._conn_options,
-                        ) as response:
-                            if not response.ok:
-                                text = await response.text()
-                                raise APIStatusError(
-                                    f"Server returned an error for {url}: {response.status}",
-                                    status_code=response.status,
-                                    body=text,
-                                )
-                            return SessionResponse.model_validate(await response.json())
-                    except (ValidationError, JSONDecodeError, aiohttp.ContentTypeError) as exc:
-                        raise APIConnectionError(
-                            "Anam returned an invalid response", retryable=False
-                        ) from exc
-                    except APIStatusError as e:
-                        if not e.retryable:
-                            raise
-                        logger.warning(
-                            f"API request to {url} failed on attempt {attempt + 1}",
-                            extra={"error": str(e)},
-                        )
-                        if attempt >= self._conn_options.max_retry:
-                            raise
-                        await asyncio.sleep(self._conn_options.retry_interval)
-                    except (TimeoutError, aiohttp.ClientError) as e:
-                        logger.warning(
-                            f"API request to {url} failed on attempt {attempt + 1}",
-                            extra={"error": str(e)},
-                        )
-                        if attempt >= self._conn_options.max_retry:
-                            raise APIConnectionError(
-                                f"Failed to connect to Anam API at {url}"
-                            ) from e
-                        await asyncio.sleep(self._conn_options.retry_interval)
-        finally:
-            if not self._session:  # if we created the session, we close it
-                await session.close()
+        session = self._session or http.http_session()
+        async with self._conn_options.total_deadline():
+            for attempt in range(self._conn_options.max_retry + 1):
+                try:
+                    async with session.post(
+                        url, headers=headers, json=payload, conn_options=self._conn_options
+                    ) as response:
+                        if not response.ok:
+                            text = await response.text()
+                            raise APIStatusError(
+                                f"Server returned an error for {url}: {response.status}",
+                                status_code=response.status,
+                                body=text,
+                            )
+                        return SessionResponse.model_validate(await response.json())
+                except (ValidationError, JSONDecodeError) as exc:
+                    raise APIConnectionError(
+                        "Anam returned an invalid response", retryable=False
+                    ) from exc
+                except APIStatusError as e:
+                    if not e.retryable:
+                        raise
+                    logger.warning(
+                        f"API request to {url} failed on attempt {attempt + 1}",
+                        extra={"error": str(e)},
+                    )
+                    if attempt >= self._conn_options.max_retry:
+                        raise
+                    await asyncio.sleep(self._conn_options.retry_interval)
+                except APIConnectionError as e:
+                    logger.warning(
+                        f"API request to {url} failed on attempt {attempt + 1}",
+                        extra={"error": str(e)},
+                    )
+                    if attempt >= self._conn_options.max_retry:
+                        raise APIConnectionError(f"Failed to connect to Anam API at {url}") from e
+                    await asyncio.sleep(self._conn_options.retry_interval)
 
         raise APIConnectionError("Failed to call Anam API after all retries.")

@@ -5,12 +5,11 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectOptions, APIStatusError, LanguageCode
+from livekit.agents import APIConnectOptions, APIStatusError, LanguageCode, http
 from livekit.agents.stt import SpeechEventType
 from livekit.plugins.soniox import STT, STTOptions
 
@@ -35,7 +34,7 @@ async def _drive_recv(model: STT, messages: list[dict[str, Any]], *, expect_even
 
     app = web.Application()
     app.router.add_get("/transcribe", peer)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         # The application supplies a transport and URL, then consumes the public stream.
         model._base_url = str(server.make_url("/transcribe"))
         model._http_session = session
@@ -64,7 +63,7 @@ async def test_authentication_and_endpoint_options_reach_the_peer(level: int | N
 
     app = web.Application()
     app.router.add_get("/transcribe", peer)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         model = STT(
             api_key="test-key",
             base_url=str(server.make_url("/transcribe")),
@@ -102,7 +101,7 @@ async def test_authentication_error_surfaces_without_retry() -> None:
 
     app = web.Application()
     app.router.add_get("/transcribe", peer)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         model = STT(
             api_key="test-key", base_url=str(server.make_url("/transcribe")), http_session=session
         )

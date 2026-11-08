@@ -1,11 +1,10 @@
 """A successful avatar POST with invalid JSON must never be repeated."""
 
-import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectionError, APIConnectOptions
+from livekit.agents import APIConnectionError, APIConnectOptions, http
 from livekit.plugins.anam.api import AnamAPI
 from livekit.plugins.anam.types import PersonaConfig
 from livekit.plugins.avatario.api import AvatarioAPI
@@ -30,16 +29,16 @@ async def test_invalid_success_response_does_not_repeat_creation(provider, monke
 
     app = web.Application()
     app.router.add_post("/{path:.*}", create)
-    async with TestServer(app) as server, aiohttp.ClientSession() as http:
+    async with TestServer(app) as server, http.open() as session:
         options = APIConnectOptions(max_retry=2, retry_interval=0)
         url = str(server.make_url("")).rstrip("/")
         if provider == "anam":
-            api = AnamAPI(api_key="key", api_url=url, session=http, conn_options=options)
+            api = AnamAPI(api_key="key", api_url=url, session=session, conn_options=options)
             call = api.start_session(
                 PersonaConfig(name="avatar", avatarId="avatar"), "wss://livekit.test", "token"
             )
         elif provider == "did":
-            api = DIDAPI(api_key="key", api_url=url, session=http, conn_options=options)
+            api = DIDAPI(api_key="key", api_url=url, session=session, conn_options=options)
             call = api.join_session(agent_id="avatar", transport={}, audio_config={})
         elif provider == "avatartalk":
             api = AvatarTalkAPI(api_key="key", api_url=url)
@@ -47,7 +46,7 @@ async def test_invalid_success_response_does_not_repeat_creation(provider, monke
                 "wss://livekit.test", "avatar", "neutral", "room", "listener", "token", "agent"
             )
         elif provider == "keyframe":
-            api = KeyframeAPI(api_key="key", api_url=url, session=http, conn_options=options)
+            api = KeyframeAPI(api_key="key", api_url=url, session=session, conn_options=options)
             call = api.create_plugin_session(
                 room_name="room",
                 livekit_url="wss://livekit.test",
@@ -56,10 +55,12 @@ async def test_invalid_success_response_does_not_repeat_creation(provider, monke
             )
         elif provider == "avatario":
             monkeypatch.setattr("livekit.plugins.avatario.api.DEFAULT_API_URL", url)
-            api = AvatarioAPI(api_key="key", avatar_id="avatar", session=http, conn_options=options)
+            api = AvatarioAPI(
+                api_key="key", avatar_id="avatar", session=session, conn_options=options
+            )
             call = api.start_session(livekit_agent_identity="agent")
         elif provider == "lemonslice":
-            api = LemonSliceAPI(api_key="key", api_url=url, session=http, conn_options=options)
+            api = LemonSliceAPI(api_key="key", api_url=url, session=session, conn_options=options)
             call = api.start_agent_session(
                 livekit_url="wss://livekit.test",
                 livekit_token="token",
@@ -67,7 +68,7 @@ async def test_invalid_success_response_does_not_repeat_creation(provider, monke
                 agent_id="avatar",
             )
         else:
-            api = LiveAvatarAPI(api_key="key", api_url=url, session=http, conn_options=options)
+            api = LiveAvatarAPI(api_key="key", api_url=url, session=session, conn_options=options)
             call = api.start_streaming_session("session", "token")
         with pytest.raises(APIConnectionError) as error:
             await call
@@ -76,11 +77,11 @@ async def test_invalid_success_response_does_not_repeat_creation(provider, monke
 
 
 async def test_invalid_liveavatar_url_is_not_classified_as_invalid_provider_response():
-    async with aiohttp.ClientSession() as http:
+    async with http.open() as session:
         api = LiveAvatarAPI(
             api_key="key",
             api_url="http://[",
-            session=http,
+            session=session,
             conn_options=APIConnectOptions(max_retry=0),
         )
         with pytest.raises(APIConnectionError) as error:

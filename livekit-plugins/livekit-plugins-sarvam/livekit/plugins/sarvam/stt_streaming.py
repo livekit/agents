@@ -24,7 +24,6 @@ from dataclasses import dataclass, replace
 from typing import Literal
 from urllib.parse import urlencode
 
-import aiohttp
 import numpy as np
 from pydantic import JsonValue, ValidationError
 
@@ -37,6 +36,7 @@ from livekit.agents import (
     APITimeoutError,
     LanguageCode,
     __version__ as livekit_version,
+    http,
     stt,
     utils,
 )
@@ -245,7 +245,7 @@ class STTRealtime(stt.STT):
         return_timestamps: bool = False,
         api_key: str | None = None,
         base_url: str = SARVAM_STT_REALTIME_URL,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         vad_sot_threshold: float | None = None,
         vad_min_speech_ms: int | None = None,
         vad_min_silence_ms: int | None = None,
@@ -266,7 +266,7 @@ class STTRealtime(stt.STT):
             return_timestamps: Whether finals should carry segment-level start and end times.
             api_key: Sarvam API key. Falls back to the ``SARVAM_API_KEY`` environment variable.
             base_url: WebSocket URL of the realtime endpoint.
-            http_session: Optional aiohttp session to reuse for the connection.
+            http_session: Optional HTTP session to reuse for the connection.
             vad_sot_threshold: VAD activation threshold (``vad`` endpointing only).
             vad_min_speech_ms: Minimum speech duration in ms (``vad`` endpointing only).
             vad_min_silence_ms: End-of-turn silence in ms (``vad`` endpointing only).
@@ -323,13 +323,13 @@ class STTRealtime(stt.STT):
         """Name of the speech-to-text provider."""
         return "Sarvam"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
             try:
-                self._session = utils.http_context.http_session()
+                self._session = http.http_session()
                 self._owns_session = False
             except RuntimeError:
-                self._session = aiohttp.ClientSession()
+                self._session = http.HttpSession()
                 self._owns_session = True
         return self._session
 
@@ -474,8 +474,8 @@ class STTRealtime(stt.STT):
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
-        if self._owns_session and self._session and not self._session.closed:
-            await self._session.close()
+        if self._owns_session and self._session:
+            await self._session.aclose()
 
 
 class RealtimeSpeechStream(stt.RecognizeStream):
@@ -493,7 +493,7 @@ class RealtimeSpeechStream(stt.RecognizeStream):
         stt: STTRealtime,
         opts: RealtimeSTTOptions,
         conn_options: APIConnectOptions,
-        http_session: aiohttp.ClientSession,
+        http_session: http.HttpSession,
     ) -> None:
         """Create a realtime speech stream.
 
@@ -501,12 +501,12 @@ class RealtimeSpeechStream(stt.RecognizeStream):
             stt: The parent instance that created this stream.
             opts: Resolved options for this connection.
             conn_options: Connection options for this stream.
-            http_session: aiohttp session used to open the WebSocket.
+            http_session: HTTP session used to open the WebSocket.
         """
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._session = http_session
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._ws: http.WebSocket | None = None
         self._request_id = ""
         self._session_id = ""
         self._resolved_config: dict[str, JsonValue] | None = None
@@ -775,7 +775,7 @@ class RealtimeSpeechStream(stt.RecognizeStream):
     async def _run(self) -> None:
         # A single connection attempt: this endpoint bills per connection, so the
         # stream never reconnects on its own (`stream()` also forces max_retry=0).
-        ws: aiohttp.ClientWebSocketResponse | None = None
+        ws: http.WebSocket | None = None
         try:
             ws = await self._connect_ws()
             self._ws = ws
@@ -787,17 +787,6 @@ class RealtimeSpeechStream(stt.RecognizeStream):
                 await asyncio.gather(*tasks)
             finally:
                 await utils.aio.cancel_and_wait(*tasks)
-        except TimeoutError as e:
-            raise APITimeoutError("Timed out connecting to Sarvam realtime STT") from e
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=self._request_id or None,
-                body=e.message,
-            ) from e
-        except aiohttp.ClientConnectorError as e:
-            raise APIConnectionError("failed to connect to Sarvam realtime STT") from e
         finally:
             if ws is not None:
                 await ws.close()
@@ -838,7 +827,7 @@ class RealtimeSpeechStream(stt.RecognizeStream):
 
     async def _safe_send_str(
         self,
-        ws: aiohttp.ClientWebSocketResponse,
+        ws: http.WebSocket,
         payload: dict[str, object],
     ) -> bool:
         """Send a JSON control message, tolerating a peer that already closed.
@@ -851,7 +840,7 @@ class RealtimeSpeechStream(stt.RecognizeStream):
 
         try:
             await ws.send_str(json.dumps(payload))
-        except (aiohttp.ClientConnectionResetError, ConnectionError):
+        except APIConnectionError:
             self._logger.debug(
                 "Sarvam realtime STT WebSocket closed before send completed",
                 extra={**self._build_log_context(), "payload": payload},
@@ -859,19 +848,19 @@ class RealtimeSpeechStream(stt.RecognizeStream):
             return False
         return True
 
-    async def _safe_send_bytes(self, ws: aiohttp.ClientWebSocketResponse, payload: bytes) -> None:
+    async def _safe_send_bytes(self, ws: http.WebSocket, payload: bytes) -> None:
         if ws.closed:
             return
 
         try:
             await ws.send_bytes(payload)
-        except (aiohttp.ClientConnectionResetError, ConnectionError):
+        except APIConnectionError:
             self._logger.debug(
                 "Sarvam realtime STT WebSocket closed before audio send completed",
                 extra={**self._build_log_context(), "payload_bytes": len(payload)},
             )
 
-    async def _send_pending_config_update(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _send_pending_config_update(self, ws: http.WebSocket) -> None:
         payload = self._pending_config_update
         self._pending_config_update = None
         if payload is None:
@@ -880,7 +869,7 @@ class RealtimeSpeechStream(stt.RecognizeStream):
             # Only now can a config.updated acknowledgement refer to our change.
             self._endpointing_update_sent = True
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self) -> http.WebSocket:
         ws_url = _build_realtime_ws_url(self._opts.base_url, self._opts)
         headers = {
             "API-SUBSCRIPTION-KEY": self._opts.api_key,
@@ -890,27 +879,26 @@ class RealtimeSpeechStream(stt.RecognizeStream):
             "Connecting to Sarvam realtime STT WebSocket", extra=self._build_log_context()
         )
         try:
-            ws = await utils.http_context.ws_connect(
-                self._session,
+            ws = await self._session.ws_connect(
                 ws_url,
                 headers=headers,
                 heartbeat=30.0,
                 conn_options=self._conn_options,
             )
-        except (TimeoutError, aiohttp.ClientConnectorError) as e:
+        except (APIConnectionError, APITimeoutError) as e:
             self._logger.error(
                 "Failed to connect to Sarvam realtime STT WebSocket",
                 extra={**self._build_log_context(), "error": str(e), "url": ws_url},
                 exc_info=True,
             )
             raise
-        except aiohttp.ClientResponseError as e:
+        except APIStatusError as e:
             self._logger.error(
                 "Sarvam realtime STT WebSocket handshake failed",
                 extra={
                     **self._build_log_context(),
                     "error": e.message,
-                    "status_code": e.status,
+                    "status_code": e.status_code,
                     "url": ws_url,
                 },
                 exc_info=True,
@@ -929,7 +917,7 @@ class RealtimeSpeechStream(stt.RecognizeStream):
         return ws
 
     @utils.log_exceptions(logger=logger)
-    async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _process_audio(self, ws: http.WebSocket) -> None:
         samples_per_channel = max(int(self._opts.sample_rate * AUDIO_CHUNK_MS / 1000), 1)
         audio_bstream = utils.media.AudioByteStream(
             sample_rate=self._opts.sample_rate,
@@ -975,10 +963,10 @@ class RealtimeSpeechStream(stt.RecognizeStream):
             await self._safe_send_str(ws, {"event": "end"})
 
     @utils.log_exceptions(logger=logger)
-    async def _process_messages(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _process_messages(self, ws: http.WebSocket) -> None:
         while True:
             msg = await ws.receive()
-            if msg.type == aiohttp.WSMsgType.TEXT:
+            if msg.type == http.WebSocketMessageType.TEXT:
                 try:
                     await self._handle_message(RealtimeMessage.model_validate_json(msg.data))
                 except ValidationError as e:
@@ -992,7 +980,7 @@ class RealtimeSpeechStream(stt.RecognizeStream):
                             extra={**self._build_log_context(), "raw_message": msg.data},
                         )
                         raise APIStatusError(
-                            message=f"Sarvam realtime STT non-JSON error message: {msg.data}",
+                            message=f"Sarvam realtime STT non-JSON error message: {msg.data!s}",
                             request_id=self._request_id or None,
                             body={"raw_message": msg.data},
                         ) from e
@@ -1003,19 +991,9 @@ class RealtimeSpeechStream(stt.RecognizeStream):
                     continue
                 if self._session_ended:
                     break
-            elif msg.type == aiohttp.WSMsgType.ERROR:
-                self._logger.error(
-                    "Sarvam realtime STT WebSocket error",
-                    extra={**self._build_log_context(), "raw_message": msg.data},
-                )
-                raise APIConnectionError(f"Sarvam realtime STT WebSocket error: {msg.data}")
-            elif msg.type in (
-                aiohttp.WSMsgType.CLOSED,
-                aiohttp.WSMsgType.CLOSE,
-                aiohttp.WSMsgType.CLOSING,
-            ):
-                close_code = ws.close_code if ws.close_code is not None else msg.data
-                close_reason = msg.extra
+            elif msg.type == http.WebSocketMessageType.CLOSE:
+                close_code = ws.close_code
+                close_reason = msg.data
                 if self._session_ended and close_code in (1000, 1001, None):
                     self._flush_terminal_utterance()
                     self._emit_local_usage_fallback()

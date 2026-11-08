@@ -44,7 +44,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from urllib.parse import urlencode
 
-import aiohttp
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from livekit import rtc
@@ -55,6 +54,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
@@ -195,7 +195,7 @@ class STT(stt.STT):
         max_words: NotGivenOr[int] = NOT_GIVEN,
         keepalive_interval: NotGivenOr[float | None] = NOT_GIVEN,
         api_key: str | None = None,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         base_url: str = SMALLEST_STT_BASE_URL,
         stream_path: str = DEFAULT_STREAM_PATH,
     ) -> None:
@@ -261,7 +261,7 @@ class STT(stt.STT):
                 direct server, which does not accept the message. ``None`` disables it.
             api_key: Smallest AI API key. Falls back to the SMALLEST_API_KEY
                 environment variable if not provided.
-            http_session: An existing aiohttp ClientSession to reuse.
+            http_session: An existing HttpSession to reuse.
             base_url: API base URL. For a directly reachable inference server pass its
                 ``http://host:port`` and ``stream_path="/transcribe"``.
             stream_path: Path of the streaming endpoint under ``base_url``.
@@ -326,9 +326,9 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "SmallestAI"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     async def _recognize_impl(
@@ -349,10 +349,8 @@ class STT(stt.STT):
         }
 
         try:
-            async with utils.http_context.request(
-                self._ensure_session(),
-                "POST",
-                url=f"{config.base_url}/stt/",
+            async with self._ensure_session().post(
+                f"{config.base_url}/stt/",
                 headers={
                     "Authorization": f"Bearer {config.api_key}",
                     "Content-Type": "application/octet-stream",
@@ -364,16 +362,14 @@ class STT(stt.STT):
                 data=rtc.combine_audio_frames(buffer).to_wav_bytes(),
                 conn_options=conn_options,
             ) as resp:
-                resp.raise_for_status()
+                await resp.raise_for_status()
                 data = _Transcript.model_validate(await resp.json())
                 return _batch_transcription_to_speech_event(config.language, data)
 
         except TimeoutError as e:
             raise APITimeoutError() from e
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from e
+        except (APIStatusError, APIConnectionError):
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -519,7 +515,7 @@ class SpeechStream(stt.RecognizeStream):
         stt: STT,
         opts: _STTOptions,
         conn_options: APIConnectOptions,
-        http_session: aiohttp.ClientSession,
+        http_session: http.HttpSession,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
@@ -573,7 +569,7 @@ class SpeechStream(stt.RecognizeStream):
     async def _run(self) -> None:
         closing_ws = False
 
-        async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def keepalive_task(ws: http.WebSocket) -> None:
             # Resets the public API's inactivity timer while no audio flows; the server
             # answers with a pong that recv_task ignores.
             interval = self._opts.keepalive_interval
@@ -584,14 +580,14 @@ class SpeechStream(stt.RecognizeStream):
                 while True:
                     await asyncio.sleep(interval)
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
-            except (aiohttp.ClientError, ConnectionError) as e:
+            except APIConnectionError as e:
                 # With no audio flowing this write is where a dropped socket shows first.
                 if closing_ws or self._session.closed:
                     return
                 raise APIConnectionError("Smallest AI STT connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
 
             # 50 ms packets, the cadence the Pulse docs recommend.
@@ -627,7 +623,7 @@ class SpeechStream(stt.RecognizeStream):
                 # Input closed: the server flushes, answers with is_last and closes.
                 closing_ws = True
                 await ws.send_str(SpeechStream._CLOSE_STREAM_MSG)
-            except (aiohttp.ClientError, ConnectionError) as e:
+            except APIConnectionError as e:
                 # A dropped socket surfaces on the write side first. Expected closes just
                 # return; anything else reconnects through _run, like recv_task.
                 if closing_ws or self._session.closed:
@@ -635,31 +631,26 @@ class SpeechStream(stt.RecognizeStream):
                 raise APIConnectionError("Smallest AI STT connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             while True:
-                msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                try:
+                    msg = await ws.receive()
+                except APIConnectionError:
+                    # An unanswered heartbeat ping fails the socket from our side.
+                    if closing_ws or self._session.closed:
+                        return
+                    raise
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     if closing_ws or self._session.closed:
                         return
                     raise APIStatusError(
                         message="Smallest AI STT connection closed unexpectedly",
                         status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                        body=msg.data,
                     )
 
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    if closing_ws or self._session.closed:
-                        return
-                    # An unanswered heartbeat ping closes the socket from our side and
-                    # arrives here, not as a close frame; ws.exception() holds the reason.
-                    raise APIConnectionError("Smallest AI STT connection lost") from ws.exception()
-
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected Smallest AI STT message type: %s", msg.type)
                     continue
 
@@ -700,7 +691,7 @@ class SpeechStream(stt.RecognizeStream):
                 if data.is_last:
                     return
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
+        ws: http.WebSocket | None = None
         while True:
             try:
                 ws = await self._connect_ws()
@@ -774,34 +765,19 @@ class SpeechStream(stt.RecognizeStream):
         base = self._opts.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
         return f"{base.rstrip('/')}{self._opts.stream_path}?{urlencode(self._stream_params())}"
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        try:
-            ws = await utils.http_context.ws_connect(
-                self._session,
-                self._ws_url(),
-                headers={
-                    "Authorization": f"Bearer {self._opts.api_key}",
-                    "X-Source": "livekit",
-                    "X-LiveKit-Version": __version__,
-                },
-                # Without a heartbeat a half-open socket is never noticed: recv_task
-                # parks on receive() and the exception-driven reconnect never runs.
-                heartbeat=30.0,
-                conn_options=self._conn_options,
-            )
-        except TimeoutError:
-            raise APIConnectionError("failed to connect to Smallest AI STT") from None
-        except aiohttp.ClientResponseError as e:
-            # RequestInfo carries the request headers, so chaining this error or
-            # formatting it puts the API key in the exception repr.
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
-        except Exception as e:
-            raise APIConnectionError(
-                f"failed to connect to Smallest AI STT ({type(e).__name__})"
-            ) from None
-
+    async def _connect_ws(self) -> http.WebSocket:
+        ws = await self._session.ws_connect(
+            self._ws_url(),
+            headers={
+                "Authorization": f"Bearer {self._opts.api_key}",
+                "X-Source": "livekit",
+                "X-LiveKit-Version": __version__,
+            },
+            # Without a heartbeat a half-open socket is never noticed: recv_task
+            # parks on receive() and the exception-driven reconnect never runs.
+            heartbeat=30.0,
+            conn_options=self._conn_options,
+        )
         logger.debug("established Smallest AI STT WebSocket connection")
         return ws
 

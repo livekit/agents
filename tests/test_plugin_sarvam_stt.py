@@ -3,16 +3,16 @@ from __future__ import annotations
 import asyncio
 import gc
 import weakref
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from livekit import rtc
 from livekit.agents import (
-    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    APITimeoutError,
+    http,
 )
 from livekit.plugins.sarvam import stt as sarvam_stt
 
@@ -35,12 +35,6 @@ class _ErrorResponse:
 
 
 class _ErrorSession:
-    trace_configs = []
-
-    def request(self, method, url, **kwargs):
-        kwargs.pop("data", None)
-        return self.post(url, **kwargs)
-
     def __init__(self, *, status: int, error_text: str) -> None:
         self._status = status
         self._error_text = error_text
@@ -52,37 +46,31 @@ class _ErrorSession:
 class _FakeWS:
     def __init__(
         self,
-        messages: list[SimpleNamespace],
+        messages: list[http.WebSocketMessage],
         *,
         close_code: int | None = None,
-        exception: BaseException | None = None,
     ) -> None:
         self._messages = iter(messages)
         self.close_code = close_code
-        self._exception = exception
         self.closed = False
 
-    def __aiter__(self) -> _FakeWS:
-        return self
+    async def receive(self) -> http.WebSocketMessage:
+        return next(self._messages, http.WebSocketMessage(http.WebSocketMessageType.CLOSE, ""))
 
-    async def __anext__(self) -> SimpleNamespace:
-        try:
-            return next(self._messages)
-        except StopIteration:
-            raise StopAsyncIteration from None
 
-    async def receive(self) -> SimpleNamespace:
-        try:
-            return next(self._messages)
-        except StopIteration:
-            return SimpleNamespace(
-                type=sarvam_stt.aiohttp.WSMsgType.CLOSED,
-                data=self.close_code,
-                extra=None,
-            )
+class _RecordingSession:
+    """Stands in for the per-stream ``http.HttpSession`` and records its close."""
 
-    def exception(self) -> BaseException | None:
-        return self._exception
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture
+def recording_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sarvam_stt.http, "HttpSession", _RecordingSession)
 
 
 def _make_audio_buffer(
@@ -173,12 +161,12 @@ async def test_sarvam_stt_stream_run_does_not_retry_on_timeout() -> None:
     async def _raise_timeout() -> None:
         nonlocal attempts
         attempts += 1
-        raise TimeoutError("simulated timeout")
+        raise APITimeoutError("simulated timeout", phase="connect")
 
     stream._run_connection = _raise_timeout  # type: ignore[method-assign]
     stream._build_log_context = lambda: {}  # type: ignore[method-assign]
 
-    with pytest.raises(APIConnectionError, match="Failed to connect to STT WebSocket"):
+    with pytest.raises(APITimeoutError):
         await stream._run()
 
     assert attempts == 1
@@ -236,13 +224,7 @@ async def test_sarvam_stt_process_messages_raises_on_non_json_error_text() -> No
     stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
 
     ws = _FakeWS(
-        [
-            SimpleNamespace(
-                type=sarvam_stt.aiohttp.WSMsgType.TEXT,
-                data="invalid model: saarass:v3",
-                extra=None,
-            )
-        ]
+        [http.WebSocketMessage(http.WebSocketMessageType.TEXT, "invalid model: saarass:v3")]
     )
 
     with pytest.raises(APIStatusError, match="Sarvam STT non-JSON error message"):
@@ -257,13 +239,7 @@ async def test_sarvam_stt_process_messages_raises_on_error_close_reason() -> Non
     stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
 
     ws = _FakeWS(
-        [
-            SimpleNamespace(
-                type=sarvam_stt.aiohttp.WSMsgType.CLOSED,
-                data=None,
-                extra="invalid model: saarass:v3",
-            )
-        ],
+        [http.WebSocketMessage(http.WebSocketMessageType.CLOSE, "invalid model: saarass:v3")],
         close_code=1000,
     )
 
@@ -271,7 +247,7 @@ async def test_sarvam_stt_process_messages_raises_on_error_close_reason() -> Non
         await stream._process_messages(ws)
 
     assert excinfo.value.body == {
-        "msg_type": "CLOSED",
+        "msg_type": "CLOSE",
         "close_code": 1000,
         "close_reason": "invalid model: saarass:v3",
     }
@@ -286,14 +262,8 @@ async def test_sarvam_stt_process_messages_raises_on_non_graceful_close() -> Non
     stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
 
     ws = _FakeWS(
-        [
-            SimpleNamespace(
-                type=sarvam_stt.aiohttp.WSMsgType.CLOSE,
-                data=4000,
-                extra="Invalid model 'saarass:v3'.",
-            )
-        ],
-        close_code=None,
+        [http.WebSocketMessage(http.WebSocketMessageType.CLOSE, "Invalid model 'saarass:v3'.")],
+        close_code=4000,
     )
 
     with pytest.raises(APIStatusError) as excinfo:
@@ -321,9 +291,9 @@ async def test_sarvam_stt_process_messages_raises_on_post_loop_non_graceful_clos
 
     assert excinfo.value.status_code == 4000
     assert excinfo.value.body == {
-        "msg_type": "CLOSED",
+        "msg_type": "CLOSE",
         "close_code": 4000,
-        "close_reason": None,
+        "close_reason": "",
     }
 
 
@@ -438,10 +408,11 @@ async def test_sarvam_stt_stream_forces_single_attempt_conn_options(
     assert conn_options.retry_interval == 0.2
     assert conn_options.read_timeout == 4.0
 
-    await captured["http_session"].close()
+    await captured["http_session"].aclose()
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("recording_sessions")
 async def test_sarvam_stt_aclose_closes_tracked_stream_sessions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -456,19 +427,18 @@ async def test_sarvam_stt_aclose_closes_tracked_stream_sessions(
     stream_b = stt.stream(language="hi-IN")
     sessions = [stream_a._session, stream_b._session]
 
-    assert all(isinstance(s, sarvam_stt.aiohttp.ClientSession) for s in sessions)
+    assert all(isinstance(s, _RecordingSession) for s in sessions)
     assert all(not s.closed for s in sessions)
     assert len(stt._streams) == 2
 
     await stt.aclose()
 
-    assert all(s.closed for s in sessions), (
-        "STT.aclose() must close every per-stream aiohttp session"
-    )
+    assert all(s.closed for s in sessions), "STT.aclose() must close every per-stream HTTP session"
     assert len(stt._streams) == 0
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("recording_sessions")
 async def test_sarvam_stt_async_context_closes_stream_sessions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -487,6 +457,7 @@ async def test_sarvam_stt_async_context_closes_stream_sessions(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("recording_sessions")
 async def test_sarvam_stt_aclose_tolerates_already_closed_streams(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -507,6 +478,7 @@ async def test_sarvam_stt_aclose_tolerates_already_closed_streams(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("recording_sessions")
 async def test_sarvam_stt_aclose_closes_session_of_garbage_collected_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -515,7 +487,7 @@ async def test_sarvam_stt_aclose_closes_session_of_garbage_collected_stream(
     Regression test for the WeakSet hole in the original fix: with weak
     tracking, a completed ``SpeechStream`` can be collected before
     ``STT.aclose()`` snapshots the set, leaving its per-stream
-    ``aiohttp.ClientSession`` unreachable and unclosed. Strong ownership keeps
+    ``http.HttpSession`` unreachable and unclosed. Strong ownership keeps
     the stream (and its session) reachable until ``aclose`` closes it.
     """
 
@@ -556,7 +528,6 @@ async def test_sarvam_stt_aclose_closes_session_of_garbage_collected_stream(
 async def test_batch_transcript_without_timestamps_uses_audio_duration(
     as_list: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import aiohttp
     from aiohttp import web
     from aiohttp.test_utils import TestServer
 
@@ -566,7 +537,7 @@ async def test_batch_transcript_without_timestamps_uses_audio_duration(
 
     app = web.Application()
     app.router.add_post("/recognize", recognize)
-    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+    async with TestServer(app) as server, http.open() as session:
         endpoint = str(server.make_url("/recognize"))
         monkeypatch.setattr(sarvam_stt, "_get_urls_for_model", lambda _: (endpoint, endpoint))
         model = sarvam_stt.STT(api_key="test", http_session=session)

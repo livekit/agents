@@ -25,15 +25,14 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Literal
 
-import aiohttp
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
+    http,
     tokenize,
     tts,
     utils,
@@ -73,7 +72,7 @@ _MESSAGE = TypeAdapter(dict[str, JsonValue])
 _PHRASE_FLUSH_SUFFIXES = (".", "!", "?", ",", ";", ":")
 
 
-async def _close_ws(ws: aiohttp.ClientWebSocketResponse, *, context: str) -> None:
+async def _close_ws(ws: http.WebSocket, *, context: str) -> None:
     try:
         await asyncio.wait_for(ws.close(), timeout=WS_CLOSE_TIMEOUT_S)
     except TimeoutError:
@@ -231,7 +230,7 @@ class _WsConnectionTiming:
 
 @dataclass
 class _WarmStandbyConnection:
-    ws: aiohttp.ClientWebSocketResponse
+    ws: http.WebSocket
     standby_ready_ms: float
     # Settings epoch the socket was opened under; a checkout whose epoch no
     # longer matches the current one is stale (voice/language/speed changed).
@@ -266,7 +265,7 @@ class TTS(tts.TTS[Literal["slng_event"]]):
         sample_rate: int = 24000,
         speed: float = 1.0,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: http.HttpSession | None = None,
         extra_headers: dict[str, str] | None = None,
         # Advanced / optional. Used by integrations that drive the session
         # themselves; a typical client can ignore these.
@@ -302,7 +301,7 @@ class TTS(tts.TTS[Literal["slng_event"]]):
             language (str): Language code. Defaults to "en".
             sample_rate (int): Sample rate of audio. Defaults to 24000.
             word_tokenizer: Optional tokenizer for processing text.
-            http_session (aiohttp.ClientSession): Optional aiohttp session to use for requests.
+            http_session (http.HttpSession): Optional HttpSession to use for requests.
         """
         if {"first_audio_timeout_s", "fallback_recovery_cooldown_s"} & model_options.keys():
             raise TypeError(
@@ -486,10 +485,10 @@ class TTS(tts.TTS[Literal["slng_event"]]):
     def warm_standby_enabled(self) -> bool:
         return self._opts.warm_standby_enabled
 
-    def _is_ws_usable(self, ws: aiohttp.ClientWebSocketResponse) -> bool:
+    def _is_ws_usable(self, ws: http.WebSocket) -> bool:
         return not bool(getattr(ws, "closed", False))
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         session = self._ensure_session()
 
         # Connect to WebSocket
@@ -500,9 +499,7 @@ class TTS(tts.TTS[Literal["slng_event"]]):
         }
         headers.update(self._opts.extra_headers)
         connect_started_at = time.perf_counter()
-        ws = await utils.http_context.ws_connect(
-            session, model_endpoint, headers=headers, conn_options=conn_options
-        )
+        ws = await session.ws_connect(model_endpoint, headers=headers, conn_options=conn_options)
         ws_connect_ms = _elapsed_ms(connect_started_at)
 
         # SLNG-specific: Send init and wait for ready
@@ -560,7 +557,7 @@ class TTS(tts.TTS[Literal["slng_event"]]):
                     return
                 epoch = self._standby_epoch
                 standby_started_at = time.perf_counter()
-                ws: aiohttp.ClientWebSocketResponse | None = None
+                ws: http.WebSocket | None = None
                 try:
                     ws = await self._connect_ws(conn_options)
                     if epoch != self._standby_epoch:
@@ -598,7 +595,7 @@ class TTS(tts.TTS[Literal["slng_event"]]):
 
     async def _checkout_standby(
         self,
-    ) -> tuple[aiohttp.ClientWebSocketResponse | None, float | None, str | None]:
+    ) -> tuple[http.WebSocket | None, float | None, str | None]:
         if not self.warm_standby_enabled:
             return None, None, "disabled"
 
@@ -636,9 +633,9 @@ class TTS(tts.TTS[Literal["slng_event"]]):
             self._ws_connection_timings.pop(id(standby.ws), None)
             await _close_ws(standby.ws, context="warm_standby_close")
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
+    def _ensure_session(self) -> http.HttpSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http.http_session()
         return self._session
 
     def update_options(
@@ -747,15 +744,6 @@ class TTS(tts.TTS[Literal["slng_event"]]):
         await self._close_standby()
 
 
-def _check_stream_timeouts(conn_options: APIConnectOptions) -> None:
-    if conn_options.read_timeout == 0:
-        # aiohttp reads a zero receive timeout as no limit
-        raise APIError(
-            "SLNG streaming cannot enforce read_timeout=0",
-            retryable=False,
-        )
-
-
 class ChunkedStream(tts.ChunkedStream):
     """Non-streaming synthesis: send the full text once over the SLNG WebSocket."""
 
@@ -766,7 +754,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
         options: _TTSOptions,
-        connect: Callable[[APIConnectOptions], Awaitable[aiohttp.ClientWebSocketResponse]],
+        connect: Callable[[APIConnectOptions], Awaitable[http.WebSocket]],
         connection_timings: dict[int, _WsConnectionTiming],
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
@@ -775,7 +763,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(options)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        _check_stream_timeouts(self._conn_options)
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -784,7 +771,7 @@ class ChunkedStream(tts.ChunkedStream):
             mime_type="audio/pcm",
         )
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
+        ws: http.WebSocket | None = None
         audio_received = False
 
         try:
@@ -797,11 +784,7 @@ class ChunkedStream(tts.ChunkedStream):
 
             while True:
                 msg = await ws.receive(timeout=self._conn_options.read_timeout)
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     # Several bridge providers (Rime, Cartesia) terminate a
                     # segment by closing the socket. Mirror the streaming path:
                     # a close after audio is a normal end-of-segment, not an
@@ -811,12 +794,9 @@ class ChunkedStream(tts.ChunkedStream):
                         break
                     raise APIStatusError("SLNG websocket connection closed unexpectedly")
 
-                if msg.type == aiohttp.WSMsgType.BINARY:
-                    output_emitter.push(msg.data)
+                if msg.type is http.WebSocketMessageType.BINARY:
+                    output_emitter.push(msg.binary)
                     audio_received = True
-                    continue
-
-                if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
 
                 try:
@@ -883,14 +863,7 @@ class ChunkedStream(tts.ChunkedStream):
                     logger.debug("[TTS] ignoring unknown message", extra={"lk.pii.data": resp})
         except TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=request_id,
-                body=None,
-            ) from None
-        except APIStatusError:
+        except (APIStatusError, APIConnectionError):
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -911,10 +884,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         tts: TTS,
         conn_options: APIConnectOptions,
         options: _TTSOptions,
-        connect: Callable[[APIConnectOptions], Awaitable[aiohttp.ClientWebSocketResponse]],
+        connect: Callable[[APIConnectOptions], Awaitable[http.WebSocket]],
         connection_timings: dict[int, _WsConnectionTiming],
         checkout_standby: Callable[
-            [], Awaitable[tuple[aiohttp.ClientWebSocketResponse | None, float | None, str | None]]
+            [], Awaitable[tuple[http.WebSocket | None, float | None, str | None]]
         ],
         replenish_standby: Callable[[APIConnectOptions], bool],
     ) -> None:
@@ -942,7 +915,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # Create segments_ch per run so base-class retries after an error get a
         # fresh channel (matching the Deepgram plugin pattern).
-        _check_stream_timeouts(self._conn_options)
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
         request_id = utils.shortuuid()
         logger.debug(f"[TTS] _run starting: request_id={request_id}")
@@ -995,14 +967,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         except TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=request_id,
-                body=None,
-            ) from None
-        except APIStatusError:
+        except (APIStatusError, APIConnectionError):
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -1038,7 +1003,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         standby_replenish_started = False
         standby_replenish_requested = False
 
-        def capture_ws_timing(ws: aiohttp.ClientWebSocketResponse) -> None:
+        def capture_ws_timing(ws: http.WebSocket) -> None:
             nonlocal ws_connect_ms, init_send_ms, connect_total_ms
             timing = self._connection_timings.pop(id(ws), None)
             if timing is None:
@@ -1094,7 +1059,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 },
             )
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: http.WebSocket) -> None:
             word_count = 0
 
             async def _emit_text(text: str) -> None:
@@ -1162,17 +1127,13 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(_FLUSH_MSG)
             input_sent_event.set()
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: http.WebSocket) -> None:
             nonlocal ready_ms, audio_end_ms, gateway_request_id, gateway_session_id
             nonlocal audio_chunks_seen
             await input_sent_event.wait()
             while True:
                 msg = await ws.receive(timeout=self._conn_options.read_timeout)
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
+                if msg.type is http.WebSocketMessageType.CLOSE:
                     if audio_chunks_seen > 0:
                         logger.info(
                             "[TTS] recv_task: websocket closed after terminal "
@@ -1185,11 +1146,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     raise APIStatusError("SLNG websocket connection closed unexpectedly")
 
                 # SLNG: Handle both binary (legacy) and JSON audio_chunk messages
-                if msg.type == aiohttp.WSMsgType.BINARY:
+                if msg.type is http.WebSocketMessageType.BINARY:
                     audio_chunks_seen += 1
                     mark_first_audio_seen()
-                    output_emitter.push(msg.data)
-                elif msg.type == aiohttp.WSMsgType.TEXT:
+                    output_emitter.push(msg.binary)
+                else:
                     try:
                         resp = _MESSAGE.validate_json(msg.data)
                     except ValidationError:
@@ -1287,7 +1248,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         logger.debug("[TTS] ignoring unknown message", extra={"lk.pii.data": resp})
 
         try:
-            ws: aiohttp.ClientWebSocketResponse | None = None
+            ws: http.WebSocket | None = None
             if standby_enabled:
                 (
                     ws,

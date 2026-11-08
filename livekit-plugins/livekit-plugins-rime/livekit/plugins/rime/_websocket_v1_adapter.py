@@ -18,9 +18,7 @@ import asyncio
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
 
-import aiohttp
-
-from livekit.agents import APIConnectOptions, APIError, redacted_cause, tokenize, tts, utils
+from livekit.agents import APIConnectOptions, APIError, http, redacted_cause, tokenize, tts, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -58,7 +56,7 @@ class WebSocketV1Adapter:
         websocket_v1_url: str,
         websocket_protocol: _websocket_v1.WebSocketProtocol,
         api_key: str,
-        ensure_session: Callable[[], aiohttp.ClientSession],
+        ensure_session: Callable[[], http.HttpSession],
         sentence_tokenizer: tokenize.SentenceTokenizer | None = None,
         allow_custom_endpoint: bool = False,
     ) -> None:

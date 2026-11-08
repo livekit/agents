@@ -3,10 +3,9 @@ import os
 from json import JSONDecodeError
 from typing import TypeVar
 
-import aiohttp
 from pydantic import BaseModel, JsonValue, ValidationError
 
-from livekit.agents import NOT_GIVEN, APIConnectionError, NotGivenOr
+from livekit.agents import NOT_GIVEN, APIConnectionError, NotGivenOr, http
 
 logger = logging.getLogger(__name__)
 
@@ -53,20 +52,19 @@ class AvatarTalkAPI:
         response_type: type[_ResponseT],
         json: dict[str, JsonValue] | None = None,
     ) -> _ResponseT:
-        async with aiohttp.ClientSession() as session:
-            async with session.request(
-                method, f"{self._api_url}{path}", headers=self._headers, json=json
-            ) as response:
-                if response.ok:
-                    try:
-                        return response_type.model_validate(await response.json())
-                    except (ValidationError, JSONDecodeError, aiohttp.ContentTypeError) as exc:
-                        raise APIConnectionError(
-                            "AvatarTalk returned an invalid response", retryable=False
-                        ) from exc
-                else:
-                    r = await response.json()
-                    raise AvatarTalkException(f"API request failed: {response.status} {r}")
+        async with http.http_session().request(
+            method, f"{self._api_url}{path}", headers=self._headers, json=json
+        ) as response:
+            if response.ok:
+                try:
+                    return response_type.model_validate(await response.json())
+                except (ValidationError, JSONDecodeError) as exc:
+                    raise APIConnectionError(
+                        "AvatarTalk returned an invalid response", retryable=False
+                    ) from exc
+            else:
+                r = await response.json()
+                raise AvatarTalkException(f"API request failed: {response.status} {r}")
 
     async def start_session(
         self,

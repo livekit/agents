@@ -10,8 +10,9 @@ from typing import Literal, NamedTuple
 
 import pytest
 
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, _core, utils
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, _core
 from livekit.agents.cli import NOISY_LOGGERS
+from livekit.agents.http import client as http_client
 
 from . import concurrency
 from .a2a_peer import peer  # noqa: F401  (re-exported so pytest discovers the fixture)
@@ -251,9 +252,9 @@ def _filter_by_provider(config: pytest.Config, items: list[pytest.Item]) -> None
 
 @pytest.fixture
 async def job_process():
-    utils.http_context._new_session_ctx()
+    http_client._new_session_ctx()
     yield
-    await utils.http_context._close_http_ctx()
+    await http_client._close_http_ctx()
 
 
 @pytest.fixture(autouse=True)

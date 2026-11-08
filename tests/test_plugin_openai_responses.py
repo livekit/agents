@@ -5,7 +5,6 @@ import json
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
-import aiohttp
 import httpx2 as httpx
 import pytest
 from openai.types import Reasoning
@@ -17,6 +16,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     ProviderAttempts,
+    http,
     llm as agents_llm,
     utils,
 )
@@ -32,16 +32,16 @@ pytestmark = pytest.mark.plugin("openai")
 
 class _FakeWSMsg:
     def __init__(self, data: str) -> None:
-        self.type = aiohttp.WSMsgType.TEXT
+        self.type = http.WebSocketMessageType.TEXT
         self.data = data
         self.extra = None
 
 
 class _RecordingWS:
-    """Minimal aiohttp-websocket stand-in: records what was sent, then replays
+    """Minimal websocket stand-in: records what was sent, then replays
     a single terminal frame so `generate_response` returns. When ``dead`` is set,
     send_str fails the way a socket closed while idle does (and ws.closed stays
-    False, mirroring aiohttp)."""
+    False)."""
 
     def __init__(self, reply: dict, *, dead: bool = False) -> None:
         self.sent: str | None = None
@@ -52,7 +52,7 @@ class _RecordingWS:
 
     async def send_str(self, data: str) -> None:
         if self._dead:
-            raise ConnectionResetError("Cannot write to closing transport")
+            raise APIConnectionError("websocket send failed")
         self.sent = data
 
     async def receive(self) -> _FakeWSMsg:
@@ -172,7 +172,7 @@ def test_error_event_missing_sequence_number_parses_cleanly() -> None:
 async def test_stale_reused_ws_is_discarded_and_request_succeeds() -> None:
     """Regression for #6513: a pooled WebSocket that OpenAI (or an intermediary
     such as a NAT/proxy) closed while idle only fails on send when reused —
-    aiohttp keeps ws.closed False until a read observes the close. The transport
+    ws.closed stays False until a read observes the close. The transport
     must discard the stale connection and reconnect in place, instead of raising
     a retryable error that costs a full outer LLM retry (with backoff) for every
     stale socket."""
@@ -259,7 +259,7 @@ async def test_responses_prewarm_uses_configured_connect_timeout(connect_timeout
         assert prewarm_task is not None
         await asyncio.wait_for(asyncio.shield(prewarm_task), timeout=1.0)
         assert timeouts == [connect_timeout]
-        assert await transport._acquire_and_send("{}") is cast(aiohttp.ClientWebSocketResponse, ws)
+        assert await transport._acquire_and_send("{}") is cast(http.WebSocket, ws)
         assert timeouts == [connect_timeout], "the first turn should reuse the prewarmed socket"
         transport._pool.put(ws)  # type: ignore[arg-type]
     finally:
@@ -283,7 +283,7 @@ async def test_responses_acquisition_preserves_shared_prewarm(
 
     transport._pool._connect_cb = connect  # type: ignore[assignment]
     transport._pool.prewarm()
-    request: asyncio.Task[aiohttp.ClientWebSocketResponse] | None = None
+    request: asyncio.Task[http.WebSocket] | None = None
     try:
         await asyncio.wait_for(started.wait(), timeout=1.0)
         assert transport._pool._prewarm_task is not None
@@ -308,7 +308,7 @@ async def test_responses_acquisition_preserves_shared_prewarm(
             acquired = await transport._acquire_and_send("{}")
         else:
             acquired = await asyncio.wait_for(request, timeout=1.0)
-        assert acquired is cast(aiohttp.ClientWebSocketResponse, ws)
+        assert acquired is cast(http.WebSocket, ws)
         assert transport._pool.last_connection_reused
         transport._pool.put(ws)  # type: ignore[arg-type]
     finally:

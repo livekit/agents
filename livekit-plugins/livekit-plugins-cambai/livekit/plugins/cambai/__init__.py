@@ -16,10 +16,9 @@ from __future__ import annotations
 
 import os
 
-import aiohttp
 from pydantic import TypeAdapter
 
-from livekit.agents import APIStatusError, Plugin
+from livekit.agents import APIStatusError, Plugin, http
 
 from .log import logger
 from .tts import API_BASE_URL, API_KEY_HEADER, TTS
@@ -52,7 +51,7 @@ async def list_voices(
     if not api_key:
         raise ValueError("api_key required (or set CAMB_API_KEY environment variable)")
 
-    async with aiohttp.ClientSession() as session:
+    async with http.open() as session:
         async with session.get(
             f"{base_url}/list-voices",
             headers={API_KEY_HEADER: api_key},
