@@ -3,7 +3,7 @@
 Kelly (STT -> LLM -> TTS) answers first and can hand the caller to Alloy (OpenAI Realtime) or
 Nova (Zoom Voice Agent, speech-to-speech). Each agent can hand back to the others.
 
-Needs ZOOM_AI_API_KEY (a Zoom AI Services key with Voice Agent access, from Platform Studio),
+Needs ZOOM_AI_API_KEY (a Zoom AI Services key with Voice Agent access, from https://www.zoom.ai/),
 OPENAI_API_KEY and LiveKit credentials:
 
     python examples/voice_agents/zoom_multi_agent.py console

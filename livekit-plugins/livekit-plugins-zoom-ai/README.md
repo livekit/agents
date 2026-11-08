@@ -21,7 +21,7 @@ uv add "livekit-agents[zoom-ai]"
 
 ## Pre-requisites
 
-The plugin needs a Zoom AI Services API key. Create one in [Zoom Platform Studio](https://platform.zoom.us/) under Credentials → API Keys, with the Scribe or Voice Agent permissions.
+The plugin needs a Zoom AI Services API key. Sign up at [zoom.ai](https://www.zoom.ai/) and create an API key with the Scribe or Voice Agent permissions. Plans and pricing are there too. Existing accounts can also create keys in [Zoom Platform Studio](https://platform.zoom.us/) under Credentials → API Keys.
 
 Set it in your `.env` file:
 

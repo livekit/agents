@@ -1,8 +1,8 @@
 """A voice agent running on Zoom Voice Agent (speech-to-speech), with one function tool.
 
 Zoom handles recognition, the model, speech and turn-taking, so the session needs only the
-realtime model. Needs ZOOM_AI_API_KEY (a Zoom AI Services key with Voice Agent access, from
-Platform Studio):
+realtime model. Needs ZOOM_AI_API_KEY (a Zoom AI Services key with Voice Agent access,
+from https://www.zoom.ai/):
 
     python examples/voice_agents/zoom_voice_agent.py console
 

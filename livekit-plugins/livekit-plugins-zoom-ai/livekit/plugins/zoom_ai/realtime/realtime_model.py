@@ -142,7 +142,7 @@ class RealtimeModel(llm.RealtimeModel):
                 (``"inf"``).
             tool_choice: ``"auto"``, ``"none"`` or ``"required"``; ``None`` uses Zoom's
                 default (``"auto"``). A named function is sent as ``"required"``.
-            api_key: Zoom AI Services API key (Platform Studio → Credentials). Defaults to
+            api_key: Zoom AI Services API key, created at https://www.zoom.ai/. Defaults to
                 ``ZOOM_AI_API_KEY``.
             url: Voice Agent WebSocket endpoint.
             http_session: aiohttp session to use; defaults to the job's shared session.
