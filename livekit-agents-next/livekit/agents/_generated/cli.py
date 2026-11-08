@@ -10,20 +10,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
+
+if TYPE_CHECKING:
+    from .worker_options import ProcessOptions, ServerOptions
+
+LogLevel: TypeAlias = Literal["trace", "debug", "info", "warn", "error", "fatal", "off"]
+"""The launcher's `--log-level`; `warning` and `critical` are aliases of `warn` and `fatal`."""
 
 
 @dataclass(kw_only=True, slots=True)
 class CliArgsStart:
-    log_level: Literal["trace", "debug", "info", "warn", "error", "fatal", "off"]
+    log_level: LogLevel
     dev: bool
     cli_addr: str | None
     simulation: bool
-    ws_url: str | None
-    api_key: str | None
-    api_secret: str | None
-    shutdown_timeout: float | None
-    drain_timeout: float | None
+    options: ServerOptions
+    """The server options the command line gives (`--url`, `--api-key`, `--api-secret`,
+    `--shutdown-timeout`, `--drain-timeout`), over the `AgentServer`'s own.
+    """
+    process: ProcessOptions
+    """The process tuning the command line gives."""
 
 
 @dataclass(kw_only=True, slots=True)

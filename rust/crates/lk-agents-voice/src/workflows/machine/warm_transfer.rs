@@ -74,27 +74,6 @@ pub enum Origination {
     Twilio(TwilioDial),
 }
 
-/// `[(role, text)]` as a context with just what [`format_conversation_history`] reads. Anything
-/// that is not a role literal reads as `developer`, which the briefing skips.
-fn conversation_of(items: Vec<(String, String)>) -> ChatContext {
-    use lk_agents_abi::{ChatContent, ChatItem, ChatMessage, Role};
-    ChatContext {
-        items: items
-            .into_iter()
-            .enumerate()
-            .map(|(i, (role, text))| {
-                let role = Role::from_literal(&role).unwrap_or(Role::Developer);
-                ChatItem::Message(ChatMessage::new(
-                    format!("history-{i}"),
-                    role,
-                    vec![ChatContent::Text(text)],
-                    std::time::UNIX_EPOCH,
-                ))
-            })
-            .collect(),
-    }
-}
-
 /// `connect_to_caller`, `decline_transfer` and `voicemail_detected`, as raw function schemas.
 pub fn transfer_tools() -> Vec<BTreeMap<String, Value>> {
     let tool = |name: &str, description: &str, reason: Option<&str>| {
@@ -124,14 +103,14 @@ pub fn transfer_tools() -> Vec<BTreeMap<String, Value>> {
 /// conversation, unless fixed instructions were given.
 pub fn briefing(
     instructions: Option<InstructionsArg>,
-    conversation: Option<Vec<(String, String)>>,
+    conversation: Option<Vec<lk_agents_abi::ChatItem>>,
 ) -> String {
     let (persona, extra) = match instructions {
         Some(InstructionsArg::Fixed(text)) => return text,
         Some(InstructionsArg::Workflow(sections)) => (sections.persona.given(), sections.extra),
         None => (None, String::new()),
     };
-    let history = conversation.map(conversation_of).as_ref().map(format_conversation_history);
+    let history = conversation.map(|items| format_conversation_history(&ChatContext::new(items)));
     render(
         INSTRUCTIONS_TEMPLATE,
         &[
@@ -152,7 +131,7 @@ pub struct TransferConfig {
     pub dtmf: Option<String>,
     pub ringing_timeout: Option<f64>,
     pub instructions: Maybe<InstructionsArg>,
-    pub conversation: Option<Vec<(String, String)>>,
+    pub conversation: Option<Vec<lk_agents_abi::ChatItem>>,
     pub env_sip_trunk: Option<String>,
     pub env_sip_number: String,
     pub twilio: Option<TwilioDial>,
@@ -443,10 +422,14 @@ mod tests {
     // Catches: the briefing losing the caller conversation or the persona.
     #[test]
     fn the_briefing_carries_the_conversation() {
-        let i = briefing(
-            None,
-            Some(vec![("user".into(), "my order is late".into()), ("system".into(), "x".into())]),
-        );
+        use lk_agents_abi::{ChatContent, ChatItem, ChatMessage, Role};
+        let message = |id: &str, role, text: &str| {
+            let content = vec![ChatContent::Text(text.into())];
+            ChatItem::Message(ChatMessage::new(id, role, content, std::time::UNIX_EPOCH))
+        };
+        let conversation =
+            vec![message("a", Role::User, "my order is late"), message("b", Role::System, "x")];
+        let i = briefing(None, Some(conversation));
         assert!(i.contains("Caller: my order is late\n"), "{i}");
         assert!(i.contains("# Identity"));
         assert!(!i.contains("x\n## End"));

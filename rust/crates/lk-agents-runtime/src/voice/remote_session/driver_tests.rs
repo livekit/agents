@@ -1,7 +1,7 @@
 use tokio::sync::Notify;
 
 use super::super::client::{ReadyError, RemoteSession, RequestError};
-use super::super::{AgentInfo, ClientSink, IoUpdate, RtcStats, SessionState};
+use super::super::{AgentInfo, ClientSink, FrameworkInfo, IoUpdate, RemoteSessionState, RtcStats};
 use super::*;
 use lk_agents_abi::secs;
 use lk_agents_abi::{ChatItem, Clock};
@@ -77,7 +77,14 @@ impl SessionPort for Port {
         &self,
         _cx: &crate::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, Result<AgentInfo, HostError>> {
-        Box::pin(async move { Ok(("agent-1".into(), None, vec![], vec![])) })
+        Box::pin(async move {
+            Ok(AgentInfo {
+                id: "agent-1".into(),
+                instructions: None,
+                tools: vec![],
+                chat_ctx: vec![],
+            })
+        })
     }
     fn run_input<'a>(
         &'a self,
@@ -95,9 +102,15 @@ impl SessionPort for Port {
     fn session_state(
         &self,
         _cx: &crate::telemetry::Cx,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<SessionState, HostError>> {
+    ) -> lk_agents_abi::BoxFuture<'_, Result<RemoteSessionState, HostError>> {
         Box::pin(async move {
-            Ok(("not-a-state".into(), "away".into(), "agent-1".into(), Default::default(), None))
+            Ok(RemoteSessionState {
+                agent_state: "not-a-state".into(),
+                user_state: "away".into(),
+                agent_id: "agent-1".into(),
+                options: Default::default(),
+                started_at: None,
+            })
         })
     }
     fn rtc_stats(
@@ -112,8 +125,8 @@ impl SessionPort for Port {
     ) -> lk_agents_abi::BoxFuture<'_, Result<lk_agents_abi::usage::Usage, HostError>> {
         Box::pin(async move { Ok(Default::default()) })
     }
-    fn framework_info(&self) -> (String, String) {
-        ("rust".into(), "0".into())
+    fn framework_info(&self) -> FrameworkInfo {
+        FrameworkInfo { sdk: "rust".into(), sdk_version: "0".into() }
     }
     fn update_io(
         &self,

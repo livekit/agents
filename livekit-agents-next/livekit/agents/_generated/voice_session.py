@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from .room_options import RoomIoConfig
     from .tool_options import ToolSpec
     from .turn import TurnHandlingOptions
+    from .video_sampler import VoiceActivityVideoSampler
     from .workflows import DtmfEvent
 
 
@@ -183,8 +184,8 @@ class VoiceSessionArgs:
     """The host's own io legs, replacing the room's."""
     host_audio_output: AudioOutput | None = None
     host_video_input: VideoInput | None = None
-    video_sampler: tuple[float, float] | None = None
-    """`VoiceActivityVideoSampler(speaking_fps, silent_fps)`'s two rates; `None`: every frame."""
+    video_sampler: VoiceActivityVideoSampler | None = None
+    """How often camera frames reach the model; `None`: every frame."""
     host_video_sampler: bool = False
     """A custom `video_sampler` callable: the host pumps and gates; the session reads no camera."""
     host_transcription_output: TextOutput | None = None

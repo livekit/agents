@@ -10,12 +10,14 @@ from typing import Any, Self
 
 from livekit.agents._bindings import Duplex, FallbackListener
 from livekit.agents.llm import LLM, Toolset
-from livekit.agents.llm.mcp import MCPToolset, _Progress
+from livekit.agents.llm.mcp import MCPToolset
 from livekit.agents.llm.realtime import RealtimeModel
 from livekit.agents.llm.tool_context import ToolChoice
 from livekit.agents.tts import TTS
+from livekit.agents.voice.events import RunContext
 
 from .._core import TtsStream
+from .chat_diff import DiffOps
 from .chat_items import ChatItem, ChatRole
 from .connect import APIConnectOptions
 from .duplex import DuplexCapabilities, DuplexInputItem
@@ -64,13 +66,8 @@ def remove_instructions(item_ids: Sequence[str]) -> list[int]:
     ascending, given the items' ids.
     """
 
-def compute_chat_ctx_diff(
-    old: Sequence[ChatItem],
-    new: Sequence[ChatItem],
-) -> tuple[list[str], list[tuple[str | None, str]], list[tuple[str | None, str]]]:
-    """The operations turning ``old`` into ``new``, as ``(to_remove, to_create, to_update)``; an
-    update patches the item in place, keeping its server-side position.
-    """
+def compute_chat_ctx_diff(old: Sequence[ChatItem], new: Sequence[ChatItem]) -> DiffOps:
+    """The operations turning ``old`` into ``new``."""
 
 class FixedGate:
     """Opens on output that stands out from a silence the plugin already knows."""
@@ -138,7 +135,7 @@ class FallbackLlm:
         sticky: bool = False,
         on_availability: FallbackListener | None = None,
     ) -> Self:
-        """`llm.FallbackAdapter`'s mixin builds it from the adapter's attributes, one per loop."""
+        """`llm.FallbackAdapter` builds it from its attributes, one per loop."""
     @property
     def active_index(self) -> int: ...
     async def aclose(self) -> None: ...
@@ -169,7 +166,7 @@ class FallbackTts:
         sample_rate: int | None = None,
         on_availability: FallbackListener | None = None,
     ) -> Self:
-        """`tts.FallbackAdapter`'s mixin builds it from the adapter's attributes, one per loop."""
+        """`tts.FallbackAdapter` builds it from its attributes, one per loop."""
     @property
     def active_index(self) -> int: ...
     @property
@@ -181,7 +178,7 @@ class FallbackTts:
     async def aclose(self) -> None: ...
     async def synthesize(
         self,
-        text: str,
+        input_text: str,
         conn_options: APIConnectOptions | None = None,
     ) -> TtsStream: ...
     async def stream(
@@ -335,7 +332,7 @@ class McpSession:
         name: str,
         arguments: dict[str, object],
         timeout: float | None,
-        progress: _Progress | None,
+        progress: RunContext | None,
         host_context: object | None,
     ) -> object: ...
     async def close(self) -> None: ...

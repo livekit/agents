@@ -6,7 +6,9 @@ use livekit_protocol as proto;
 use crate::{EnvOption, RuntimeConfig, WorkerConfig, WorkerPermissions};
 use lk_agents_abi::worker::ipc_host::WorkerError;
 use lk_agents_abi::worker::job::JobExecutorType;
-use lk_agents_abi::worker::types::{Listeners, MultiprocessingContext};
+use lk_agents_abi::worker::types::{
+    Listeners, MultiprocessingContext, ProcessOptions, ServerOptions,
+};
 
 /// `load_threshold`'s default, to which a hosted (Cloud) worker is held.
 pub const DEFAULT_LOAD_THRESHOLD: EnvOption<f32> = EnvOption::Split {
@@ -135,7 +137,8 @@ impl ServerSettings {
     /// Validate the whole update before replacing the running configuration.
     pub fn apply(
         &mut self,
-        options: lk_agents_abi::worker::types::ServerOptions,
+        options: ServerOptions,
+        process: ProcessOptions,
     ) -> Result<(), WorkerError> {
         use lk_agents_abi::Maybe::Given;
         let mut next = self.clone();
@@ -154,22 +157,19 @@ impl ServerSettings {
         if let Given(value) = options.listeners {
             next.listeners = value;
         }
-        if let Given(value) = options.max_retry {
+        if let Given(value) = process.max_retry {
             next.max_retry = value;
         }
-        if let Given(value) = options.permissions {
+        if let Given(value) = process.permissions {
             next.permissions = value;
         }
-        if let Given(value) = options.http_proxy {
+        if let Given(value) = process.http_proxy {
             next.http_proxy = value;
         }
-        if let Given(value) = options.version {
-            next.version = value;
-        }
-        if let Given(value) = options.job_executor_type {
+        if let Given(value) = process.job_executor_type {
             next.job_executor_type = value;
         }
-        if let Given(value) = options.multiprocessing_context {
+        if let Given(value) = process.multiprocessing_context {
             next.multiprocessing_context = value;
             next.multiprocessing_fallback = false;
         }
@@ -179,13 +179,13 @@ impl ServerSettings {
         if let Given(value) = options.job_memory_limit_mb {
             next.job_memory_limit_mb = value;
         }
-        if let Given(value) = options.shutdown_process_timeout {
+        if let Given(value) = process.shutdown_process_timeout {
             next.shutdown_process_timeout = value;
         }
-        if let Given(value) = options.session_end_timeout {
+        if let Given(value) = process.session_end_timeout {
             next.session_end_timeout = value;
         }
-        if let Given(value) = options.initialize_process_timeout {
+        if let Given(value) = process.initialize_process_timeout {
             next.initialize_process_timeout = value;
         }
         if let Given(value) = options.load_threshold {

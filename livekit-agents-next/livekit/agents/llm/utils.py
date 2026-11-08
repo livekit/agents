@@ -68,9 +68,7 @@ def remove_instructions(chat_ctx: ChatContext) -> None:
 
 def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps:
     """The minimal create/remove/update operations turning ``old_ctx`` into ``new_ctx``."""
-
-    to_remove, to_create, to_update = _core.compute_chat_ctx_diff(old_ctx.items, new_ctx.items)
-    return DiffOps(to_remove=to_remove, to_create=to_create, to_update=to_update)
+    return _core.compute_chat_ctx_diff(old_ctx.items, new_ctx.items)
 
 
 def is_context_type(ty: type, *, allow_subclasses: bool = False) -> bool:
@@ -104,18 +102,11 @@ async def serialize_image(image: ImageContent, *, use_cache: bool = True) -> Ser
         if key == cache_key:
             return serialized
     if isinstance(source, str):
-        data, mime_type, url, _ = await _core.serialize_image_url(source, declared_mime)
+        serialized = await _core.serialize_image_url(source, detail, declared_mime)
     elif isinstance(source, rtc.VideoFrame):
-        data, mime_type = await _core.serialize_image_frame(source, width, height)
-        url = None
+        serialized = await _core.serialize_image_frame(source, detail, width, height)
     else:
         raise ValueError("Unsupported image type")
-    serialized = SerializedImage(
-        inference_detail=detail,
-        mime_type=mime_type,
-        data_bytes=data,
-        external_url=url,
-    )
     if use_cache:
         image._cache["serialized_image"] = (cache_key, serialized)
     return serialized

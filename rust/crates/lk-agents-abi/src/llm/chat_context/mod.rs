@@ -731,11 +731,21 @@ impl From<Vec<ChatItem>> for ChatContext {
 
 // Public data contracts. Python behavior remains in its adapters.
 
-#[crate::host(record(module = "chat_diff", path = "livekit.agents.llm.utils", dataclass))]
+/// An item to create or patch, placed after `previous_item_id` (`None`: first in the
+/// conversation).
+#[crate::host(record(module = "chat_diff", path = "livekit.agents.llm.utils", dataclass, emit))]
+pub struct AnchoredItem {
+    pub previous_item_id: Option<String>,
+    pub item_id: String,
+}
+
+/// The operations turning one conversation into another; an update patches the item in place,
+/// keeping its server-side position.
+#[crate::host(record(module = "chat_diff", path = "livekit.agents.llm.utils", dataclass, emit))]
 pub struct DiffOps {
     pub to_remove: Vec<String>,
-    pub to_create: Vec<(Option<String>, String)>,
-    pub to_update: Vec<(Option<String>, String)>,
+    pub to_create: Vec<AnchoredItem>,
+    pub to_update: Vec<AnchoredItem>,
 }
 
 /// `(type, id, role, len(content), name, created_at, call_id)`.
@@ -791,13 +801,9 @@ pub type Anchored = (Option<String>, String);
 /// Minimal edit scripts for realtime servers that insert, delete or replace conversation items.
 #[crate::host(functions)]
 pub trait ChatContextDiffs {
-    /// The operations turning ``old`` into ``new``, as ``(to_remove, to_create, to_update)``; an
-    /// update patches the item in place, keeping its server-side position.
+    /// The operations turning ``old`` into ``new``.
     #[host(function)]
-    fn compute_chat_ctx_diff(
-        old: Vec<ChatItem>,
-        new: Vec<ChatItem>,
-    ) -> (Vec<String>, Vec<Anchored>, Vec<Anchored>);
+    fn compute_chat_ctx_diff(old: Vec<ChatItem>, new: Vec<ChatItem>) -> DiffOps;
 }
 
 // Live SDK media must be made durable before a chat history is persisted.

@@ -359,10 +359,13 @@ impl CoreAgentConfig {
         crate::generated::records::agent_authoring::agent_configuration_to_py(py, out)
     }
 
-    #[pyo3(signature = (given))]
-    fn check_tool_options(&self, given: ::std::vec::Vec<::std::string::String>) -> PyResult<()> {
+    /// Refuses options given with an already built tool, which took its own when built.
+    #[pyo3(signature = (options))]
+    fn check_tool_options(&self, options: Bound<'_, PyAny>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        <CoreAgentConfigImpl as ::lk_agents_abi::agent::authoring::AgentConfig>::check_tool_options(&self.0, given).map_err(|e: ::lk_agents_abi::agent::authoring::AuthoringError| <::lk_agents_abi::agent::authoring::AuthoringError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let options =
+            crate::generated::records::agent_authoring::tool_options_from_py(options.as_any())?;
+        <CoreAgentConfigImpl as ::lk_agents_abi::agent::authoring::AgentConfig>::check_tool_options(&self.0, options).map_err(|e: ::lk_agents_abi::agent::authoring::AuthoringError| <::lk_agents_abi::agent::authoring::AuthoringError as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
     }
 

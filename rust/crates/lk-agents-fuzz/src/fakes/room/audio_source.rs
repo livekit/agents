@@ -176,11 +176,11 @@ impl AudioSource for FakeAudioSource {
         Ok(())
     }
 
-    fn queued_duration(&self) -> Result<Duration> {
+    fn queued_seconds(&self) -> Result<f64> {
         let now = self.clock.now();
         let mut state = self.state.lock().unwrap();
         Self::settle_locked(&mut state, now);
-        Ok(Self::queued_locked(&state, now))
+        Ok(Self::queued_locked(&state, now).as_secs_f64())
     }
 
     fn playback_info(&self) -> Result<PlaybackInfo> {

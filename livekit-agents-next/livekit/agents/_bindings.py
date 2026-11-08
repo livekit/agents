@@ -8,6 +8,7 @@ import dataclasses
 import time
 import weakref
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Sequence
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, Never, Protocol, TypeVar, cast
 
 from pydantic import BaseModel
@@ -675,7 +676,7 @@ class TurnDetector:
         label = f"{cls.__module__}.{cls.__name__}"
         return {"label": label, "model": self._detector.model, "provider": self._detector.provider}
 
-    async def _core_predict(self, timeout: float | None) -> EotPrediction:
+    async def _core_predict(self, timeout: timedelta | None) -> EotPrediction:
         from ._generated.turn_events import EotPrediction
 
         ev = await self.stream.predict()

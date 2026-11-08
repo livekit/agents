@@ -24,6 +24,16 @@ pub fn parse_cli<'py>(
     crate::generated::records::cli::cli_parse_result_to_py(py, out)
 }
 
+/// [`LogLevel::host_level`].
+#[pyfunction]
+#[pyo3(signature = (level))]
+pub fn host_log_level(py: Python<'_>, level: Bound<'_, PyAny>) -> PyResult<u32> {
+    crate::py_calls::check_pid()?;
+    let level = crate::generated::records::cli::log_level_from_py(level.as_any())?;
+    let out = py.detach(|| <CliImpl as ::lk_agents_abi::cli::Cli>::host_log_level(level));
+    ::pyo3::PyResult::Ok(out)
+}
+
 /// One structured JSON line, including host-formatted exceptions and stack traces.
 #[pyfunction]
 #[pyo3(signature = (record))]

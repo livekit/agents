@@ -17,7 +17,6 @@ from livekit.agents import (
     stt,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-from livekit.agents.utils.media import silence_frame
 
 pytestmark = pytest.mark.unit
 
@@ -57,7 +56,7 @@ class Stalled(stt.RecognizeStream):
 
 async def test_a_full_input_holds_the_core_push_instead_of_failing() -> None:
     stream = Stalled(stt=Provider(), conn_options=APIConnectOptions(max_retry=0))
-    frame = silence_frame(duration=0.02, sample_rate=16000)
+    frame = rtc.AudioFrame.create(16000, 1, int(0.02 * 16000))
     try:
         for _ in range(256):
             await stream._core_push(frame)
@@ -74,7 +73,7 @@ async def test_a_full_input_holds_the_core_push_instead_of_failing() -> None:
 async def test_an_unread_event_backlog_holds_the_input_instead_of_failing() -> None:
     stream = Stalled(stt=Provider(), conn_options=APIConnectOptions(max_retry=0))
     event = stt.SpeechEvent(type=stt.SpeechEventType.INTERIM_TRANSCRIPT, alternatives=[])
-    frame = silence_frame(duration=0.02, sample_rate=16000)
+    frame = rtc.AudioFrame.create(16000, 1, int(0.02 * 16000))
     try:
         for _ in range(65):
             stream.send(event)
@@ -151,7 +150,7 @@ async def test_a_provider_that_stops_at_the_closing_flush_completes() -> None:
 
     stream = StopsAtFlush(stt=Provider(), conn_options=APIConnectOptions(max_retry=0))
     try:
-        stream.push_frame(silence_frame(duration=0.02, sample_rate=16000))
+        stream.push_frame(rtc.AudioFrame.create(16000, 1, int(0.02 * 16000)))
         stream.end_input()
         assert [event.alternatives[0].text async for event in stream] == ["last words"]
     finally:
@@ -246,7 +245,7 @@ async def test_core_owned_recognition_keeps_completion_and_read_deadlines(comple
 @pytest.mark.parametrize("ended", [False, True])
 async def test_recognition_admission_preserves_the_terminal_timeout_cause(ended: bool) -> None:
     stream = Provider().stream(conn_options=APIConnectOptions(max_retry=0, total_timeout=0))
-    frame = silence_frame(duration=0.02, sample_rate=16000)
+    frame = rtc.AudioFrame.create(16000, 1, int(0.02 * 16000))
     if ended:
         stream.end_input()
     try:
@@ -307,7 +306,7 @@ async def test_a_stalled_host_behind_the_retry_bridge_never_fails_on_a_burst() -
             pass
 
     consuming = asyncio.create_task(drain())
-    frame = silence_frame(duration=0.02, sample_rate=16000)
+    frame = rtc.AudioFrame.create(16000, 1, int(0.02 * 16000))
     try:
         await asyncio.wait_for(entered.wait(), timeout=1)
         # 12 s, past the host input and the core's 10 s queue: the oldest audio is dropped

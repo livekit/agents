@@ -24,9 +24,20 @@ impl lk_agents_abi::llm::chat_context::ChatContextDiffs for ChatDiffs {
     fn compute_chat_ctx_diff(
         old: Vec<ChatItem>,
         new: Vec<ChatItem>,
-    ) -> (Vec<String>, Vec<Anchored>, Vec<Anchored>) {
+    ) -> lk_agents_abi::llm::chat_context::DiffOps {
+        use lk_agents_abi::llm::chat_context::AnchoredItem;
+        let anchored = |items: Vec<Anchored>| {
+            items
+                .into_iter()
+                .map(|(previous_item_id, item_id)| AnchoredItem { previous_item_id, item_id })
+                .collect()
+        };
         let ops = compute_chat_ctx_diff(&ChatContext::new(old), &ChatContext::new(new));
-        (ops.to_remove, ops.to_create, ops.to_update)
+        lk_agents_abi::llm::chat_context::DiffOps {
+            to_remove: ops.to_remove,
+            to_create: anchored(ops.to_create),
+            to_update: anchored(ops.to_update),
+        }
     }
 }
 

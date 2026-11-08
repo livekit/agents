@@ -93,7 +93,7 @@ class EndCallTool(Toolset):
         session = ctx.live_session
         if session is None:
             raise RuntimeError("end_call ends a call; this tool runs outside one")
-        ctx.speech_handle._core.end_call()
+        ctx.speech_handle._native.end_call()
         session.once("close", self._on_session_close)
 
         if self._on_tool_called:
@@ -128,13 +128,12 @@ async def send_dtmf_events(ctx: RunContext, events: list[DtmfEvent]) -> str:
     Call when:
     - User wants to send DTMF events
     """
-    from ..voice.room_io import Room
 
     session = ctx.live_session
     if session is None:
         raise RuntimeError("DTMF tones are sent on a call; this tool runs outside one")
     room = session._room or get_job_context().room
-    return await _core.send_dtmf_events(_core._core_create_room_session(Room.of(room)), events)
+    return await _core.send_dtmf_events(_core._core_create_room_session(room), events)
 
 
 class SearchStrategy(Protocol):

@@ -9,6 +9,7 @@ use super::*;
 
 mod class;
 mod exposed;
+mod facade;
 mod native;
 mod proxy;
 mod record;
@@ -16,6 +17,49 @@ mod stream;
 use exposed::{declared_error, error_entry, export_decl, export_entry};
 use proxy::eager_future;
 use record::{check_default, record_entry, record_target, unit_enum};
+
+/// The declarations that still cross as a tuple ("Boundary values"), by their diagnostic
+/// location. It only shrinks: a row no declaration meets is stale.
+const TUPLE_BASELINE: &str = include_str!("../../../tuple-baseline.json");
+
+/// The baselined tuple declarations met by this run.
+static TUPLES_MET: std::sync::Mutex<std::collections::BTreeSet<String>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+fn tuple_baseline() -> std::collections::BTreeSet<&'static str> {
+    TUPLE_BASELINE
+        .lines()
+        .filter_map(|l| l.trim().trim_end_matches(',').strip_prefix('"')?.strip_suffix('"'))
+        .collect()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test exercising the tuple conversions the baselined declarations still use.
+    pub(crate) static TUPLES_IN_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn tuple_baselined(at: &str) -> bool {
+    #[cfg(test)]
+    if TUPLES_IN_TEST.get() {
+        return true;
+    }
+    let baselined = tuple_baseline().contains(at);
+    if baselined {
+        TUPLES_MET.lock().expect("unpoisoned").insert(at.to_owned());
+    }
+    baselined
+}
+
+/// After the ABI resolved: every tuple baseline row still names a tuple declaration.
+pub fn check_tuple_baseline() -> Result<(), String> {
+    let met = TUPLES_MET.lock().expect("unpoisoned");
+    let stale: Vec<_> = tuple_baseline().into_iter().filter(|row| !met.contains(*row)).collect();
+    match stale.is_empty() {
+        true => Ok(()),
+        false => Err(format!("stale tuple-baseline.json rows:\n{}", stale.join("\n"))),
+    }
+}
 
 /// Every `#[host(class)]` of the crate, in module order.
 pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
@@ -78,6 +122,9 @@ pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
             } else if voc::find(&entries, "functions").is_some() {
                 voc::only(&at, &entries, &["functions"])?;
                 out.classes.push(resolver().class(tr, None)?);
+            } else if let Some(facade) = voc::find(&entries, "facade") {
+                voc::only(&at, &entries, &["facade"])?;
+                out.facades.push(resolver().facade_trait(tr, facade)?);
             } else if let Some(proxy) = voc::find(&entries, "proxy")
                 && declares_calls(tr)
             {
@@ -266,7 +313,7 @@ impl Resolver<'_> {
             &entries,
             &[
                 "new", "call", "await", "getter", "setter", "function", "next", "name", "pid",
-                "attached", "future", "facade", "path",
+                "attached", "future", "path",
             ],
         )?;
         let kinds: Vec<MethodKind> = [
@@ -282,11 +329,23 @@ impl Resolver<'_> {
         .filter(|(k, _)| voc::find(&entries, k).is_some())
         .map(|(_, kind)| kind)
         .collect();
-        let [mut kind] = kinds[..] else {
+        let [kind] = kinds[..] else {
             return Err(format!(
                 "{at}: declare exactly one of new, call, await, getter, setter, function, next"
             ));
         };
+        self.method_of(f, kind, &entries, &at)
+    }
+
+    /// A method of the declared `kind`, its other keys read from `entries`.
+    fn method_of(
+        &self,
+        f: &syn::TraitItemFn,
+        mut kind: MethodKind,
+        entries: &[Entry],
+        at: &str,
+    ) -> Result<Method, String> {
+        let (entries, at) = (entries.to_vec(), at.to_owned());
         if kind == MethodKind::Function && f.sig.asyncness.is_some() {
             kind = MethodKind::AsyncFunction;
         }
@@ -344,7 +403,7 @@ impl Resolver<'_> {
             voc::only(
                 &pat,
                 &entries,
-                &["kw", "default", "context", "shape_error", "one_or_many", "pcm"],
+                &["kw", "default", "context", "shape_error", "one_or_many", "pcm", "sdk"],
             )?;
             kw_only |= voc::find(&entries, "kw").is_some();
             // The caller's span, read at the call's entry (`telemetry::Cx::entry`).
@@ -360,6 +419,8 @@ impl Resolver<'_> {
                     shape_error: None,
                     one_or_many: false,
                     pcm: false,
+                    sdk: false,
+                    kwargs: false,
                     by_ref: false,
                     kw_only: false,
                     default: None,
@@ -379,6 +440,8 @@ impl Resolver<'_> {
                     shape_error: None,
                     one_or_many: false,
                     pcm: false,
+                    sdk: false,
+                    kwargs: false,
                     by_ref,
                     kw_only: false,
                     default: None,
@@ -410,6 +473,10 @@ impl Resolver<'_> {
                 return Err(format!("{pat}: one_or_many applies to a list of items"));
             }
             let pcm = voc::find(&entries, "pcm").is_some();
+            let sdk = voc::find(&entries, "sdk").is_some();
+            if sdk && !crate::proxy_sdk::sdk_number(&ty) {
+                return Err(format!("{pat}: sdk applies to a wire enum, optional or not"));
+            }
             if pcm && ty != Ty::List(Box::new(Ty::Int(crate::decl::Int::U8))) {
                 return Err(format!("{pat}: pcm applies to bytes"));
             }
@@ -447,6 +514,8 @@ impl Resolver<'_> {
                 shape_error,
                 one_or_many,
                 pcm,
+                sdk,
+                kwargs: false,
             });
         }
         if kind == MethodKind::Getter && !params.is_empty() {
@@ -495,13 +564,11 @@ impl Resolver<'_> {
                 Some(ty)
             }
         };
-        let facade = class::facade(&entries, &at)?;
         let path = voc::text(&at, &entries, "path")?;
         if path.is_some() && !matches!(kind, MethodKind::Function | MethodKind::AsyncFunction) {
             return Err(format!("{at}: only a `function` is placed in a public module"));
         }
         Ok(Method {
-            facade,
             rust_name: f.sig.ident.to_string(),
             mutable: receiver.is_some_and(|r| r.mutability.is_some()),
             name: voc::text(&at, &entries, "name")?.unwrap_or_else(|| f.sig.ident.to_string()),
@@ -696,6 +763,9 @@ impl Resolver<'_> {
         };
         match shape {
             Shape::Tuple(items) if items.is_empty() => Ok(Ty::Unit),
+            Shape::Tuple(_) if !tuple_baselined(at) => Err(format!(
+                "{at}: no tuple crosses the boundary: a value with more than one field is a #[host(record)]"
+            )),
             Shape::Tuple(items) => Ok(Ty::Tuple(items.iter().map(|item| self.classify(item, at)).collect::<Result<_, _>>()?)),
             Shape::Named { found: Found::Item { module, item }, args }
                 if let Some(duplex) = self.declared_duplex(*module, *item, args, at)? => Ok(duplex),

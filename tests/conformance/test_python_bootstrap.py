@@ -21,7 +21,7 @@ def test_launcher_failure_exits_nonzero_after_cleanup(failure: str) -> None:
             async def _run(self, **kwargs):
                 if FAILURE == "startup":
                     raise RuntimeError("startup refused")
-            async def _drain(self):
+            async def _drain(self, timeout=None):
                 print("drained")
                 if FAILURE == "drain":
                     raise RuntimeError("drain refused")

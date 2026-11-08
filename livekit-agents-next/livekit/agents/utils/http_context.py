@@ -1,3 +1,17 @@
+"""HTTP and WebSocket for Python plugins, held to the same contract as the Rust transport.
+
+Native providers use ``lk-agents-net``. Python plugins use aiohttp, and this module makes aiohttp
+behave the same way:
+
+- ``request()`` and ``ws_connect()`` enforce each ``APIConnectOptions`` limit (pool, connect,
+  write, read) on the wait it names, and raise ``APITimeoutError`` naming the one that expired.
+  The total limit and retries belong to the caller's retry owner, not to this module.
+- ``http_session()`` is the job's shared session; ``open()`` provides one outside a job.
+- Every client in the process trusts the same CA certificates (see ``_export_ca_paths``).
+
+Limits and defaults are declared once in ABI; nothing here chooses a policy.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,8 +20,8 @@ import contextvars
 import functools
 import os
 import ssl
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
-from typing import Any, Literal
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from typing import Any
 
 import aiohttp
 import aiohttp.payload
@@ -21,125 +35,40 @@ from .._generated.types import TimeoutPhase
 from ..log import logger
 from ..types import APIConnectOptions
 
-_ClientFactory = Callable[[], aiohttp.ClientSession]
-_ContextVar = contextvars.ContextVar[_ClientFactory | None]("agent_http_session")
+# --- public API -------------------------------------------------------------------------------
 
 
-class _Phases:
-    """One request's deadline, armed with the limit of the phase it is waiting in."""
-
-    def __init__(
-        self,
-        options: APIConnectOptions,
-        deadline: asyncio.Timeout,
-        after_connect: TimeoutPhase | None,
-    ) -> None:
-        self._options = options
-        self._deadline = deadline
-        self.after_connect = after_connect
-        self.armed: TimeoutPhase | None = None
-
-    def arm(self, phase: TimeoutPhase | None) -> None:
-        # Writer cleanup may run after the request's timeout fired. Keep that phase for error
-        # attribution; an expiring asyncio.Timeout cannot be rescheduled or disarmed.
-        if self._deadline.expired():
-            return
-        self.armed = phase
-        match phase:
-            case "pool":
-                limit = self._options.pool_timeout
-            case "connect":
-                limit = self._options.connect_timeout
-            case "write":
-                limit = self._options.write_timeout
-            case "read":
-                limit = self._options.read_timeout
-            case "total" | None:
-                limit = None
-        self._deadline.reschedule(
-            None if limit is None else asyncio.get_running_loop().time() + limit
+def http_session() -> aiohttp.ClientSession:
+    """The job's shared ``aiohttp.ClientSession``, bound to the job's event loop."""
+    if (lazy := _ContextVar.get()) is None:
+        raise RuntimeError(
+            "no http session outside a job: wrap the code in "
+            "`async with livekit.agents.utils.http_context.open():`, "
+            "or pass your own aiohttp.ClientSession to the plugin"
         )
-
-
-_current_phases = contextvars.ContextVar[_Phases | None]("http_request_phases", default=None)
-
-
-def _on(phase: TimeoutPhase | None | Literal["connected"]) -> Callable[..., Awaitable[None]]:
-    async def arm(*_: object) -> None:
-        if (phases := _current_phases.get()) is not None:
-            phases.arm(phases.after_connect if phase == "connected" else phase)
-
-    return arm
-
-
-# aiohttp reports the pool wait and the connection setup (DNS, TCP, TLS) as separate events.
-_PHASE_TRACE = aiohttp.TraceConfig()
-_PHASE_TRACE.on_connection_queued_start.append(_on("pool"))
-_PHASE_TRACE.on_connection_queued_end.append(_on("connected"))
-_PHASE_TRACE.on_connection_create_start.append(_on("connect"))
-_PHASE_TRACE.on_connection_create_end.append(_on("connected"))
-_PHASE_TRACE.on_connection_reuseconn.append(_on("connected"))
-_PHASE_TRACE.freeze()
-
-
-class _WriteProgress:
-    """A body writer whose every chunk waiting for the transport runs under the write limit."""
-
-    def __init__(self, writer: AbstractStreamWriter, phases: _Phases) -> None:
-        self._writer = writer
-        self._phases = phases
-
-    async def write(self, chunk: bytes | bytearray | memoryview) -> None:
-        self._phases.arm("write")
-        try:
-            await self._writer.write(chunk)
-        finally:
-            self._phases.arm(None)
-
-    def __getattr__(self, name: str) -> object:
-        return getattr(self._writer, name)
-
-
-class _TimedBody(aiohttp.payload.Payload):
-    def __init__(self, body: aiohttp.payload.Payload, phases: _Phases) -> None:
-        super().__init__(body, headers=body.headers)
-        self._size = body.size
-        self._phases = phases
-
-    def decode(self, encoding: str = "utf-8", errors: str = "strict") -> str:
-        return self._value.decode(encoding, errors)  # type: ignore[no-any-return]
-
-    async def write(self, writer: AbstractStreamWriter) -> None:
-        await self._value.write(_WriteProgress(writer, self._phases))
-
-    async def write_with_length(
-        self, writer: AbstractStreamWriter, content_length: int | None
-    ) -> None:
-        await self._value.write_with_length(_WriteProgress(writer, self._phases), content_length)
+    return lazy()
 
 
 @contextlib.asynccontextmanager
-async def _phase_limits(
-    session: aiohttp.ClientSession, options: APIConnectOptions, after_connect: TimeoutPhase | None
-) -> AsyncIterator[_Phases]:
-    if _PHASE_TRACE not in session.trace_configs:
-        session.trace_configs.append(_PHASE_TRACE)
+async def open() -> AsyncIterator[aiohttp.ClientSession]:  # noqa: A001
+    """Bind a session for ``http_session()`` outside a job, closed on exit.
+
+    Inside a job or another ``open()``, yields the existing session and leaves it open.
+
+    Example::
+
+        async with utils.http_context.open():
+            async with VoiceSession() as session:
+                await session.start(MyAgent())
+    """
+    if _ContextVar.get() is not None:
+        yield http_session()
+        return
+    _new_session_ctx()
     try:
-        async with asyncio.timeout(None) as deadline:
-            phases = _Phases(options, deadline, after_connect)
-            token = _current_phases.set(phases)
-            try:
-                yield phases
-            finally:
-                _current_phases.reset(token)
-    except aiohttp.SocketTimeoutError as e:
-        # aiohttp identifies this as read inactivity, independently of our pool/connect/write
-        # deadline. Preserve the SDK exception as the cause instead of losing the known phase.
-        raise APITimeoutError("read timed out", phase="read") from e
-    except TimeoutError as e:
-        if not deadline.expired() or phases.armed is None:
-            raise
-        raise APITimeoutError(f"{phases.armed} timed out", phase=phases.armed) from e
+        yield http_session()
+    finally:
+        await _close_http_ctx()
 
 
 @contextlib.asynccontextmanager
@@ -153,25 +82,13 @@ async def request(
     json: object = None,
     **kwargs: Any,
 ) -> AsyncIterator[aiohttp.ClientResponse]:
-    """``session.request`` under the pool, connect, write and read limits of ``conn_options``.
-
-    The total limit belongs to the operation's retry owner. A limit that expires raises
-    ``APITimeoutError`` naming its phase, preserving the SDK timeout as its cause.
-    """
-    async with _phase_limits(session, conn_options, after_connect=None) as phases:
+    """``session.request`` under the pool, connect, write and read limits of ``conn_options``."""
+    async with _under_limits(session, conn_options, after_connect=None) as deadline:
         if json is not None:
             data = aiohttp.payload.JsonPayload(json, dumps=session.json_serialize)
-        elif isinstance(data, aiohttp.FormData):
-            data = data()
         if data is not None:
-            try:
-                body = aiohttp.payload.get_payload(data)
-            except aiohttp.payload.LookupError:
-                if not isinstance(data, Iterable):
-                    raise TypeError(f"unsupported request body: {type(data).__name__}") from None
-                body = aiohttp.FormData(data)()
-            data = _TimedBody(body, phases)
-        # aiohttp disables a zero limit; the smallest positive one expires at the first wait.
+            data = _TimedBody(_payload(data), deadline)
+        # aiohttp treats 0 as no limit; the smallest positive float expires at the first wait
         read = conn_options.read_timeout
         timeout = aiohttp.ClientTimeout(
             sock_read=5e-324 if read == 0 else read, ceil_threshold=float("inf")
@@ -187,12 +104,12 @@ async def ws_connect(
     conn_options: APIConnectOptions,
     **kwargs: Any,
 ) -> aiohttp.ClientWebSocketResponse:
-    """``session.ws_connect`` under the pool and connect limits, then the read limit while the
-    handshake response is expected. Every frame sent on the open socket waits for the transport
-    under the write limit; what is received is the caller's protocol."""
-    async with _phase_limits(session, conn_options, after_connect="read"):
+    """``session.ws_connect`` under the pool and connect limits, then the read limit for the
+    handshake response. Frames sent on the open socket run under the write limit; reads belong
+    to the caller's protocol."""
+    async with _under_limits(session, conn_options, after_connect="read"):
         ws: aiohttp.ClientWebSocketResponse = await session.ws_connect(url, **kwargs)
-    if isinstance(ws, aiohttp.ClientWebSocketResponse):
+    if isinstance(ws, aiohttp.ClientWebSocketResponse):  # not a test fake
         ws._writer = _TimedFrameWriter(ws._writer, conn_options.write_timeout)  # type: ignore[assignment]
     return ws
 
@@ -202,9 +119,154 @@ def websocket_headers(ws: aiohttp.ClientWebSocketResponse) -> Mapping[str, str]:
     return ws._response.headers
 
 
+# --- limits -----------------------------------------------------------------------------------
+#
+# aiohttp only has a read limit (``sock_read``), so the others are added here:
+#
+# - a request runs under one asyncio timeout (``_Deadline``), moved to the limit of whatever
+#   it is waiting on;
+# - aiohttp's trace events say when it waits for the pool or opens a connection;
+# - the request body's writer is wrapped, so each chunk waits under the write limit;
+# - an open websocket's frame writer is wrapped the same way.
+
+
+class _Deadline:
+    """One request's timeout, set to the limit of the wait in progress.
+
+    aiohttp writes the body in its own task, so a stalled body write expires this shared
+    timeout: the request task is the one that fails, naming the limit that ran out.
+    """
+
+    def __init__(
+        self,
+        options: APIConnectOptions,
+        timeout: asyncio.Timeout,
+        after_connect: TimeoutPhase | None,
+    ) -> None:
+        self._options = options
+        self._timeout = timeout
+        self.after_connect = after_connect
+        self.limit: TimeoutPhase | None = None
+
+    def set_limit(self, limit: TimeoutPhase | None) -> None:
+        if self._timeout.expired():
+            return  # keep the limit that fired; an expired asyncio.Timeout cannot be rescheduled
+        self.limit = limit
+        match limit:
+            case "pool":
+                seconds = self._options.pool_timeout
+            case "connect":
+                seconds = self._options.connect_timeout
+            case "write":
+                seconds = self._options.write_timeout
+            case "read":
+                seconds = self._options.read_timeout
+            case _:
+                seconds = None
+        self._timeout.reschedule(
+            None if seconds is None else asyncio.get_running_loop().time() + seconds
+        )
+
+
+_current = contextvars.ContextVar[_Deadline | None]("http_deadline", default=None)
+
+
+@contextlib.asynccontextmanager
+async def _under_limits(
+    session: aiohttp.ClientSession, options: APIConnectOptions, after_connect: TimeoutPhase | None
+) -> AsyncIterator[_Deadline]:
+    if _CONNECTION_TRACE not in session.trace_configs:
+        session.trace_configs.append(_CONNECTION_TRACE)
+    try:
+        async with asyncio.timeout(None) as timeout:
+            deadline = _Deadline(options, timeout, after_connect)
+            token = _current.set(deadline)
+            try:
+                yield deadline
+            finally:
+                _current.reset(token)
+    except aiohttp.SocketTimeoutError as e:  # aiohttp's own read limit
+        raise APITimeoutError("read timed out", phase="read") from e
+    except TimeoutError as e:
+        if not timeout.expired() or deadline.limit is None:
+            raise
+        raise APITimeoutError(f"{deadline.limit} timed out", phase=deadline.limit) from e
+
+
+def _trace_hook(
+    limit: TimeoutPhase | None, connected: bool = False
+) -> Callable[..., Awaitable[None]]:
+    async def hook(*_: object) -> None:
+        if (deadline := _current.get()) is not None:
+            deadline.set_limit(deadline.after_connect if connected else limit)
+
+    return hook
+
+
+_CONNECTION_TRACE = aiohttp.TraceConfig()
+_CONNECTION_TRACE.on_connection_queued_start.append(_trace_hook("pool"))
+_CONNECTION_TRACE.on_connection_create_start.append(_trace_hook("connect"))  # DNS, TCP, TLS
+for _connected in (
+    _CONNECTION_TRACE.on_connection_queued_end,
+    _CONNECTION_TRACE.on_connection_create_end,
+    _CONNECTION_TRACE.on_connection_reuseconn,
+):
+    _connected.append(_trace_hook(None, connected=True))
+_CONNECTION_TRACE.freeze()
+
+
+def _payload(data: object) -> aiohttp.payload.Payload:
+    """aiohttp's own body resolution, done here so the payload can be wrapped."""
+    if isinstance(data, aiohttp.FormData):
+        data = data()
+    try:
+        return aiohttp.payload.PAYLOAD_REGISTRY.get(data, disposition=None)
+    except aiohttp.payload.LookupError:
+        return aiohttp.FormData(data)()  # type: ignore[arg-type]
+
+
+class _TimedBody(aiohttp.payload.Payload):
+    """A request body written through ``_TimedBodyWriter``."""
+
+    def __init__(self, body: aiohttp.payload.Payload, deadline: _Deadline) -> None:
+        super().__init__(body, headers=body.headers)
+        self._size = body.size
+        self._deadline = deadline
+
+    def decode(self, encoding: str = "utf-8", errors: str = "strict") -> str:
+        return self._value.decode(encoding, errors)  # type: ignore[no-any-return]
+
+    async def write(self, writer: AbstractStreamWriter) -> None:
+        await self._value.write(_TimedBodyWriter(writer, self._deadline))
+
+    async def write_with_length(
+        self, writer: AbstractStreamWriter, content_length: int | None
+    ) -> None:
+        await self._value.write_with_length(
+            _TimedBodyWriter(writer, self._deadline), content_length
+        )
+
+
+class _TimedBodyWriter:
+    """Each body chunk waits for the transport under the write limit."""
+
+    def __init__(self, writer: AbstractStreamWriter, deadline: _Deadline) -> None:
+        self._writer = writer
+        self._deadline = deadline
+
+    async def write(self, chunk: bytes | bytearray | memoryview) -> None:
+        self._deadline.set_limit("write")
+        try:
+            await self._writer.write(chunk)
+        finally:
+            self._deadline.set_limit(None)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._writer, name)
+
+
 class _TimedFrameWriter:
-    """A websocket's frame writer whose every frame waiting for the transport (a peer that stopped
-    reading) runs under the write limit."""
+    """Each websocket frame waits for the transport under the write limit."""
 
     def __init__(self, writer: WebSocketWriter, limit: float | None) -> None:
         self._writer = writer
@@ -221,26 +283,16 @@ class _TimedFrameWriter:
         return getattr(self._writer, name)
 
 
-def _has_system_trust_store() -> bool:
-    """Whether OpenSSL's default verify paths resolve to something on disk.
-
-    cert_store_stats() can't tell us this: a hashed capath dir loads lazily and
-    reports 0 even when present.
-    """
-    paths = ssl.get_default_verify_paths()
-    return bool(
-        (paths.cafile and os.path.exists(paths.cafile))
-        or (paths.capath and os.path.isdir(paths.capath))
-    )
+# --- trusted CA certificates ------------------------------------------------------------------
 
 
-def _set_default_cert_env() -> None:
-    """Share Python's resolved trust paths with native clients before they load roots.
+def _export_ca_paths() -> None:
+    """Export the CA paths Python resolved, or certifi when there are none, to
+    ``SSL_CERT_FILE``/``SSL_CERT_DIR``. Explicit values are kept.
 
-    Unlike building an ``SSLContext``, the env var also reaches job subprocesses
-    (which inherit it) and the Rust livekit-rtc SDK, since both OpenSSL and
-    rustls-native-certs honor it. Otherwise room connections in minimal
-    containers fail with "no native root CA certificates found".
+    ``cli.run_app`` calls it once at startup. Job processes inherit the variables, and OpenSSL
+    and rustls-native-certs both read them, so aiohttp, livekit-rtc and the native clients trust
+    the same roots, including in minimal containers without ca-certificates.
     """
     if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
         return
@@ -249,120 +301,53 @@ def _set_default_cert_env() -> None:
         os.environ["SSL_CERT_FILE"] = paths.cafile
     if paths.capath and os.path.isdir(paths.capath):
         os.environ["SSL_CERT_DIR"] = paths.capath
-    if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
-        return
-    os.environ["SSL_CERT_FILE"] = certifi.where()
-    logger.debug("no system trust store found, setting SSL_CERT_FILE to the certifi bundle")
-
-
-def _create_ssl_context() -> ssl.SSLContext:
-    """TLS context for the shared http session.
-
-    Falls back to certifi when no system trust store is resolvable (e.g. minimal
-    containers without ca-certificates); ``SSL_CERT_FILE`` / ``SSL_CERT_DIR``
-    take precedence.
-
-    Building a context parses the whole CA bundle, so the process builds one per
-    trust configuration and every job's session shares it. An ``SSLContext`` is
-    safe to share across threads and event loops. Like aiohttp's own default
-    context, it is not reloaded: a CA bundle replaced at the same path takes
-    effect when the process restarts.
-    """
-    return _ssl_context_for(os.environ.get("SSL_CERT_FILE"), os.environ.get("SSL_CERT_DIR"))
+    if not (os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR")):
+        os.environ["SSL_CERT_FILE"] = certifi.where()
+        logger.debug("no system trust store found, using the certifi bundle")
 
 
 @functools.cache
-def _ssl_context_for(cafile: str | None, capath: str | None) -> ssl.SSLContext:
-    if cafile or capath:
-        return ssl.create_default_context(cafile=cafile, capath=capath)
-
-    ctx = ssl.create_default_context()
-    if not _has_system_trust_store():
-        ctx.load_verify_locations(cafile=certifi.where())
-    return ctx
+def _ssl_context() -> ssl.SSLContext:
+    """Built once (parsing the bundle is slow) and shared by every job's session. Like the
+    native roots, it is not reloaded."""
+    return ssl.create_default_context()
 
 
-def _new_session_ctx() -> _ClientFactory:
-    g_session: aiohttp.ClientSession | None = None
+# --- the job's session ------------------------------------------------------------------------
 
-    def _new_session() -> aiohttp.ClientSession:
-        nonlocal g_session
-        if g_session is None or g_session.closed:
-            logger.debug("http_session(): creating a new httpclient ctx")
 
+class _LazySession:
+    """The job's session, created on first use (and again if closed)."""
+
+    def __init__(self) -> None:
+        self.session: aiohttp.ClientSession | None = None
+
+    def __call__(self) -> aiohttp.ClientSession:
+        if self.session is None or self.session.closed:
             from ..job import get_job_context
 
             try:
-                http_proxy = get_job_context().proc.http_proxy
+                proxy = get_job_context().proc.http_proxy
             except RuntimeError:
-                http_proxy = None
-
+                proxy = None
             connector = aiohttp.TCPConnector(
-                limit_per_host=50,
-                keepalive_timeout=120,  # the default is only 15s
-                ssl=_create_ssl_context(),
+                limit_per_host=50, keepalive_timeout=120, ssl=_ssl_context()
             )
-            g_session = aiohttp.ClientSession(
-                proxy=http_proxy, connector=connector, trace_configs=[_PHASE_TRACE]
+            self.session = aiohttp.ClientSession(
+                proxy=proxy, connector=connector, trace_configs=[_CONNECTION_TRACE]
             )
-        return g_session
-
-    _ContextVar.set(_new_session)
-    return _new_session
+        return self.session
 
 
-def http_session() -> aiohttp.ClientSession:
-    """Optional utility function to avoid having to manually manage an aiohttp.ClientSession lifetime.
-    On job processes, this http session will be bound to the main event loop.
-    """  # noqa: E501
+_ContextVar = contextvars.ContextVar[_LazySession | None]("agent_http_session", default=None)
 
-    val = _ContextVar.get(None)
-    if val is None:
-        raise RuntimeError(
-            "Attempted to use an http session outside of a job context. This is probably because you are trying to use a plugin without using the agent worker api. "  # noqa: E501
-            "If you're running plugins outside the agent worker (e.g. tests or scripts), wrap your code with `async with livekit.agents.utils.http_context.open(): ...`. "  # noqa: E501
-            "Alternatively, create your own aiohttp.ClientSession, pass it into the plugin constructor as a kwarg, and manage its lifecycle."  # noqa: E501
-        )
 
-    return val()
+def _new_session_ctx() -> None:
+    _ContextVar.set(_LazySession())
 
 
 async def _close_http_ctx() -> None:
-    val = _ContextVar.get(None)
-    if val is not None:
-        logger.debug("http_session(): closing the httpclient ctx")
-        await val().close()
+    if (lazy := _ContextVar.get()) is not None:
+        if lazy.session is not None:
+            await lazy.session.close()
         _ContextVar.set(None)
-
-
-@contextlib.asynccontextmanager
-async def open() -> AsyncIterator[aiohttp.ClientSession]:  # noqa: A001
-    """Bind a process-local aiohttp.ClientSession to the current asyncio context.
-
-    Use this when running plugins outside a job worker (e.g. tests or scripts), so that ``http_session()`` returns a usable session inside the
-    ``async with`` block. The session is closed and the context is reset on exit.
-
-    If an http session context is already bound (nested call, or already set up
-    by the worker), this is a no-op pass-through — the existing session is
-    yielded and left untouched on exit.
-
-    Example::
-
-        async with utils.http_context.open():
-            async with VoiceSession() as session:
-                await session.start(MyAgent())
-    """
-    if _ContextVar.get(None) is not None:
-        yield _ContextVar.get()()  # type: ignore[misc]
-        return
-
-    factory = _new_session_ctx()
-    try:
-        yield factory()
-    finally:
-        await _close_http_ctx()
-
-
-# Select the process's trust source before application imports can construct native
-# clients. The Python session and lk-agents-net then see the same CA overrides.
-_set_default_cert_env()

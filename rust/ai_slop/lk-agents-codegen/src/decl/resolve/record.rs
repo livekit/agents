@@ -211,6 +211,10 @@ impl Resolver<'_> {
         if typed_dict && (persisted || !matches!(item, syn::Item::Struct(_))) {
             return Err(format!("{at}: a typed_dict record is a plain struct of keys"));
         }
+        let kwargs = voc::find(&record.nested, "kwargs").is_some();
+        if kwargs && (typed_dict || persisted || !matches!(item, syn::Item::Struct(_))) {
+            return Err(format!("{at}: kwargs follows an options struct's model"));
+        }
         if name.contains('.') && (persisted || !matches!(item, syn::Item::Struct(_))) {
             return Err(format!("{at}: a nested model is a record struct, not persisted"));
         }
@@ -434,6 +438,8 @@ impl Resolver<'_> {
             emit_by_hand: by_hand(at, &record.nested, "emit")?,
             transparent,
             typed_dict,
+            kwargs,
+            sdk: voc::find(&record.nested, "sdk").is_some(),
             enumeration,
             enum_base,
             pydantic,
@@ -821,6 +827,8 @@ pub(super) fn record_target(
             "nested_in",
             "dispatch",
             "typed_dict",
+            "kwargs",
+            "sdk",
             "default",
             "defaults_from",
             "pydantic",
@@ -949,8 +957,11 @@ fn check_record_field(at: &str, ty: &Ty, (extract, emit): (bool, bool)) -> Resul
     if extract {
         check_input(at, ty)?;
     }
-    if emit {
-        check_output(at, ty)?;
+    match ty {
+        // An omitted field crosses as the model's default, `NOT_GIVEN`.
+        Ty::Maybe(inner) if emit => check_output(at, inner)?,
+        _ if emit => check_output(at, ty)?,
+        _ => {}
     }
     Ok(())
 }

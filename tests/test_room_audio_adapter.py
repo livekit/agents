@@ -145,7 +145,7 @@ def test_a_processor_failure_is_an_error_event_whose_source_is_the_processor(
             speech_id=None,
             processor_failure=failure,
         ),
-        sessions[0]._owner.state,
+        sessions[0]._native.state,
     )
     [event] = errors[0]
     [logged] = [r for r in caplog.records if r.getMessage() == "session error"]
@@ -506,7 +506,11 @@ async def test_failed_audio_publication_releases_its_unadopted_source(
     )
     participant = LocalParticipant(room)
     options = SimpleNamespace(
-        sample_rate=24000, num_channels=1, queue_size_ms=200, name="speech", source="microphone"
+        sample_rate=24000,
+        num_channels=1,
+        queue_size_ms=200,
+        name="speech",
+        source=rtc.TrackSource.SOURCE_MICROPHONE,
     )
     task = asyncio.create_task(participant._core_publish_audio_track(options))
     if phase == "cancelled":

@@ -10,7 +10,8 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use futures_util::StreamExt;
-use lk_agents_abi::llm::mcp::{McpInvocation, McpSession as McpSessionPort, McpTimeout};
+use lk_agents_abi::invoke::CallContext;
+use lk_agents_abi::llm::mcp::{McpSession as McpSessionPort, McpTimeout};
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_core::mcp::timeout_duration;
@@ -53,7 +54,7 @@ async fn forward_progress(
     let (Some(sink), Some(message)) = (sink, progress_message(update.message.as_deref())) else {
         return Ok(());
     };
-    let invocation = McpInvocation { host_context: host_context.clone() };
+    let invocation = CallContext { host_context: host_context.clone(), ..CallContext::default() };
     tokio::select! {
         _ = connection.cancel.cancelled() => {}
         result = sink.update(&telemetry::Cx::NONE, &invocation, message) => result?,

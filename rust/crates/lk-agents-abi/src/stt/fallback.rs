@@ -22,21 +22,9 @@ pub trait FallbackStt: Send + Sync + Sized + 'static {
     type Events: StreamOutput<SpeechEvent> + 'static;
 
     /// `members` in order, each already streaming (the host wraps a recognize-only entry in its
-    /// `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s, whose mixin builds it from
-    /// the adapter's attributes, one per loop.
+    /// `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s, which builds it from its
+    /// attributes, one per loop.
     #[host(new)]
-    #[host(facade(
-        module = "provider_hosts",
-        class = "FallbackSttHost",
-        target = "_native",
-        legs(stream, recognize, _recognize_impl),
-        resolve(members = ".._bindings.core_legs"),
-        availability(
-            observer = "on_availability",
-            event = "stt_availability_changed",
-            record = ".stt_availability.AvailabilityChangedEvent"
-        )
-    ))]
     fn new(
         env: &Self::Env,
         members: Vec<Arc<dyn Stt>>,
@@ -77,3 +65,21 @@ pub trait FallbackStt: Send + Sync + Sized + 'static {
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,
     ) -> Result<crate::DuplexStream<Self::Audio, Self::Events>, ProviderError>;
 }
+
+/// `stt.FallbackAdapter`'s chain, built once per loop from the adapter's attributes; a failed STT
+/// is skipped until it recovers.
+#[crate::host(facade(
+    path = "livekit.agents.stt",
+    extended,
+    name = "FallbackAdapter",
+    native = FallbackStt,
+    per_loop,
+    legs(stream, recognize, _recognize_impl),
+    resolve(members = ".._bindings.core_legs"),
+    availability(
+        observer = "on_availability",
+        event = "stt_availability_changed",
+        record = ".stt_availability.AvailabilityChangedEvent"
+    )
+))]
+pub trait FallbackSttAdapter {}

@@ -4,15 +4,18 @@ import dataclasses
 from typing import Any
 
 from .. import _bindings, _core, stt
-from .._generated import public_inference_stt as _public, vad as vad_mod
+from .._generated import (
+    facades_inference_stt as _facades,
+    public_inference_stt as _public,
+    vad as vad_mod,
+)
 from .._generated.inference_stt import FallbackModel as FallbackModel
 from .._generated.language import LanguageCode
-from .._generated.provider_hosts import InferenceSttHost
 from .._generated.public_inference_stt import *  # noqa: F403
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from . import Credentials, get_inference_headers
+from . import _resolve_credentials, get_inference_headers
 
 FallbackModelType = FallbackModel | str
 
@@ -27,7 +30,7 @@ __all__ += _public.__all__
 DEFAULT_SAMPLE_RATE = 16000
 
 
-class STT(InferenceSttHost, stt.STT):
+class STT(_facades.STT, stt.STT):
     """LiveKit Inference STT over the core's gateway client (``_core.InferenceStt``)."""
 
     def __init__(
@@ -82,7 +85,7 @@ class STT(InferenceSttHost, stt.STT):
         )
         self._sample_rate = sample_rate if is_given(sample_rate) else default_sample_rate
         self._conn_options = conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS
-        credentials = Credentials.resolve(base_url, api_key, api_secret)
+        credentials = _resolve_credentials(base_url, api_key, api_secret)
         self._base_url, self._api_key, self._api_secret = dataclasses.astuple(credentials)
         self._vad = self._resolve_vad(vad if is_given(vad) else None)
         super().__init__(capabilities=self._fold_capabilities())

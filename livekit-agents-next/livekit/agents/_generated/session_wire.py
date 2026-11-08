@@ -14,15 +14,13 @@ from .events import (
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
     EotPredictionEvent,
-    ToolCallEnded,
-    ToolCallUpdated,
-    ToolReplyUpdated,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
     _AgentBackchannelOpportunityEvent,
 )
+from .overlap import OverlappingSpeechEvent
 
 if TYPE_CHECKING:
     from livekit.agents._core import SpeechHandle
@@ -30,11 +28,10 @@ if TYPE_CHECKING:
     from livekit.agents.llm.tool_context import ToolChoice
 
     from .agent_run import RunInputRequirement, RunSettled
-    from .chat_items import FunctionCall
     from .events import CloseReason
     from .metrics import AgentMetrics
-    from .overlap import OverlappingSpeechEvent
     from .rtc_wire import ProcessorFailure
+    from .session_events import ToolUpdate
     from .stream_info import StreamInfo
 
 
@@ -55,19 +52,10 @@ class SpeechCreatedWire:
 
 
 @dataclass(kw_only=True, slots=True)
-class ToolCallStartedWire:
-    """A function tool call was dispatched: the call's fields, which the host validates into its
-    `llm.FunctionCall`.
-    """
-
-    function_call: FunctionCall
-
-
-@dataclass(kw_only=True, slots=True)
 class ToolExecutionUpdatedWire:
     """`tool_execution_updated`'s payload; the host emits `ToolExecutionUpdatedEvent` from it."""
 
-    update: ToolUpdateWire
+    update: ToolUpdate
 
 
 @dataclass(kw_only=True, slots=True)
@@ -238,13 +226,6 @@ MetricsLeg: TypeAlias = Literal["vad"]
 
 
 @dataclass(kw_only=True, slots=True)
-class OverlappingSpeechWire:
-    """`overlapping_speech`'s wire payload: the interruption detector's verdict, as it reported it."""
-
-    event: OverlappingSpeechEvent
-
-
-@dataclass(kw_only=True, slots=True)
 class SessionErrorWire:
     """`error`'s wire payload: the ingredients of `ErrorEvent`; the host wraps `error` in the leg's
     class chosen by `source`.
@@ -309,10 +290,6 @@ class ExceededTurnReply(TypedDict):
     tool_choice: ToolChoice
 
 
-ToolUpdateWire: TypeAlias = ToolCallStartedWire | ToolCallUpdated | ToolCallEnded | ToolReplyUpdated
-"""The four tool-lifecycle updates, each crossing as its own record."""
-
-
 HostWire: TypeAlias = (
     HistoryReloadedWire
     | UserInputTranscribedEvent
@@ -343,7 +320,7 @@ HostWire: TypeAlias = (
     | FloorChangedWire
     | CloseWire
     | MetricsCollectedWire
-    | OverlappingSpeechWire
+    | OverlappingSpeechEvent
     | SessionErrorWire
     | ToolExecutionUpdatedWire
     | ParticipantLinked
@@ -362,5 +339,3 @@ dropped, both via `_generated/session_dispatch.py`; the rest have host behaviour
 
 DEFAULT_HOOK_BOUND: Final = 15.0
 DEFAULT_MAX_UNRECOVERABLE_ERRORS: Final = 3
-DEFAULT_SPEAKING_FPS: Final = 1.0
-DEFAULT_SILENT_FPS: Final = 0.3

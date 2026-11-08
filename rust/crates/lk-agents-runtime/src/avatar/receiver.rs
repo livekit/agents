@@ -5,8 +5,9 @@ use crate::rtc::events::RpcHandler;
 use crate::rtc::wait;
 use crate::telemetry;
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::utils::video::AudioReceiverFrame;
-use lk_agents_abi::voice::avatar::{self, AvatarAudioReceiver, ClearBufferListener};
+use lk_agents_abi::voice::avatar::{
+    self, AudioReceiverObservation, AvatarAudioReceiver, ClearBufferListener,
+};
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::voice::rtc::{ByteStream, ParticipantIdentity, Receiver, RoomEvent, RtcRoom};
 use lk_agents_abi::{BoxFuture, Clock, OwnedTask, Spawner, SpawnerExt};
@@ -475,8 +476,6 @@ impl DataStreamAudioReceiver {
     }
 }
 
-type AudioReceipt = (u64, bool, Option<AvatarPlaybackSegment>, Option<AudioReceiverFrame>);
-
 fn failure(error: ReceiverEnd) -> ProviderError {
     ApiError::new(error.to_string()).into()
 }
@@ -512,10 +511,12 @@ impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
         DataStreamAudioReceiver::start(self).await.map_err(failure)
     }
 
-    async fn next_audio(&self) -> Result<AudioReceipt, ProviderError> {
+    async fn next_audio(&self) -> Result<AudioReceiverObservation, ProviderError> {
         match self.recv().await {
-            Ok(receipt) => Ok(receipt),
-            Err(ReceiverEnd::Closed) => Ok((0, false, None, None)),
+            Ok((epoch, starts_segment, segment, frame)) => {
+                Ok(AudioReceiverObservation { epoch, starts_segment, segment, frame })
+            }
+            Err(ReceiverEnd::Closed) => Ok(AudioReceiverObservation::default()),
             Err(error) => Err(failure(error)),
         }
     }
@@ -545,14 +546,12 @@ impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
     }
 }
 
+/// The runner reads the native receiver directly; its host `start()` already started it.
 impl AvatarAudioReceiver for DataStreamAudioReceiver {
-    fn open_audio(&self, _cx: &telemetry::Cx) -> BoxFuture<'_, Result<(), ProviderError>> {
-        Box::pin(avatar::DataStreamAudioReceiver::start(self))
-    }
     fn next_audio(
         &self,
         _cx: &telemetry::Cx,
-    ) -> BoxFuture<'_, Result<AudioReceipt, ProviderError>> {
+    ) -> BoxFuture<'_, Result<AudioReceiverObservation, ProviderError>> {
         Box::pin(avatar::DataStreamAudioReceiver::next_audio(self))
     }
     fn notify_playback_started(
@@ -567,9 +566,9 @@ impl AvatarAudioReceiver for DataStreamAudioReceiver {
     fn notify_playback_finished(
         &self,
         _cx: &telemetry::Cx,
-        segment: AvatarPlaybackSegment,
         playback_position: f64,
         interrupted: bool,
+        segment: AvatarPlaybackSegment,
     ) -> BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move {
             avatar::DataStreamAudioReceiver::notify_playback_finished(

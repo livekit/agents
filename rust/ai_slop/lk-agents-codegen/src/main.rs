@@ -13,7 +13,6 @@ mod decl;
 mod exceptions;
 mod exports;
 mod facade;
-mod facade_native;
 mod forward;
 mod implementations;
 mod imports;
@@ -21,6 +20,7 @@ mod native_enums;
 mod parse;
 mod placement;
 mod proxy;
+mod proxy_sdk;
 mod python;
 mod records;
 mod shape_error;
@@ -103,6 +103,7 @@ impl Outputs {
 fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     let abi = decl::tree::Crate::read(root, "rust/crates/lk-agents-abi", "lk_agents_abi")?;
     let mut declared = decl::resolve::declarations(&abi)?;
+    decl::resolve::check_tuple_baseline()?;
 
     let mut o = Outputs { files: Vec::new(), dirs: Vec::new() };
     let registry = telemetry::read(&abi)?;
@@ -132,12 +133,12 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     models.extend(native_enums::flags(&declared));
     let bases = bases::read(root, &declared)?;
     models.extend(exports::emit(&declared, &bases)?);
+    models.extend(proxy_sdk::python(&declared)?);
     let with_bases = python::emit(&declared, &bases)?;
     let (core_pyi, core_names) = surface::emit(class_stubs.iter())?;
     o.add(PathBuf::from(CORE_NAMES), &core_names.text);
     let mut forward = forward::emit(&declared)?;
-    forward.extend(facade::emit(&declared)?);
-    forward.extend(facade_native::emit(&declared)?);
+    forward.extend(facade::emit(&declared, &bases)?);
     for package in python_packages {
         let python_root = Path::new(package).join(PYTHON_GENERATED);
         o.dirs.push(python_root.clone());
@@ -161,7 +162,16 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     }
     for (path, text) in &mut o.files {
         if path.extension().is_some_and(|ext| ext == "rs") {
-            *text = rustfmt(root, text)?;
+            // rustfmt is not idempotent on long generated lines: format to its fixed point
+            let mut formatted = rustfmt(root, text)?;
+            for _ in 0..3 {
+                let again = rustfmt(root, &formatted)?;
+                if again == formatted {
+                    break;
+                }
+                formatted = again;
+            }
+            *text = formatted;
         }
     }
     Ok(o)

@@ -29,8 +29,8 @@ class FallbackStt:
         on_availability: FallbackListener | None = None,
     ) -> Self:
         """`members` in order, each already streaming (the host wraps a recognize-only entry in its
-        `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s, whose mixin builds it from
-        the adapter's attributes, one per loop.
+        `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s, which builds it from its
+        attributes, one per loop.
         """
     @property
     def active_index(self) -> int:
@@ -85,8 +85,8 @@ class InferenceStt:
         vad: VAD[Any] | None = None,
     ) -> Self:
         """A client of `model` on the gateway at `base_url`. Starts nothing. `vad`'s end of speech
-        finalizes the transcript (Speechmatics only). `inference.STT`'s mixin builds it on first
-        use, after a fork, from the STT's attributes.
+        finalizes the transcript (Speechmatics only). `inference.STT` builds it on first use, after
+        a fork, from its attributes.
         """
     def set_vad(self, vad: VAD[Any] | None = None) -> None:
         """The model's VAD as the host resolved it on `update_options(model=)`; `None` drops it.
@@ -146,8 +146,8 @@ class InferenceSttStream:
 class SttStreamAdapter:
     """`stt.StreamAdapter`'s engine as the host builds it; the public class stays Python."""
     def __new__(cls, stt: STT[Any], vad: VAD[Any]) -> Self:
-        """The wrapped STT and VAD; each stream binds its own recognition policy. `StreamAdapter`'s
-        mixin builds it from the adapter's attributes, one per loop.
+        """The wrapped STT and VAD; each stream binds its own recognition policy. `StreamAdapter`
+        builds it from its attributes, one per loop.
         """
     async def recognize(
         self,

@@ -403,7 +403,8 @@ class RealtimeSession(
             )
 
         # Process new items only (Ultravox doesn't support deletions)
-        for _, msg_id in diff_ops.to_create:
+        for created in diff_ops.to_create:
+            msg_id = created.item_id
             item = chat_ctx.get_by_id(msg_id)
             if not item:
                 continue

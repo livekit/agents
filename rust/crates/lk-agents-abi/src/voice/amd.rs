@@ -166,12 +166,9 @@ pub const EVALUATED_STT_MODELS: &[&str] =
 pub trait AmdFunctions {
     /// `_resolve_classifier`'s `max_endpointing_delay`: explicit option, else the activity's,
     /// else the default. `provided` is `None` only when the key was absent: an explicit default
-    /// still beats a disagreeing activity.
+    /// still beats a disagreeing activity. Seconds, as the options hold them.
     #[host(function)]
-    fn amd_resolve_max_endpointing_delay(
-        provided: Option<Duration>,
-        activity: Option<Duration>,
-    ) -> Duration;
+    fn amd_resolve_max_endpointing_delay(provided: Option<f64>, activity: Option<f64>) -> f64;
     /// `AMDPredictionEvent.is_human`.
     #[host(function)]
     fn amd_prediction_is_human(prediction: AmdPrediction) -> bool;

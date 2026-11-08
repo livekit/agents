@@ -74,7 +74,7 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | `"agent_state_changed"` | `AgentStateChangedEvent`: `old_state`, `new_state` | the agent moved between `initializing`, `idle`, `listening`, `thinking` and `speaking` |
 | `"user_state_changed"` | `UserStateChangedEvent`: `old_state`, `new_state` | the person moved between `speaking`, `listening` and `away` |
 | `"error"` | `ErrorEvent`: `error`, `source` | a provider or an input audio processor failed; `error.recoverable` says whether the call goes on |
-| `"user_turn_exceeded"` | `UserTurnExceededEvent`: `transcript`, `accumulated_transcript`, `accumulated_word_count`, `duration` | the person spoke past the turn limit without a reply |
+| `"user_turn_exceeded"` | `UserTurnExceededEvent`: `transcript`, `accumulated_transcript`, `accumulated_word_count`, `duration` (a `timedelta`) | the person spoke past the turn limit without a reply |
 | `"user_transcription_timeout"` | `UserTranscriptionTimeoutEvent`: `speech_duration` | the person spoke but recognition produced no transcript |
 | `"agent_false_interruption"` | `AgentFalseInterruptionEvent`: `resumed` | an interruption turned out not to be one |
 | `"overlapping_speech"` | `OverlappingSpeechEvent` | adaptive interruption detection classified overlapping speech |
@@ -305,7 +305,7 @@ if result.category == AMDCategory.MACHINE_VM:
 
 `execute()` returns an `AMDPredictionEvent`: `category` (`human`,
 `machine-ivr`, `machine-vm`, `machine-unavailable` or `uncertain`), `reason`,
-`transcript`, `speech_duration` and `delay`, with `is_human` and `is_machine`.
+`transcript`, `speech_duration` and `delay` (`timedelta`s), with `is_human` and `is_machine`.
 Until the verdict the agent's speech is held. On a machine the current speech
 is interrupted (`interrupt_on_machine=True`), and a `machine-ivr` verdict
 starts IVR navigation (`ivr_detection=True`).

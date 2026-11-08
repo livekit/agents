@@ -267,7 +267,8 @@ impl Run {
         let sources = self.room.local_participant().sources();
         let room = sources
             .iter()
-            .map(|source| source.queued_duration().expect("fake source queue position"))
+            .map(|source| source.queued_seconds().expect("fake source queue position"))
+            .map(lk_agents_abi::utils::clock::secs)
             .max()
             .unwrap_or_default();
         self.console.as_ref().map_or(room, |cli| room.max(cli.queued()))

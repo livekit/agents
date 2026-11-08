@@ -53,8 +53,8 @@ pub struct FallbackStt(pub(crate) ::std::sync::Arc<FallbackSttImpl>);
 #[pymethods]
 impl FallbackStt {
     /// `members` in order, each already streaming (the host wraps a recognize-only entry in its
-    /// `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s, whose mixin builds it from
-    /// the adapter's attributes, one per loop.
+    /// `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s, which builds it from its
+    /// attributes, one per loop.
     #[new]
     #[pyo3(signature = (members, *, attempt_timeout = 10.0, max_retry_per_stt = 1, retry_interval = 5.0, on_availability = None))]
     fn new(
@@ -294,8 +294,8 @@ pub struct InferenceStt(pub(crate) ::std::sync::Arc<InferenceSttImpl>);
 #[pymethods]
 impl InferenceStt {
     /// A client of `model` on the gateway at `base_url`. Starts nothing. `vad`'s end of speech
-    /// finalizes the transcript (Speechmatics only). `inference.STT`'s mixin builds it on first
-    /// use, after a fork, from the STT's attributes.
+    /// finalizes the transcript (Speechmatics only). `inference.STT` builds it on first use, after
+    /// a fork, from its attributes.
     #[new]
     #[pyo3(signature = (*, model, language, encoding, sample_rate, base_url, api_key, api_secret, extra_kwargs, fallback = None, conn_options, vad = None))]
     fn new(
@@ -625,8 +625,8 @@ pub struct SttStreamAdapter(pub(crate) ::std::sync::Arc<SttStreamAdapterImpl>);
 
 #[pymethods]
 impl SttStreamAdapter {
-    /// The wrapped STT and VAD; each stream binds its own recognition policy. `StreamAdapter`'s
-    /// mixin builds it from the adapter's attributes, one per loop.
+    /// The wrapped STT and VAD; each stream binds its own recognition policy. `StreamAdapter`
+    /// builds it from its attributes, one per loop.
     #[new]
     #[pyo3(signature = (stt, vad))]
     fn new(

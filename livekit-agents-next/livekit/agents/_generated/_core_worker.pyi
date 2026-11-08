@@ -18,7 +18,7 @@ from .._core import _core_A2ADoor
 from .job_records import RunningJobInfo
 from .worker_endpoint import ExchangeEvent, ExchangeMessage, RequestHead
 from .worker_ipc import JobRunnerOptions, JobStatus, StartJob
-from .worker_options import ServerOptions
+from .worker_options import ProcessOptions, ServerOptions
 from .worker_server import EndpointRoute
 
 def room_join_token(
@@ -244,11 +244,11 @@ def ipc_pair() -> tuple[int, int]: ...
 def init(role: Role) -> None: ...
 
 class ServerConfig:
-    def __new__(cls, options: ServerOptions) -> Self:
-        """`options` left empty read the environment (`http_proxy`: `HTTPS_PROXY`, else
-        `HTTP_PROXY`).
+    def __new__(cls, options: ServerOptions, process: ProcessOptions, version: str) -> Self:
+        """Options left empty read the environment (`http_proxy`: `HTTPS_PROXY`, else
+        `HTTP_PROXY`). `version`: the SDK version the worker registers and `/worker` reports.
         """
-    def update(self, options: ServerOptions) -> None:
+    def update(self, options: ServerOptions, process: ProcessOptions) -> None:
         """Before the server starts only."""
     @property
     def ws_url(self) -> str: ...

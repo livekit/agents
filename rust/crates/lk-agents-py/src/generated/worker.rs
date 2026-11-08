@@ -1004,25 +1004,39 @@ pub struct ServerConfig(pub(crate) ::std::sync::Arc<ServerConfigImpl>);
 
 #[pymethods]
 impl ServerConfig {
-    /// `options` left empty read the environment (`http_proxy`: `HTTPS_PROXY`, else
-    /// `HTTP_PROXY`).
+    /// Options left empty read the environment (`http_proxy`: `HTTPS_PROXY`, else
+    /// `HTTP_PROXY`). `version`: the SDK version the worker registers and `/worker` reports.
     #[new]
-    #[pyo3(signature = (options))]
-    fn new(py: Python<'_>, options: Bound<'_, PyAny>) -> PyResult<ServerConfig> {
+    #[pyo3(signature = (options, process, version))]
+    fn new(
+        py: Python<'_>,
+        options: Bound<'_, PyAny>,
+        process: Bound<'_, PyAny>,
+        version: ::std::string::String,
+    ) -> PyResult<ServerConfig> {
         crate::py_calls::check_pid()?;
         let options =
             crate::generated::records::worker_options::server_options_from_py(options.as_any())?;
-        let out = py.detach(|| <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::new(options)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let process =
+            crate::generated::records::worker_options::process_options_from_py(process.as_any())?;
+        let out = py.detach(|| <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::new(options, process, version)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(ServerConfig(::std::sync::Arc::new(out)))
     }
 
     /// Before the server starts only.
-    #[pyo3(signature = (options))]
-    fn update(&self, py: Python<'_>, options: Bound<'_, PyAny>) -> PyResult<()> {
+    #[pyo3(signature = (options, process))]
+    fn update(
+        &self,
+        py: Python<'_>,
+        options: Bound<'_, PyAny>,
+        process: Bound<'_, PyAny>,
+    ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
         let options =
             crate::generated::records::worker_options::server_options_from_py(options.as_any())?;
-        py.detach(|| <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::update(&self.0, options)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let process =
+            crate::generated::records::worker_options::process_options_from_py(process.as_any())?;
+        py.detach(|| <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::update(&self.0, options, process)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
@@ -1567,14 +1581,14 @@ impl ::lk_agents_abi::worker::job::SessionJob for SessionJobProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "SessionJob._core_connect",
+            "SessionJob.connect",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_connect")?,
+                    host.bind(py).getattr("connect")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1671,9 +1685,12 @@ impl ::lk_agents_abi::worker::job::SessionJob for SessionJobProxy {
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py).getattr("_tempdir")?,
+                    ::pyo3::types::PyString::new(py, "name").into_any(),
+                ];
                 Ok((
-                    host.bind(py).getattr("_core_recording_dir")?,
+                    py.import("builtins")?.getattr("getattr")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1872,7 +1889,7 @@ pub struct SessionPortProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
     /// The host's running loop and a copy of its context, captured when it was taken.
     context: ::lk_agents_abi::utils::host_ref::HostRef,
-    framework_info: (::std::string::String, ::std::string::String),
+    framework_info: ::lk_agents_abi::worker::remote_session::FrameworkInfo,
 }
 
 impl SessionPortProxy {
@@ -1920,21 +1937,7 @@ impl SessionPortProxy {
         };
         let framework_info = {
             let v = crate::py_calls::read(obj, "_core_framework_info")?;
-            (|| -> ::pyo3::PyResult<_> {
-                let tuple = v.cast::<::pyo3::types::PyTuple>()?;
-                if tuple.len() != 2 {
-                    return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                        "{}: expected a tuple of 2 items",
-                        "SessionPort._core_framework_info"
-                    )));
-                }
-                let item_0 = tuple.get_item(0)?;
-                let item_1 = tuple.get_item(1)?;
-                Ok((
-                    (item_0.extract::<::std::string::String>())?,
-                    (item_1.extract::<::std::string::String>())?,
-                ))
-            })()?
+            crate::generated::records::remote_session::framework_info_from_py(v.as_any())?
         };
         Ok(SessionPortProxy {
             host: ::std::sync::Arc::new(obj.clone().unbind()),
@@ -1996,12 +1999,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
-            (
-                ::std::string::String,
-                ::std::option::Option<::std::string::String>,
-                ::std::vec::Vec<::std::string::String>,
-                ::std::vec::Vec<::lk_agents_abi::ChatItem>,
-            ),
+            ::lk_agents_abi::worker::remote_session::AgentInfo,
             ::lk_agents_abi::errors::HostError,
         >,
     > {
@@ -2031,7 +2029,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 4 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 4 items", "SessionPort._core_agent_info"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; Ok(((item_0.extract::<::std::string::String>())?, (if item_1.is_none() { Ok(None) } else { (item_1.extract::<::std::string::String>()).map(Some) })?, (item_2.try_iter().and_then(|items| items.map(|item| { let item = item?; item.extract::<::std::string::String>() }).collect::<PyResult<Vec<_>>>()))?, (item_3.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(item.as_any()) }).collect::<PyResult<Vec<_>>>()))?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::generated::records::remote_session::agent_info_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -2088,13 +2086,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
-            (
-                ::std::string::String,
-                ::std::string::String,
-                ::std::string::String,
-                ::std::collections::BTreeMap<::std::string::String, ::std::string::String>,
-                ::std::option::Option<f64>,
-            ),
+            ::lk_agents_abi::worker::remote_session::RemoteSessionState,
             ::lk_agents_abi::errors::HostError,
         >,
     > {
@@ -2124,7 +2116,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 5 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 5 items", "SessionPort._core_session_state"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; Ok(((item_0.extract::<::std::string::String>())?, (item_1.extract::<::std::string::String>())?, (item_2.extract::<::std::string::String>())?, (item_3.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|dict| dict.iter().map(|(key, item)| Ok((key.extract::<::std::string::String>()?, item.extract::<::std::string::String>()?))).collect::<PyResult<::std::collections::BTreeMap<_, _>>>()))?, (if item_4.is_none() { Ok(None) } else { (crate::py_values::number_from_py::<f64>(item_4.as_any(), "SessionPort._core_session_state")).map(Some) })?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::generated::records::remote_session::remote_session_state_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -2136,10 +2128,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
-            ::std::option::Option<(
-                ::std::vec::Vec<::serde_json::Value>,
-                ::std::vec::Vec<::serde_json::Value>,
-            )>,
+            ::std::option::Option<::lk_agents_abi::worker::remote_session::RtcStats>,
             ::lk_agents_abi::errors::HostError,
         >,
     > {
@@ -2169,7 +2158,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (if o.is_none() { Ok(None) } else { ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "SessionPort._core_rtc_stats"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((item_0.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::py_values::value_from_py(item.as_any(), "SessionPort._core_rtc_stats") }).collect::<PyResult<Vec<_>>>()))?, (item_1.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::py_values::value_from_py(item.as_any(), "SessionPort._core_rtc_stats") }).collect::<PyResult<Vec<_>>>()))?,)) })()).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::remote_session::rtc_stats_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -2217,20 +2206,14 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
         })
     }
 
-    fn framework_info(&self) -> (::std::string::String, ::std::string::String) {
+    fn framework_info(&self) -> ::lk_agents_abi::worker::remote_session::FrameworkInfo {
         ::std::clone::Clone::clone(&self.framework_info)
     }
 
     fn update_io(
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,
-        update: (
-            ::std::option::Option<bool>,
-            ::std::option::Option<bool>,
-            ::std::option::Option<bool>,
-            ::std::option::Option<bool>,
-            ::std::option::Option<bool>,
-        ),
+        update: ::lk_agents_abi::worker::remote_session::IoUpdate,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -2243,7 +2226,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [::pyo3::IntoPyObjectExt::into_bound_py_any(update_arg, py)?];
+                    [crate::generated::records::remote_session::io_update_to_py(py, update_arg)?];
                 Ok((
                     host.bind(py).getattr("_core_update_io")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
@@ -2933,14 +2916,14 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "JobProcess._core_disconnect",
+            "JobProcess._room.disconnect",
             context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_disconnect")?,
+                    host.bind(py).getattr("_room")?.getattr("disconnect")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))

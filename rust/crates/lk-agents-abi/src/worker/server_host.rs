@@ -10,7 +10,7 @@ use crate::invoke::CallContext;
 use crate::worker::http::{EndpointHandler, EndpointKind};
 use crate::worker::ipc_host::WorkerError;
 use crate::worker::job::RunningJobInfo;
-use crate::worker::types::{ProcessStartOptions, ServerOptions};
+use crate::worker::types::{ProcessOptions, ProcessStartOptions, ServerOptions};
 
 /// Preserve the native configuration identity shared by a server and its options surface.
 #[crate::host(native(refused = "expected a native ServerConfig"))]
@@ -18,14 +18,18 @@ pub trait ServerConfiguration: Any + Send + Sync {}
 
 #[crate::host(class(name = "ServerConfig", native = ServerConfiguration))]
 pub trait ServerConfig: Send + Sync + Sized + 'static {
-    /// `options` left empty read the environment (`http_proxy`: `HTTPS_PROXY`, else
-    /// `HTTP_PROXY`).
+    /// Options left empty read the environment (`http_proxy`: `HTTPS_PROXY`, else
+    /// `HTTP_PROXY`). `version`: the SDK version the worker registers and `/worker` reports.
     #[host(new)]
-    fn new(options: ServerOptions) -> Result<Self, WorkerError>;
+    fn new(
+        options: ServerOptions,
+        process: ProcessOptions,
+        version: String,
+    ) -> Result<Self, WorkerError>;
 
     /// Before the server starts only.
     #[host(call)]
-    fn update(&self, options: ServerOptions) -> Result<(), WorkerError>;
+    fn update(&self, options: ServerOptions, process: ProcessOptions) -> Result<(), WorkerError>;
 
     #[host(getter)]
     fn ws_url(&self) -> String;

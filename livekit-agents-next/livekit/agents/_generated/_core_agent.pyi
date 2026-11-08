@@ -13,7 +13,7 @@ from livekit.agents.storage.context import ContextStore
 from livekit.agents.voice.agent_run import AgentCallbacks
 
 from .._core import Storage, _core_ContextActivation
-from .agent_authoring import AgentConfiguration, CallbackKind
+from .agent_authoring import AgentConfiguration, CallbackKind, ToolOptions
 from .agent_run import AgentDefinition, EventExpectation, Retries, RunRequest, RunUpdate
 from .chat_items import ChatItem
 from .run_stream_events import PresentedEvent, StreamOutcome
@@ -67,7 +67,8 @@ class _core_AgentConfig:
     @property
     def validated_output(self) -> bool: ...
     def configuration(self, retries: object | None) -> AgentConfiguration: ...
-    def check_tool_options(self, given: Sequence[str]) -> None: ...
+    def check_tool_options(self, options: ToolOptions) -> None:
+        """Refuses options given with an already built tool, which took its own when built."""
     def join_instructions(self, parts: Sequence[str]) -> str: ...
     @property
     def retries(self) -> Retries: ...

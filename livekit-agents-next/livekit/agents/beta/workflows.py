@@ -17,7 +17,7 @@ from .. import _core, llm, stt, tts
 from .._generated import public_beta_workflows as _public
 from .._generated.public_beta_workflows import *  # noqa: F403
 from .._generated.vad import VAD
-from .._generated.voice_session import DtmfTaskOptions, UpdateAgentArgs
+from .._generated.voice_session import DtmfTaskOptions
 from .._generated.workflow_prompts import (
     ASK_DIGITS_INSTRUCTIONS,
     ASK_EMAIL_INSTRUCTIONS,
@@ -37,7 +37,6 @@ from ..voice.background_audio import (
     PlayHandle,
 )
 from ..voice.events import RunContext
-from ..voice.room_io import Room
 
 if TYPE_CHECKING:
     from ..voice.io import TurnHandlingOptions
@@ -77,7 +76,7 @@ async def receive_dtmf(
 ) -> GetDtmfResult:
     """Receive keypad digits; stop at the delimiter or after an inter-digit timeout."""
     digits = await _core.receive_dtmf(
-        _core._core_create_room_session(Room.of(room)), num_digits, timeout, stop_event
+        _core._core_create_room_session(room), num_digits, timeout, stop_event
     )
     return GetDtmfResult(user_input=digits)
 
@@ -125,7 +124,7 @@ class GetDtmfTask(VoiceTask[GetDtmfResult]):
         binding = _live_binding("GetDtmfTask.run()")
         session, agent = binding.session, self._agent
         value = await session._running.run_voice_task(
-            UpdateAgentArgs(**session._frame(agent, task=True)),
+            session._frame(agent, task=True),
             origin=binding.origin,
             opens_with_reply=not agent._has_on_enter(),
             dtmf=DtmfTaskOptions(
@@ -255,7 +254,7 @@ class WarmTransfer:
             dtmf=dtmf,
             ringing_timeout=ringing_timeout,
             instructions=instructions,
-            conversation=_conversation(chat_ctx),
+            conversation=chat_ctx.items if chat_ctx is not None else None,
             env_sip_trunk=os.environ.get("LIVEKIT_SIP_OUTBOUND_TRUNK"),
             env_sip_number=os.environ.get("LIVEKIT_SIP_NUMBER", ""),
         )
@@ -269,7 +268,7 @@ class WarmTransfer:
         job_ctx = get_job_context()
         identity = await self._transfer.run(
             _TransferHost(self, session, job_ctx),
-            _core._core_create_room_session(Room.of(job_ctx.room)),
+            _core._core_create_room_session(job_ctx.room),
         )
         return WarmTransferResult(human_agent_identity=identity)
 
@@ -324,7 +323,7 @@ class TwilioConnectorWarmTransfer(WarmTransfer):
         self._transfer = _core.WarmTransfer(
             ringing_timeout=ringing_timeout,
             instructions=instructions,
-            conversation=_conversation(chat_ctx),
+            conversation=chat_ctx.items if chat_ctx is not None else None,
             twilio={
                 "phone_number": phone_number,
                 "from_number": twilio_from_number,
@@ -358,12 +357,6 @@ def _briefing_agent(
 
 def _given(**options: Any) -> dict[str, Any]:
     return {k: v for k, v in options.items() if is_given(v)}
-
-
-def _conversation(chat_ctx: llm.ChatContext | None) -> list[tuple[str, str]] | None:
-    if chat_ctx is None:
-        return None
-    return [(m.role, m.text_content or "") for m in chat_ctx.messages()]
 
 
 def _transfer_tool(transfer: _core.WarmTransfer, spec: dict[str, Any]) -> llm.RawFunctionTool:
@@ -400,9 +393,6 @@ class _TransferHost:
         await self._player.start(room=self._job.room)
         return self._player.play(self._transfer._hold_audio, loop=True)
 
-    def _core_stop_hold(self, hold: PlayHandle) -> None:
-        hold.stop()
-
     def _core_io_state(self) -> IoEnableState:
         return {
             "audio_input": self._session.input.audio_enabled,
@@ -419,7 +409,7 @@ class _TransferHost:
         _, api_key, api_secret = _server_credentials()
         token = _core.room_join_token(api_key, api_secret, identity, room_name, agent=True)
         await self._room.connect(self._job._info.url, token)
-        return _core._core_create_room_session(Room.of(self._room))
+        return _core._core_create_room_session(self._room)
 
     async def _core_start_human(self) -> None:
         await self._human.start(
@@ -432,9 +422,3 @@ class _TransferHost:
                 participant_identity=_core.WARM_TRANSFER_IDENTITY,
             ),
         )
-
-    def _core_close_human(self, drain: bool) -> None:
-        self._human.shutdown(drain=drain)
-
-    async def _core_disconnect_human(self) -> None:
-        await self._room.disconnect()

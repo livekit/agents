@@ -181,22 +181,17 @@ impl Namespace {
 
 impl host::StorageNamespace for Namespace {}
 
-fn seconds(value: Option<f64>, default: Duration, name: &str) -> Result<Duration, StorageError> {
-    match value {
-        Some(s) => Duration::try_from_secs_f64(s)
-            .map_err(|e| StorageError::Invalid(format!("{name}: {e}"))),
-        None => Ok(default),
-    }
-}
-
 /// `value`, else the environment variable `name` as float seconds.
-fn env_seconds(value: Option<f64>, name: &str) -> Result<Option<f64>, StorageError> {
+fn env_seconds(value: Option<Duration>, name: &str) -> Result<Option<Duration>, StorageError> {
     if value.is_some() {
         return Ok(value);
     }
     match std::env::var(name) {
         Ok(raw) if !raw.is_empty() => {
-            raw.parse().map(Some).map_err(|e| StorageError::Invalid(format!("{name}={raw:?}: {e}")))
+            let invalid =
+                |e: &dyn std::fmt::Display| StorageError::Invalid(format!("{name}={raw:?}: {e}"));
+            let seconds: f64 = raw.parse().map_err(|e| invalid(&e))?;
+            Duration::try_from_secs_f64(seconds).map(Some).map_err(|e| invalid(&e))
         }
         _ => Ok(None),
     }
@@ -339,15 +334,15 @@ impl HostStorageClass for Namespace {
         url: Option<String>,
         api_key: Option<String>,
         api_secret: Option<String>,
-        lease_ttl: Option<f64>,
-        renew_interval: Option<f64>,
+        lease_ttl: Option<Duration>,
+        renew_interval: Option<Duration>,
         holder: Option<String>,
     ) -> Result<Self, StorageError> {
         let default = LeaseTiming::default();
-        let lease = |ttl, renew_interval| {
+        let lease = |ttl: Option<Duration>, renew_interval: Option<Duration>| {
             LeaseTiming::new(
-                seconds(ttl, default.ttl, "lease_ttl")?,
-                seconds(renew_interval, default.renew_interval, "renew_interval")?,
+                ttl.unwrap_or(default.ttl),
+                renew_interval.unwrap_or(default.renew_interval),
             )
         };
         let config = match local {

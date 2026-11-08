@@ -86,9 +86,9 @@ def _rtc_runtime() -> None:
 
 
 def _shared_ssl_context() -> None:
-    from ..utils.http_context import _create_ssl_context
+    from ..utils.http_context import _ssl_context
 
-    _create_ssl_context()
+    _ssl_context()
 
 
 _step("the livekit-rtc native library", _rtc_native_library)

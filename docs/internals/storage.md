@@ -487,8 +487,8 @@ databases and the threads service mints `AT_` ids and manages thread metadata.
 | Argument                 | Environment variable when omitted                                         |
 | ------------------------ | ------------------------------------------------------------------------- |
 | `api_key`, `api_secret`  | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`                                    |
-| `lease_ttl`              | `LIVEKIT_AGENTDB_LEASE_TTL` in seconds, else 10 seconds                    |
-| `renew_interval`         | `LIVEKIT_AGENTDB_RENEW_INTERVAL` in seconds, else 3 seconds; positive and less than half `lease_ttl` |
+| `lease_ttl`              | a `timedelta`; `LIVEKIT_AGENTDB_LEASE_TTL` in seconds, else 10 seconds     |
+| `renew_interval`         | a `timedelta`; `LIVEKIT_AGENTDB_RENEW_INTERVAL` in seconds, else 3 seconds; positive and less than half `lease_ttl` |
 | `holder`                 | this worker's lease holder id, `<hostname>-<pid>` by default               |
 
 #### Connection and authentication

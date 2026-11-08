@@ -5,21 +5,27 @@ use serde_json::Value;
 
 use crate::ChatItem;
 
-/// What an assertion expects of an event: its kind and the fields it names.
+/// What an assertion expects of an event: its kind and the fields it names; a field left `None`
+/// is not checked.
 #[crate::host(record(module = "agent_run", extract))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum EventExpectation {
     /// `role` is the `ChatRole` literal.
     Message {
+        #[host(default = None)]
         role: Option<String>,
     },
     /// `arguments` holds the keys the call must carry with equal values; others may be present.
     FunctionCall {
+        #[host(default = None)]
         name: Option<String>,
+        #[host(default = None)]
         arguments: Option<Value>,
     },
     FunctionCallOutput {
+        #[host(default = None)]
         output: Option<String>,
+        #[host(default = None)]
         is_error: Option<bool>,
     },
 }

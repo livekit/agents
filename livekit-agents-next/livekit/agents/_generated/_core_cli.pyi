@@ -10,9 +10,12 @@ from typing import Self
 
 from livekit.agents.cli import _DevServer
 
-from .cli import CliParseResult, LogRecord
+from .cli import CliParseResult, LogLevel, LogRecord
 
 def parse_cli(argv: Sequence[str]) -> CliParseResult: ...
+
+def host_log_level(level: LogLevel) -> int:
+    """[`LogLevel::host_level`]."""
 
 def format_log_record(record: LogRecord) -> str:
     """One structured JSON line, including host-formatted exceptions and stack traces."""

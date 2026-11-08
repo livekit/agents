@@ -30,6 +30,7 @@ pub struct Declarations {
     pub constants: Vec<Constant>,
     pub str_classes: Vec<StrClass>,
     pub exception_families: Vec<crate::exceptions::Family>,
+    pub facades: Vec<FacadeClass>,
 }
 
 #[derive(Debug, Clone)]
@@ -239,6 +240,12 @@ pub struct RecordDecl {
     /// `record(.., typed_dict)`: a struct crossing as a plain dict typed by a generated `TypedDict`
     /// (an optional field is a `NotRequired` key, absent when `None`), not a model instance.
     pub typed_dict: bool,
+    /// `record(.., kwargs)`: an options struct whose model is followed by `<Name>Kwargs`, a
+    /// `TypedDict(total=False)` of its fields, so a public constructor takes
+    /// `**options: Unpack[<Name>Kwargs]` and passes them on unfiltered.
+    pub kwargs: bool,
+    /// `record(.., sdk)`: its `wire_enum` fields cross as their SDK numbers (an SDK class's fields).
+    pub sdk: bool,
     /// `record(.., enum)`: a unit-only enum crossing as a `str` `Enum` class (`CloseReason.ERROR`,
     /// its `.value` the string) rather than a `Literal` of its strings.
     pub enumeration: bool,
@@ -476,8 +483,10 @@ pub struct Proxy {
     pub view: Option<(String, String)>,
     /// `sdk`: the host is an SDK object whose enums are numbers: a `wire_enum` it returns is read
     /// as its SDK number (`TryFrom<i32>`); a number this build has no variant for reads as the
-    /// enum's `Default`, and is dropped from a list.
+    /// enum's `Default`, and is dropped from a list. It passes them as their SDK numbers too.
     pub sdk: bool,
+    /// `events(..)`: the SDK events the host object's `on` delivers, each to its native entry.
+    pub events: Option<crate::proxy_sdk::Events>,
     /// `base = "tts.py"`: the host class is a plugin base class, hand-written in that file beside
     /// the declaring one (see `crate::bases`).
     pub base: Option<String>,
@@ -580,6 +589,11 @@ pub enum Target {
     Attribute(Vec<String>),
     /// `function = "module.name"`: that module function, called with the host object first.
     Function { module: String, name: String },
+    /// `emit = "event"`: the arguments emitted as that event on the host's event emitter.
+    Emit(String),
+    /// `iter`: the next item of the host's `AsyncIterator` (the host itself, or the attribute
+    /// along `getter = "a.b"`), opened by the first pull; its end reads as `None`.
+    Iter(Vec<String>),
 }
 
 /// How the core calls the host: declared, then checked against the signature.
@@ -689,8 +703,6 @@ pub struct Assoc {
 
 #[derive(Debug, Clone)]
 pub struct Method {
-    /// An authoring facade's direct native delegation, generated with this signature.
-    pub facade: Option<Facade>,
     pub rust_name: String,
     /// `&mut self`.
     pub mutable: bool,
@@ -716,36 +728,109 @@ pub struct Method {
     pub doc: Vec<String>,
 }
 
+/// `#[host(facade(..))] trait X`: the public Python class over a native class, one method per
+/// Python method, in order (docs/internals/rust-core.md "Facades").
 #[derive(Debug, Clone)]
-pub struct Facade {
+pub struct FacadeClass {
+    /// The Python class name: the trait's, or `name = ".."`.
+    pub name: String,
+    /// `path = "livekit.agents.x"`: the public module re-exporting it.
+    pub path: String,
+    /// `extended`: the base of the handwritten subclass of its name in `path`, which is the
+    /// public class; it is not re-exported.
+    pub extended: bool,
+    /// The generated module under `_generated/` (`facades_<x>` for `livekit.agents.x`).
     pub module: String,
-    pub class: String,
-    pub target: String,
-    pub future: bool,
-    pub discard: bool,
-    pub omit: Option<String>,
-    /// Each `Option` parameter defaulting to `None` is the host's `NotGivenOr`, sent as `None`
-    /// when not given.
-    pub not_given: bool,
-    /// The host function (`module.fn`) whose value fills the `origin` parameter: the caller's.
-    pub origin: Option<String>,
-    /// The host callable (`module.Name`) the native result is handed to.
-    pub returns: Option<String>,
-    /// A parameter's host annotation, when the delegate takes another type than the native.
-    pub annotations: Vec<(String, String)>,
-    /// A parameter's host function (`module.fn`) applied to a given value before it is sent.
-    pub resolve: Vec<(String, String)>,
-    /// On a constructor: the provider methods whose override keeps the host object as the leg.
+    /// `base = "module.Name"`, relative to `livekit.agents`.
+    pub base: Option<String>,
+    /// The native class's host name (`_core.<native>`).
+    pub native: String,
+    pub build: Build,
+    /// The provider methods whose override keeps the host object as the leg.
     pub legs: Vec<String>,
-    /// On a constructor: the host method whose value is the leg, in place of the target.
+    /// The host method whose value is the leg, in place of `_native`.
     pub leg: Option<String>,
-    /// On a constructor: built once per host object, not once per running loop.
-    pub cached: bool,
-    /// On a constructor: the host class observes its chain and emits its availability event.
     pub availability: Option<Availability>,
+    /// A native constructor parameter's host function (`module.fn`), applied when it is built.
+    pub resolve: Vec<(String, String)>,
+    /// A native constructor parameter's host annotation, for its attribute.
+    pub annotations: Vec<(String, String)>,
+    pub stream: Option<StreamForm>,
+    pub delegates: Vec<Delegate>,
+    pub source: String,
+    pub doc: Vec<String>,
+    pub methods: Vec<FacadeMethod>,
 }
 
-/// `availability(observer = "p", event = "..", record = "module.Name")` of a constructor facade.
+/// `#[host(delegate)] type X: Trait`: an object the class holds as `self._x` and forwards to.
+#[derive(Debug, Clone)]
+pub struct Delegate {
+    pub assoc: String,
+    pub attribute: String,
+    pub ty: Ty,
+}
+
+/// When a facade builds its native object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Build {
+    /// In the generated `__init__`, from its parameters.
+    Eager,
+    /// `cached`: once per host object, on first use, from its `self._<param>` attributes.
+    Cached,
+    /// `per_loop`: once per running event loop, from its attributes (a native engine calls the
+    /// host objects it holds on the loop it was built on).
+    PerLoop,
+}
+
+/// `stream(op = m, owner = "_tts", native_retries, resolve(..))`: a provider stream whose `_run`
+/// opens the owner's native `op`, its arguments the stream's `self._<param>` attributes (passed
+/// through a `resolve` function when named), and the base pumps it.
+#[derive(Debug, Clone)]
+pub struct StreamForm {
+    pub op: String,
+    pub owner: String,
+    /// The native operation retries on its own: the base's attempts do not.
+    pub native_retries: bool,
+    pub resolve: Vec<(String, String)>,
+}
+
+/// One method of a facade trait.
+#[derive(Debug, Clone)]
+pub struct FacadeMethod {
+    /// The Python signature, resolved like a class method's.
+    pub method: Method,
+    /// The native method it calls: the same name unless `native = m`.
+    pub native: String,
+    /// `via = Assoc`: the delegate it forwards to, not the native object.
+    pub via: Option<Delegate>,
+    /// `(parameter, attribute)`: the parameters declared as a delegate (`Self::X`).
+    pub delegated: Vec<(String, String)>,
+    /// A native `None` raises `StopAsyncIteration`.
+    pub none_ends_iteration: bool,
+    /// `wrap = Record::field`: the native value becomes that record's field, `(module, name,
+    /// field)`.
+    pub wrap: Option<(String, String, String)>,
+    /// `exit = m`: an `async with` whose entry is the native method and whose exit is `m`, passed
+    /// the entry's value when it takes one.
+    pub exit: Option<String>,
+    pub adapt: Adapt,
+}
+
+/// The per-method adaptations of a facade forward.
+#[derive(Debug, Clone, Default)]
+pub struct Adapt {
+    pub future: bool,
+    pub discard: bool,
+    pub not_given: bool,
+    pub origin: Option<String>,
+    pub returns: Option<String>,
+    pub annotations: Vec<(String, String)>,
+    pub resolve: Vec<(String, String)>,
+}
+
+/// `availability(observer = "p", event = "..", record = "module.Name")` of a facade: the host
+/// object is the chain observer its native constructor takes as `p`, and emits `event` as
+/// `record(entry of _members, available)`.
 #[derive(Debug, Clone)]
 pub struct Availability {
     pub observer: String,
@@ -794,6 +879,10 @@ pub struct Param {
     pub one_or_many: bool,
     /// `#[host(pcm)]` on bytes: a 16-bit PCM view is read as its bytes, a partial sample included.
     pub pcm: bool,
+    /// `#[host(sdk)]`: a `wire_enum` (or an optional one) the host passes as its SDK number.
+    pub sdk: bool,
+    /// `#[host(kwargs)]` on a proxy's `typed_dict` record: its keys are the call's keyword arguments.
+    pub kwargs: bool,
 }
 
 /// A declared default, written once as a host literal and converted for both sides.
@@ -829,7 +918,7 @@ pub enum Ty {
     Bool,
     Int(Int),
     Float,
-    /// `std::time::Duration`: seconds, as a float on the host.
+    /// `std::time::Duration`: a `datetime.timedelta` on the host.
     Duration,
     /// `std::time::SystemTime`: a wall clock, as the host's float of Unix seconds.
     Timestamp,

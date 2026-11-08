@@ -451,9 +451,12 @@ def byte_stream_host():
         async def aclose(self):
             sent.append((self.topic, self.data))
 
+    class Sdk:
+        async def stream_bytes(self, *, name, topic, destination_identities, attributes):
+            return Writer(topic)
+
     class Participant:
-        async def _core_stream_bytes(self, opts):
-            return Writer(opts.topic)
+        sdk = Sdk()
 
     return SimpleNamespace(
         pair=(loop, contextvars.copy_context()), participant=Participant(), sent=sent

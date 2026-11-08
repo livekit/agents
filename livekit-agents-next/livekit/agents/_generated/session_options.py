@@ -87,12 +87,12 @@ class SessionLegs(TypedDict):
     llm: bool
     tts: bool
     realtime: bool
-    detector: DetectorKind | None
+    detector: NotRequired[DetectorKind]
     """An end-of-turn detector was built, and which protocol it speaks."""
-    adaptive_detector: bool
-    audio_enabled: bool
-    audio_output: bool
-    sink_can_pause: bool
+    adaptive_detector: NotRequired[bool]
+    audio_enabled: NotRequired[bool]
+    audio_output: NotRequired[bool]
+    sink_can_pause: NotRequired[bool]
 
 
 class ResolvedEndpointing(TypedDict):

@@ -1,27 +1,31 @@
 # GENERATED FILE -- DO NOT EDIT.
-# From #[host(facade)] declarations in lk-agents-abi.
+# From #[host(facade)] traits in lk-agents-abi.
 
 from __future__ import annotations
 
-import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from .. import _core
-from .storage_class import ThreadInfo
-from collections.abc import Mapping
-from .storage_class import ThreadItemPage
-from .storage_class import TaskPage
-from .storage_class import TaskState
-from .storage_class import TaskOrder
-from .storage_class import TaskRecord
-from .storage_class import EventRow
+from .. import _bindings, _core
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from .storage_class import (
+        EventRow,
+        TaskOrder,
+        TaskPage,
+        TaskRecord,
+        TaskState,
+        ThreadInfo,
+        ThreadItemPage,
+    )
 
 
-class ThreadReads:
+class Thread:
+    """`ctx.thread`'s reads (docs/threads.md): each opens the thread's database for the call."""
+
     if TYPE_CHECKING:
-
-        @property
-        def _native(self) -> _core._core_ThreadHandle: ...
+        _native: _core._core_ThreadHandle
 
     @property
     def id(self) -> str:

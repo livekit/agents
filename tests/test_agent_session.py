@@ -336,7 +336,7 @@ async def test_close_before_start_prevents_opening_a_session() -> None:
     await session.aclose()
     with pytest.raises(RuntimeError, match="closed"):
         await session.start(Agent(instructions="Welcome the caller.", name="reception"))
-    assert session._owner.session is None
+    assert session._native.session is None
 
 
 async def test_selecting_an_agent_before_start_keeps_its_callbacks_configurable() -> None:

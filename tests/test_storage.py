@@ -81,14 +81,10 @@ async def run_turn(
     *,
     debounce: timedelta | None = None,
     task_id: str | None = None,
-    wait_timeout: float | None = None,
+    wait_timeout: timedelta | None = None,
 ) -> TurnResult:
     """One message through the Rust turn with the door's host, as the A2A service runs it."""
-    options = TurnOptions(
-        policy=policy,
-        debounce=debounce.total_seconds() if debounce is not None else None,
-        wait_timeout=wait_timeout,
-    )
+    options = TurnOptions(inbox=policy, debounce=debounce, wait_timeout=wait_timeout)
     host = _TurnHost(
         handler,
         thread=Thread(storage, thread_id, agent_name=lane),
@@ -728,7 +724,14 @@ async def test_a_lease_timeout_fails_the_early_row(thread_storages: Workers) -> 
     first = asyncio.create_task(run_turn(a, sid, LANE, a2a("one", "m1"), "queue", slow))
     await entered.wait()
     second = await run_turn(
-        b, sid, LANE, a2a("two", "m2"), "queue", echo, task_id="AST_2", wait_timeout=0.05
+        b,
+        sid,
+        LANE,
+        a2a("two", "m2"),
+        "queue",
+        echo,
+        task_id="AST_2",
+        wait_timeout=timedelta(seconds=0.05),
     )
     assert second.task.status == "failed"
     assert second.task.data.status_message["metadata"][REASON] == "lease-timeout"

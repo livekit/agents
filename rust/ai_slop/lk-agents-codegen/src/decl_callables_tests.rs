@@ -245,7 +245,7 @@ fn declared_class_instances_are_accepted_by_batch_operations() {
 
 #[test]
 fn transparent_tuple_values_use_shared_shape_checks_and_accept_iterable_batches() {
-    let declarations = read(r#"
+    let declarations = read_with_tuples(r#"
         #[crate::host(record(module = "tokenize", extract, emit, transparent))]
         pub enum Token { Text(String), Span((String, usize, usize)) }
         #[crate::host(proxy(host = "livekit.agents.tokenize.Tokenizer"))]
@@ -269,7 +269,7 @@ fn transparent_tuple_values_use_shared_shape_checks_and_accept_iterable_batches(
     let adapters = crate::adapter::emit(&declarations).unwrap();
     let adapter = &adapters.iter().find(|adapter| adapter.path == "llm.rs").unwrap().text;
     assert!(adapter.contains("try_iter()") && adapter.contains("token_from_py"), "{adapter}");
-    let ambiguous = read(
+    let ambiguous = read_with_tuples(
         r#"
         #[crate::host(record(module = "tokenize", extract, transparent))]
         pub enum Two { First((String, usize)), Second((usize, usize)) }
@@ -429,7 +429,7 @@ fn dictionary_records_use_their_declared_model_in_both_directions() {
 
 #[test]
 fn callable_annotations_follow_the_declared_call_and_its_iterable_result_reader() {
-    let declarations = read(r#"
+    let declarations = read_with_tuples(r#"
         use std::sync::Arc;
         #[crate::host(record(module = "tokens", extract, emit, transparent))]
         pub enum Token { Text(String), Span((String, usize, usize)) }

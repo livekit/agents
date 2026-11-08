@@ -19,9 +19,11 @@ from typing import TYPE_CHECKING, Any, Generic, cast, overload
 from livekit import rtc
 
 from .. import _core, llm, stt, tts
-from .._generated import public_voice_agent_session as _public
+from .._generated import (
+    facades_voice_agent_session as _facades,
+    public_voice_agent_session as _public,
+)
 from .._generated.public_voice_agent_session import *  # noqa: F403
-from .._generated.session_commands import SessionCommands
 from .._generated.session_options import TextTransforms as TextTransforms
 from .._generated.session_wire import (
     HostWire,
@@ -48,7 +50,6 @@ from ._session_bindings import (
     TTSNode as TTSNode,
     UserTurnCompletedHook as UserTurnCompletedHook,
     UserTurnExceededHook as UserTurnExceededHook,
-    VoiceActivityVideoSampler as VoiceActivityVideoSampler,
     _CallbackT,
     _stt_model,
     _tts_model,
@@ -92,13 +93,13 @@ _delivered: contextvars.ContextVar[tuple[VoiceSession[Any], _SessionState]] = (
 )
 
 
-class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Context_T]):
+class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[Context_T]):
     _context: Context_T
     _thread: Thread | None
     _execution_id: str
     _conn_options: SessionConnectOptions
     _options: _core.SessionOptions
-    _owner: _core._core_SessionOwner
+    _native: _core._core_SessionOwner
     _stt_context: STTContextOptions | None
     _llm: llm.LLM | llm.RealtimeModel | None
     _tools: list[llm.Tool | llm.Toolset]
@@ -217,7 +218,7 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
     @property
     def options(self) -> dict[str, Any]:
         """The configuration the core runs on, current the instant a change is sent."""
-        return cast(dict[str, Any], self._owner.resolved_options(self._adapter._legs()))
+        return cast(dict[str, Any], self._native.resolved_options(self._adapter._legs()))
 
     @property
     def conn_options(self) -> SessionConnectOptions:
@@ -246,7 +247,7 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
         delivered = _delivered.get(None)
         if delivered is not None and delivered[0] is self:
             return delivered[1]
-        return self._owner.state
+        return self._native.state
 
     @property
     def amd(self) -> AMD | None:
@@ -266,14 +267,14 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
 
     @property
     def current_agent(self) -> Agent:
-        agent = self._owner.current_agent
+        agent = self._native.current_agent
         if agent is None:
             raise RuntimeError("VoiceSession isn't running")
         return cast(Agent, agent)
 
     @property
     def _core(self) -> _NativeSession:
-        return cast("_NativeSession", self._owner.session)
+        return cast("_NativeSession", self._native.session)
 
     @property
     def _running(self) -> _NativeSession:
@@ -355,11 +356,11 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
             if ctx is not None
             else None
         )
-        await self._owner.start(host.storage, host, job=job)
+        await self._native.start(host.storage, host, job=job)
         # the session's span is the caller's current span from here: the entrypoint's own spans
         # and the job's RPC handlers nest under it. It stays attached for the rest of the
         # entrypoint, which outlives the session's start; the job's context ends with the job.
-        if (span := self._owner.span) is not None:
+        if (span := self._native.span) is not None:
             self._root_span_context = _context(span)
             otel_context.attach(self._root_span_context)
 
@@ -370,10 +371,10 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
         await self._aclose(CloseReason.USER_INITIATED)
 
     async def _aclose(self, reason: CloseReason) -> None:
-        await self._owner.aclose(reason.value)
+        await self._native.aclose(reason.value)
 
     def shutdown(self, *, drain: bool = True) -> None:
-        self._owner.shutdown(CloseReason.USER_INITIATED.value, drain=drain)
+        self._native.shutdown(CloseReason.USER_INITIATED.value, drain=drain)
 
     async def __aenter__(self) -> VoiceSession[Context_T]:
         return self
@@ -409,9 +410,9 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
         """Hand the conversation to ``agent``; the session and its history stay. ``chat_ctx`` is
         the context ``agent`` works on instead of the conversation carried forward; before
         ``start()``, the history the session starts on unless ``start()`` names its own."""
-        frame = UpdateAgentArgs(**self._frame(agent)) if self._core is not None else None
+        frame = self._frame(agent) if self._core is not None else None
         items = chat_ctx.items if chat_ctx is not None else None
-        self._owner.update_agent(agent, frame, chat_ctx=items)
+        self._native.update_agent(agent, frame, chat_ctx=items)
 
     def _agent_chat_ctx(self) -> ChatContext:
         """The driving agent's own context, as the core keeps it."""
@@ -433,7 +434,7 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
         """Layer settings over the session's for the block: each takes its value from the
         topmost layer that sets it, else from the base, and the layer is released when the
         block ends, however it ends. Refused as ``update_options`` refuses."""
-        layer = self._owner.override_options(
+        layer = self._native.override_options(
             stt=_stt_model(stt),
             tts=_tts_model(tts),
             vad=vad,
@@ -451,7 +452,7 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
             raise
         finally:
             try:
-                self._owner.release_override(layer)
+                self._native.release_override(layer)
             except _core.SessionClosing as refused:
                 # a closed session has nothing left to restore; the block's own error is the one
                 # to raise
@@ -460,7 +461,7 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
 
     # --- frames --------------------------------------------------------------------------
 
-    def _frame(self, agent: Agent, *, task: bool = False) -> dict[str, Any]:
+    def _frame(self, agent: Agent, *, task: bool = False) -> UpdateAgentArgs:
         return self._adapter._frame(agent, task=task)
 
     # --- the core's events ---------------------------------------------------------------
@@ -541,7 +542,7 @@ class VoiceTask(Generic[Output_T, Context_T]):
         binding = _live_binding("VoiceTask.run()")
         session, agent = binding.session, self._agent
         reply = session._running.run_voice_task(
-            UpdateAgentArgs(**session._frame(agent, task=True)),
+            session._frame(agent, task=True),
             origin=binding.origin,
             opens_with_reply=not agent._has_on_enter(),
         )
@@ -551,7 +552,6 @@ class VoiceTask(Generic[Output_T, Context_T]):
 
 __all__ = [
     "VoiceSession",
-    "VoiceActivityVideoSampler",
     "TextTransforms",
 ]
 __all__ += _public.__all__

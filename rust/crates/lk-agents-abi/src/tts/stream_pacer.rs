@@ -16,11 +16,11 @@ pub trait HostSentenceStream: Send + Sync {
     #[host(notify, name = "end_input")]
     fn end_input(&self);
     /// The next sentence, `None` once the stream ended.
-    #[host(await, name = "_core_next")]
+    #[host(await, iter)]
     fn next(
         &self,
         cx: &crate::telemetry::Cx,
-    ) -> crate::BoxFuture<'_, Result<Option<String>, ProviderError>>;
+    ) -> crate::BoxFuture<'_, Result<Option<crate::tokenize::TokenData>, ProviderError>>;
     #[host(await, name = "aclose")]
     fn aclose(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
 }
@@ -32,10 +32,23 @@ pub trait PushedAudio: Send + Sync {
     fn pushed_duration(&self) -> f64;
 }
 
-/// `SentenceStreamPacer.wrap()`: a host sentence stream's sentences, paced by the audio its
-/// emitter pushed. The first sentence goes at once; the next batch once the audio stopped
-/// growing and less than `min_remaining_audio` seconds of it is left to play, at most
+/// `tts.SentenceStreamPacer`: the first sentence goes at once; the next batch once the audio
+/// stopped growing and less than `min_remaining_audio` seconds of it is left to play, at most
 /// `max_text_length` characters of whole sentences joined by a space.
+#[crate::host(record(
+    module = "stream_pacer",
+    extract,
+    emit,
+    host_type = "livekit.agents.tts.SentenceStreamPacer"
+))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SentenceStreamPacer {
+    pub min_remaining_audio: f64,
+    pub max_text_length: usize,
+}
+
+/// `SentenceStreamPacer.wrap()`: a host sentence stream's sentences, paced by the audio its
+/// emitter pushed.
 #[crate::host(class(name = "_core_PacedSentences"))]
 pub trait PacedSentences: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
@@ -45,10 +58,9 @@ pub trait PacedSentences: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(
         env: &Self::Env,
-        sentences: Arc<dyn HostSentenceStream>,
-        audio: Arc<dyn PushedAudio>,
-        min_remaining_audio: f64,
-        max_text_length: usize,
+        sent_stream: Arc<dyn HostSentenceStream>,
+        audio_emitter: Arc<dyn PushedAudio>,
+        #[host(kw)] pacer: SentenceStreamPacer,
     ) -> Self;
 
     /// The next batch, `None` once the input ended and every sentence went; the host stream's
@@ -59,4 +71,31 @@ pub trait PacedSentences: Send + Sync + Sized + 'static {
     /// Stop reading and close the host stream.
     #[host(await)]
     async fn aclose(&self, cx: crate::telemetry::Cx);
+}
+
+/// `tts.StreamPacerWrapper`: a sentence stream paced by the audio its emitter pushed.
+#[crate::host(facade(path = "livekit.agents.tts", base = "tokenize.SentenceStream",
+                     native = PacedSentences))]
+pub trait StreamPacerWrapper {
+    /// Text pushed to the wrapper goes here.
+    #[host(delegate)]
+    type SentStream: HostSentenceStream;
+
+    #[host(new)]
+    fn new(
+        sent_stream: Self::SentStream,
+        audio_emitter: Arc<dyn PushedAudio>,
+        #[host(kw)] pacer: SentenceStreamPacer,
+    ) -> Self;
+
+    #[host(via = SentStream)]
+    fn push_text(&self, text: String);
+    #[host(via = SentStream)]
+    fn flush(&self);
+    #[host(via = SentStream)]
+    fn end_input(&self);
+
+    #[host(none_ends_iteration, wrap = crate::tokenize::TokenData::token)]
+    async fn __anext__(&self) -> Option<crate::tokenize::TokenData>;
+    async fn aclose(&self);
 }

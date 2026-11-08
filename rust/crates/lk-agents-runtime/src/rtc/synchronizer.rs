@@ -269,7 +269,7 @@ impl lk_agents_abi::voice::rtc::media::AVSynchronizer for AVSynchronizer {
     }
     fn last_audio_time(&self) -> Result<f64, RtcError> {
         let last = self.inner.state.lock().last_audio;
-        Ok(last - self.inner.audio.queued_duration()?.as_secs_f64())
+        Ok(last - self.inner.audio.queued_seconds()?)
     }
 
     async fn aclose(&self) -> Outcome {

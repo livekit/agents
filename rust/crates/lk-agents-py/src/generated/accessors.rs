@@ -464,6 +464,11 @@ impl AgentsTypesModule {
     pub fn not_given<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
         obj.as_any().getattr("NotGiven")
     }
+    pub fn not_given_value<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("NOT_GIVEN")
+    }
 }
 
 /// Python interface: `livekit.agents.voice.room_io.AudioInputOptions`.

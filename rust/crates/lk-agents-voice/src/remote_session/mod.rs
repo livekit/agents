@@ -8,7 +8,7 @@ use lk_agents_abi::usage::{ModelUsage, Usage};
 use lk_agents_abi::voice::amd::AmdCategory;
 use lk_agents_abi::voice::events::{AgentState, ToolEndStatus, ToolReplyStatus};
 pub use lk_agents_abi::worker::remote_session::{
-    AgentInfo, IoUpdate, RtcStats, SessionPort, SessionState,
+    AgentInfo, FrameworkInfo, IoUpdate, RemoteSessionState, RtcStats, SessionPort,
 };
 use lk_agents_abi::worker::remote_session::{
     FunctionCallRef, RemoteSessionEventKind, RemoteSessionRequestKind, ToolExecutionUpdatedWire,
@@ -259,10 +259,10 @@ pub fn session_event(
         }
         W::FunctionToolsExecuted(ev) => tools_executed(ev),
         W::OverlappingSpeech(ev) => WireEvent::OverlappingSpeech(OverlappingSpeechWire {
-            is_interruption: ev.event.is_interruption,
-            overlap_started_at: ev.event.overlap_started_at,
-            detection_delay: ev.event.detection_delay,
-            detected_at: ev.event.detected_at,
+            is_interruption: ev.is_interruption,
+            overlap_started_at: ev.overlap_started_at,
+            detection_delay: ev.detection_delay,
+            detected_at: ev.detected_at,
         }),
         _ => return None,
     };
@@ -321,13 +321,13 @@ pub fn decode_debug_message(raw: &[u8]) -> Result<Option<proto::Struct>, prost::
 /// Absent inner field == absent submessage, as the reference checks `HasField("input")` first.
 pub fn io_update(io: &proto::session_request::UpdateIo) -> IoUpdate {
     let (i, o) = (io.input.as_ref(), io.output.as_ref());
-    (
-        i.and_then(|i| i.audio_enabled),
-        i.and_then(|i| i.video_enabled),
-        o.and_then(|o| o.audio_enabled),
-        o.and_then(|o| o.video_enabled),
-        o.and_then(|o| o.transcription_enabled),
-    )
+    IoUpdate {
+        input_audio: i.and_then(|i| i.audio_enabled),
+        input_video: i.and_then(|i| i.video_enabled),
+        output_audio: o.and_then(|o| o.audio_enabled),
+        output_video: o.and_then(|o| o.video_enabled),
+        output_transcription: o.and_then(|o| o.transcription_enabled),
+    }
 }
 
 /// `request.WhichOneof("request")`, used in logs and client errors.
@@ -343,10 +343,10 @@ pub enum SessionReply {
     ChatHistory(Vec<ChatItem>),
     AgentInfo(AgentInfo),
     RunInput(Result<Vec<ChatItem>, lk_agents_abi::errors::HostError>),
-    SessionState(SessionState),
+    SessionState(RemoteSessionState),
     RtcStats(Option<RtcStats>),
     SessionUsage(Usage),
-    FrameworkInfo(String, String),
+    FrameworkInfo(FrameworkInfo),
     UpdateIo,
     FinalizeSimulation(
         Result<Option<lk_agents_abi::worker::SimulationVerdict>, lk_agents_abi::errors::HostError>,
@@ -419,7 +419,7 @@ pub fn encode_session_reply(
                 items: items.iter().map(encode_chat_item).collect(),
             }),
         ),
-        SessionReply::AgentInfo((id, instructions, tools, chat_ctx)) => (
+        SessionReply::AgentInfo(AgentInfo { id, instructions, tools, chat_ctx }) => (
             None,
             Response::GetAgentInfo(proto::session_response::GetAgentInfoResponse {
                 id,
@@ -440,7 +440,13 @@ pub fn encode_session_reply(
                 }),
             )
         }
-        SessionReply::SessionState((agent_state, user_state, agent_id, options, started_at)) => {
+        SessionReply::SessionState(RemoteSessionState {
+            agent_state,
+            user_state,
+            agent_id,
+            options,
+            started_at,
+        }) => {
             let agent_state = AgentState::from_wire(&agent_state).unwrap_or(AgentState::Idle);
             let user_state = UserState::from_wire(&user_state).unwrap_or(UserState::Listening);
             let started_at = started_at.filter(|t| *t != UNSET_STARTED_AT).unwrap_or(now);
@@ -456,13 +462,13 @@ pub fn encode_session_reply(
             )
         }
         SessionReply::RtcStats(stats) => {
-            let (publisher, subscriber) = stats.unwrap_or_default();
+            let stats = stats.unwrap_or_default();
             let structs = |v: &[serde_json::Value]| v.iter().filter_map(json_to_struct).collect();
             (
                 None,
                 Response::GetRtcStats(proto::session_response::GetRtcStatsResponse {
-                    publisher_stats: structs(&publisher),
-                    subscriber_stats: structs(&subscriber),
+                    publisher_stats: structs(&stats.publisher_stats),
+                    subscriber_stats: structs(&stats.subscriber_stats),
                 }),
             )
         }
@@ -473,7 +479,7 @@ pub fn encode_session_reply(
                 created_at: Some(encode_epoch_secs(now)),
             }),
         ),
-        SessionReply::FrameworkInfo(sdk, sdk_version) => (
+        SessionReply::FrameworkInfo(FrameworkInfo { sdk, sdk_version }) => (
             None,
             Response::GetFrameworkInfo(proto::session_response::GetFrameworkInfoResponse {
                 sdk,

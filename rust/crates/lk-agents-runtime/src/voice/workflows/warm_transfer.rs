@@ -9,11 +9,12 @@ use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::{ApiError, HostError};
 use lk_agents_abi::voice::rtc::{DisconnectReason, RoomEvent, RtcRoom, TRACK_KIND_AUDIO};
 use lk_agents_abi::voice::workflows::InstructionsArg;
+use lk_agents_abi::voice::workflows::warm_transfer::HoldMusic;
 pub use lk_agents_abi::voice::workflows::warm_transfer::{
     HUMAN_AGENT_IDENTITY, TWILIO_RINGING_TIMEOUT, TransferFailed, WarmTransferRefused,
 };
 use lk_agents_abi::voice::workflows::{TwilioCallEnd, TwilioDial};
-use lk_agents_abi::{Clock, HostRef, Spawner, SpawnerExt};
+use lk_agents_abi::{Clock, Spawner, SpawnerExt};
 use lk_agents_net::room_service::{RoomService, SipCall, Telephony, api_error};
 use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::workflows::effects::{TransferEffects, TransferToolEffect};
@@ -128,7 +129,7 @@ impl TransferApi for ProjectApi {
 struct Running {
     phase: RunPhase,
     core: Transfer,
-    hold: Option<HostRef>,
+    hold: Option<Arc<dyn HoldMusic>>,
     watcher: Option<TaskId>,
 }
 
@@ -312,7 +313,7 @@ impl TransferRun {
                 host.close_human(drain);
             }
             if let Some(hold) = hold {
-                host.stop_hold(hold);
+                hold.stop();
             }
             if let Some(io) = effects.io {
                 host.set_io(io);
@@ -666,7 +667,7 @@ impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransf
         dtmf: Option<String>,
         ringing_timeout: Option<f64>,
         instructions: Maybe<InstructionsArg>,
-        conversation: Option<Vec<(String, String)>>,
+        conversation: Option<Vec<lk_agents_abi::ChatItem>>,
         env_sip_trunk: Option<String>,
         env_sip_number: String,
         twilio: Option<TwilioDial>,
@@ -817,14 +818,11 @@ mod tests {
         fn start_hold(
             &self,
             _cx: &telemetry::Cx,
-        ) -> lk_agents_abi::BoxFuture<'_, Result<Option<HostRef>, HostError>> {
+        ) -> lk_agents_abi::BoxFuture<'_, Result<Option<Arc<dyn HoldMusic>>, HostError>> {
             Box::pin(async move {
                 self.hold_starts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 std::future::pending().await
             })
-        }
-        fn stop_hold(&self, _: HostRef) {
-            unreachable!()
         }
         fn io_state(&self) -> IoEnableState {
             unreachable!()

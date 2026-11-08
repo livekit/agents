@@ -117,7 +117,7 @@ reaches, crosses to the turn in the order the handler awaited it:
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `endpoint`                          | the last path segment of the endpoint's URL                                                                                              |
 | `description`                       | required: what another agent reads to decide whether to call                                                                             |
-| `inbox`, `debounce`                 | see below                                                                                                                                |
+| `inbox`, `debounce`, `wait_timeout` | see below                                                                                                                                |
 | `storage`                           | this endpoint's storage when it is not the server's                                                                                      |
 | `version`                           | the card's version                                                                                                                       |
 
@@ -167,10 +167,16 @@ if __name__ == "__main__":
 | `ws_url`, `api_key`, `api_secret` | the LiveKit project; default `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` |
 | `num_idle_processes` | job processes kept warm ahead of dispatch; `min(ceil(cpus), 4)` in production, none in development |
 | `load_threshold` | load at which the worker stops taking jobs; production default 0.7 |
-| `job_memory_warn_mb`, `job_memory_limit_mb` | a job process's memory warning and kill thresholds |
+| `job_memory_warn_mb`, `job_memory_limit_mb` | a job process's memory warning and kill thresholds in MB; default 1000 and none |
 | `drain_timeout` | maximum seconds to wait for active work after stopping admission; default 3600; zero skips waiting |
 | `shutdown_timeout` | total process shutdown budget in seconds, including draining and cleanup; default 3610; must exceed `drain_timeout` |
 | `listeners` | the worker's `public`, `health` and `prometheus` listeners; see [Listeners](#listeners) |
+
+Every option but `storage`, `project_id`, `thread_api_port` and `preload_modules` is a key of
+`ServerOptionsKwargs`, declared once with the server's defaults; a type checker flags an
+unknown one. Process tuning (connection retries, the job processes' start method, executor,
+timeouts, HTTP proxy and participant permissions) is not an `AgentServer` option: the launcher
+sets it (see [Launching and shutdown](#launching-and-shutdown)).
 
 ## Worker load and admission
 
@@ -312,7 +318,10 @@ either form without changing the shared Rust CLI.
 `start` accepts `--url`, `--api-key`,
 `--api-secret`, `--log-level`, `--dev`, `--simulation`, `--cli-addr`,
 `--shutdown-timeout`, and `--drain-timeout`. CLI timeout values override server
-configuration. `console` accepts required `--connect-addr` and `--record`. Both commands
+configuration. The process tuning flags are `--max-retry`, `--http-proxy`,
+`--job-executor-type` (`process`, `thread`), `--multiprocessing-context` (`spawn`,
+`forkserver`), `--initialize-process-timeout`, `--shutdown-process-timeout` and
+`--session-end-timeout`. `console` accepts required `--connect-addr` and `--record`. Both commands
 operate on the server supplied to `cli.run_app(server)`. Help and invalid
 arguments are handled before starting that server. The launcher has no `download-files` command.
 
@@ -534,8 +543,9 @@ overrides part of the default. `debounce` is the wait before a turn starts
 so a burst has landed, under `batch`, `interrupt` and `queue`: two seconds
 for `sms`, `whatsapp` and `email` and zero for `a2a` and `delegation` by
 default. Under `interrupt` and `queue`, a message that has not had its turn
-after 60 seconds fails `lease-timeout`; under `batch` it keeps waiting, since
-the run that drains the inbox owns its messages.
+after `wait_timeout` (a `timedelta`, a minute by default) fails `lease-timeout`;
+under `batch` it keeps waiting, since the run that drains the inbox owns its
+messages. `debounce` and `wait_timeout` are `timedelta`s.
 
 ## Tasks on the wire
 

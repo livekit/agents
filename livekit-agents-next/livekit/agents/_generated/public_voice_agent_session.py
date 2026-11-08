@@ -16,6 +16,7 @@ from .keyterms import (
     STTContextOptions as STTContextOptions,
 )
 from .recording_options import RecordingOptions as RecordingOptions
+from .video_sampler import VoiceActivityVideoSampler as VoiceActivityVideoSampler
 from .voice_task_errors import VoiceTaskFailed as VoiceTaskFailed
 
 __all__: list[str] = [
@@ -26,6 +27,7 @@ __all__: list[str] = [
     "KeytermDetectionOptions",
     "ResolvedKeytermDetection",
     "STTContextOptions",
+    "VoiceActivityVideoSampler",
     "SessionConnectOptions",
     "ExpressiveOptions",
     "VoiceTaskFailed",

@@ -15,7 +15,7 @@ impl Resolver<'_> {
     /// A declaration-model proxy: every method declares its call and its context parameter.
     pub(super) fn proxy_trait(&self, tr: &syn::ItemTrait, proxy: &Entry) -> Result<Proxy, String> {
         let at = self.at;
-        voc::only(at, &proxy.nested, &["host", "view", "base", "generic", "sdk"])?;
+        voc::only(at, &proxy.nested, &["host", "view", "base", "generic", "sdk", "events"])?;
         let host = voc::text(at, &proxy.nested, "host")?.ok_or_else(|| {
             format!("{at}: proxy(host = \"module.Class\") names the class it calls")
         })?;
@@ -81,6 +81,9 @@ impl Resolver<'_> {
             host,
             view,
             sdk: voc::find(&proxy.nested, "sdk").is_some(),
+            events: voc::find(&proxy.nested, "events")
+                .map(|events| crate::proxy_sdk::read(at, events))
+                .transpose()?,
             base,
             generic,
             async_trait,
@@ -108,6 +111,8 @@ impl Resolver<'_> {
                 "name",
                 "getter",
                 "function",
+                "emit",
+                "iter",
                 "requires",
             ],
         )?;
@@ -161,7 +166,7 @@ impl Resolver<'_> {
             let name = name.trim_start_matches('_').to_owned();
             let pat = format!("{at}({name})");
             let entries = voc::read(&pt.attrs).map_err(|e| format!("{pat}: {e}"))?;
-            voc::only(&pat, &entries, &["context", "source", "cancel", "kw"])?;
+            voc::only(&pat, &entries, &["context", "source", "cancel", "kw", "kwargs"])?;
             let kw_only = voc::find(&entries, "kw").is_some()
                 || params.last().is_some_and(|p: &Param| p.kw_only && p.ty != Ty::Cx);
             if voc::find(&entries, "kw").is_some()
@@ -208,6 +213,8 @@ impl Resolver<'_> {
                     shape_error: None,
                     one_or_many: false,
                     pcm: false,
+                    sdk: false,
+                    kwargs: false,
                     by_ref: false,
                     kw_only: false,
                     default: None,
@@ -230,6 +237,8 @@ impl Resolver<'_> {
                     shape_error: None,
                     one_or_many: false,
                     pcm: false,
+                    sdk: false,
+                    kwargs: false,
                     by_ref: true,
                     kw_only: false,
                     default: None,
@@ -247,6 +256,8 @@ impl Resolver<'_> {
                     shape_error: None,
                     one_or_many: false,
                     pcm: false,
+                    sdk: false,
+                    kwargs: false,
                     by_ref,
                     kw_only: false,
                     default: None,
@@ -284,6 +295,12 @@ impl Resolver<'_> {
             };
             // It crosses to the host; a declared proxy as the host object behind it.
             check_argument(&pat, &ty)?;
+            let kwargs = voc::find(&entries, "kwargs").is_some();
+            if kwargs && (entries.len() != 1 || by_ref || !matches!(ty, Ty::Record(_))) {
+                return Err(format!(
+                    "{pat}: `kwargs` passes an owned typed_dict record as the call's keyword arguments"
+                ));
+            }
             params.push(Param {
                 name,
                 ty,
@@ -293,6 +310,8 @@ impl Resolver<'_> {
                 shape_error: None,
                 one_or_many: false,
                 pcm: false,
+                sdk: false,
+                kwargs,
             });
         }
         // The span it runs under is named at every call site: forgetting it does not compile.
@@ -411,6 +430,14 @@ impl Resolver<'_> {
             }
         };
         let (name, target) = target(&at, &entries, kind, &f.sig.ident.to_string())?;
+        if matches!(target, Target::Iter(_))
+            && (!matches!(ret.ok, Ty::Optional(_))
+                || params.iter().any(|p| !matches!(p.ty, Ty::Cx | Ty::Cancellation)))
+        {
+            return Err(format!(
+                "{at}: `iter` pulls the next item: `(&self, cx: &Cx) -> Result<Option<T>, E>`, its end `None`"
+            ));
+        }
         Ok(ProxyMethod {
             rust_name: f.sig.ident.to_string(),
             name,
@@ -474,8 +501,9 @@ impl Resolver<'_> {
 
 /// What the call reaches: `name = "a.b"` (a method along an attribute path, the Rust name by
 /// default), `getter = "a.b"` (an attribute read: in place by `call` or `read_once`, on the host's
-/// loop by `await`) or
-/// `function = "module.name"` (a module function taking the host object first). At most one.
+/// loop by `await`), `function = "module.name"` (a module function taking the host object first)
+/// or `emit = "event"` (the arguments emitted as that event). At most one. `iter` (awaited) pulls
+/// the next item of the host's `AsyncIterator`, or of the attribute along `getter`.
 fn target(
     at: &str,
     entries: &[Entry],
@@ -493,14 +521,32 @@ fn target(
         voc::text(at, entries, "name")?.map(|t| ("name", t)),
         voc::text(at, entries, "getter")?.map(|t| ("getter", t)),
         voc::text(at, entries, "function")?.map(|t| ("function", t)),
+        voc::text(at, entries, "emit")?.map(|t| ("emit", t)),
     ];
     let mut declared = declared.into_iter().flatten();
-    let (key, text) = match (declared.next(), declared.next()) {
-        (None, _) => return Ok((rust_name.to_owned(), Target::Method(vec![rust_name.to_owned()]))),
-        (Some(one), None) => one,
-        (Some(_), Some(_)) => {
-            return Err(format!("{at}: a proxy method declares one of name, getter, function"));
+    let one = match (declared.next(), declared.next()) {
+        (one, None) => one,
+        (_, Some(_)) => {
+            return Err(format!(
+                "{at}: a proxy method declares one of name, getter, function, emit"
+            ));
         }
+    };
+    if voc::find(entries, "iter").is_some() {
+        return match (kind, one) {
+            (ProxyCall::Await, None) => Ok(("__anext__".to_owned(), Target::Iter(Vec::new()))),
+            (ProxyCall::Await, Some(("getter", text))) => {
+                let along = path("getter", &text)?;
+                Ok((text, Target::Iter(along)))
+            }
+            _ => Err(format!(
+                "{at}: `iter` is awaited, over the host or the attribute along `getter`"
+            )),
+        };
+    }
+    let (key, text) = match one {
+        None => return Ok((rust_name.to_owned(), Target::Method(vec![rust_name.to_owned()]))),
+        Some(one) => one,
     };
     let target = match key {
         "name" => Target::Method(path(key, &text)?),
@@ -513,6 +559,13 @@ fn target(
         _ if kind == ProxyCall::Bind => {
             return Err(format!("{at}: a bind makes no host call"));
         }
+        "emit" if matches!(kind, ProxyCall::Notify | ProxyCall::Call) => {
+            if syn::parse_str::<syn::Ident>(&text).is_err() {
+                return Err(format!("{at}: emit = \"{text}\" names an event"));
+            }
+            Target::Emit(text.clone())
+        }
+        "emit" => return Err(format!("{at}: an event is emitted by `notify` or `call`")),
         _ => match text.rsplit_once('.') {
             Some((module, name)) if path(key, &text).is_ok() => {
                 Target::Function { module: module.to_owned(), name: name.to_owned() }

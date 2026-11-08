@@ -5,8 +5,7 @@ from typing import TYPE_CHECKING, Any, cast, get_args
 
 from .. import _core, llm
 from .._bindings import APIConnectionError, APIStatusError, APITimeoutError
-from .._generated import public_inference_llm as _public
-from .._generated.provider_hosts import InferenceLlmHost
+from .._generated import facades_inference_llm as _facades, public_inference_llm as _public
 from .._generated.public_inference_llm import *  # noqa: F403
 from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
@@ -16,8 +15,8 @@ from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, N
 from ..utils import is_given
 from . import (
     HEADER_INFERENCE_PROVIDER,
-    Credentials,
     InferenceClass,
+    _resolve_credentials,
     extract_quota_usage,
     get_inference_headers,
 )
@@ -92,7 +91,7 @@ class ProviderEndpoint:
     """Msgpack request bodies, for a provider that accepts them."""
 
 
-class LLM(InferenceLlmHost, llm.LLM):
+class LLM(_facades.LLM, llm.LLM):
     """LiveKit Inference LLM over the core's gateway client (``_core.InferenceLlm``)."""
 
     def __init__(
@@ -113,9 +112,9 @@ class LLM(InferenceLlmHost, llm.LLM):
         self._provider = provider
         self._inference_class = inference_class
         self._extra_kwargs: dict[str, object] = dict(extra_kwargs or {})
-        # the client is built from these on first use, after a fork (`InferenceLlmHost`)
+        # the client is built from these on first use, after a fork
         if _endpoint is None:
-            credentials = Credentials.resolve(base_url, api_key, api_secret)
+            credentials = _resolve_credentials(base_url, api_key, api_secret)
             self._base_url, self._api_key, self._api_secret = dataclasses.astuple(credentials)
             self._strict_tool_schema, self._gzip_body, self._msgpack_body = True, False, False
         else:

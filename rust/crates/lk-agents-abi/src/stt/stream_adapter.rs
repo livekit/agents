@@ -22,16 +22,9 @@ pub trait SttStreamAdapter: Send + Sync + Sized + 'static {
     #[host(source(item = SpeechEvent, class = "SttAdapterStream"))]
     type Events: StreamOutput<SpeechEvent> + 'static;
 
-    /// The wrapped STT and VAD; each stream binds its own recognition policy. `StreamAdapter`'s
-    /// mixin builds it from the adapter's attributes, one per loop.
+    /// The wrapped STT and VAD; each stream binds its own recognition policy. `StreamAdapter`
+    /// builds it from its attributes, one per loop.
     #[host(new)]
-    #[host(facade(
-        module = "provider_hosts",
-        class = "SttStreamAdapterHost",
-        target = "_native",
-        legs(stream, recognize),
-        resolve(stt = ".._bindings.core_leg", vad = ".._bindings.core_leg")
-    ))]
     fn new(env: &Self::Env, stt: Arc<dyn Stt>, vad: Arc<dyn Vad>) -> Self;
 
     /// `_recognize_impl`: the wrapped STT's batch path.
@@ -52,3 +45,15 @@ pub trait SttStreamAdapter: Send + Sync + Sized + 'static {
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,
     ) -> Result<crate::DuplexStream<Self::Audio, Self::Events>, ProviderError>;
 }
+
+/// `stt.StreamAdapter`'s engine, built once per loop from the adapter's attributes.
+#[crate::host(facade(
+    path = "livekit.agents.stt",
+    extended,
+    name = "StreamAdapter",
+    native = SttStreamAdapter,
+    per_loop,
+    legs(stream, recognize),
+    resolve(stt = ".._bindings.core_leg", vad = ".._bindings.core_leg")
+))]
+pub trait SttStreamAdapterFacade {}

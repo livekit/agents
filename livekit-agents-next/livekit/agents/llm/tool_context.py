@@ -21,7 +21,7 @@ from typing import (
 )
 
 from pydantic import Field, JsonValue
-from typing_extensions import ParamSpec, TypeVar
+from typing_extensions import ParamSpec, TypeVar, Unpack
 
 from .. import _core
 from .._generated.provider_data import TOOL_BEHAVIOR, ProviderFormat
@@ -32,6 +32,7 @@ from .._generated.tool_context import (
 )
 
 if TYPE_CHECKING:
+    from .._generated.agent_authoring import ToolOptionsKwargs
     from ..voice.events import RunContext
 
 
@@ -107,12 +108,6 @@ class Toolset:
             rewards.filtered(lambda tool: tool.info.name in {"balance", "redeem"})
         """
         return _FilteredToolset(self, predicate)
-
-    def _core_lifetime(self) -> _core._core_ToolsetLifetime:
-        return self._lifetime
-
-    def _core_children(self) -> _core._core_ToolsetGroup | None:
-        return self._children
 
 
 # Used by ToolChoice
@@ -249,6 +244,12 @@ def function_tool(
     needs_approval: bool | ReadBack = False,
     retries: int | None = None,
 ) -> Callable[[Callable[_P, _R]], FunctionTool[_P, _R]]: ...
+
+
+@overload
+def function_tool(
+    f: Callable[_P, _R], **options: Unpack[ToolOptionsKwargs]
+) -> FunctionTool[_P, _R] | RawFunctionTool[_P, _R]: ...
 
 
 def function_tool(

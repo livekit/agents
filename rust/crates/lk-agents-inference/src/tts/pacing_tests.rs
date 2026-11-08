@@ -50,12 +50,16 @@ impl HostSentenceStream for Host {
     fn next(
         &self,
         _cx: &telemetry::Cx,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<String>, ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::tokenize::TokenData>, ProviderError>,
+    > {
         Box::pin(async move {
             loop {
                 let changed = self.changed.notified();
-                if let Some(sentence) = self.queued.lock().pop_front() {
-                    return Ok(Some(sentence));
+                if let Some(token) = self.queued.lock().pop_front() {
+                    let segment_id = String::new();
+                    return Ok(Some(lk_agents_abi::tokenize::TokenData { segment_id, token }));
                 }
                 if *self.ended.lock() {
                     return Ok(None);
@@ -82,7 +86,12 @@ impl PushedAudio for Audio {
 
 fn paced(host: &Arc<Host>, audio: &Arc<Audio>) -> PacedSentences {
     let env = ProcessEnv::current_runtime();
-    PacedSentences::new(&env, host.clone(), audio.clone(), 5.0, 300)
+    PacedSentences::new(
+        &env,
+        host.clone(),
+        audio.clone(),
+        SentenceStreamPacer { min_remaining_audio: 5.0, max_text_length: 300 },
+    )
 }
 
 #[tokio::test(start_paused = true)]

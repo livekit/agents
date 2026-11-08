@@ -576,7 +576,8 @@ class RealtimeSession(llm.RealtimeSession):
         buffered_user_text = False
         last_item_id = chat_ctx.items[-1].id if chat_ctx.items else None
 
-        for _, item_id in diff_ops.to_create:
+        for created in diff_ops.to_create:
+            item_id = created.item_id
             item = chat_ctx.get_by_id(item_id)
             if item is None:
                 continue

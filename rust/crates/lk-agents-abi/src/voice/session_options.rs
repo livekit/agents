@@ -501,12 +501,17 @@ pub struct SessionLegs {
     // The LLM is a realtime model (its socket may own turn detection).
     pub realtime: bool,
     /// An end-of-turn detector was built, and which protocol it speaks.
+    #[host(default = None)]
     pub detector: Option<DetectorKind>,
     // The host's eight-condition gate said yes.
+    #[host(default = false)]
     pub adaptive_detector: bool,
+    #[host(default = true)]
     pub audio_enabled: bool,
+    #[host(default = true)]
     pub audio_output: bool,
     // `session.output.audio.can_pause`, cached (reading it is a host call).
+    #[host(default = true)]
     pub sink_can_pause: bool,
 }
 

@@ -126,7 +126,6 @@ pub trait ThreadHandle: Send + Sync + Sized + 'static {
 
     /// The thread id.
     #[host(getter)]
-    #[host(facade(module = "thread_reads", class = "ThreadReads", target = "_native"))]
     fn id(&self) -> String;
     /// The agent whose history `chat_history()` reads by default.
     #[host(getter)]
@@ -137,11 +136,9 @@ pub trait ThreadHandle: Send + Sync + Sized + 'static {
 
     /// The platform's record: scope, attributes, created, last active, expiry.
     #[host(await)]
-    #[host(facade(module = "thread_reads", class = "ThreadReads", target = "_native"))]
     async fn info(&self) -> Result<super::ThreadInfo, StorageError>;
     /// Change the attributes a listing returns, or the idle period.
     #[host(await)]
-    #[host(facade(module = "thread_reads", class = "ThreadReads", target = "_native"))]
     async fn update(
         &self,
         #[host(kw, default = None)] attributes: Option<std::collections::BTreeMap<String, String>>,
@@ -151,7 +148,6 @@ pub trait ThreadHandle: Send + Sync + Sized + 'static {
     /// `agent`'s; pass the page's `after` to read the next (empty on the last page). The same
     /// records Cloud's threads API answers, for an application's own read routes.
     #[host(await)]
-    #[host(facade(module = "thread_reads", class = "ThreadReads", target = "_native"))]
     async fn list_items(
         &self,
         #[host(kw, default = None)] agent: Option<String>,
@@ -163,7 +159,6 @@ pub trait ThreadHandle: Send + Sync + Sized + 'static {
     /// `status` when given. Pass the page's `next_page_token` to read the next; a token is bound
     /// to its listing.
     #[host(await)]
-    #[host(facade(module = "thread_reads", class = "ThreadReads", target = "_native"))]
     async fn list_tasks(
         &self,
         #[host(kw, default = None)] agent: Option<String>,
@@ -174,12 +169,10 @@ pub trait ThreadHandle: Send + Sync + Sized + 'static {
     ) -> Result<TaskPage, StorageError>;
     /// One task record, `None` when this thread has none of that id.
     #[host(await)]
-    #[host(facade(module = "thread_reads", class = "ThreadReads", target = "_native"))]
     async fn task(&self, task_id: String) -> Result<Option<TaskRecord>, StorageError>;
     /// One page of the journal (docs/internals/storage.md#journal), every lane, in order; pass
     /// the last `id` to read the next.
     #[host(await)]
-    #[host(facade(module = "thread_reads", class = "ThreadReads", target = "_native"))]
     async fn journal(
         &self,
         #[host(default = 0)] after_id: i64,
@@ -196,4 +189,55 @@ pub trait ThreadHandle: Send + Sync + Sized + 'static {
         #[host(kw, default = None)] status: Option<TaskState>,
         #[host(default = 50)] limit: i64,
     ) -> Result<Vec<TaskRecord>, StorageError>;
+}
+
+/// `ctx.thread`'s reads (docs/threads.md): each opens the thread's database for the call.
+#[crate::host(facade(
+    path = "livekit.agents.storage",
+    extended,
+    name = "Thread",
+    native = ThreadHandle
+))]
+pub trait ThreadFacade {
+    /// The thread id.
+    #[host(getter)]
+    fn id(&self) -> String;
+    /// The platform's record: scope, attributes, created, last active, expiry.
+    async fn info(&self) -> Result<super::ThreadInfo, StorageError>;
+    /// Change the attributes a listing returns, or the idle period.
+    async fn update(
+        &self,
+        #[host(kw, default = None)] attributes: Option<std::collections::BTreeMap<String, String>>,
+        #[host(default = None)] idle_ttl_seconds: Option<i64>,
+    ) -> Result<super::ThreadInfo, StorageError>;
+    /// One page of the thread's committed chat items in insertion order, every lane's or
+    /// `agent`'s; pass the page's `after` to read the next (empty on the last page). The same
+    /// records Cloud's threads API answers, for an application's own read routes.
+    async fn list_items(
+        &self,
+        #[host(kw, default = None)] agent: Option<String>,
+        #[host(default = None)] after: Option<String>,
+        #[host(default = 100)] limit: i64,
+    ) -> Result<ThreadItemPage, StorageError>;
+    /// One page of the thread's A2A task records: in insertion order (`order="inserted"`), or
+    /// last updated first (`"updated"`) as A2A `tasks/list` lists them; of `agent`'s lane and
+    /// `status` when given. Pass the page's `next_page_token` to read the next; a token is bound
+    /// to its listing.
+    async fn list_tasks(
+        &self,
+        #[host(kw, default = None)] agent: Option<String>,
+        #[host(default = None)] status: Option<TaskState>,
+        #[host(default = "inserted")] order: crate::storage::thread::TaskOrder,
+        #[host(default = None)] page_token: Option<String>,
+        #[host(default = 50)] limit: i64,
+    ) -> Result<TaskPage, StorageError>;
+    /// One task record, `None` when this thread has none of that id.
+    async fn task(&self, task_id: String) -> Result<Option<TaskRecord>, StorageError>;
+    /// One page of the journal (docs/internals/storage.md#journal), every lane, in order; pass
+    /// the last `id` to read the next.
+    async fn journal(
+        &self,
+        #[host(default = 0)] after_id: i64,
+        #[host(default = 100)] limit: i64,
+    ) -> Result<Vec<EventRow>, StorageError>;
 }

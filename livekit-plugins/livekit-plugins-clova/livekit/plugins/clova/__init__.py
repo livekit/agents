@@ -33,9 +33,6 @@ class ClovaSTTPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __name__)
 
-    def download_files(self) -> None:
-        pass
-
 
 Plugin.register_plugin(ClovaSTTPlugin())
 

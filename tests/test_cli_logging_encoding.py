@@ -21,7 +21,7 @@ def test_production_cli_logging_preserves_unicode_on_cp1252_stdout(monkeypatch):
     monkeypatch.setattr(sys, "stdout", stdout)
     monkeypatch.setattr(logging, "raiseExceptions", False)
 
-    setup_logging("INFO")
+    setup_logging("info")
     logging.getLogger().info("café عاوز 🗣️")
     stdout.flush()
 
@@ -38,7 +38,7 @@ def test_cli_logging_preserves_all_unicode_on_cp1252_stdout(monkeypatch):
     monkeypatch.setattr(sys, "stdout", stdout)
     monkeypatch.setattr(logging, "raiseExceptions", False)
 
-    setup_logging("INFO")
+    setup_logging("info")
     logging.getLogger().info("café عاوز 🗣️")
     stdout.flush()
 
@@ -54,7 +54,7 @@ def test_cli_logging_setup_preserves_locale_encoded_stdout_for_print(monkeypatch
     monkeypatch.setattr(root, "level", logging.NOTSET)
     monkeypatch.setattr(sys, "stdout", stdout)
 
-    setup_logging("INFO")
+    setup_logging("info")
     print("café")
     stdout.flush()
 
@@ -70,7 +70,7 @@ def test_production_cli_logging_keeps_raw_unicode_on_utf8_stdout(monkeypatch):
     monkeypatch.setattr(sys, "stdout", stdout)
     monkeypatch.setattr(logging, "raiseExceptions", False)
 
-    setup_logging("INFO")
+    setup_logging("info")
     logging.getLogger().info("café")
     stdout.flush()
 

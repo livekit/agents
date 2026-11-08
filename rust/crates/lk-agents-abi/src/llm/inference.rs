@@ -26,15 +26,6 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     /// tool schemas or accepts compressed or msgpack bodies. `inference.LLM`'s mixin builds it on
     /// first use, after a fork, from the LLM's attributes.
     #[host(new)]
-    #[host(facade(
-        module = "provider_hosts",
-        class = "InferenceLlmHost",
-        target = "_native",
-        cached,
-        legs(chat),
-        leg = "_core_native",
-        annotation(extra_kwargs = "dict[str, object]")
-    ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         env: &Self::Env,
@@ -62,7 +53,6 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     ) -> Self;
 
     #[host(getter)]
-    #[host(facade(module = "provider_hosts", class = "InferenceLlmHost", target = "_native"))]
     fn model(&self) -> String;
 
     /// The persistent request options, a copy.
@@ -71,17 +61,6 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
 
     /// Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs.
     #[host(call)]
-    #[host(facade(
-        module = "provider_hosts",
-        class = "InferenceLlmHost",
-        target = "_native",
-        not_given,
-        annotation(
-            model = ".inference_llm.LLMModels | str",
-            extra_kwargs = ".llm_provider_options.ChatCompletionOptions | dict[str, Any]"
-        ),
-        resolve(extra_kwargs = "builtins.dict")
-    ))]
     fn update_options(
         &self,
         #[host(kw, default = None)] model: Option<String>,
@@ -103,6 +82,37 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
         #[host(default = None)] extra_kwargs: Option<Extra>,
         #[host(default = None)] headers: Option<crate::Headers>,
     ) -> Result<Self::Chunks, ApiError>;
+}
+
+/// `inference.LLM`'s client, built on first use, after a fork, from the LLM's attributes.
+#[crate::host(facade(
+    path = "livekit.agents.inference.llm",
+    extended,
+    name = "LLM",
+    native = InferenceLlm,
+    cached,
+    legs(chat),
+    leg = "_core_native",
+    annotation(extra_kwargs = "dict[str, object]")
+))]
+pub trait InferenceLlmFacade {
+    #[host(getter)]
+    fn model(&self) -> String;
+
+    /// Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs.
+    #[host(
+        not_given,
+        annotation(
+            model = ".inference_llm.LLMModels | str",
+            extra_kwargs = ".llm_provider_options.ChatCompletionOptions | dict[str, Any]"
+        ),
+        resolve(extra_kwargs = "builtins.dict")
+    )]
+    fn update_options(
+        &self,
+        #[host(kw, default = None)] model: Option<String>,
+        #[host(default = None)] extra_kwargs: Option<Extra>,
+    );
 }
 
 /// Accumulates the streamed choices of one OpenAI-compatible completion into chunks, filtering

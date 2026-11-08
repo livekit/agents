@@ -3,7 +3,7 @@
 
 use lk_agents_abi::agent::Retries;
 use lk_agents_abi::agent::authoring::{
-    AgentConfiguration, AuthoringError, CallbackKind, DEFAULT_AGENT_NAME,
+    AgentConfiguration, AuthoringError, CallbackKind, DEFAULT_AGENT_NAME, ToolOptions,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -90,7 +90,8 @@ impl lk_agents_abi::agent::authoring::AgentConfig for AgentConfig {
             retries: resolve_retries(retries, self.retries)?,
         })
     }
-    fn check_tool_options(&self, given: Vec<String>) -> Result<(), AuthoringError> {
+    fn check_tool_options(&self, options: ToolOptions) -> Result<(), AuthoringError> {
+        let given = options.given();
         if given.is_empty() { Ok(()) } else { Err(AuthoringError::BuiltToolOptions(given)) }
     }
     fn join_instructions(&self, parts: Vec<String>) -> String {

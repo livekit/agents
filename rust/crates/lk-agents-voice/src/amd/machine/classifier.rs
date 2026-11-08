@@ -17,7 +17,7 @@ pub const NO_SPEECH_THRESHOLD: Duration = Duration::from_secs(10);
 
 pub const DETECTION_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Fallback for the synthetic end-of-turn backstop; see [`resolve_max_endpointing_delay`].
+/// Fallback for the synthetic end-of-turn backstop; see [`AmdRules`].
 pub const MAX_ENDPOINTING_DELAY: Duration = Duration::from_secs(3);
 
 /// Once spent, `postpone_termination` is no longer offered, forcing the model to commit.
@@ -830,26 +830,13 @@ impl Core {
     }
 }
 
-// --- option resolution ---
-
-/// An explicit option, else the activity's value, else the default; by presence, not value.
-pub fn resolve_max_endpointing_delay(
-    provided: Option<Duration>,
-    activity: Option<Duration>,
-    default: Duration,
-) -> Duration {
-    provided.or(activity).unwrap_or(default)
-}
-
 /// The detector's endpointing rule, as the host calls it.
 pub struct AmdRules;
 
 impl lk_agents_abi::voice::amd::AmdFunctions for AmdRules {
-    fn amd_resolve_max_endpointing_delay(
-        provided: Option<Duration>,
-        activity: Option<Duration>,
-    ) -> Duration {
-        resolve_max_endpointing_delay(provided, activity, MAX_ENDPOINTING_DELAY)
+    /// An explicit option, else the activity's value, else the default; by presence, not value.
+    fn amd_resolve_max_endpointing_delay(provided: Option<f64>, activity: Option<f64>) -> f64 {
+        provided.or(activity).unwrap_or(MAX_ENDPOINTING_DELAY.as_secs_f64())
     }
 
     fn amd_prediction_is_human(prediction: lk_agents_abi::voice::amd::AmdPrediction) -> bool {

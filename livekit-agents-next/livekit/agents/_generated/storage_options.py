@@ -10,24 +10,44 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Literal, TypeAlias
+
+from typing_extensions import TypedDict
 
 
 @dataclass(kw_only=True, slots=True)
 class TurnOptions:
-    """A text door's turn options; a field left out is the default."""
+    """A text door's turn options (`a2a_session`'s); a field left out is the default."""
 
-    policy: PolicySpec = None
-    """`inbox`: one policy for every channel, or a map by channel over the
-    default map; `None` is the default map.
+    inbox: PolicySpec = None
+    """The turn policy for a message that arrives while one runs: one for every channel, or a
+    map by channel over the default map; `None` is the default map.
     """
     debounce: DebounceSpec = None
-    """The wait before a turn starts, in seconds: one for every channel, or a map by channel;
-    `None` is the defaults.
+    """How long to wait for more of a burst before a turn starts: one wait for every channel,
+    or a map by channel; `None` is the defaults.
     """
-    wait_timeout: float | None = None
-    """How long a waiter polls for the lane before its task fails `lease-timeout`, in seconds;
-    `None` is a minute.
+    wait_timeout: timedelta | None = None
+    """How long a waiter polls for the lane before its task fails `lease-timeout`; `None` is a
+    minute.
+    """
+
+
+class TurnOptionsKwargs(TypedDict, total=False):
+    """`TurnOptions`'s fields as keyword arguments."""
+
+    inbox: PolicySpec
+    """The turn policy for a message that arrives while one runs: one for every channel, or a
+    map by channel over the default map; `None` is the default map.
+    """
+    debounce: DebounceSpec
+    """How long to wait for more of a burst before a turn starts: one wait for every channel,
+    or a map by channel; `None` is the defaults.
+    """
+    wait_timeout: timedelta | None
+    """How long a waiter polls for the lane before its task fails `lease-timeout`; `None` is a
+    minute.
     """
 
 
@@ -41,7 +61,7 @@ channel, or a map that overrides the default map channel by channel.
 """
 
 
-DebounceSpec: TypeAlias = float | dict[str, float] | None
+DebounceSpec: TypeAlias = timedelta | dict[str, timedelta] | None
 """The debounce as a door declares it: nothing (the defaults), one wait for every channel, or a
 map per channel.
 """

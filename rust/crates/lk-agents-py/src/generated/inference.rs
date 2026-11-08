@@ -13,8 +13,6 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/inference/mod.rs.
 type InferenceCredentialsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::InferenceCredentials;
-type InferenceCredentialsInferenceCredentialsOutput =
-    (::std::string::String, ::std::string::String, ::std::string::String);
 
 /// `explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `server`; `""` when nothing resolves. A
 /// set but empty `LIVEKIT_INFERENCE_API_KEY` shadows `server`.
@@ -60,18 +58,18 @@ pub fn inference_url(
 /// ladders above); a `ValueError` when the key or the secret does not resolve.
 #[pyfunction]
 #[pyo3(signature = (base_url, api_key, api_secret, server_url, server_api_key, server_api_secret))]
-pub fn inference_credentials(
-    py: Python<'_>,
+pub fn inference_credentials<'py>(
+    py: Python<'py>,
     base_url: ::std::option::Option<::std::string::String>,
     api_key: ::std::option::Option<::std::string::String>,
     api_secret: ::std::option::Option<::std::string::String>,
     server_url: ::std::option::Option<::std::string::String>,
     server_api_key: ::std::option::Option<::std::string::String>,
     server_api_secret: ::std::option::Option<::std::string::String>,
-) -> PyResult<InferenceCredentialsInferenceCredentialsOutput> {
+) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
     let out = py.detach(|| <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_credentials(base_url, api_key, api_secret, server_url, server_api_key, server_api_secret)).map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
-    ::pyo3::PyResult::Ok(out)
+    crate::generated::records::inference_credentials::credentials_to_py(py, out)
 }
 
 /// An inference request's identification headers, in order: `user_agent`, the priority of a
@@ -701,7 +699,7 @@ pub struct InferenceTts(pub(crate) ::std::sync::Arc<InferenceTtsImpl>);
 
 #[pymethods]
 impl InferenceTts {
-    /// `inference.TTS`'s mixin builds it on first use, after a fork, from the TTS's attributes.
+    /// `inference.TTS` builds it on first use, after a fork, from its attributes.
     #[new]
     #[pyo3(signature = (model, *, base_url, api_key, api_secret, conn_options, voice = None, language = None, encoding = "pcm_s16le".to_owned(), sample_rate = 24000, extra_kwargs = None, fallback = None))]
     fn new(

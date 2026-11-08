@@ -49,6 +49,10 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
             "match {x} {{ None => py.None().into_bound(py), Some(x) => {} }}",
             emit(t, "x")?
         ),
+        Ty::Maybe(t) => format!(
+            "match {x} {{ ::lk_agents_abi::Maybe::NotGiven => crate::py_values::not_given(py)?, ::lk_agents_abi::Maybe::Given(x) => {} }}",
+            emit(t, "x")?
+        ),
         Ty::List(t) if **t == Ty::Int(crate::decl::Int::U8) => {
             format!("::pyo3::types::PyBytes::new(py, &{x}).into_any()")
         }
@@ -82,9 +86,7 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
                 "::pyo3::IntoPyObjectExt::into_bound_py_any(::lk_agents_abi::unix_secs({x}), py)?"
             )
         }
-        Ty::Duration => {
-            format!("::pyo3::IntoPyObjectExt::into_bound_py_any({x}.as_secs_f64(), py)?")
-        }
+        Ty::Duration => format!("::pyo3::IntoPyObjectExt::into_bound_py_any({x}, py)?"),
         // A native implementation, as the declared class it is.
         Ty::Native { rust, .. } => {
             format!("<dyn {rust} as crate::generated::NativeToHost>::to_host(py, {x})?")

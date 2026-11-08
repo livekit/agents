@@ -124,26 +124,15 @@ pub enum McpError {
 
 pub type McpCause = std::sync::Arc<dyn std::error::Error + Send + Sync>;
 
-/// The host context captured at the MCP operation's entry.
-#[derive(Debug, Clone, Default)]
-#[crate::host(record(module = "mcp_session", emit))]
-pub struct McpInvocation {
-    pub host_context: Option<crate::utils::host_ref::HostRef>,
-}
-
-impl crate::agent::HostContext for McpInvocation {
-    fn host_context(&self) -> Option<&crate::utils::host_ref::HostRef> {
-        self.host_context.as_ref()
-    }
-}
-
-#[crate::host(proxy(host = "livekit.agents.llm.mcp._Progress"))]
+/// A `report_progress` tool's progress messages: its `RunContext.update()`, run in the host
+/// context captured at the MCP operation's entry.
+#[crate::host(proxy(host = "livekit.agents.voice.events.RunContext"))]
 pub trait McpProgress: Send + Sync {
-    #[host(await, name = "_core_update")]
+    #[host(await)]
     fn update<'a>(
         &'a self,
         cx: &crate::telemetry::Cx,
-        #[host(context)] invocation: &'a McpInvocation,
+        #[host(context)] invocation: &'a crate::invoke::CallContext,
         message: &'a str,
     ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
 }

@@ -22,13 +22,18 @@ from typing import (
     overload,
 )
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import TypeAdapter
 from pydantic_core import to_jsonable_python
-from typing_extensions import ParamSpec, TypeVar
+from typing_extensions import ParamSpec, TypeVar, Unpack
 
 from .. import _core, llm, stt, tts
 from .._generated import public_voice as _public
-from .._generated.agent_authoring import DEFAULT_AGENT_NAME as DEFAULT_AGENT_NAME, CallbackKind
+from .._generated.agent_authoring import (
+    DEFAULT_AGENT_NAME as DEFAULT_AGENT_NAME,
+    CallbackKind,
+    ToolOptions,
+    ToolOptionsKwargs,
+)
 from .._generated.agent_run import AgentDefinition
 from .._generated.public_voice import *  # noqa: F403
 from .._generated.text_session import LocalAgentTool
@@ -37,11 +42,8 @@ from ..inference.llm import llm_from_model_string
 from ..llm import LLM, DuplexModel, DuplexRealtimeAdapter, RealtimeModel
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..llm.tool_context import (
-    DuplicateMode,
-    DuplicateScope,
     FunctionTool,
     FunctionToolInfo,
-    RawFunctionDescription,
     RawFunctionTool,
     ReadBack,
     Tool,
@@ -522,33 +524,11 @@ class Agent(Generic[Context_T, Output_T]):
 
     @overload
     def tool(
-        self,
-        f: None = None,
-        /,
-        *,
-        name: str | None = None,
-        description: str | None = None,
-        raw_schema: RawFunctionDescription | dict[str, JsonValue] | None = None,
-        flags: ToolFlag = ToolFlag.NONE,
-        on_duplicate: DuplicateMode = "allow",
-        duplicate_scope: DuplicateScope = "name",
-        needs_approval: bool | ReadBack = False,
-        retries: int | None = None,
+        self, f: None = None, /, **options: Unpack[ToolOptionsKwargs]
     ) -> Callable[[Callable[_P, _R]], FunctionTool[_P, _R] | RawFunctionTool[_P, _R]]: ...
 
     def tool(
-        self,
-        f: Callable[_P, _R] | None = None,
-        /,
-        *,
-        name: str | None = None,
-        description: str | None = None,
-        raw_schema: RawFunctionDescription | dict[str, JsonValue] | None = None,
-        flags: ToolFlag = ToolFlag.NONE,
-        on_duplicate: DuplicateMode = "allow",
-        duplicate_scope: DuplicateScope = "name",
-        needs_approval: bool | ReadBack = False,
-        retries: int | None = None,
+        self, f: Callable[_P, _R] | None = None, /, **options: Unpack[ToolOptionsKwargs]
     ) -> Any:
         """Register a function tool on this agent, as a decorator.
 
@@ -559,25 +539,12 @@ class Agent(Generic[Context_T, Output_T]):
             async def find_appointment(ctx: RunContext, last_name: str) -> str: ...
         """
 
-        options: dict[str, Any] = {
-            "name": name,
-            "description": description,
-            "raw_schema": raw_schema,
-            "flags": flags,
-            "on_duplicate": on_duplicate,
-            "duplicate_scope": duplicate_scope,
-            "needs_approval": needs_approval,
-            "retries": retries,
-        }
-
         def register(func: Callable[_P, _R]) -> FunctionTool[_P, _R] | RawFunctionTool[_P, _R]:
             self._check_not_frozen("a tool")
             tool: FunctionTool[_P, _R] | RawFunctionTool[_P, _R]
             if isinstance(func, (FunctionTool, RawFunctionTool)):
                 # an already built tool, registered as it is: its options were given when built
-                default = inspect.signature(Agent.tool).parameters
-                given = [k for k, v in options.items() if v != default[k].default]
-                self._config.check_tool_options(given)
+                self._config.check_tool_options(ToolOptions(**options))
                 tool = func
             else:
                 # `function_tool` refuses what a raw schema cannot take (`needs_approval`)

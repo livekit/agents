@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import atexit
 import contextlib
 import enum
@@ -18,7 +17,6 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .agent_session import VoiceSession
 from .events import AgentStateChangedEvent
-from .room_io import _SOURCES, Room as _RtcRoom, _name
 
 _resource_stack = contextlib.ExitStack()
 atexit.register(_resource_stack.close)
@@ -63,31 +61,6 @@ class AudioConfig(NamedTuple):
     fade_out: float = 0.0
 
 
-class _FrameStream:
-    """An ``AsyncIterator[rtc.AudioFrame]`` as the core's ``FrameStream``."""
-
-    def __init__(self, frames: AsyncIterator[rtc.AudioFrame]) -> None:
-        self._frames = frames
-        self._pending: asyncio.Future[rtc.AudioFrame] | None = None
-
-    async def _core_next(self) -> rtc.AudioFrame | None:
-        self._pending = asyncio.ensure_future(self._frames.__anext__())
-        try:
-            return await self._pending
-        except (StopAsyncIteration, asyncio.CancelledError):
-            # exhausted, or cancelled by the core's `cancel_pending` as it drops the sound
-            return None
-        finally:
-            self._pending = None
-
-    def _core_cancel_pending(self) -> None:
-        if self._pending is not None:
-            self._pending.cancel()
-
-    async def _core_close(self) -> None:
-        self._core_cancel_pending()
-
-
 def _sounds(
     source: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None],
 ) -> tuple[list[Sound], bool]:
@@ -103,7 +76,7 @@ def _sounds(
             Sound(
                 source=SoundSourceFile(path=audio)
                 if isinstance(audio, str)
-                else SoundSourceStream(stream=_FrameStream(audio)),
+                else SoundSourceStream(stream=audio),
                 volume=cfg.volume,
                 probability=cfg.probability,
                 fade_in=cfg.fade_in,
@@ -219,11 +192,11 @@ class BackgroundAudioPlayer:
         options = track_publish_options or rtc.TrackPublishOptions()
         ambient, choose = self._ambient
         sid = await self._player.start(
-            _core._core_create_room_session(_RtcRoom.of(room)),
+            _core._core_create_room_session(room),
             random.random(),
             ambient=ambient,
             choose=choose,
-            source=_name(_SOURCES, options.source, "unknown"),
+            source=options.source,
         )
         if isinstance(room, rtc.Room):
             self.publication = room.local_participant.track_publications.get(sid)

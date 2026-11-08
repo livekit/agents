@@ -3,20 +3,19 @@ options), and ``livekit.rtc`` as the core's room traits see it (``RtcRoom`` and 
 publications and sources). Each adapter holds its SDK object as ``sdk``: the core's generated
 proxies read and call the SDK through it, and each ``_core_<method>`` here is an SDK call that
 builds or converts more than a name. Stream writers and video sources are SDK objects the core
-calls directly. SDK enums reach the core's events as the names ``_core.rtc_wire_names()`` lists."""
+calls directly; the SDK's events reach the core through the generated ``rtc_events``."""
 
 from __future__ import annotations
 
 import functools
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Coroutine
-from dataclasses import asdict
-from typing import TYPE_CHECKING, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 
 from livekit import rtc
 
 from .. import _core
-from .._generated import public_voice_room_io as _public, rtc_wire
+from .._generated import public_voice_room_io as _public, rtc_events, rtc_wire
 from .._generated.public_voice_room_io import *  # noqa: F403
 from ..types import ATTRIBUTE_PUBLISH_ON_BEHALF
 
@@ -37,99 +36,29 @@ NoiseCancellationSelector: TypeAlias = Callable[
 ]
 
 
-_CONNECTION, _DISCONNECT, _SOURCES = _core.rtc_wire_names()
-
-
-def _name(names: list[str], value: int, unknown: str) -> str:
-    return names[value] if 0 <= value < len(names) else unknown
-
-
 class Room:
-    """An ``rtc.Room`` (``sdk``) as the core's ``RtcRoom``: its event bus (``bus``), RPC router
-    and local participant. Its SDK events are re-emitted into the bus; one per room (``of``), so
-    the handlers are registered once. The core reads the SDK room's attributes through ``sdk``;
-    the methods here are the calls that build SDK objects or register SDK handlers."""
+    """An ``rtc.Room`` (``sdk``) as the core's ``RtcRoom``, which takes the SDK room through it:
+    its event bus (``bus``), RPC router and local participant. Its SDK events are delivered into
+    the bus; one per room, so the handlers are registered once. The core reads the SDK room's
+    attributes through ``sdk``; the methods here are the calls that build SDK objects or register
+    SDK handlers."""
 
-    @classmethod
-    def of(cls, room: rtc.Room) -> Room:
-        adapter = getattr(room, "_lk_core_room", None)
+    sdk: rtc.Room
+    bus: _core.RoomEventBus
+    rpc_router: _core._core_RoomRpcRouter
+    local: LocalParticipant
+
+    def __new__(cls, room: rtc.Room) -> Room:
+        adapter: Room | None = getattr(room, "_lk_core_room", None)
         if adapter is None:
-            adapter = cls(room)
+            adapter = super().__new__(cls)
+            adapter.sdk = room
+            adapter.bus = _core.RoomEventBus()
+            adapter.rpc_router = _core._core_RoomRpcRouter()
+            adapter.local = LocalParticipant(adapter)
+            rtc_events.subscribe(adapter)
             room._lk_core_room = adapter  # type: ignore[attr-defined]
         return adapter
-
-    def __init__(self, room: rtc.Room) -> None:
-        self.sdk = room
-        self.bus = _core.RoomEventBus()
-        self.rpc_router = _core._core_RoomRpcRouter()
-        self.local = LocalParticipant(self)
-        bus = self.bus
-        room.on(
-            "track_subscribed",
-            lambda track, pub, p: _core._core_room_track_subscribed(
-                bus, self._remote(p), self._publication(pub)
-            ),
-        )
-        room.on(
-            "track_unsubscribed",
-            lambda track, pub, p: _core._core_room_track_unsubscribed(
-                bus, self._remote(p), self._publication(pub)
-            ),
-        )
-        room.on(
-            "track_published",
-            lambda pub, p: _core._core_room_track_published(
-                bus, self._remote(p), self._publication(pub)
-            ),
-        )
-        room.on(
-            "track_unpublished",
-            lambda pub, p: _core._core_room_track_unpublished(
-                bus, self._remote(p), self._publication(pub)
-            ),
-        )
-        room.on(
-            "local_track_published",
-            lambda pub, track: _core._core_room_local_track_published(bus, self._publication(pub)),
-        )
-        room.on(
-            "participant_connected",
-            lambda p: _core._core_room_participant_connected(bus, self._remote(p)),
-        )
-        room.on(
-            "participant_active",
-            lambda p: _core._core_room_participant_active(bus, self._remote(p)),
-        )
-        room.on("participant_attributes_changed", self._attributes_changed)
-        room.on(
-            "participant_disconnected",
-            lambda p: _core._core_room_participant_disconnected(
-                bus, self._remote(p), _name(_DISCONNECT, p.disconnect_reason, "unknown_reason")
-            ),
-        )
-        room.on(
-            "connection_state_changed",
-            lambda state: _core._core_room_connection_state_changed(
-                bus, _name(_CONNECTION, state, "disconnected")
-            ),
-        )
-        room.on(
-            "disconnected",
-            lambda reason: _core._core_room_disconnected(
-                bus, _name(_DISCONNECT, reason, "unknown_reason")
-            ),
-        )
-        room.on(
-            "sip_dtmf_received",
-            lambda ev: _core._core_room_sip_dtmf_received(
-                bus, ev.digit, ev.participant.identity if ev.participant is not None else None
-            ),
-        )
-
-    def _attributes_changed(self, changed: list[str], participant: rtc.Participant) -> None:
-        # the agent's own attributes are not a remote participant's
-        if isinstance(participant, rtc.RemoteParticipant):
-            _core._core_room_participant_attributes_changed(self.bus, self._remote(participant))
 
     def _remote(self, participant: rtc.RemoteParticipant) -> RemoteParticipant:
         return RemoteParticipant(self, participant)
@@ -171,10 +100,6 @@ class Room:
         self.sdk.register_text_stream_handler(topic, opened)
 
 
-class _TextStreamSender(TypedDict, total=False):
-    sender_identity: str
-
-
 class LocalParticipant:
     """The room's ``rtc.LocalParticipant`` (``sdk``, resolved on each read: it exists once the
     room connects) as the core's ``LocalParticipant``. The methods here build SDK tracks,
@@ -196,9 +121,7 @@ class LocalParticipant:
         track = rtc.LocalAudioTrack.create_audio_track(opts.name, source.sdk)
         publication = await self.sdk.publish_track(
             track,
-            rtc.TrackPublishOptions(
-                source=cast(rtc.TrackSource.ValueType, _SOURCES.index(opts.source))
-            ),
+            rtc.TrackPublishOptions(source=cast(rtc.TrackSource.ValueType, opts.source)),
         )
         return self._room._publication(publication)
 
@@ -208,9 +131,7 @@ class LocalParticipant:
         track = rtc.LocalVideoTrack.create_video_track(opts.name, source)
         publication = await self.sdk.publish_track(
             track,
-            rtc.TrackPublishOptions(
-                source=cast(rtc.TrackSource.ValueType, _SOURCES.index(opts.source))
-            ),
+            rtc.TrackPublishOptions(source=cast(rtc.TrackSource.ValueType, opts.source)),
         )
         return self._room._publication(publication)
 
@@ -222,9 +143,7 @@ class LocalParticipant:
         )
         try:
             track = rtc.LocalAudioTrack.create_audio_track(opts.name, source)
-            options = rtc.TrackPublishOptions(
-                source=cast(rtc.TrackSource.ValueType, _SOURCES.index(opts.source))
-            )
+            options = rtc.TrackPublishOptions(source=cast(rtc.TrackSource.ValueType, opts.source))
             publication = await self.sdk.publish_track(track, options)
         except BaseException as error:
             try:
@@ -233,29 +152,6 @@ class LocalParticipant:
                 error.add_note(f"Unpublished audio source cleanup failed: {cleanup_error!r}")
             raise
         return AudioSource(source), self._room._publication(publication)
-
-    async def _core_publish_transcription(self, transcription: rtc_wire.Transcription) -> None:
-        await self.sdk.publish_transcription(
-            rtc.Transcription(
-                participant_identity=transcription.participant_identity,
-                track_sid=transcription.track_sid,
-                segments=[rtc.TranscriptionSegment(**asdict(s)) for s in transcription.segments],
-            )
-        )
-
-    async def _core_stream_text(self, opts: rtc_wire.StreamTextOptions) -> rtc.TextStreamWriter:
-        sender: _TextStreamSender = {}
-        if opts.sender_identity is not None:
-            sender["sender_identity"] = opts.sender_identity
-        return await self.sdk.stream_text(topic=opts.topic, attributes=opts.attributes, **sender)
-
-    async def _core_stream_bytes(self, opts: rtc_wire.StreamBytesOptions) -> rtc.ByteStreamWriter:
-        return await self.sdk.stream_bytes(
-            name=opts.name,
-            topic=opts.topic,
-            destination_identities=opts.destination_identities,
-            attributes=opts.attributes,
-        )
 
     async def _core_perform_rpc(
         self, destination: str, method: str, payload: str
@@ -303,9 +199,6 @@ class RemoteParticipant:
         self._room = room
         self.sdk = participant
 
-    def _core_active(self) -> bool:
-        return self.sdk.state == rtc.ParticipantState.PARTICIPANT_STATE_ACTIVE
-
     def _core_track_publications(self) -> list[TrackPublication]:
         return [self._room._publication(p) for p in self.sdk.track_publications.values()]
 
@@ -320,10 +213,6 @@ class TrackPublication:
 
     def _core_is_subscribed(self) -> bool:
         return self.sdk.track is not None
-
-    async def _core_set_subscribed(self, subscribed: bool) -> None:
-        assert isinstance(self.sdk, rtc.RemoteTrackPublication)
-        self.sdk.set_subscribed(subscribed)
 
     def _core_open_audio_stream(self, opts: rtc_wire.AudioStreamOptions) -> _AudioStream:
         track = self.sdk.track

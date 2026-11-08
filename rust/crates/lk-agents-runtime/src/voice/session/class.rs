@@ -160,8 +160,11 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let speeches = Arc::clone(&builder.speeches);
         builder.session_id = args.session_id;
         builder.tracer = env.tracer.clone();
-        builder.video_sampler = args.video_sampler.map(|(speaking, silent)| {
-            lk_agents_voice::agent_session::video_sampler::VideoSampler::new(speaking, silent)
+        builder.video_sampler = args.video_sampler.map(|sampler| {
+            lk_agents_voice::agent_session::video_sampler::VideoSampler::new(
+                sampler.speaking_fps,
+                sampler.silent_fps,
+            )
         });
         builder.instructions = args.instructions.map(Instructions::plain).unwrap_or_default();
         builder.dynamic_instructions = args.dynamic_instructions;

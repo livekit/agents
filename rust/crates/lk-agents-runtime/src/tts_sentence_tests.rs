@@ -256,7 +256,10 @@ async fn a_paced_adapter_sends_the_first_sentence_then_batches_the_rest_as_audio
         Arc::new(lk_agents_net::clock::RealClock::new()),
     )
     // 0.02 s of audio per sentence; the next batch goes once at most 0.01 s of it remains.
-    .with_pacing(Some((0.01, 300)));
+    .with_pacing(Some(lk_agents_abi::tts::stream_pacer::SentenceStreamPacer {
+        min_remaining_audio: 0.01,
+        max_text_length: 300,
+    }));
     let (sink, source) =
         adapter.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
     sink.push("one. two. three.".into()).unwrap();

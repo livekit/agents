@@ -141,10 +141,10 @@ fn a_cut_segments_end_after_a_clear_is_not_the_next_segments() {
     let delivered = core.handle(AvatarEvent::Reported { finished: true, result: Ok(()) });
     assert_eq!(
         ops(&delivered),
-        vec![AvatarIoOperation::PushAudio(Some(MediaFrame::Audio(pcm(2, 0.1))))]
+        vec![AvatarIoOperation::PushAudio(AudioReceiverFrame::Audio(pcm(2, 0.1)))]
     );
     let end = core.handle(audio_input(&core, Ok(Some(AudioReceiverFrame::SegmentEnd))));
-    assert_eq!(ops(&end), vec![AvatarIoOperation::PushAudio(None)]);
+    assert_eq!(ops(&end), vec![AvatarIoOperation::PushAudio(AudioReceiverFrame::SegmentEnd)]);
 }
 
 // Catches: one playing flag for a generator holding two segments: the first segment's end, out
@@ -310,7 +310,7 @@ fn a_clear_waits_for_the_audio_on_its_way_into_the_generator() {
     let push = core.handle(audio_input(&core, Ok(Some(AudioReceiverFrame::Audio(pcm(1, 0.1))))));
     assert_eq!(
         ops(&push),
-        vec![AvatarIoOperation::PushAudio(Some(MediaFrame::Audio(pcm(1, 0.1))))]
+        vec![AvatarIoOperation::PushAudio(AudioReceiverFrame::Audio(pcm(1, 0.1)))]
     );
     let clear = core.handle(AvatarEvent::ClearBuffer { epoch: core.clear_epoch + 1 });
     assert!(ops(&clear).is_empty(), "cleared with the cut audio still on its way: {clear:?}");
@@ -455,7 +455,7 @@ fn delayed_clear_and_report_delivery_hold_new_audio_until_old_debt_is_delivered(
     let delivered = core.handle(AvatarEvent::Reported { finished: true, result: Ok(()) });
     assert!(
         ops(&delivered)
-            .contains(&AvatarIoOperation::PushAudio(Some(MediaFrame::Audio(pcm(2, 0.1)))))
+            .contains(&AvatarIoOperation::PushAudio(AudioReceiverFrame::Audio(pcm(2, 0.1))))
     );
     core.handle(AvatarEvent::AudioPushed(Ok(())));
     core.handle(AvatarEvent::Audio(Ok((
@@ -552,7 +552,7 @@ fn unkeyed_audio_is_keyed_per_segment_and_per_clear() {
     let first = core.handle(unkeyed(&core, AudioReceiverFrame::Audio(pcm(1, 0.1))));
     assert_eq!(
         ops(&first),
-        vec![AvatarIoOperation::PushAudio(Some(MediaFrame::Audio(pcm(1, 0.1))))]
+        vec![AvatarIoOperation::PushAudio(AudioReceiverFrame::Audio(pcm(1, 0.1)))]
     );
     core.handle(AvatarEvent::AudioPushed(Ok(())));
     core.handle(unkeyed(&core, AudioReceiverFrame::Audio(pcm(2, 0.1))));

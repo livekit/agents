@@ -176,8 +176,8 @@ pub trait Storage: Send + Sync + Sized + 'static {
         #[host(default = None)] url: Option<String>,
         #[host(default = None)] api_key: Option<String>,
         #[host(default = None)] api_secret: Option<String>,
-        #[host(default = None)] lease_ttl: Option<f64>,
-        #[host(default = None)] renew_interval: Option<f64>,
+        #[host(default = None)] lease_ttl: Option<std::time::Duration>,
+        #[host(default = None)] renew_interval: Option<std::time::Duration>,
         #[host(default = None)] holder: Option<String>,
     ) -> Result<Self, StorageError>;
 

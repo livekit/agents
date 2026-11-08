@@ -42,8 +42,8 @@ fn every_builtin_clip_is_shipped() {
 struct Frames {
     frames: tokio::sync::Mutex<AudioReceiver<()>>,
     reading: Notify,
-    stopped: CancellationToken,
-    closed: AtomicBool,
+    /// The pending read was cancelled by the source's teardown.
+    cancelled: AtomicBool,
 }
 
 impl Frames {
@@ -57,8 +57,7 @@ impl Frames {
             Arc::new(Self {
                 frames: tokio::sync::Mutex::new(frames),
                 reading: Notify::new(),
-                stopped: CancellationToken::new(),
-                closed: AtomicBool::new(false),
+                cancelled: AtomicBool::new(false),
             }),
             send,
         )
@@ -69,28 +68,22 @@ impl FrameStream for Frames {
     fn next(
         &self,
         _: &telemetry::Cx,
+        cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Option<AudioFrame>, ProviderError>> {
         Box::pin(async move {
             self.reading.notify_one();
             let mut frames = self.frames.lock().await;
             Ok(tokio::select! {
                 biased;
-                _ = self.stopped.cancelled() => None,
+                _ = cancel.cancelled() => {
+                    self.cancelled.store(true, Ordering::Release);
+                    None
+                }
                 frame = frames.recv() => match frame {
                     Some(Item::Media(frame)) => Some(frame),
                     _ => None,
                 },
             })
-        })
-    }
-
-    fn cancel_pending(&self) {
-        self.stopped.cancel();
-    }
-
-    fn close(&self, _: &telemetry::Cx) -> lk_agents_abi::BoxFuture<'_, ()> {
-        Box::pin(async {
-            self.closed.store(true, Ordering::Release);
         })
     }
 }
@@ -148,7 +141,7 @@ async fn a_pending_source_can_be_stopped_without_advancing_the_clock() {
     assert!(player.state.try_lock().is_some());
     tokio::time::timeout(Duration::from_secs(1), player.stop_sounds()).await.unwrap();
     assert!(handle.done());
-    assert!(stream.closed.load(Ordering::Acquire));
+    assert!(stream.cancelled.load(Ordering::Acquire));
     next.cancel();
     let _ = next.await;
 }
@@ -183,7 +176,6 @@ async fn a_short_final_frame_is_padded_and_closed_before_returning() {
     drop(send);
     assert_eq!(player.next_block().await, Some(vec![9, 0]));
     assert!(handle.done());
-    assert!(stream.closed.load(Ordering::Acquire));
 }
 
 #[tokio::test]

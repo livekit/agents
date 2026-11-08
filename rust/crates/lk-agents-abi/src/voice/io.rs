@@ -168,12 +168,16 @@ pub trait Playback: PlaybackTracker + Sized + 'static {
     fn reset(&self) {
         PlaybackTracker::reset(self)
     }
-    /// `AudioOutput.wait_for_playout()`: the last event as `(playback_position, interrupted,
-    /// synchronized_transcript)`.
+    /// `AudioOutput.wait_for_playout()`: the last event.
     #[host(await, name = "wait_for_playout")]
-    async fn wait_for_played(&self) -> (f64, bool, Option<String>) {
+    async fn wait_for_played(&self) -> PlaybackFinishedEvent {
         let ev = PlaybackTracker::wait_for_playout(self).await;
-        (ev.playback_position.as_secs_f64(), ev.interrupted, ev.synchronized_transcript)
+        PlaybackFinishedEvent {
+            playback_position: ev.playback_position.as_secs_f64(),
+            interrupted: ev.interrupted,
+            synchronized_transcript: ev.synchronized_transcript,
+            segment: None,
+        }
     }
 }
 
@@ -560,7 +564,12 @@ impl From<crate::ResampleError> for IoError {
 
 // Public data contracts. Python behavior remains in its adapters.
 
-#[crate::host(record(module = "playback_events", path = "livekit.agents.voice.io", dataclass))]
+#[crate::host(record(
+    module = "playback_events",
+    path = "livekit.agents.voice.io",
+    dataclass,
+    emit
+))]
 pub struct PlaybackFinishedEvent {
     /// How much of the audio was played back
     pub playback_position: f64,

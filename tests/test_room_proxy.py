@@ -6,7 +6,6 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import _core
-from livekit.agents.voice.room_io import Room
 
 pytestmark = pytest.mark.unit
 
@@ -19,8 +18,7 @@ def initialize_native_runtime() -> None:
 @pytest.mark.asyncio
 async def test_disconnected_sdk_room_keeps_the_framework_wait_error() -> None:
     room = rtc.Room()
-    supplied = Room.of(room)
-    capability = _core._core_create_room_session(supplied)
+    capability = _core._core_create_room_session(room)
     try:
         with pytest.raises(RuntimeError, match="room is not connected"):
             await asyncio.wait_for(_core.wait_for_participant(capability, None, None, False), 2)

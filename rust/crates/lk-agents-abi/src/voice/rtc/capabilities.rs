@@ -12,17 +12,49 @@ use super::events::RoomEventSink;
 use super::ports::{ByteStreamIngress, RpcCallback, TextStreamIngress};
 use super::{
     AudioStreamItem, AudioStreamOptions, AudioTrackFeature, ConnectionState, ParticipantIdentity,
-    ParticipantKind, PlaybackInfo, RtcError, StreamBytesOptions, StreamTextOptions,
-    TrackPublishOptions, TrackSid, TrackSource, Transcription,
+    ParticipantKind, ParticipantState, PlaybackInfo, RtcError, StreamBytesOptions,
+    StreamTextOptions, TrackPublishOptions, TrackSid, TrackSource, Transcription,
 };
 use crate::{AudioFrame, StreamOutput};
 
-/// A connected room: `room_io.Room`, the adapter holding an `rtc.Room` as its `sdk`, its event
-/// bus and its RPC router. Reads of the SDK room address `sdk` directly.
+/// A connected room: an `rtc.Room`, called through its `room_io.Room` adapter (one per SDK room),
+/// which holds it as its `sdk`, its event bus and its RPC router. Reads of the SDK room address
+/// `sdk` directly. Its SDK events reach the bus through their
+/// [`RtcRuntime`](super::events::RtcRuntime) entry of the same name.
 ///
 /// `connection_state` rather than `isconnected`: the reference's boolean cannot distinguish
 /// disconnected from reconnecting, and [`ConnectionState::is_connected`] recovers it exactly.
-#[crate::host(proxy(host = "livekit.agents.voice.room_io.Room", sdk))]
+#[crate::host(proxy(
+    host = "livekit.rtc.Room",
+    view = "livekit.agents.voice.room_io.Room",
+    sdk,
+    events(
+        module = "rtc_events",
+        on = "sdk",
+        entries = RtcRuntime,
+        pass(bus = "self.bus"),
+        track_subscribed(args(track, publication, participant)),
+        track_unsubscribed(args(track, publication, participant)),
+        track_published(args(publication, participant)),
+        track_unpublished(args(publication, participant)),
+        local_track_published(args(publication, track)),
+        participant_connected(args(participant)),
+        participant_active(args(participant)),
+        // The agent's own attributes are not a remote participant's.
+        participant_attributes_changed(
+            args(changed, participant),
+            when(participant = "livekit.rtc.RemoteParticipant")
+        ),
+        participant_disconnected(args(participant), reason = "participant.disconnect_reason"),
+        connection_state_changed(args(state)),
+        disconnected(args(reason)),
+        sip_dtmf_received(
+            args(event),
+            digit = "event.digit",
+            participant = "event.participant.identity"
+        ),
+    )
+))]
 pub trait RtcRoom: Send + Sync {
     #[host(call, name = "_core_create_audio_source")]
     fn create_audio_source(
@@ -180,7 +212,7 @@ pub trait LocalParticipant: Send + Sync {
 
     /// The deprecated transcription API. Still published, in parallel with the text stream, by
     /// `_ParticipantLegacyTranscriptionOutput`.
-    #[host(await, name = "_core_publish_transcription")]
+    #[host(await, name = "sdk.publish_transcription")]
     fn publish_transcription<'a>(
         &'a self,
         cx: &crate::telemetry::Cx,
@@ -194,19 +226,19 @@ pub trait LocalParticipant: Send + Sync {
     /// writes every delta into it, and closes it with `lk.transcription_final=true` plus the
     /// segment's expression attributes (`_output.py:_flush_task`). A per-call `stream_text` would
     /// open one stream per token, and frontends key rendering on the stream id per segment.
-    #[host(await, name = "_core_stream_text")]
+    #[host(await, name = "sdk.stream_text")]
     fn stream_text<'a>(
         &'a self,
         cx: &crate::telemetry::Cx,
-        opts: StreamTextOptions,
+        #[host(kwargs)] opts: StreamTextOptions,
     ) -> crate::BoxFuture<'a, Result<Box<dyn TextStreamWriter>, RtcError>>;
 
     /// Open a byte stream and return its writer: one per avatar audio segment.
-    #[host(await, name = "_core_stream_bytes")]
+    #[host(await, name = "sdk.stream_bytes")]
     fn stream_bytes<'a>(
         &'a self,
         _cx: &crate::telemetry::Cx,
-        opts: StreamBytesOptions,
+        #[host(kwargs)] opts: StreamBytesOptions,
     ) -> crate::BoxFuture<'a, Result<Box<dyn ByteStreamWriter>, RtcError>> {
         let _ = opts;
         Box::pin(async move { Err(RtcError::Unsupported("stream_bytes")) })
@@ -327,10 +359,11 @@ pub trait AudioSource: Any + Send + Sync {
     #[host(call, name = "_core_clear_queue")]
     fn clear_queue(&self) -> Result<(), RtcError>;
 
-    /// Audio pushed but not yet played. `_forward_audio` reads it to account for what a pause
-    /// throws away, and `_wait_for_playout` to find where the playhead stopped.
+    /// Audio pushed but not yet played, in seconds as the SDK reads it. `_forward_audio` reads it
+    /// to account for what a pause throws away, and `_wait_for_playout` to find where the playhead
+    /// stopped.
     #[host(call, getter = "sdk.queued_duration")]
-    fn queued_duration(&self) -> Result<std::time::Duration, RtcError>;
+    fn queued_seconds(&self) -> Result<f64, RtcError>;
 
     /// Resolve when the queue drains -- immediately after a [`clear_queue`](Self::clear_queue).
     ///
@@ -374,10 +407,13 @@ pub trait RemoteParticipant: Send + Sync {
     #[host(read_once, getter = "sdk.kind")]
     fn kind(&self) -> ParticipantKind;
 
-    /// Whether the participant is active (`ParticipantState.PARTICIPANT_STATE_ACTIVE`): connected
-    /// and ready to exchange media.
-    #[host(call, name = "_core_active")]
-    fn active(&self) -> Result<bool, RtcError>;
+    #[host(call, getter = "sdk.state")]
+    fn state(&self) -> Result<ParticipantState, RtcError>;
+
+    /// Whether the participant is active: connected and ready to exchange media.
+    fn active(&self) -> Result<bool, RtcError> {
+        Ok(self.state()? == ParticipantState::Active)
+    }
 
     /// Read for `ATTRIBUTE_PUBLISH_ON_BEHALF`: a participant publishing on the agent's behalf (an
     /// avatar worker) must not be linked as the user. Returned by value because the host's map is
@@ -420,7 +456,7 @@ pub trait TrackPublication: Send + Sync {
     fn audio_features(&self) -> Vec<AudioTrackFeature>;
 
     /// Remote only.
-    #[host(await, name = "_core_set_subscribed")]
+    #[host(await, name = "sdk.set_subscribed")]
     fn set_subscribed<'a>(
         &'a self,
         _cx: &crate::telemetry::Cx,

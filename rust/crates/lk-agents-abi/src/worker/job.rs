@@ -29,7 +29,7 @@ pub struct StartJob {
 pub trait SessionJob: Send + Sync {
     /// `JobContext.connect()`: the room connected, once however many callers; its `room_connect`
     /// opens under `trace` (the session's `session_start`).
-    #[host(await, name = "_core_connect")]
+    #[host(await, name = "connect")]
     fn connect(
         &self,
         cx: &crate::telemetry::Cx,
@@ -42,7 +42,7 @@ pub trait SessionJob: Send + Sync {
     #[host(call, name = "_core_claim_primary")]
     fn claim_primary(&self, session: crate::HostRef) -> Result<bool, crate::errors::HostError>;
     /// The directory the job's session files are written to.
-    #[host(call, name = "_core_recording_dir")]
+    #[host(call, getter = "_tempdir.name")]
     fn recording_dir(&self) -> Result<String, crate::errors::HostError>;
     /// `JobContext.init_recording(options)`: the first call sets what the job records.
     #[host(call, name = "init_recording")]
@@ -150,6 +150,7 @@ mod proto_bytes {
     extract,
     emit
 ))]
+#[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobExecutorType {
     #[host(rename = "process")]

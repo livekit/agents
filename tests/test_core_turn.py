@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -107,7 +108,7 @@ async def test_one_message_through_the_rust_turn(thread_storage: Storage) -> Non
     assert session.holder.startswith("worker-a/")
 
     host = Host()
-    turn = _core.Turn(session, LANE, host, TurnOptions(policy="interrupt", debounce=0))
+    turn = _core.Turn(session, LANE, host, TurnOptions(inbox="interrupt", debounce=timedelta(0)))
     assert turn.lane == LANE and turn.policy_for("sms") == "interrupt"
 
     result = await turn.run(a2a("hello", "m1"))
@@ -148,7 +149,9 @@ async def test_one_message_through_the_rust_turn(thread_storage: Storage) -> Non
 
 async def test_debounce_delays_the_turn(thread_storage: Storage) -> None:
     session = await thread_storage._open(await thread_of(thread_storage))
-    turn = _core.Turn(session, LANE, Host(), TurnOptions(policy="queue", debounce=0.4))
+    turn = _core.Turn(
+        session, LANE, Host(), TurnOptions(inbox="queue", debounce=timedelta(seconds=0.4))
+    )
     started = time.monotonic()
     result = await turn.run(a2a("hello", "m1"))
     assert result.task.status == "completed"
@@ -164,12 +167,12 @@ async def test_a_waiter_past_wait_timeout_fails_lease_timeout(
     session_a = await storage_a._open(thread_id)
     gate = asyncio.Event()
     host_a = Host(gate)
-    turn_a = _core.Turn(session_a, LANE, host_a, TurnOptions(policy="queue", debounce=0))
+    turn_a = _core.Turn(session_a, LANE, host_a, TurnOptions(inbox="queue", debounce=timedelta(0)))
     first = asyncio.ensure_future(turn_a.run(a2a("first", "m1")))
     await asyncio.wait_for(host_a.entered.wait(), 10)
 
     session_b = await storage_b._open(thread_id)
-    options = TurnOptions(policy="queue", debounce=0, wait_timeout=0.5)
+    options = TurnOptions(inbox="queue", debounce=timedelta(0), wait_timeout=timedelta(seconds=0.5))
     turn_b = _core.Turn(session_b, LANE, Host(), options)
     second = await asyncio.wait_for(turn_b.run(a2a("second", "m2")), 30)
     assert second.task.status == "failed"
@@ -191,14 +194,18 @@ async def test_a_second_message_under_interrupt_yields_the_first(
     session_a = await storage_a._open(thread_id)
     gate = asyncio.Event()
     host_a = Host(gate)
-    turn_a = _core.Turn(session_a, LANE, host_a, TurnOptions(policy="interrupt", debounce=0))
+    turn_a = _core.Turn(
+        session_a, LANE, host_a, TurnOptions(inbox="interrupt", debounce=timedelta(0))
+    )
     # the first acquire writes the schema; the second worker dials after it
     first = asyncio.ensure_future(turn_a.run(a2a("first", "m1")))
     await asyncio.wait_for(host_a.entered.wait(), 10)
 
     session_b = await storage_b._open(thread_id)
     host_b = Host()
-    turn_b = _core.Turn(session_b, LANE, host_b, TurnOptions(policy="interrupt", debounce=0))
+    turn_b = _core.Turn(
+        session_b, LANE, host_b, TurnOptions(inbox="interrupt", debounce=timedelta(0))
+    )
     second = asyncio.ensure_future(turn_b.run(a2a("second", "m2")))
 
     # B fails the lease and records itself as waiting; A sees it at its next checkpoint
@@ -239,7 +246,9 @@ async def test_turn_options_apply_scalar_and_channel_policies(thread_storage: St
             session,
             LANE,
             Host(),
-            TurnOptions(policy="interrupt", debounce=0, wait_timeout=1),
+            TurnOptions(
+                inbox="interrupt", debounce=timedelta(0), wait_timeout=timedelta(seconds=1)
+            ),
         )
         assert all_channels.policy_for("sms") == "interrupt"
         assert all_channels.policy_for("audio") == "interrupt"
@@ -248,17 +257,21 @@ async def test_turn_options_apply_scalar_and_channel_policies(thread_storage: St
             session,
             LANE,
             Host(),
-            TurnOptions(policy={"sms": "batch"}, debounce={"sms": 2}, wait_timeout=1.5),
+            TurnOptions(
+                inbox={"sms": "batch"},
+                debounce={"sms": timedelta(seconds=2)},
+                wait_timeout=timedelta(seconds=1.5),
+            ),
         )
         assert per_channel.policy_for("sms") == "batch"
         assert per_channel.policy_for("audio") == "interrupt"
 
-        with pytest.raises(TypeError, match="TurnOptions.policy") as invalid:
+        with pytest.raises(TypeError, match="TurnOptions.inbox") as invalid:
             _core.Turn(
                 session,
                 LANE,
                 Host(),
-                TurnOptions(policy="later"),  # type: ignore[arg-type]
+                TurnOptions(inbox="later"),  # type: ignore[arg-type]
             )
         assert isinstance(invalid.value.__cause__, ValueError)
         assert "later" in str(invalid.value.__cause__)
@@ -270,7 +283,7 @@ async def test_turn_options_apply_scalar_and_channel_policies(thread_storage: St
                 {"policy": "interrupt"},  # type: ignore[arg-type]
             )
         with pytest.raises(TypeError, match="TurnOptions.debounce") as negative:
-            _core.Turn(session, LANE, Host(), TurnOptions(debounce=-1))
+            _core.Turn(session, LANE, Host(), TurnOptions(debounce=timedelta(seconds=-1)))
         assert isinstance(negative.value.__cause__, ValueError)
     finally:
         session.close()

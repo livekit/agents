@@ -11,7 +11,9 @@ import pytest
 
 from livekit.agents import AgentServer, JobContext, _core, cli
 from livekit.agents._generated.cli import CliArgsConsole, CliArgsStart
+from livekit.agents._generated.worker_options import ProcessOptions
 from livekit.agents.job import RunningJobInfo
+from livekit.agents.types import NOT_GIVEN
 from livekit.agents.worker import _ServerCallbacks
 
 pytestmark = pytest.mark.unit
@@ -28,11 +30,11 @@ def test_cli_generated_args_matrix_dispatches_every_command_and_preserves_status
             (
                 "start",
                 (
-                    args.ws_url,
-                    args.api_key,
-                    args.api_secret,
-                    args.shutdown_timeout,
-                    args.drain_timeout,
+                    args.options.ws_url,
+                    args.options.api_key,
+                    args.options.api_secret,
+                    args.options.shutdown_timeout,
+                    args.options.drain_timeout,
                 ),
             )
         )
@@ -46,7 +48,10 @@ def test_cli_generated_args_matrix_dispatches_every_command_and_preserves_status
     assert (
         cli._launch(["start", "--dev", "--simulation", "--url", "wss://cli.example"], server) == 17
     )
-    assert calls.pop() == ("start", ("wss://cli.example", None, None, None, None))
+    assert calls.pop() == (
+        "start",
+        ("wss://cli.example", NOT_GIVEN, NOT_GIVEN, NOT_GIVEN, NOT_GIVEN),
+    )
     assert cli._launch(["console", "--connect-addr", "127.0.0.1:9", "--record"], server) == 0
     assert calls.pop() == ("console", ("127.0.0.1:9", True))
     console = _core.parse_cli(["agent", "console", "--connect-addr", "127.0.0.1:9"]).args
@@ -76,7 +81,7 @@ async def test_non_linux_forkserver_fallback_is_reported_after_native_start(
         api_secret=credentials["LIVEKIT_API_SECRET"],
         num_idle_processes=0,
     )
-    server._update_options(multiprocessing_context="forkserver")
+    server._update_options(ProcessOptions(multiprocessing_context="forkserver"))
 
     @server.rtc_session()
     async def entrypoint(context: JobContext) -> None:

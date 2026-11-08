@@ -1,19 +1,26 @@
 //! The avatar's host contracts: its audio receiver, video generator and media, and what the
 //! receiver tells its host.
 
-/// A clear epoch, segment boundary, playback segment and optional audio frame.
-pub type AudioReceiverObservation =
-    (u64, bool, Option<AvatarPlaybackSegment>, Option<AudioReceiverFrame>);
-
 use crate::errors::ProviderError;
 use crate::utils::video::{AudioReceiverFrame, AvatarFrame, MediaFrame};
 use crate::voice::io::AvatarPlaybackSegment;
 
-/// The `clear_buffer` event `DataStreamAudioReceiver` emits when the agent clears its audio
-/// (`AudioReceiver.emit`).
+/// What the avatar runner reads from its receiver: the receiver's clear epoch, whether this
+/// first frame opened a segment, the segment, and the frame (`None` at the end). The receiver
+/// stamps it before crossing the async boundary.
+#[crate::host(record(module = "avatar", extract, emit))]
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AudioReceiverObservation {
+    pub epoch: u64,
+    pub starts_segment: bool,
+    pub segment: Option<AvatarPlaybackSegment>,
+    pub frame: Option<AudioReceiverFrame>,
+}
+
+/// The `clear_buffer` event `DataStreamAudioReceiver` emits when the agent clears its audio.
 #[crate::host(proxy(host = "livekit.agents.voice.avatar.AudioReceiver"))]
 pub trait ClearBufferListener: Send + Sync {
-    #[host(notify, name = "_core_clear_buffer")]
+    #[host(notify, emit = "clear_buffer")]
     fn clear_buffer(&self);
 }
 
@@ -21,34 +28,34 @@ pub trait ClearBufferListener: Send + Sync {
 /// reported. A host `AudioReceiver` carries this surface (`voice/avatar.py`).
 #[crate::host(proxy(host = "livekit.agents.voice.avatar.AudioReceiver"))]
 pub trait AvatarAudioReceiver: Send + Sync {
-    /// Begin iterating (`__aiter__`).
-    #[host(await, name = "_core_open_audio")]
+    /// Begin receiving. A host receiver opens its iterator with its first read.
     fn open_audio(
         &self,
-        cx: &crate::telemetry::Cx,
-    ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
-    /// One observation: receiver clear epoch, whether this first frame opened a segment,
-    /// and the frame (None at EOF). The receiver stamps it before crossing the async boundary.
+        _cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async { Ok(()) })
+    }
+    /// The next observation; its `frame` is `None` at the end.
     #[host(await, name = "_core_next_audio")]
     fn next_audio(
         &self,
         cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<AudioReceiverObservation, ProviderError>>;
-    #[host(await, name = "_core_notify_playback_started")]
+    #[host(await)]
     fn notify_playback_started(
         &self,
         cx: &crate::telemetry::Cx,
-        segment: AvatarPlaybackSegment,
+        #[host(kw)] segment: AvatarPlaybackSegment,
     ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
-    #[host(await, name = "_core_notify_playback_finished")]
+    #[host(await)]
     fn notify_playback_finished(
         &self,
         cx: &crate::telemetry::Cx,
-        segment: AvatarPlaybackSegment,
         playback_position: f64,
         interrupted: bool,
+        #[host(kw)] segment: AvatarPlaybackSegment,
     ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
-    #[host(await, name = "_core_aclose")]
+    #[host(await)]
     fn aclose(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
 }
 
@@ -56,26 +63,27 @@ pub trait AvatarAudioReceiver: Send + Sync {
 /// `VideoGenerator` carries this surface (`voice/avatar.py`).
 #[crate::host(proxy(host = "livekit.agents.voice.avatar.VideoGenerator"))]
 pub trait AvatarVideoGenerator: Send + Sync {
-    /// An audio frame, or `None` for `AudioSegmentEnd`.
-    #[host(await, name = "_core_push_audio")]
+    /// An audio frame, or `AudioSegmentEnd`.
+    #[host(await)]
     fn push_audio(
         &self,
         cx: &crate::telemetry::Cx,
-        frame: Option<MediaFrame>,
+        frame: AudioReceiverFrame,
     ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
-    #[host(await, name = "_core_clear_buffer")]
+    #[host(await)]
     fn clear_buffer(
         &self,
         cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
-    /// Begin iterating (`__aiter__`).
-    #[host(await, name = "_core_open_frames")]
+    /// Begin generating. A host generator opens its iterator with its first read.
     fn open_frames(
         &self,
-        cx: &crate::telemetry::Cx,
-    ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
+        _cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async { Ok(()) })
+    }
     /// The next frame or segment end; `None` once the generator is exhausted.
-    #[host(await, name = "_core_next_frame")]
+    #[host(await, iter)]
     fn next_frame(
         &self,
         cx: &crate::telemetry::Cx,
@@ -149,9 +157,7 @@ pub trait DataStreamAudioReceiver: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn start(&self) -> Result<(), ProviderError>;
     #[host(await)]
-    async fn next_audio(
-        &self,
-    ) -> Result<(u64, bool, Option<AvatarPlaybackSegment>, Option<AudioReceiverFrame>), ProviderError>;
+    async fn next_audio(&self) -> Result<AudioReceiverObservation, ProviderError>;
     #[host(call)]
     fn notify_playback_started(&self, segment: AvatarPlaybackSegment) -> Result<(), ProviderError>;
     #[host(call)]
@@ -247,7 +253,7 @@ pub struct AvatarOptions {
 #[crate::host(proxy(host = "livekit.agents.voice.avatar.AvatarSession"))]
 pub trait AvatarHost: Send + Sync {
     /// The avatar's `metrics_collected` event.
-    #[host(notify, name = "_core_metrics_collected")]
+    #[host(notify, emit = "metrics_collected")]
     fn metrics_collected(&self, metrics: crate::metrics::base::AvatarMetrics);
     /// The avatar's `aclose` (a plugin's own), which the job's shutdown runs.
     #[host(call, getter = "aclose")]

@@ -1,8 +1,8 @@
 //! The host bridge and public contract of a warm transfer.
 
 use super::{InstructionsArg, IoEnableState, TwilioDial};
+use crate::Maybe;
 use crate::errors::HostError;
-use crate::{HostRef, Maybe};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -64,6 +64,13 @@ pub enum TransferFailed {
     Host(#[from] HostError),
 }
 
+/// The hold music playing while the caller waits (`PlayHandle`).
+#[crate::host(proxy(host = "livekit.agents.voice.background_audio.PlayHandle"))]
+pub trait HoldMusic: Send + Sync {
+    #[host(notify)]
+    fn stop(&self);
+}
+
 /// What the transfer executor asks of the SDK (rooms, sessions, hold music), each entered through
 /// HostInvoker. Its LiveKit and Twilio requests are the runtime's own.
 #[crate::host(proxy(host = "livekit.agents.beta.workflows._TransferHost"))]
@@ -72,9 +79,7 @@ pub trait TransferHost: Send + Sync {
     fn start_hold(
         &self,
         cx: &crate::telemetry::Cx,
-    ) -> crate::BoxFuture<'_, Result<Option<HostRef>, HostError>>;
-    #[host(notify, name = "_core_stop_hold")]
-    fn stop_hold(&self, hold: HostRef);
+    ) -> crate::BoxFuture<'_, Result<Option<std::sync::Arc<dyn HoldMusic>>, HostError>>;
     #[host(read_once, name = "_core_io_state")]
     fn io_state(&self) -> IoEnableState;
     #[host(notify, name = "_core_set_io")]
@@ -92,9 +97,9 @@ pub trait TransferHost: Send + Sync {
     #[host(await, name = "_core_start_human")]
     fn start_human(&self, cx: &crate::telemetry::Cx)
     -> crate::BoxFuture<'_, Result<(), HostError>>;
-    #[host(notify, name = "_core_close_human")]
-    fn close_human(&self, drain: bool);
-    #[host(await, name = "_core_disconnect_human")]
+    #[host(notify, name = "_human.shutdown")]
+    fn close_human(&self, #[host(kw)] drain: bool);
+    #[host(await, name = "_room.disconnect")]
     fn disconnect_human(
         &self,
         cx: &crate::telemetry::Cx,
@@ -126,7 +131,7 @@ pub trait WarmTransfer: Sized + Send + Sync + 'static {
         #[host(default = None)] dtmf: Option<String>,
         #[host(default = None)] ringing_timeout: Option<f64>,
         instructions: Maybe<InstructionsArg>,
-        #[host(default = None)] conversation: Option<Vec<(String, String)>>,
+        #[host(default = None)] conversation: Option<Vec<crate::ChatItem>>,
         #[host(default = None)] env_sip_trunk: Option<String>,
         #[host(default = "")] env_sip_number: String,
         #[host(default = None)] twilio: Option<TwilioDial>,

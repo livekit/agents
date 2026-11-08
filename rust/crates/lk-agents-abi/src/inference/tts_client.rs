@@ -13,22 +13,8 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
 
     #[host(class(name = "TtsStream"))]
     type Stream;
-    /// `inference.TTS`'s mixin builds it on first use, after a fork, from the TTS's attributes.
+    /// `inference.TTS` builds it on first use, after a fork, from its attributes.
     #[host(new)]
-    #[host(facade(
-        module = "provider_hosts",
-        class = "InferenceTtsHost",
-        target = "_native",
-        cached,
-        legs(synthesize, stream),
-        leg = "_core_native",
-        annotation(
-            language = ".language.LanguageCode | None",
-            sample_rate = "int",
-            extra_kwargs = "dict[str, Any]",
-            fallback = "list[.inference_tts.FallbackModel]"
-        )
-    ))]
     #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     fn new(
         env: &Self::Env,
@@ -75,6 +61,24 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
         #[host(default = false)] expressive: bool,
     ) -> Result<Self::Stream, ProviderError>;
 }
+
+/// `inference.TTS`'s client, built on first use, after a fork, from the TTS's attributes.
+#[crate::host(facade(
+    path = "livekit.agents.inference.tts",
+    extended,
+    name = "TTS",
+    native = InferenceTts,
+    cached,
+    legs(synthesize, stream),
+    leg = "_core_native",
+    annotation(
+        language = ".language.LanguageCode | None",
+        sample_rate = "int",
+        extra_kwargs = "dict[str, Any]",
+        fallback = "list[.inference_tts.FallbackModel]"
+    )
+))]
+pub trait InferenceTtsFacade {}
 
 // Public data contracts. Python behavior remains in its adapters.
 

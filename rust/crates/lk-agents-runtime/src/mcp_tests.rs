@@ -1,6 +1,6 @@
 use super::*;
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::llm::mcp::McpInvocation;
+use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::llm::mcp::McpSession as _;
 use lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT;
 use rmcp::model::*;
@@ -350,7 +350,7 @@ impl McpProgress for BlockedProgress {
     fn update<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        _: &'a McpInvocation,
+        _: &'a CallContext,
         _: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
         Box::pin(async move {

@@ -23,7 +23,7 @@ pub trait LeaseGroup: Any + Send + Sync {
 
 #[crate::host(proxy(host = "livekit.agents.llm.Toolset"))]
 pub trait ToolsetHooks: Send + Sync {
-    #[host(read_once, name = "_core_lifetime")]
+    #[host(read_once, getter = "_lifetime")]
     fn lifetime(&self) -> &Arc<dyn Lifetime>;
     #[host(await, name = "setup")]
     fn setup(
@@ -35,7 +35,7 @@ pub trait ToolsetHooks: Send + Sync {
     fn close(&self, cx: &crate::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>>;
     /// Framework-owned children acquired by the default setup, including before a user override
     /// subsequently fails. A failed setup does not call the failed resource's authored close.
-    #[host(call, name = "_core_children")]
+    #[host(call, getter = "_children")]
     fn children(&self) -> Result<Option<Arc<dyn LeaseGroup>>, HostError>;
 }
 

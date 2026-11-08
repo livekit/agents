@@ -216,7 +216,9 @@ impl Shared {
             return;
         }
 
-        let Some(queued) = self.source_result(src.as_ref(), src.queued_duration()) else { return };
+        let Some(queued) = self.source_result(src.as_ref(), source_queued(src.as_ref())) else {
+            return;
+        };
         let (paused, cutting) = {
             let mut st = self.lock();
             st.playback.captured(frame.clone(), queued);
@@ -236,7 +238,9 @@ impl Shared {
             let Some(info) = self.source_result(src.as_ref(), src.playback_info()) else { return };
             self.lock().playback.cut_captured(info);
         }
-        let Some(queued) = self.source_result(src.as_ref(), src.queued_duration()) else { return };
+        let Some(queued) = self.source_result(src.as_ref(), source_queued(src.as_ref())) else {
+            return;
+        };
         self.lock().playback.source_queued(self.clock.now(), queued);
     }
 
@@ -322,7 +326,7 @@ impl Shared {
                 continue;
             }
             let queued = match src {
-                Some(src) => self.source_result(src.as_ref(), src.queued_duration()),
+                Some(src) => self.source_result(src.as_ref(), source_queued(src.as_ref())),
                 None => Some(Duration::ZERO),
             };
             let Some(queued) = queued else { return ControlFlow::Continue(()) };
@@ -724,4 +728,9 @@ impl AudioOutput for ParticipantAudioOutput {
             self.shared.wake.notify_waiters();
         }
     }
+}
+
+/// The source's queued audio; the SDK's figure is float seconds.
+fn source_queued(src: &dyn AudioSource) -> std::result::Result<Duration, RtcError> {
+    src.queued_seconds().map(lk_agents_abi::utils::clock::secs)
 }

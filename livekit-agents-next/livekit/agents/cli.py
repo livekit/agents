@@ -18,12 +18,14 @@ from ._generated.cli import (
     CliArgsConsole,
     CliArgsStart,
     CliParseResultDisplay,
+    LogLevel,
     LogRecord,
 )
 from ._generated.job_records import RunningJobInfo
+from ._generated.worker_options import ProcessOptions
 from .job import JobExecutorType
 from .log import DEV_LEVEL, _add_global_log_fields, logger
-from .types import NOT_GIVEN
+from .utils import http_context
 from .worker import AgentServer, Plugin
 
 __all__ = ["run_app"]
@@ -49,6 +51,7 @@ NOISY_LOGGERS = [
 
 def run_app(server: AgentServer) -> None:
     """Launch an explicitly supplied server through the same command interface."""
+    http_context._export_ca_paths()
     if status := _launch(sys.argv[1:], server):
         raise SystemExit(status)
 
@@ -165,24 +168,10 @@ class _LineHandler(logging.StreamHandler):  # type: ignore[type-arg]
 
 
 # what the worker logs with, for the job processes it starts: each writes its own lines
-_log_config: str | None = None
+_log_config: LogLevel | None = None
 
 
-def _python_log_level(level: str) -> int:
-    aliases = {"WARN": "WARNING", "FATAL": "CRITICAL"}
-    name = aliases.get(level.upper(), level.upper())
-    if name == "OFF":
-        return logging.CRITICAL + 1
-    if name == "TRACE":
-        logging.addLevelName(5, "TRACE")
-        return 5
-    try:
-        return logging.getLevelNamesMapping()[name]
-    except KeyError:
-        raise ValueError(f"unknown log level: {level}") from None
-
-
-def setup_logging(log_level: str) -> logging.Handler:
+def setup_logging(log_level: LogLevel) -> logging.Handler:
     """Write structured JSON logs to inherited stdout at the requested level."""
     global _log_config
     _log_config = log_level
@@ -195,7 +184,9 @@ def setup_logging(log_level: str) -> logging.Handler:
     _add_global_log_fields(handler)
     root = logging.getLogger()
     root.addHandler(handler)
-    level = _python_log_level(log_level)
+    level = _core.host_log_level(log_level)
+    if log_level == "trace":
+        logging.addLevelName(level, "TRACE")
     root.setLevel(level)
     for name in NOISY_LOGGERS:
         noisy = logging.getLogger(name)
@@ -220,15 +211,7 @@ def setup_logging(log_level: str) -> logging.Handler:
 def _run_worker(server: AgentServer, args: CliArgsStart, *, unregistered: bool = False) -> int:
     """Serve, stop admission, drain, and clean up within one process deadline."""
     try:
-        server._update_options(
-            ws_url=args.ws_url if args.ws_url is not None else NOT_GIVEN,
-            api_key=args.api_key if args.api_key is not None else NOT_GIVEN,
-            api_secret=args.api_secret if args.api_secret is not None else NOT_GIVEN,
-            shutdown_timeout=args.shutdown_timeout
-            if args.shutdown_timeout is not None
-            else NOT_GIVEN,
-            drain_timeout=args.drain_timeout if args.drain_timeout is not None else NOT_GIVEN,
-        )
+        server._config.update(args.options, args.process)
     except ValueError as configuration_error:
         raise CLIError(str(configuration_error)) from configuration_error
     server._config.simulation = args.simulation
@@ -302,15 +285,9 @@ async def _finish_server(server: AgentServer, shutdown: _core.Shutdown, *, drain
 async def _drain(server: AgentServer, timeout: float) -> None:
     if timeout <= 0:
         return
-    task = asyncio.create_task(server._drain())
-    done, _ = await asyncio.wait({task}, timeout=timeout)
-    if not done:
-        task.cancel()
-        logger.warning("drain timed out, closing remaining work")
-        return
     try:
-        task.result()
-    except asyncio.TimeoutError:
+        await server._drain(timeout)
+    except TimeoutError:
         logger.warning("drain timed out, closing remaining work")
 
 
@@ -356,9 +333,9 @@ def _run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
     this process."""
     from .voice._session_bindings import ConsoleCall
 
-    setup_logging("DEBUG")
+    setup_logging("debug")
     ConsoleCall.addr, ConsoleCall.record = connect_addr, record
-    server._update_options(job_executor_type=JobExecutorType.THREAD)
+    server._update_options(ProcessOptions(job_executor_type=JobExecutorType.THREAD))
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)

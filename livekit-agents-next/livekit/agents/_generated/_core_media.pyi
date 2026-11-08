@@ -11,6 +11,8 @@ from livekit.agents.tts import SynthesizedAudio
 from livekit.agents.utils.aio import Chan
 from livekit.rtc import VideoFrame
 
+from .chat_items import InferenceDetail
+from .llm import SerializedImage
 from .rtc_frames import AudioFrame
 from .transcript import TranscriptChunk
 from .usage import TokenUsage
@@ -27,15 +29,17 @@ async def encode_image(
 
 async def serialize_image_frame(
     frame: VideoFrame,
+    inference_detail: InferenceDetail,
     inference_width: int | None = None,
     inference_height: int | None = None,
-) -> tuple[bytes, str]:
+) -> SerializedImage:
     """A frame as JPEG bytes, resized to its inference size when it has one."""
 
 async def serialize_image_url(
     url: str,
+    inference_detail: InferenceDetail,
     mime_type: str | None,
-) -> tuple[bytes | None, str | None, str | None, str | None]:
+) -> SerializedImage:
     """A URL's inline bytes and MIME type, or the URL itself when it is external."""
 
 class AudioEmitter:

@@ -91,17 +91,19 @@ pub trait ImageFunctions {
     async fn serialize_image_frame(
         env: &Self::Env,
         frame: Arc<dyn RtcVideoFrame>,
+        inference_detail: crate::InferenceDetail,
         #[host(default = None)] inference_width: Option<u32>,
         #[host(default = None)] inference_height: Option<u32>,
-    ) -> Result<(Vec<u8>, String), ImageError>;
+    ) -> Result<crate::llm::provider_format::image::SerializedImage, ImageError>;
 
     /// A URL's inline bytes and MIME type, or the URL itself when it is external.
     #[host(function)]
     async fn serialize_image_url(
         env: &Self::Env,
         url: String,
+        inference_detail: crate::InferenceDetail,
         mime_type: Option<String>,
-    ) -> Result<(Option<Vec<u8>>, Option<String>, Option<String>, Option<String>), ImageError>;
+    ) -> Result<crate::llm::provider_format::image::SerializedImage, ImageError>;
 }
 
 /// An image that could not be prepared.

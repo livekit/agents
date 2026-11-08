@@ -9,8 +9,7 @@ from typing import Literal, Protocol, runtime_checkable
 from livekit import rtc
 
 from . import _bindings, _core
-from ._generated import public_stt as _public
-from ._generated.provider_hosts import FallbackSttHost, SttStreamAdapterHost
+from ._generated import facades_stt as _facades, public_stt as _public
 from ._generated.public_stt import *  # noqa: F403
 from ._generated.vad import VAD
 from .types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -33,7 +32,9 @@ class SpeakerContext(Protocol):
 
 
 class FallbackAdapter(
-    FallbackSttHost, _bindings.FallbackMembers[STT], STT[Literal["stt_availability_changed"]]
+    _facades.FallbackAdapter,
+    _bindings.FallbackMembers[STT],
+    STT[Literal["stt_availability_changed"]],
 ):
     """Several STT behind one: a failed one is skipped until it recovers."""
 
@@ -148,7 +149,7 @@ class StreamAdapterWrapper(RecognizeStream):
         )
 
 
-class StreamAdapter(SttStreamAdapterHost, STT):
+class StreamAdapter(_facades.StreamAdapter, STT):
     """A recognize-only STT as a streaming one: the VAD cuts the audio into utterances, each
     recognized on its own (``_core.SttStreamAdapter``)."""
 

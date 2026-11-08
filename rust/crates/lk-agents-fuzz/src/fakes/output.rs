@@ -630,6 +630,7 @@ impl lk_agents_abi::voice::background_audio::FrameStream for FakeSoundStream {
     fn next(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
+        _cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<AudioFrame>, lk_agents_abi::errors::ProviderError>,
@@ -646,11 +647,6 @@ impl lk_agents_abi::voice::background_audio::FrameStream for FakeSoundStream {
             )
         });
         Box::pin(std::future::ready(Ok(frame)))
-    }
-    fn cancel_pending(&self) {}
-    fn close(&self, _cx: &lk_agents_abi::telemetry::Cx) -> lk_agents_abi::BoxFuture<'_, ()> {
-        *self.left.lock().unwrap() = 0;
-        Box::pin(std::future::ready(()))
     }
 }
 

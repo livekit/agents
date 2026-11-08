@@ -17,7 +17,7 @@ from livekit.protocol import models
 
 from . import _core, ipc, telemetry, utils
 from ._generated.job_records import RunningJobInfo
-from ._generated.worker_options import Listeners, ServerOptions
+from ._generated.worker_options import ProcessOptions, ServerOptions, ServerOptionsKwargs
 from ._generated.worker_server import ProcessStartOptions
 from .evals import SimulationContext
 from .http import AgentRoutes
@@ -27,7 +27,7 @@ from .log import logger
 from .storage import _CallThreadEntrypoint
 from .storage.session import _Handler
 from .types import NOT_GIVEN, NotGivenOr
-from .utils import http_context, is_given
+from .utils import is_given
 from .version import __version__
 
 if TYPE_CHECKING:
@@ -132,20 +132,6 @@ class AgentHandler:
         return decorator
 
 
-def _core_options(given: dict[str, Any]) -> ServerOptions:
-    """The server options given by name, as the core takes them; the core has the defaults."""
-    skip = (
-        "self",
-        "__class__",
-        "storage",
-        "project_id",
-        "thread_api_port",
-        "preload_modules",
-        "_load_fnc",
-    )
-    return ServerOptions(**{k: v for k, v in given.items() if k not in skip and is_given(v)})
-
-
 class AgentServer(AgentHandler):
     """The worker: its doors (one voice door, text doors under ``/<endpoint>``), the job
     processes, and the connection to LiveKit, whose lifecycle is the core's
@@ -156,26 +142,15 @@ class AgentServer(AgentHandler):
     def __init__(
         self,
         *,
-        agent_name: NotGivenOr[str] = NOT_GIVEN,
         storage: Storage | None = None,
         project_id: str = "default",
         thread_api_port: int | None = None,
-        ws_url: NotGivenOr[str] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        api_secret: NotGivenOr[str] = NOT_GIVEN,
-        load_threshold: NotGivenOr[float] = NOT_GIVEN,
-        job_memory_warn_mb: NotGivenOr[float] = NOT_GIVEN,
-        job_memory_limit_mb: NotGivenOr[float] = NOT_GIVEN,
-        drain_timeout: NotGivenOr[float] = NOT_GIVEN,
-        shutdown_timeout: NotGivenOr[float] = NOT_GIVEN,
-        num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
-        listeners: NotGivenOr[Listeners] = NOT_GIVEN,
         preload_modules: Sequence[str] = (),
         _load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
+        **options: Unpack[ServerOptionsKwargs],
     ) -> None:
-        options = _core_options({**locals(), "version": __version__})
         AgentHandler.__init__(self)
-        self._config = _core.ServerConfig(options)
+        self._config = _core.ServerConfig(ServerOptions(**options), ProcessOptions(), __version__)
         self._storage = storage
         self._project_id = project_id
         self._thread_api_port = thread_api_port
@@ -293,9 +268,11 @@ class AgentServer(AgentHandler):
                 self._thread_server = None
             await telemetry._shutdown()
 
-    def _update_options(self, **options: Any) -> None:
-        """Change options of ``AgentServer()`` before the server starts."""
-        self._config.update(_core_options(options))
+    def _update_options(
+        self, process: ProcessOptions | None = None, **options: Unpack[ServerOptionsKwargs]
+    ) -> None:
+        """Change the server's options and process tuning before the server starts."""
+        self._config.update(ServerOptions(**options), process or ProcessOptions())
 
     @property
     def id(self) -> str:
@@ -361,8 +338,6 @@ class _ServerCallbacks:
     async def _core_start(self, opts: ProcessStartOptions) -> None:
         """The job processes, when the core wants them. The server's settings (``opts.env``)
         become a job process's environment; this process's is never changed."""
-        # must run before job processes spawn so they inherit the SSL_CERT_FILE fallback
-        http_context._set_default_cert_env()
         logger.info(
             "starting worker", extra={"version": __version__, "rtc-version": rtc.__version__}
         )
@@ -481,10 +456,6 @@ class Plugin(ABC):  # noqa: B024
 
         cls.registered_plugins.append(plugin)
         cls.emitter.emit("plugin_registered", plugin)
-
-    # plugin can implement an optional download_files method
-    def download_files(self) -> None:  # noqa: B027
-        pass
 
     @property
     def package(self) -> str:

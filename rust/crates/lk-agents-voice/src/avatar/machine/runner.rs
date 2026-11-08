@@ -104,7 +104,7 @@ impl AvatarEvent {
 pub enum AvatarIoOperation {
     OpenAudio,
     NextAudio,
-    PushAudio(Option<MediaFrame>),
+    PushAudio(AudioReceiverFrame),
     OpenFrames,
     NextFrame,
     Publish,
@@ -495,22 +495,18 @@ impl RunnerCore {
         item: AudioReceiverFrame,
         out: &mut Vec<AvatarEffect>,
     ) {
-        let frame = match item {
-            AudioReceiverFrame::Audio(frame) => {
+        match &item {
+            AudioReceiverFrame::Audio(_) => {
                 if !std::mem::replace(&mut self.reading, true) {
                     let segment = self.segment_key(segment);
                     self.owed.push_back(segment);
                 }
                 self.stale_end = false;
-                Some(MediaFrame::Audio(frame))
             }
-            AudioReceiverFrame::SegmentEnd => {
-                self.reading = false;
-                None
-            }
-        };
+            AudioReceiverFrame::SegmentEnd => self.reading = false,
+        }
         self.audio_pushing = true;
-        out.push(AvatarEffect::Io(AvatarIoOperation::PushAudio(frame)));
+        out.push(AvatarEffect::Io(AvatarIoOperation::PushAudio(item)));
     }
 
     fn audio_pushed(&mut self, result: Result<(), ProviderError>, out: &mut Vec<AvatarEffect>) {

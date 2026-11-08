@@ -229,14 +229,19 @@ fn omittable_record_options_refuse_competing_defaults_and_output() {
         assert!(error.contains("Options.persona"), "{error}");
         assert!(error.contains("default"), "{error}");
     }
-    let result = crate::decl::tests::read(
+    let decls = crate::decl::tests::read(
         r#"
         use crate::utils::maybe::Maybe;
         #[crate::host(record(module = "session", emit))]
         pub struct Options { pub persona: Maybe<String> }
     "#,
+    )
+    .expect("an emitted record field crosses its omission");
+    let generated = crate::records::conversions(&decls).expect("conversions emit").text;
+    assert!(
+        generated.contains("::lk_agents_abi::Maybe::NotGiven => crate::py_values::not_given(py)?"),
+        "{generated}"
     );
-    assert!(result.expect_err("omission is input-only").contains("omission is an input state"));
 }
 
 #[test]

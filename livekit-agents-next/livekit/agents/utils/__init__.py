@@ -109,12 +109,6 @@ def _kinds(kind: Sequence[int] | int | None) -> list[int] | None:
     return [kind] if isinstance(kind, int) else list(kind)
 
 
-def _room_session(room: rtc.Room) -> _core._core_RoomSession:
-    from ..voice.room_io import Room
-
-    return _core._core_create_room_session(Room.of(room))
-
-
 async def wait_for_agent(
     room: rtc.Room,
     *,
@@ -134,7 +128,7 @@ async def wait_for_agent(
     Raises:
         RuntimeError: If the room is not connected.
     """
-    identity = await _core.wait_for_agent(_room_session(room), agent_name)
+    identity = await _core.wait_for_agent(_core._core_create_room_session(room), agent_name)
     return room.remote_participants[identity]
 
 
@@ -173,7 +167,7 @@ async def wait_for_participant(
     When `include_local` is True, the local participant is also considered.
     """
     found = await _core.wait_for_participant(
-        _room_session(room), identity, _kinds(kind), include_local
+        _core._core_create_room_session(room), identity, _kinds(kind), include_local
     )
     return room.local_participant if found is None else room.remote_participants[found]
 
@@ -221,7 +215,11 @@ async def wait_for_track_publication(
     on a participant that is gone.
     """
     publisher, sid = await _core.wait_for_track_publication(
-        _room_session(room), identity, _kinds(kind), include_local, wait_for_subscription
+        _core._core_create_room_session(room),
+        identity,
+        _kinds(kind),
+        include_local,
+        wait_for_subscription,
     )
     participant: rtc.Participant = (
         room.local_participant if publisher is None else room.remote_participants[publisher]

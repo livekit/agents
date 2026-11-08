@@ -13,7 +13,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias
 
 if TYPE_CHECKING:
-    from livekit.agents.voice.background_audio import _FrameStream
+    from collections.abc import AsyncIterator
+    from typing import Any
 
 
 @dataclass(kw_only=True, slots=True)
@@ -23,7 +24,7 @@ class SoundSourceFile:
 
 @dataclass(kw_only=True, slots=True)
 class SoundSourceStream:
-    stream: _FrameStream
+    stream: AsyncIterator[Any]
 
 
 SoundSource: TypeAlias = SoundSourceFile | SoundSourceStream

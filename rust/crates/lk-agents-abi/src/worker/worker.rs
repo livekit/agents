@@ -25,7 +25,7 @@ pub struct Snapshot {
 }
 
 /// `WorkerPermissions`, field-for-field, including the defaults.
-#[crate::host(record(module = "worker_options", dataclass, extract))]
+#[crate::host(record(module = "worker_options", dataclass, extract, emit))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerPermissions {
     #[host(default = true)]
@@ -140,7 +140,13 @@ pub enum MultiprocessingContext {
 
 /// `AgentServer(listeners=)`: public traffic and operational information never share a port
 /// (docs/server.md "Listeners"). A listener left out keeps its default.
-#[crate::host(record(module = "worker_options", path = "livekit.agents", typed_dict, extract))]
+#[crate::host(record(
+    module = "worker_options",
+    path = "livekit.agents",
+    typed_dict,
+    extract,
+    emit
+))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Listeners {
     /// The agent's endpoints and HTTP routes, where the worker serves them (a self-hosted
@@ -156,7 +162,13 @@ pub struct Listeners {
 }
 
 /// Where a listener binds; a key left out keeps its default.
-#[crate::host(record(module = "worker_options", path = "livekit.agents", typed_dict, extract))]
+#[crate::host(record(
+    module = "worker_options",
+    path = "livekit.agents",
+    typed_dict,
+    extract,
+    emit
+))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ListenerAddress {
     #[host(default = None)]
@@ -166,7 +178,13 @@ pub struct ListenerAddress {
 }
 
 /// The public listener's address and how it reads the client.
-#[crate::host(record(module = "worker_options", path = "livekit.agents", typed_dict, extract))]
+#[crate::host(record(
+    module = "worker_options",
+    path = "livekit.agents",
+    typed_dict,
+    extract,
+    emit
+))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PublicListener {
     #[host(default = None)]
@@ -179,29 +197,58 @@ pub struct PublicListener {
     pub proxy_headers: bool,
 }
 
-/// A sparse update to the server configuration; omission and an explicit null remain distinct.
-#[crate::host(record(module = "worker_options", dataclass, extract))]
-#[derive(Clone, Default)]
+/// `AgentServer(...)`'s options: a sparse update to the server configuration, where omission and
+/// an explicit null remain distinct. An option left out keeps its default.
+#[crate::host(record(module = "worker_options", dataclass, extract, emit, kwargs))]
+#[derive(Clone, Default, PartialEq)]
 pub struct ServerOptions {
+    /// The LiveKit server URL; default `LIVEKIT_URL`.
     pub ws_url: crate::Maybe<String>,
+    /// Default `LIVEKIT_API_KEY`.
     pub api_key: crate::Maybe<String>,
+    /// Default `LIVEKIT_API_SECRET`.
     pub api_secret: crate::Maybe<String>,
+    /// The agent's name, its lane in a thread and the first segment of its endpoints; default
+    /// `LIVEKIT_AGENT_NAME`. `LIVEKIT_AGENT_NAME_OVERRIDE` wins over it.
     pub agent_name: crate::Maybe<String>,
+    /// The worker's `public`, `health` and `prometheus` listeners (docs/server.md "Listeners").
     pub listeners: crate::Maybe<Listeners>,
+    /// Load at which the worker stops taking jobs; 0.7 in production.
     pub load_threshold: crate::Maybe<f64>,
+    /// Job processes kept warm ahead of dispatch; `min(ceil(cpus), 4)` in production, none in
+    /// development.
     pub num_idle_processes: crate::Maybe<u32>,
+    /// Maximum seconds to wait for active work after admission stops; 3600. Zero skips waiting.
     pub drain_timeout: crate::Maybe<f64>,
+    /// Total process shutdown budget in seconds, draining and cleanup included; 3610. Must
+    /// exceed `drain_timeout`.
     pub shutdown_timeout: crate::Maybe<f64>,
-    pub max_retry: crate::Maybe<u32>,
-    pub permissions: crate::Maybe<WorkerPermissions>,
-    pub http_proxy: crate::Maybe<Option<String>>,
-    pub version: crate::Maybe<String>,
-    pub job_executor_type: crate::Maybe<crate::worker::job::JobExecutorType>,
-    pub multiprocessing_context: crate::Maybe<MultiprocessingContext>,
+    /// A job process's memory warning threshold in MB; 1000.
     pub job_memory_warn_mb: crate::Maybe<f64>,
+    /// A job process's memory kill threshold in MB; 0, no limit.
     pub job_memory_limit_mb: crate::Maybe<f64>,
+}
+
+/// The server's process tuning: the launcher sets it (`CliArgs::Start`), never `AgentServer(...)`.
+/// An option left out keeps its default.
+#[crate::host(record(module = "worker_options", dataclass, extract, emit))]
+#[derive(Clone, Default, PartialEq)]
+pub struct ProcessOptions {
+    /// Connection attempts to LiveKit before the worker fails; 16.
+    pub max_retry: crate::Maybe<u32>,
+    /// The permissions of the agent's participant in the rooms it joins.
+    pub permissions: crate::Maybe<WorkerPermissions>,
+    /// The proxy the job processes' HTTP clients use; default `HTTPS_PROXY`, else `HTTP_PROXY`.
+    pub http_proxy: crate::Maybe<Option<String>>,
+    /// Where jobs run; `"process"`.
+    pub job_executor_type: crate::Maybe<crate::worker::job::JobExecutorType>,
+    /// How job processes start; `"forkserver"` on Linux, else `"spawn"`.
+    pub multiprocessing_context: crate::Maybe<MultiprocessingContext>,
+    /// Seconds a job process has to exit once its job ended; 10.
     pub shutdown_process_timeout: crate::Maybe<f64>,
+    /// Seconds a session's end callbacks have to finish; 300.
     pub session_end_timeout: crate::Maybe<f64>,
+    /// Seconds a job process has to initialize (`prewarm`); 10.
     pub initialize_process_timeout: crate::Maybe<f64>,
 }
 

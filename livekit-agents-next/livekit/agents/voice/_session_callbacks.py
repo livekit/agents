@@ -25,14 +25,12 @@ from .._generated.session_wire import (
     HostWire,
     ItemAddedWire,
     MetricsCollectedWire,
-    OverlappingSpeechWire,
     RunFailedWire,
     RunFinishedWire,
     RunRefusedWire,
     SessionErrorWire,
     SpeechCreatedWire,
     TextInputWire,
-    ToolCallStartedWire,
     ToolExecutionUpdatedWire,
 )
 from .._generated.voice_session import VoiceCommandOrigin, VoiceCommandOriginHook
@@ -62,9 +60,7 @@ from .events import (
     FunctionToolsExecutedEvent,
     RunContext,
     SpeechCreatedEvent,
-    ToolCallStarted,
     ToolExecutionUpdatedEvent,
-    ToolUpdate,
     UserTurnExceededEvent,
     event_dict,
 )
@@ -133,9 +129,6 @@ class _AgentHooks:
     def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
         self._toolsets = _core._core_ToolsetScopes()
-
-    def _core_toolset_scopes(self) -> _core._core_ToolsetScopes:
-        return self._toolsets
 
     def _core_toolset_resources(self, tools: Iterable[llm.Tool | llm.Toolset]) -> list[llm.Toolset]:
         return [tool for tool in self._for_call(tools) if isinstance(tool, llm.Toolset)]
@@ -431,12 +424,7 @@ def _on_run_failed(self: VoiceSession[Any], wire: RunFailedWire) -> None:
 
 
 def _on_tool_update(self: VoiceSession[Any], wire: ToolExecutionUpdatedWire) -> None:
-    update: ToolUpdate = (
-        ToolCallStarted(function_call=wire.update.function_call)
-        if isinstance(wire.update, ToolCallStartedWire)
-        else wire.update
-    )
-    self.emit("tool_execution_updated", ToolExecutionUpdatedEvent(update=update))
+    self.emit("tool_execution_updated", ToolExecutionUpdatedEvent(update=wire.update))
 
 
 def _on_metrics(self: VoiceSession[Any], wire: MetricsCollectedWire) -> None:
@@ -480,10 +468,6 @@ def _on_error(self: VoiceSession[Any], wire: SessionErrorWire) -> None:
     )
     error, source = _error_record(self, wire)
     self.emit("error", ErrorEvent(error=error, source=source))
-
-
-def _on_overlapping_speech(self: VoiceSession[Any], wire: OverlappingSpeechWire) -> None:
-    self.emit("overlapping_speech", wire.event)
 
 
 def _on_amd_result(self: VoiceSession[Any], wire: AMDPredictionEvent) -> None:
@@ -551,7 +535,6 @@ _HANDLERS: dict[type, Callable[[VoiceSession[Any], Any], None]] = {
     RunFailedWire: _on_run_failed,
     ToolExecutionUpdatedWire: _on_tool_update,
     MetricsCollectedWire: _on_metrics,
-    OverlappingSpeechWire: _on_overlapping_speech,
     SessionErrorWire: _on_error,
     CloseWire: _on_close,
     AMDPredictionEvent: _on_amd_result,
@@ -561,10 +544,10 @@ _HANDLERS: dict[type, Callable[[VoiceSession[Any], Any], None]] = {
 
 
 def report_snapshots(self: VoiceSession[Any]) -> list[dict[str, Any]]:
-    return [event for event in self._event_snapshots if self._owner.accepts_event(event["type"])]
+    return [event for event in self._event_snapshots if self._native.accepts_event(event["type"])]
 
 
 def record_snapshot(self: VoiceSession[Any], arg: AgentEvent) -> None:
     # the event as the report records it: no live objects (a model client, an exception)
-    if self._owner.admit_event(arg.type):
+    if self._native.admit_event(arg.type):
         self._event_snapshots.append(event_dict(arg, json=True))

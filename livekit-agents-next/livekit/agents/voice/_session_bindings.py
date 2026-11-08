@@ -18,12 +18,20 @@ from .. import _bindings, _core, inference, llm, stt, tts
 from .._bindings import TurnDetector, realtime_model, tool_specs
 from .._generated.connect import SessionConnectOptions as SessionConnectOptions
 from .._generated.keyterms import STTContextOptions
+from .._generated.remote_session import (
+    AgentInfo,
+    FrameworkInfo,
+    IoUpdate,
+    RemoteSessionState,
+    RtcStats,
+)
 from .._generated.remote_session_wire import STATE_OPTION_FIELDS
 from .._generated.session_options import SessionKwargs
 from .._generated.session_owner import ProviderBindings
-from .._generated.session_wire import DEFAULT_HOOK_BOUND, DEFAULT_SILENT_FPS, DEFAULT_SPEAKING_FPS
+from .._generated.session_wire import DEFAULT_HOOK_BOUND
 from .._generated.vad import VAD
-from .._generated.voice_session import VoiceSessionArgs
+from .._generated.video_sampler import VoiceActivityVideoSampler
+from .._generated.voice_session import UpdateAgentArgs, VoiceSessionArgs
 from ..inference.llm import llm_from_model_string
 from ..job import get_job_context
 from ..llm import (
@@ -48,7 +56,7 @@ from .events import (
     RunContext,
     UserTurnExceededEvent,
 )
-from .room_io import Room as _RtcRoom, RoomOptions
+from .room_io import RoomOptions
 
 if TYPE_CHECKING:
     from .._core import VoiceAgent as _NativeAgent
@@ -82,20 +90,7 @@ UserTurnCompletedHook = Callable[
 UserTurnExceededHook = Callable[[RunContext[_C], UserTurnExceededEvent], Coroutine[Any, Any, None]]
 
 
-class VoiceActivityVideoSampler:
-    """Sample the camera at ``speaking_fps`` while the user speaks, ``silent_fps`` otherwise."""
-
-    def __init__(
-        self, *, speaking_fps: float = DEFAULT_SPEAKING_FPS, silent_fps: float = DEFAULT_SILENT_FPS
-    ) -> None:
-        self.speaking_fps = speaking_fps
-        self.silent_fps = silent_fps
-
-
 _CallbackT = TypeVar("_CallbackT", bound=Callable[..., object])
-
-
-VoiceActivityVideoSampler.__module__ = "livekit.agents.voice.agent_session"
 
 
 _OPTION_KEYS = (SessionKwargs.__required_keys__ | SessionKwargs.__optional_keys__) - {
@@ -172,7 +167,7 @@ def initialize(
     session._execution_id = shortuuid("execution_")
     session._store = None
 
-    session._owner = _core._core_SessionOwner(session._options)
+    session._native = _core._core_SessionOwner(session._options)
     session._room = None
     session._amd = None
     # the native options own the providers from here: `session.stt`, `tts` and `vad` read them
@@ -264,33 +259,34 @@ class SessionAdapter:
             toolset_scope=id(agent),
         )
 
-    def _frame(self, agent: Agent, *, task: bool = False) -> dict[str, Any]:
-        """``agent`` as the core installs it (``update_agent``'s keywords); the core has its
-        toolsets acquired by the native registry before Python reflects their tools. ``task``:
-        it runs a ``VoiceTask``."""
+    def _frame(self, agent: Agent, *, task: bool = False) -> UpdateAgentArgs:
+        """``agent`` as the core installs it; the core has its toolsets acquired by the native
+        registry before Python reflects their tools. ``task``: it runs a ``VoiceTask``."""
         session = self.session
         # its tools, instructions and hooks are what the core runs from now on
         agent._config.freeze()
-        pool = self._pool(agent)
-        frame: dict[str, Any] = {
-            "instructions": agent._config.instructions,
-            "dynamic_instructions": (
-                _DynamicInstructions(session, agent) if agent._config.dynamic_instructions else None
-            ),
-            "agent": agent.name,
-            "agent_host": agent,
-            "tools_host": pool,
-            "voice_agent": self._voice_agent(agent, task=task),
-        }
         # every leg a node may wrap is given, so the previous frame's node never stays on it; the
         # session's STT and TTS stay as they are, under the agent's nodes
         binding = _VoiceBinding(session, agent)
-        frame["stt"] = _bindings.core_leg(binding.stt)
         model = binding.llm
-        if is_given(agent._llm) or not isinstance(model, llm.RealtimeModel):
-            frame["llm"] = _bindings.core_leg(model)
-        frame["tts"] = _bindings.core_leg(binding.tts)
-        return {**frame, **self._nodes(agent)}
+        return UpdateAgentArgs(
+            instructions=agent._config.instructions,
+            dynamic_instructions=(
+                _DynamicInstructions(session, agent) if agent._config.dynamic_instructions else None
+            ),
+            agent=agent.name,
+            agent_host=agent,
+            tools_host=self._pool(agent),
+            voice_agent=self._voice_agent(agent, task=task),
+            stt=_bindings.core_leg(binding.stt),
+            llm=(
+                _bindings.core_leg(model)
+                if is_given(agent._llm) or not isinstance(model, llm.RealtimeModel)
+                else NOT_GIVEN
+            ),
+            tts=_bindings.core_leg(binding.tts),
+            **self._nodes(agent),
+        )
 
     def _nodes(self, agent: Agent) -> dict[str, Any]:
         """The registered nodes, as the core opens them for ``agent``, each call in its
@@ -313,11 +309,6 @@ class SessionAdapter:
             "llm": isinstance(session._llm, llm.LLM),
             "tts": session.tts is not None,
             "realtime": isinstance(session._llm, llm.RealtimeModel),
-            "detector": None,
-            "adaptive_detector": False,
-            "audio_enabled": True,
-            "audio_output": True,
-            "sink_can_pause": True,
         }
 
     def _using_default_vad(self) -> bool:
@@ -431,7 +422,7 @@ class SessionHost:
         from ..storage import Thread, _StorageHandle
         from ..storage.context import ContextStore
 
-        storage = session._owner.storage
+        storage = session._native.storage
         assert storage is not None
         session._store = ContextStore(activation=storage.activation, scope_id=storage.scope_id)
         if session._thread is None and (namespace := storage.namespace) is not None:
@@ -442,7 +433,7 @@ class SessionHost:
 
         hooks = _AgentHooks(session)
         frame = session._frame(agent)
-        model = frame.get("llm", session._llm)
+        model = frame.llm if is_given(frame.llm) else session._llm
         # an OpenAI-protocol model or a fallback chain runs in the core; any other one is a host
         # realtime model
         realtime = (
@@ -450,21 +441,20 @@ class SessionHost:
             if isinstance(model, llm.RealtimeModel)
             else None
         )
-        sampler = session._video_sampler
         keyterm_llm = _detection_llm(session._stt_context)
         session._room = room
         args = VoiceSessionArgs(
-            instructions=frame["instructions"],
-            dynamic_instructions=frame["dynamic_instructions"],
-            agent=frame["agent"],
-            agent_host=frame["agent_host"],
+            instructions=frame.instructions,
+            dynamic_instructions=frame.dynamic_instructions,
+            agent=frame.agent,
+            agent_host=frame.agent_host,
             # without one, `update_agent(chat_ctx=)`'s; a stored call starts on its lane's history
             chat_ctx=chat_ctx.items if chat_ctx is not None else None,
-            stt=frame["stt"],
+            stt=frame.stt if is_given(frame.stt) else None,
             vad=_bindings.core_leg(session.vad),
             llm=None if isinstance(model, llm.RealtimeModel) else model,
             realtime=realtime,
-            tts=frame["tts"],
+            tts=frame.tts if is_given(frame.tts) else None,
             host_audio_input=session._input.audio,
             host_video_input=session._input.video,
             host_audio_output=session._output.audio,
@@ -472,10 +462,10 @@ class SessionHost:
             on_event=session,
             hooks=hooks,
             session_toolsets=hooks._core_toolset_resources(session._tools),
-            tools_host=frame["tools_host"],
-            voice_agent=frame["voice_agent"],
+            tools_host=frame.tools_host,
+            voice_agent=frame.voice_agent,
             room_io_config=options,
-            video_sampler=(sampler.speaking_fps, sampler.silent_fps) if sampler else None,
+            video_sampler=session._video_sampler,
             using_default_vad=session._adapter._using_default_vad(),
             turn_detector=session._turn_detector,
             hook_bound=DEFAULT_HOOK_BOUND,
@@ -484,7 +474,10 @@ class SessionHost:
             stt_context=session._stt_context,
             keyterm_llm=_bindings.core_leg(keyterm_llm) if keyterm_llm is not None else None,
             keyterm_tools=[_record_keyterms] if keyterm_llm is not None else None,
-            **{node: frame[node] for node in _NODES if node in frame},
+            llm_node=frame.llm_node,
+            tts_node=frame.tts_node,
+            stt_node=frame.stt_node,
+            transcription_node=frame.transcription_node,
             # served when the owner decides the session hosts it
             remote_session=RemoteSessionAccess(session),
             console=console,
@@ -492,9 +485,8 @@ class SessionHost:
             # the job ends once its primary session closes
             job_run=job._run if job is not None else None,
         )
-        rtc_room = _RtcRoom.of(room) if room is not None else None
         return _core._core_SessionBindings(
-            room=_core._core_create_room_session(rtc_room),
+            room=_core._core_create_room_session(room),
             args=args,
             record_audio=console is not None and ConsoleCall.record,
         )
@@ -551,47 +543,50 @@ class RemoteSessionAccess:
     def __init__(self, session: VoiceSession[Any]) -> None:
         self.session = session
 
-    async def _core_agent_info(self) -> tuple[str, str | None, list[str], list[llm.ChatItem]]:
+    async def _core_agent_info(self) -> AgentInfo:
         agent = self.session.current_agent
-        tools = list(llm.ToolContext(agent.tools).function_tools)
-        return agent.name, agent._config.instructions, tools, self.session.history.items
+        return AgentInfo(
+            id=agent.name,
+            instructions=agent._config.instructions,
+            tools=list(llm.ToolContext(agent.tools).function_tools),
+            chat_ctx=self.session.history.items,
+        )
 
     async def _core_run_input(self, text: str) -> list[llm.ChatItem]:
         await self.session.interrupt(force=True)
         result = await self.session._run(user_input=text)
         return result.new_messages()
 
-    async def _core_session_state(self) -> tuple[str, str, str, dict[str, str], float | None]:
+    async def _core_session_state(self) -> RemoteSessionState:
         options = self.session.options
-        return (
-            self.session.agent_state,
-            self.session.user_state,
-            self.session.current_agent.name,
-            {k: str(options.get(k)) for k in STATE_OPTION_FIELDS},
-            self.session._owner.started_at,
+        return RemoteSessionState(
+            agent_state=self.session.agent_state,
+            user_state=self.session.user_state,
+            agent_id=self.session.current_agent.name,
+            options={k: str(options.get(k)) for k in STATE_OPTION_FIELDS},
+            started_at=self.session._native.started_at,
         )
 
-    async def _core_rtc_stats(self) -> tuple[list[Any], list[Any]] | None:
+    async def _core_rtc_stats(self) -> RtcStats | None:
         job_ctx = get_job_context(required=False)
         if job_ctx is None or not job_ctx.room.isconnected():
             return None
         stats = await job_ctx.room.get_rtc_stats()
-        return (
-            [MessageToDict(s) for s in stats.publisher_stats],
-            [MessageToDict(s) for s in stats.subscriber_stats],
+        return RtcStats(
+            publisher_stats=[MessageToDict(s) for s in stats.publisher_stats],
+            subscriber_stats=[MessageToDict(s) for s in stats.subscriber_stats],
         )
 
-    def _core_framework_info(self) -> tuple[str, str]:
-        return "python", __version__
+    def _core_framework_info(self) -> FrameworkInfo:
+        return FrameworkInfo(sdk="python", sdk_version=__version__)
 
-    async def _core_update_io(self, update: tuple[bool | None, ...]) -> None:
-        audio_in, _, audio_out, _, transcription = update
-        if audio_in is not None:
-            self.session.input.set_audio_enabled(audio_in)
-        if audio_out is not None:
-            self.session.output.set_audio_enabled(audio_out)
-        if transcription is not None:
-            self.session.output.set_transcription_enabled(transcription)
+    async def _core_update_io(self, update: IoUpdate) -> None:
+        if update.input_audio is not None:
+            self.session.input.set_audio_enabled(update.input_audio)
+        if update.output_audio is not None:
+            self.session.output.set_audio_enabled(update.output_audio)
+        if update.output_transcription is not None:
+            self.session.output.set_transcription_enabled(update.output_transcription)
 
     async def _core_finalize_simulation(
         self, provisional: SimulationVerdict

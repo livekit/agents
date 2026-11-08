@@ -13,6 +13,7 @@ from livekit.agents.tts import TTS, AudioEmitter
 
 from .connect import APIConnectOptions
 from .expressive import SpeechSteeringOptions
+from .stream_pacer import SentenceStreamPacer
 from .tts import ExpressiveTag, MarkupInfo, SynthesizedAudio
 
 def chat_message_text_content(parts: Sequence[str], assistant: bool) -> str | None: ...
@@ -72,27 +73,24 @@ async def tts_adapter_stream(
     *,
     expressive: bool = False,
     sentences: SentenceStream | None = None,
-    pacing: tuple[float, int] | None = None,
+    pacing: SentenceStreamPacer | None = None,
 ) -> TtsStream:
     """`provider`'s synthesis of each sentence of the text pushed, one segment, each sentence
     retried within `conn_options`. Under `expressive` the provider's markup is lowered
     before each sentence. `sentences` is the host tokenizer's stream the text is split by
-    (blingfire's by default); `pacing` is `(min_remaining_audio, max_text_length)` to release
-    sentences as the audio plays out (`tts.SentenceStreamPacer`).
+    (blingfire's by default); `pacing` releases sentences as the audio plays out.
     """
 
 class _core_PacedSentences:
     """`SentenceStreamPacer.wrap()`: a host sentence stream's sentences, paced by the audio its
-    emitter pushed. The first sentence goes at once; the next batch once the audio stopped
-    growing and less than `min_remaining_audio` seconds of it is left to play, at most
-    `max_text_length` characters of whole sentences joined by a space.
+    emitter pushed.
     """
     def __new__(
         cls,
-        sentences: SentenceStream,
-        audio: AudioEmitter,
-        min_remaining_audio: float,
-        max_text_length: int,
+        sent_stream: SentenceStream,
+        audio_emitter: AudioEmitter,
+        *,
+        pacer: SentenceStreamPacer,
     ) -> Self: ...
     async def next(self) -> str | None:
         """The next batch, `None` once the input ended and every sentence went; the host stream's

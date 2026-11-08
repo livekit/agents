@@ -211,6 +211,7 @@ impl BackgroundAudioPlayer {
         self.queued.lock().push(Source {
             input,
             pending: None,
+            cancel: None,
             playback,
             handle: handle.clone(),
             spawner: self.spawner.clone(),
@@ -422,6 +423,8 @@ type PendingFrame = Pin<Box<dyn Future<Output = Result<Option<AudioFrame>, Provi
 struct Source {
     input: Input,
     pending: Option<PendingFrame>,
+    /// Reaches the pending read's host pull when the source is torn down.
+    cancel: Option<Arc<crate::host::Cancellation>>,
     playback: Playback,
     handle: Arc<PlaybackDone>,
     spawner: Arc<dyn Spawner>,
@@ -552,14 +555,16 @@ impl Source {
             Input::Closed => return Fetched::Ended,
         };
         // A read that times out stays pending for the next round, so no frame is lost.
+        let cancel = &mut self.cancel;
         let pending = self.pending.get_or_insert_with(|| {
-            let stream = stream.clone();
-            Box::pin(async move { stream.next(&telemetry::Cx::NONE).await })
+            let (stream, cancel) = (stream.clone(), cancel.insert(Arc::default()).clone());
+            Box::pin(async move { stream.next(&telemetry::Cx::NONE, cancel).await })
         });
         let Ok(result) = lk_agents_abi::timeout(clock, timeout, pending).await else {
             return Fetched::TimedOut;
         };
         self.pending = None;
+        self.cancel = None;
         match result {
             Ok(Some(frame)) => Fetched::Pcm(
                 lk_agents_media::pcm_samples(&frame.data),
@@ -591,8 +596,8 @@ impl Source {
     }
 
     fn teardown(&mut self) -> tokio::sync::oneshot::Receiver<()> {
-        if let Input::Stream(stream) = &self.input {
-            stream.cancel_pending();
+        if let Some(cancel) = self.cancel.take() {
+            cancel.cancel();
         }
         let pending = self.pending.take();
         let input = std::mem::replace(&mut self.input, Input::Closed);
@@ -601,13 +606,12 @@ impl Source {
                 let _ = pending.await;
             }
             match input {
-                Input::Stream(stream) => stream.close(&telemetry::Cx::NONE).await,
                 Input::File(mut file) => {
                     if let Err(error) = file.close().await {
                         log::warn!(target: lk_agents_abi::LOG_TARGET, "background audio cleanup incomplete: {error}");
                     }
                 }
-                Input::Closed => {}
+                Input::Stream(_) | Input::Closed => {}
             }
         })
     }

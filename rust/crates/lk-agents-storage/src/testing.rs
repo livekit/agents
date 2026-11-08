@@ -56,8 +56,7 @@ impl Store {
 impl Backend {
     pub async fn store(self, lease: LeaseTiming) -> Store {
         let env = ProcessEnv::current_runtime();
-        let (ttl, renew) =
-            (Some(lease.ttl.as_secs_f64()), Some(lease.renew_interval.as_secs_f64()));
+        let (ttl, renew) = (Some(lease.ttl), Some(lease.renew_interval));
         let (namespace, dir) = match self {
             Backend::Sqlite => {
                 let dir = std::env::temp_dir().join(shortuuid("lk-agents-storage-"));

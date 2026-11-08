@@ -1,9 +1,6 @@
 //! Values exchanged through the RTC capability boundary. Opaque video references keep frame
 //! resources owned by the host.
 
-/// Connection, disconnect and track-source wire names.
-pub type RtcWireNames = (Vec<&'static str>, Vec<&'static str>, Vec<&'static str>);
-
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
@@ -91,6 +88,11 @@ macro_rules! wire_i32 {
                     .ok_or(UnknownWireValue { kind: $kind, value })
             }
         }
+        impl From<$t> for i32 {
+            fn from(value: $t) -> i32 {
+                value.wire()
+            }
+        }
     };
 }
 
@@ -138,14 +140,15 @@ impl ConnectionState {
     }
 }
 
-/// `rtc.DisconnectReason`, verbatim. Crosses as [`as_str`](Self::as_str)'s name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// `rtc.DisconnectReason`, verbatim. Crosses as [`as_str`](Self::as_str)'s name; an SDK number
+/// this build has no variant for reads as `unknown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 // `rtc.DisconnectReason`'s member, lower-cased, in wire order.
-#[crate::host(string)]
-#[crate::host(wire_strs(err = UnknownDisconnectReason, msg = UnknownDisconnectReason(s.to_owned())))]
+#[crate::host(wire_enum(err = UnknownDisconnectReason, msg = UnknownDisconnectReason(s.to_owned())))]
 pub enum DisconnectReason {
+    #[default]
     Unknown,
     ClientInitiated,
     DuplicateIdentity,
@@ -231,6 +234,20 @@ pub enum ParticipantKind {
 
 wire_i32!(ParticipantKind, "ParticipantKind");
 
+/// `rtc.ParticipantState`. An `sdk` proxy reads an unknown state as `joining`, not active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[crate::host(codec(extract, emit, host = "str"))]
+#[crate::host(wire_enum)]
+pub enum ParticipantState {
+    #[default]
+    Joining,
+    Joined,
+    Active,
+    Disconnected,
+}
+
+wire_i32!(ParticipantState, "ParticipantState");
+
 /// `rtc.TrackSource`. An `sdk` proxy reads an unknown source as `unknown`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[crate::host(codec(extract, emit, host = "str"))]
@@ -264,25 +281,13 @@ pub enum AudioTrackFeature {
 
 wire_i32!(AudioTrackFeature, "AudioTrackFeature");
 
-/// Each `ALL` array's names, indexed by wire value, for the host's SDK events and track options:
-/// `(connection states, disconnect reasons, track sources)`. Proxy reads take SDK numbers
-/// through their `sdk` declaration instead.
-#[crate::host(export(pid = false))]
-pub fn rtc_wire_names() -> RtcWireNames {
-    (
-        ConnectionState::ALL.iter().map(|v| v.as_str()).collect(),
-        DisconnectReason::ALL.iter().map(|v| v.as_str()).collect(),
-        TrackSource::ALL.iter().map(|v| v.as_str()).collect(),
-    )
-}
-
 /// Everything `_ParticipantAudioOutput` needs to publish its track, translated once at construction.
-#[crate::host(record(module = "rtc_wire", emit))]
+#[crate::host(record(module = "rtc_wire", emit, sdk))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackPublishOptions {
     /// `track_name` on the wire; absent keeps the default (`roomio_audio`).
     pub name: String,
-    /// Crosses as its name; the host adapter maps it back to `rtc.TrackSource`.
+    /// `rtc.TrackSource`'s number, as `rtc.TrackPublishOptions(source=)` takes it.
     pub source: TrackSource,
     pub sample_rate: u32,
     pub num_channels: u16,
@@ -404,17 +409,17 @@ pub const AUDIO_QUEUE: Duration = Duration::from_secs(10);
 
 /// `LocalParticipant.stream_text(...)`'s keyword arguments.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[crate::host(record(module = "rtc_wire", emit))]
+#[crate::host(record(module = "rtc_wire", typed_dict, emit))]
 pub struct StreamTextOptions {
     pub topic: String,
-    /// Absent means omit the key: the writer then defaults to the local participant's identity.
+    /// `None`: the writer defaults to the local participant's identity.
     pub sender_identity: Option<ParticipantIdentity>,
     pub attributes: BTreeMap<String, String>,
 }
 
 /// `LocalParticipant.stream_bytes(...)`'s keyword arguments.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[crate::host(record(module = "rtc_wire", emit))]
+#[crate::host(record(module = "rtc_wire", typed_dict, emit))]
 pub struct StreamBytesOptions {
     pub name: String,
     pub topic: String,
@@ -428,7 +433,7 @@ pub const TRACK_KIND_VIDEO: i32 = 2;
 
 /// `rtc.TranscriptionSegment`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[crate::host(record(module = "rtc_wire", emit))]
+#[crate::host(record(module = "rtc_wire", host_type = "livekit.rtc.TranscriptionSegment", emit))]
 pub struct TranscriptionSegment {
     pub id: String,
     pub text: String,
@@ -442,7 +447,7 @@ pub struct TranscriptionSegment {
 
 /// `rtc.Transcription`, the argument to `publish_transcription`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[crate::host(record(module = "rtc_wire", emit))]
+#[crate::host(record(module = "rtc_wire", host_type = "livekit.rtc.Transcription", emit))]
 pub struct Transcription {
     pub participant_identity: ParticipantIdentity,
     pub track_sid: TrackSid,

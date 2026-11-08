@@ -148,6 +148,9 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
                 dataclasses.push((r, text.clone()));
             }
             body.push_str(&text);
+            if r.kwargs {
+                body.push_str(&kwargs(r, module, &own, &mut runtime, &mut typing));
+            }
         }
         // A public dataclass's annotations are resolved at import (`public_paths`): a name only
         // the type checker imports would fail the import.
@@ -187,6 +190,10 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
         // A wire vocabulary's `Literal` is evaluated wherever its record's annotations are.
         if typing.remove("typing", "Literal") {
             runtime.add("typing", "Literal");
+        }
+        // So is a duration's `timedelta`: pydantic resolves the events' annotations at runtime.
+        if typing.remove("datetime", "timedelta") {
+            runtime.add("datetime", "timedelta");
         }
         for imports in [&mut runtime, &mut typing] {
             imports.remove_module(&format!(".{module}"));
@@ -248,12 +255,13 @@ fn public_paths(records: &[&RecordDecl], runtime: &mut Imports) -> String {
                 r.name
             ));
         }
-        let classes: Vec<&str> = match &r.body {
-            RecordBody::Struct(_) => vec![&r.name],
+        let classes: Vec<String> = match &r.body {
+            RecordBody::Struct(_) if r.kwargs => vec![r.name.clone(), format!("{}Kwargs", r.name)],
+            RecordBody::Struct(_) => vec![r.name.clone()],
             RecordBody::Variants(vs) if !r.transparent => {
-                vs.iter().map(|v| v.name.as_str()).collect()
+                vs.iter().map(|v| v.name.clone()).collect()
             }
-            RecordBody::Literals(_) if r.enumeration => vec![&r.name],
+            RecordBody::Literals(_) if r.enumeration => vec![r.name.clone()],
             _ => Vec::new(),
         };
         lines.extend(classes.into_iter().map(|c| format!("{c}.__module__ = {path:?}\n")));
@@ -262,6 +270,32 @@ fn public_paths(records: &[&RecordDecl], runtime: &mut Imports) -> String {
         true => String::new(),
         false => format!("\n\n{}", lines.concat()),
     }
+}
+
+/// `<Name>Kwargs`: an options record's fields as optional keyword arguments, each annotated
+/// with the value it takes when given.
+fn kwargs(
+    r: &RecordDecl,
+    module: &str,
+    own: &[String],
+    runtime: &mut Imports,
+    typing: &mut Imports,
+) -> String {
+    let RecordBody::Struct(fields) = &r.body else { unreachable!("kwargs is a struct's") };
+    runtime.add("typing_extensions", "TypedDict");
+    let mut s = format!("\n\nclass {}Kwargs(TypedDict, total=False):\n", r.name);
+    s.push_str(&docstring(&[format!("`{}`'s fields as keyword arguments.", r.name)], "    "));
+    s.push('\n');
+    for f in fields.iter().filter(|f| f.modeled() && !f.private) {
+        let ann = match (&f.annotation, &f.ty) {
+            (Some(text), _) => typing.annotation(text, &r.rust),
+            (None, Ty::Maybe(inner)) => annotation(inner, module, own, false, typing),
+            (None, ty) => annotation(ty, module, own, false, typing),
+        };
+        s.push_str(&format!("    {}: {ann}\n", f.host_name()));
+        s.push_str(&docstring(&f.doc, "    "));
+    }
+    s
 }
 
 /// `_generated/<dispatch>.py`: a dispatched record's routed members, keyed by model class.
@@ -577,7 +611,17 @@ fn model(
                 default
             };
             let ann = match &f.host_type {
-                _ if let Some(text) = &f.annotation => imports.annotation(text, &r.rust),
+                // An annotation describes the value; an omittable field adds `NotGivenOr`.
+                _ if let Some(text) = &f.annotation => match f.ty {
+                    Ty::Maybe(_) => {
+                        imports.add("..types", "NotGivenOr");
+                        format!("NotGivenOr[{}]", imports.annotation(text, &r.rust))
+                    }
+                    _ => imports.annotation(text, &r.rust),
+                },
+                _ if r.sdk && crate::proxy_sdk::sdk_number(&f.ty) => {
+                    crate::proxy_sdk::annotation(&f.ty).to_owned()
+                }
                 Some((m, name)) => {
                     imports.add(m, name);
                     match f.ty {
@@ -970,7 +1014,11 @@ fn annotation(ty: &Ty, module: &str, own: &[String], any: bool, typing: &mut Imp
     match ty {
         Ty::Bool => "bool".into(),
         Ty::Int(_) => "int".into(),
-        Ty::Float | Ty::Duration | Ty::Timestamp => "float".into(),
+        Ty::Float | Ty::Timestamp => "float".into(),
+        Ty::Duration => {
+            typing.add("datetime", "timedelta");
+            "timedelta".into()
+        }
         Ty::Str => "str".into(),
         Ty::Json | Ty::JsonObject if any => {
             typing.add("pydantic", "JsonValue");
@@ -1005,6 +1053,11 @@ fn annotation(ty: &Ty, module: &str, own: &[String], any: bool, typing: &mut Imp
         Ty::Proxy { host, .. } => {
             let (m, name) = host.rsplit_once('.').expect("a proxy's host class is dotted");
             typing.add(m, name);
+            // A host iterator a proxy pulls: its items are typed where the core reads them.
+            if host == "collections.abc.AsyncIterator" {
+                typing.add("typing", "Any");
+                return format!("{name}[Any]");
+            }
             name.to_owned()
         }
         Ty::Native { classes, .. } => classes

@@ -5,20 +5,20 @@ use std::time::Duration;
 
 pub const LEASE_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// A text door's turn options; a field left out is the default.
+/// A text door's turn options (`a2a_session`'s); a field left out is the default.
 #[derive(Debug, Clone, Default, PartialEq)]
-#[crate::host(record(module = "storage_options", emit, extract))]
+#[crate::host(record(module = "storage_options", emit, extract, kwargs))]
 pub struct TurnOptions {
-    /// `inbox`: one policy for every channel, or a map by channel over the
-    /// default map; `None` is the default map.
-    #[host(default = None)]
+    /// The turn policy for a message that arrives while one runs: one for every channel, or a
+    /// map by channel over the default map; `None` is the default map.
+    #[host(default = None, rename = "inbox")]
     pub policy: PolicySpec,
-    /// The wait before a turn starts, in seconds: one for every channel, or a map by channel;
-    /// `None` is the defaults.
+    /// How long to wait for more of a burst before a turn starts: one wait for every channel,
+    /// or a map by channel; `None` is the defaults.
     #[host(default = None)]
     pub debounce: DebounceSpec,
-    /// How long a waiter polls for the lane before its task fails `lease-timeout`, in seconds;
-    /// `None` is a minute.
+    /// How long a waiter polls for the lane before its task fails `lease-timeout`; `None` is a
+    /// minute.
     #[host(default = None)]
     pub wait_timeout: Option<Duration>,
 }

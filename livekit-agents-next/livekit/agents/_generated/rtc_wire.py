@@ -11,8 +11,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from inspect import get_annotations
-from typing import TYPE_CHECKING, Literal, TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
+
+from typing_extensions import TypedDict
+
+from livekit.rtc import (
+    Transcription as _HostTranscription,
+    TranscriptionSegment as _HostTranscriptionSegment,
+)
 
 if TYPE_CHECKING:
     from livekit.rtc import VideoFrame
@@ -26,8 +34,8 @@ class TrackPublishOptions:
 
     name: str
     """`track_name` on the wire; absent keeps the default (`roomio_audio`)."""
-    source: Literal["unknown", "camera", "microphone", "screenshare", "screenshare_audio"]
-    """Crosses as its name; the host adapter maps it back to `rtc.TrackSource`."""
+    source: int
+    """`rtc.TrackSource`'s number, as `rtc.TrackPublishOptions(source=)` takes it."""
     sample_rate: int
     num_channels: int
     queue_size_ms: int
@@ -105,18 +113,16 @@ class VideoFrameRef:
     """`VideoFrameEvent.timestamp_us`, the host's."""
 
 
-@dataclass(kw_only=True, slots=True)
-class StreamTextOptions:
+class StreamTextOptions(TypedDict):
     """`LocalParticipant.stream_text(...)`'s keyword arguments."""
 
     topic: str
     sender_identity: str | None
-    """Absent means omit the key: the writer then defaults to the local participant's identity."""
+    """`None`: the writer defaults to the local participant's identity."""
     attributes: dict[str, str]
 
 
-@dataclass(kw_only=True, slots=True)
-class StreamBytesOptions:
+class StreamBytesOptions(TypedDict):
     """`LocalParticipant.stream_bytes(...)`'s keyword arguments."""
 
     name: str
@@ -125,26 +131,10 @@ class StreamBytesOptions:
     attributes: dict[str, str]
 
 
-@dataclass(kw_only=True, slots=True)
-class TranscriptionSegment:
-    """`rtc.TranscriptionSegment`."""
-
-    id: str
-    text: str
-    start_time: int
-    """Milliseconds. `room_io` always writes 0 for both; kept because the field is on the wire."""
-    end_time: int
-    language: str
-    final: bool
+TranscriptionSegment = _HostTranscriptionSegment
 
 
-@dataclass(kw_only=True, slots=True)
-class Transcription:
-    """`rtc.Transcription`, the argument to `publish_transcription`."""
-
-    participant_identity: str
-    track_sid: str
-    segments: list[TranscriptionSegment]
+Transcription = _HostTranscription
 
 
 @dataclass(kw_only=True, slots=True)
@@ -153,9 +143,9 @@ class PlaybackInfo:
     audio source's `PlayoutLedger` hands back, and the core reads back unchanged.
     """
 
-    played: float
+    played: timedelta
     """Audio that reached the speaker."""
-    discarded: float
+    discarded: timedelta
     """Audio captured and then thrown away by `clear_queue`: non-zero means the playout was
     interrupted.
     """
@@ -169,7 +159,7 @@ class AudioOutputCapabilities:
 @dataclass(kw_only=True, slots=True)
 class VideoTrackOptions:
     name: str
-    source: Literal["unknown", "camera", "microphone", "screenshare", "screenshare_audio"]
+    source: int
     width: int
     height: int
 

@@ -26,6 +26,7 @@ use std::{
 use crate::fakes::room::{FakeRoom, Sent};
 use lk_agents_abi::SpawnerExt as _;
 use lk_agents_abi::utils::video::{MediaFrame, VideoFrame};
+use lk_agents_abi::voice::avatar::AudioReceiverObservation;
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::voice::rtc::{ParticipantKind, StreamInfo};
 use lk_agents_abi::{
@@ -153,24 +154,17 @@ fn receiver_error(error: ReceiverEnd) -> ProviderError {
 }
 
 impl AvatarAudioReceiver for Receiver {
-    fn open_audio(
-        &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
-        Box::pin(async move { Ok(()) })
-    }
-
     fn next_audio(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
-    ) -> lk_agents_abi::BoxFuture<
-        '_,
-        Result<
-            (u64, bool, Option<AvatarPlaybackSegment>, Option<AudioReceiverFrame>),
-            ProviderError,
-        >,
-    > {
+    ) -> lk_agents_abi::BoxFuture<'_, Result<AudioReceiverObservation, ProviderError>> {
         Box::pin(async move {
+            let observation = |epoch, starts_segment, segment, frame| AudioReceiverObservation {
+                epoch,
+                starts_segment,
+                segment,
+                frame,
+            };
             match self.rx.recv().await {
                 Ok((epoch, starts_segment, key, Some(Received::Audio(frame)))) => {
                     let segment = {
@@ -185,7 +179,7 @@ impl AvatarAudioReceiver for Receiver {
                         samples: frame.samples_per_channel,
                         rate: frame.sample_rate,
                     };
-                    Ok((
+                    Ok(observation(
                         epoch,
                         starts_segment,
                         key,
@@ -199,10 +193,12 @@ impl AvatarAudioReceiver for Receiver {
                 Ok((epoch, _, key, Some(Received::SegmentEnd))) => {
                     record(&self.log, &self.stamps, AvatarStep::ReceivedEnd);
                     self.next_segment();
-                    Ok((epoch, false, key, Some(AudioReceiverFrame::SegmentEnd)))
+                    Ok(observation(epoch, false, key, Some(AudioReceiverFrame::SegmentEnd)))
                 }
-                Ok((epoch, _, key, None)) => Ok((epoch, false, key, None)),
-                Err(ReceiverEnd::Closed) => Ok((self.segment.lock().unwrap().2, false, None, None)),
+                Ok((epoch, _, key, None)) => Ok(observation(epoch, false, key, None)),
+                Err(ReceiverEnd::Closed) => {
+                    Ok(observation(self.segment.lock().unwrap().2, false, None, None))
+                }
                 Err(error) => Err(receiver_error(error)),
             }
         })
@@ -222,9 +218,9 @@ impl AvatarAudioReceiver for Receiver {
     fn notify_playback_finished(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        segment: AvatarPlaybackSegment,
         position: f64,
         interrupted: bool,
+        segment: AvatarPlaybackSegment,
     ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move {
             record(&self.log, &self.stamps, AvatarStep::ReportedFinished { interrupted });
@@ -358,11 +354,15 @@ impl AvatarVideoGenerator for Generator {
     fn push_audio(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        frame: Option<MediaFrame>,
+        frame: AudioReceiverFrame,
     ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move {
             let mut state = self.state.lock().unwrap();
-            match frame.as_ref().and_then(|f| self.frames.of(f)) {
+            let entry = match &frame {
+                AudioReceiverFrame::Audio(f) => self.frames.get(&f.data),
+                AudioReceiverFrame::SegmentEnd => None,
+            };
+            match entry {
                 Some(Entry::Received { segment, from, samples, rate }) => {
                     state.last_segment = Some(segment);
                     state.buffer.push_back(Buffered::Audio { segment, from, samples, rate });
@@ -392,13 +392,6 @@ impl AvatarVideoGenerator for Generator {
             record(&self.log, &self.stamps, AvatarStep::GeneratorCleared);
             Ok(())
         })
-    }
-
-    fn open_frames(
-        &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
-        Box::pin(async move { Ok(()) })
     }
 
     fn next_frame(

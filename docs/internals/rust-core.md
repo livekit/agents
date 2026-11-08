@@ -1336,16 +1336,28 @@ pub trait RtcRoom: Send + Sync {
 carry, such as a turn detector's opened stream.
 
 A proxy method also declares how it reaches the host, so no `_core_*` method exists only to
-adapt a call: `maybe_await` accepts a host method that returns a value or an awaitable,
-`emit = "event"` emits the record argument on the host's event emitter, and `iter` reads a host
-`AsyncIterator`, with its end read as `None`. A proxy trait can also be emitted as a
+adapt a call: `await` and `notify` accept a host method that returns a value or an awaitable,
+`emit = "event"` emits the arguments on the host's event emitter, and `await, iter` pulls the
+next item of a host `AsyncIterator` (the host itself, or the attribute along `getter`), opened by
+its first pull, with its end read as `None` and a `#[host(cancel)]` reaching the pending pull. A proxy trait can also be emitted as a
 `typing.Protocol` for host code that types its implementations. Rust never calls the host to
 reach another native object: a capability one native owner needs from another is passed
 natively.
 
 SDK event subscriptions are declared on the SDK proxy (event name, argument conversions, the
-native entry they feed); codegen emits the `on(...)` wiring. `proxy(.., sdk)` reads and writes
-`wire_enum` values as SDK numbers in proxy returns, function arguments and record fields alike.
+native entry they feed); codegen emits the `on(...)` wiring (`_generated/rtc_events.py`):
+
+```rust
+#[crate::host(proxy(host = "livekit.rtc.Room", view = "livekit.agents.voice.room_io.Room", sdk,
+    events(module = "rtc_events", on = "sdk", entries = RtcRuntime, pass(bus = "self.bus"),
+        participant_disconnected(args(participant), reason = "participant.disconnect_reason"),
+        ..)))]
+```
+
+A `wire_enum` crosses as its SDK number wherever an SDK holds it so: an `sdk` proxy's returns, a
+`#[host(sdk)]` function argument and the fields of a `record(.., sdk)`. A proxy's
+`#[host(kwargs)]` argument is a `typed_dict` record whose keys are the call's keyword arguments,
+so an SDK call taking keyword options needs no adapter method.
 
 Keep export attributes in one documented vocabulary shared by parsing and
 generation. New keys require multiple concrete uses, not feature-specific glue.
@@ -1398,17 +1410,34 @@ pub trait StreamPacerWrapper {
 }
 ```
 
-The generated class subclasses `base`, its public `__init__` takes the `#[host(new)]` parameters
-with their ABI defaults, and it builds the native object from them. Method adaptations are a
-fixed vocabulary: `none_ends_iteration` (a native `None` raises `StopAsyncIteration`), `wrap`
-(the result becomes a record), and a context-manager form that turns a native begin/end pair into
-`async with`. A stream facade (`base` a provider stream: `llm.LLMStream`, `RecognizeStream`,
-`SynthesizeStream`, `VADStream`) names the native operation its `_run` opens; the base class pumps
-input and output, and `native_retries` marks a native operation that retries on its own.
+The generated class (`_generated/facades_<x>.py`, re-exported from `path`) subclasses `base`;
+its public `__init__` takes the `#[host(new)]` parameters with their ABI defaults and builds the
+native object from them, by name. A provider engine is built lazily instead, from the host
+object's `self._<param>` attributes: once (`cached`) or once per running loop (`per_loop`), with
+the provider keys `legs`, `leg`, `resolve`, `annotation` and `availability`. Method adaptations
+are a fixed vocabulary: `none_ends_iteration` (a native `None` raises `StopAsyncIteration`),
+`wrap` (the result becomes a record), `native = m` (another native method), `future`,
+`discard`, `not_given`, `origin`, `returns`, `annotation`, `resolve`, and the context-manager
+form `exit = m`, which turns a native begin/end pair into `async with`:
+
+```rust
+/// `RunContext.foreground()`: hold the floor while inside.
+#[host(native = wait_for_idle_and_hold, exit = release_idle_hold)]
+async fn foreground(&self) -> u64;
+```
+
+A stream facade (`base` a provider stream: `llm.LLMStream`, `RecognizeStream`,
+`SynthesizeStream`, `ChunkedStream`, `VADStream`) names the native operation its `_run` opens
+on its owner, the facade of the same native class: `stream(op = synthesize, owner = "_tts",
+native_retries)`. The operation's arguments are the stream's `self._<param>` attributes; the base
+class pumps input and output (`_core_run_native`), and `native_retries` marks a native operation
+that retries on its own, so the base's attempts do not.
 
 Logic a facade cannot declare goes in a handwritten subclass of the generated class when it is
-specific to Python (SDK objects, user callbacks, reflection). Logic that Rust can own cleanly moves
-to Rust instead, and the facade stays fully generated.
+specific to Python (SDK objects, user callbacks, reflection): the facade is then `extended`, not
+re-exported, and the handwritten class of its name in `path` subclasses it, setting `_native` when
+no `#[host(new)]` builds it. Logic that Rust can own cleanly moves to Rust instead, and the facade
+stays fully generated.
 
 ### Generation
 
@@ -2190,7 +2219,7 @@ The first use loads the system roots, or the explicit `SSL_CERT_FILE`/`SSL_CERT_
 locations, once; subsequent clients reuse the cached verifier. Certificate changes take
 effect after a process restart. Protocol-specific ALPN settings do not change the trusted
 roots. Rust `livekit-api` receives the process HTTP client's connection pool and TLS
-configuration. The Python host resolves its CA paths before application imports so the
+configuration. The Python host exports its CA paths when `run_app` starts so the
 shared aiohttp session used by Python `livekit-api` and native clients use the same paths.
 The framework's OTLP Requests transport uses that Python SSL context too, forces server
 certificate and hostname verification, and never follows redirects. The explicit insecure

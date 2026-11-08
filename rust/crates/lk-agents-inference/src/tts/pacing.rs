@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::tts::stream_adapter::{SentenceSplitter, SentenceTextProcessor};
-use lk_agents_abi::tts::stream_pacer::{HostSentenceStream, PacedSentences as Port, PushedAudio};
+use lk_agents_abi::tts::stream_pacer::{
+    HostSentenceStream, PacedSentences as Port, PushedAudio, SentenceStreamPacer,
+};
 use lk_agents_abi::utils::clock::{Clock, Ts, before, secs};
 use lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_net::env::ProcessEnv;
@@ -141,7 +143,7 @@ impl HostSentences {
         let (host, cx) = (stream.clone(), cx.clone());
         let reader = tokio::spawn(async move {
             loop {
-                let next = host.next(&cx).await;
+                let next = host.next(&cx).await.map(|sentence| sentence.map(|s| s.token));
                 let more = matches!(next, Ok(Some(_)));
                 if tx.send(next).is_err() || !more {
                     return;
@@ -225,10 +227,10 @@ impl Sentences {
         rx: mpsc::UnboundedReceiver<AdapterInput>,
         split: Split,
         normalize: Option<Box<dyn SentenceTextProcessor>>,
-        pacing: Option<(f64, usize)>,
+        pacing: Option<SentenceStreamPacer>,
         clock: Arc<dyn Clock>,
     ) -> Self {
-        let pacer = pacing.map(|(audio, text)| SentencePacer::new(audio, text));
+        let pacer = pacing.map(|p| SentencePacer::new(p.min_remaining_audio, p.max_text_length));
         let pace_at = pacer.as_ref().map(|_| clock.now());
         Self {
             rx,
@@ -452,15 +454,14 @@ impl Port for PacedSentences {
         env: &ProcessEnv,
         sentences: Arc<dyn HostSentenceStream>,
         audio: Arc<dyn PushedAudio>,
-        min_remaining_audio: f64,
-        max_text_length: usize,
+        pacer: SentenceStreamPacer,
     ) -> Self {
         Self {
             stream: sentences.clone(),
             clock: env.clock.clone(),
             audio,
             state: tokio::sync::Mutex::new(PacedState {
-                pacer: SentencePacer::new(min_remaining_audio, max_text_length),
+                pacer: SentencePacer::new(pacer.min_remaining_audio, pacer.max_text_length),
                 input: PacedInput::Unread(sentences),
             }),
             closed: tokio_util::sync::CancellationToken::new(),

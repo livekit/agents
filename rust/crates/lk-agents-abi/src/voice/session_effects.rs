@@ -13,10 +13,6 @@ const _: () = ();
 pub const DEFAULT_HOOK_BOUND: f64 = 15.0;
 #[crate::host(constant)]
 pub const DEFAULT_MAX_UNRECOVERABLE_ERRORS: i64 = 3;
-#[crate::host(constant)]
-pub const DEFAULT_SPEAKING_FPS: f64 = 1.0;
-#[crate::host(constant)]
-pub const DEFAULT_SILENT_FPS: f64 = 0.3;
 
 #[crate::host(record(module = "session_wire", emit))]
 #[derive(Clone)]
@@ -97,7 +93,7 @@ pub trait SessionHooks: Send + Sync {
         agent: &'a crate::HostRef,
     ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
     /// Framework ownership is native; the host only identifies its Python toolset objects.
-    #[host(read_once, name = "_core_toolset_scopes")]
+    #[host(read_once, getter = "_toolsets")]
     fn toolset_scopes(&self) -> &Arc<dyn crate::llm::toolsets::ScopesPort>;
     #[host(call, name = "_core_toolset_resources")]
     fn toolset_resources(

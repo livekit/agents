@@ -6,7 +6,8 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 # The generated event models take this module's path, so their string annotations resolve
-# here: `Annotated`, `Literal` and `Field` stay bound.
+# here: `Annotated`, `Literal`, `Field` and `timedelta` stay bound.
+from datetime import timedelta as timedelta
 from typing import TYPE_CHECKING, Annotated as Annotated, Any, Generic, Literal as Literal
 
 from pydantic import Field as Field, TypeAdapter

@@ -575,7 +575,8 @@ class STT(stt.STT):
             mode=mode,
         )
 
-        wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
+        audio = rtc.combine_audio_frames(buffer)
+        wav_bytes = audio.to_wav_bytes()
 
         form_data = aiohttp.FormData()
         form_data.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/wav")
@@ -640,7 +641,7 @@ class STT(stt.STT):
 
                 # If start/end times are still 0, use buffer duration as an estimate for end_time
                 if start_time == 0.0 and end_time == 0.0:
-                    end_time = utils.media.calculate_audio_duration(buffer)
+                    end_time = audio.duration
 
                 alternatives = [
                     stt.SpeechData(

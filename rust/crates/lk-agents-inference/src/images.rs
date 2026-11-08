@@ -3,7 +3,9 @@
 
 use std::sync::Arc;
 
+use lk_agents_abi::InferenceDetail;
 use lk_agents_abi::llm::provider_format::ImageResolver;
+use lk_agents_abi::llm::provider_format::image::SerializedImage;
 use lk_agents_abi::media::images::{
     ImageEncodeOptions, ImageError, ImageFormat, ImageInput, PreparedImage, ResizeStrategy,
 };
@@ -63,9 +65,10 @@ impl lk_agents_abi::media::images::ImageFunctions for ImageFunctions {
     async fn serialize_image_frame(
         _env: &ProcessEnv,
         frame: Arc<dyn RtcVideoFrame>,
+        inference_detail: InferenceDetail,
         inference_width: Option<u32>,
         inference_height: Option<u32>,
-    ) -> Result<(Vec<u8>, String), ImageError> {
+    ) -> Result<SerializedImage, ImageError> {
         let resize = inference_width.zip(inference_height).filter(|(w, h)| *w > 0 && *h > 0);
         let options = ImageEncodeOptions {
             format: ImageFormat::Jpeg,
@@ -77,7 +80,7 @@ impl lk_agents_abi::media::images::ImageFunctions for ImageFunctions {
         let prepared = prepare(ImageInput::HostFrame(frame), options).await?;
         match prepared {
             PreparedImage { data: Some(bytes), mime_type: Some(mime_type), .. } => {
-                Ok((bytes, mime_type))
+                Ok(SerializedImage::inline(bytes, mime_type, inference_detail))
             }
             _ => Err(ImageError("image encoder returned no bytes".into())),
         }
@@ -86,11 +89,17 @@ impl lk_agents_abi::media::images::ImageFunctions for ImageFunctions {
     async fn serialize_image_url(
         _env: &ProcessEnv,
         url: String,
+        inference_detail: InferenceDetail,
         mime_type: Option<String>,
-    ) -> Result<(Option<Vec<u8>>, Option<String>, Option<String>, Option<String>), ImageError> {
+    ) -> Result<SerializedImage, ImageError> {
         let prepared =
             prepare(ImageInput::Url { url, mime_type }, ImageEncodeOptions::default()).await?;
-        Ok((prepared.data, prepared.mime_type, prepared.external_url, prepared.overridden_mime))
+        Ok(SerializedImage {
+            inference_detail,
+            mime_type: prepared.mime_type,
+            data_bytes: prepared.data,
+            external_url: prepared.external_url,
+        })
     }
 }
 

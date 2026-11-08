@@ -165,7 +165,7 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
             let class = class_ref(&module, &r.name);
             // An emit-only record's fields need no reader (an emitted failure has none).
             let reads = if r.extract && !r.extract_by_hand {
-                struct_reads(&r.name, fields, "obj")?
+                struct_reads(&r.name, fields, "obj", r.sdk)?
             } else {
                 String::new()
             };
@@ -207,7 +207,7 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
             };
             // An extract-only record may hold what never returns to the host (a proxy).
             let emit = if r.emit && !r.emit_by_hand {
-                let (pattern, sets) = struct_emits(fields)?;
+                let (pattern, sets) = struct_emits(fields, r.sdk)?;
                 let built = construct(&class_ref(&module, &r.name), "()", "Some(&kwargs)");
                 // A private attribute is set on the built model; `None` keeps its default.
                 let private: String = fields
@@ -450,12 +450,15 @@ fn typed_dict_rust(r: &RecordDecl, fields: &[Field]) -> Result<(String, String),
 }
 
 /// `field: read,` lines of a struct literal read off `obj`.
-fn struct_reads(owner: &str, fields: &[Field], obj: &str) -> Result<String, String> {
+fn struct_reads(owner: &str, fields: &[Field], obj: &str, sdk: bool) -> Result<String, String> {
     let mut s = String::new();
     for f in fields {
         // Computed after the read, or not crossing at all: Rust's default.
         let read = match f.omitted.is_some() || !f.modeled() {
             true => "::std::default::Default::default()".to_owned(),
+            false if sdk && crate::proxy_sdk::sdk_number(&f.ty) => {
+                crate::proxy_sdk::field_read(owner, f, obj)
+            }
             false => attr_read(owner, f, obj)?,
         };
         s.push_str(&format!("            {}: {read},\n", f.rust_name));
@@ -473,7 +476,7 @@ fn attr_read(owner: &str, f: &Field, obj: &str) -> Result<String, String> {
 }
 
 /// The destructuring pattern and the `kwargs.set_item` lines of a struct's fields.
-fn struct_emits(fields: &[Field]) -> Result<(String, String), String> {
+fn struct_emits(fields: &[Field], sdk: bool) -> Result<(String, String), String> {
     let mut pattern = Vec::new();
     let mut sets = String::new();
     for f in fields {
@@ -484,6 +487,9 @@ fn struct_emits(fields: &[Field]) -> Result<(String, String), String> {
         pattern.push(f.rust_name.clone());
         match &f.ty {
             _ if f.private => {}
+            ty if sdk && crate::proxy_sdk::sdk_number(ty) => {
+                sets.push_str(&crate::proxy_sdk::field_set(f));
+            }
             // Nothing to send: the host's factory stamps it.
             Ty::Optional(inner) if f.factory.is_some() => sets.push_str(&format!(
                 "        if let Some(x) = {} {{\n            kwargs.set_item({:?}, {})?;\n        }}\n",
@@ -547,9 +553,9 @@ pub(super) fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
             format!("crate::py_values::number_from_py::<{}>({v}, {path:?})", i.rust())
         }
         Ty::Float => format!("crate::py_values::number_from_py::<f64>({v}, {path:?})"),
-        Ty::Duration => format!(
-            "crate::py_values::number_from_py::<f64>({v}, {path:?}).and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{path}: {{e}}\"))))"
-        ),
+        Ty::Duration => {
+            format!("crate::py_values::extract_at::<::std::time::Duration>({v}, {path:?})")
+        }
         Ty::Timestamp => format!(
             "crate::py_values::number_from_py::<f64>({v}, {path:?}).and_then(|s| crate::py_values::wall_from_py(s, {path:?}))"
         ),
@@ -757,7 +763,8 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
             Ty::Str => ("str", "obj.is_instance_of::<::pyo3::types::PyString>()".into()),
             Ty::Bool => ("bool", "obj.is_instance_of::<::pyo3::types::PyBool>()".into()),
             Ty::Int(_) => ("number", "obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>()".into()),
-            Ty::Float | Ty::Duration | Ty::Timestamp => ("number", "obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>())".into()),
+            Ty::Duration => ("timedelta", "obj.is_instance_of::<::pyo3::types::PyDelta>()".into()),
+            Ty::Float | Ty::Timestamp => ("number", "obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>())".into()),
             Ty::Map(..)
             | Ty::OrderedMap(..)
             | Ty::JsonObject => {

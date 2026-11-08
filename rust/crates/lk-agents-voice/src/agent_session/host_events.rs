@@ -269,7 +269,7 @@ impl SessionEvent {
                 error: error.as_ref().map(ErrorEvent::wire),
             }),
             SessionEvent::OverlappingSpeech(event) => {
-                HostWire::OverlappingSpeech(w::OverlappingSpeechWire { event: (**event).clone() })
+                HostWire::OverlappingSpeech((**event).clone())
             }
             SessionEvent::MetricsCollected { metrics, speech, .. } => {
                 let leg = matches!(**metrics, AgentMetrics::Vad(_)).then_some(w::MetricsLeg::Vad);

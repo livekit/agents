@@ -20,26 +20,6 @@ fn _extract_storage_core_serve_threads_port(
 }
 type StorageCoreServeThreadsPortInput = u16;
 
-fn _extract_storage_new_lease_ttl(obj: &Bound<'_, PyAny>) -> PyResult<StorageNewLeaseTtlInput> {
-    if obj.is_none() {
-        Ok(None)
-    } else {
-        (crate::py_values::number_from_py::<f64>(obj.as_any(), "lease_ttl")).map(Some)
-    }
-}
-type StorageNewLeaseTtlInput = ::std::option::Option<f64>;
-
-fn _extract_storage_new_renew_interval(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<StorageNewRenewIntervalInput> {
-    if obj.is_none() {
-        Ok(None)
-    } else {
-        (crate::py_values::number_from_py::<f64>(obj.as_any(), "renew_interval")).map(Some)
-    }
-}
-type StorageNewRenewIntervalInput = ::std::option::Option<f64>;
-
 fn _extract_storage_create_thread_idle_ttl_seconds(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<StorageCreateThreadIdleTtlSecondsInput> {
@@ -158,9 +138,8 @@ impl Storage {
         url: ::std::option::Option<::std::string::String>,
         api_key: ::std::option::Option<::std::string::String>,
         api_secret: ::std::option::Option<::std::string::String>,
-        #[pyo3(from_py_with = _extract_storage_new_lease_ttl)] lease_ttl: StorageNewLeaseTtlInput,
-        #[pyo3(from_py_with = _extract_storage_new_renew_interval)]
-        renew_interval: StorageNewRenewIntervalInput,
+        lease_ttl: Option<Bound<'_, PyAny>>,
+        renew_interval: Option<Bound<'_, PyAny>>,
         holder: ::std::option::Option<::std::string::String>,
     ) -> PyResult<Storage> {
         crate::py_calls::check_pid()?;
@@ -168,6 +147,14 @@ impl Storage {
         let local = local
             .map(|v| {
                 crate::generated::records::storage_class::local_storage_options_from_py(v.as_any())
+            })
+            .transpose()?;
+        let lease_ttl = lease_ttl
+            .map(|v| crate::py_values::extract_at::<::std::time::Duration>(v.as_any(), "lease_ttl"))
+            .transpose()?;
+        let renew_interval = renew_interval
+            .map(|v| {
+                crate::py_values::extract_at::<::std::time::Duration>(v.as_any(), "renew_interval")
             })
             .transpose()?;
         let out = py.detach(|| <StorageImpl as ::lk_agents_abi::storage::Storage>::new(&env, local, url, api_key, api_secret, lease_ttl, renew_interval, holder)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
@@ -1121,14 +1108,7 @@ impl Thread {
         crate::py_calls::check_pid()?;
         let wait_timeout = wait_timeout
             .map(|v| {
-                crate::py_values::number_from_py::<f64>(v.as_any(), "wait_timeout").and_then(|s| {
-                    ::std::time::Duration::try_from_secs_f64(s).map_err(|e| {
-                        ::pyo3::exceptions::PyValueError::new_err(format!(
-                            "{}: {e}",
-                            "wait_timeout"
-                        ))
-                    })
-                })
+                crate::py_values::extract_at::<::std::time::Duration>(v.as_any(), "wait_timeout")
             })
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);

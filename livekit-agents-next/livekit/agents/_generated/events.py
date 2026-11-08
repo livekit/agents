@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from datetime import timedelta
 from enum import StrEnum, unique
 from typing import Literal, TypeAlias
 
@@ -164,7 +165,7 @@ class UserTurnExceededEvent:
     """Full transcript since the start of user speaking."""
     accumulated_word_count: int
     """Total word count since the start of user speaking."""
-    duration: float
+    duration: timedelta
     """Duration of the user turn in seconds."""
     created_at: float = field(default_factory=time.time)
     type: Literal["user_turn_exceeded"] = "user_turn_exceeded"

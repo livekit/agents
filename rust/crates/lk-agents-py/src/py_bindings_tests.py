@@ -363,10 +363,12 @@ async def test_realtime_chain_accepts_host_and_native_members() -> None:
 
 
 async def test_http_route_kind_is_validated_before_the_host_runs() -> None:
-    from livekit.agents._generated.worker_options import ServerOptions
+    from livekit.agents._generated.worker_options import ProcessOptions, ServerOptions
     from livekit.agents._generated.worker_server import EndpointRoute
 
-    runtime = _core.ServerRuntime(_core.ServerConfig(ServerOptions()), object())
+    runtime = _core.ServerRuntime(
+        _core.ServerConfig(ServerOptions(), ProcessOptions(), "0.0.0"), object()
+    )
     with pytest.raises(TypeError, match="EndpointRoute.kind") as failure:
         runtime.run(
             devmode=True,
@@ -388,7 +390,7 @@ async def test_drain_distinguishes_deadlines_from_identical_host_error_text(
 ) -> None:
     import asyncio
 
-    from livekit.agents._generated.worker_options import ServerOptions
+    from livekit.agents._generated.worker_options import ProcessOptions, ServerOptions
 
     class Host:
         def __init__(self) -> None:
@@ -416,7 +418,7 @@ async def test_drain_distinguishes_deadlines_from_identical_host_error_text(
             raise AssertionError("no request is served")
 
     host = Host()
-    config = _core.ServerConfig(ServerOptions())
+    config = _core.ServerConfig(ServerOptions(), ProcessOptions(), "0.0.0")
     config.simulation = True
     runtime = _core.ServerRuntime(config, host)
     running = asyncio.ensure_future(

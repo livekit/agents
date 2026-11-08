@@ -321,21 +321,15 @@ pub fn remove_instructions(
 // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
 type ChatContextDiffsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ChatContextDiffs;
-type ChatContextDiffsComputeChatCtxDiffOutput = (
-    ::std::vec::Vec<::std::string::String>,
-    ::std::vec::Vec<(::std::option::Option<::std::string::String>, ::std::string::String)>,
-    ::std::vec::Vec<(::std::option::Option<::std::string::String>, ::std::string::String)>,
-);
 
-/// The operations turning ``old`` into ``new``, as ``(to_remove, to_create, to_update)``; an
-/// update patches the item in place, keeping its server-side position.
+/// The operations turning ``old`` into ``new``.
 #[pyfunction]
 #[pyo3(signature = (old, new))]
-pub fn compute_chat_ctx_diff(
-    py: Python<'_>,
+pub fn compute_chat_ctx_diff<'py>(
+    py: Python<'py>,
     old: Bound<'_, PyAny>,
     new: Bound<'_, PyAny>,
-) -> PyResult<ChatContextDiffsComputeChatCtxDiffOutput> {
+) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
     let old = old.try_iter().and_then(|items| {
         items
@@ -354,7 +348,7 @@ pub fn compute_chat_ctx_diff(
             .collect::<PyResult<Vec<_>>>()
     })?;
     let out = py.detach(|| <ChatContextDiffsImpl as ::lk_agents_abi::llm::chat_context::ChatContextDiffs>::compute_chat_ctx_diff(old, new));
-    ::pyo3::PyResult::Ok(out)
+    crate::generated::records::chat_diff::diff_ops_to_py(py, out)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
@@ -756,7 +750,7 @@ pub struct FallbackLlm(pub(crate) ::std::sync::Arc<FallbackLlmImpl>);
 
 #[pymethods]
 impl FallbackLlm {
-    /// `llm.FallbackAdapter`'s mixin builds it from the adapter's attributes, one per loop.
+    /// `llm.FallbackAdapter` builds it from its attributes, one per loop.
     #[new]
     #[pyo3(signature = (members, *, attempt_timeout = 5.0, max_retry_per_llm = 0, retry_interval = 0.5, sticky = false, on_availability = None))]
     fn new(
@@ -950,7 +944,7 @@ pub struct FallbackTts(pub(crate) ::std::sync::Arc<FallbackTtsImpl>);
 
 #[pymethods]
 impl FallbackTts {
-    /// `tts.FallbackAdapter`'s mixin builds it from the adapter's attributes, one per loop.
+    /// `tts.FallbackAdapter` builds it from its attributes, one per loop.
     #[new]
     #[pyo3(signature = (members, *, max_retry_per_tts = 2, attempt_timeout = None, sample_rate = None, on_availability = None))]
     fn new(
@@ -1041,11 +1035,11 @@ impl FallbackTts {
         })
     }
 
-    #[pyo3(signature = (text, conn_options = None))]
+    #[pyo3(signature = (input_text, conn_options = None))]
     fn synthesize<'py>(
         &self,
         py: Python<'py>,
-        text: ::std::string::String,
+        input_text: ::std::string::String,
         conn_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
@@ -1054,7 +1048,7 @@ impl FallbackTts {
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::synthesize(&this, text, conn_options)
+            let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::synthesize(&this, input_text, conn_options)
                 .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -3771,7 +3765,7 @@ impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
 
-/// [`::lk_agents_abi::llm::mcp::McpProgress`] over a host `livekit.agents.llm.mcp._Progress`.
+/// [`::lk_agents_abi::llm::mcp::McpProgress`] over a host `livekit.agents.voice.events.RunContext`.
 #[derive(Clone)]
 pub struct McpProgressProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
@@ -3823,32 +3817,22 @@ impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
     fn update<'a>(
         &'a self,
         cx: &::lk_agents_abi::telemetry::Cx,
-        invocation: &::lk_agents_abi::llm::mcp::McpInvocation,
+        invocation: &::lk_agents_abi::invoke::CallContext,
         message: &str,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::sync::Arc::clone(&self.host);
-        let invocation_arg = ::std::clone::Clone::clone(invocation);
         let message_arg = message.to_owned();
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "McpProgress._core_update",
+            "McpProgress.update",
             invocation,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    crate::generated::records::mcp_session::mcp_invocation_to_py(
-                        py,
-                        invocation_arg,
-                    )?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?,
-                ];
-                Ok((
-                    host.bind(py).getattr("_core_update")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?];
+                Ok((host.bind(py).getattr("update")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -4913,11 +4897,11 @@ impl ToolsetHooksProxy {
             None => crate::py_calls::capture_context(obj.py())?,
         };
         let lifetime = {
-            let v = crate::py_calls::read(obj, "_core_lifetime")?;
+            let v = obj.getattr("_lifetime")?;
             crate::py_objects::native::<dyn ::lk_agents_abi::llm::toolsets::Lifetime>(v.as_any())
                 .ok_or_else(|| {
                     ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "ToolsetHooks._core_lifetime",
+                        "ToolsetHooks._lifetime",
                         ": expected a native toolset lifetime"
                     ))
                 })?
@@ -5013,9 +4997,12 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py).clone(),
+                    ::pyo3::types::PyString::new(py, "_children").into_any(),
+                ];
                 Ok((
-                    host.bind(py).getattr("_core_children")?,
+                    py.import("builtins")?.getattr("getattr")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -5037,7 +5024,7 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
                 )
                 .ok_or_else(|| {
                     ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "ToolsetHooks._core_children",
+                        "ToolsetHooks._children",
                         ": expected a native toolset lease group"
                     ))
                 }))

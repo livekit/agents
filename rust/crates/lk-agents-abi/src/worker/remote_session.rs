@@ -175,7 +175,7 @@ pub trait SessionPort: Send + Sync {
     fn session_state(
         &self,
         cx: &crate::telemetry::Cx,
-    ) -> crate::BoxFuture<'_, Result<SessionState, crate::errors::HostError>>;
+    ) -> crate::BoxFuture<'_, Result<RemoteSessionState, crate::errors::HostError>>;
 
     /// `session._room_io.room.get_rtc_stats()`; `None` without room IO.
     #[host(await, name = "_core_rtc_stats")]
@@ -191,9 +191,9 @@ pub trait SessionPort: Send + Sync {
         cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<crate::usage::Usage, crate::errors::HostError>>;
 
-    /// `("python", __version__)` on the reference. Read once.
+    /// `FrameworkInfo(sdk="python", sdk_version=__version__)` on the reference. Read once.
     #[host(read_once, name = "_core_framework_info")]
-    fn framework_info(&self) -> (String, String);
+    fn framework_info(&self) -> FrameworkInfo;
 
     /// Only the `Some` channels are applied.
     #[host(await, name = "_core_update_io")]
@@ -216,22 +216,56 @@ pub trait SessionPort: Send + Sync {
     >;
 }
 
-/// `(id, instructions, tool names, chat_ctx items)`. `None` instructions differ from `""`; tools are
-/// flattened across `Toolset`s, names only.
-pub type AgentInfo = (String, Option<String>, Vec<String>, Vec<ChatItem>);
+/// The current agent: `None` instructions differ from `""`; tools are flattened across
+/// `Toolset`s, names only.
+#[crate::host(record(module = "remote_session", extract))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentInfo {
+    pub id: String,
+    pub instructions: Option<String>,
+    pub tools: Vec<String>,
+    pub chat_ctx: Vec<ChatItem>,
+}
 
-/// `(agent_state, user_state, agent_id, options, started_at)` as the host holds them: an unknown
-/// state word answers `AS_IDLE` / `US_LISTENING`; `options` keys are `STATE_OPTION_FIELDS`;
-/// `started_at` is epoch seconds, `None` or `0` stamped with the answer time.
-pub type SessionState =
-    (String, String, String, std::collections::BTreeMap<String, String>, Option<f64>);
+/// The session's state as the host holds it: an unknown state word answers `AS_IDLE` /
+/// `US_LISTENING`; `options` keys are `STATE_OPTION_FIELDS`; `started_at` is epoch seconds,
+/// `None` or `0` stamped with the answer time.
+#[crate::host(record(module = "remote_session", extract))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteSessionState {
+    pub agent_state: String,
+    pub user_state: String,
+    pub agent_id: String,
+    pub options: std::collections::BTreeMap<String, String>,
+    pub started_at: Option<f64>,
+}
 
-/// `(publisher stats, subscriber stats)`, each `MessageToDict` of one stat.
-pub type RtcStats = (Vec<serde_json::Value>, Vec<serde_json::Value>);
+/// Each stat is `MessageToDict` of one SDK stat.
+#[crate::host(record(module = "remote_session", extract))]
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RtcStats {
+    pub publisher_stats: Vec<serde_json::Value>,
+    pub subscriber_stats: Vec<serde_json::Value>,
+}
 
-/// `(input audio, input video, output audio, output video, output transcription)`; `None` leaves
-/// the channel alone.
-pub type IoUpdate = (Option<bool>, Option<bool>, Option<bool>, Option<bool>, Option<bool>);
+/// The SDK the session runs on and its version.
+#[crate::host(record(module = "remote_session", extract))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrameworkInfo {
+    pub sdk: String,
+    pub sdk_version: String,
+}
+
+/// The channels to switch; `None` leaves a channel alone.
+#[crate::host(record(module = "remote_session", emit))]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct IoUpdate {
+    pub input_audio: Option<bool>,
+    pub input_video: Option<bool>,
+    pub output_audio: Option<bool>,
+    pub output_video: Option<bool>,
+    pub output_transcription: Option<bool>,
+}
 
 /// The runtime-owned remote host attached to one live voice session.
 pub trait SessionHosting: Send + Sync {

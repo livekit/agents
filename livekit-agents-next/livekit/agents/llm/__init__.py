@@ -7,8 +7,7 @@ from dataclasses import replace
 from typing import Literal
 
 from .. import _bindings
-from .._generated import public_llm as _public
-from .._generated.provider_hosts import FallbackLlmHost
+from .._generated import facades_llm as _facades, public_llm as _public
 from .._generated.public_llm import *  # noqa: F403
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
@@ -140,7 +139,9 @@ __all__ += _public.__all__
 
 
 class FallbackAdapter(
-    FallbackLlmHost, _bindings.FallbackMembers[LLM], LLM[Literal["llm_availability_changed"]]
+    _facades.FallbackAdapter,
+    _bindings.FallbackMembers[LLM],
+    LLM[Literal["llm_availability_changed"]],
 ):
     """Several LLMs behind one: a failed one is skipped until it recovers. The chain is the
     core's (``_core.FallbackLlm``)."""

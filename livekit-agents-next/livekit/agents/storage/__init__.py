@@ -11,14 +11,13 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from .. import _core
-from .._generated import public_storage as _public
+from .._generated import facades_storage as _facades, public_storage as _public
 from .._generated.public_storage import *  # noqa: F403
 from .._generated.storage_class import (
     LocalStorageOptions,
     TaskRecord,
     TaskState,
 )
-from .._generated.thread_reads import ThreadReads
 from ..llm import ChatContext
 from ..log import logger
 from .context import (
@@ -115,10 +114,8 @@ class AgentDBStorage(Storage):
         args = {
             "api_key": api_key or None,
             "api_secret": api_secret or None,
-            "lease_ttl": lease_ttl.total_seconds() if lease_ttl is not None else None,
-            "renew_interval": (
-                renew_interval.total_seconds() if renew_interval is not None else None
-            ),
+            "lease_ttl": lease_ttl,
+            "renew_interval": renew_interval,
             "holder": holder,
         }
         super().__init__(args)
@@ -150,10 +147,8 @@ class SQLiteStorage(Storage):
                 directory=os.fspath(directory) if directory is not None else None,
                 project_id=project_id,
             ),
-            "lease_ttl": lease_ttl.total_seconds() if lease_ttl is not None else None,
-            "renew_interval": (
-                renew_interval.total_seconds() if renew_interval is not None else None
-            ),
+            "lease_ttl": lease_ttl,
+            "renew_interval": renew_interval,
             "holder": holder,
         }
         super().__init__(args)
@@ -162,20 +157,16 @@ class SQLiteStorage(Storage):
         )
 
 
-class Thread(ThreadReads):
+class Thread(_facades.Thread):
     """``ctx.thread``: the durable thread (docs/threads.md). Each read opens the thread's
     database for the call; there is nothing to open or close."""
 
     def __init__(self, storage: Storage, thread_id: str, *, agent_name: str) -> None:
         self._storage = storage
         self._agent_name = agent_name
-        self._handle = _core._core_ThreadHandle(
+        self._native = _core._core_ThreadHandle(
             storage.threads, thread_id, storage.holder, agent_name
         )
-
-    @property
-    def _native(self) -> _core._core_ThreadHandle:
-        return self._handle
 
     def lane(self, agent: str) -> Lane:
         """An agent's lane of this thread: its history and its tasks."""

@@ -153,7 +153,12 @@ impl remote_session::SessionPort for FakeConsolePort {
         _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, Result<remote_session::AgentInfo, HostError>> {
         Box::pin(async move {
-            Ok(("agent".into(), Some("You are a test agent.".into()), Vec::new(), Vec::new()))
+            Ok(remote_session::AgentInfo {
+                id: "agent".into(),
+                instructions: Some("You are a test agent.".into()),
+                tools: Vec::new(),
+                chat_ctx: Vec::new(),
+            })
         })
     }
     fn run_input<'a>(
@@ -166,13 +171,19 @@ impl remote_session::SessionPort for FakeConsolePort {
     fn session_state(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<remote_session::SessionState, HostError>> {
+    ) -> lk_agents_abi::BoxFuture<'_, Result<remote_session::RemoteSessionState, HostError>> {
         Box::pin(async move {
             let options = lk_agents_abi::worker::remote_session::STATE_OPTION_FIELDS
                 .iter()
                 .map(|key| ((*key).to_owned(), "None".to_owned()))
                 .collect();
-            Ok(("listening".into(), "listening".into(), "agent".into(), options, Some(0.0)))
+            Ok(remote_session::RemoteSessionState {
+                agent_state: "listening".into(),
+                user_state: "listening".into(),
+                agent_id: "agent".into(),
+                options,
+                started_at: Some(0.0),
+            })
         })
     }
     fn rtc_stats(
@@ -187,8 +198,8 @@ impl remote_session::SessionPort for FakeConsolePort {
     ) -> lk_agents_abi::BoxFuture<'_, Result<lk_agents_abi::usage::Usage, HostError>> {
         Box::pin(async move { Ok(Default::default()) })
     }
-    fn framework_info(&self) -> (String, String) {
-        ("rust".into(), "fuzz".into())
+    fn framework_info(&self) -> remote_session::FrameworkInfo {
+        remote_session::FrameworkInfo { sdk: "rust".into(), sdk_version: "fuzz".into() }
     }
     fn update_io(
         &self,

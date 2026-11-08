@@ -14,11 +14,27 @@ from inspect import get_annotations
 
 
 @dataclass
+class AnchoredItem:
+    """An item to create or patch, placed after `previous_item_id` (`None`: first in the
+    conversation).
+    """
+
+    previous_item_id: str | None
+    item_id: str
+
+
+@dataclass
 class DiffOps:
+    """The operations turning one conversation into another; an update patches the item in place,
+    keeping its server-side position.
+    """
+
     to_remove: list[str]
-    to_create: list[tuple[str | None, str]]
-    to_update: list[tuple[str | None, str]]
+    to_create: list[AnchoredItem]
+    to_update: list[AnchoredItem]
 
 
+AnchoredItem.__annotations__ = get_annotations(AnchoredItem, eval_str=True)
+AnchoredItem.__module__ = "livekit.agents.llm.utils"
 DiffOps.__annotations__ = get_annotations(DiffOps, eval_str=True)
 DiffOps.__module__ = "livekit.agents.llm.utils"

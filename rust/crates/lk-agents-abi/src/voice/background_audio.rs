@@ -4,20 +4,17 @@ use crate::AudioFrame;
 use crate::errors::ProviderError;
 use std::sync::Arc;
 
-/// A caller-supplied stream. Cancellation must reach any pending host-side pull. A host
-/// `AsyncIterator[rtc.AudioFrame]` is this trait through `background_audio.py`'s `_FrameStream`.
-#[crate::host(proxy(host = "livekit.agents.voice.background_audio._FrameStream"))]
+/// A caller-supplied stream: a host `AsyncIterator[rtc.AudioFrame]`.
+#[crate::host(proxy(host = "collections.abc.AsyncIterator"))]
 pub trait FrameStream: Send + Sync {
-    /// The next frame, `None` once exhausted (or cancelled by [`cancel_pending`](Self::cancel_pending)).
-    #[host(await, name = "_core_next")]
+    /// The next frame, `None` once exhausted. `cancel` reaches the host's pending pull, which
+    /// settles before the read does.
+    #[host(await, iter)]
     fn next(
         &self,
         cx: &crate::telemetry::Cx,
+        #[host(cancel)] cancel: Arc<dyn crate::invoke::Cancellation>,
     ) -> crate::BoxFuture<'_, Result<Option<AudioFrame>, ProviderError>>;
-    #[host(notify, name = "_core_cancel_pending")]
-    fn cancel_pending(&self);
-    #[host(await, name = "_core_close")]
-    fn close(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, ()>;
 }
 
 /// `play(loop=True)` with an iterator source.
@@ -115,7 +112,7 @@ pub trait BackgroundAudioPlayer: Send + Sync + Sized + 'static {
         draw: f64,
         #[host(kw)] ambient: Vec<Sound>,
         choose: bool,
-        #[host(default = None)] source: Option<crate::voice::rtc::TrackSource>,
+        #[host(default = None, sdk)] source: Option<crate::voice::rtc::TrackSource>,
     ) -> Result<crate::voice::rtc::TrackSid, crate::voice::rtc::RtcError>;
 
     #[host(call)]

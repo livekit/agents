@@ -29,6 +29,7 @@ from typing import Any, TypeVar, cast
 from livekit import rtc
 
 from .. import _core, telemetry
+from .._generated.cli import LogLevel
 from .._generated.worker_ipc import StartJob
 from ..job import (
     JobContext,
@@ -56,7 +57,7 @@ class JobArgs:
     preload_modules: tuple[str, ...] = ()
     user_arguments: Any | None = None
     mp_cch: socket.socket | PipeEnd | None = None
-    log_config: str | None = None
+    log_config: LogLevel | None = None
     logger_levels: dict[str, int] = field(default_factory=dict)
     # the server's settings as environment variables, which the job's code reads
     env: tuple[tuple[str, str], ...] = ()
@@ -247,9 +248,6 @@ class _JobProc:
             return None
         return ctx.make_session_report()
 
-    async def _core_disconnect(self) -> None:
-        await self._room.disconnect()
-
     async def _core_shutdown_callback(
         self, callback: Callable[..., Awaitable[None]], reason: str | None
     ) -> None:
@@ -269,14 +267,11 @@ def thread_main(args: JobArgs) -> None:
     )
 
 
-def log_to_stdout(config: str | None, levels: dict[str, int], fields: dict[str, Any]) -> None:
+def log_to_stdout(config: LogLevel | None, levels: dict[str, int], fields: dict[str, Any]) -> None:
     """Write the child's structured logs with the worker's level and process fields."""
     from ..cli import setup_logging
 
-    configured_level = (
-        config if config is not None else logging.getLevelName(levels.get("root", logging.WARNING))
-    )
-    setup_logging(configured_level).addFilter(_Stamp(fields))
+    setup_logging(config or "warn").addFilter(_Stamp(fields))
     for name, level in levels.items():
         logging.getLogger(name).setLevel(level)
 

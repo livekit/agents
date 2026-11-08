@@ -271,6 +271,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<agent::CoreStreamEvents>()?;
     m.add_class::<agent::CoreStreamText>()?;
     m.add_function(wrap_pyfunction!(cli::parse_cli, m)?)?;
+    m.add_function(wrap_pyfunction!(cli::host_log_level, m)?)?;
     m.add_function(wrap_pyfunction!(cli::format_log_record, m)?)?;
     m.add_function(wrap_pyfunction!(cli::dev_channel, m)?)?;
     m.add_class::<cli::Shutdown>()?;
@@ -533,7 +534,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::NodeTranscript>()?;
     m.add_function(wrap_pyfunction!(text_session::_core_persist_text_session_state, m)?)?;
     m.add_function(wrap_pyfunction!(text_session::_core_restore_text_session_state, m)?)?;
-    m.add_function(wrap_pyfunction!(voice::rtc_wire_names, m)?)?;
     m.add_function(wrap_pyfunction!(voice::video_queue_frames, m)?)?;
     m.add(
         "WARM_TRANSFER_IDENTITY",

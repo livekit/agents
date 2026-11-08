@@ -34,20 +34,8 @@ pub trait FallbackLlm: Send + Sync + Sized + 'static {
     #[host(source(item = crate::LlmChunk, class = "FallbackLlmChunks"))]
     type Chunks: crate::StreamOutput<crate::LlmChunk> + 'static;
 
-    /// `llm.FallbackAdapter`'s mixin builds it from the adapter's attributes, one per loop.
+    /// `llm.FallbackAdapter` builds it from its attributes, one per loop.
     #[host(new)]
-    #[host(facade(
-        module = "provider_hosts",
-        class = "FallbackLlmHost",
-        target = "_native",
-        legs(chat),
-        resolve(members = ".._bindings.core_legs"),
-        availability(
-            observer = "on_availability",
-            event = "llm_availability_changed",
-            record = ".llm_availability.AvailabilityChangedEvent"
-        )
-    ))]
     fn new(
         env: &Self::Env,
         members: Vec<std::sync::Arc<dyn crate::Llm>>,
@@ -78,6 +66,24 @@ pub trait FallbackLlm: Send + Sync + Sized + 'static {
     ) -> Result<Self::Chunks, crate::errors::ProviderError>;
 }
 
+/// `llm.FallbackAdapter`'s chain, built once per loop from the adapter's attributes; a failed LLM
+/// is skipped until it recovers.
+#[crate::host(facade(
+    path = "livekit.agents.llm",
+    extended,
+    name = "FallbackAdapter",
+    native = FallbackLlm,
+    per_loop,
+    legs(chat),
+    resolve(members = ".._bindings.core_legs"),
+    availability(
+        observer = "on_availability",
+        event = "llm_availability_changed",
+        record = ".llm_availability.AvailabilityChangedEvent"
+    )
+))]
+pub trait FallbackLlmAdapter {}
+
 /// `tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
 #[crate::host(class(name = "FallbackTts", native = crate::Tts))]
 pub trait FallbackTts: Send + Sync + Sized + 'static {
@@ -87,21 +93,8 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
 
     #[host(class(name = "TtsStream"))]
     type Stream;
-    /// `tts.FallbackAdapter`'s mixin builds it from the adapter's attributes, one per loop.
+    /// `tts.FallbackAdapter` builds it from its attributes, one per loop.
     #[host(new)]
-    #[host(facade(
-        module = "provider_hosts",
-        class = "FallbackTtsHost",
-        target = "_native",
-        legs(synthesize, stream),
-        resolve(members = ".._bindings.core_legs"),
-        annotation(sample_rate = "int"),
-        availability(
-            observer = "on_availability",
-            event = "tts_availability_changed",
-            record = ".tts_availability.AvailabilityChangedEvent"
-        )
-    ))]
     fn new(
         env: &Self::Env,
         members: Vec<std::sync::Arc<dyn crate::Tts>>,
@@ -123,7 +116,7 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn synthesize(
         &self,
-        text: String,
+        input_text: String,
         #[host(default = None)] conn_options: Option<crate::ApiConnectOptions>,
     ) -> Result<Self::Stream, crate::errors::ProviderError>;
     #[host(await)]
@@ -133,6 +126,43 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
         #[host(default = false)] expressive: bool,
     ) -> Result<Self::Stream, crate::errors::ProviderError>;
 }
+
+/// `tts.FallbackAdapter`'s chain, built once per loop from the adapter's attributes; a failed
+/// TTS is skipped until it recovers.
+#[crate::host(facade(
+    path = "livekit.agents.tts",
+    extended,
+    name = "FallbackAdapter",
+    native = FallbackTts,
+    per_loop,
+    legs(synthesize, stream),
+    resolve(members = ".._bindings.core_legs"),
+    annotation(sample_rate = "int"),
+    availability(
+        observer = "on_availability",
+        event = "tts_availability_changed",
+        record = ".tts_availability.AvailabilityChangedEvent"
+    )
+))]
+pub trait FallbackTtsAdapter {}
+
+/// `tts.FallbackAdapter.synthesize()`: the chain's synthesis, which retries and falls back.
+#[crate::host(facade(
+    path = "livekit.agents.tts",
+    base = "tts.ChunkedStream",
+    native = FallbackTts,
+    stream(op = synthesize, owner = "_tts", native_retries)
+))]
+pub trait FallbackChunkedStream {}
+
+/// `tts.FallbackAdapter.stream()`: the chain's synthesis, which retries and falls back.
+#[crate::host(facade(
+    path = "livekit.agents.tts",
+    base = "tts.SynthesizeStream",
+    native = FallbackTts,
+    stream(op = stream, owner = "_tts", native_retries)
+))]
+pub trait FallbackSynthesizeStream {}
 
 /// One realtime fallback member: a native model or a host provider. Host providers open a fresh
 /// adapter on every attempt, so a failed session is never reused by a later attempt.

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import platform
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import JsonValue
@@ -58,30 +57,20 @@ def default_api_secret(explicit: str | None) -> str:
 def resolve_credentials(api_key: str | None, api_secret: str | None) -> tuple[str, str]:
     """The inference key and secret (``default_api_key``, ``default_api_secret``); raises
     when either is missing."""
-    creds = Credentials.resolve(None, api_key, api_secret)
+    creds = _resolve_credentials(None, api_key, api_secret)
     return creds.api_key, creds.api_secret
 
 
-@dataclass(frozen=True)
-class Credentials:
-    """Where a gateway client connects, and with what."""
-
-    base_url: str
-    api_key: str
-    api_secret: str
-
-    @classmethod
-    def resolve(
-        cls,
-        base_url: NotGivenOr[str] | None,
-        api_key: NotGivenOr[str] | None,
-        api_secret: NotGivenOr[str] | None,
-    ) -> Credentials:
-        """Each given value, else the ladders and ``get_default_inference_url``; raises when the
-        key or the secret is missing."""
-        given = [v if is_given(v) else None for v in (base_url, api_key, api_secret)]
-        server = [_server_setting(f"LIVEKIT_{n}") for n in ("URL", "API_KEY", "API_SECRET")]
-        return cls(*_core.inference_credentials(*given, *server))
+def _resolve_credentials(
+    base_url: NotGivenOr[str] | None,
+    api_key: NotGivenOr[str] | None,
+    api_secret: NotGivenOr[str] | None,
+) -> Credentials:
+    """Each given value, else the ladders and ``get_default_inference_url``; raises when the key
+    or the secret is missing."""
+    given = [v if is_given(v) else None for v in (base_url, api_key, api_secret)]
+    server = [_server_setting(f"LIVEKIT_{n}") for n in ("URL", "API_KEY", "API_SECRET")]
+    return _core.inference_credentials(*given, *server)
 
 
 _USER_AGENT = f"LiveKit Agents/{__version__} (python {platform.python_version()})"
@@ -377,7 +366,7 @@ class AdaptiveInterruptionDetector(_core.InterruptionDetector):
         api_secret: str | None = None,
         **options: Any,
     ) -> AdaptiveInterruptionDetector:
-        credentials = Credentials.resolve(base_url, api_key, api_secret)
+        credentials = _resolve_credentials(base_url, api_key, api_secret)
         return super().__new__(
             cls,
             base_url=credentials.base_url,
@@ -415,7 +404,6 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
-    "Credentials",
     "extract_quota_usage",
     "get_default_inference_url",
     "get_inference_headers",

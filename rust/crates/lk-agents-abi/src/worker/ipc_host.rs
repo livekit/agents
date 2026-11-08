@@ -232,7 +232,7 @@ pub trait JobProcess: Send + Sync {
         cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
     ) -> crate::BoxFuture<'a, Result<Option<crate::telemetry::report::SessionReport>, HostError>>;
-    #[host(await, name = "_core_disconnect")]
+    #[host(await, name = "_room.disconnect")]
     fn disconnect<'a>(
         &'a self,
         cx: &crate::telemetry::Cx,

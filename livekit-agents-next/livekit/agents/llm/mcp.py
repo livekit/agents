@@ -30,16 +30,6 @@ __all__ = [
 __all__ += _public.__all__
 
 
-class _Progress:
-    """A ``report_progress`` tool's progress messages, as ``ctx.update()`` calls."""
-
-    def __init__(self, ctx: RunContext) -> None:
-        self._ctx = ctx
-
-    async def _core_update(self, _invocation: object, message: str) -> None:
-        await self._ctx.update(message)
-
-
 HeadersFor = Callable[[RunContext[Any]], dict[str, str]]
 """A run's HTTP headers, from its ``RunContext``."""
 TokenFor = Callable[[RunContext[Any]], "str | None"]
@@ -94,7 +84,7 @@ class MCPServer:
     ) -> RawFunctionTool:
         timeout = options["timeout"]
 
-        async def _call(raw_arguments: dict[str, Any], progress: _Progress | None) -> Any:
+        async def _call(raw_arguments: dict[str, Any], progress: RunContext | None) -> Any:
             await self._refresh()
             result = await self._session.call_tool(
                 name,
@@ -109,7 +99,7 @@ class MCPServer:
         if options["report_progress"]:
             # progress becomes ctx.update(); the first update frees the reply loop
             async def impl(ctx: RunContext, raw_arguments: dict[str, Any]) -> Any:
-                return await _call(raw_arguments, _Progress(ctx))
+                return await _call(raw_arguments, ctx)
         else:
 
             async def impl(raw_arguments: dict[str, Any]) -> Any:

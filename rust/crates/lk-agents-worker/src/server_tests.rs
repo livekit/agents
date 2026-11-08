@@ -95,7 +95,11 @@ fn listeners_default_per_mode() {
         prometheus: Some(ListenerAddress::default()),
         ..Default::default()
     };
-    s.apply(ServerOptions { listeners: Given(listeners), ..Default::default() }).unwrap();
+    s.apply(
+        ServerOptions { listeners: Given(listeners), ..Default::default() },
+        Default::default(),
+    )
+    .unwrap();
     let l = &s.listeners;
     let at = |b: Bind| (b.host, b.port);
     assert_eq!(at(Bind::public(l, false)), ("0.0.0.0".into(), 9000));
@@ -193,25 +197,26 @@ async fn a_host_that_stops_answering_reads_as_stuck() {
 #[test]
 fn invalid_server_update_cannot_partially_change_launch_configuration() {
     use lk_agents_abi::Maybe::Given;
-    use lk_agents_abi::worker::types::ServerOptions;
+    use lk_agents_abi::worker::types::{ProcessOptions, ServerOptions};
     let mut server = settings();
     let original_url = server.ws_url.clone();
     let error = server
-        .apply(ServerOptions {
-            ws_url: Given("wss://new.example".into()),
-            initialize_process_timeout: Given(f64::NAN),
-            ..Default::default()
-        })
+        .apply(
+            ServerOptions { ws_url: Given("wss://new.example".into()), ..Default::default() },
+            ProcessOptions { initialize_process_timeout: Given(f64::NAN), ..Default::default() },
+        )
         .unwrap_err();
     assert!(error.to_string().contains("initialize_process_timeout"));
     assert_eq!(server.ws_url, original_url, "a refused update changes no option");
     server
-        .apply(ServerOptions {
-            ws_url: Given("wss://new.example".into()),
-            initialize_process_timeout: Given(4.0),
-            drain_timeout: Given(0.0),
-            ..Default::default()
-        })
+        .apply(
+            ServerOptions {
+                ws_url: Given("wss://new.example".into()),
+                drain_timeout: Given(0.0),
+                ..Default::default()
+            },
+            ProcessOptions { initialize_process_timeout: Given(4.0), ..Default::default() },
+        )
         .unwrap();
     assert_eq!(server.ws_url, "wss://new.example");
     assert_eq!(server.initialize_process_timeout, 4.0);

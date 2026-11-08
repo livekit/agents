@@ -892,7 +892,7 @@ impl lk_agents_abi::worker::remote_session::SessionPort for UnusedRemotePort {
         _cx: &Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
-        Result<lk_agents_abi::worker::remote_session::SessionState, HostError>,
+        Result<lk_agents_abi::worker::remote_session::RemoteSessionState, HostError>,
     > {
         Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }
@@ -911,8 +911,11 @@ impl lk_agents_abi::worker::remote_session::SessionPort for UnusedRemotePort {
     ) -> lk_agents_abi::BoxFuture<'_, Result<lk_agents_abi::usage::Usage, HostError>> {
         Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }
-    fn framework_info(&self) -> (String, String) {
-        ("rust".to_owned(), "test".to_owned())
+    fn framework_info(&self) -> lk_agents_abi::worker::remote_session::FrameworkInfo {
+        lk_agents_abi::worker::remote_session::FrameworkInfo {
+            sdk: "rust".to_owned(),
+            sdk_version: "test".to_owned(),
+        }
     }
     fn update_io(
         &self,

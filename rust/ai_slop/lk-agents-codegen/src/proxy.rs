@@ -67,12 +67,23 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
             Target::Function { module, name } => format!(
                 "crate::py_calls::call(&obj.py().import({module:?})?.getattr({name:?})?, (obj,), None)?"
             ),
+            Target::Emit(_) | Target::Iter(_) => unreachable!("read_once reads a value"),
         };
         reads.push_str(&format!(
             "        let {} = {{\n            let v = {value};\n            {read}?\n        }};\n",
             m.rust_name
         ));
         inits.push(m.rust_name.clone());
+    }
+    for m in p.methods.iter().filter(|m| matches!(m.target, Target::Iter(_))) {
+        fields.push(format!(
+            "    /// The host iterator `{}` pulls, opened by its first pull.\n    {}_iter: ::std::sync::Arc<::pyo3::sync::PyOnceLock<Py<PyAny>>>,\n",
+            m.rust_name, m.rust_name
+        ));
+        inits.push(format!(
+            "{}_iter: ::std::sync::Arc::new(::pyo3::sync::PyOnceLock::new())",
+            m.rust_name
+        ));
     }
     if let Some(bound) = p.bound() {
         fields.push(format!(
@@ -191,8 +202,11 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
                 name = q.name,
             ));
             args.push(format!("{}_arg.into_bound(py)", q.name));
+        } else if q.kwargs {
+            // A typed_dict's keys are keyword arguments.
+            keywords.push((None, value));
         } else if q.kw_only {
-            keywords.push((q.name.clone(), value));
+            keywords.push((Some(q.name.clone()), value));
         } else {
             args.push(value);
         }
@@ -229,13 +243,36 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             args.insert(0, "host.bind(py).clone()".to_owned());
             format!("py.import({module:?})?.getattr({name:?})?")
         }
+        Target::Emit(event) => {
+            args.insert(0, format!("::pyo3::types::PyString::new(py, {event:?}).into_any()"));
+            "host.bind(py).getattr(\"emit\")?".to_owned()
+        }
+        // `anext(iterator, None)`, the iterator opened on the loop by the first pull.
+        Target::Iter(along) => {
+            moved.push_str(&format!(
+                "        let iterator = ::std::sync::Arc::clone(&self.{}_iter);\n",
+                m.rust_name
+            ));
+            let iterable = match along.as_slice() {
+                [] => "host.bind(py).clone()".to_owned(),
+                along => format!("host.bind(py){}", attributes(along)),
+            };
+            args.insert(0, format!("iterator.get_or_try_init(py, || crate::py_calls::call(&py.import(\"builtins\")?.getattr(\"aiter\")?, ({iterable},), None).map(::pyo3::Bound::unbind))?.bind(py).clone()"));
+            args.push("py.None().into_bound(py)".to_owned());
+            "py.import(\"builtins\")?.getattr(\"anext\")?".to_owned()
+        }
     };
     let kwargs = if keywords.is_empty() {
         "None".to_owned()
     } else {
         let set = keywords
             .iter()
-            .map(|(name, value)| format!("kwargs.set_item({name:?}, {value})?; "))
+            .map(|(name, value)| match name {
+                Some(name) => format!("kwargs.set_item({name:?}, {value})?; "),
+                None => format!(
+                    "::pyo3::types::PyDictMethods::update(&kwargs, ({value}).cast::<::pyo3::types::PyMapping>()?)?; "
+                ),
+            })
             .collect::<String>();
         format!("Some({{ let kwargs = ::pyo3::types::PyDict::new(py); {set}kwargs }})")
     };
@@ -525,12 +562,9 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         Ty::Shared { class, family, value: true, .. } => format!(
             "::pyo3::Bound::new(py, crate::generated::{family}::{class}(::std::sync::Arc::new({v})))?.into_any()"
         ),
-        // Seconds, as the host's timeouts and delays are.
-        Ty::Duration => {
-            format!("::pyo3::IntoPyObjectExt::into_bound_py_any({v}.as_secs_f64(), py)?")
-        }
+        Ty::Duration => format!("::pyo3::IntoPyObjectExt::into_bound_py_any({v}, py)?"),
         Ty::Optional(t) if **t == Ty::Duration => {
-            format!("::pyo3::IntoPyObjectExt::into_bound_py_any({v}.map(|d| d.as_secs_f64()), py)?")
+            format!("::pyo3::IntoPyObjectExt::into_bound_py_any({v}, py)?")
         }
         Ty::Optional(t) | Ty::List(t) if matches!(**t, Ty::Json | Ty::JsonObject) => {
             return Err(format!("{at}: `{}` has no host conversion yet", ty.rust()));
@@ -670,7 +704,8 @@ mod tests {
             let source = proxy(&format!(
                 "{call} fn acquire(&self{cx}) -> Result<(Option<std::sync::Arc<dyn Callbacks>>, Vec<std::sync::Arc<dyn Callbacks>>), HostError>; #[host(await)] async fn ping(&self, cx: &Cx) -> Result<(), HostError>;",
             ));
-            let decls = read(&source).expect("nested capabilities resolve");
+            let decls =
+                crate::decl::tests::read_with_tuples(&source).expect("nested capabilities resolve");
             let p = &decls.proxies[0];
             let emitted = super::method(p, &p.methods[0]).expect("emits");
             assert_eq!(emitted.matches("CallbacksProxy::in_context").count(), 2);
@@ -793,6 +828,72 @@ mod tests {
             (
                 "#[host(await)] async fn f(&self, cx: &Cx, #[host(kw, context)] a: &Report) -> Result<(), HostError>;",
                 "`kw` marks a plain argument",
+            ),
+        ] {
+            let err = read(&proxy(body)).expect_err(body);
+            assert!(err.contains(want), "`{body}`: {err}");
+        }
+    }
+
+    // Catches: an event emitted as a method call, an iterator reopened on every pull (or not
+    // opened on the loop), an iterator's end read as anything but `None`, a form on the wrong
+    // kind of call.
+    #[test]
+    fn proxy_calls_emit_events_and_pull_host_iterators() {
+        let decls = read(&proxy(concat!(
+            "#[host(notify, emit = \"clear_buffer\")] fn cleared(&self);",
+            "#[host(await, iter)] async fn next(&self, cx: &Cx) -> Result<Option<String>, HostError>;",
+            "#[host(await, iter, getter = \"stream\")] async fn next_in(&self, cx: &Cx) -> Result<Option<u32>, HostError>;",
+        )))
+        .expect("forms resolve");
+        let p = &decls.proxies[0];
+        let emitted: Vec<String> =
+            p.methods.iter().map(|m| super::method(p, m).expect("emits")).collect();
+        assert!(
+            emitted[0].contains("[::pyo3::types::PyString::new(py, \"clear_buffer\").into_any()]")
+                && emitted[0].contains("host.bind(py).getattr(\"emit\")?"),
+            "{}",
+            emitted[0]
+        );
+        assert!(
+            emitted[1].contains("let iterator = ::std::sync::Arc::clone(&self.next_iter);")
+                && emitted[1].contains("iterator.get_or_try_init(py, ")
+                && emitted[1].contains("getattr(\"aiter\")?, (host.bind(py).clone(),)")
+                && emitted[1].contains("py.None().into_bound(py)]")
+                && emitted[1].contains("py.import(\"builtins\")?.getattr(\"anext\")?")
+                && emitted[1].contains("::lk_agents_runtime::host::call("),
+            "{}",
+            emitted[1]
+        );
+        assert!(emitted[2].contains("(host.bind(py).getattr(\"stream\")?,)"), "{}", emitted[2]);
+        let whole = super::proxy(p).expect("emits");
+        assert!(
+            whole.contains("next_iter: ::std::sync::Arc<::pyo3::sync::PyOnceLock<Py<PyAny>>>")
+                && whole
+                    .contains("next_iter: ::std::sync::Arc::new(::pyo3::sync::PyOnceLock::new())"),
+            "{whole}"
+        );
+        for (body, want) in [
+            (
+                "#[host(await, emit = \"x\")] async fn f(&self, cx: &Cx) -> Result<(), HostError>;",
+                "emitted by `notify` or `call`",
+            ),
+            ("#[host(notify, emit = \"a.b\")] fn f(&self);", "names an event"),
+            (
+                "#[host(call, iter)] fn f(&self) -> Result<Option<u32>, HostError>;",
+                "`iter` is awaited",
+            ),
+            (
+                "#[host(await, iter, name = \"x\")] async fn f(&self, cx: &Cx) -> Result<Option<u32>, HostError>;",
+                "`iter` is awaited",
+            ),
+            (
+                "#[host(await, iter)] async fn f(&self, cx: &Cx) -> Result<u32, HostError>;",
+                "pulls the next item",
+            ),
+            (
+                "#[host(await, iter)] async fn f(&self, cx: &Cx, n: u32) -> Result<Option<u32>, HostError>;",
+                "pulls the next item",
             ),
         ] {
             let err = read(&proxy(body)).expect_err(body);

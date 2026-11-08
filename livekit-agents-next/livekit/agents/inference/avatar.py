@@ -15,7 +15,7 @@ from ..types import (
 )
 from ..utils import is_given
 from ..voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
-from . import Credentials, get_inference_headers
+from . import _resolve_credentials, get_inference_headers
 
 if TYPE_CHECKING:
     from ..voice import VoiceSession
@@ -93,7 +93,7 @@ class AvatarSession(BaseAvatarSession):
             conn_options: Retry and phase limits of the create and terminate requests.
         """
         super().__init__()
-        creds = Credentials.resolve(base_url, api_key, api_secret)
+        creds = _resolve_credentials(base_url, api_key, api_secret)
         self._native = _core.InferenceAvatar(
             model,
             avatar_identity=avatar_participant_identity or None,

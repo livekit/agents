@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import timedelta
 from typing import Self
 
 from .chat_items import ChatItem
@@ -57,8 +58,8 @@ class Storage:
         url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
-        lease_ttl: float | None = None,
-        renew_interval: float | None = None,
+        lease_ttl: timedelta | None = None,
+        renew_interval: timedelta | None = None,
         holder: str | None = None,
     ) -> Self:
         """`local`: threads in that project's directory, resolved to an absolute path once.
@@ -236,7 +237,7 @@ class Thread:
         run_id: str,
         *,
         channel: str | None = None,
-        wait_timeout: float | None = None,
+        wait_timeout: timedelta | None = None,
     ) -> Run: ...
     def close(self) -> None:
         """Schedule connection release without blocking the caller."""

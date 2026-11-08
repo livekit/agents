@@ -24,8 +24,8 @@ impl AudioSource for Audio {
     fn clear_queue(&self) -> Outcome {
         Ok(())
     }
-    fn queued_duration(&self) -> Result<Duration, RtcError> {
-        Ok(Duration::ZERO)
+    fn queued_seconds(&self) -> Result<f64, RtcError> {
+        Ok(0.0)
     }
     fn wait_for_playout(
         &self,

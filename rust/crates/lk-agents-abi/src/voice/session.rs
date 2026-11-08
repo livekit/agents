@@ -208,6 +208,22 @@ pub struct UpdateAgentArgs {
     pub transcription_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
 }
 
+/// Sample the camera at ``speaking_fps`` while the user speaks, ``silent_fps`` otherwise.
+#[crate::host(record(
+    module = "video_sampler",
+    path = "livekit.agents.voice.agent_session",
+    dataclass,
+    kw_only,
+    extract
+))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VoiceActivityVideoSampler {
+    #[host(default = 1.0)]
+    pub speaking_fps: f64,
+    #[host(default = 0.3)]
+    pub silent_fps: f64,
+}
+
 /// What `_core.VoiceSession` is assembled from: the session's legs, hooks, nodes and options as
 /// `VoiceSession(...)` and `start()` hand them over.
 #[crate::host(record(module = "voice_session", extract, default))]
@@ -283,9 +299,9 @@ pub struct VoiceSessionArgs {
     pub host_audio_output: Option<Arc<dyn AudioOutput>>,
     #[host(default = None)]
     pub host_video_input: Option<Arc<dyn VideoInput>>,
-    /// `VoiceActivityVideoSampler(speaking_fps, silent_fps)`'s two rates; `None`: every frame.
+    /// How often camera frames reach the model; `None`: every frame.
     #[host(default = None)]
-    pub video_sampler: Option<(f64, f64)>,
+    pub video_sampler: Option<VoiceActivityVideoSampler>,
     /// A custom `video_sampler` callable: the host pumps and gates; the session reads no camera.
     #[host(default = false)]
     pub host_video_sampler: bool,
@@ -607,16 +623,6 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// tools stay), refused on a realtime model as `chat_ctx` is. Sent from the agent's
     /// `on_enter`, it is that hook's reply.
     #[host(call)]
-    #[host(facade(
-        module = "session_commands",
-        class = "SessionCommands",
-        target = "_running",
-        not_given,
-        origin = "..voice._session_callbacks._origin",
-        returns = "..voice.io.SpeechHandle",
-        annotation(chat_ctx = "..llm.ChatContext"),
-        resolve(chat_ctx = "..voice._session_callbacks._items")
-    ))]
     #[allow(clippy::too_many_arguments)]
     fn generate_reply(
         &self,
@@ -670,7 +676,6 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// `RoomIO.set_participant(identity)`: point the audio input and the user transcript at
     /// someone else. `None` unlinks.
     #[host(await)]
-    #[host(facade(module = "session_commands", class = "SessionCommands", target = "_running"))]
     fn set_participant(
         &self,
         identity: Option<String>,
@@ -698,7 +703,6 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
 
     /// `AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it.
     #[host(call)]
-    #[host(facade(module = "session_commands", class = "SessionCommands", target = "_running"))]
     fn clear_user_turn(&self) -> Result<(), SessionRefused>;
 
     /// `Agent.update_instructions()` on the agent that is already driving.
@@ -727,12 +731,6 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// `AgentSession.interrupt(force=)`: the current and queued speeches up to the first
     /// uninterruptible; answers when they are done, or with the refusal.
     #[host(await)]
-    #[host(facade(
-        module = "session_commands",
-        class = "SessionCommands",
-        target = "_running",
-        future
-    ))]
     fn interrupt(
         &self,
         #[host(kw, default = false)] force: bool,
@@ -741,22 +739,10 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// `AgentSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
     /// speech is left. Answers `None`, or why it was refused.
     #[host(await)]
-    #[host(facade(
-        module = "session_commands",
-        class = "SessionCommands",
-        target = "_running",
-        discard
-    ))]
     fn drain(&self) -> Result<BoxFuture<'static, Option<DrainRefused>>, SessionRefused>;
 
     /// `AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`).
     #[host(await)]
-    #[host(facade(
-        module = "session_commands",
-        class = "SessionCommands",
-        target = "_running",
-        omit = "hold"
-    ))]
     fn wait_for_idle(
         &self,
         #[host(kw, default = None)] hold: Option<u64>,
@@ -797,14 +783,6 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// end. With `audio`, those frames play instead of the TTS and `text`, a `str`, is still
     /// committed. The handle is the promise the session fulfils.
     #[host(call)]
-    #[host(facade(
-        module = "session_commands",
-        class = "SessionCommands",
-        target = "_running",
-        not_given,
-        origin = "..voice._session_callbacks._origin",
-        returns = "..voice.io.SpeechHandle"
-    ))]
     fn say(
         &self,
         text: crate::OneOrStream<String>,
@@ -841,12 +819,6 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// `AgentSession.commit_user_turn(..)`: flush, wait for the final, commit, answer with the
     /// transcript. Runs whether or not awaited; a newer commit supersedes it.
     #[host(await)]
-    #[host(facade(
-        module = "session_commands",
-        class = "SessionCommands",
-        target = "_running",
-        future
-    ))]
     fn commit_user_turn(
         &self,
         #[host(kw, default = 2.0)] transcript_timeout: f64,

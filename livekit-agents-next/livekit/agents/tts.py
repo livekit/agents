@@ -5,16 +5,14 @@ declarations), the expressive markup helpers over the core's per-provider tables
 
 from __future__ import annotations
 
-from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 from livekit import rtc
 
 from . import _bindings, _core, tokenize, utils
-from ._generated import public_tts as _public
-from ._generated.provider_hosts import FallbackTtsHost
+from ._generated import facades_tts as _facades, public_tts as _public
 from ._generated.public_tts import *  # noqa: F403
-from .tokenize import SentenceStream, TokenData
+from .tokenize import SentenceStream
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -72,33 +70,10 @@ class _EmitterOutput:
         return self._ch.closed
 
 
-def _into(output_emitter: AudioEmitter, *, stream: bool) -> Any:
-    """What forwards a core synthesis's audio into ``output_emitter``, one segment if streamed."""
-    started = not stream
-
-    def out(audio: SynthesizedAudio) -> None:
-        nonlocal started
-        if not started:
-            started = True
-            output_emitter.start_segment(segment_id=audio.segment_id or utils.shortuuid())
-        if words := audio.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
-            output_emitter.push_timed_transcript(words)
-        output_emitter.push_frame(audio.frame)
-        if audio.usage is not None or audio.characters_count is not None:
-            output_emitter.report_usage(audio.usage, characters_count=audio.characters_count)
-
-    return out
-
-
-async def _drain_native(native: Any, output_emitter: AudioEmitter, *, stream: bool) -> None:
-    """Forward a core ``TtsStream`` into ``output_emitter``."""
-    out = _into(output_emitter, stream=stream)
-    while (audio := await native.recv()) is not None:
-        out(audio)
-
-
 class FallbackAdapter(
-    FallbackTtsHost, _bindings.FallbackMembers[TTS], TTS[Literal["tts_availability_changed"]]
+    _facades.FallbackAdapter,
+    _bindings.FallbackMembers[TTS],
+    TTS[Literal["tts_availability_changed"]],
 ):
     """Several TTS behind one: a failed one is skipped until it recovers."""
 
@@ -139,67 +114,15 @@ class FallbackAdapter(
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> FallbackChunkedStream:
-        # the core's chain retries and falls back: the stream does not retry on top of it
-        no_retry = replace(conn_options, max_retry=0)
-        return FallbackChunkedStream(tts=self, input_text=text, conn_options=no_retry)
+        return FallbackChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> FallbackSynthesizeStream:
-        return FallbackSynthesizeStream(tts=self, conn_options=replace(conn_options, max_retry=0))
+        return FallbackSynthesizeStream(tts=self, conn_options=conn_options)
 
     def prewarm(self) -> None:
         self._members[0].prewarm()
-
-
-def _initialize(output_emitter: AudioEmitter, tts: TTS, *, stream: bool) -> None:
-    output_emitter.initialize(
-        request_id=utils.shortuuid(),
-        sample_rate=tts.sample_rate,
-        num_channels=tts.num_channels,
-        mime_type="audio/pcm",
-        stream=stream,
-    )
-
-
-class FallbackChunkedStream(ChunkedStream):
-    _tts: FallbackAdapter
-
-    async def _run(self, output_emitter: AudioEmitter) -> None:
-        _initialize(output_emitter, self._tts, stream=False)
-        native = await self._tts._native.synthesize(
-            self._input_text, conn_options=self._conn_options
-        )
-        try:
-            await _drain_native(native, output_emitter, stream=False)
-        finally:
-            await native.aclose()
-
-
-class FallbackSynthesizeStream(SynthesizeStream):
-    _tts: FallbackAdapter
-
-    async def _run(self, output_emitter: AudioEmitter) -> None:
-        _initialize(output_emitter, self._tts, stream=True)
-        native = await self._tts._native.stream(
-            conn_options=self._conn_options, expressive=self._expressive
-        )
-        await _duplex(self, native, output_emitter, self.input)
-
-
-async def _duplex(
-    stream: SynthesizeStream, native: Any, output_emitter: AudioEmitter, texts: Any
-) -> None:
-    """Text from ``texts`` into a core ``TtsStream``, its audio into ``output_emitter``."""
-
-    def feed(text: Any) -> None:
-        if isinstance(text, SynthesizeStream.Flush):
-            native.flush()
-        elif text:
-            stream.mark_started()
-            native.push_text(text)
-
-    await _bindings.pump(native, texts, feed, _into(output_emitter, stream=True))
 
 
 class StreamAdapter(TTS):
@@ -264,23 +187,19 @@ class StreamAdapterWrapper(SynthesizeStream):
     Its time to first audio is measured from the first text pushed."""
 
     _tts: StreamAdapter
+    _core_native_retries = True
 
-    def __init__(self, *, tts: StreamAdapter, conn_options: APIConnectOptions) -> None:
-        # each sentence is retried by the core's adapter, not the whole stream
-        super().__init__(tts=tts, conn_options=replace(conn_options, max_retry=0))
-        self._sentence_conn_options = conn_options
-
-    async def _run(self, output_emitter: AudioEmitter) -> None:
-        _initialize(output_emitter, self._tts, stream=True)
+    async def _core_open(self) -> _core.TtsStream:
         tokenizer, pacer = self._tts._sentence_tokenizer, self._tts._stream_pacer
-        native = await _core.tts_adapter_stream(
+        return await _core.tts_adapter_stream(
             self._tts._wrapped_tts,
-            self._sentence_conn_options,
+            self._conn_options,
             expressive=self._expressive,
             sentences=tokenizer.stream() if tokenizer else None,
-            pacing=(pacer._min_remaining_audio, pacer._max_text_length) if pacer else None,
+            pacing=pacer,
         )
-        await _duplex(self, native, output_emitter, self.input)
+
+    _run = SynthesizeStream._core_run_native
 
 
 class SentenceStreamPacer:
@@ -297,44 +216,11 @@ class SentenceStreamPacer:
             min_remaining_audio: The audio left, in seconds, below which the next batch goes.
             max_text_length: The longest text sent at once.
         """
-        self._min_remaining_audio = min_remaining_audio
-        self._max_text_length = max_text_length
+        self.min_remaining_audio = min_remaining_audio
+        self.max_text_length = max_text_length
 
     def wrap(self, sent_stream: SentenceStream, audio_emitter: AudioEmitter) -> StreamPacerWrapper:
         """``sent_stream``'s sentences, paced by the audio ``audio_emitter`` pushed. The core
         reads ``sent_stream`` and runs the pacing (``_core._core_PacedSentences``); text pushed
         to the wrapper goes to ``sent_stream``, and closing the wrapper closes it."""
         return StreamPacerWrapper(sent_stream, audio_emitter, pacer=self)
-
-
-class StreamPacerWrapper(SentenceStream):
-    def __init__(
-        self,
-        sent_stream: SentenceStream,
-        audio_emitter: AudioEmitter,
-        *,
-        pacer: SentenceStreamPacer,
-    ) -> None:
-        super().__init__()
-        self._sent_stream = sent_stream
-        self._native = _core._core_PacedSentences(
-            sent_stream, audio_emitter, pacer._min_remaining_audio, pacer._max_text_length
-        )
-
-    def push_text(self, text: str) -> None:
-        self._sent_stream.push_text(text)
-
-    def flush(self) -> None:
-        self._sent_stream.flush()
-
-    def end_input(self) -> None:
-        self._sent_stream.end_input()
-
-    async def aclose(self) -> None:
-        self._event_ch.close()
-        await self._native.aclose()
-
-    async def __anext__(self) -> TokenData:
-        if self._event_ch.closed or (text := await self._native.next()) is None:
-            raise StopAsyncIteration
-        return TokenData(token=text)

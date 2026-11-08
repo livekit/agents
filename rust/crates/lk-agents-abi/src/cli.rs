@@ -1,7 +1,8 @@
 //! The process launcher's typed command line, and the agent server the dev channel reports on.
 
 /// The launcher's `--log-level`; `warning` and `critical` are aliases of `warn` and `fatal`.
-#[crate::host(wire_enum(msg = format!("unknown log level {s:?}")))]
+#[crate::host(record(module = "cli", extract, emit))]
+#[crate::host(wire_strs(msg = format!("unknown log level {s:?}")))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
     Trace,
@@ -13,8 +14,24 @@ pub enum LogLevel {
     Off,
 }
 
+impl LogLevel {
+    /// The level on the host's numeric scale (Python `logging`'s): `trace` is 5, `off` is above
+    /// `fatal`.
+    pub const fn host_level(self) -> u32 {
+        match self {
+            LogLevel::Trace => 5,
+            LogLevel::Debug => 10,
+            LogLevel::Info => 20,
+            LogLevel::Warn => 30,
+            LogLevel::Error => 40,
+            LogLevel::Fatal => 50,
+            LogLevel::Off => 51,
+        }
+    }
+}
+
 /// The command accepted by the process launcher.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 #[crate::host(record(module = "cli", emit, extract))]
 pub enum CliArgs {
     Start {
@@ -22,11 +39,11 @@ pub enum CliArgs {
         dev: bool,
         cli_addr: Option<String>,
         simulation: bool,
-        ws_url: Option<String>,
-        api_key: Option<String>,
-        api_secret: Option<String>,
-        shutdown_timeout: Option<f64>,
-        drain_timeout: Option<f64>,
+        /// The server options the command line gives (`--url`, `--api-key`, `--api-secret`,
+        /// `--shutdown-timeout`, `--drain-timeout`), over the `AgentServer`'s own.
+        options: crate::worker::types::ServerOptions,
+        /// The process tuning the command line gives.
+        process: crate::worker::types::ProcessOptions,
     },
     Console {
         connect_addr: String,
@@ -35,7 +52,7 @@ pub enum CliArgs {
 }
 
 /// Parsing never prints or exits the hosting process.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 #[crate::host(record(module = "cli", emit))]
 pub enum CliParseResult {
     Parsed { args: CliArgs },
@@ -70,6 +87,10 @@ pub struct LogRecord {
 pub trait Cli {
     #[host(function)]
     fn parse_cli(argv: Vec<String>) -> CliParseResult;
+
+    /// [`LogLevel::host_level`].
+    #[host(function)]
+    fn host_log_level(level: LogLevel) -> u32;
 
     /// One structured JSON line, including host-formatted exceptions and stack traces.
     #[host(function, pid = false)]

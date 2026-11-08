@@ -43,8 +43,7 @@ pub trait StreamAdapterFunctions {
     /// `provider`'s synthesis of each sentence of the text pushed, one segment, each sentence
     /// retried within `conn_options`. Under `expressive` the provider's markup is lowered
     /// before each sentence. `sentences` is the host tokenizer's stream the text is split by
-    /// (blingfire's by default); `pacing` is `(min_remaining_audio, max_text_length)` to release
-    /// sentences as the audio plays out (`tts.SentenceStreamPacer`).
+    /// (blingfire's by default); `pacing` releases sentences as the audio plays out.
     #[host(function)]
     async fn tts_adapter_stream(
         env: &Self::Env,
@@ -53,6 +52,6 @@ pub trait StreamAdapterFunctions {
         conn_options: crate::ApiConnectOptions,
         #[host(kw, default = false)] expressive: bool,
         #[host(default = None)] sentences: Option<Arc<dyn HostSentenceStream>>,
-        #[host(default = None)] pacing: Option<(f64, usize)>,
+        #[host(default = None)] pacing: Option<crate::tts::stream_pacer::SentenceStreamPacer>,
     ) -> Result<Self::Stream, ProviderError>;
 }

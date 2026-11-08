@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from .._core import TurnDetectorStream as TurnDetectorStream
+from .inference_credentials import Credentials as Credentials
 from .inference_headers import (
     HEADER_INFERENCE_PRIORITY as HEADER_INFERENCE_PRIORITY,
     HEADER_INFERENCE_PROVIDER as HEADER_INFERENCE_PROVIDER,
@@ -19,6 +20,7 @@ from .interruption_errors import InterruptionDetectionError as InterruptionDetec
 from .overlap import OverlappingSpeechEvent as OverlappingSpeechEvent
 
 __all__: list[str] = [
+    "Credentials",
     "VADModels",
     "TurnDetectorModels",
     "TurnDetectorVersions",

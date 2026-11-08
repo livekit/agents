@@ -227,8 +227,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             extra={
                 "category": result.category.value,
                 "reason": result.reason,
-                "speech_duration": result.speech_duration,
-                "delay": result.delay,
+                "speech_duration": result.speech_duration.total_seconds(),
+                "delay": result.delay.total_seconds(),
                 "lk.pii.transcript": result.transcript,
             },
         )

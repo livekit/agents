@@ -14,6 +14,7 @@ import pytest
 
 from livekit.agents import _core
 from livekit.agents.types import NOT_GIVEN
+from livekit.agents.voice.io import PlaybackFinishedEvent
 
 pytestmark = pytest.mark.unit
 
@@ -87,9 +88,9 @@ async def test_duration_reports_validate_before_settling_playout(case: dict[str,
         assert _core._core_playback_finished(tracker, segment, 0.125, False, None)
     else:
         assert _core._core_playback_finished(tracker, segment, value, False, None)
-        position, interrupted, transcript = await tracker.wait_for_playout()
-        assert position == case["expected"]
-        assert not interrupted and transcript is None
+        finished = await tracker.wait_for_playout()
+        assert finished.playback_position == case["expected"]
+        assert not finished.interrupted and finished.synchronized_transcript is None
 
 
 @pytest.mark.parametrize("case", _cases("collections"))
@@ -138,7 +139,7 @@ async def test_cancelling_native_wait_does_not_cancel_playout(case: dict[str, An
     segment = _core._core_playback_note_capture(tracker)
     tracker.note_flush()
 
-    async def wait() -> tuple[float, bool, str | None]:
+    async def wait() -> PlaybackFinishedEvent:
         return await tracker.wait_for_playout()
 
     waiter = asyncio.create_task(wait())
@@ -151,7 +152,9 @@ async def test_cancelling_native_wait_does_not_cancel_playout(case: dict[str, An
         with pytest.raises(asyncio.CancelledError):
             await waiter
         assert _core._core_playback_finished(tracker, segment, case["position"], False, "settled")
-        assert await tracker.wait_for_playout() == (case["position"], False, "settled")
+        finished = await tracker.wait_for_playout()
+        assert (finished.playback_position, finished.interrupted) == (case["position"], False)
+        assert finished.synchronized_transcript == "settled"
         assert waiter.cancelled(), "late completion revived the cancelled waiter"
     finally:
         waiter.cancel()

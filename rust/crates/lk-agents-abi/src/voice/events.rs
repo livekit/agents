@@ -237,12 +237,19 @@ pub struct SpeechCreated {
 
 // --- the tool lifecycle ---------------------------------------------------------------------------
 //
-// `ToolExecutionUpdatedEvent.update`'s members. A started call crosses as `ToolCallStartedWire`;
-// the host builds the public `ToolCallStarted` (`voice/events.py`) with its `llm.FunctionCall`.
+// `ToolExecutionUpdatedEvent.update`'s members, each crossing as its public record.
 
-/// A function tool call was dispatched: the call's fields, which the host validates into its
-/// `llm.FunctionCall`.
-#[crate::host(record(module = "session_wire", name = "ToolCallStartedWire", emit))]
+/// A function tool call was dispatched.
+#[crate::host(record(
+    module = "session_events",
+    path = "livekit.agents.voice.events",
+    dataclass,
+    frozen,
+    kw_only,
+    slots,
+    constant(type = "tool_call_started"),
+    emit
+))]
 #[derive(Clone)]
 pub struct ToolCallStarted {
     pub function_call: crate::FunctionCall,
@@ -323,8 +330,8 @@ pub struct ToolReplyUpdated {
     pub speech_id: String,
 }
 
-/// The four tool-lifecycle updates, each crossing as its own record.
-#[crate::host(record(module = "session_wire", name = "ToolUpdateWire", emit, transparent))]
+/// The public tool updates: validated calls and their typed lifecycle records.
+#[crate::host(record(module = "session_events", emit, transparent))]
 #[derive(Clone)]
 pub enum ToolUpdate {
     Started(ToolCallStarted),
@@ -650,13 +657,6 @@ pub enum MetricsLeg {
     Vad,
 }
 
-/// `overlapping_speech`'s wire payload: the interruption detector's verdict, as it reported it.
-#[crate::host(record(module = "session_wire", emit))]
-#[derive(Debug, Clone)]
-pub struct OverlappingSpeechWire {
-    pub event: OverlappingSpeechEvent,
-}
-
 /// The leg an `ErrorEvent` names: `LLMError.type` and its siblings, which are public API. An
 /// interruption detector failure degrades to VAD silently and the EOT model's `error` is never
 /// subscribed.
@@ -834,8 +834,8 @@ pub enum HostWire {
     #[host(emits = "CloseEvent")]
     Close(CloseWire),
     MetricsCollected(MetricsCollectedWire),
-    #[host(emits = "OverlappingSpeechEvent")]
-    OverlappingSpeech(OverlappingSpeechWire),
+    #[host(event)]
+    OverlappingSpeech(OverlappingSpeechEvent),
     #[host(emits = "ErrorEvent")]
     Error(SessionErrorWire),
     #[host(emits = "ToolExecutionUpdatedEvent")]
@@ -876,30 +876,6 @@ pub struct SpeechCreatedEvent {
     pub created_at: f64,
 }
 
-/// A function tool call was dispatched.
-#[crate::host(record(
-    module = "session_events",
-    path = "livekit.agents.voice.events",
-    dataclass,
-    frozen,
-    kw_only,
-    slots,
-    constant(type = "tool_call_started"),
-    name = "ToolCallStarted"
-))]
-pub struct ToolCallStartedEvent {
-    pub function_call: crate::FunctionCall,
-}
-
-/// The public tool updates retain validated calls and their typed lifecycle records.
-#[crate::host(record(module = "session_events", name = "ToolUpdate", transparent))]
-pub enum ToolLifecycleUpdate {
-    Started(ToolCallStartedEvent),
-    Updated(ToolCallUpdated),
-    Ended(ToolCallEnded),
-    Reply(ToolReplyUpdated),
-}
-
 /// One flat tool-lifecycle update. Discriminate on ``update.type``: ``tool_call_started``
 ///     → ``tool_call_updated`` → ``tool_call_ended`` → ``tool_reply_updated``.
 ///
@@ -913,7 +889,7 @@ pub enum ToolLifecycleUpdate {
     constant(type = "tool_execution_updated")
 ))]
 pub struct ToolExecutionUpdatedEvent {
-    pub update: ToolLifecycleUpdate,
+    pub update: ToolUpdate,
     #[host(default_factory = "time.time")]
     pub created_at: f64,
 }

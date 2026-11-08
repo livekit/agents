@@ -1177,7 +1177,7 @@ async def entrypoint(ctx):
 
 async def main(style):
     if style != "none":
-        cli.setup_logging("INFO")
+        cli.setup_logging("info")
     launcher = JobLauncher(
         job_entrypoint_fnc=entrypoint, session_end_fnc=None, simulation_end_fnc=None,
         session_end_timeout=10, mp_ctx=mp.get_context("spawn"), loop=asyncio.get_running_loop(),

@@ -14,7 +14,7 @@ use lk_agents_abi::tts::stream_adapter::StreamAdapterFunctions;
 use lk_agents_abi::tts::stream_adapter::{
     SentenceTextProcessor, SplitterFactory, TextProcessorFactory,
 };
-use lk_agents_abi::tts::stream_pacer::HostSentenceStream;
+use lk_agents_abi::tts::stream_pacer::{HostSentenceStream, SentenceStreamPacer};
 use lk_agents_abi::tts::types::{SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::utils::clock::{Clock, Ts};
@@ -39,7 +39,7 @@ pub struct StreamAdapter {
     /// after earlier ones were heard is synthesized again, not the whole reply lost.
     budget: lk_agents_abi::ApiConnectOptions,
     /// `(min_remaining_audio, max_text_length)`: sentences released as the audio plays out.
-    pacing: Option<(f64, usize)>,
+    pacing: Option<SentenceStreamPacer>,
 }
 
 impl StreamAdapter {
@@ -64,7 +64,7 @@ impl StreamAdapter {
     }
 
     /// Its sentences paced by `(min_remaining_audio, max_text_length)`.
-    pub fn with_pacing(mut self, pacing: Option<(f64, usize)>) -> Self {
+    pub fn with_pacing(mut self, pacing: Option<SentenceStreamPacer>) -> Self {
         self.pacing = pacing;
         self
     }
@@ -536,7 +536,7 @@ impl StreamAdapterFunctions for AdapterStreams {
         conn_options: ApiConnectOptions,
         expressive: bool,
         sentences: Option<Arc<dyn HostSentenceStream>>,
-        pacing: Option<(f64, usize)>,
+        pacing: Option<SentenceStreamPacer>,
     ) -> Result<Self::Stream, ProviderError> {
         conn_options.validate().map_err(|error| {
             ProviderError::Local(ApiError { retryable: false, ..ApiError::new(error.to_string()) })

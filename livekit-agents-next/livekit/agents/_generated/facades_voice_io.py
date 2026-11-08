@@ -1,20 +1,21 @@
 # GENERATED FILE -- DO NOT EDIT.
-# From #[host(facade)] declarations in lk-agents-abi.
+# From #[host(facade)] traits in lk-agents-abi.
 
 from __future__ import annotations
 
-import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from .. import _core
-from .chat_items import ChatItem
+from .. import _bindings, _core
+
+if TYPE_CHECKING:
+    from .chat_items import ChatItem
 
 
-class SpeechView:
+class SpeechHandle:
+    """`voice.SpeechHandle`'s reads of its native speech."""
+
     if TYPE_CHECKING:
-
-        @property
-        def _native(self) -> _core.SpeechHandle: ...
+        _native: _core.SpeechHandle
 
     @property
     def id(self) -> str:

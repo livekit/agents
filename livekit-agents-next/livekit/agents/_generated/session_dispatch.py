@@ -46,6 +46,7 @@ PUBLIC_EVENTS: dict[type, str] = {
     AgentStateChangedEvent: "agent_state_changed",
     UserStateChangedEvent: "user_state_changed",
     AgentFalseInterruptionEvent: "agent_false_interruption",
+    OverlappingSpeechEvent: "overlapping_speech",
 }
 
 # `HostWire` members the host receives and does not act on.

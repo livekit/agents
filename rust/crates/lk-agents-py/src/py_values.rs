@@ -14,7 +14,7 @@ pub mod interfaces {
 
     #[lk_agents_abi::host(interface(
         module = "livekit.agents.types",
-        attrs(not_given(name = "NotGiven"))
+        attrs(not_given(name = "NotGiven"), not_given_value(name = "NOT_GIVEN"))
     ))]
     pub struct AgentsTypesModule;
 
@@ -462,6 +462,11 @@ fn not_given_type(py: Python<'_>) -> PyResult<&Bound<'_, PyType>> {
 
 pub fn is_not_given(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
     obj.is_instance(not_given_type(obj.py())?)
+}
+
+/// `NOT_GIVEN`, as an emitted record's omitted field.
+pub fn not_given(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    access::AgentsTypesModule::not_given_value(&(access::AgentsTypesModule::import(py)?))
 }
 
 /// Translate a provider's performance-counter stamp at the host clock boundary.

@@ -747,7 +747,8 @@ class RealtimeSession(llm.RealtimeSession):
             logger.warning("Gemini Live does not support removing messages")
 
         append_ctx = llm.ChatContext.empty()
-        for _, item_id in diff_ops.to_create:
+        for created in diff_ops.to_create:
+            item_id = created.item_id
             item = chat_ctx.get_by_id(item_id)
             if item:
                 append_ctx.items.append(item)

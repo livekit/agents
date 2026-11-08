@@ -2,6 +2,7 @@
 
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::errors::Invalid;
+use lk_agents_abi::inference::GatewayCredentials;
 
 /// `api_key if is_given(api_key) else os.getenv("LIVEKIT_INFERENCE_API_KEY",
 /// os.getenv("LIVEKIT_API_KEY", ""))`. A set-but-empty `LIVEKIT_INFERENCE_API_KEY` shadows
@@ -78,7 +79,7 @@ impl lk_agents_abi::inference::InferenceCredentials for Credentials {
         server_url: Option<String>,
         server_api_key: Option<String>,
         server_api_secret: Option<String>,
-    ) -> Result<(String, String, String), Invalid> {
+    ) -> Result<GatewayCredentials, Invalid> {
         let invalid = |error: ApiError| Invalid(error.message);
         let inference = env("LIVEKIT_INFERENCE_API_KEY");
         let key =
@@ -95,7 +96,7 @@ impl lk_agents_abi::inference::InferenceCredentials for Credentials {
             Some(url) => url,
             None => Self::inference_url(server_url),
         };
-        Ok((url, key, secret))
+        Ok(GatewayCredentials { base_url: url, api_key: key, api_secret: secret })
     }
 
     fn inference_identity_headers(

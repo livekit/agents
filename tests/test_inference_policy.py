@@ -240,7 +240,6 @@ async def test_vad_adapter_preserves_the_utterances_recognition_retry_budget() -
         VADEventType,
         VADStream,
     )
-    from livekit.agents.utils.media import silence_frame
 
     class OneUtterance(VAD):
         def __init__(self):
@@ -284,7 +283,7 @@ async def test_vad_adapter_preserves_the_utterances_recognition_retry_budget() -
         async with adapter.stream(
             conn_options=APIConnectOptions(max_retry=1, retry_interval=0, read_timeout=0.125)
         ) as source:
-            source.push_frame(silence_frame(duration=0.01, sample_rate=16000))
+            source.push_frame(rtc.AudioFrame.create(16000, 1, int(0.01 * 16000)))
             source.end_input()
             events = [event async for event in source]
         assert any(event.alternatives and event.alternatives[0].text == "hello" for event in events)

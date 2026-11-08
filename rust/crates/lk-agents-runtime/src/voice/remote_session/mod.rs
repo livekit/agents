@@ -71,10 +71,7 @@ pub fn reply<'a>(
             RequestPlan::SessionUsage => {
                 SessionReply::SessionUsage(port.session_usage(&telemetry::Cx::NONE).await?)
             }
-            RequestPlan::FrameworkInfo => {
-                let (sdk, version) = port.framework_info();
-                SessionReply::FrameworkInfo(sdk, version)
-            }
+            RequestPlan::FrameworkInfo => SessionReply::FrameworkInfo(port.framework_info()),
             RequestPlan::UpdateIo(update) => {
                 port.update_io(&telemetry::Cx::NONE, update).await?;
                 SessionReply::UpdateIo

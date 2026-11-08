@@ -154,7 +154,8 @@ pub trait RoomEventBus: Send + Sync + Sized + 'static {
     fn new() -> Self;
 }
 
-/// The SDK callbacks of a host room, each emitting its event into the room's fan-out.
+/// The SDK callbacks of a host room (`RtcRoom`'s declared events), each emitting its event into
+/// the room's fan-out.
 #[crate::host(functions)]
 pub trait RtcRuntime: Send + Sync + Sized + 'static {
     #[host(function, name = "_core_room_track_subscribed")]
@@ -220,18 +221,18 @@ pub trait RtcRuntime: Send + Sync + Sized + 'static {
     fn participant_disconnected(
         bus: Arc<dyn RoomEventSink>,
         participant: Arc<dyn RemoteParticipant>,
-        reason: DisconnectReason,
+        #[host(sdk)] reason: DisconnectReason,
     ) {
         bus.emit(RoomEvent::ParticipantDisconnected { participant, reason });
     }
 
     #[host(function, name = "_core_room_connection_state_changed")]
-    fn connection_state_changed(bus: Arc<dyn RoomEventSink>, state: ConnectionState) {
+    fn connection_state_changed(bus: Arc<dyn RoomEventSink>, #[host(sdk)] state: ConnectionState) {
         bus.emit(RoomEvent::ConnectionStateChanged { state });
     }
 
     #[host(function, name = "_core_room_disconnected")]
-    fn disconnected(bus: Arc<dyn RoomEventSink>, reason: DisconnectReason) {
+    fn disconnected(bus: Arc<dyn RoomEventSink>, #[host(sdk)] reason: DisconnectReason) {
         bus.emit(RoomEvent::Close { reason });
     }
 

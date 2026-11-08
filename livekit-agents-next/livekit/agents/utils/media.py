@@ -16,36 +16,6 @@ from ..log import logger
 from .aio import cancel_and_wait
 
 
-def silence_frame(duration: float, sample_rate: int, num_channels: int = 1) -> rtc.AudioFrame:
-    """Create a zeroed ``rtc.AudioFrame`` of the given duration and format."""
-    samples = int(duration * sample_rate)
-    return rtc.AudioFrame(
-        data=b"\x00\x00" * samples * num_channels,
-        num_channels=num_channels,
-        samples_per_channel=samples,
-        sample_rate=sample_rate,
-    )
-
-
-def calculate_audio_duration(frames: list[rtc.AudioFrame] | rtc.AudioFrame) -> float:
-    """
-    Calculate the total duration of audio frames.
-
-    This function computes the total duration of audio frames in seconds.
-    It accepts either a list of `rtc.AudioFrame` objects or a single `rtc.AudioFrame` object.
-
-    Parameters:
-    - frames (list[rtc.AudioFrame] | rtc.AudioFrame): A list of `rtc.AudioFrame` instances or a single `rtc.AudioFrame` instance.
-
-    Returns:
-    - float: The total duration in seconds of all frames provided.
-    """  # noqa: E501
-    if isinstance(frames, list):
-        return sum(frame.duration for frame in frames)
-    else:
-        return frames.duration
-
-
 async def audio_frames_from_file(
     file_path: str, sample_rate: int = 48000, num_channels: int = 1
 ) -> AsyncGenerator[rtc.AudioFrame, None]:

@@ -69,6 +69,22 @@ pub(crate) fn read(llm: &str) -> Result<Declarations, String> {
     resolve::declarations(&krate)
 }
 
+/// [`read`], with the tuple conversions the baselined declarations still use allowed.
+pub(crate) fn read_with_tuples(llm: &str) -> Result<Declarations, String> {
+    resolve::TUPLES_IN_TEST.set(true);
+    let read = read(llm);
+    resolve::TUPLES_IN_TEST.set(false);
+    read
+}
+
+// Catches: a tuple crossing the boundary outside the shrinking baseline.
+#[test]
+fn a_tuple_outside_the_baseline_is_refused() {
+    let err = read(&proxy("#[host(call)] fn pair(&self) -> Result<(String, u32), HostError>;"))
+        .expect_err("a tuple is refused");
+    assert!(err.contains("no tuple crosses the boundary"), "{err}");
+}
+
 fn class(body: &str) -> String {
     format!(
         "use super::chat::{{Extra, Res, Chunk, Report, Llm, Conn}};\nuse crate::Item;\nuse std::sync::Arc;\n#[crate::host(class(name = \"Native\", native = Llm))]\npub trait Native: Sized {{ {body} }}"
@@ -865,7 +881,7 @@ fn handwritten_scalar_unions_import_the_records_in_their_declaring_module() {
 // pyo3's native extraction, or accepting a tuple without checking its exact arity.
 #[test]
 fn proxy_tuple_returns_convert_each_element_by_its_declared_kind() {
-    let decls = read(&proxy(
+    let decls = read_with_tuples(&proxy(
         r#"
         #[host(await)] async fn report(&self, cx: &Cx) -> Result<(Chunk, super::chat::Extra), HostError>;
         "#,

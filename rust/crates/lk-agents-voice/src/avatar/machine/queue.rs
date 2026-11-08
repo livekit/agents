@@ -151,14 +151,14 @@ impl Queue {
             } else {
                 false
             };
-            return Some((
-                item.epoch,
-                starts,
-                Some(AvatarPlaybackSegment { playback: item.key, stream_id: None }),
-                Some(item.frame),
-            ));
+            return Some(AudioReceiverObservation {
+                epoch: item.epoch,
+                starts_segment: starts,
+                segment: Some(AvatarPlaybackSegment { playback: item.key, stream_id: None }),
+                frame: Some(item.frame),
+            });
         }
-        self.closed.then_some((0, false, None, None))
+        self.closed.then(AudioReceiverObservation::default)
     }
     pub fn close(&mut self) -> QueueEffects {
         if self.closed {
@@ -190,7 +190,7 @@ mod tests {
     fn delayed_acknowledgement_cannot_finish_the_replacement() {
         let mut queue = Queue::new(false);
         queue.capture(frame(), key(1), 0).unwrap();
-        assert!(queue.next_audio().unwrap().1);
+        assert!(queue.next_audio().unwrap().starts_segment);
         assert!(queue.clear().clear);
         queue.capture(frame(), key(2), 1).unwrap();
         queue.flush().unwrap();
@@ -230,15 +230,15 @@ mod tests {
         let mut queue = Queue::new(true);
         assert!(queue.capture(frame(), key(1), 5).unwrap().started.is_empty());
         queue.capture(frame(), key(1), 5).unwrap();
-        let (epoch, starts, _, _) = queue.next_audio().unwrap();
-        assert_eq!(epoch, 5);
-        assert!(starts);
+        let observation = queue.next_audio().unwrap();
+        assert_eq!(observation.epoch, 5);
+        assert!(observation.starts_segment);
         assert_eq!(queue.started(None).started, vec![key(1)]);
         assert!(queue.started(None).started.is_empty());
-        assert!(!queue.next_audio().unwrap().1);
+        assert!(!queue.next_audio().unwrap().starts_segment);
         queue.capture(frame(), key(1), 5).unwrap();
         assert!(queue.close().reset);
-        assert_eq!(queue.next_audio().unwrap(), (0, false, None, None));
+        assert_eq!(queue.next_audio().unwrap(), AudioReceiverObservation::default());
         assert!(queue.capture(frame(), key(2), 6).is_err());
         assert!(!queue.close().reset);
     }

@@ -1,6 +1,7 @@
 """The native avatar publishes and captures through shared RTC capabilities."""
 
 import asyncio
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -52,12 +53,12 @@ class Source:
     async def _core_wait_for_playout(self):
         from livekit.agents._generated.rtc_wire import PlaybackInfo
 
-        return PlaybackInfo(played=0.0, discarded=0.0)
+        return PlaybackInfo(played=timedelta(0), discarded=timedelta(0))
 
     def _core_playback_info(self):
         from livekit.agents._generated.rtc_wire import PlaybackInfo
 
-        return PlaybackInfo(played=0.0, discarded=0.0)
+        return PlaybackInfo(played=timedelta(0), discarded=timedelta(0))
 
 
 class VideoSource:

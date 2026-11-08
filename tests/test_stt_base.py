@@ -20,7 +20,6 @@ from livekit.agents.stt import (
     STTCapabilities,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from livekit.agents.utils.media import silence_frame
 
 from .fake_stt import FakeSTT, FakeUserSpeech
 from .fake_vad import FakeVAD
@@ -147,7 +146,7 @@ async def test_recognize_does_not_retry_a_non_retryable_error() -> None:
     stt = _AlwaysFailingSTT(APIStatusError("Unauthorized", status_code=401))
     with pytest.raises(APIStatusError) as exc_info:
         await stt.recognize(
-            silence_frame(duration=0.1, sample_rate=16_000),
+            rtc.AudioFrame.create(16_000, 1, int(0.1 * 16_000)),
             conn_options=_retry_friendly_options(),
         )
 
@@ -160,7 +159,7 @@ async def test_recognize_still_retries_a_retryable_error() -> None:
     stt = _AlwaysFailingSTT(APIConnectionError("socket closed"))
     with pytest.raises(APIConnectionError):
         await stt.recognize(
-            silence_frame(duration=0.1, sample_rate=16_000),
+            rtc.AudioFrame.create(16_000, 1, int(0.1 * 16_000)),
             conn_options=_retry_friendly_options(),
         )
 
@@ -169,7 +168,7 @@ async def test_recognize_still_retries_a_retryable_error() -> None:
 
 async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final() -> None:
     recognize_delay = 0.5
-    frame = silence_frame(duration=0.1, sample_rate=16_000)
+    frame = rtc.AudioFrame.create(16_000, 1, int(0.1 * 16_000))
     speech = FakeUserSpeech(
         start_time=0.0,
         end_time=0.1,

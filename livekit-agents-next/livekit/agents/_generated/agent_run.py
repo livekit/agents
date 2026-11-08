@@ -296,27 +296,29 @@ class Retries:
 class EventExpectationMessage:
     """`role` is the `ChatRole` literal."""
 
-    role: str | None
+    role: str | None = None
 
 
 @dataclass(kw_only=True, slots=True)
 class EventExpectationFunctionCall:
     """`arguments` holds the keys the call must carry with equal values; others may be present."""
 
-    name: str | None
-    arguments: object | None
+    name: str | None = None
+    arguments: object | None = None
 
 
 @dataclass(kw_only=True, slots=True)
 class EventExpectationFunctionCallOutput:
-    output: str | None
-    is_error: bool | None
+    output: str | None = None
+    is_error: bool | None = None
 
 
 EventExpectation: TypeAlias = (
     EventExpectationMessage | EventExpectationFunctionCall | EventExpectationFunctionCallOutput
 )
-"""What an assertion expects of an event: its kind and the fields it names."""
+"""What an assertion expects of an event: its kind and the fields it names; a field left `None`
+is not checked.
+"""
 
 
 EventType: TypeAlias = Literal["message", "function_call", "function_call_output"]

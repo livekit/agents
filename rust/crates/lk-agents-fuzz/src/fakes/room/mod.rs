@@ -8,8 +8,8 @@ use lk_agents_abi::voice::rtc::capabilities::{
 };
 use lk_agents_abi::voice::rtc::{
     ByteStreamIngress, ConnectionState, DisconnectReason, ParticipantIdentity, ParticipantKind,
-    RoomEvent, RpcCallback, RtcError, StreamInfo, StreamTextOptions, TextStreamIngress,
-    TrackPublishOptions, TrackSid, TrackSource, Transcription,
+    ParticipantState, RoomEvent, RpcCallback, RtcError, StreamInfo, StreamTextOptions,
+    TextStreamIngress, TrackPublishOptions, TrackSid, TrackSource, Transcription,
 };
 use lk_agents_abi::{Clock, VirtualClock};
 use lk_agents_abi::{Closed, StreamOutput, Ts};
@@ -972,8 +972,8 @@ impl RemoteParticipant for FakeRemoteParticipant {
         self.kind
     }
 
-    fn active(&self) -> Result<bool> {
-        Ok(true)
+    fn state(&self) -> Result<ParticipantState> {
+        Ok(ParticipantState::Active)
     }
 
     fn attributes(&self) -> Result<BTreeMap<String, String>> {

@@ -38,6 +38,18 @@ from .llm import LLM, LLMError
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
+class ToolCallStarted:
+    """A function tool call was dispatched."""
+
+    function_call: FunctionCall
+    type: Literal["tool_call_started"] = "tool_call_started"
+
+
+ToolUpdate: TypeAlias = ToolCallStarted | ToolCallUpdated | ToolCallEnded | ToolReplyUpdated
+"""The public tool updates: validated calls and their typed lifecycle records."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
 class SpeechCreatedEvent:
     __pydantic_config__ = ConfigDict(arbitrary_types_allowed=True)
 
@@ -49,18 +61,6 @@ class SpeechCreatedEvent:
     """The speech handle that was created"""
     created_at: float = field(default_factory=time.time)
     type: Literal["speech_created"] = "speech_created"
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class ToolCallStarted:
-    """A function tool call was dispatched."""
-
-    function_call: FunctionCall
-    type: Literal["tool_call_started"] = "tool_call_started"
-
-
-ToolUpdate: TypeAlias = ToolCallStarted | ToolCallUpdated | ToolCallEnded | ToolReplyUpdated
-"""The public tool updates retain validated calls and their typed lifecycle records."""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -143,10 +143,10 @@ class ErrorEvent(BaseModel):
         return _bindings.session_error_serialize(self, handler)
 
 
-SpeechCreatedEvent.__annotations__ = get_annotations(SpeechCreatedEvent, eval_str=True)
-SpeechCreatedEvent.__module__ = "livekit.agents.voice.events"
 ToolCallStarted.__annotations__ = get_annotations(ToolCallStarted, eval_str=True)
 ToolCallStarted.__module__ = "livekit.agents.voice.events"
+SpeechCreatedEvent.__annotations__ = get_annotations(SpeechCreatedEvent, eval_str=True)
+SpeechCreatedEvent.__module__ = "livekit.agents.voice.events"
 ToolExecutionUpdatedEvent.__annotations__ = get_annotations(ToolExecutionUpdatedEvent, eval_str=True)
 ToolExecutionUpdatedEvent.__module__ = "livekit.agents.voice.events"
 _TypeDiscriminator.__annotations__ = get_annotations(_TypeDiscriminator, eval_str=True)

@@ -16,6 +16,7 @@ from livekit import rtc
 
 from .. import _core
 from .._generated import (
+    facades_voice_io as _facades,
     public_voice_io as _public,
     session_options as _session_options,
     speech_defaults,
@@ -23,7 +24,6 @@ from .._generated import (
 from .._generated.io_events import PlaybackSegment as PlaybackSegment
 from .._generated.language import LanguageCode
 from .._generated.public_voice_io import *  # noqa: F403
-from .._generated.speech_view import SpeechView
 from ..log import logger
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -203,7 +203,7 @@ class AudioOutput(
     async def wait_for_playout(self) -> PlaybackFinishedEvent:
         """Wait for the segments captured so far to finish playing out; returns the last one's
         event."""
-        return PlaybackFinishedEvent(*await self._tracker.wait_for_playout())
+        return await self._tracker.wait_for_playout()
 
     @abstractmethod
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
@@ -395,7 +395,7 @@ class AgentOutput:
         self._session._running.set_io_enabled("transcription", enabled)
 
 
-class SpeechHandle(SpeechView):
+class SpeechHandle(_facades.SpeechHandle):
     """One speech of the session, over the core's handle: its state is the core's, and awaiting
     it waits for the core to finish playing it out. Awaiting never raises; read
     ``exception()`` for a failure. The core hands this object back wherever the speech is named
@@ -413,7 +413,7 @@ class SpeechHandle(SpeechView):
     """Priority for important messages that should be played before others."""
 
     def __init__(self, core: _core.SpeechHandle) -> None:
-        self._core = core
+        self._native = core
         # the core's report of the speech's end, awaited once a done callback is added
         self._reported: asyncio.Future[None] | None = None
         core.host = weakref.ref(self)
@@ -426,16 +426,12 @@ class SpeechHandle(SpeechView):
         return handle or SpeechHandle(core)
 
     @property
-    def _native(self) -> _core.SpeechHandle:
-        return self._core
-
-    @property
     def allow_interruptions(self) -> bool:
-        return self._core.allow_interruptions
+        return self._native.allow_interruptions
 
     @allow_interruptions.setter
     def allow_interruptions(self, value: bool) -> None:
-        self._core.allow_interruptions = value
+        self._native.allow_interruptions = value
 
     def exception(self) -> BaseException | None:
         """The error the speech failed with, or ``None``.
@@ -445,20 +441,20 @@ class SpeechHandle(SpeechView):
         """
         if not self.done():
             raise asyncio.InvalidStateError("SpeechHandle is not done yet")
-        return self._core.exception()
+        return self._native.exception()
 
     def interrupt(self, *, force: bool = False) -> SpeechHandle:
         """Interrupt the speech."""
-        self._core.interrupt(force=force)
+        self._native.interrupt(force=force)
         return self
 
     async def wait_for_playout(self) -> None:
         from .agent_session import _origin
 
-        await self._core.wait_for_playout(origin=_origin())
+        await self._native.wait_for_playout(origin=_origin())
 
     async def _wait_for_generation(self, step_idx: int = -1) -> None:
-        await self._core.wait_for_generation(None if step_idx < 0 else step_idx)
+        await self._native.wait_for_generation(None if step_idx < 0 else step_idx)
 
     def __await__(self) -> Generator[None, None, SpeechHandle]:
         async def _await() -> SpeechHandle:
@@ -474,7 +470,7 @@ class SpeechHandle(SpeechView):
         A speech the session ended before creating, and a handle constructed directly, are
         reported at once; the session's close reports every speech it still holds."""
         if self._reported is None:
-            self._reported = asyncio.ensure_future(self._core.wait_reported())
+            self._reported = asyncio.ensure_future(self._native.wait_reported())
         self._reported.add_done_callback(_DoneCallback(self, callback))
 
     def remove_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
@@ -485,7 +481,7 @@ class SpeechHandle(SpeechView):
     async def wait_if_not_interrupted(self, aw: Sequence[Awaitable[object]]) -> None:
         """Wait for ``aw``, unless the speech is interrupted first; ``aw`` is never cancelled."""
         gathered = asyncio.gather(*[asyncio.shield(fut) for fut in aw], return_exceptions=True)
-        interrupted = asyncio.ensure_future(self._core.wait_for_interrupted())
+        interrupted = asyncio.ensure_future(self._native.wait_for_interrupted())
         try:
             await asyncio.wait({gathered, interrupted}, return_when=asyncio.FIRST_COMPLETED)
         finally:

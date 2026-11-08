@@ -37,8 +37,6 @@ from .._generated.agent_run import (
 )
 from .._generated.public_voice_run_result import *  # noqa: F403
 from .._generated.usage import Usage
-from ..types import NOT_GIVEN, NotGivenOr
-from ..utils import is_given
 
 if TYPE_CHECKING:
     from . import Agent
@@ -60,26 +58,11 @@ def _events(items: list[llm.ChatItem]) -> list[RunEvent]:
     return events
 
 
-def _expectation(
-    type: EventType,
-    *,
-    role: NotGivenOr[llm.ChatRole] = NOT_GIVEN,
-    name: NotGivenOr[str] = NOT_GIVEN,
-    arguments: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    output: NotGivenOr[str] = NOT_GIVEN,
-    is_error: NotGivenOr[bool] = NOT_GIVEN,
-) -> EventExpectation:
-    if type == "message":
-        return EventExpectationMessage(role=role if is_given(role) else None)
-    if type == "function_call":
-        return EventExpectationFunctionCall(
-            name=name if is_given(name) else None,
-            arguments=arguments if is_given(arguments) else None,
-        )
-    return EventExpectationFunctionCallOutput(
-        output=output if is_given(output) else None,
-        is_error=is_error if is_given(is_error) else None,
-    )
+_EXPECTATIONS: dict[EventType, type[EventExpectation]] = {
+    "message": EventExpectationMessage,
+    "function_call": EventExpectationFunctionCall,
+    "function_call_output": EventExpectationFunctionCallOutput,
+}
 
 
 class RunAssert:
@@ -122,11 +105,11 @@ class RunAssert:
         __tracebackhide__ = True
         if type is None:
             return EventAssert(self, self._core.next_event(None))
-        return _MATCHED[type](self, self._core.next_event(_expectation(type)))
+        return _MATCHED[type](self, self._core.next_event(_EXPECTATIONS[type]()))
 
     @overload
     def skip_next_event_if(
-        self, *, type: Literal["message"], role: NotGivenOr[llm.ChatRole] = NOT_GIVEN
+        self, *, type: Literal["message"], role: llm.ChatRole | None = None
     ) -> ChatMessageAssert | None: ...
 
     @overload
@@ -134,8 +117,8 @@ class RunAssert:
         self,
         *,
         type: Literal["function_call"],
-        name: NotGivenOr[str] = NOT_GIVEN,
-        arguments: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        name: str | None = None,
+        arguments: dict[str, Any] | None = None,
     ) -> FunctionCallAssert | None: ...
 
     @overload
@@ -143,13 +126,13 @@ class RunAssert:
         self,
         *,
         type: Literal["function_call_output"],
-        output: NotGivenOr[str] = NOT_GIVEN,
-        is_error: NotGivenOr[bool] = NOT_GIVEN,
+        output: str | None = None,
+        is_error: bool | None = None,
     ) -> FunctionCallOutputAssert | None: ...
 
     def skip_next_event_if(self, *, type: EventType, **expected: Any) -> _Matched[Any] | None:
         """Skip the next event only if it matches; its assertion, or ``None``."""
-        index = self._core.skip_next_event_if(_expectation(type, **expected))
+        index = self._core.skip_next_event_if(_EXPECTATIONS[type](**expected))
         return None if index is None else _MATCHED[type](self, index)
 
     def skip_next(self, count: int = 1) -> RunAssert:
@@ -166,18 +149,18 @@ class RunAssert:
     def contains_function_call(
         self,
         *,
-        name: NotGivenOr[str] = NOT_GIVEN,
-        arguments: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        name: str | None = None,
+        arguments: dict[str, Any] | None = None,
     ) -> FunctionCallAssert:
         __tracebackhide__ = True
         return self[:].contains_function_call(name=name, arguments=arguments)
 
-    def contains_message(self, *, role: NotGivenOr[llm.ChatRole] = NOT_GIVEN) -> ChatMessageAssert:
+    def contains_message(self, *, role: llm.ChatRole | None = None) -> ChatMessageAssert:
         __tracebackhide__ = True
         return self[:].contains_message(role=role)
 
     def contains_function_call_output(
-        self, *, output: NotGivenOr[str] = NOT_GIVEN, is_error: NotGivenOr[bool] = NOT_GIVEN
+        self, *, output: str | None = None, is_error: bool | None = None
     ) -> FunctionCallOutputAssert:
         __tracebackhide__ = True
         return self[:].contains_function_call_output(output=output, is_error=is_error)
@@ -195,13 +178,13 @@ class EventAssert:
 
     def _check(self, type: EventType, **expected: Any) -> int:
         __tracebackhide__ = True
-        return self._parent._core.at(self._index, _expectation(type, **expected))
+        return self._parent._core.at(self._index, _EXPECTATIONS[type](**expected))
 
     def is_function_call(
         self,
         *,
-        name: NotGivenOr[str] = NOT_GIVEN,
-        arguments: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        name: str | None = None,
+        arguments: dict[str, Any] | None = None,
     ) -> FunctionCallAssert:
         """A call of ``name`` whose arguments include ``arguments``."""
         __tracebackhide__ = True
@@ -210,14 +193,14 @@ class EventAssert:
         )
 
     def is_function_call_output(
-        self, *, output: NotGivenOr[str] = NOT_GIVEN, is_error: NotGivenOr[bool] = NOT_GIVEN
+        self, *, output: str | None = None, is_error: bool | None = None
     ) -> FunctionCallOutputAssert:
         __tracebackhide__ = True
         return FunctionCallOutputAssert(
             self._parent, self._check("function_call_output", output=output, is_error=is_error)
         )
 
-    def is_message(self, *, role: NotGivenOr[llm.ChatRole] = NOT_GIVEN) -> ChatMessageAssert:
+    def is_message(self, *, role: llm.ChatRole | None = None) -> ChatMessageAssert:
         __tracebackhide__ = True
         return ChatMessageAssert(self._parent, self._check("message", role=role))
 
@@ -232,26 +215,26 @@ class EventRangeAssert:
 
     def _find(self, type: EventType, **expected: Any) -> int:
         __tracebackhide__ = True
-        expectation = _expectation(type, **expected)
+        expectation = _EXPECTATIONS[type](**expected)
         return self._parent._core.contains(self._start, self._stop, expectation)
 
     def contains_function_call(
         self,
         *,
-        name: NotGivenOr[str] = NOT_GIVEN,
-        arguments: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        name: str | None = None,
+        arguments: dict[str, Any] | None = None,
     ) -> FunctionCallAssert:
         __tracebackhide__ = True
         return FunctionCallAssert(
             self._parent, self._find("function_call", name=name, arguments=arguments)
         )
 
-    def contains_message(self, *, role: NotGivenOr[llm.ChatRole] = NOT_GIVEN) -> ChatMessageAssert:
+    def contains_message(self, *, role: llm.ChatRole | None = None) -> ChatMessageAssert:
         __tracebackhide__ = True
         return ChatMessageAssert(self._parent, self._find("message", role=role))
 
     def contains_function_call_output(
-        self, *, output: NotGivenOr[str] = NOT_GIVEN, is_error: NotGivenOr[bool] = NOT_GIVEN
+        self, *, output: str | None = None, is_error: bool | None = None
     ) -> FunctionCallOutputAssert:
         __tracebackhide__ = True
         return FunctionCallOutputAssert(

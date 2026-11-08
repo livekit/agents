@@ -60,6 +60,7 @@ mod background_audio {
         fn next(
             &self,
             _cx: &lk_agents_abi::telemetry::Cx,
+            _cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
         ) -> lk_agents_abi::BoxFuture<'_, Result<Option<AudioFrame>, ProviderError>> {
             let mut left = self.0.lock().unwrap();
             let frame = (*left > 0).then(|| {
@@ -67,10 +68,6 @@ mod background_audio {
                 AudioFrame::new(1000i16.to_le_bytes().repeat(480), 48_000, 1, 480)
             });
             Box::pin(std::future::ready(Ok(frame)))
-        }
-        fn cancel_pending(&self) {}
-        fn close(&self, _cx: &lk_agents_abi::telemetry::Cx) -> lk_agents_abi::BoxFuture<'_, ()> {
-            Box::pin(std::future::ready(()))
         }
     }
 
@@ -102,7 +99,7 @@ mod background_audio {
         ));
     }
 
-    /// A stream whose close waits for the test, counting entries and cancellations.
+    /// A stream whose pending read settles when the test says, counting entries and cancellations.
     #[derive(Default)]
     struct DelayedClose {
         entered: tokio::sync::Notify,
@@ -116,13 +113,8 @@ mod background_audio {
         fn next(
             &self,
             _cx: &lk_agents_abi::telemetry::Cx,
+            _cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
         ) -> lk_agents_abi::BoxFuture<'_, Result<Option<AudioFrame>, ProviderError>> {
-            Box::pin(async { Ok(None) })
-        }
-
-        fn cancel_pending(&self) {}
-
-        fn close(&self, _cx: &lk_agents_abi::telemetry::Cx) -> lk_agents_abi::BoxFuture<'_, ()> {
             Box::pin(async move {
                 struct Closing<'a>(&'a DelayedClose, bool);
                 impl Drop for Closing<'_> {
@@ -138,6 +130,7 @@ mod background_audio {
                 self.release.notified().await;
                 closing.1 = true;
                 self.finished.store(true, Ordering::SeqCst);
+                Ok(None)
             })
         }
     }

@@ -20,7 +20,9 @@ use lk_agents_abi::worker::ipc_host::WorkerError;
 use lk_agents_abi::worker::server_host::{
     EndpointRoute, ServerConfig, ServerConfiguration, ServerHost as Host, ServerRuntime,
 };
-use lk_agents_abi::worker::types::{ProcessPoolOptions, ProcessStartOptions, ServerOptions};
+use lk_agents_abi::worker::types::{
+    ProcessOptions, ProcessPoolOptions, ProcessStartOptions, ServerOptions,
+};
 use parking_lot::{Mutex, MutexGuard};
 
 use crate::server::{self, HealthProbe, ServerPhase, ServerSettings, ServerStart};
@@ -49,11 +51,18 @@ impl Configuration {
 impl ServerConfiguration for Configuration {}
 
 impl ServerConfig for Configuration {
-    fn new(options: ServerOptions) -> Result<Self, WorkerError> {
+    fn new(
+        options: ServerOptions,
+        process: ProcessOptions,
+        version: String,
+    ) -> Result<Self, WorkerError> {
         let env = |name: &str| std::env::var(name).ok();
-        let mut settings =
-            ServerSettings { http_proxy: ServerSettings::env_proxy(env), ..Default::default() };
-        settings.apply(options)?;
+        let mut settings = ServerSettings {
+            http_proxy: ServerSettings::env_proxy(env),
+            version,
+            ..Default::default()
+        };
+        settings.apply(options, process)?;
         Ok(Self {
             settings: Arc::new(Mutex::new(settings.with_env(env))),
             serving: Arc::default(),
@@ -61,13 +70,13 @@ impl ServerConfig for Configuration {
         })
     }
 
-    fn update(&self, options: ServerOptions) -> Result<(), WorkerError> {
+    fn update(&self, options: ServerOptions, process: ProcessOptions) -> Result<(), WorkerError> {
         if self.running.load(Ordering::Acquire) {
             return Err(WorkerError::Failed(
                 "cannot update options after starting the server".into(),
             ));
         }
-        self.get().apply(options)
+        self.get().apply(options, process)
     }
 
     fn ws_url(&self) -> String {

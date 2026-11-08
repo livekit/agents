@@ -9,6 +9,11 @@ from .._core import (
     split_expr_markup as split_expr_markup,
     strip_all_markup as strip_all_markup,
 )
+from .facades_tts import (
+    FallbackChunkedStream as FallbackChunkedStream,
+    FallbackSynthesizeStream as FallbackSynthesizeStream,
+    StreamPacerWrapper as StreamPacerWrapper,
+)
 from .tts import (
     ChunkedStream as ChunkedStream,
     ExpressiveTag as ExpressiveTag,
@@ -31,6 +36,9 @@ __all__: list[str] = [
     "TTS",
     "ChunkedStream",
     "SynthesizeStream",
+    "FallbackChunkedStream",
+    "FallbackSynthesizeStream",
+    "StreamPacerWrapper",
     "AudioEmitter",
     "split_all_markup",
     "strip_all_markup",

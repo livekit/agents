@@ -8,10 +8,10 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from inspect import get_annotations
 from types import TracebackType
-from typing import Annotated, Generic, Literal, Never, Self
+from typing import Annotated, Any, ClassVar, Generic, Literal, Never, Self
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict, TypeVar
@@ -338,7 +338,7 @@ class ChunkedStream(ABC):
             False, tts.label, tts.model, tts.provider
         )
         self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts(
-            "tts_batch", conn_options, self
+            "tts_batch", _attempted(self, conn_options), self
         )
         self._core_attempt_task: asyncio.Task[None] | None = None
         self._core_cancelled = False
@@ -372,6 +372,24 @@ class ChunkedStream(ABC):
         once audio was pushed a failure is not retried. Cancellation means a deadline passed
         or the stream was closed: clean up and let it propagate.
         """
+
+    _core_native_retries: ClassVar[bool] = False
+    """The native synthesis ``_core_open`` opens retries on its own: no attempt is repeated."""
+
+    async def _core_open(self) -> _core.TtsStream:
+        """A native synthesis of ``input_text``, which ``_core_run_native`` drains."""
+        raise NotImplementedError
+
+    async def _core_run_native(self, output_emitter: _core.AudioEmitter) -> None:
+        """A ``_run`` over ``_core_open``: its audio into ``output_emitter``."""
+        _initialize(output_emitter, self._tts, stream=False)
+        native = await self._core_open()
+        try:
+            out = _into(output_emitter, stream=False)
+            while (audio := await native.recv()) is not None:
+                out(audio)
+        finally:
+            await native.aclose()
 
     async def _main_task(self) -> None:
         # run() starts from the task, after the framework set ``core``
@@ -467,7 +485,7 @@ class SynthesizeStream(ABC):
         self._metrics = _core.TtsMetricState(True, tts.label, tts.model, tts.provider)
         self._segment_text = ""
         self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts(
-            "tts_stream", conn_options, self
+            "tts_stream", _attempted(self, conn_options), self
         )
         self._core_attempt_task: asyncio.Task[None] | None = None
         self._core_cancelled = False
@@ -496,6 +514,27 @@ class SynthesizeStream(ABC):
         Cancellation means a deadline passed or the stream was closed: clean up and let it
         propagate.
         """
+
+    _core_native_retries: ClassVar[bool] = False
+    """The native synthesis ``_core_open`` opens retries on its own: no attempt is repeated."""
+
+    async def _core_open(self) -> _core.TtsStream:
+        """A native synthesis of the text pushed, which ``_core_run_native`` pumps."""
+        raise NotImplementedError
+
+    async def _core_run_native(self, output_emitter: _core.AudioEmitter) -> None:
+        """A ``_run`` over ``_core_open``: ``input`` into it, its audio into ``output_emitter``."""
+        _initialize(output_emitter, self._tts, stream=True)
+        native = await self._core_open()
+
+        def feed(text: str | SynthesizeStream.Flush) -> None:
+            if isinstance(text, SynthesizeStream.Flush):
+                native.flush()
+            elif text:
+                self.mark_started()
+                native.push_text(text)
+
+        await _bindings.pump(native, self.input, feed, _into(output_emitter, stream=True))
 
     async def _main_task(self) -> None:
         # run() starts from the task, after the framework set ``core``
@@ -644,6 +683,41 @@ class _ChunkedStreamFromStream(ChunkedStream):
                 if timed_transcripts := ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
                     output_emitter.push_timed_transcript(timed_transcripts)
         output_emitter.flush()
+
+
+def _attempted(
+    stream: ChunkedStream | SynthesizeStream, conn: APIConnectOptions
+) -> APIConnectOptions:
+    """The options the stream's attempts run under: no retry over a native one that retries."""
+    return replace(conn, max_retry=0) if stream._core_native_retries else conn
+
+
+def _initialize(output_emitter: _core.AudioEmitter, tts: TTS[Any], *, stream: bool) -> None:
+    output_emitter.initialize(
+        request_id=shortuuid(),
+        sample_rate=tts.sample_rate,
+        num_channels=tts.num_channels,
+        mime_type="audio/pcm",
+        stream=stream,
+    )
+
+
+def _into(output_emitter: _core.AudioEmitter, *, stream: bool) -> Any:
+    """What forwards a native synthesis's audio into ``output_emitter``, one segment if streamed."""
+    started = not stream
+
+    def out(audio: SynthesizedAudio) -> None:
+        nonlocal started
+        if not started:
+            started = True
+            output_emitter.start_segment(segment_id=audio.segment_id or shortuuid())
+        if words := audio.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
+            output_emitter.push_timed_transcript(words)
+        output_emitter.push_frame(audio.frame)
+        if audio.usage is not None or audio.characters_count is not None:
+            output_emitter.report_usage(audio.usage, characters_count=audio.characters_count)
+
+    return out
 
 
 

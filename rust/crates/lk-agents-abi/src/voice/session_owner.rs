@@ -139,16 +139,10 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn state(&self) -> Arc<Self::State>;
     /// Empty before startup; the final snapshot remains readable after close.
-    #[host(
-        getter,
-        facade(module = "session_commands", class = "SessionCommands", target = "_owner")
-    )]
+    #[host(getter)]
     fn usage(&self) -> crate::usage::Usage;
     /// No keyterms are applied before a voice driver exists.
-    #[host(
-        getter,
-        facade(module = "session_commands", class = "SessionCommands", target = "_owner")
-    )]
+    #[host(getter)]
     fn keyterms(&self) -> Vec<String>;
     /// `update_agent(agent, chat_ctx=)`. Before `start()`, `agent` drives once the session
     /// starts, on `chat_ctx` unless `start()` names its own; after, `frame` is the handoff and
@@ -166,22 +160,6 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     /// released. `interruption` merges over the session's and takes no `mode`, which is set with
     /// `VoiceSession(turn_handling=)`.
     #[host(call)]
-    #[host(facade(
-        module = "session_commands",
-        class = "SessionCommands",
-        target = "_owner",
-        annotation(
-            stt = "..stt.STT | str | None",
-            tts = "..tts.TTS | str | None",
-            vad = ".vad.VAD | None",
-            tts_text_transforms = "collections.abc.Sequence[.session_options.TextTransforms] | None",
-            expressive = "bool | .expressive.ExpressiveOptions"
-        ),
-        resolve(
-            stt = "..voice._session_bindings._stt_model",
-            tts = "..voice._session_bindings._tts_model"
-        )
-    ))]
     #[allow(clippy::too_many_arguments)]
     fn update_options(
         &self,
@@ -284,4 +262,132 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     /// An event of `kind` the report keeps is counted as retained; whether it was accepted.
     #[host(call)]
     fn admit_event(&self, kind: String) -> bool;
+}
+
+/// `voice.VoiceSession`'s commands: the owner's settings and reads, and the running session's
+/// commands, which refuse before `start()`.
+#[crate::host(facade(
+    path = "livekit.agents.voice.agent_session",
+    extended,
+    name = "VoiceSession",
+    native = SessionOwner
+))]
+pub trait VoiceSessionFacade {
+    /// The session `start()` started; refused before.
+    #[host(delegate)]
+    type Running: super::session::VoiceSession;
+
+    /// Empty before startup; the final snapshot remains readable after close.
+    #[host(getter)]
+    fn usage(&self) -> crate::usage::Usage;
+    /// No keyterms are applied before a voice driver exists.
+    #[host(getter)]
+    fn keyterms(&self) -> Vec<String>;
+    /// `update_options(..)`: change only the supplied settings. A replaced `stt`, `tts` or `vad`
+    /// is installed in place on a running session, without restarting the call or interrupting
+    /// speech; a setting an `override_options` layer holds takes the new value once the layer is
+    /// released. `interruption` merges over the session's and takes no `mode`, which is set with
+    /// `VoiceSession(turn_handling=)`.
+    #[host(
+        annotation(
+            stt = "..stt.STT | str | None",
+            tts = "..tts.TTS | str | None",
+            vad = ".vad.VAD | None",
+            tts_text_transforms = "collections.abc.Sequence[.session_options.TextTransforms] | None",
+            expressive = "bool | .expressive.ExpressiveOptions"
+        ),
+        resolve(
+            stt = "..voice._session_bindings._stt_model",
+            tts = "..voice._session_bindings._tts_model"
+        )
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn update_options(
+        &self,
+        #[host(kw)] stt: crate::Maybe<Option<crate::HostRef>>,
+        tts: crate::Maybe<Option<crate::HostRef>>,
+        vad: crate::Maybe<Option<crate::HostRef>>,
+        turn_detection: crate::Maybe<super::session_options::TurnDetectionKwarg>,
+        endpointing_opts: crate::Maybe<super::session_options::EndpointingKwargs>,
+        interruption: crate::Maybe<super::session_options::InterruptionKwargs>,
+        min_consecutive_speech_delay: crate::Maybe<f64>,
+        tts_text_transforms: crate::Maybe<Option<super::session_options::TextTransformSet>>,
+        expressive: crate::Maybe<super::session_options::Expressive>,
+        keyterms: crate::Maybe<Vec<String>>,
+    ) -> Result<(), OptionsRefused>;
+
+    /// `generate_reply()`: reply now, with no end of turn behind it. The overrides apply to this
+    /// reply only; `tools` narrows the driving agent's tools to these names (its provider-owned
+    /// tools stay), refused on a realtime model as `chat_ctx` is. Sent from the agent's
+    /// `on_enter`, it is that hook's reply.
+    #[host(
+        via = Running,
+        not_given,
+        origin = "..voice._session_callbacks._origin",
+        returns = "..voice.io.SpeechHandle",
+        annotation(chat_ctx = "..llm.ChatContext"),
+        resolve(chat_ctx = "..voice._session_callbacks._items")
+    )]
+    fn generate_reply(
+        &self,
+        #[host(kw, default = None)] user_input: Option<String>,
+        #[host(default = None)] instructions: Option<String>,
+        #[host(default = None)] tool_choice: Option<crate::ToolChoice>,
+        #[host(default = None)] tools: Option<Vec<String>>,
+        #[host(default = None)] allow_interruptions: Option<bool>,
+        #[host(default = None)] chat_ctx: Option<Vec<crate::ChatItem>>,
+    );
+
+    /// `say()`: speak `text` without the LLM, the words given or a stream of them read to its
+    /// end. With `audio`, those frames play instead of the TTS and `text`, a `str`, is still
+    /// committed. The handle is the promise the session fulfils.
+    #[host(
+        via = Running,
+        not_given,
+        origin = "..voice._session_callbacks._origin",
+        returns = "..voice.io.SpeechHandle"
+    )]
+    fn say(
+        &self,
+        text: crate::OneOrStream<String>,
+        #[host(kw, default = None)] audio: Option<Box<dyn crate::StreamOutput<crate::AudioFrame>>>,
+        #[host(default = None)] allow_interruptions: Option<bool>,
+        #[host(default = true)] add_to_chat_ctx: bool,
+    );
+
+    /// `RoomIO.set_participant(identity)`: point the audio input and the user transcript at
+    /// someone else. `None` unlinks.
+    #[host(via = Running)]
+    async fn set_participant(&self, identity: Option<String>) -> crate::voice::io::Result<()>;
+
+    /// `AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it.
+    #[host(via = Running)]
+    fn clear_user_turn(&self) -> Result<(), super::session::SessionRefused>;
+
+    /// `AgentSession.interrupt(force=)`: the current and queued speeches up to the first
+    /// uninterruptible; answers when they are done, or with the refusal.
+    #[host(via = Running, future)]
+    async fn interrupt(
+        &self,
+        #[host(kw, default = false)] force: bool,
+    ) -> Result<(), super::session::NotInterruptible>;
+
+    /// `AgentSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
+    /// speech is left. Answers `None`, or why it was refused.
+    #[host(via = Running, discard)]
+    async fn drain(&self) -> Option<super::session::DrainRefused>;
+
+    /// `AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`).
+    #[host(via = Running)]
+    async fn wait_for_idle(&self) -> Result<(), super::session::IdleRefused>;
+
+    /// `AgentSession.commit_user_turn(..)`: flush, wait for the final, commit, answer with the
+    /// transcript. Runs whether or not awaited; a newer commit supersedes it.
+    #[host(via = Running, future)]
+    async fn commit_user_turn(
+        &self,
+        #[host(kw, default = 2.0)] transcript_timeout: f64,
+        #[host(default = 2.0)] stt_flush_duration: f64,
+        #[host(default = false)] skip_reply: bool,
+    ) -> Result<String, super::session::CommitSuperseded>;
 }

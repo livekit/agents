@@ -7,7 +7,6 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import VoiceSession
-from livekit.agents.metrics import AvatarMetrics
 from livekit.agents.voice.avatar import AvatarSession
 
 pytestmark = pytest.mark.unit
@@ -77,12 +76,3 @@ async def test_concurrent_closes_wait_for_one_close_and_a_new_start_begins_again
     with pytest.raises(TimeoutError):
         await avatar.wait_for_join(timeout=0.01)
     await avatar.aclose()
-
-
-def test_metrics_collected_emits_the_lifecycles_metrics():
-    avatar = Avatar()
-    seen: list[AvatarMetrics] = []
-    avatar.on("metrics_collected", seen.append)
-    metrics = AvatarMetrics(timestamp=1.0, playback_latency=0.2)
-    avatar._core_metrics_collected(metrics)
-    assert seen == [metrics]

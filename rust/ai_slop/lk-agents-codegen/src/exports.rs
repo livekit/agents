@@ -49,6 +49,9 @@ pub fn placed(
             continue;
         }
         add(path, generated(&record.module), &record.name);
+        if record.kwargs {
+            add(path, generated(&record.module), &format!("{}Kwargs", record.name));
+        }
         if let Some(missing) = &record.missing {
             add(path, generated(&record.module), missing);
         }
@@ -81,6 +84,11 @@ pub fn placed(
     for base in bases {
         for (class, path) in &base.paths {
             add(path, generated(&base.module), class);
+        }
+    }
+    for facade in &declared.facades {
+        if !facade.extended {
+            add(&facade.path, generated(&facade.module), &facade.name);
         }
     }
     for class in &declared.classes {

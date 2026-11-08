@@ -192,7 +192,7 @@ async def test_the_jobs_first_session_records_what_the_job_records_and_every_one
         closing.append(session)
         on_shutdown(self, session)
 
-    monkeypatch.setattr(JobContext, "_core_connect", connect)
+    monkeypatch.setattr(JobContext, "connect", connect)
     monkeypatch.setattr(JobContext, "_core_on_shutdown", register)
     token = _JobContextVar.set(ctx)
     first = VoiceSession(llm=FakeLLM(), turn_handling={"turn_detection": None})
@@ -201,11 +201,11 @@ async def test_the_jobs_first_session_records_what_the_job_records_and_every_one
         await first.start(Agent(instructions="desk"))
         await second.start(Agent(instructions="back office"), room=ctx.room)
         assert ctx._sessions == [first, second] and closing == [first, second]
-        assert first._owner.recording_options.audio and first._owner.started_at is not None
-        assert first._owner.recording_path == str(ctx.session_directory / "audio.ogg")
-        assert not second._owner.recording_options.audio
-        assert second._owner.recording_path is None
-        assert ctx.make_session_report().audio_recording_path == first._owner.recording_path
+        assert first._native.recording_options.audio and first._native.started_at is not None
+        assert first._native.recording_path == str(ctx.session_directory / "audio.ogg")
+        assert not second._native.recording_options.audio
+        assert second._native.recording_path is None
+        assert ctx.make_session_report().audio_recording_path == first._native.recording_path
     finally:
         _JobContextVar.reset(token)
         await first.aclose()

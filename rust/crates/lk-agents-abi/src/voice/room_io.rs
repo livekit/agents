@@ -450,23 +450,23 @@ pub struct TextOutputOptions {
 ))]
 pub struct RoomOptions {
     /// The text input options. If not provided, default to True.
-    #[host(annotation = "..types.NotGivenOr[TextInputOptions | bool]")]
+    #[host(annotation = "TextInputOptions | bool")]
     pub text_input: crate::Maybe<crate::HostRef>,
     /// The audio input options. If not provided, default to True.
-    #[host(annotation = "..types.NotGivenOr[AudioInputOptions | bool]")]
+    #[host(annotation = "AudioInputOptions | bool")]
     pub audio_input: crate::Maybe<crate::HostRef>,
     /// The video input options. If not provided, default to False.
-    #[host(annotation = "..types.NotGivenOr[VideoInputOptions | bool]")]
+    #[host(annotation = "VideoInputOptions | bool")]
     pub video_input: crate::Maybe<crate::HostRef>,
     /// The audio output options. If not provided, default to True.
-    #[host(annotation = "..types.NotGivenOr[AudioOutputOptions | bool]")]
+    #[host(annotation = "AudioOutputOptions | bool")]
     pub audio_output: crate::Maybe<crate::HostRef>,
     /// The transcription output options. If not provided, default to True.
-    #[host(annotation = "..types.NotGivenOr[TextOutputOptions | bool]")]
+    #[host(annotation = "TextOutputOptions | bool")]
     pub text_output: crate::Maybe<crate::HostRef>,
     /// Participant kinds accepted for auto subscription. If not provided,
     ///     accept `DEFAULT_PARTICIPANT_KINDS`.
-    #[host(annotation = "..types.NotGivenOr[list[rtc.ParticipantKind.ValueType]]")]
+    #[host(annotation = "list[rtc.ParticipantKind.ValueType]")]
     pub participant_kinds: crate::Maybe<Vec<i32>>,
     /// The participant to link to. If not provided, link to the first participant.
     ///     Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`.

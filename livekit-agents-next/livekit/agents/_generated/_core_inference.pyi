@@ -12,6 +12,7 @@ from livekit.agents.tts import TTS
 
 from .._core import TtsStream
 from .connect import APIConnectOptions
+from .inference_credentials import Credentials
 from .inference_stt import FallbackModel
 from .inference_tts import FallbackModel as HostFallbackModel
 from .realtime import RealtimeCapabilities
@@ -39,7 +40,7 @@ def inference_credentials(
     server_url: str | None,
     server_api_key: str | None,
     server_api_secret: str | None,
-) -> tuple[str, str, str]:
+) -> Credentials:
     """The gateway's URL (a nonempty `base_url`, else [`Self::inference_url`]) and key pair (the
     ladders above); a `ValueError` when the key or the secret does not resolve.
     """
@@ -211,7 +212,7 @@ class InferenceTts:
         extra_kwargs: dict[str, object] | None = None,
         fallback: list[HostFallbackModel] | None = None,
     ) -> Self:
-        """`inference.TTS`'s mixin builds it on first use, after a fork, from the TTS's attributes."""
+        """`inference.TTS` builds it on first use, after a fork, from its attributes."""
     @property
     def sample_rate(self) -> int: ...
     @property

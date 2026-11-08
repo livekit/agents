@@ -287,7 +287,7 @@ pub fn host(attr: TokenStream, item: TokenStream) -> TokenStream {
 use lk_agents_bindgen::to_snake;
 
 /// What each item takes, for a head on the wrong item.
-const HEADS: &str = "the `host` attribute macro is `export` on a fn/const, `proxy`/`native`/`class`/`functions`/`sink` on a trait, `codec`/`record` on a type, \
+const HEADS: &str = "the `host` attribute macro is `export` on a fn/const, `proxy`/`native`/`class`/`functions`/`sink`/`facade` on a trait, `codec`/`record` on a type, \
     `error` on an enum or struct, `wire_enum`/`wire_strs`/`native_enum` on a unit enum, `string` on a struct or enum, \
     `interface` on a unit struct, `file`/`exceptions` on `const _`, or `constant` on a `pub const` (written into its file's Python module)";
 
@@ -304,7 +304,7 @@ fn expand_host(
     let fits = matches!(
         (&parsed, head.as_deref()),
         (I::Fn(_) | I::Const(_), Some("export"))
-            | (I::Trait(_), Some("proxy" | "native" | "class" | "functions" | "sink"))
+            | (I::Trait(_), Some("proxy" | "native" | "class" | "functions" | "sink" | "facade"))
             | (I::Struct(_), Some("interface"))
             | (I::Enum(_) | I::Struct(_) | I::Type(_), Some("codec"))
             | (I::Enum(_) | I::Struct(_), Some("record"))

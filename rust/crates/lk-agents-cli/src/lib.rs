@@ -19,6 +19,10 @@ impl lk_agents_abi::cli::Cli for Commands {
         parse_cli(argv)
     }
 
+    fn host_log_level(level: lk_agents_abi::cli::LogLevel) -> u32 {
+        level.host_level()
+    }
+
     fn format_log_record(record: LogRecord) -> String {
         format_log_record(record)
     }

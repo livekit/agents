@@ -212,7 +212,12 @@ impl Run {
             host_video_input: setup
                 .video
                 .then(|| fakes::FakeVideoInput::new(&registry) as Arc<VideoIn>),
-            video_sampler: setup.video_sampler.then_some((1.0, 0.3)),
+            video_sampler: setup.video_sampler.then_some(
+                lk_agents_abi::voice::session::VoiceActivityVideoSampler {
+                    speaking_fps: 1.0,
+                    silent_fps: 0.3,
+                },
+            ),
             host_transcription_output: legs.is_none().then(|| {
                 fakes::FakeTextOutput::new(registry.clone(), setup.text_output_raises) as _
             }),
@@ -323,12 +328,11 @@ impl Run {
             let llm = fakes::FakeLlm::new(registry.clone());
             let stt =
                 amd.own_stt.then(|| fakes::FakeStt::for_amd(registry.clone(), connect) as Arc<Stt>);
-            let activity =
-                api.resolved_options().map(|o| Duration::from_secs_f64(o.endpointing.max_delay));
+            let activity = api.resolved_options().map(|o| o.endpointing.max_delay);
             let cfg = AmdConfigKwargs {
-                max_endpointing_delay: Some(
-                    AmdRules::amd_resolve_max_endpointing_delay(None, activity).as_secs_f64(),
-                ),
+                max_endpointing_delay: Some(AmdRules::amd_resolve_max_endpointing_delay(
+                    None, activity,
+                )),
                 source: Some(if amd.own_stt {
                     TranscriptSource::AmdStt
                 } else {

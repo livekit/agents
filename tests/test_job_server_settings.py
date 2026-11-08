@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from livekit.agents import AgentServer, JobContext, inference
+from livekit.agents._generated.worker_options import ProcessOptions
 from livekit.agents.inference import get_default_inference_url, resolve_credentials
 from livekit.agents.job import JobExecutorType
 from livekit.agents.storage import SQLiteStorage
@@ -26,7 +27,9 @@ async def test_local_console_job_needs_no_livekit_credentials(
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LIVEKIT_AGENTS_PRELOAD_LOCAL_INFERENCE", "0")
     server = AgentServer(storage=SQLiteStorage(directory=tmp_path))
-    server._update_options(job_executor_type=JobExecutorType.THREAD, num_idle_processes=0)
+    server._update_options(
+        ProcessOptions(job_executor_type=JobExecutorType.THREAD), num_idle_processes=0
+    )
     started, ran = asyncio.Event(), threading.Event()
     server._on_started.append(started.set)
 
@@ -61,7 +64,9 @@ async def test_a_thread_job_reads_credentials_from_server_options(
         api_key="option-key",
         api_secret="option-secret",
     )
-    server._update_options(job_executor_type=JobExecutorType.THREAD, num_idle_processes=0)
+    server._update_options(
+        ProcessOptions(job_executor_type=JobExecutorType.THREAD), num_idle_processes=0
+    )
     server._config.simulation = True
 
     @server.rtc_session()
@@ -96,7 +101,7 @@ def test_inference_credentials_read_the_inference_environment_first(
     monkeypatch.setenv("LIVEKIT_INFERENCE_API_KEY", "inference-key")
     monkeypatch.delenv("LIVEKIT_INFERENCE_API_SECRET", raising=False)
     monkeypatch.setenv("LIVEKIT_INFERENCE_URL", "http://localhost:8080")
-    creds = inference.Credentials.resolve(NOT_GIVEN, None, "mine")
+    creds = inference._resolve_credentials(NOT_GIVEN, None, "mine")
     assert creds == inference.Credentials("http://localhost:8080", "inference-key", "mine")
     monkeypatch.setenv("LIVEKIT_INFERENCE_API_KEY", "")
     with pytest.raises(ValueError, match="api_key is required"):

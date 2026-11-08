@@ -41,6 +41,7 @@ from ._generated._core_cli import (
     Shutdown as Shutdown,
     dev_channel as dev_channel,
     format_log_record as format_log_record,
+    host_log_level as host_log_level,
     parse_cli as parse_cli,
 )
 from ._generated._core_errors import (
@@ -326,7 +327,6 @@ from ._generated._core_voice import (
     receive_dtmf as receive_dtmf,
     resolve_interruption_detector as resolve_interruption_detector,
     rt_server_turn_detection as rt_server_turn_detection,
-    rtc_wire_names as rtc_wire_names,
     send_dtmf_events as send_dtmf_events,
     stt_node as stt_node,
     tts_node as tts_node,

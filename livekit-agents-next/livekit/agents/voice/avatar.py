@@ -10,11 +10,10 @@ events."""
 
 from __future__ import annotations
 
-import asyncio
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Coroutine
-from typing import TYPE_CHECKING, Generic, Literal, Never
+from typing import TYPE_CHECKING, Generic, Literal, Never, cast
 
 from typing_extensions import TypeVar
 
@@ -22,14 +21,13 @@ from livekit import rtc
 
 from .. import _core, utils
 from .._generated import public_voice_avatar as _public
+from .._generated.avatar import AudioReceiverObservation
 from .._generated.avatar_queue import QueueEffects
 from .._generated.io_events import AvatarPlaybackSegment
 from .._generated.public_voice_avatar import *  # noqa: F403
 from ..job import get_job_context
-from ..metrics import AvatarMetrics
 from ..types import NOT_GIVEN, NotGivenOr
 from .io import AudioOutput, AudioOutputCapabilities
-from .room_io import Room
 
 if TYPE_CHECKING:
     from .agent_session import VoiceSession
@@ -61,6 +59,7 @@ class AudioReceiver(
     """
 
     _core_audio_epoch = 0
+    _core_audio: AsyncIterator[rtc.AudioFrame | AudioSegmentEnd] | None = None
 
     async def start(self) -> None:
         pass
@@ -84,32 +83,18 @@ class AudioReceiver(
     async def aclose(self) -> None:
         pass
 
-    # what `_core.AvatarRunner` calls (`AvatarAudioReceiver`)
+    # what `_core.AvatarRunner` reads (`AvatarAudioReceiver.next_audio`), stamped with the
+    # runner's clear epoch on this loop
 
-    def _core_clear_buffer(self) -> None:
-        self.emit("clear_buffer")
-
-    async def _core_open_audio(self) -> None:
-        self._core_audio = self.__aiter__()
-
-    async def _core_next_audio(
-        self,
-    ) -> tuple[int, bool, AvatarPlaybackSegment | None, rtc.AudioFrame | AudioSegmentEnd | None]:
-        item = await anext(self._core_audio, None)
-        return self._core_audio_epoch, False, None, item
-
-    async def _core_notify_playback_started(self, segment: AvatarPlaybackSegment) -> None:
-        await _maybe_await(self.notify_playback_started(segment=segment))
-
-    async def _core_notify_playback_finished(
-        self, segment: AvatarPlaybackSegment, playback_position: float, interrupted: bool
-    ) -> None:
-        await _maybe_await(
-            self.notify_playback_finished(playback_position, interrupted, segment=segment)
+    async def _core_next_audio(self) -> AudioReceiverObservation:
+        if (audio := self._core_audio) is None:
+            audio = self._core_audio = self.__aiter__()
+        return AudioReceiverObservation(
+            epoch=self._core_audio_epoch,
+            starts_segment=False,
+            segment=None,
+            frame=await anext(audio, None),
         )
-
-    async def _core_aclose(self) -> None:
-        await self.aclose()
 
 
 class VideoGenerator(ABC):
@@ -126,26 +111,6 @@ class VideoGenerator(ABC):
         self,
     ) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
         """Continuously stream out video and audio frames, or AudioSegmentEnd when the audio segment ends"""  # noqa: E501
-
-    # what `_core.AvatarRunner` calls (`AvatarVideoGenerator`)
-
-    async def _core_push_audio(self, frame: rtc.AudioFrame | None) -> None:
-        await self.push_audio(AudioSegmentEnd() if frame is None else frame)
-
-    async def _core_clear_buffer(self) -> None:
-        await _maybe_await(self.clear_buffer())
-
-    async def _core_open_frames(self) -> None:
-        self._core_frames = self.__aiter__()
-
-    async def _core_next_frame(self) -> rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd | None:
-        return await anext(self._core_frames, None)
-
-
-async def _maybe_await(result: None | Coroutine[None, None, None]) -> None:
-    # a receiver or generator may answer synchronously or with a coroutine
-    if asyncio.iscoroutine(result):
-        await result
 
 
 TEvent = TypeVar("TEvent", default=Never, contravariant=True)
@@ -192,8 +157,8 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         self._room = room
         self._agent_session = agent_session
         self._lifecycle = _core._core_AvatarLifecycle(
-            agent_session._owner,
-            Room.of(room),
+            agent_session._native,
+            room,
             identity=self.avatar_identity,
             provider=self.provider,
             avatar=self,
@@ -240,11 +205,6 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
                 self._agent_session = None
                 self._room = None
 
-    # what `_core_AvatarLifecycle` calls (`AvatarHost`)
-
-    def _core_metrics_collected(self, metrics: AvatarMetrics) -> None:
-        self.emit("metrics_collected", metrics)
-
 
 # The agent's side: the session's audio sink, streaming to the avatar and paced by its reports.
 class DataStreamAudioOutput(_core.DataStreamAudioOutput):
@@ -262,7 +222,7 @@ class DataStreamAudioOutput(_core.DataStreamAudioOutput):
     ) -> DataStreamAudioOutput:
         return super().__new__(
             cls,
-            Room.of(room),
+            room,
             destination_identity=destination_identity,
             sample_rate=sample_rate,
             wait_remote_track=wait_remote_track,
@@ -288,7 +248,7 @@ class DataStreamAudioReceiver(AudioReceiver):
     ):
         super().__init__()
         self._native = _core.DataStreamAudioReceiver(
-            Room.of(room),
+            room,
             sender_identity=sender_identity,
             frame_size_ms=frame_size_ms if utils.is_given(frame_size_ms) else 100,
             rpc_max_retries=rpc_max_retries,
@@ -309,14 +269,8 @@ class DataStreamAudioReceiver(AudioReceiver):
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
         return self
 
-    async def _core_next_audio(
-        self,
-    ) -> tuple[int, bool, AvatarPlaybackSegment | None, rtc.AudioFrame | AudioSegmentEnd | None]:
-        return await self._native.next_audio()
-
     async def __anext__(self) -> rtc.AudioFrame | AudioSegmentEnd:
-        _, _, _, item = await self._native.next_audio()
-        if item is None:
+        if (item := (await self._native.next_audio()).frame) is None:
             raise StopAsyncIteration
         return item
 
@@ -386,14 +340,11 @@ class QueueAudioOutput(
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
         return self
 
-    async def _core_next_audio(
-        self,
-    ) -> tuple[int, bool, AvatarPlaybackSegment | None, rtc.AudioFrame | AudioSegmentEnd | None]:
+    async def _core_next_audio(self) -> AudioReceiverObservation:
         return await self._native.next_audio()
 
     async def __anext__(self) -> rtc.AudioFrame | AudioSegmentEnd:
-        _, _, _, item = await self._native.next_audio()
-        if item is None:
+        if (item := (await self._native.next_audio()).frame) is None:
             raise StopAsyncIteration
         return item
 
@@ -417,9 +368,13 @@ class AvatarRunner:
         # publish video and audio tracks until the first frame pushed
     ) -> None:
         self._audio_recv = audio_recv
+        receiver = audio_recv
+        if isinstance(audio_recv, DataStreamAudioReceiver):
+            # the native receiver is the runner's own receiver (its stub names the host class)
+            receiver = cast(AudioReceiver, audio_recv._native)
         self._core = _core.AvatarRunner(
-            _core._core_create_room_session(Room.of(room)),
-            receiver=audio_recv,
+            _core._core_create_room_session(room),
+            receiver=receiver,
             generator=video_gen,
             options=options,
             queue_size_ms=_queue_size_ms,

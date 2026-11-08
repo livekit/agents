@@ -2,7 +2,10 @@
 
 use clap::builder::{PossibleValue, PossibleValuesParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
+use lk_agents_abi::Maybe;
 use lk_agents_abi::cli::{CliArgs, CliParseResult, LogLevel};
+use lk_agents_abi::worker::job::JobExecutorType;
+use lk_agents_abi::worker::types::{MultiprocessingContext, ProcessOptions, ServerOptions};
 
 #[derive(Parser)]
 #[command(about = "Run a LiveKit agent server")]
@@ -41,6 +44,25 @@ struct StartArgs {
     /// Maximum seconds to wait for active work; must leave time for cleanup.
     #[arg(long, value_parser = seconds)]
     drain_timeout: Option<f64>,
+    /// Connection attempts to LiveKit before the worker fails.
+    #[arg(long)]
+    max_retry: Option<u32>,
+    /// The proxy the job processes' HTTP clients use.
+    #[arg(long)]
+    http_proxy: Option<String>,
+    #[arg(long, value_parser = |s: &str| s.parse::<JobExecutorType>())]
+    job_executor_type: Option<JobExecutorType>,
+    #[arg(long, value_parser = |s: &str| s.parse::<MultiprocessingContext>())]
+    multiprocessing_context: Option<MultiprocessingContext>,
+    /// Seconds a job process has to initialize.
+    #[arg(long, value_parser = seconds)]
+    initialize_process_timeout: Option<f64>,
+    /// Seconds a job process has to exit once its job ended.
+    #[arg(long, value_parser = seconds)]
+    shutdown_process_timeout: Option<f64>,
+    /// Seconds a session's end callbacks have to finish.
+    #[arg(long, value_parser = seconds)]
+    session_end_timeout: Option<f64>,
     // Older Go launchers pass this flag. Presentation now belongs to that launcher.
     #[arg(long = "log-format", hide = true, value_enum)]
     _legacy_log_format: Option<LegacyLogFormat>,
@@ -93,17 +115,34 @@ pub fn parse_cli(argv: Vec<String>) -> CliParseResult {
             dev: args.dev,
             cli_addr: args.cli_addr,
             simulation: args.simulation,
-            ws_url: args.url.filter(|s| !s.is_empty()),
-            api_key: args.api_key.filter(|s| !s.is_empty()),
-            api_secret: args.api_secret.filter(|s| !s.is_empty()),
-            shutdown_timeout: args.shutdown_timeout,
-            drain_timeout: args.drain_timeout,
+            options: ServerOptions {
+                ws_url: given(args.url.filter(|s| !s.is_empty())),
+                api_key: given(args.api_key.filter(|s| !s.is_empty())),
+                api_secret: given(args.api_secret.filter(|s| !s.is_empty())),
+                shutdown_timeout: given(args.shutdown_timeout),
+                drain_timeout: given(args.drain_timeout),
+                ..Default::default()
+            },
+            process: ProcessOptions {
+                max_retry: given(args.max_retry),
+                http_proxy: given(args.http_proxy.filter(|s| !s.is_empty()).map(Some)),
+                job_executor_type: given(args.job_executor_type),
+                multiprocessing_context: given(args.multiprocessing_context),
+                initialize_process_timeout: given(args.initialize_process_timeout),
+                shutdown_process_timeout: given(args.shutdown_process_timeout),
+                session_end_timeout: given(args.session_end_timeout),
+                ..Default::default()
+            },
         },
         Command::Console(args) => {
             CliArgs::Console { connect_addr: args.connect_addr, record: args.record }
         }
     };
     CliParseResult::Parsed { args }
+}
+
+fn given<T>(value: Option<T>) -> Maybe<T> {
+    value.map_or(Maybe::NotGiven, Maybe::Given)
 }
 
 fn diagnostic(error: clap::Error) -> CliParseResult {
@@ -124,24 +163,29 @@ mod tests {
 
     #[test]
     fn launcher_contract_and_deadline_overrides() {
-        let CliParseResult::Parsed {
-            args: CliArgs::Start { cli_addr, dev, shutdown_timeout, drain_timeout, .. },
-        } = parse(&[
-            "start",
-            "--dev",
-            "--reload-addr",
-            "127.0.0.1:9",
-            "--shutdown-timeout",
-            "55",
-            "--drain-timeout",
-            "45",
-        ])
+        let CliParseResult::Parsed { args: CliArgs::Start { cli_addr, dev, options, process, .. } } =
+            parse(&[
+                "start",
+                "--dev",
+                "--reload-addr",
+                "127.0.0.1:9",
+                "--shutdown-timeout",
+                "55",
+                "--drain-timeout",
+                "45",
+                "--multiprocessing-context",
+                "spawn",
+            ])
         else {
             panic!("expected start")
         };
         assert_eq!(cli_addr.as_deref(), Some("127.0.0.1:9"));
         assert!(dev);
-        assert_eq!((shutdown_timeout, drain_timeout), (Some(55.0), Some(45.0)));
+        assert!(options.shutdown_timeout == Maybe::Given(55.0));
+        assert!(options.drain_timeout == Maybe::Given(45.0));
+        assert!(!options.ws_url.is_given());
+        assert!(process.multiprocessing_context == Maybe::Given(MultiprocessingContext::Spawn));
+        assert!(!process.max_retry.is_given());
         assert!(matches!(
             parse(&["console", "--connect-addr=localhost:9", "--record"]),
             CliParseResult::Parsed { args: CliArgs::Console { record: true, .. } }
@@ -178,6 +222,7 @@ mod tests {
             &["start", "--cli-addr", "x"],
             &["start", "--log-format", "xml"],
             &["start", "--shutdown-timeout", "NaN"],
+            &["start", "--job-executor-type", "fiber"],
         ] {
             assert!(
                 matches!(parse(args), CliParseResult::Display { exit_code: 2, stderr: true, .. }),

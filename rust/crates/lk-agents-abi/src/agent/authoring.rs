@@ -1,7 +1,8 @@
 //! Agent authoring state and generated Python configuration records. Callables stay in the host.
 
 use super::Retries;
-use crate::{Maybe, ToolChoice};
+use crate::llm::provider_format::tools::{DuplicateMode, DuplicateScope, ToolFlag};
+use crate::{HostRef, Maybe, ToolChoice};
 use serde_json::Value;
 
 #[crate::host(file(module = "agent_authoring"))]
@@ -31,6 +32,49 @@ pub struct AgentRetries {
 #[derive(Clone)]
 pub struct ModelSettings {
     pub tool_choice: Maybe<ToolChoice>,
+}
+
+/// `Agent.tool()`'s options; an option left out keeps its default.
+#[crate::host(record(module = "agent_authoring", dataclass, extract, kwargs))]
+#[derive(Clone, Default)]
+pub struct ToolOptions {
+    /// The tool's name; the function's when `None`.
+    pub name: Maybe<Option<String>>,
+    /// What the model reads; the docstring when `None`.
+    pub description: Maybe<Option<String>>,
+    /// The tool's whole schema, for a function that takes its arguments as one raw dict.
+    #[host(annotation = ".tool_context.RawFunctionDescription | dict[str, typing.Any] | None")]
+    pub raw_schema: Maybe<Option<HostRef>>,
+    #[host(annotation = ".tool_flags.ToolFlag")]
+    pub flags: Maybe<ToolFlag>,
+    pub on_duplicate: Maybe<DuplicateMode>,
+    pub duplicate_scope: Maybe<DuplicateScope>,
+    /// Hold each call for the person's approval of a read-back (tools.md "Approval"): `True`
+    /// reads back the description and the arguments, a `ReadBack` function writes it.
+    #[host(annotation = "bool | ..llm.tool_context.ReadBack")]
+    pub needs_approval: Maybe<HostRef>,
+    /// Consecutive retries the model gets for this tool; the agent's `retries['tools']` when
+    /// `None`.
+    pub retries: Maybe<Option<i64>>,
+}
+
+impl ToolOptions {
+    /// The options given, by name.
+    pub fn given(&self) -> Vec<String> {
+        [
+            ("name", self.name.is_given()),
+            ("description", self.description.is_given()),
+            ("raw_schema", self.raw_schema.is_given()),
+            ("flags", self.flags.is_given()),
+            ("on_duplicate", self.on_duplicate.is_given()),
+            ("duplicate_scope", self.duplicate_scope.is_given()),
+            ("needs_approval", self.needs_approval.is_given()),
+            ("retries", self.retries.is_given()),
+        ]
+        .into_iter()
+        .filter_map(|(name, given)| given.then(|| name.to_owned()))
+        .collect()
+    }
 }
 
 #[crate::host(record(module = "agent_authoring", enum, extract))]
@@ -104,8 +148,9 @@ pub trait AgentConfig: Send + Sized + 'static {
     fn validated_output(&self) -> bool;
     #[host(call)]
     fn configuration(&self, retries: Option<Value>) -> Result<AgentConfiguration, AuthoringError>;
+    /// Refuses options given with an already built tool, which took its own when built.
     #[host(call)]
-    fn check_tool_options(&self, given: Vec<String>) -> Result<(), AuthoringError>;
+    fn check_tool_options(&self, options: ToolOptions) -> Result<(), AuthoringError>;
     #[host(call)]
     fn join_instructions(&self, parts: Vec<String>) -> String;
     #[host(getter)]

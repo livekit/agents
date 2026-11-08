@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import pytest
 
 from livekit.agents.voice.amd import AMDCategory, AMDPredictionEvent
@@ -18,6 +20,10 @@ def test_a_verdict_says_whether_a_human_or_a_machine_answered(
 ) -> None:
     # The properties call into _core; twice they named a _core function that did not exist.
     event = AMDPredictionEvent(
-        speech_duration=1.0, category=category, reason="llm", transcript="hi", delay=0.5
+        speech_duration=timedelta(seconds=1),
+        category=category,
+        reason="llm",
+        transcript="hi",
+        delay=timedelta(seconds=0.5),
     )
     assert (event.is_human, event.is_machine) == (human, machine)

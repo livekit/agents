@@ -157,8 +157,8 @@ fn a_defaulted_typed_dict_key_is_not_required_whatever_its_annotation() {
 }
 
 // Catches: a scalar-or-map option (`Policy | dict[str, Policy] | None`) needing wrapper classes,
-// `None` not crossing as the unit variant, a policy string read as a model instance, an `int`
-// refused where seconds are a `float`, or `int` and `float` variants left ambiguous.
+// `None` not crossing as the unit variant, a policy string read as a model instance, a duration
+// not told apart as a `timedelta`, or `int` and `float` variants left ambiguous.
 #[test]
 fn a_transparent_record_crosses_scalars_maps_and_none() {
     let decls = read(
@@ -187,9 +187,14 @@ fn a_transparent_record_crosses_scalars_maps_and_none() {
     let shell = crate::records::conversions(&decls).expect("emits").text;
     assert!(
         shell.contains("return Ok(::lk_agents_abi::llm::class::PolicySpec::Default);")
-            && shell.contains("::lk_agents_abi::llm::class::PolicySpec::Default => py.None().into_bound(py),")
-            && shell.contains("PolicySpec::All(crate::generated::records::options::policy_from_py(obj)?)")
-            && shell.contains("obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>()"),
+            && shell.contains(
+                "::lk_agents_abi::llm::class::PolicySpec::Default => py.None().into_bound(py),"
+            )
+            && shell.contains(
+                "PolicySpec::All(crate::generated::records::options::policy_from_py(obj)?)"
+            )
+            && shell.contains("obj.is_instance_of::<::pyo3::types::PyDelta>()")
+            && shell.contains("extract_at::<::std::time::Duration>(obj, "),
         "{shell}"
     );
     let not_none = read(
@@ -207,6 +212,38 @@ fn a_transparent_record_crosses_scalars_maps_and_none() {
     assert!(
         crate::records::conversions(&ambiguous).err().is_some_and(|e| e.contains("share a class"))
     );
+}
+
+// Catches: an options record's `Kwargs` missing, required (not `total=False`), annotated with
+// `NotGivenOr`, a duration not a `timedelta`, its field docs dropped, or not exported beside it.
+#[test]
+fn an_options_record_emits_its_keyword_arguments() {
+    let decls = read(
+        r#"use crate::utils::maybe::Maybe;
+        #[crate::host(record(module = "options", path = "livekit.agents", dataclass, extract, kwargs))]
+        pub struct ServerOptions {
+            /// Seconds of grace.
+            pub drain_timeout: Maybe<std::time::Duration>,
+            pub http_proxy: Maybe<Option<String>>,
+        }"#,
+    )
+    .expect("resolves");
+    let models = crate::records::python(&decls).expect("models");
+    let options = &models.iter().find(|o| o.path == "options.py").expect("options.py").text;
+    assert!(
+        options.contains(
+            "class ServerOptionsKwargs(TypedDict, total=False):\n    \"\"\"`ServerOptions`'s fields as keyword arguments.\"\"\"\n\n    drain_timeout: timedelta\n    \"\"\"Seconds of grace.\"\"\"\n    http_proxy: str | None\n"
+        ) && options.contains("ServerOptionsKwargs.__module__ = \"livekit.agents\"\n"),
+        "{options}"
+    );
+    let placed = crate::exports::placed(&decls, &[]);
+    assert!(placed["livekit.agents"].iter().any(|(_, n)| n == "ServerOptionsKwargs"));
+    let typed = read(
+        r#"use crate::utils::maybe::Maybe;
+        #[crate::host(record(module = "options", typed_dict, kwargs, extract))]
+        pub struct Keys { pub a: Maybe<String> }"#,
+    );
+    assert!(typed.err().is_some_and(|e| e.contains("kwargs follows an options struct")));
 }
 
 // Catches: a nested model (`RealtimeModelMetrics.InputTokenDetails`) emitted at module level,

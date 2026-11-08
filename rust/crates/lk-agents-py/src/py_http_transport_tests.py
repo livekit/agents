@@ -123,14 +123,14 @@ async def test_stalled_response_expires_under_the_read_limit(
 async def test_writer_cleanup_preserves_the_expired_phase() -> None:
     async with aiohttp.ClientSession() as session:
         with pytest.raises(APITimeoutError) as error:
-            async with http_context._phase_limits(
+            async with http_context._under_limits(
                 session, replace(_UNLIMITED, write_timeout=0), after_connect=None
-            ) as phases:
-                phases.arm("write")
+            ) as deadline:
+                deadline.set_limit("write")
                 try:
                     await asyncio.Event().wait()
                 finally:
-                    phases.arm(None)
+                    deadline.set_limit(None)
         assert error.value.phase == "write"
 
 
@@ -138,7 +138,7 @@ async def test_an_unclassified_timeout_keeps_its_identity() -> None:
     failure = TimeoutError("application timeout")
     async with aiohttp.ClientSession() as session:
         with pytest.raises(TimeoutError) as error:
-            async with http_context._phase_limits(session, _UNLIMITED, after_connect=None):
+            async with http_context._under_limits(session, _UNLIMITED, after_connect=None):
                 raise failure
         assert error.value is failure
 

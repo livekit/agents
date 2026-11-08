@@ -4,7 +4,7 @@ use super::{RtcError, TrackSource};
 use crate::utils::video::{MediaFrame, VideoFrame};
 use std::any::Any;
 
-#[crate::host(record(module = "rtc_wire", emit))]
+#[crate::host(record(module = "rtc_wire", emit, sdk))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VideoTrackOptions {
     pub name: String,
@@ -49,8 +49,8 @@ pub trait AVSynchronizer: Send + Sync + Sized + 'static {
 }
 
 use super::PlaybackInfo;
-use std::time::Duration;
 
+/// The `queued_seconds` are `rtc.AudioSource.queued_duration`, float seconds as the SDK reads.
 #[crate::host(class(name = "PlayoutLedger"))]
 pub trait PlayoutLedger: Sized + Send + Sync + 'static {
     #[host(new)]
@@ -58,9 +58,9 @@ pub trait PlayoutLedger: Sized + Send + Sync + 'static {
     #[host(call)]
     fn add_pushed_samples(&self, samples_per_channel: u32, sample_rate: u32);
     #[host(call)]
-    fn add_discarded(&self, duration: Duration);
+    fn add_discarded(&self, queued_seconds: f64);
     #[host(call)]
-    fn snapshot(&self, queued: Duration) -> PlaybackInfo;
+    fn snapshot(&self, queued_seconds: f64) -> PlaybackInfo;
     #[host(call)]
     fn settle(&self) -> PlaybackInfo;
 }

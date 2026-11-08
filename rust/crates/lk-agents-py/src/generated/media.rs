@@ -102,10 +102,11 @@ pub fn encode_image<'py>(
 
 /// A frame as JPEG bytes, resized to its inference size when it has one.
 #[pyfunction]
-#[pyo3(signature = (frame, inference_width = None, inference_height = None))]
+#[pyo3(signature = (frame, inference_detail, inference_width = None, inference_height = None))]
 pub fn serialize_image_frame<'py>(
     py: Python<'py>,
     frame: Bound<'_, PyAny>,
+    inference_detail: Bound<'_, PyAny>,
     #[pyo3(from_py_with = _extract_image_functions_serialize_image_frame_inference_width)]
     inference_width: ImageFunctionsSerializeImageFrameInferenceWidthInput,
     #[pyo3(from_py_with = _extract_image_functions_serialize_image_frame_inference_height)]
@@ -114,25 +115,40 @@ pub fn serialize_image_frame<'py>(
     crate::py_calls::check_pid()?;
     let env = crate::process::env();
     let frame = crate::generated::utils::RtcVideoFrameProxy::from_host(frame.as_any())?;
+    let inference_detail =
+        crate::generated::records::chat_items::inference_detail_from_py(inference_detail.as_any())?;
     crate::py_calls::future_into_py(py, async move {
-        let out = <ImageFunctionsImpl as ::lk_agents_abi::media::images::ImageFunctions>::serialize_image_frame(&env, frame, inference_width, inference_height).await.map_err(|e: ::lk_agents_abi::media::images::ImageError| <::lk_agents_abi::media::images::ImageError as crate::py_errors::HostException>::to_py_err(&e))?;
-        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        let out = <ImageFunctionsImpl as ::lk_agents_abi::media::images::ImageFunctions>::serialize_image_frame(&env, frame, inference_detail, inference_width, inference_height).await.map_err(|e: ::lk_agents_abi::media::images::ImageError| <::lk_agents_abi::media::images::ImageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Python::attach(|py| {
+            ::pyo3::IntoPyObjectExt::into_py_any(
+                crate::generated::records::llm::serialized_image_to_py(py, out)?,
+                py,
+            )
+        })
     })
 }
 
 /// A URL's inline bytes and MIME type, or the URL itself when it is external.
 #[pyfunction]
-#[pyo3(signature = (url, mime_type))]
+#[pyo3(signature = (url, inference_detail, mime_type))]
 pub fn serialize_image_url<'py>(
     py: Python<'py>,
     url: ::std::string::String,
+    inference_detail: Bound<'_, PyAny>,
     mime_type: ::std::option::Option<::std::string::String>,
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
     let env = crate::process::env();
+    let inference_detail =
+        crate::generated::records::chat_items::inference_detail_from_py(inference_detail.as_any())?;
     crate::py_calls::future_into_py(py, async move {
-        let out = <ImageFunctionsImpl as ::lk_agents_abi::media::images::ImageFunctions>::serialize_image_url(&env, url, mime_type).await.map_err(|e: ::lk_agents_abi::media::images::ImageError| <::lk_agents_abi::media::images::ImageError as crate::py_errors::HostException>::to_py_err(&e))?;
-        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        let out = <ImageFunctionsImpl as ::lk_agents_abi::media::images::ImageFunctions>::serialize_image_url(&env, url, inference_detail, mime_type).await.map_err(|e: ::lk_agents_abi::media::images::ImageError| <::lk_agents_abi::media::images::ImageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Python::attach(|py| {
+            ::pyo3::IntoPyObjectExt::into_py_any(
+                crate::generated::records::llm::serialized_image_to_py(py, out)?,
+                py,
+            )
+        })
     })
 }
 

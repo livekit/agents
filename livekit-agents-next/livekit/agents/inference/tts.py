@@ -4,14 +4,13 @@ import dataclasses
 from typing import Any
 
 from .. import _core, tts
-from .._generated import public_inference_tts as _public
+from .._generated import facades_inference_tts as _facades, public_inference_tts as _public
 from .._generated.inference_tts import FallbackModel as FallbackModel
 from .._generated.language import LanguageCode
-from .._generated.provider_hosts import InferenceTtsHost
 from .._generated.public_inference_tts import *  # noqa: F403
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from ..utils import is_given, shortuuid
-from . import Credentials, get_inference_headers
+from ..utils import is_given
+from . import _resolve_credentials, get_inference_headers
 
 FallbackModelType = FallbackModel | str
 
@@ -27,7 +26,7 @@ __all__ += _public.__all__
 DEFAULT_SAMPLE_RATE = 24000
 
 
-class TTS(InferenceTtsHost, tts.TTS):
+class TTS(_facades.TTS, tts.TTS):
     """LiveKit Inference TTS over the core's gateway client (``_core.InferenceTts``)."""
 
     def __init__(
@@ -74,7 +73,7 @@ class TTS(InferenceTtsHost, tts.TTS):
             for f in fallbacks
         ]
         self._conn_options = conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS
-        credentials = Credentials.resolve(base_url, api_key, api_secret)
+        credentials = _resolve_credentials(base_url, api_key, api_secret)
         self._base_url, self._api_key, self._api_secret = dataclasses.astuple(credentials)
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -160,16 +159,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        native = await self._tts._core_native().stream(
+    async def _core_open(self) -> _core.TtsStream:
+        return await self._tts._core_native().stream(
             conn_options=self._conn_options, expressive=self._expressive
         )
-        output_emitter.initialize(
-            request_id=shortuuid("tts_"),
-            sample_rate=self._tts.sample_rate,
-            num_channels=1,
-            stream=True,
-            mime_type="audio/pcm",
-        )
 
-        await tts._duplex(self, native, output_emitter, self.input)
+    _run = tts.SynthesizeStream._core_run_native

@@ -694,6 +694,8 @@ fn duplex_class(
         shape_error: None,
         one_or_many: false,
         pcm: false,
+        sdk: false,
+        kwargs: false,
     };
     let (item_ty, convert) = input(&at, &param)?;
     let convert = convert.map(|c| format!("        let item = {c};\n")).unwrap_or_default();
@@ -828,6 +830,9 @@ fn object_default(p: &Param) -> Option<&str> {
 /// taken as an object.
 fn input(at: &str, p: &Param) -> Result<(String, Option<String>), String> {
     let path = format!("{:?}", p.name);
+    if p.sdk {
+        return crate::proxy_sdk::input(p);
+    }
     if let (true, Ty::List(item)) = (p.one_or_many, &p.ty) {
         return Ok((
             "Bound<'_, PyAny>".into(),
@@ -1007,9 +1012,9 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
                 len = items.len(),
             )
         }
-        Ty::Duration => format!(
-            "crate::py_values::number_from_py::<f64>({v}.as_any(), {path}).and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{{}}: {{e}}\", {path}))))"
-        ),
+        Ty::Duration => {
+            format!("crate::py_values::extract_at::<::std::time::Duration>({v}.as_any(), {path})")
+        }
         Ty::Optional(inner) => format!(
             "if {v}.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }}",
             from_object(v, inner, path, at)?

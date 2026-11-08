@@ -6,8 +6,7 @@ import asyncio
 import json
 import weakref
 from collections.abc import Callable, Mapping, Sequence
-from datetime import timedelta
-from typing import TypedDict, cast
+from typing import cast
 
 from pydantic import JsonValue
 from typing_extensions import Unpack
@@ -20,7 +19,7 @@ from ._generated.a2a_door import DoorConfig
 from ._generated.a2a_metadata import GRANT_HEADER, RPC_PATH
 from ._generated.a2a_remote import RemoteEventInputRequired, RemoteEventOutcome
 from ._generated.public_a2a import *  # noqa: F403
-from ._generated.storage_options import Policy, TurnOptions
+from ._generated.storage_options import TurnOptions, TurnOptionsKwargs
 from ._generated.tool_report import ToolOutcomeInputRequired, ToolReport
 from .job import _server_credentials
 from .llm.tool_context import InputRequired, RawFunctionTool, Tool, Toolset, function_tool
@@ -271,13 +270,9 @@ def _json_object(value: dict[str, object]) -> dict[str, JsonValue]:
     return cast("dict[str, JsonValue]", value)
 
 
-class A2ASessionOptions(TypedDict, total=False):
+class A2ASessionOptions(TurnOptionsKwargs, total=False):
     """``a2a_session``'s optional parameters (docs/server.md)."""
 
-    inbox: Policy | Mapping[str, Policy] | None
-    """The turn policy for a message that arrives while one runs, or a map by channel."""
-    debounce: timedelta | Mapping[str, timedelta] | None
-    """How long to wait for more of a burst, or a map by channel."""
     storage: Storage | None
     """This endpoint's storage when it is not the server's."""
     version: str | None
@@ -307,21 +302,17 @@ class A2AEndpoint:
         *,
         endpoint: str,
         description: str,
-        inbox: Policy | Mapping[str, Policy] | None = None,
-        debounce: timedelta | Mapping[str, timedelta] | None = None,
         storage: Storage | None = None,
         version: str | None = None,
         lane: str | None = None,
+        **turn: Unpack[TurnOptionsKwargs],
     ) -> None:
         if not endpoint or "/" in endpoint:
             raise ValueError("endpoint is one path segment, the last of the endpoint's URL")
         self.handler = handler
         self.name = endpoint
         self.description = description
-        self.turn_options = TurnOptions(
-            policy=dict(inbox) if isinstance(inbox, Mapping) else inbox,
-            debounce=_seconds(debounce),
-        )
+        self.turn_options = TurnOptions(**turn)
         self.version = version or ""
         self.lane = lane
         self._storage = storage
@@ -384,17 +375,6 @@ class A2AEndpoint:
             name=self.name, description=self.description, version=self.version, url=root + RPC_PATH
         )
         return cast("dict[str, JsonValue]", json.loads(_core_a2a_agent_card(descriptor)))
-
-
-def _seconds(
-    debounce: timedelta | Mapping[str, timedelta] | None,
-) -> float | dict[str, float] | None:
-    """The decorator's ``debounce`` as the turn's options carry it."""
-    if debounce is None:
-        return None
-    if isinstance(debounce, timedelta):
-        return debounce.total_seconds()
-    return {channel: wait.total_seconds() for channel, wait in debounce.items()}
 
 
 __all__ = [

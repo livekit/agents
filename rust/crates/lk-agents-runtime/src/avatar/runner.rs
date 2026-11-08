@@ -35,9 +35,12 @@ impl AvatarIo {
             AvatarIoOperation::OpenAudio => {
                 AvatarEvent::AudioOpened(self.receiver.open_audio(&telemetry::Cx::NONE).await)
             }
-            AvatarIoOperation::NextAudio => {
-                AvatarEvent::Audio(self.receiver.next_audio(&telemetry::Cx::NONE).await)
-            }
+            AvatarIoOperation::NextAudio => AvatarEvent::Audio(
+                self.receiver
+                    .next_audio(&telemetry::Cx::NONE)
+                    .await
+                    .map(|o| (o.epoch, o.starts_segment, o.segment, o.frame)),
+            ),
             AvatarIoOperation::PushAudio(frame) => AvatarEvent::AudioPushed(
                 self.generator.push_audio(&telemetry::Cx::NONE, frame).await,
             ),
@@ -60,9 +63,9 @@ impl AvatarIo {
                         .receiver
                         .notify_playback_finished(
                             &telemetry::Cx::NONE,
-                            segment,
                             position,
                             interrupted,
+                            segment,
                         )
                         .await,
                 }

@@ -27,6 +27,22 @@ pub const HEADER_INFERENCE_PRIORITY: &str = "X-LiveKit-Inference-Priority";
 /// `LIVEKIT_INFERENCE_URL`, `LIVEKIT_INFERENCE_API_KEY`, `LIVEKIT_INFERENCE_API_SECRET` and
 /// `LIVEKIT_WORKER_TOKEN` from the environment; `server_*` are the server's `LIVEKIT_URL` and key
 /// pair as the host resolves them (in a job, its `AgentServer`'s settings).
+/// Where a gateway client connects, and with what.
+#[crate::host(record(
+    module = "inference_credentials",
+    path = "livekit.agents.inference",
+    name = "Credentials",
+    dataclass,
+    frozen,
+    emit
+))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayCredentials {
+    pub base_url: String,
+    pub api_key: String,
+    pub api_secret: String,
+}
+
 #[crate::host(functions)]
 pub trait InferenceCredentials {
     /// `explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `server`; `""` when nothing resolves. A
@@ -59,7 +75,7 @@ pub trait InferenceCredentials {
         server_url: Option<String>,
         server_api_key: Option<String>,
         server_api_secret: Option<String>,
-    ) -> Result<(String, String, String), Invalid>;
+    ) -> Result<GatewayCredentials, Invalid>;
 
     /// An inference request's identification headers, in order: `user_agent`, the priority of a
     /// nonempty `inference_class`, and in a job (`job_headers` given) its nonempty room, job and

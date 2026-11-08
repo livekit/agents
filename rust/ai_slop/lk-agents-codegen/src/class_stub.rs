@@ -101,7 +101,11 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
                 let ty = match f.ty {
                     Ty::Bool => "bool",
                     Ty::Int(_) => "int",
-                    Ty::Float | Ty::Duration | Ty::Timestamp => "float",
+                    Ty::Float | Ty::Timestamp => "float",
+                    Ty::Duration => {
+                        imports.add("datetime", "timedelta");
+                        "timedelta"
+                    }
                     _ => "str",
                 };
                 body.push_str(&format!("\ndef {function}(record: {}) -> {ty}: ...\n", r.name));
@@ -446,6 +450,8 @@ pub(crate) fn parameters(c: &Class, m: &Method, imports: &mut Imports) -> Vec<(S
                 format!("{item} | list[{item}]")
             } else if p.pcm {
                 "bytes | bytearray | memoryview".to_owned()
+            } else if p.sdk {
+                crate::proxy_sdk::annotation(&p.ty).to_owned()
             } else if p.shape_error.as_ref().is_some_and(|policy| policy.items) {
                 strict_list_input(c, &p.ty, imports)
             } else {
@@ -488,7 +494,11 @@ pub(crate) fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -
         Ty::CallContext | Ty::Cx | Ty::Cancellation | Ty::Env => "object".into(),
         Ty::Bool => "bool".into(),
         Ty::Int(_) => "int".into(),
-        Ty::Float | Ty::Duration | Ty::Timestamp => "float".into(),
+        Ty::Float | Ty::Timestamp => "float".into(),
+        Ty::Duration => {
+            imports.add("datetime", "timedelta");
+            "timedelta".into()
+        }
         Ty::Str => "str".into(),
         Ty::Json => "object".into(),
         Ty::JsonObject => "dict[str, object]".into(),
@@ -572,6 +582,25 @@ pub(crate) fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -
                     result = format!("Awaitable[{result}]");
                 }
                 return format!("Callable[[{params}], {result}]");
+            }
+            // A host `AsyncIterator` pulled by `iter`: typed by the item it yields.
+            if host == "collections.abc.AsyncIterator"
+                && let Some((family, name)) = declared
+                && let Some(method) = imports
+                    .proxies
+                    .iter()
+                    .find(|proxy| &proxy.family == family && &proxy.rust_name == name)
+                    .and_then(|proxy| {
+                        proxy.methods.iter().find(|m| m.target == crate::decl::Target::Iter(vec![]))
+                    })
+                    .cloned()
+                && let Ty::Optional(item) = &method.ret.ok
+            {
+                imports.add("collections.abc", "AsyncIterator");
+                return format!(
+                    "AsyncIterator[{}]",
+                    annotation(this, item, Dir::ProxyResult, imports)
+                );
             }
             // A dotted class, with its type arguments when it is generic (`aio.Chan[..]`).
             let name = imports.annotation(host, "");

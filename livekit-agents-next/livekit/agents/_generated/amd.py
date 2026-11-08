@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from enum import StrEnum, unique
 from typing import Final, Literal, NotRequired, TypeAlias
 
@@ -24,11 +25,11 @@ class AMDCategory(StrEnum):
 
 @dataclass(kw_only=True, slots=True)
 class AMDPredictionEvent:
-    speech_duration: float
+    speech_duration: timedelta
     category: AMDCategory
     reason: Literal["detection_timeout", "no_speech_timeout", "short_greeting", "llm", "participant_missing"]
     transcript: str
-    delay: float
+    delay: timedelta
     type: Literal["amd_prediction"] = "amd_prediction"
 
     @property

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import os
 import signal
@@ -381,6 +382,7 @@ async def _drive(server: Any, jobs: int) -> None:
 
 def _worker_main() -> None:
     from livekit.agents import AgentServer, cli, ipc
+    from livekit.agents._generated.worker_options import ProcessOptions
     from livekit.agents.job import JobExecutorType
 
     options = json.loads(os.environ["IT_OPTS"])
@@ -400,8 +402,10 @@ def _worker_main() -> None:
     options.setdefault("listeners", {"health": {"port": 0}})
 
     # the IPC options are private: set them where the CLI does
+    tuning = {f.name for f in dataclasses.fields(ProcessOptions)}
+    process = ProcessOptions(**{k: v for k, v in options.items() if k in tuning})
     server = AgentServer()
-    server._update_options(**options)
+    server._update_options(process, **{k: v for k, v in options.items() if k not in tuning})
     server.rtc_session()(_entrypoint)
     if SCENARIO == "cli_shutdown":
         job_task: asyncio.Task[None] | None = None
@@ -413,7 +417,7 @@ def _worker_main() -> None:
         server._on_started.append(start_job)
         args = _core.parse_cli(["agent", "start"]).args
         raise SystemExit(cli._run_worker(server, args, unregistered=True))
-    cli.setup_logging("DEBUG")
+    cli.setup_logging("debug")
     asyncio.run(_drive(server, int(os.environ["IT_JOBS"])))
 
 

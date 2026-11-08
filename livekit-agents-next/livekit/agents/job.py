@@ -204,11 +204,11 @@ class JobContext:
         if session is None or self._session_report is not None:
             return
         try:
-            await session._owner.finish_recording()
+            await session._native.finish_recording()
         except Exception:
             logger.exception("failed to finish the session recording")
         try:
-            self._session_report = await session._owner.final_report(
+            self._session_report = await session._native.final_report(
                 self._report_job, session._adapter._legs(), session._report_event_snapshots()
             )
         except Exception:
@@ -248,15 +248,12 @@ class JobContext:
             self._sessions.append(session)
         return self._sessions[0] is session
 
-    def _core_recording_dir(self) -> str:
-        return str(self._session_directory)
-
     def _core_on_shutdown(self, session: VoiceSession) -> None:
         from .voice.events import CloseReason
 
         # the native close, run in the shutdown's span (a framework callback opens none of its own)
         self._run.add_shutdown_callback(
-            functools.partial(session._owner.aclose, CloseReason.JOB_SHUTDOWN.value),
+            functools.partial(session._native.aclose, CloseReason.JOB_SHUTDOWN.value),
             takes_reason=False,
             framework=True,
             name="VoiceSession.aclose",
@@ -291,7 +288,7 @@ class JobContext:
         session = session or self._primary_agent_session
         if session is None:
             raise RuntimeError("Cannot prepare report, no VoiceSession was found")
-        if not session._owner.allows_report(self.job.id):
+        if not session._native.allows_report(self.job.id):
             raise PermissionError("A session report is available only to its owning job")
         return session
 
@@ -301,7 +298,7 @@ class JobContext:
         session = self._report_session(session)
         report = self._session_report
         if report is None or session is not self._primary_agent_session:
-            report = session._owner.report(
+            report = session._native.report(
                 self._report_job,
                 session._adapter._legs(),
                 session._report_event_snapshots(),
@@ -540,10 +537,6 @@ class JobContext:
                 single_peer_connection,
             )
         )
-
-    async def _core_connect(self) -> None:
-        # a session on the job's room connects it beside its start (`_core.SessionJob`)
-        await self.connect()
 
     async def _connect(
         self,

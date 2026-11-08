@@ -6,7 +6,7 @@ use lk_agents_abi::{ImageContent, InferenceDetail};
 // `llm/utils.py`'s `SerializedImage`: what `serialize_image` returns. `inference_detail` is
 // [`InferenceDetail`] rather than a bare `str`: an unknown value raises rather than sending the
 // wrong fidelity. Stays here: the encoder crate sits below this one.
-#[crate::host(record(module = "llm", path = "livekit.agents.llm.utils", extract))]
+#[crate::host(record(module = "llm", path = "livekit.agents.llm.utils", extract, emit))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerializedImage {
     pub inference_detail: InferenceDetail,

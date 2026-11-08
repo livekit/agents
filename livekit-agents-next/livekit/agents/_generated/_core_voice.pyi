@@ -27,14 +27,14 @@ from livekit.agents.voice.io import (
     VideoInput,
     _StreamingTurnDetector,
 )
-from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
-from livekit.rtc import VideoFrame
+from livekit.agents.voice.room_io import RemoteParticipant, TrackPublication
+from livekit.rtc import Room, VideoFrame
 
 from .._core import SessionRecorder, Storage, VoiceAgent, _core_ContextActivation, _core_VoiceStore
 from ..types import NotGivenOr
 from .agent_nodes import NodeFrame
 from .amd import AMDConfig, AMDPredictionEvent
-from .avatar import AudioReceiverFrame, MediaFrame
+from .avatar import AudioReceiverObservation, MediaFrame
 from .avatar_options import AvatarOptions
 from .avatar_queue import QueueEffects
 from .background_audio_wire import Sound
@@ -44,6 +44,7 @@ from .events import AgentState, UserState
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
 from .llm import ChatChunk
 from .metrics import AvatarMetrics
+from .playback_events import PlaybackFinishedEvent
 from .rtc_frames import AudioFrame
 from .rtc_wire import PlaybackInfo
 from .session_options import (
@@ -77,7 +78,7 @@ from .workflows import CapturePlan, DtmfEvent, InstructionsArg, TwilioDial
 def amd_resolve_max_endpointing_delay(provided: float | None, activity: float | None) -> float:
     """`_resolve_classifier`'s `max_endpointing_delay`: explicit option, else the activity's,
     else the default. `provided` is `None` only when the key was absent: an explicit default
-    still beats a disagreeing activity.
+    still beats a disagreeing activity. Seconds, as the options hold them.
     """
 
 def amd_prediction_is_human(prediction: AMDPredictionEvent) -> bool:
@@ -117,9 +118,7 @@ class DataStreamAudioReceiver:
         on_clear_buffer: AudioReceiver | None = None,
     ) -> Self: ...
     async def start(self) -> None: ...
-    async def next_audio(
-        self,
-    ) -> tuple[int, bool, AvatarPlaybackSegment | None, AudioReceiverFrame | None]: ...
+    async def next_audio(self) -> AudioReceiverObservation: ...
     def notify_playback_started(self, segment: AvatarPlaybackSegment) -> None: ...
     def notify_playback_finished(
         self,
@@ -189,9 +188,7 @@ class _core_QueueAudio:
         segment: AvatarPlaybackSegment | None,
     ) -> QueueEffects: ...
     def playback_started(self, segment: AvatarPlaybackSegment | None) -> QueueEffects: ...
-    async def next_audio(
-        self,
-    ) -> tuple[int, bool, AvatarPlaybackSegment | None, AudioReceiverFrame | None]: ...
+    async def next_audio(self) -> AudioReceiverObservation: ...
     def close(self) -> QueueEffects: ...
 
 class PlayState:
@@ -222,7 +219,7 @@ class BackgroundAudioPlayer:
         *,
         ambient: Sequence[Sound],
         choose: bool,
-        source: Literal["unknown", "camera", "microphone", "screenshare", "screenshare_audio"] | None = None,
+        source: int | None = None,
     ) -> str: ...
     def play(
         self,
@@ -252,10 +249,8 @@ class PlaybackTracker:
     def __new__(cls) -> Self: ...
     def note_flush(self) -> None: ...
     def reset(self) -> None: ...
-    async def wait_for_playout(self) -> tuple[float, bool, str | None]:
-        """`AudioOutput.wait_for_playout()`: the last event as `(playback_position, interrupted,
-        synchronized_transcript)`.
-        """
+    async def wait_for_playout(self) -> PlaybackFinishedEvent:
+        """`AudioOutput.wait_for_playout()`: the last event."""
 
 def _core_playback_begin(tracker: PlaybackTracker, segment: PlaybackSegment) -> bool: ...
 
@@ -388,18 +383,12 @@ def _core_room_participant_attributes_changed(
 def _core_room_participant_disconnected(
     bus: RoomEventBus,
     participant: RemoteParticipant,
-    reason: Literal["unknown", "client_initiated", "duplicate_identity", "server_shutdown", "participant_removed", "room_deleted", "state_mismatch", "join_failure", "migration", "signal_close", "room_closed", "user_unavailable", "user_rejected", "sip_trunk_failure", "connection_timeout", "media_failure", "agent_error"],
+    reason: int,
 ) -> None: ...
 
-def _core_room_connection_state_changed(
-    bus: RoomEventBus,
-    state: Literal["disconnected", "connected", "reconnecting"],
-) -> None: ...
+def _core_room_connection_state_changed(bus: RoomEventBus, state: int) -> None: ...
 
-def _core_room_disconnected(
-    bus: RoomEventBus,
-    reason: Literal["unknown", "client_initiated", "duplicate_identity", "server_shutdown", "participant_removed", "room_deleted", "state_mismatch", "join_failure", "migration", "signal_close", "room_closed", "user_unavailable", "user_rejected", "sip_trunk_failure", "connection_timeout", "media_failure", "agent_error"],
-) -> None: ...
+def _core_room_disconnected(bus: RoomEventBus, reason: int) -> None: ...
 
 def _core_room_sip_dtmf_received(
     bus: RoomEventBus,
@@ -424,10 +413,11 @@ class AVSynchronizer:
     async def aclose(self) -> None: ...
 
 class PlayoutLedger:
+    """The `queued_seconds` are `rtc.AudioSource.queued_duration`, float seconds as the SDK reads."""
     def __new__(cls) -> Self: ...
     def add_pushed_samples(self, samples_per_channel: int, sample_rate: int) -> None: ...
-    def add_discarded(self, duration: float) -> None: ...
-    def snapshot(self, queued: float) -> PlaybackInfo: ...
+    def add_discarded(self, queued_seconds: float) -> None: ...
+    def snapshot(self, queued_seconds: float) -> PlaybackInfo: ...
     def settle(self) -> PlaybackInfo: ...
 
 class ByteStreamSender:
@@ -1138,7 +1128,7 @@ class WarmTransfer:
         dtmf: str | None = None,
         ringing_timeout: float | None = None,
         instructions: NotGivenOr[InstructionsArg] = ...,
-        conversation: Sequence[tuple[str, str]] | None = None,
+        conversation: Sequence[ChatItem] | None = None,
         env_sip_trunk: str | None = None,
         env_sip_number: str = "",
         twilio: TwilioDial | None = None,
@@ -1212,8 +1202,6 @@ class NodeAudio:
 class NodeTranscript:
     async def recv(self) -> TranscriptChunk | None: ...
     async def aclose(self) -> None: ...
-
-def rtc_wire_names() -> tuple[list[str], list[str], list[str]]: ...
 
 def video_queue_frames() -> int: ...
 

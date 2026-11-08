@@ -694,8 +694,8 @@ mod queue_tests {
             .await
         );
         assert!(queue.close().reset);
-        assert_eq!(pending.await, (0, false, None, None));
-        assert_eq!(queue.next_audio().await, (0, false, None, None));
+        assert_eq!(pending.await, AudioReceiverObservation::default());
+        assert_eq!(queue.next_audio().await, AudioReceiverObservation::default());
         assert!(!queue.close().reset);
     }
 }
