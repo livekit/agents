@@ -65,6 +65,7 @@ from .llm.tool_context import (
     Working,
     function_tool,
 )
+from .plugin import Plugin
 from .storage.context import load_context, persisted, save_context
 from .text_session import TextSession, TextSessionRoutingError, TextSessionState, TextSessionTurn
 from .types import (
@@ -125,7 +126,6 @@ from .voice.run_result import (
 from .worker import (
     AgentHandler,
     AgentServer,
-    Plugin,
     rtc_session,
 )
 

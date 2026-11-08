@@ -165,7 +165,7 @@ def load_preload_modules(modules: Sequence[str]) -> None:
         except Exception as error:
             # multiprocessing's forkserver ignores ImportError from its preload list.
             raise RuntimeError(f"preload module {module!r} failed: {error}") from error
-    from ..worker import Plugin
+    from ..plugin import Plugin
 
     for plugin in Plugin.registered_plugins:
         _load_exports(importlib.import_module(plugin.package))

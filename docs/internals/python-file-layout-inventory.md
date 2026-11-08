@@ -589,6 +589,7 @@ These source classifications are not additive savings; the exact target contains
 | [metrics.py](../../livekit-agents-next/livekit/agents/metrics.py) | 45 | Retain | `metrics.py`. Retain the v1 public provider metric records and log_metrics API; OTel/Prometheus collection stays separate. |
 | [simulation.py](../../livekit-agents-next/livekit/agents/simulation.py) | 111 | Merge | `evals.py`. Simulation verdict/context and judge evaluation form one evaluation/testing API; avoid adding this to already-large job.py. |
 | [stt.py](../../livekit-agents-next/livekit/agents/stt.py) | 298 | Retain | `stt.py`. Already consolidated public STT contract, fallback and stream adaptation module. |
+| [plugin.py](../../livekit-agents-next/livekit/agents/plugin.py) | 50 | Retain | `plugin.py`. The plugin-author contract: the `Plugin` a provider package registers on import; the server and the forkserver preload read the registry. |
 | [text_session.py](../../livekit-agents-next/livekit/agents/text_session.py) | 227 | Retain | `text_session.py`. Keep request-scoped TextSession host/agent hydration wrapper distinct from A2A transport Turn context. |
 | [tts.py](../../livekit-agents-next/livekit/agents/tts.py) | 480 | Retain | `tts.py`. Already consolidated public TTS contract, emitter/stream adaptation and pacing module. |
 | [types.py](../../livekit-agents-next/livekit/agents/types.py) | 34 | Retain | `types.py`. Retain useful v1 public constants, sentinel/options types and NotGivenOr, plus existing root re-exports. |

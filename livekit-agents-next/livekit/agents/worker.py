@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import logging
 import multiprocessing as mp
-import threading
-from abc import ABC
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypedDict, TypeVar
@@ -24,6 +21,7 @@ from .http import AgentRoutes
 from .ipc import preload_module_names
 from .job import JobContext
 from .log import logger
+from .plugin import Plugin
 from .storage import _CallThreadEntrypoint
 from .storage.session import _Handler
 from .types import NOT_GIVEN, NotGivenOr
@@ -258,7 +256,7 @@ class AgentServer(AgentHandler):
                 routes=self._http._manifest,
                 has_load_fnc=self._load_fnc is not None,
                 endpoints=self._http,
-                text_doors=[await door.service.native() for door in self._a2a_endpoints.values()],
+                text_doors=[door._door() for door in self._a2a_endpoints.values()],
                 asyncio_debug=asyncio.get_running_loop().get_debug(),
             )
         finally:
@@ -383,42 +381,3 @@ class _ServerCallbacks:
         assert load_fnc is not None
         args = (self._server,) if inspect.signature(load_fnc).parameters else ()
         return await asyncio.get_running_loop().run_in_executor(None, load_fnc, *args)
-
-
-class Plugin(ABC):  # noqa: B024
-    registered_plugins: list[Plugin] = []
-
-    def __init__(
-        self,
-        title: str,
-        version: str,
-        package: str,
-        logger: logging.Logger | None = None,
-    ) -> None:
-        self._title = title
-        self._version = version
-        self._package = package
-        self._logger = logger
-
-    @classmethod
-    def register_plugin(cls, plugin: Plugin) -> None:
-        if threading.current_thread() != threading.main_thread():
-            raise RuntimeError("Plugins must be registered on the main thread")
-
-        cls.registered_plugins.append(plugin)
-
-    @property
-    def package(self) -> str:
-        return self._package
-
-    @property
-    def title(self) -> str:
-        return self._title
-
-    @property
-    def version(self) -> str:
-        return self._version
-
-    @property
-    def logger(self) -> logging.Logger | None:
-        return self._logger
