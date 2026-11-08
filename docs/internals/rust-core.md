@@ -776,15 +776,9 @@ and selects reply tools. The pending-agent view uses native request identities:
 settling an older handoff cannot clear a newer selection. Runtime retains the
 agent references and settles the view when the native handoff answers.
 
-`#[host(facade(...))]` on ABI methods generates explicit Python forwarding
-signatures, including keyword defaults, Future-returning calls and readable
-views. Required native arguments cannot be omitted by a facade. A facade on a class's
-constructor is the host mixin that builds it from the host object's attributes, once per running
-loop or once per object on first use, hands it to the core as the provider unless a subclass
-replaces a declared method, and emits a fallback chain's availability event; the class's other
-facades are the mixin's methods. The fallback adapters' and the inference clients' mixins are
-generated. Python keeps
-handwritten methods where SDK object conversion or callback binding is needed;
+Public Python classes over a native class are generated facades ([Facades](#facades)): the
+fallback adapters, the inference clients and their per-request streams among them. Python keeps
+handwritten subclasses only where SDK object conversion or callback binding is needed;
 configuration types and VoiceTask authoring are separate from the session class.
 
 The runtime owns a tool body's execution and first-progress notification. It
@@ -1011,7 +1005,7 @@ duplicating their decisions.
 | --- | --- | --- |
 | Worker state | Registration, assignments, capacity/status and drain | Every assignment has an explicit disposition; stale connection results cannot revive old assignments |
 | Process supervision | Initialization, heartbeat, shutdown, failure and exit state | The worker owns sockets/pipes and OS lifecycle; host adapter only launches/bootstraps the process |
-| Process pool | Warm capacity, reservations, pending jobs and retry policy | Assign only ready processes; release failed reservations; drain stops admission |
+| Process pool | Warm capacity, reservations, pending jobs and retry policy | Assign only ready processes; release failed reservations; drain stops admission. The server runtime owns the pool and observes its job status; the host supplies only the process launcher (and forkserver), the started notification and the user's load function |
 | Request stream | Bidirectional byte I/O and transport control after the node preamble | The worker dispatches opaque bytes and request metadata through HostInvoker; each binding owns HTTP/WebSocket serving, framework adaptation and application draining |
 | Capacity and authentication | Parsing/load calculations and credential contracts | OS/environment inputs are read at the process boundary; credentials are signed/verified with the LiveKit token SDK |
 | Server lifecycle | Coordination of worker, pool, endpoint and health resources | Resource readiness is explicit; startup/shutdown report each owned operation's outcome, including incomplete cleanup |
@@ -1299,6 +1293,7 @@ cores nor runtime implementations declare a second export surface.
 | `#[host]` for a synchronous operation | Constructor, transition or synchronous API contract | Subject core for decisions; runtime or an async I/O crate for host views and resources |
 | `#[host(proxy)]` on a trait | Provider, user I/O, tool runner, hook or host SDK contract | Generated proxy in `lk-agents-py`, entered through HostInvoker |
 | `#[host(proxy(base = "tts.py"))]` on a trait | Provider contract whose host class is a plugin base class, hand-written in that file beside the trait | Generated proxy; the base written into its generated module after the records, checked to define every declared call |
+| `#[host(facade(...))]` on a trait | Public host class over a native class ([Facades](#facades)) | Generated Python class; a handwritten subclass only for Python-specific leftovers |
 | `#[host]` for an async operation, stream or awaitable | Operation awaited by the host | Runtime or async I/O implementation and generated async bridge |
 
 ABI contains contracts and data, not I/O or host-language implementations. It
@@ -1340,8 +1335,80 @@ pub trait RtcRoom: Send + Sync {
 `view = "module.Class"` remains for host objects whose calls need state the host class does not
 carry, such as a turn detector's opened stream.
 
+A proxy method also declares how it reaches the host, so no `_core_*` method exists only to
+adapt a call: `maybe_await` accepts a host method that returns a value or an awaitable,
+`emit = "event"` emits the record argument on the host's event emitter, and `iter` reads a host
+`AsyncIterator`, with its end read as `None`. A proxy trait can also be emitted as a
+`typing.Protocol` for host code that types its implementations. Rust never calls the host to
+reach another native object: a capability one native owner needs from another is passed
+natively.
+
+SDK event subscriptions are declared on the SDK proxy (event name, argument conversions, the
+native entry they feed); codegen emits the `on(...)` wiring. `proxy(.., sdk)` reads and writes
+`wire_enum` values as SDK numbers in proxy returns, function arguments and record fields alike.
+
 Keep export attributes in one documented vocabulary shared by parsing and
 generation. New keys require multiple concrete uses, not feature-specific glue.
+
+### Boundary values
+
+- No tuple crosses the boundary. A value with more than one field is a `#[host(record)]`;
+  codegen rejects tuple types in ABI signatures.
+- ABI declares every default, constant and environment variable the host sees, once:
+  `#[host(default)]` on parameters and fields, `#[host(constant)]` for constants, and
+  environment resolution in the native configuration (as `ServerConfig` resolves
+  `LIVEKIT_URL`). Python never retypes one.
+- Every string vocabulary is a `wire_strs` enum or a record tag declared in ABI. Its Python
+  `Literal` is generated; Rust matches the enum, never the string.
+- An options record can emit a keyword-arguments `TypedDict` (`kwargs`), so a public
+  constructor takes `**options: Unpack[XOptionsKwargs]` and passes them on unfiltered.
+- `Duration` crosses as `datetime.timedelta`.
+- A Python object that carries a record's data converts through `record(host_type = ...)`:
+  SDK objects, OpenTelemetry API types, public events and outcome classes. No handwritten
+  field-by-field copy or `isinstance` ladder converts between a host object and a record.
+
+### Facades
+
+A public Python class over a native class is declared as its own ABI trait, and that trait reads
+as the Python class: one method per Python method, in order. The native class is named once on
+the trait. A method with no attribute calls the native method of the same name. A delegate is a
+typed associated item that the constructor receives, and a method forwarding to it says so with
+`via`:
+
+```rust
+/// `tts.StreamPacerWrapper`: a sentence stream paced by the audio its emitter pushed.
+#[host(facade(path = "livekit.agents.tts", base = "tokenize.SentenceStream",
+              native = PacedSentences))]
+pub trait StreamPacerWrapper {
+    /// Text pushed to the wrapper goes here.
+    #[host(delegate)]
+    type SentStream: HostSentenceStream;
+
+    #[host(new)]
+    fn new(sent_stream: Self::SentStream, audio_emitter: Arc<dyn PushedAudio>,
+           #[host(kw)] pacer: SentenceStreamPacer) -> Self;
+
+    #[host(via = SentStream)] fn push_text(&self, text: String);
+    #[host(via = SentStream)] fn flush(&self);
+    #[host(via = SentStream)] fn end_input(&self);
+
+    #[host(none_ends_iteration, wrap = TokenData::token)]
+    async fn __anext__(&self) -> Option<TokenData>;
+    async fn aclose(&self);
+}
+```
+
+The generated class subclasses `base`, its public `__init__` takes the `#[host(new)]` parameters
+with their ABI defaults, and it builds the native object from them. Method adaptations are a
+fixed vocabulary: `none_ends_iteration` (a native `None` raises `StopAsyncIteration`), `wrap`
+(the result becomes a record), and a context-manager form that turns a native begin/end pair into
+`async with`. A stream facade (`base` a provider stream: `llm.LLMStream`, `RecognizeStream`,
+`SynthesizeStream`, `VADStream`) names the native operation its `_run` opens; the base class pumps
+input and output, and `native_retries` marks a native operation that retries on its own.
+
+Logic a facade cannot declare goes in a handwritten subclass of the generated class when it is
+specific to Python (SDK objects, user callbacks, reflection). Logic that Rust can own cleanly moves
+to Rust instead, and the facade stays fully generated.
 
 ### Generation
 
@@ -1370,7 +1437,8 @@ Modules that only forward or re-export are generated, with public names
 re-exported by their owning package's `__init__`. A declaration's `path = "livekit.agents.x"`
 is its public module: `_generated/public_x.py` re-exports every name placed there, and `x`
 star-imports it, holding no import list of those names; its literal `__all__` lists them, which
-mypy requires.
+mypy requires. A handwritten module that adds names of its own spreads the generated list and
+lists only its own: `__all__ = [*_public.__all__, "AudioOutput"]`.
 
 ### Module registration
 

@@ -107,7 +107,7 @@ side is one module, `livekit/agents/telemetry.py`, of about 400 lines:
 | Bridge | One `SpanProcessor` for an application-installed SDK provider; imported only when `opentelemetry-sdk` is present |
 | Public functions | `configure`, `set_capture_content` and `diagnostics`, forwarding to `_core` |
 | Host hooks | `_install` and `_shutdown` (the process exporter; the global provider is adopted once per process), `_activate` and `_current` (HostInvoker's span activation in the copied context a host call runs in, and capture), `_LoopMonitor` (the event loop's heartbeat; see [Event-loop stalls](#event-loop-stalls)) |
-| Framework spans | `room_connect` and `wait_for_participant` around `JobContext`'s room calls, `rpc_call` and `rpc_handler` from an `rtc.RpcInterceptor`, named with the generated `semconv` constants |
+| Framework spans | `room_connect` and `wait_for_participant` around `JobContext`'s room calls, `rpc_call` and `rpc_handler`, recorded by room I/O, which intercepts the room's RPC calls and handlers |
 
 `opentelemetry-api` is the only OpenTelemetry dependency. Spans the framework
 needs around Python-only code are started by the module's own tracer, so they
@@ -118,7 +118,7 @@ Everything else left Python:
 | Removed | Replaced by |
 | --- | --- |
 | `telemetry/_providers.py`, `_destination.py`, `_export.py`, `_redaction.py`, `_diagnostics.py`, `_transport.py`, `_context.py` | the exporter, destinations and policy in Rust; `telemetry.py` |
-| `telemetry/traces.py` (session report upload, RPC tracing) | the Rust session report; RPC spans in `telemetry.py` |
+| `telemetry/traces.py` (session report upload, RPC tracing) | the Rust session report; RPC spans recorded by room I/O |
 | `telemetry/metrics.py` (OTel instruments, metric series admission) | declared instruments |
 | `telemetry/trace_types.py`, `utils.py` | generated `semconv` constants |
 | span handlers and `_spans` in `voice/_session_events.py`, `_session_bindings.py` | spans recorded in Rust |
@@ -865,7 +865,7 @@ registry, a protocol shared key, or a GenAI key.
 **A report record**: declare a `#[record]` struct with its scope and emit it from
 the report builder.
 
-**A span around Python-only framework code** (an RPC handler): start it with
+**A span around Python-only framework code** (a hook around user code): start it with
 the OpenTelemetry API, using the generated `semconv` constants for its name and
 keys, and declare it in `telemetry/spans/` like any other span so the schema covers it.
 
