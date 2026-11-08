@@ -27,7 +27,7 @@ bundled backend ships the voice isolation model and authenticates against LiveKi
 using the room JWT the agent framework hands to the `FrameProcessor` automatically.
 
 ```python
-from livekit.agents import AgentSession, Agent, JobContext, inference, room_io
+from livekit.agents import Agent, JobContext, VoiceSession, inference, room_io
 from livekit.plugins import krisp, openai
 
 @server.rtc_session()
@@ -37,7 +37,7 @@ async def entrypoint(ctx: JobContext):
         noise_suppression_level=75,  # 0-100
     )
 
-    session = AgentSession(
+    session = VoiceSession(
         vad=inference.VAD(),
         stt=openai.STT(),
         llm=openai.LLM(model="gpt-4o-mini"),

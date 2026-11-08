@@ -24,7 +24,7 @@ does not accept falls back to the default model with a warning. `operating_point
 The `turn_detection_mode` parameter controls how end-of-turn (endpointing) is detected:
 
 - `VAD` (default) — Speechmatics runs its own VAD and closes turns itself (service-side
-  endpointing). No `vad` is required. Pair it with `turn_detection="stt"` on the `AgentSession`,
+  endpointing). No `vad` is required. Pair it with `turn_detection="stt"` in the `VoiceSession`'s `turn_handling`,
   otherwise the session's own turn detector decides and Speechmatics' end-of-turn is ignored.
 - `EXTERNAL` — Speechmatics does not endpoint on its own. Turns close when the caller
   calls `finalize()`. In practice you pass a `vad` to the plugin and its end-of-speech drives
@@ -45,29 +45,29 @@ too, and `diarization_sensitivity`, `enable_partials` and `speaker_active_format
 Let Speechmatics detect turns and tell the session to act on them:
 
 ```python
-from livekit.agents import AgentSession
+from livekit.agents import TurnHandlingOptions, VoiceSession
 from livekit.plugins import speechmatics
 
-agent = AgentSession(
+session = VoiceSession(
     stt=speechmatics.STT(),
-    turn_detection="stt",
+    turn_handling=TurnHandlingOptions(turn_detection="stt"),
     ...
 )
 ```
 
 ## Usage — caller-driven endpointing (`EXTERNAL`)
 
-Pass a `vad` to the plugin; its end-of-speech drives `finalize()`. `AgentSession` loads its own VAD
+Pass a `vad` to the plugin; its end-of-speech drives `finalize()`. `VoiceSession` loads its own VAD
 when none is given, so pass the same instance to both and a single VAD serves the session and the
 plugin:
 
 ```python
-from livekit.agents import AgentSession, inference
+from livekit.agents import VoiceSession, inference
 from livekit.plugins import speechmatics
 
 vad = inference.VAD()
 
-agent = AgentSession(
+session = VoiceSession(
     stt=speechmatics.STT(
         turn_detection_mode=speechmatics.TurnDetectionMode.EXTERNAL,
         # The VAD passed here drives finalize() on end-of-speech.
@@ -104,10 +104,10 @@ labelled `UU`.
 Adjust your system instructions to inform the LLM of this format so it can attribute speakers.
 
 ```python
-from livekit.agents import AgentSession
+from livekit.agents import VoiceSession
 from livekit.plugins import speechmatics
 
-agent = AgentSession(
+session = VoiceSession(
     stt=speechmatics.STT(
         enable_diarization=True,
         max_speakers=4,

@@ -30,10 +30,10 @@ export VAKYAM_API_KEY="vak_live_..."
 ## Usage
 
 ```python
-from livekit.agents import AgentSession
+from livekit.agents import VoiceSession
 from livekit.plugins import vakyam
 
-session = AgentSession(
+session = VoiceSession(
     tts=vakyam.TTS(
         model="raaga-v1",
         voice="Archana",

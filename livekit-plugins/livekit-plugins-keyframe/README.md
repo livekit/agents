@@ -11,10 +11,10 @@ pip install livekit-plugins-keyframe
 ## Usage
 
 ```python
-from livekit.agents import AgentSession
+from livekit.agents import VoiceSession
 from livekit.plugins import keyframe
 
-session = AgentSession(stt=..., llm=..., tts=...)
+session = VoiceSession(stt=..., llm=..., tts=...)
 
 avatar = keyframe.AvatarSession(
     persona_id="ab85a2a0-0555-428d-87b2-ff3019a58b93",  # or persona_slug="public:cosmo_persona-1.5-live"

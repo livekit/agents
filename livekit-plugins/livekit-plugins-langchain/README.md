@@ -16,22 +16,24 @@ You can bring over any existing workflow in LangGraph as an Agents LLM with `lan
 
 ```python
 from langgraph.graph import StateGraph
-from livekit.agents import Agent, AgentSession, JobContext
+from livekit.agents import Agent, AgentServer, JobContext, VoiceSession
 from livekit.plugins import langchain
 
-...
+server = AgentServer()
 
-def entrypoint(ctx: JobContext):
+
+@server.rtc_session()
+async def entrypoint(ctx: JobContext):
     graph = StateGraph(...).compile()
 
-    session = AgentSession(
+    session = VoiceSession(
         vad=...,
         stt=...,
         tts=...,
     )
 
     await session.start(
-        agent=Agent(llm=langchain.LLMAdapter(graph)),
+        agent=Agent(instructions="", llm=langchain.LLMAdapter(graph)),
     )
     ...
 ```

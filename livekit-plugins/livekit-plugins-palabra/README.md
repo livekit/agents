@@ -28,13 +28,13 @@ PALABRA_API_KEY=<your_palabra_api_key>
 
 ### Speech-to-Text (STT)
 
-Use Palabra STT in an `AgentSession` or as a standalone streaming transcription service. The spoken language is auto-detected by default:
+Use Palabra STT in a `VoiceSession` or as a standalone streaming transcription service. The spoken language is auto-detected by default:
 
 ```python
-from livekit.agents import AgentSession
+from livekit.agents import VoiceSession
 from livekit.plugins import palabra
 
-session = AgentSession(
+session = VoiceSession(
     stt=palabra.STT(),
     # ... llm, tts, etc.
 )
@@ -59,7 +59,7 @@ Use Palabra TTS for real-time speech synthesis:
 ```python
 from livekit.plugins import palabra
 
-session = AgentSession(
+session = VoiceSession(
     tts=palabra.TTS(
         language="en",
         voice_id="default_low",  # or "default_high", or any Palabra voice id

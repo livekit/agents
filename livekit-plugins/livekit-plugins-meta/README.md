@@ -22,10 +22,10 @@ You can also pass the key directly with `api_key=`. The resolution order is `api
 ## Usage
 
 ```python
-from livekit.agents import AgentSession
+from livekit.agents import VoiceSession
 from livekit.plugins import meta
 
-session = AgentSession(
+session = VoiceSession(
     stt=meta.STT(
         keywords=["LiveKit", "Muse"],
         language_bias=["English"],

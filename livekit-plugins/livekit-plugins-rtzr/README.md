@@ -33,16 +33,16 @@ If `RTZR_WEBSOCKET_URL` is not set, the plugin will derive it from `RTZR_API_BAS
 
 ## Usage
 
-Use RTZR STT in an `AgentSession` or as a standalone streaming service.
+Use RTZR STT in a `VoiceSession` or as a standalone streaming service.
 
 ```python
-from livekit.agents import AgentSession
+from livekit.agents import VoiceSession
 from livekit.plugins import rtzr
 
 # Basic usage with env-based credentials
 stt = rtzr.STT()
 
-session = AgentSession(
+session = VoiceSession(
     stt=stt,
     # ... llm, tts, etc.
 )

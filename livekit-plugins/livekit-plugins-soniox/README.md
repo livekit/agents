@@ -24,12 +24,12 @@ SONIOX_API_KEY=<your_soniox_api_key>
 
 ### Speech-to-Text (STT)
 
-Use Soniox STT in an `AgentSession` or as a standalone transcription service:
+Use Soniox STT in a `VoiceSession` or as a standalone transcription service:
 
 ```python
 from livekit.plugins import soniox
 
-session = AgentSession(
+session = VoiceSession(
     stt=soniox.STT(),
     # ... llm, tts, etc.
 )
@@ -42,7 +42,7 @@ Use Soniox TTS for real-time speech synthesis:
 ```python
 from livekit.plugins import soniox
 
-session = AgentSession(
+session = VoiceSession(
     tts=soniox.TTS(
         language="en",
         voice="Maya",

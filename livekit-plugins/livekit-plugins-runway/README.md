@@ -13,11 +13,11 @@ pip install livekit-plugins-runway
 ## Usage
 
 ```python
-from livekit.agents import AgentSession, Agent, RoomOutputOptions
+from livekit.agents import Agent, VoiceSession, room_io
 from livekit.plugins import runway
 
 async def entrypoint(ctx):
-    session = AgentSession()
+    session = VoiceSession()
 
     avatar = runway.AvatarSession(
         avatar_id="your-custom-avatar-id",
@@ -28,7 +28,7 @@ async def entrypoint(ctx):
     await session.start(
         agent=Agent(instructions="Talk to me!"),
         room=ctx.room,
-        room_output_options=RoomOutputOptions(audio_enabled=False),
+        room_options=room_io.RoomOptions(audio_output=False),
     )
 ```
 

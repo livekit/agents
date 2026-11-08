@@ -97,25 +97,25 @@ tts = TTS(
 ## Usage with LiveKit Agents
 
 ```python
-from livekit import agents
+from livekit.agents import Agent, AgentServer, JobContext, VoiceSession, cli
 from livekit.plugins.cambai import TTS
 
-async def entrypoint(ctx: agents.JobContext):
-    # Connect to room
-    await ctx.connect()
+server = AgentServer()
 
-    # Initialize TTS
-    tts = TTS(language="en-us")
 
-    # Synthesize and publish
-    stream = tts.synthesize("Hello from LiveKit with Camb.ai!")
-    audio_frame = await stream.collect()
+@server.rtc_session()
+async def entrypoint(ctx: JobContext):
+    session = VoiceSession(
+        stt="deepgram/nova-3:en",
+        llm="google/gemma-4-31b-it",
+        tts=TTS(language="en-us"),
+    )
+    await session.start(agent=Agent(instructions="You are a helpful assistant."), room=ctx.room)
+    await session.say("Hello from LiveKit with Camb.ai!")
 
-    # Publish to room
-    source = agents.AudioSource(tts.sample_rate, tts.num_channels)
-    track = agents.LocalAudioTrack.create_audio_track("tts", source)
-    await ctx.room.local_participant.publish_track(track)
-    await source.capture_frame(audio_frame)
+
+if __name__ == "__main__":
+    cli.run_app(server)
 ```
 
 ## Configuration Options

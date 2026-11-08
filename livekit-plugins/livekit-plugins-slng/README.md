@@ -40,7 +40,7 @@ Additional keyword arguments are forwarded to the gateway and applied according 
 For the lowest STT turn latency, let the plugin know when the user stops speaking. The plugin then sends a finalize signal so the provider returns the final transcript immediately instead of waiting for its own endpointing:
 
 ```python
-session = AgentSession(stt=stt, ...)
+session = VoiceSession(stt=stt, ...)
 stt.attach_to_session(session)
 ```
 

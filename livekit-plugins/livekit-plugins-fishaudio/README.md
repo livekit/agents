@@ -23,13 +23,13 @@ FISH_API_KEY=<your_api_key>
 ## Usage
 
 ```python
-from livekit.agents import AgentSession
+from livekit.agents import VoiceSession
 from livekit.plugins import fishaudio
 
 # Basic usage with env-based credentials
 tts = fishaudio.TTS()
 
-session = AgentSession(
+session = VoiceSession(
     tts=tts,
     # ... stt, llm, etc.
 )

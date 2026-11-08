@@ -83,9 +83,8 @@ stt = baseten.STT(
 ```python
 import os
 from livekit import agents
-from livekit.agents import AgentSession, Agent, RoomInputOptions, inference
-from livekit.plugins import baseten, openai, noise_cancellation
-from livekit.agents.inference import TurnDetector
+from livekit.agents import Agent, VoiceSession, inference
+from livekit.plugins import baseten, openai
 
 BASETEN_API_KEY = os.getenv("BASETEN_API_KEY")
 whisper_model_id = "your-whisper-model-id"  # or use chain_id for chain deployments
@@ -94,9 +93,12 @@ orpheus_model_id = "your-orpheus-model-id"
 
 assistant = Agent(instructions="You are a helpful voice assistant.")
 
+server = agents.AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(ctx: agents.JobContext):
-    session = AgentSession(
+    session = VoiceSession(
         stt=baseten.STT(
             api_key=BASETEN_API_KEY,
             model_id=whisper_model_id,  # or chain_id="your-chain-id"
@@ -116,16 +118,9 @@ async def entrypoint(ctx: agents.JobContext):
             ),
         ),
         vad=inference.VAD(),
-        turn_detection=TurnDetector(),
     )
 
-    await session.start(
-        room=ctx.room,
-        agent=assistant,
-        room_input_options=RoomInputOptions(
-            noise_cancellation=noise_cancellation.BVC(),
-        ),
-    )
+    await session.start(room=ctx.room, agent=assistant)
 
     await session.generate_reply(
         instructions="Greet the user and offer your assistance."
@@ -133,7 +128,7 @@ async def entrypoint(ctx: agents.JobContext):
 
 
 if __name__ == "__main__":
-    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
+    agents.cli.run_app(server)
 ```
 
 ## TTS (Text-to-Speech)
@@ -156,10 +151,10 @@ protocols from the Whisper/Orpheus trusses, so select them with `model` — the
 same `baseten.STT` / `baseten.TTS` classes handle both.
 
 ```python
-from livekit.agents import AgentSession
+from livekit.agents import VoiceSession
 from livekit.plugins import baseten
 
-session = AgentSession(
+session = VoiceSession(
     stt=baseten.STT(model="qwen3-asr", model_id="your-qwen3-asr-model-id"),
     tts=baseten.TTS(model="qwen3-tts", model_id="your-qwen3-tts-model-id",
                     voice="your-voice"),

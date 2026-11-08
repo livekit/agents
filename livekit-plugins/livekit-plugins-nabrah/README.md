@@ -16,13 +16,13 @@ You'll need an API key from Nabrah. It can be set as an environment variable:
 
 ## Usage
 
-Use Nabrah STT in an `AgentSession`:
+Use Nabrah STT in a `VoiceSession`:
 
 ```python
-from livekit.agents import AgentSession
+from livekit.agents import VoiceSession
 from livekit.plugins import nabrah
 
-session = AgentSession(
+session = VoiceSession(
     stt=nabrah.STT(
         recognition_model="eot_nabrah",
         language="ar-SA",
@@ -82,14 +82,14 @@ Load it at startup and pass it to the plugin:
 import json
 import pathlib
 
-from livekit.agents import AgentSession
+from livekit.agents import VoiceSession
 from livekit.plugins import nabrah
 
 boosting = json.loads(
     pathlib.Path(__file__).with_name("boosting.json").read_text(encoding="utf-8")
 )
 
-session = AgentSession(
+session = VoiceSession(
     stt=nabrah.STT(
         recognition_model="eot_nabrah",
         language="ar-SA",
@@ -116,9 +116,9 @@ from livekit import agents
 from livekit.agents import (
     Agent,
     AgentServer,
-    AgentSession,
     JobContext,
     TurnHandlingOptions,
+    VoiceSession,
     inference,
 )
 from livekit.plugins import nabrah
@@ -137,7 +137,7 @@ assistant = Agent(instructions="You are a helpful voice assistant.")
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
-    session = AgentSession(
+    session = VoiceSession(
         stt=nabrah.STT(
             recognition_model="eot_nabrah",
             language="ar-SA",
@@ -155,7 +155,6 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     await session.start(agent=assistant, room=ctx.room)
-    await ctx.connect()
 
 
 if __name__ == "__main__":

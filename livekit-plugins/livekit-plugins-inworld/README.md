@@ -18,7 +18,7 @@ Set `INWORLD_API_KEY` in your `.env` file ([get one here](https://platform.inwor
 
 ### TTS
 
-Use Inworld TTS within an `AgentSession` or as a standalone speech generator.
+Use Inworld TTS within a `VoiceSession` or as a standalone speech generator.
 
 ```python
 from livekit.plugins import inworld
@@ -81,7 +81,7 @@ Use Inworld STT for streaming speech-to-text. Multiple models are supported.
 ```python
 from livekit.plugins import inworld
 
-session = AgentSession(
+session = VoiceSession(
    stt=inworld.STT()
    # ... llm, tts, etc.
 )
@@ -92,7 +92,7 @@ With a specific model and voice profile detection:
 ```python
 from livekit.plugins import inworld
 
-session = AgentSession(
+session = VoiceSession(
    stt=inworld.STT(
        model="inworld/inworld-stt-1",
        enable_voice_profile=True,
@@ -118,24 +118,18 @@ in a LiveKit voice agent. Save this as ``inworld_agent.py`` and run:
 Then connect via https://agents-playground.livekit.io
 """
 
-import logging
-
 from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
     AgentServer,
-    AgentSession,
     JobContext,
+    VoiceSession,
     cli,
     inference,
-    metrics,
     room_io,
 )
-from livekit.agents.inference import TurnDetector
 from livekit.plugins import inworld
-
-logger = logging.getLogger("inworld-agent")
 
 load_dotenv()
 
@@ -157,25 +151,12 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
 
-    session = AgentSession(
+    session = VoiceSession(
         stt=inworld.STT(model="inworld/inworld-stt-1"),
         llm="openai/gpt-4.1-mini",
         tts=inworld.TTS(voice="Clive"),
-        turn_detection=TurnDetector(),
         vad=inference.VAD(),
     )
-
-    usage_collector = metrics.UsageCollector()
-
-    @session.on("metrics_collected")
-    def _on_metrics(ev):
-        metrics.log_metrics(ev.metrics)
-        usage_collector.collect(ev.metrics)
-
-    async def log_usage():
-        logger.info(f"Usage: {usage_collector.get_summary()}")
-
-    ctx.add_shutdown_callback(log_usage)
 
     await session.start(
         agent=assistant,
@@ -194,7 +175,7 @@ if __name__ == "__main__":
 ```python
 from livekit.plugins import inworld
 
-session = AgentSession(
+session = VoiceSession(
    tts=inworld.TTS(voice="Hades"),
    stt=inworld.STT(),
    # ... llm, etc.

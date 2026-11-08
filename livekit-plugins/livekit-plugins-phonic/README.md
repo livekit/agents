@@ -19,9 +19,9 @@ from dotenv import load_dotenv
 from livekit.agents import (
     Agent,
     AgentServer,
-    AgentSession,
     JobContext,
     RunContext,
+    VoiceSession,
     cli,
 )
 from livekit.plugins.phonic.realtime import RealtimeModel
@@ -56,7 +56,7 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
-    session = AgentSession(llm=RealtimeModel(voice="sabrina", audio_speed=1.2))
+    session = VoiceSession(llm=RealtimeModel(voice="sabrina", audio_speed=1.2))
     await session.start(agent=assistant, room=ctx.room)
     await session.generate_reply(
         instructions="Greet the user, asking about their day.",

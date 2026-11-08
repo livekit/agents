@@ -202,7 +202,7 @@ model = aws.realtime.RealtimeModel.with_nova_sonic_2(
 
 ```python
 from livekit import agents
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, VoiceSession
 from livekit.plugins import aws
 from dotenv import load_dotenv
 
@@ -215,9 +215,7 @@ server = agents.AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: agents.JobContext):
-    await ctx.connect()
-    
-    session = AgentSession(
+    session = VoiceSession(
         llm=aws.realtime.RealtimeModel.with_nova_sonic_2(
             voice="matthew",
             turn_detection="MEDIUM",
@@ -237,10 +235,10 @@ if __name__ == "__main__":
 For more control over individual components, use pipeline mode:
 
 ```python
-from livekit.agents import inference
+from livekit.agents import VoiceSession, inference
 from livekit.plugins import aws
 
-session = AgentSession(
+session = VoiceSession(
     stt=aws.STT(),                    # Amazon Transcribe
     llm=aws.LLM(),                    # Nova 2 Lite (default)
     tts=aws.TTS(),                    # Amazon Polly

@@ -52,15 +52,15 @@ tts = TTS(api_key="your-api-key")
 |----------|---------|
 | `GNANI_API_KEY` | API key for Gnani Vachana STT and TTS |
 
-## Quick Start — AgentSession snippet
+## Quick Start: VoiceSession snippet
 
-The snippet below shows core `AgentSession` wiring with Gnani WebSocket STT/TTS.
+The snippet below shows core `VoiceSession` wiring with Gnani WebSocket STT/TTS.
 
 ```python
-from livekit.agents import AgentSession, room_io
+from livekit.agents import VoiceSession, room_io
 from livekit.plugins import gnani, groq, silero
 
-session = AgentSession(
+session = VoiceSession(
     stt=gnani.STT(
         language="en-IN",
         use_streaming=True,

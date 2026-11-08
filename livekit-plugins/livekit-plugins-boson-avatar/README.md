@@ -59,8 +59,6 @@ from livekit.plugins import boson_avatar
 
 
 async def entrypoint(ctx: JobContext) -> None:
-    await ctx.connect()
-
     session = VoiceSession(
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("openai/gpt-4.1-mini"),

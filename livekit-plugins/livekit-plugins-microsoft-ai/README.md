@@ -148,7 +148,7 @@ containing the detected onset and prefix through that timestamp (the bundled
 Silero VAD provides these). Empty
 or incompatible start frames fail explicitly rather than clipping the onset.
 Alternatively, pass `vad=None` and call `flush()` / `end_input()` yourself.
-**Configuring only AgentSession's VAD is insufficient:** it does not commit
+**Configuring only VoiceSession's VAD is insufficient:** it does not commit
 native STT streams.
 
 The client protocol is:
@@ -276,7 +276,7 @@ JSON/Foundry variants are not silently tried as fallbacks.
 
 `TTS.synthesize()` returns a `ChunkedStream` of correctly framed audio after
 the complete response has been validated. `streaming=False` is intentional.
-AgentSession supplies its existing sentence `tts.StreamAdapter` for incremental
+VoiceSession supplies its existing sentence `tts.StreamAdapter` for incremental
 LLM text; there is no claim of native text/audio streaming. Cancellation closes
 the request and stops output, including already buffered frames.
 
@@ -296,7 +296,7 @@ the completed user turn with `microsoft_ai.TTS`. It uses
 an additional model reply. There is no LLM, manual transcription injection,
 per-utterance `flush()` call, or paid LiveKit Inference.
 
-The same local Silero VAD model is passed to **both** STT and AgentSession;
+The same local Silero VAD model is passed to **both** STT and VoiceSession;
 each opens its own stream. The plugin's VAD drives provider commits after
 0.5 seconds of observed silence. Session VAD detects barge-in after 0.2 seconds
 of speech. Echoes are interruptible and never automatically resumed after a
@@ -351,7 +351,7 @@ and provider closure checks passed.
 ### TTS only in a real room, without a LiveKit Cloud account
 
 `examples/microsoft/microsoft_ai_tts_room.py` uses only `microsoft_ai.TTS` and
-`AgentSession.say()`. There is no LLM, STT, VAD, microphone, text-input handler,
+`VoiceSession.say()`. There is no LLM, STT, VAD, microphone, text-input handler,
 remote session control or paid LiveKit Inference. It waits for a participant
 and an audio subscription, says `Hello, this is a Microsoft AI voice test.`
 once, waits for playback, closes its session and TTS client, and ends the
@@ -400,7 +400,7 @@ uv pip install --python /tmp/microsoft-ai-room/bin/python \
 
 ### Full STT/LLM/TTS agent
 
-See `examples/microsoft/microsoft_ai_agent.py` for an AgentSession using the
+See `examples/microsoft/microsoft_ai_agent.py` for a VoiceSession using the
 existing OpenAI LLM, bundled VAD and this STT/TTS package. Its OpenAI credential
 is used by the LLM only. This full agent requires STT access as well as TTS.
 It cannot run with only an Azure Speech TTS key: `microsoft_ai.STT` also needs
