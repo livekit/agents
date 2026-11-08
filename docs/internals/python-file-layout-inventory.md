@@ -133,8 +133,7 @@ livekit/agents/
   telemetry/metrics.py
   telemetry/traces.py
   text_session.py
-  tokenize/__init__.py
-  tokenize/blingfire.py
+  tokenize.py
   tts.py
   types.py
   utils/__init__.py
@@ -699,7 +698,7 @@ These source classifications are not additive savings; the exact target contains
 
 | Current file | Lines | Action | Target and reason |
 | --- | ---: | --- | --- |
-| [tokenize/__init__.py](../../livekit-agents-next/livekit/agents/tokenize/__init__.py) | 296 | Retain | `tokenize/__init__.py`. Keep base tokenizer/stream contracts and existing native/basic namespace. |
+| [tokenize.py](../../livekit-agents-next/livekit/agents/tokenize.py) | 296 | Retain | `tokenize.py`. Base tokenizer/stream contracts, with the generated `basic` and `blingfire` namespaces bound as attributes. |
 | `tokenize/blingfire.py` | 83 | Removed | `livekit.agents.tokenize.blingfire` is generated from its ABI declaration (`BlingfireSentenceTokenizer`). |
 
 ### utils

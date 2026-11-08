@@ -4,10 +4,10 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable
 from typing import overload
 
-from .. import _core
-from .._generated import public_tokenize as _public
-from .._generated.public_tokenize import *  # noqa: F403
-from ..utils import aio, shortuuid
+from . import _core
+from ._generated import public_tokenize as _public
+from ._generated.public_tokenize import *  # noqa: F403
+from .utils import aio, shortuuid
 
 __all__ = [
     "SentenceTokenizer",
@@ -285,7 +285,7 @@ class _CoreWordTokenizer(WordTokenizer):
 
 
 # the tokenizers build on the definitions above: ``tokenize.basic`` and ``tokenize.blingfire``
-from .._generated import (  # noqa: E402
+from ._generated import (  # noqa: E402
     public_tokenize_basic as basic,
     public_tokenize_blingfire as blingfire,
 )
