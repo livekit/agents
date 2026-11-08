@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import json
 import os
@@ -62,6 +63,8 @@ DEFAULT_MODEL = "saidwire-en-2026-10-30"
 
 _KEEPALIVE = json.dumps({"type": "KeepAlive"})
 _FINALIZE = json.dumps({"type": "Finalize"})
+# how long a reconnect waits for the final transcript of the audio already sent
+_DRAIN_TIMEOUT_S = 3.0
 _CLOSE_STREAM = json.dumps({"type": "CloseStream"})
 _USER_AGENT = f"livekit-plugins-saidwire/{__version__}"
 
@@ -310,29 +313,48 @@ class STT(stt.STT):
         early_words: NotGivenOr[bool] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
-        """Change options. Open streams reconnect with the new settings."""
-        changes = {
-            k: v
-            for k, v in {
-                "model": model,
-                "endpointing_ms": endpointing_ms,
-                "utterance_end_ms": utterance_end_ms,
-                "interim_results": interim_results,
-                "punctuate": punctuate,
-                "early_words": early_words,
-                "vad_events": vad_events,
-            }.items()
-            if is_given(v)
+        """Change options. Open streams reconnect with the new settings.
+
+        A stream finishes the audio it already sent (``Finalize``, then its final transcript)
+        before it reconnects, so a change during speech doesn't lose words. Options equal to
+        the current ones are ignored, and a call that changes nothing doesn't reconnect.
+        ``interim_results`` also updates ``capabilities.interim_results``.
+        """
+        given = {
+            "model": model,
+            "endpointing_ms": endpointing_ms,
+            "utterance_end_ms": utterance_end_ms,
+            "interim_results": interim_results,
+            "punctuate": punctuate,
+            "early_words": early_words,
+            "vad_events": vad_events,
         }
+        changes = {k: v for k, v in given.items() if is_given(v)}
+        if not changes:
+            return
         for k, v in changes.items():
             setattr(self._opts, k, v)
+        self._capabilities.interim_results = self._opts.interim_results
         for s in self._streams:
             s.update_options(**changes)
+
+    async def aclose(self) -> None:
+        """Close every stream opened by :meth:`stream`.
+
+        The HTTP session is left open: it is either supplied by the caller or owned by the
+        job's HTTP context.
+        """
+        streams = list(self._streams)
+        self._streams.clear()
+        # return_exceptions=True so one stream failing to close doesn't leave the rest open
+        await asyncio.gather(*(s.aclose() for s in streams), return_exceptions=True)
 
 
 class SpeechStream(stt.SpeechStream):
     # the last timed final of the current turn; END_OF_SPEECH carries its end time
     _final_alternatives: list[stt.SpeechData]
+    # reconnect drain: an input item read after a drain began, kept for the next connection
+    _carry: rtc.AudioFrame | stt.SpeechStream._FlushSentinel | None
 
     def __init__(
         self,
@@ -352,6 +374,11 @@ class SpeechStream(stt.SpeechStream):
         self._final_alternatives = []
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
+        self._carry = None
+        self._finalize_outstanding = 0  # Finalize messages not yet answered on this connection
+        self._draining = False
+        self._drain_finalize = False  # the drain sent its own Finalize
+        self._drained = asyncio.Event()
         self._pending_usage = 0.0
         self._last_usage_report = time.monotonic()
 
@@ -361,8 +388,12 @@ class SpeechStream(stt.SpeechStream):
         return self._request_id
 
     def update_options(self, **changes: Any) -> None:
-        """Apply option changes and reconnect with them."""
-        for k, v in changes.items():
+        """Apply option changes and reconnect with them, after the audio already sent is
+        finalized. Does nothing when no option actually changes."""
+        changed = {k: v for k, v in changes.items() if getattr(self._opts, k) != v}
+        if not changed:
+            return
+        for k, v in changed.items():
             setattr(self._opts, k, v)
         self._reconnect_event.set()
 
@@ -420,7 +451,28 @@ class SpeechStream(stt.SpeechStream):
             except (aiohttp.ClientError, ConnectionError):
                 return
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def next_input(
+            stop: asyncio.Future[Any],
+        ) -> rtc.AudioFrame | stt.SpeechStream._FlushSentinel | None:
+            """The next input item, or None once a drain starts. Raises ChanClosed at end."""
+            if self._carry is not None:
+                data, self._carry = self._carry, None
+                return data
+            if stop.done():
+                return None
+            # Cancelling a pending recv() leaves the item in the channel, so nothing is lost.
+            recv = asyncio.ensure_future(self._input_ch.recv())
+            try:
+                await asyncio.wait({recv, stop}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                pending = not recv.done()
+                if pending:
+                    recv.cancel()
+            if pending:
+                return None
+            return recv.result()
+
+        async def send_task(ws: aiohttp.ClientWebSocketResponse, stop: asyncio.Future[Any]) -> None:
             nonlocal closing
             samples_50ms = self._opts.sample_rate // 20
             bstream = utils.audio.AudioByteStream(
@@ -428,8 +480,32 @@ class SpeechStream(stt.SpeechStream):
                 num_channels=1,
                 samples_per_channel=samples_50ms,
             )
+            unfinalized = False  # audio sent since the last Finalize
             try:
-                async for data in self._input_ch:
+                while True:
+                    try:
+                        data = await next_input(stop)
+                    except utils.aio.ChanClosed:
+                        break
+                    if data is not None and stop.done():
+                        self._carry = data  # read after the drain began: the next connection's
+                        data = None
+                    if data is None:
+                        # Reconnect drain: finish this connection's audio before switching.
+                        for f in bstream.flush():
+                            await ws.send_bytes(f.data.tobytes())
+                            self._add_usage(f.duration)
+                            unfinalized = True
+                        if unfinalized:
+                            self._drain_finalize = True
+                            self._finalize_outstanding += 1
+                            await ws.send_str(_FINALIZE)
+                        # Also wait for the answer to a session flush still in flight.
+                        if self._finalize_outstanding > 0:
+                            self._draining = True
+                        else:
+                            self._drained.set()
+                        return
                     frames: list[rtc.AudioFrame] = []
                     flush = False
                     if isinstance(data, rtc.AudioFrame):
@@ -440,7 +516,10 @@ class SpeechStream(stt.SpeechStream):
                     for f in frames:
                         await ws.send_bytes(f.data.tobytes())
                         self._add_usage(f.duration)
+                        unfinalized = True
                     if flush:
+                        self._finalize_outstanding += 1
+                        unfinalized = False
                         await ws.send_str(_FINALIZE)
                 closing = True
                 self._add_usage(0.0, force=True)
@@ -489,13 +568,18 @@ class SpeechStream(stt.SpeechStream):
             if restart_clock is not None:
                 restart_clock()
             self._end_speech()
+            closing = False
+            self._finalize_outstanding = 0
+            self._draining = False
+            self._drain_finalize = False
+            self._drained.clear()
+            wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
             tasks = [
-                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(send_task(ws, wait_reconnect)),
                 asyncio.create_task(recv_task(ws)),
                 asyncio.create_task(keepalive_task(ws)),
             ]
             group = asyncio.gather(*tasks[:2])
-            wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
             try:
                 done, _ = await asyncio.wait(
                     (group, wait_reconnect), return_when=asyncio.FIRST_COMPLETED
@@ -503,9 +587,23 @@ class SpeechStream(stt.SpeechStream):
                 for t in done:
                     if t is not wait_reconnect:
                         t.result()
-                if wait_reconnect not in done:
+                if group in done or wait_reconnect not in done:
                     break
                 self._reconnect_event.clear()
+                # Options changed: send the buffered audio and Finalize on this connection,
+                # and wait (bounded) for its final transcript before reconnecting.
+                await asyncio.wait({tasks[0]}, timeout=self._conn_options.timeout)
+                if tasks[0].done() and tasks[0].exception() is not None:
+                    tasks[0].result()
+                drained = asyncio.create_task(self._drained.wait())
+                await asyncio.wait({drained, tasks[1]}, timeout=_DRAIN_TIMEOUT_S)
+                drained.cancel()
+                if tasks[1].done() and tasks[1].exception() is not None:
+                    tasks[1].result()
+                closing = True
+                with contextlib.suppress(aiohttp.ClientError, ConnectionError):
+                    await ws.send_str(_CLOSE_STREAM)
+                logger.debug("reconnecting to Saidwire to apply updated options")
             finally:
                 await utils.aio.gracefully_cancel(*tasks, wait_reconnect)
                 self._flush_usage()
@@ -657,7 +755,7 @@ class SpeechStream(stt.SpeechStream):
                     alternatives=alts,
                 )
             )
-        elif is_final and data.get("from_finalize"):
+        elif is_final and data.get("from_finalize") and not self._drain_answer():
             # The answer to a flush with nothing new: still emit an empty final, so the
             # session stops waiting for one.
             self._event_ch.send_nowait(
@@ -673,6 +771,15 @@ class SpeechStream(stt.SpeechStream):
         # gets its own START_OF_SPEECH.
         if data.get("speech_final") or (is_final and data.get("from_finalize")):
             self._end_speech()
+        if is_final and data.get("from_finalize") and self._finalize_outstanding > 0:
+            self._finalize_outstanding -= 1
+            if self._draining and self._finalize_outstanding == 0:
+                self._drained.set()
+
+    def _drain_answer(self) -> bool:
+        """True for the answer to the reconnect drain's own Finalize, which no session flush
+        is waiting for (answers arrive in order, so it is the last one outstanding)."""
+        return self._drain_finalize and self._finalize_outstanding == 1
 
 
 def _timed(word: dict[str, Any], offset: float) -> TimedString:

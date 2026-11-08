@@ -62,6 +62,7 @@ class Conn:
     audio_bytes: int = 0
     sent: list = field(default_factory=list)  # messages sent
     close_code: int | None = None
+    ended: bool = False  # the server-side handler finished (either side closed)
 
 
 class Recognizer:
@@ -453,6 +454,7 @@ class FakeSaidwire:
                         )
         finally:
             watcher.cancel()
+            conn.ended = True
         return ws
 
     # ------------------------------------------------------------------ pre-recorded
@@ -870,6 +872,88 @@ async def test_update_options_reconnects(server, session):
     await t
     assert len(server.conns) == 2 and server.conns[1].query["endpointing"] == "650"
     assert finals(ev) == ["Hello"]
+
+
+async def test_update_options_mid_speech_finalizes_before_reconnecting(server, session):
+    # endpointing off: without the drain, the words sent on the first connection
+    # would never be finalized and would be lost by the reconnect
+    s = saidwire.STT(api_key=KEY, base_url=server.url, http_session=session, endpointing_ms=0)
+    stream = s.stream()
+
+    async def feed():
+        for f in frames(tone_pcm(16000, 2)):
+            stream.push_frame(f)
+        await asyncio.sleep(0.9)  # both words heard, none final yet
+        s.update_options(punctuate=False)
+        for f in frames(silence_pcm(16000, 0.6) + tone_pcm(16000, 1) + silence_pcm(16000, 0.2)):
+            stream.push_frame(f)
+            await asyncio.sleep(0.005)
+        stream.end_input()
+
+    t = asyncio.create_task(feed())
+    ev = [e async for e in stream]
+    await t
+    assert len(server.conns) == 2
+    first, second = server.conns
+    assert {"type": "Finalize"} in first.texts
+    assert first.texts[-1] == {"type": "CloseStream"}
+    assert second.query["punctuate"] == "false"
+    texts = finals(ev)
+    assert texts[0] == "Hello this"  # the drained final from the first connection
+    assert len(texts) == 2
+    # the drain's own Finalize answer is not surfaced as an extra empty final mid-stream
+    empty = [e for e in ev if e.type == E.FINAL_TRANSCRIPT and not e.alternatives[0].text]
+    assert len(empty) <= 1
+
+
+async def test_update_options_without_changes_does_not_reconnect(server, session):
+    s = saidwire.STT(api_key=KEY, base_url=server.url, http_session=session, endpointing_ms=500)
+    stream = s.stream()
+
+    async def feed():
+        await asyncio.sleep(0.2)
+        s.update_options()  # nothing given
+        s.update_options(endpointing_ms=500, punctuate=True)  # same values
+        await asyncio.sleep(0.3)
+        for f in frames(tone_pcm(16000, 1) + silence_pcm(16000, 0.8)):
+            stream.push_frame(f)
+        stream.end_input()
+
+    t = asyncio.create_task(feed())
+    ev = [e async for e in stream]
+    await t
+    assert len(server.conns) == 1
+    assert finals(ev) == ["Hello"]
+
+
+def test_update_options_updates_interim_capability():
+    s = saidwire.STT(api_key=KEY)
+    assert s.capabilities.interim_results is True
+    s.update_options(interim_results=False)
+    assert s.capabilities.interim_results is False
+    s.update_options(interim_results=True)
+    assert s.capabilities.interim_results is True
+
+
+async def test_aclose_closes_open_streams(server, session):
+    s = saidwire.STT(api_key=KEY, base_url=server.url, http_session=session)
+    stream = s.stream()
+    for f in frames(tone_pcm(16000, 1)):
+        stream.push_frame(f)
+    for _ in range(100):
+        if server.conns:
+            break
+        await asyncio.sleep(0.02)
+    assert server.conns
+    await asyncio.wait_for(s.aclose(), 5)
+    for _ in range(100):
+        if server.conns[0].ended:
+            break
+        await asyncio.sleep(0.02)
+    assert server.conns[0].ended
+    # no keepalive or reconnect after close
+    await asyncio.sleep(0.5)
+    assert len(server.conns) == 1
 
 
 async def test_prerecorded_recognize(server, session):
