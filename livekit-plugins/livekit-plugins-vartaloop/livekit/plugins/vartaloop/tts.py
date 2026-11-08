@@ -461,6 +461,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         pending: deque[tuple[str, str]] = deque()
         # set once a message is on the wire, or when there is nothing to send
         sent_or_done = asyncio.Event()
+        # set after every send: an untimed wait (nothing was pending) must restart with a timeout
+        utterance_sent = asyncio.Event()
         sender_done = asyncio.Event()
 
         async def _input_task() -> None:
@@ -485,6 +487,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     self._mark_started()
                     await ws.send_str(json.dumps(body))
                     sent_or_done.set()
+                    utterance_sent.set()
             finally:
                 sender_done.set()
                 sent_or_done.set()
@@ -571,12 +574,18 @@ class SynthesizeStream(tts.SynthesizeStream):
             if sender_done.is_set():
                 return await ws.receive(timeout=self._conn_options.timeout)
             # while an utterance is pending the server owes us a message within the timeout;
-            # with nothing pending the pause is the LLM's (or the user's), not the server's
-            timeout = self._conn_options.timeout if pending else None
-            recv = asyncio.ensure_future(ws.receive(timeout=timeout))
-            done_waiter = asyncio.ensure_future(sender_done.wait())
+            # with nothing pending the pause is the LLM's (or the user's), not the server's,
+            # and the wait is also woken by the next send so it restarts with the timeout
+            idle = not pending
+            utterance_sent.clear()
+            recv = asyncio.ensure_future(
+                ws.receive(timeout=None if idle else self._conn_options.timeout)
+            )
+            waiters = {asyncio.ensure_future(sender_done.wait())}
+            if idle:
+                waiters.add(asyncio.ensure_future(utterance_sent.wait()))
             try:
-                await asyncio.wait({recv, done_waiter}, return_when=asyncio.FIRST_COMPLETED)
+                await asyncio.wait({recv, *waiters}, return_when=asyncio.FIRST_COMPLETED)
                 if recv.done():
                     return recv.result()
                 return None
@@ -584,8 +593,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if not recv.done():
                     # cancel the pending receive; the socket stays usable (aiohttp re-arms)
                     await utils.aio.gracefully_cancel(recv)
-                if not done_waiter.done():
-                    await utils.aio.gracefully_cancel(done_waiter)
+                for w in waiters:
+                    if not w.done():
+                        await utils.aio.gracefully_cancel(w)
 
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:

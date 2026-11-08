@@ -152,9 +152,16 @@ class _FakeWS:
     """A Vartaloop server: every utterance message gets start, one PCM frame, end."""
 
     def __init__(
-        self, *, stale: bool = False, error: dict | None = None, stale_error: bool = False
+        self,
+        *,
+        stale: bool = False,
+        error: dict | None = None,
+        stale_error: bool = False,
+        silent_from: int | None = None,
     ) -> None:
         self.sent: list[dict] = []
+        # utterances from this index on get no answer at all (a stalled server)
+        self._silent_from = silent_from
         self._queue: deque[_FakeMsg] = deque()
         self._has_msg = asyncio.Event()
         self.close_code = None
@@ -178,6 +185,8 @@ class _FakeWS:
         body = json.loads(data)
         self.sent.append(body)
         rid = body["request_id"]
+        if self._silent_from is not None and len(self.sent) > self._silent_from:
+            return
         if self._error is not None:
             self._queue.append(_FakeMsg.text({"type": "error", "request_id": rid, **self._error}))
         else:
@@ -390,3 +399,32 @@ async def test_a_pause_in_the_input_longer_than_the_timeout_does_not_fail_the_st
 
     frames = [bytes(ev.frame.data) async for ev in stream]
     assert len(ws.sent) == 3 and len(b"".join(frames)) == 6 * 3840
+
+
+@pytest.mark.asyncio
+async def test_a_sentence_sent_after_an_idle_gap_still_times_out():
+    """The first sentence completes, the LLM pauses, then sends a second sentence the server
+    never answers: the timeout must apply to it even though the wait started idle."""
+    import time
+
+    from livekit.agents import APITimeoutError
+    from livekit.plugins.vartaloop import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY)
+    ws = _FakeWS(silent_from=1)
+    tts._pool = _FakePool(ws)  # type: ignore[assignment]
+
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.5))
+    stream.push_text("First sentence of the reply, long enough. ")
+    stream.push_text("Second sentence of the reply, long enough. ")  # releases the first
+    async with asyncio.timeout(5):
+        while not ws.sent:
+            await asyncio.sleep(0.01)
+    await asyncio.sleep(0.8)  # idle: longer than the timeout, nothing pending
+    stream.push_text("Third sentence of the reply, long enough.")  # releases the second: unanswered
+    t0 = time.perf_counter()
+    with pytest.raises(APITimeoutError):
+        async for _ in stream:
+            pass
+    assert time.perf_counter() - t0 < 3.0
+    assert len(ws.sent) == 2
