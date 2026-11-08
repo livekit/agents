@@ -104,7 +104,9 @@ session = AgentSession(llm=zoom_ai.realtime.RealtimeModel(voice="jenna"))
 await session.start(Agent(instructions="You are a friendly support agent."), room=ctx.room)
 ```
 
-It can also be the model of a single agent in a multi-agent handoff (`Agent(llm=zoom_ai.realtime.RealtimeModel())`); see [`examples/voice_agents/zoom_voice_agent.py`](../../examples/voice_agents/zoom_voice_agent.py).
+A runnable version with a function tool is [`examples/voice_agents/zoom_voice_agent.py`](../../examples/voice_agents/zoom_voice_agent.py).
+
+It can also be the model of a single agent in a multi-agent handoff (`Agent(llm=zoom_ai.realtime.RealtimeModel())`); see [`examples/voice_agents/zoom_multi_agent.py`](../../examples/voice_agents/zoom_multi_agent.py).
 
 Function tools work as with any model: Zoom asks for the call, the agent runs it, and the plugin returns the result and asks for the follow-up reply.
 
@@ -136,6 +138,10 @@ zoom_ai.realtime.RealtimeModel(
 | `url` | `wss://api.zoom.us/v2/ws/aiservices/voice-agent/live` | Voice Agent endpoint |
 
 `voice`, `tool_choice` and `vocabulary` can be changed on a live session with `update_options()`; instructions and tools follow the agent.
+
+### Debugging
+
+The session emits every Zoom server event, unwrapped from its envelope, as `zoom_server_event_received`. To see the raw protocol, listen on the realtime session directly, for example `rt_session.on("zoom_server_event_received", print)` on a session from `model.session()`. Plugin logs are under the `livekit.plugins.zoom_ai` logger.
 
 ### Voice Agent limitations
 
