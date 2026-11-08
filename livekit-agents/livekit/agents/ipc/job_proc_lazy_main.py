@@ -516,7 +516,13 @@ class _JobProc:
         )
         await self._client.send(Exiting(reason=shutdown_info.reason))
         with tracer.start_as_current_span("room_disconnect"):
-            await self._room.disconnect()
+            await self._room.disconnect(
+                reason=(
+                    rtc.DisconnectReason.AGENT_ERROR
+                    if self.failed
+                    else rtc.DisconnectReason.CLIENT_INITIATED
+                )
+            )
 
         async def _traced_shutdown_callback(
             callback: Callable[[str], Awaitable[None]],
