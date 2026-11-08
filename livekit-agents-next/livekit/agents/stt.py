@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
-
 from livekit import rtc
 
 from ._generated import facades_stt as _facades, public_stt as _public
@@ -11,16 +9,8 @@ from .types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, No
 __all__ = [
     "StreamAdapter",
     "FallbackAdapter",
-    "SpeakerContext",
 ]
 __all__ += _public.__all__
-
-
-@runtime_checkable
-class SpeakerContext(Protocol):
-    """A speaker model an STT context provides, turned into LLM instructions."""
-
-    def to_instructions(self) -> str: ...
 
 
 class FallbackAdapter(_facades.FallbackAdapter):
