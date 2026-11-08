@@ -43,7 +43,7 @@ class OrderAgent(Agent):
         Args:
             order_id: The order number the caller gives.
         """
-        logger.info(f"looking up order {order_id}")
+        logger.info("looking up an order")  # order numbers are caller data; keep them out of logs
         return f"Order {order_id} shipped and arrives Friday."
 
 

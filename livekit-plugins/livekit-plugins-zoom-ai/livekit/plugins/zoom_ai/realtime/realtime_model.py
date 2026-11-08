@@ -305,6 +305,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
         self._closing = False
         # an error before the connection's first session.updated is a configuration error
         self._awaiting_config_ack = False
+        # optional settings sent on the current connection, which need a reset to clear
+        self._sent_optional: set[str] = set()
 
         self._input_resampler: rtc.AudioResampler | None = None
         self._bstream = utils.audio.AudioByteStream(
@@ -490,9 +492,22 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
 
     def _session_update_event(self, *, first: bool) -> dict[str, Any]:
         opts = self._opts
+        if first:
+            self._sent_optional.clear()
+
+        # Optional settings are left out of a connection's first update so Zoom's defaults
+        # apply. A session.update only changes the fields it carries, so once a setting has
+        # been sent on this connection, clearing it has to send its reset value.
+        def _optional(key: str, value: Any, reset: Any) -> Any:
+            if value is not None:
+                self._sent_optional.add(key)
+                return value
+            return reset if key in self._sent_optional else None
+
         listen: dict[str, Any] = {"format": {"type": "pcm16", "rate": SAMPLE_RATE}}
-        if opts.vocabulary:
-            listen["transcription"] = {"vocabulary": {"phrases": opts.vocabulary}}
+        phrases = _optional("vocabulary", opts.vocabulary or None, [])
+        if phrases is not None:
+            listen["transcription"] = {"vocabulary": {"phrases": phrases}}
 
         provider: dict[str, Any] = {"type": opts.llm_provider, "model": opts.model}
         if opts.provider_headers:
@@ -500,12 +515,18 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
         if opts.provider_metadata:
             provider["metadata"] = opts.provider_metadata
         think: dict[str, Any] = {"provider": provider, "tools": self._zoom_tools}
-        if instructions := self._full_instructions():
-            think["instructions"] = instructions
-        if opts.tool_choice is not None:
-            think["tool_choice"] = _to_zoom_tool_choice(opts.tool_choice)
-        if opts.response_token_limit is not None:
-            think["response_token_limit"] = opts.response_token_limit
+        optional_think = {
+            "instructions": _optional("instructions", self._full_instructions(), ""),
+            "tool_choice": _optional(
+                "tool_choice",
+                _to_zoom_tool_choice(opts.tool_choice) if opts.tool_choice is not None else None,
+                "auto",
+            ),
+            "response_token_limit": _optional(
+                "response_token_limit", opts.response_token_limit, "inf"
+            ),
+        }
+        think.update({k: v for k, v in optional_think.items() if v is not None})
         if first and opts.reasoning_effort:
             # "Set the reasoning level in your first session.update"
             think["reasoning"] = {"effort": opts.reasoning_effort}
@@ -549,24 +570,25 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
         self._tools = llm.ToolContext(retained)
 
     def _apply_chat_ctx(self, chat_ctx: llm.ChatContext, *, send_update: bool) -> None:
-        new_items = [item for item in chat_ctx.items if self._chat_ctx.get_by_id(item.id) is None]
-        if not new_items:
-            return
-
         if not self._conversation_started:
             # Nothing has been said in this session yet, so the history can still be given
-            # as part of the instructions.
+            # as part of the instructions. The given context replaces the history whole,
+            # so removed and edited items are dropped too.
             history: list[llm.ChatItem] = [
                 item
                 for item in chat_ctx.items
                 if item.type in ("message", "function_call", "function_call_output")
                 and not (item.type == "message" and item.role in ("system", "developer"))
             ]
+            rendered = _render_history(history)
             self._chat_ctx = llm.ChatContext(history)
-            self._history = _render_history(history)
-            if send_update:
-                self._send_session_update()
+            if rendered != self._history:
+                self._history = rendered
+                if send_update:
+                    self._send_session_update()
             return
+
+        new_items = [item for item in chat_ctx.items if self._chat_ctx.get_by_id(item.id) is None]
 
         for item in new_items:
             if item.type == "function_call_output":

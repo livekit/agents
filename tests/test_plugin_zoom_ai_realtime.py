@@ -410,6 +410,55 @@ async def test_instruction_and_option_updates_resend_the_session(
     await session.aclose()
 
 
+async def test_cleared_settings_are_reset_on_later_updates(
+    server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
+) -> None:
+    fake, url = server
+    model = make_model(url, http, vocabulary=["LiveKit"])
+    session = await start(model)
+    conn = await fake.conn()
+    session.update_options(tool_choice="required")
+    session.update_options(tool_choice=None)  # what AgentActivity does after a forced turn
+    model.update_options(vocabulary=None)
+    await session.update_instructions("")
+    await wait_for(lambda: len(conn.of_type("session.update")) == 5)
+    first, required, cleared, no_vocab, no_instructions = conn.of_type("session.update")
+
+    # the first update leaves unset options out, so Zoom's defaults apply
+    assert "tool_choice" not in first["session"]["think"]
+    assert "response_token_limit" not in first["session"]["think"]
+    assert required["session"]["think"]["tool_choice"] == "required"
+    # once sent, clearing a setting sends its reset value instead of leaving it out
+    assert cleared["session"]["think"]["tool_choice"] == "auto"
+    assert no_vocab["session"]["listen"]["transcription"] == {"vocabulary": {"phrases": []}}
+    assert no_instructions["session"]["think"]["instructions"] == ""
+    # a setting never sent on this connection stays out
+    assert "response_token_limit" not in no_instructions["session"]["think"]
+    await session.aclose()
+
+
+async def test_history_replaced_before_the_conversation_starts(
+    server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
+) -> None:
+    fake, url = server
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="My order is 123.")
+    session = await start(make_model(url, http), instructions="You are Nova.", chat_ctx=chat_ctx)
+    conn = await fake.conn()
+    await wait_for(lambda: conn.events)
+    assert "My order is 123." in conn.events[0]["session"]["think"]["instructions"]
+
+    await session.update_chat_ctx(chat_ctx.copy())  # unchanged: nothing to send
+    await session.update_chat_ctx(llm.ChatContext.empty())  # cleared
+    await wait_for(lambda: len(conn.of_type("session.update")) >= 2)
+    await asyncio.sleep(0.05)
+    updates = conn.of_type("session.update")
+    assert len(updates) == 2
+    assert updates[1]["session"]["think"]["instructions"] == "You are Nova."
+    assert session.chat_ctx.items == []
+    await session.aclose()
+
+
 # ---------------------------------------------------------------------------
 # Responses
 # ---------------------------------------------------------------------------
