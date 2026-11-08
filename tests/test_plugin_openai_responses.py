@@ -10,7 +10,11 @@ import aiohttp
 import httpx2 as httpx
 import pytest
 from openai.types import Reasoning
-from openai.types.responses import ResponseCreatedEvent, ResponseIncompleteEvent
+from openai.types.responses import (
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseIncompleteEvent,
+)
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, llm as agents_llm
 from livekit.plugins.openai.responses.llm import (
@@ -409,7 +413,9 @@ class _ReplayResponsesWS:
 class _ReplayHTTPStream:
     """Minimal OpenAI AsyncStream stand-in for the HTTP Responses path."""
 
-    def __init__(self, events: list[ResponseCreatedEvent | ResponseIncompleteEvent]) -> None:
+    def __init__(
+        self, events: list[ResponseCreatedEvent | ResponseIncompleteEvent | ResponseCompletedEvent]
+    ) -> None:
         self._events = events
 
     async def __aenter__(self) -> _ReplayHTTPStream:
@@ -480,6 +486,82 @@ async def test_incomplete_response_is_non_retryable_and_does_not_update_context(
         assert llm_model._prev_chat_ctx is None
     finally:
         await llm_model.aclose()
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+@pytest.mark.parametrize("with_usage", [False, True])
+async def test_hosted_search_metadata_reaches_the_response_stream(
+    transport_kind: str, with_usage: bool
+) -> None:
+    """Applications can render citations and inspect hosted searches on both transports."""
+    citation = {
+        "type": "url_citation",
+        "url": "https://example.org/news",
+        "title": "News",
+        "start_index": 0,
+        "end_index": 5,
+    }
+    search = {
+        "type": "web_search_call",
+        "id": "ws_1",
+        "status": "completed",
+        "action": {"type": "search", "queries": ["space news"]},
+    }
+    response = {
+        **_RESPONSE_CREATED["response"],
+        "status": "completed",
+        "output": [
+            search,
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "hello", "annotations": [citation]}],
+            },
+        ],
+    }
+    if with_usage:
+        response["usage"] = {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "total_tokens": 15,
+            "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 0},
+        }
+    completed = {"type": "response.completed", "sequence_number": 2, "response": response}
+    if transport_kind == "websocket":
+        model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+        model._ws = _ReplayResponsesWS([_RESPONSE_CREATED, completed])  # type: ignore[assignment]
+    else:
+        client = MagicMock()
+        client._base_url = httpx.URL("https://api.openai.com/v1")
+        client.responses.create = AsyncMock(
+            return_value=_ReplayHTTPStream(
+                [
+                    ResponseCreatedEvent.model_validate(_RESPONSE_CREATED),
+                    ResponseCompletedEvent.model_validate(completed),
+                ]
+            )
+        )
+        model = ResponsesLLM(model="gpt-4.1", client=client, use_websocket=False)
+    try:
+        async with model.chat(chat_ctx=agents_llm.ChatContext.empty()) as stream:
+            chunks = [chunk async for chunk in stream]
+        assert len(chunks) == 1
+        chunk = chunks[0]
+        assert chunk.delta is not None
+        assert chunk.delta.content is None
+        assert chunk.delta.extra == {
+            "openai": {
+                "annotations": [citation],
+                "web_search_calls": [search],
+            }
+        }
+        assert (chunk.usage is not None) == with_usage
+        assert not chunk.has_response()
+    finally:
+        await model.aclose()
 
 
 class _StallingResponsesWS:

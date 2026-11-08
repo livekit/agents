@@ -693,7 +693,18 @@ class LLMStream(llm.LLMStream):
         self._response_id = event.response.id
 
     def _handle_response_completed(self, event: ResponseCompletedEvent) -> llm.ChatChunk | None:
+        annotations: list[dict[str, Any]] = []
+        web_search_calls: list[dict[str, Any]] = []
         for item in event.response.output:
+            if item.type == "message":
+                for content in item.content:
+                    if content.type == "output_text":
+                        annotations.extend(
+                            annotation.model_dump(exclude_none=True)
+                            for annotation in content.annotations
+                        )
+            elif item.type == "web_search_call":
+                web_search_calls.append(item.model_dump(exclude_none=True))
             # Every item.type is a discriminator of openai's ResponseOutputItem union.
             # Of those, only these are produced/consumed by the agent itself; all other
             # members of the union are tools the Responses API runs server-side (e.g.
@@ -729,6 +740,18 @@ class LLMStream(llm.LLMStream):
                     total_tokens=usage.total_tokens,
                     service_tier=getattr(event.response, "service_tier", None),
                 ),
+            )
+        if annotations or web_search_calls:
+            if chunk is None:
+                chunk = llm.ChatChunk(id=self._response_id)
+            chunk.delta = llm.ChoiceDelta(
+                role="assistant",
+                extra={
+                    "openai": {
+                        "annotations": annotations,
+                        "web_search_calls": web_search_calls,
+                    }
+                },
             )
         return chunk
 
