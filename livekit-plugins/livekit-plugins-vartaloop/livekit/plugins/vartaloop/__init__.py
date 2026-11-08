@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Vartalaap plugin for LiveKit Agents
+"""Vartaloop plugin for LiveKit Agents
 
-Hinglish and Indian-language text-to-speech over the Vartalaap API
-(https://docs.vartalaap.si). See https://docs.livekit.io/agents/integrations/tts/ for
+Hinglish and Indian-language text-to-speech over the Vartaloop API
+(https://docs.vartaloop.ai). See https://docs.livekit.io/agents/integrations/tts/ for
 how TTS plugins fit into an AgentSession.
 """
 
@@ -29,12 +29,12 @@ from livekit.agents import Plugin
 from .log import logger
 
 
-class VartalaapPlugin(Plugin):
+class VartaloopPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(VartalaapPlugin())
+Plugin.register_plugin(VartaloopPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()

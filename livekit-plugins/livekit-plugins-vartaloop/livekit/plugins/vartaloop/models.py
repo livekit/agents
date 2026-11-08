@@ -1,7 +1,7 @@
 from typing import Literal
 
 TTSModels = Literal["narad"]
-"""The Vartalaap model family. ``narad`` is the current Hinglish / Indian-English model."""
+"""The Vartaloop model family. ``narad`` is the current Hinglish / Indian-English model."""
 
 TTSVoices = Literal[
     "saanvi",

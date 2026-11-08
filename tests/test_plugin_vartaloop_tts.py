@@ -13,7 +13,7 @@ from yarl import URL
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
 
-pytestmark = pytest.mark.plugin("vartalaap")
+pytestmark = pytest.mark.plugin("vartaloop")
 
 SECRET_API_KEY = "vt_live_secret-api-key-do-not-log"
 
@@ -29,7 +29,7 @@ def _handshake_error_with_api_key(api_key: str) -> WSServerHandshakeError:
 
 @pytest.mark.asyncio
 async def test_connect_ws_redacts_api_key_from_handshake_error():
-    from livekit.plugins.vartalaap import TTS
+    from livekit.plugins.vartaloop import TTS
 
     tts = TTS(api_key=SECRET_API_KEY)
 
@@ -51,7 +51,7 @@ async def test_connect_ws_redacts_api_key_from_handshake_error():
 
 @pytest.mark.asyncio
 async def test_connect_ws_generic_error_does_not_chain_cause():
-    from livekit.plugins.vartalaap import TTS
+    from livekit.plugins.vartaloop import TTS
 
     tts = TTS(api_key=SECRET_API_KEY)
     leaky = ConnectionError(f"wss://api.vartaloop.ai/v1/tts/stream?api_key={SECRET_API_KEY}")
@@ -72,8 +72,8 @@ async def test_connect_ws_generic_error_does_not_chain_cause():
 
 
 def test_request_body_sends_only_what_differs_from_the_server_defaults():
-    from livekit.plugins.vartalaap import TTS
-    from livekit.plugins.vartalaap.tts import _request_body
+    from livekit.plugins.vartaloop import TTS
+    from livekit.plugins.vartaloop.tts import _request_body
 
     tts = TTS(api_key=SECRET_API_KEY)
     body = _request_body(tts._opts, text="नमस्ते", request_id="r1")
@@ -114,7 +114,7 @@ def test_request_body_sends_only_what_differs_from_the_server_defaults():
 
 
 def test_options_are_validated():
-    from livekit.plugins.vartalaap import TTS
+    from livekit.plugins.vartaloop import TTS
 
     with pytest.raises(ValueError):
         TTS(api_key=SECRET_API_KEY, speed=3.0)
@@ -126,7 +126,7 @@ def test_options_are_validated():
     with pytest.raises(ValueError):
         tts.update_options(profile="radio")
     assert tts.model == "narad"
-    assert tts.provider == "Vartalaap"
+    assert tts.provider == "Vartaloop"
     assert tts.capabilities.streaming is True
 
 
@@ -149,7 +149,7 @@ class _FakeMsg:
 
 
 class _FakeWS:
-    """A Vartalaap server: every utterance message gets start, one PCM frame, end."""
+    """A Vartaloop server: every utterance message gets start, one PCM frame, end."""
 
     def __init__(
         self, *, stale: bool = False, error: dict | None = None, stale_error: bool = False
@@ -222,7 +222,7 @@ class _FakePool:
 
 @pytest.mark.asyncio
 async def test_stream_sends_one_utterance_per_sentence_and_plays_them_in_order():
-    from livekit.plugins.vartalaap import TTS
+    from livekit.plugins.vartaloop import TTS
 
     tts = TTS(api_key=SECRET_API_KEY, voice="sahil", digits="hi")
     ws = _FakeWS(stale=True)
@@ -256,7 +256,7 @@ async def test_stream_sends_one_utterance_per_sentence_and_plays_them_in_order()
 
 @pytest.mark.asyncio
 async def test_stream_server_error_is_an_api_status_error_and_drops_the_socket():
-    from livekit.plugins.vartalaap import TTS
+    from livekit.plugins.vartaloop import TTS
 
     tts = TTS(api_key=SECRET_API_KEY)
     pool = _FakePool(_FakeWS(error={"status": 503, "retry_after": 1, "error": "busy"}))
@@ -276,7 +276,7 @@ async def test_stream_server_error_is_an_api_status_error_and_drops_the_socket()
 
 @pytest.mark.asyncio
 async def test_stream_bad_request_is_not_retryable():
-    from livekit.plugins.vartalaap import TTS
+    from livekit.plugins.vartaloop import TTS
 
     tts = TTS(api_key=SECRET_API_KEY)
     tts._pool = _FakePool(_FakeWS(error={"status": 400, "error": "unknown voice x"}))  # type: ignore[assignment]
@@ -294,7 +294,7 @@ async def test_stream_bad_request_is_not_retryable():
 
 @pytest.mark.asyncio
 async def test_stream_ignores_a_stale_error_of_another_utterance():
-    from livekit.plugins.vartalaap import TTS
+    from livekit.plugins.vartaloop import TTS
 
     tts = TTS(api_key=SECRET_API_KEY)
     tts._pool = _FakePool(_FakeWS(stale_error=True))  # type: ignore[assignment]
@@ -309,7 +309,7 @@ async def test_stream_ignores_a_stale_error_of_another_utterance():
 
 @pytest.mark.asyncio
 async def test_update_options_applies_to_the_next_sentence_of_a_running_stream():
-    from livekit.plugins.vartalaap import TTS
+    from livekit.plugins.vartaloop import TTS
 
     tts = TTS(api_key=SECRET_API_KEY, voice="saanvi")
     ws = _FakeWS()
@@ -338,7 +338,7 @@ async def test_stream_finishes_promptly_when_input_closes_after_the_last_end():
     the input then must finish the stream at once, not after a receive timeout."""
     import time
 
-    from livekit.plugins.vartalaap import TTS
+    from livekit.plugins.vartaloop import TTS
 
     tts = TTS(api_key=SECRET_API_KEY)
     ws = _FakeWS()
@@ -359,7 +359,7 @@ async def test_stream_finishes_promptly_when_input_closes_after_the_last_end():
 
 
 def test_a_rejected_update_leaves_the_options_untouched():
-    from livekit.plugins.vartalaap import TTS
+    from livekit.plugins.vartaloop import TTS
 
     tts = TTS(api_key=SECRET_API_KEY, speed=1.2)
     with pytest.raises(ValueError):
@@ -372,7 +372,7 @@ def test_a_rejected_update_leaves_the_options_untouched():
 async def test_a_pause_in_the_input_longer_than_the_timeout_does_not_fail_the_stream():
     """The first sentence has been spoken and the LLM pauses for longer than the connection
     timeout before the next one: nothing is pending, so nothing is owed by the server."""
-    from livekit.plugins.vartalaap import TTS
+    from livekit.plugins.vartaloop import TTS
 
     tts = TTS(api_key=SECRET_API_KEY)
     ws = _FakeWS()

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Text-to-speech over the Vartalaap API.
+"""Text-to-speech over the Vartaloop API.
 
 Two paths, both 16-bit PCM mono at 24 kHz:
 
@@ -59,10 +59,11 @@ from .version import __version__
 DEFAULT_BASE_URL = "https://api.vartaloop.ai"
 DEFAULT_MODEL = "narad"
 DEFAULT_VOICE = "saanvi"
-API_KEY_ENV = "VARTALAAP_API_KEY"
+API_KEY_ENV = "VARTALOOP_API_KEY"
+_LEGACY_API_KEY_ENV = "VARTALAAP_API_KEY"  # the product's earlier name, still honoured
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
-USER_AGENT = f"livekit-plugins-vartalaap/{__version__}"
+USER_AGENT = f"livekit-plugins-vartaloop/{__version__}"
 
 # A pooled socket is reopened after this long so one call cannot pin a connection forever.
 _MAX_SESSION_DURATION = 300.0
@@ -157,13 +158,13 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
     ) -> None:
-        """Create a new instance of Vartalaap TTS.
+        """Create a new instance of Vartaloop TTS.
 
-        See https://docs.vartalaap.si/api/tts/ for the API this plugin speaks.
+        See https://docs.vartaloop.ai/api/tts/ for the API this plugin speaks.
 
         Args:
-            api_key (str, optional): The Vartalaap API key (``vt_live_…``). Read from the
-                ``VARTALAAP_API_KEY`` environment variable when not given.
+            api_key (str, optional): The Vartaloop API key (``vt_live_…``). Read from the
+                ``VARTALOOP_API_KEY`` environment variable when not given.
             model (TTSModels | str, optional): The model family. Defaults to ``narad``.
             voice (TTSVoices | str, optional): The voice id. Defaults to ``saanvi``. The voice
                 decides the language and so the text normaliser: Hinglish text to a Hinglish voice,
@@ -197,15 +198,17 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
-        vartalaap_api_key = api_key or os.environ.get(API_KEY_ENV)
-        if not vartalaap_api_key:
+        vartaloop_api_key = (
+            api_key or os.environ.get(API_KEY_ENV) or os.environ.get(_LEGACY_API_KEY_ENV)
+        )
+        if not vartaloop_api_key:
             raise ValueError(
-                "Vartalaap API key is required, either as argument or set"
+                "Vartaloop API key is required, either as argument or set"
                 f" {API_KEY_ENV} environment variable"
             )
         if sample_rate != SAMPLE_RATE:
             raise ValueError(
-                f"Vartalaap TTS produces {SAMPLE_RATE} Hz audio; sample_rate must be it"
+                f"Vartaloop TTS produces {SAMPLE_RATE} Hz audio; sample_rate must be it"
             )
 
         self._opts = _TTSOptions(
@@ -220,7 +223,7 @@ class TTS(tts.TTS):
             profile=profile,
             raw=raw,
             sample_rate=sample_rate,
-            api_key=vartalaap_api_key,
+            api_key=vartaloop_api_key,
             base_url=base_url.rstrip("/"),
         )
         _check_options(self._opts)
@@ -243,7 +246,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "Vartalaap"
+        return "Vartaloop"
 
     def _auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._opts.api_key}", "User-Agent": USER_AGENT}
@@ -268,7 +271,7 @@ class TTS(tts.TTS):
             # transport errors can quote the URL (which may carry a key): keep the type only
             raise APIConnectionError(type(e).__name__) from None
 
-        logger.debug("Established new Vartalaap TTS WebSocket connection")
+        logger.debug("Established new Vartaloop TTS WebSocket connection")
         return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -507,7 +510,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     raise APIStatusError(
-                        "Vartalaap connection closed unexpectedly",
+                        "Vartaloop connection closed unexpectedly",
                         request_id=request_id,
                         status_code=ws.close_code or -1,
                         body=f"{msg.data=} {msg.extra=}",
@@ -521,7 +524,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning("unexpected Vartalaap message type %s", msg.type)
+                    logger.warning("unexpected Vartaloop message type %s", msg.type)
                     continue
 
                 data = json.loads(msg.data)

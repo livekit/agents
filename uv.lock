@@ -110,7 +110,7 @@ members = [
     "livekit-plugins-ultravox",
     "livekit-plugins-upliftai",
     "livekit-plugins-vakyam",
-    "livekit-plugins-vartalaap",
+    "livekit-plugins-vartaloop",
     "livekit-plugins-xai",
     "livekit-plugins-zoom-ai",
 ]
@@ -2393,8 +2393,8 @@ upliftai = [
 vakyam = [
     { name = "livekit-plugins-vakyam" },
 ]
-vartalaap = [
-    { name = "livekit-plugins-vartalaap" },
+vartaloop = [
+    { name = "livekit-plugins-vartaloop" },
 ]
 xai = [
     { name = "livekit-plugins-xai" },
@@ -2497,7 +2497,7 @@ requires-dist = [
     { name = "livekit-plugins-ultravox", marker = "extra == 'ultravox'", editable = "livekit-plugins/livekit-plugins-ultravox" },
     { name = "livekit-plugins-upliftai", marker = "extra == 'upliftai'", editable = "livekit-plugins/livekit-plugins-upliftai" },
     { name = "livekit-plugins-vakyam", marker = "extra == 'vakyam'", editable = "livekit-plugins/livekit-plugins-vakyam" },
-    { name = "livekit-plugins-vartalaap", marker = "extra == 'vartalaap'", editable = "livekit-plugins/livekit-plugins-vartalaap" },
+    { name = "livekit-plugins-vartaloop", marker = "extra == 'vartaloop'", editable = "livekit-plugins/livekit-plugins-vartaloop" },
     { name = "livekit-plugins-xai", marker = "extra == 'xai'", editable = "livekit-plugins/livekit-plugins-xai" },
     { name = "livekit-plugins-zoom-ai", marker = "extra == 'zoom-ai'", editable = "livekit-plugins/livekit-plugins-zoom-ai" },
     { name = "livekit-protocol", specifier = ">=1.1.31,<2" },
@@ -2523,7 +2523,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "vartalaap", "xai", "zoom-ai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "vartaloop", "xai", "zoom-ai"]
 
 [[package]]
 name = "livekit-api"
@@ -3990,8 +3990,8 @@ requires-dist = [
 ]
 
 [[package]]
-name = "livekit-plugins-vartalaap"
-source = { editable = "livekit-plugins/livekit-plugins-vartalaap" }
+name = "livekit-plugins-vartaloop"
+source = { editable = "livekit-plugins/livekit-plugins-vartaloop" }
 dependencies = [
     { name = "livekit-agents" },
 ]
