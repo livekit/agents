@@ -2226,14 +2226,7 @@ class AgentActivity(RecognitionHooks):
         ev: STTMetrics | TTSMetrics | VADMetrics | LLMMetrics | RealtimeModelMetrics,
     ) -> None:
         # what no inference span can carry gets a span of its own, under the session
-        if isinstance(ev, LLMMetrics):
-            # a realtime model's own text model (GPT-Live's backend) runs no LLMStream, which
-            # is what opens an llm_request span
-            with tracer.start_span("llm_request", context=self._session._root_span_context) as span:
-                trace_utils.record_llm_metrics(span, ev)
-        elif isinstance(ev, RealtimeModelMetrics) and isinstance(
-            self.llm, llm.DuplexRealtimeAdapter
-        ):
+        if isinstance(ev, RealtimeModelMetrics) and isinstance(self.llm, llm.DuplexRealtimeAdapter):
             # a duplex model reports usage for its session: the realtime spans are keyed by the
             # adapter's own speech bursts, whose ids the model never sees, so none would match
             with tracer.start_span(

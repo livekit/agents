@@ -12,7 +12,7 @@ from ..types import ATTRIBUTE_REDACTION_ENABLED, NOT_GIVEN, NotGivenOr
 from . import trace_types
 
 if TYPE_CHECKING:
-    from ..metrics import LLMMetrics, RealtimeModelMetrics
+    from ..metrics import RealtimeModelMetrics
 
 
 REDACTED_EXCEPTION_MESSAGE = "exception details redacted"
@@ -169,23 +169,3 @@ def record_realtime_metrics(span: trace.Span, ev: RealtimeModelMetrics) -> None:
         with tracer.use_span(span):
             with tracer.start_span("realtime_metrics") as child:
                 child.set_attributes(attrs)
-
-
-def record_llm_metrics(span: trace.Span, ev: LLMMetrics) -> None:
-    """Record a text model's usage on its ``llm_request`` span, when no ``LLMStream`` ran it.
-
-    A realtime model's own text model (GPT-Live's backend Responses model) reports only these.
-    """
-    from .gen_ai import set_request_attributes, set_response_attributes, set_usage_attributes
-
-    model_name = ev.metadata.model_name if ev.metadata else None
-    span.set_attribute(trace_types.ATTR_LLM_METRICS, ev.model_dump_json())
-    set_request_attributes(
-        span,
-        operation=trace_types.GenAIOperationName.CHAT,
-        provider=ev.metadata.model_provider if ev.metadata else None,
-        model=model_name,
-        output_type=trace_types.GenAIOutputType.TEXT,
-    )
-    set_usage_attributes(span, ev)
-    set_response_attributes(span, response_id=ev.request_id or None, model=model_name)

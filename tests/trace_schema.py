@@ -93,8 +93,6 @@ SPAN_PARENTS: dict[str, frozenset[str | None]] = {
             "keyterm_detection",
             "judge_evaluation",
             "amd",
-            # a realtime model's own text model (GPT-Live's backend), which no node calls
-            "agent_session",
         },
         "llm_fallback_adapter": {"llm_node", "keyterm_detection", "judge_evaluation", "amd"},
         "llm_request_run": {"llm_request"},

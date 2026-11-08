@@ -1631,11 +1631,11 @@ def span_exporter() -> Iterator[InMemorySpanExporter]:
 
 
 @pytest.mark.no_concurrent
-async def test_both_models_report_their_usage_on_spans_under_the_session(
+async def test_the_voice_models_usage_is_on_a_span_under_the_session(
     monkeypatch: pytest.MonkeyPatch, span_exporter: InMemorySpanExporter
 ) -> None:
-    """The voice model is billed by the second and the backend by the token: both must reach a
-    span, or a tracing backend cannot price the call. The events are handled in an empty
+    """The voice model is billed by the second: its usage must reach a span, or a tracing
+    backend cannot price the call. The events are handled in an empty
     context, as the plugin's own task may run in any: the spans still hang off the session."""
     ws = _connect_hook(monkeypatch)
     model = GPTLiveModel(api_key="sk-test")
@@ -1657,7 +1657,6 @@ async def test_both_models_report_their_usage_on_spans_under_the_session(
     spans = span_exporter.get_finished_spans()
     (agent_session,) = [s for s in spans if s.name == "agent_session"]
     usage = [s for s in spans if s.name == "realtime_metrics"]
-    (backend,) = [s for s in spans if s.name == "llm_request"]
     assert agent_session.context is not None
 
     # the update carries 14 seconds; the fake service closes the session with no more
@@ -1665,31 +1664,10 @@ async def test_both_models_report_their_usage_on_spans_under_the_session(
         json.loads(str(s.attributes[trace_types.ATTR_REALTIME_MODEL_METRICS]))["session_duration"]
         for s in usage
     ] == [14.0, 0.0]
-    assert [s.parent.span_id if s.parent else None for s in [*usage, backend]] == [
+    assert [s.parent.span_id if s.parent else None for s in usage] == [
         agent_session.context.span_id
-    ] * 3
+    ] * 2
     assert usage[0].attributes[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == "gpt-live-1"
-    assert {k: v for k, v in backend.attributes.items() if k.startswith("gen_ai.")} == {
-        "gen_ai.operation.name": "chat",
-        "gen_ai.provider.name": "openai",
-        "gen_ai.request.model": "gpt-5.6-sol",
-        "gen_ai.output.type": "text",
-        "gen_ai.response.id": "resp_1",
-        "gen_ai.response.model": "gpt-5.6-sol",
-        "gen_ai.usage.input_tokens": 376,
-        "gen_ai.usage.output_tokens": 18,
-        "gen_ai.usage.cache_read.input_tokens": 100,
-        "gen_ai.usage.input_cached_tokens": 100,
-        "gen_ai.usage.cache_write.input_tokens": 20,
-        "gen_ai.usage.reasoning.output_tokens": 5,
-        "gen_ai.usage.reasoning_tokens": 5,
-    }
-    backend_metrics = json.loads(str(backend.attributes[trace_types.ATTR_LLM_METRICS]))
-    assert (
-        backend_metrics["request_id"],
-        backend_metrics["prompt_tokens"],
-        backend_metrics["metadata"]["model_name"],
-    ) == ("resp_1", 376, "gpt-5.6-sol")
     assert_trace_well_formed(spans)
 
 
