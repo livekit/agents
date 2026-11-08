@@ -9,8 +9,6 @@
   "rust/crates/lk-agents-abi/src/inference/tts_client.rs: InferenceTts::prewarm(headers)",
   "rust/crates/lk-agents-abi/src/llm/inference.rs: InferenceLlm::chat(headers)",
   "rust/crates/lk-agents-abi/src/llm/inference.rs: InferenceLlm::identified(headers)",
-  "rust/crates/lk-agents-abi/src/llm/mcp.rs: McpSession::connect_http(headers)",
-  "rust/crates/lk-agents-abi/src/llm/mcp.rs: McpSession::connect_stdio(env)",
   "rust/crates/lk-agents-abi/src/llm/provider_format/host.rs: LlmAlgorithms::prepare_provider_format",
   "rust/crates/lk-agents-abi/src/llm/realtime.rs: OpenAIRealtimeModel::bind_identification(headers)",
   "rust/crates/lk-agents-abi/src/stt/inference.rs: DeepgramOptions(DeepgramOptions.keywords)",

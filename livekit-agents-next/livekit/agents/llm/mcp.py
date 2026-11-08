@@ -3,15 +3,15 @@
 The Rust core does the MCP work: the protocol, the stdio and Streamable HTTP transports, listing
 and paginating tools, rendering their schemas and results, the reconnect backoff, recovering an
 unreachable server in the background and closing an idle connection (``_core.McpSession`` and
-``_core._core_McpToolsetLifecycle``).
+``_core._core_McpToolsetLifecycle``). ``MCPServerStdio`` is generated over it whole, and so is
+the connection half of ``MCPServerHTTP``.
 
-This module is what an application touches:
+What stays here is what only the host can do:
 
-- ``MCPServerHTTP`` and ``MCPServerStdio`` say where a server is;
-- ``MCPToolset`` gives an agent its tools;
-- credentials that come from a run (``headers=``/``auth=`` functions of the ``RunContext``) are
-  resolved here, because they are application code;
-- each MCP tool becomes a function tool here, because tools are host objects.
+- credentials that come from a run (``headers=``/``auth=`` functions of the ``RunContext``),
+  which are application code;
+- one toolset per set of run credentials, kept by a call for its whole length;
+- each MCP tool as a function tool, because tools are host objects.
 """
 
 from __future__ import annotations
@@ -22,13 +22,12 @@ import functools
 import hashlib
 import weakref
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import Any, Self, cast
 
 from pydantic import JsonValue
 
 from .. import _core
-from .._generated import public_llm_mcp as _public
+from .._generated import facades_llm_mcp as _facades, public_llm_mcp as _public
 from .._generated.mcp import ResolvedToolOptions
 from .._generated.public_llm_mcp import *  # noqa: F403
 from ..voice.events import RunContext
@@ -36,8 +35,8 @@ from .tool_context import AsyncToolset, RawFunctionTool, Toolset, function_tool
 
 # the documented surface (docs/tools.md "Toolsets")
 __all__ = [
+    "MCPServer",
     "MCPServerHTTP",
-    "MCPServerStdio",
     "MCPToolset",
 ]
 __all__ += _public.__all__
@@ -54,48 +53,7 @@ _Credentials = tuple[tuple[tuple[str, str], ...], "str | None"]
 # --- servers ----------------------------------------------------------------------------------
 
 
-class MCPServer:
-    """An MCP server: a core session that reconnects on its own after losing its connection.
-    Subclasses say how to connect."""
-
-    def __init__(
-        self,
-        *,
-        init_timeout: float,
-        request_timeout: float | None,
-        read_timeout: float | None = None,
-    ) -> None:
-        self._timeouts = (init_timeout, request_timeout, read_timeout)
-        self._session = _core.McpSession(init_timeout, request_timeout, read_timeout)
-
-    @property
-    def initialized(self) -> bool:
-        return self._session.connected
-
-    async def initialize(self) -> None:
-        raise NotImplementedError
-
-    async def list_tools(
-        self, *, tool_options: dict[str, MCPToolOptions] | None = None
-    ) -> list[RawFunctionTool]:
-        """The server's tools as function tools, each with its ``MCPToolOptions``."""
-        options = tool_options or {}
-        await self._refresh()
-        listed = cast(list[dict[str, Any]], await self._session.list_tools())
-        return [
-            _function_tool(self, tool, _core.resolve_mcp_tool_options(options.get(tool["name"])))
-            for tool in listed
-        ]
-
-    async def aclose(self) -> None:
-        await self._session.close()
-
-    async def _refresh(self) -> None:
-        """Called before each request; a server with per-run credentials reconnects here when
-        they changed."""
-
-
-class MCPServerHTTP(MCPServer):
+class MCPServerHTTP(_facades.MCPServerHTTP):
     """An MCP server over Streamable HTTP.
 
     Args:
@@ -125,14 +83,21 @@ class MCPServerHTTP(MCPServer):
         request_timeout: float | None = 30,
     ) -> None:
         super().__init__(
-            init_timeout=init_timeout, request_timeout=request_timeout, read_timeout=read_timeout
+            url,
+            init_timeout=init_timeout,
+            read_timeout=read_timeout,
+            request_timeout=request_timeout,
         )
-        self.url = url
         self._headers = headers
         self._auth = auth
+        self._timeouts = (init_timeout, read_timeout, request_timeout)
         # set on a run's copy (``_for_run``): its credentials, resolved again before a request
         self._run_credentials: Callable[[], _Credentials] | None = None
         self._connected = False
+
+    @property
+    def url(self) -> str:
+        return self._url
 
     @property
     def _per_run(self) -> bool:
@@ -151,9 +116,9 @@ class MCPServerHTTP(MCPServer):
 
     def _for_run(self, ctx: RunContext[Any]) -> MCPServerHTTP:
         """A copy of this server that connects with ``ctx``'s credentials."""
-        init_timeout, request_timeout, read_timeout = self._timeouts
+        init_timeout, read_timeout, request_timeout = self._timeouts
         copy = MCPServerHTTP(
-            self.url,
+            self._url,
             init_timeout=init_timeout,
             read_timeout=read_timeout,
             request_timeout=request_timeout,
@@ -162,6 +127,7 @@ class MCPServerHTTP(MCPServer):
         return copy
 
     async def initialize(self) -> None:
+        """Connect and complete the MCP handshake."""
         if self._run_credentials is not None:
             await self._connect(self._run_credentials())
         elif self._per_run:
@@ -171,12 +137,12 @@ class MCPServerHTTP(MCPServer):
 
     async def _connect(self, credentials: _Credentials) -> None:
         headers, auth = credentials
-        await self._session.connect_http(self.url, list(headers), auth)
+        await self._native.connect_http(self._url, dict(headers), auth)
         self._connected = True
 
     async def _refresh(self) -> None:
-        # the core keeps the connection when the credentials are unchanged and replaces it when
-        # they changed; a closed server is not reopened by a request
+        """Before each request: the core keeps the connection when the run's credentials are
+        unchanged and replaces it when they changed. A closed server is not reopened."""
         if self._run_credentials is not None and self._connected:
             await self._connect(self._run_credentials())
 
@@ -185,46 +151,11 @@ class MCPServerHTTP(MCPServer):
         await super().aclose()
 
     def __repr__(self) -> str:
-        return f"MCPServerHTTP(url={self.url})"
+        return f"MCPServerHTTP(url={self._url})"
 
 
-class MCPServerStdio(MCPServer):
-    """An MCP server run as a child process, over its stdio; restarted if it exits.
-
-    Args:
-        command: The program to run.
-        args: Its arguments.
-        env: Environment variables, over a minimal inherited set.
-        cwd: Its working directory.
-        init_timeout: Seconds to start it, complete the handshake and list the tools.
-        request_timeout: Seconds one request may go without a reply or progress; ``None`` for
-            no limit. ``MCPToolOptions(timeout=)`` sets one tool's.
-    """
-
-    def __init__(
-        self,
-        command: str,
-        args: list[str],
-        *,
-        env: dict[str, str] | None = None,
-        cwd: str | Path | None = None,
-        init_timeout: float = 5,
-        request_timeout: float | None = 30,
-    ) -> None:
-        super().__init__(init_timeout=init_timeout, request_timeout=request_timeout)
-        self.command = command
-        self.args = args
-        self.env = env
-        self.cwd = cwd
-
-    async def initialize(self) -> None:
-        cwd = str(self.cwd) if self.cwd is not None else None
-        await self._session.connect_stdio(
-            self.command, self.args, list((self.env or {}).items()), cwd
-        )
-
-    def __repr__(self) -> str:
-        return f"MCPServerStdio(command={self.command}, args={self.args}, cwd={self.cwd})"
+MCPServer = MCPServerHTTP | _facades.MCPServerStdio
+"""An MCP server an ``MCPToolset`` takes its tools from."""
 
 
 # --- the toolset ------------------------------------------------------------------------------
@@ -265,7 +196,7 @@ class MCPToolset(AsyncToolset):
         self._tool_options = dict(tool_options or {})
         # the core decides when to list, recover and close; it calls back _core_list and
         # _core_close_idle
-        self._lifecycle = _core._core_McpToolsetLifecycle(repr(mcp_server), mcp_server._session)
+        self._lifecycle = _core._core_McpToolsetLifecycle(_describe(mcp_server), mcp_server._native)
         # per-run credentials: one toolset per credential set, kept by a call for its length
         self._by_credentials: dict[str, MCPToolset] = {}
         self._by_call: weakref.WeakKeyDictionary[object, MCPToolset] = weakref.WeakKeyDictionary()
@@ -316,9 +247,19 @@ class MCPToolset(AsyncToolset):
             await self._lifecycle.release(self)
 
     async def _core_list(self) -> None:
-        if not self._mcp_server.initialized:
-            await self._mcp_server.initialize()
-        self._tools = list(await self._mcp_server.list_tools(tool_options=self._tool_options))
+        server = self._mcp_server
+        if not server.initialized:
+            await server.initialize()
+        await _refresh(server)
+        listed = cast(list[dict[str, Any]], await server.list_tools())
+        self._tools = [
+            _function_tool(
+                server,
+                tool,
+                _core.resolve_mcp_tool_options(self._tool_options.get(tool["name"])),
+            )
+            for tool in listed
+        ]
 
     async def _core_close_idle(self) -> None:
         self._tools = []
@@ -339,8 +280,8 @@ def _function_tool(
     name = tool["name"]
 
     async def call(arguments: dict[str, Any], progress: RunContext | None) -> Any:
-        await server._refresh()
-        result = await server._session.call_tool(
+        await _refresh(server)
+        result = await server._native.call_tool(
             name,
             arguments,
             options["timeout"],
@@ -371,3 +312,15 @@ def _function_tool(
         duplicate_scope=options["duplicate_scope"],
         retries=options["retries"],
     )
+
+
+async def _refresh(server: MCPServer) -> None:
+    if isinstance(server, MCPServerHTTP):
+        await server._refresh()
+
+
+def _describe(server: MCPServer) -> str:
+    """The server as logs name it."""
+    if isinstance(server, MCPServerHTTP):
+        return repr(server)
+    return f"MCPServerStdio(command={server._command}, args={list(server._args)})"

@@ -87,7 +87,7 @@ async fn mcp_real_server_lifecycle_stdio() -> Result {
     let peer = Peer::new("stdio");
     let session = Arc::new(McpSession::new(5.0, Some(30.0), Some(30.0))?);
     let result = async {
-        session.connect_stdio(peer.python.clone(), peer.args("stdio"), Vec::new(), None).await?;
+        session.connect_stdio(peer.python.clone(), peer.args("stdio"), None, None).await?;
         exercise(session.clone(), &peer).await?;
         let pid: i32 = peer.receipt("pid").await?.parse()?;
         #[cfg(unix)]
@@ -116,7 +116,7 @@ async fn mcp_real_server_lifecycle_http() -> Result {
     let session = Arc::new(McpSession::new(5.0, Some(30.0), Some(30.0))?);
     let result = async {
         let url = peer.receipt("url").await?;
-        session.connect_http(&ProcessEnv::current_runtime(), url, Vec::new(), None).await?;
+        session.connect_http(&ProcessEnv::current_runtime(), url, Default::default(), None).await?;
         exercise(session.clone(), &peer).await
     }
     .await;

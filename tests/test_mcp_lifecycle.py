@@ -7,21 +7,20 @@ import pytest
 
 from livekit.agents import _core
 from livekit.agents.llm import mcp
-from livekit.agents.llm.mcp import MCPServer, MCPServerHTTP, MCPServerStdio, MCPToolset
-from livekit.agents.llm.tool_context import RawFunctionTool, function_tool
+from livekit.agents.llm.mcp import MCPServerHTTP, MCPServerStdio, MCPToolset
 from livekit.agents.voice.events import RunContext
 
 pytestmark = pytest.mark.unit
 
 
-@function_tool
-async def lookup() -> str:
-    return "found"
+LISTING = [{"name": "lookup", "inputSchema": {"type": "object", "properties": {}}}]
 
 
-class Server(MCPServer):
+class Server(MCPServerStdio):
+    """A stdio server that never launches: its connection and listing are scripted."""
+
     def __init__(self) -> None:
-        super().__init__(init_timeout=10.0, request_timeout=None)
+        super().__init__("never-launched", [], init_timeout=10.0, request_timeout=None)
         self.connected = False
         self.closes = 0
         self.reachable = True
@@ -34,11 +33,11 @@ class Server(MCPServer):
     async def initialize(self) -> None:
         self.connected = True
 
-    async def list_tools(self, **kwargs: object) -> list[RawFunctionTool]:
+    async def list_tools(self) -> object:
         self.listing.set()
         if not self.reachable:
             raise ConnectionError("server unreachable")
-        return [lookup]  # type: ignore[list-item]
+        return LISTING
 
     async def aclose(self) -> None:
         self.closes += 1
@@ -58,14 +57,14 @@ async def test_an_unreachable_server_leaves_the_toolset_empty_until_it_answers()
     async with asyncio.timeout(5):
         while not toolset.tools:
             await asyncio.sleep(0)
-    assert list(toolset.tools) == [lookup]
+    assert [tool.id for tool in toolset.tools] == ["lookup"]
     await toolset.aclose()
 
 
 @pytest.mark.asyncio
 async def test_a_cancelled_setup_is_not_swallowed() -> None:
     class Blocked(Server):
-        async def list_tools(self, **kwargs: object) -> list[RawFunctionTool]:
+        async def list_tools(self) -> object:
             self.listing.set()
             await asyncio.Event().wait()
             raise AssertionError
@@ -86,7 +85,7 @@ async def test_the_last_release_stops_the_background_retry_and_cancels_its_listi
         cancelled = 0
         hanging = asyncio.Event()
 
-        async def list_tools(self, **kwargs: object) -> list[RawFunctionTool]:
+        async def list_tools(self) -> object:
             self.listing.set()
             if self.hang:
                 self.hanging.set()
@@ -181,7 +180,7 @@ async def test_a_changed_token_reconnects_before_the_next_request() -> None:
     assert isinstance(child, MCPToolset)
     server = child._mcp_server
     assert isinstance(server, MCPServerHTTP)
-    server._session = Session()  # type: ignore[assignment]
+    server._native = Session()  # type: ignore[assignment]
     await server.initialize()
     await server._refresh()
     call.context.token = "refreshed"

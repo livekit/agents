@@ -5,6 +5,7 @@ use crate::telemetry;
 use lk_agents_abi::SpawnerExt;
 use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -252,18 +253,20 @@ impl McpSessionPort for McpSession {
         &self,
         env: &ProcessEnv,
         url: String,
-        headers: Vec<(String, String)>,
+        headers: BTreeMap<String, String>,
         auth: Option<String>,
     ) -> Result<(), McpError> {
+        let headers = headers.into_iter().collect();
         self.connect_to(Target::Http { env: env.clone(), url, headers, auth }).await
     }
     async fn connect_stdio(
         &self,
         command: String,
         args: Vec<String>,
-        env: Vec<(String, String)>,
+        env: Option<BTreeMap<String, String>>,
         cwd: Option<String>,
     ) -> Result<(), McpError> {
+        let env = env.unwrap_or_default().into_iter().collect();
         self.connect_to(Target::Stdio { command, args, env, cwd }).await
     }
     async fn list_tools(&self) -> Result<Value, McpError> {

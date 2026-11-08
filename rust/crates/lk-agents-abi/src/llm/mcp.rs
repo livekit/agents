@@ -151,7 +151,7 @@ pub trait McpSession: Send + Sync + Sized + 'static {
     fn new(
         init_timeout: f64,
         request_timeout: Option<f64>,
-        read_timeout: Option<f64>,
+        #[host(default = None)] read_timeout: Option<f64>,
     ) -> Result<Self, McpError>;
     #[host(getter)]
     fn connected(&self) -> bool;
@@ -163,7 +163,7 @@ pub trait McpSession: Send + Sync + Sized + 'static {
         &self,
         env: &Self::Env,
         url: String,
-        headers: Vec<(String, String)>,
+        headers: std::collections::BTreeMap<String, String>,
         auth: Option<String>,
     ) -> Result<(), McpError>;
     #[host(await)]
@@ -171,8 +171,8 @@ pub trait McpSession: Send + Sync + Sized + 'static {
         &self,
         command: String,
         args: Vec<String>,
-        env: Vec<(String, String)>,
-        cwd: Option<String>,
+        #[host(default = None)] env: Option<std::collections::BTreeMap<String, String>>,
+        #[host(default = None)] cwd: Option<String>,
     ) -> Result<(), McpError>;
     #[host(await)]
     async fn list_tools(&self) -> Result<serde_json::Value, McpError>;
@@ -187,6 +187,85 @@ pub trait McpSession: Send + Sync + Sized + 'static {
     ) -> Result<serde_json::Value, McpError>;
     #[host(await)]
     async fn close(&self);
+}
+
+/// `MCPServerStdio`: an MCP server run as a child process, over its stdio; restarted if it exits.
+#[crate::host(facade(
+    path = "livekit.agents.llm.mcp",
+    name = "MCPServerStdio",
+    native = McpSession,
+    keep(command, args, env, cwd)
+))]
+pub trait McpServerStdioFacade {
+    /// Args:
+    ///     command: The program to run.
+    ///     args: Its arguments.
+    ///     env: Environment variables, over a minimal inherited set.
+    ///     cwd: Its working directory.
+    ///     init_timeout: Seconds to start it, complete the handshake and list the tools.
+    ///     request_timeout: Seconds one request may go without a reply or progress; ``None`` for
+    ///         no limit. ``MCPToolOptions(timeout=)`` sets one tool's.
+    #[host(new)]
+    fn new(
+        command: String,
+        args: Vec<String>,
+        #[host(kw, default = None)] env: Option<std::collections::BTreeMap<String, String>>,
+        #[host(default = None)] cwd: Option<String>,
+        #[host(default = 5.0)] init_timeout: f64,
+        #[host(default = 30.0)] request_timeout: Option<f64>,
+    ) -> Self;
+
+    /// Whether the server is connected.
+    #[host(getter, native = connected)]
+    fn initialized(&self) -> bool;
+
+    /// Start the server and complete the MCP handshake.
+    #[host(
+        native = connect_stdio,
+        bind(command = "_command", args = "_args", env = "_env", cwd = "_cwd")
+    )]
+    async fn initialize(&self) -> Result<(), McpError>;
+
+    /// The server's tool listing, every page.
+    async fn list_tools(&self) -> Result<serde_json::Value, McpError>;
+
+    #[host(native = close)]
+    async fn aclose(&self);
+}
+
+/// `MCPServerHTTP`'s connection: an MCP server over Streamable HTTP. The handwritten subclass
+/// takes the credentials, which can be functions of a run, and connects with them.
+#[crate::host(facade(
+    path = "livekit.agents.llm.mcp",
+    extended,
+    name = "MCPServerHTTP",
+    native = McpSession,
+    keep(url)
+))]
+pub trait McpServerHttpFacade {
+    /// Args:
+    ///     url: The server's MCP endpoint.
+    ///     init_timeout: Seconds to connect, complete the handshake and list the tools.
+    ///     read_timeout: Seconds a reply stream may stay idle; ``None`` for no limit.
+    ///     request_timeout: Seconds one request may go without a reply or progress; ``None`` for
+    ///         no limit. ``MCPToolOptions(timeout=)`` sets one tool's.
+    #[host(new)]
+    fn new(
+        url: String,
+        #[host(kw, default = 5.0)] init_timeout: f64,
+        #[host(default = 300.0)] read_timeout: Option<f64>,
+        #[host(default = 30.0)] request_timeout: Option<f64>,
+    ) -> Self;
+
+    /// Whether the server is connected.
+    #[host(getter, native = connected)]
+    fn initialized(&self) -> bool;
+
+    /// The server's tool listing, every page.
+    async fn list_tools(&self) -> Result<serde_json::Value, McpError>;
+
+    #[host(native = close)]
+    async fn aclose(&self);
 }
 
 /// What an `MCPToolset`'s lifecycle runs on the host: its listing and its idle close. Each

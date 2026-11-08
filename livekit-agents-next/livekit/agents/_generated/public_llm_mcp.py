@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+from .facades_llm_mcp import MCPServerStdio as MCPServerStdio
 from .mcp import MCPToolOptions as MCPToolOptions
 
 __all__: list[str] = [
     "MCPToolOptions",
+    "MCPServerStdio",
 ]

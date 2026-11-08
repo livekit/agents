@@ -294,7 +294,7 @@ class McpSession:
         cls,
         init_timeout: float,
         request_timeout: float | None,
-        read_timeout: float | None,
+        read_timeout: float | None = None,
     ) -> Self:
         """`init_timeout` bounds connecting, the handshake and a listing; `request_timeout` one
         request without a reply or progress, `None` for no limit; `read_timeout` an idle HTTP
@@ -308,15 +308,15 @@ class McpSession:
     async def connect_http(
         self,
         url: str,
-        headers: Sequence[tuple[str, str]],
+        headers: Mapping[str, str],
         auth: str | None,
     ) -> None: ...
     async def connect_stdio(
         self,
         command: str,
         args: Sequence[str],
-        env: Sequence[tuple[str, str]],
-        cwd: str | None,
+        env: Mapping[str, str] | None = None,
+        cwd: str | None = None,
     ) -> None: ...
     async def list_tools(self) -> object: ...
     async def call_tool(

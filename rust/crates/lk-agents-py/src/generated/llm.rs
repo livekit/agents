@@ -1461,7 +1461,7 @@ impl McpSession {
     /// request without a reply or progress, `None` for no limit; `read_timeout` an idle HTTP
     /// reply stream.
     #[new]
-    #[pyo3(signature = (init_timeout, request_timeout, read_timeout))]
+    #[pyo3(signature = (init_timeout, request_timeout, read_timeout = None))]
     fn new(
         py: Python<'_>,
         #[pyo3(from_py_with = _extract_mcp_session_new_init_timeout)]
@@ -1512,7 +1512,7 @@ impl McpSession {
         &self,
         py: Python<'py>,
         url: ::std::string::String,
-        headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+        headers: ::std::collections::BTreeMap<::std::string::String, ::std::string::String>,
         auth: ::std::option::Option<::std::string::String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
@@ -1532,13 +1532,15 @@ impl McpSession {
         })
     }
 
-    #[pyo3(signature = (command, args, env, cwd))]
+    #[pyo3(signature = (command, args, env = None, cwd = None))]
     fn connect_stdio<'py>(
         &self,
         py: Python<'py>,
         command: ::std::string::String,
         args: ::std::vec::Vec<::std::string::String>,
-        env: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+        env: ::std::option::Option<
+            ::std::collections::BTreeMap<::std::string::String, ::std::string::String>,
+        >,
         cwd: ::std::option::Option<::std::string::String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
