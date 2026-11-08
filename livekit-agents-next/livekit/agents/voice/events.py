@@ -10,14 +10,13 @@ from typing import TYPE_CHECKING, Annotated as Annotated, Any, Literal as Litera
 from pydantic import Field as Field, TypeAdapter
 from typing_extensions import TypeVar
 
-from livekit.agents._generated.session_events import (
-    ToolUpdate as ToolUpdate,
-    _TypeDiscriminator as _TypeDiscriminator,
-)
-
 from .._generated import facades_voice_events as _facades, public_voice_events as _public
 from .._generated.public_voice_events import *  # noqa: F403
 from .._generated.session_dispatch import AgentEvent as AgentEvent, EventTypes as EventTypes
+from .._generated.session_events import (
+    ToolUpdate as ToolUpdate,
+    _TypeDiscriminator as _TypeDiscriminator,
+)
 from .._generated.tool_report import ToolOutcomeUpdate, ToolReport
 from .._generated.voice_session import VoiceCommandOrigin, VoiceCommandOriginTool
 from ..llm import (
@@ -200,8 +199,23 @@ class RunContext(_facades.RunContext[Context_T]):
         from . import _BindingContextVar, _VoiceBinding
         from .agent_run import _template_tools, render_template
 
-        raw = message
         fnc_call = self.function_call
+        if self._session is None:
+            if (
+                self._run is not None
+                and self._run.runner is not None
+                and self._invocation is not None
+            ):
+                self._run.runner.progress(
+                    self._invocation.invocation_id, self._invocation.operation, message
+                )
+            hooks = self._run.hooks if self._run is not None else None
+            if hooks is not None and hooks.on_update is not None:
+                out = hooks.on_update(message)
+                if inspect.isawaitable(out):
+                    await out
+            return
+
         args = {"function_name": fnc_call.name, "call_id": fnc_call.call_id, "message": message}
         binding = _BindingContextVar.get(None)
         rendered = None
@@ -211,24 +225,7 @@ class RunContext(_facades.RunContext[Context_T]):
             rendered = render_template(options, tools, fnc_call.name, "update_template", args)
         if rendered is None:
             rendered = UPDATE_TEMPLATE.format(**args)
-        if self._session is None:
-            if (
-                self._run is not None
-                and self._run.runner is not None
-                and self._invocation is not None
-            ):
-                self._run.runner.progress(
-                    self._invocation.invocation_id, self._invocation.operation, raw
-                )
-            hooks = self._run.hooks if self._run is not None else None
-            if hooks is not None and hooks.on_update is not None:
-                out = hooks.on_update(raw)
-                if inspect.isawaitable(out):
-                    await out
-            return
-
-        update = ToolReport(outcome=ToolOutcomeUpdate(message=rendered, raw=raw))
-        self._tool_update(update)
+        self._tool_update(ToolReport(outcome=ToolOutcomeUpdate(message=rendered, raw=message)))
 
     def _tool_update(self, report: ToolReport) -> None:
         invocation = self._invocation

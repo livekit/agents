@@ -65,6 +65,7 @@ from ..llm import (
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
+    AsyncToolset,
     Completed,
     Failed,
     InputRequired,
@@ -89,7 +90,7 @@ from .io import SpeechHandle
 from .run_result import RunResult, _tool_body
 
 if TYPE_CHECKING:
-    from ..llm.tool_context import Tool, ToolHandlingOptions, Toolset
+    from ..llm.tool_context import ToolHandlingOptions
     from ..storage import Thread
     from ..storage.context import ContextStore
     from ..text_session import _FrameContexts
@@ -734,8 +735,6 @@ def render_template(
 
 
 def _toolset_template(tools: Sequence[Tool | Toolset], tool: str, key: ToolTemplateKey) -> Any:
-    from ..llm.tool_context import AsyncToolset, ToolContext, Toolset
-
     for entry in tools:
         if not isinstance(entry, Toolset):
             continue

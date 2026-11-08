@@ -37,7 +37,6 @@ def is_hosted() -> bool:
     return os.getenv("LIVEKIT_REMOTE_EOT_URL") is not None
 
 
-F = TypeVar("F", bound=Callable[..., object])
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
@@ -59,6 +58,8 @@ def log_exceptions(
     def deco(fn: Callable[_P, _R]) -> Callable[_P, _R]: ...
 
     def deco(fn: Callable[..., object]) -> Callable[..., object]:
+        err = f"Error in {fn.__name__}" + (f" – {msg}" if msg else "")
+
         if inspect.iscoroutinefunction(fn):
 
             @functools.wraps(fn)
@@ -66,28 +67,20 @@ def log_exceptions(
                 try:
                     return await fn(*args, **kwargs)
                 except Exception:
-                    err = f"Error in {fn.__name__}"
-                    if msg:
-                        err += f" – {msg}"
                     logger.exception(err)
                     raise
 
             return async_fn_logs
 
-        else:
+        @functools.wraps(fn)
+        def fn_logs(*args: object, **kwargs: object) -> object:
+            try:
+                return fn(*args, **kwargs)
+            except Exception:
+                logger.exception(err)
+                raise
 
-            @functools.wraps(fn)
-            def fn_logs(*args: object, **kwargs: object) -> object:
-                try:
-                    return fn(*args, **kwargs)
-                except Exception:
-                    err = f"Error in {fn.__name__}"
-                    if msg:
-                        err += f" – {msg}"
-                    logger.exception(err)
-                    raise
-
-            return fn_logs
+        return fn_logs
 
     return deco
 

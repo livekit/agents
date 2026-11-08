@@ -781,18 +781,15 @@ async def toolsets() -> None:
 async def cli() -> None:
     """What ``lk agent`` drives: argument parsing, JSON log lines, the dev channel, shutdown."""
     import struct
-    import traceback
 
     from livekit.agents import cli as agents_cli
-    from livekit.agents._generated.cli import CliArgsStart
+    from livekit.agents._generated.cli import CliArgsStart, CliParseResultDisplay
     from livekit.protocol.agent_pb import agent_dev
 
     print("== cli")
     args = _core.parse_cli(["agent", "start", "--dev", "--reload-addr", "127.0.0.1:1"]).args
     assert isinstance(args, CliArgsStart)
     assert args.cli_addr == "127.0.0.1:1", args
-    from livekit.agents._generated.cli import CliParseResultDisplay
-
     for bad in (["start", "--cli-addr", "x"], ["console"], ["serve"]):
         assert isinstance(_core.parse_cli(["agent", *bad]), CliParseResultDisplay)
 
@@ -805,7 +802,6 @@ async def cli() -> None:
     line = json.loads(agents_cli._LogFormatter(ensure_ascii=True).format(record))
     assert (line["message"], line["level"], line["job_id"]) == ("x=3", "ERROR", "AJ_1"), line
     assert "ValueError: boom" in line["exception"], line
-    assert traceback
 
     async def read(reader: asyncio.StreamReader) -> agent_dev.AgentDevMessage:
         (length,) = struct.unpack("!I", await reader.readexactly(4))
@@ -1079,10 +1075,7 @@ async def llm_prewarm() -> None:
     )
     session = VoiceSession(stt=ScriptedSTT(), llm=llm_, tts=SilentTTS(), vad=None)
     await session.start(Agent(instructions="You answer."), room=None)
-    for _ in range(100):
-        if seen:
-            break
-        await asyncio.sleep(0.02)
+    await until(lambda: bool(seen), "the gateway saw no request", 2)
     await session.aclose()
     await runner.cleanup()
     print(f"gateway saw {seen}")

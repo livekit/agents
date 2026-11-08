@@ -55,9 +55,8 @@ class Chan(Generic[T]):
         self._on_receive = _on_receive
         self._on_eof = _on_eof
         self._eof_seen = False
-        self._loop = loop or asyncio.get_event_loop()
+        self._loop = loop
         self._maxsize = max(maxsize, 0)
-        self._close_ev = asyncio.Event()
         self._closed = False
         self._gets: deque[asyncio.Future[T | None]] = deque()
         self._puts: deque[asyncio.Future[T | None]] = deque()
@@ -71,8 +70,8 @@ class Chan(Generic[T]):
                 break
 
     async def send(self, value: T) -> None:
-        while self.full() and not self._close_ev.is_set():
-            p = self._loop.create_future()
+        while self.full() and not self._closed:
+            p = (self._loop or asyncio.get_running_loop()).create_future()
             self._puts.append(p)
             try:
                 await p
@@ -90,7 +89,7 @@ class Chan(Generic[T]):
         self.send_nowait(value)
 
     def send_nowait(self, value: T) -> None:
-        if self._close_ev.is_set():
+        if self._closed:
             raise ChanClosed
 
         if self.full():
@@ -100,8 +99,8 @@ class Chan(Generic[T]):
         self._wakeup_next(self._gets)
 
     async def recv(self) -> T:
-        while self.empty() and not self._close_ev.is_set():
-            g = self._loop.create_future()
+        while self.empty() and not self._closed:
+            g = (self._loop or asyncio.get_running_loop()).create_future()
             self._gets.append(g)
 
             try:
@@ -123,7 +122,7 @@ class Chan(Generic[T]):
 
     def recv_nowait(self) -> T:
         if self.empty():
-            if self._close_ev.is_set():
+            if self._closed:
                 self._eof()
                 raise ChanClosed
             else:
@@ -132,7 +131,7 @@ class Chan(Generic[T]):
         if self._on_receive is not None:
             self._on_receive(item)
         # the last item of a closed channel is its end, whether or not the reader reads past it
-        if self._close_ev.is_set() and self.empty():
+        if self._closed and self.empty():
             self._eof()
         self._wakeup_next(self._puts)
         return item
@@ -144,7 +143,6 @@ class Chan(Generic[T]):
 
     def close(self) -> None:
         self._closed = True
-        self._close_ev.set()
         while self._puts:
             putter = self._puts.popleft()
             if not putter.done():
@@ -202,13 +200,13 @@ class Interval:
     def reset(self) -> None:
         if self._fut and self._handler and not self._handler.cancelled():
             self._handler.cancel()
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             self._handler = loop.call_later(self._interval, _finish_fut, self._fut)
         else:
             self._last_sleep = 0
 
     async def tick(self) -> int:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         if self._last_sleep:
             self._fut = loop.create_future()

@@ -33,7 +33,7 @@ class SentenceTokenizer(ABC):
         pass
 
 
-class SentenceStream(ABC):
+class _TokenStream(ABC):
     def __init__(self) -> None:
         self._event_ch = aio.Chan[TokenData]()
 
@@ -65,6 +65,10 @@ class SentenceStream(ABC):
         return self._event_ch.closed
 
 
+class SentenceStream(_TokenStream):
+    pass
+
+
 class WordTokenizer(ABC):
     @abstractmethod
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
@@ -78,39 +82,15 @@ class WordTokenizer(ABC):
         return " ".join(words)
 
 
-class WordStream(ABC):
-    def __init__(self) -> None:
-        self._event_ch = aio.Chan[TokenData]()
-
-    @abstractmethod
-    def push_text(self, text: str) -> None: ...
-
-    @abstractmethod
-    def flush(self) -> None: ...
-
-    @abstractmethod
-    def end_input(self) -> None: ...
-
-    @abstractmethod
-    async def aclose(self) -> None: ...
-
-    async def __anext__(self) -> TokenData:
-        return await self._event_ch.__anext__()
-
-    def __aiter__(self) -> AsyncIterator[TokenData]:
-        return self
-
-    def _check_not_closed(self) -> None:
-        if self._event_ch.closed:
-            cls = type(self)
-            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
+class WordStream(_TokenStream):
+    pass
 
 
 # a tokenizer returns tokens, or tokens with their start and end offsets in the text
 TokenizeCallable = Callable[[str], list[str] | list[TokenSpan]]
 
 
-class BufferedTokenStream:
+class BufferedTokenStream(_TokenStream):
     """Streamed text cut into tokens by a tokenizer."""
 
     def __init__(
@@ -131,7 +111,7 @@ class BufferedTokenStream:
             xml_aware: Never split an XML tag across tokens; only when the input carries
                 markup, as a stray "<" in plain text holds streaming until flush.
         """
-        self._event_ch = aio.Chan[TokenData]()
+        super().__init__()
         self._buffer = _core.TokenBuffer(
             tokenize_fnc,
             min_token_len=min_token_len,
@@ -161,17 +141,6 @@ class BufferedTokenStream:
 
     async def aclose(self) -> None:
         self._event_ch.close()
-
-    def _check_not_closed(self) -> None:
-        if self._event_ch.closed:
-            cls = type(self)
-            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
-
-    def __aiter__(self) -> BufferedTokenStream:
-        return self
-
-    async def __anext__(self) -> TokenData:
-        return await self._event_ch.__anext__()
 
 
 class BufferedSentenceStream(BufferedTokenStream, SentenceStream):

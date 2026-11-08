@@ -42,7 +42,6 @@ from typing import Any
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-STACK = "next"
 SAMPLE_RATE = 24000
 LOUD = 400.0  # int16 RMS of an audible frame
 STT, LLM, TTS, REALTIME = (
@@ -124,7 +123,7 @@ def jsonable(v: Any, depth: int = 0) -> Any:
     name = type(v).__name__
     if name == "SpeechHandle":
         return {"__type": name, "id": v.id, "allow_interruptions": v.allow_interruptions}
-    if name in ("Agent", "AgentTask") or "Agent" in [c.__name__ for c in type(v).__mro__]:
+    if "Agent" in [c.__name__ for c in type(v).__mro__]:
         return {"__type": "Agent", "id": getattr(v, "id", None)}
     if hasattr(v, "model_dump"):
         with contextlib.suppress(Exception):
@@ -148,16 +147,18 @@ class Recorder:
 
 
 try:  # the driving process may have no livekit.agents
-    from livekit.agents import Agent, RunContext, function_tool
+    from livekit.agents import (
+        Agent,
+        AsyncToolset,
+        Completed,
+        RunContext,
+        VoiceTask,
+        function_tool,
+    )
 except ImportError:
     function_tool = None
 
 if function_tool is not None:
-    try:
-        from livekit.agents.llm.async_toolset import AsyncToolset
-    except ImportError:
-        from livekit.agents.llm.tool_context import AsyncToolset  # type: ignore[no-redef]
-
     billing = Agent(instructions=INSTRUCTIONS + " You are the billing desk.")
 
     @billing.on_enter
@@ -189,39 +190,33 @@ if function_tool is not None:
         await asyncio.sleep(3.0)
         return f"A table is booked at {time}."
 
-    try:
-        from livekit.agents import Completed, VoiceTask
-    except ImportError:
-        VoiceTask = None
+    email_collector = Agent(instructions=EMAIL_INSTRUCTIONS, output_type=str)
 
-    if VoiceTask is not None:
-        email_collector = Agent(instructions=EMAIL_INSTRUCTIONS, output_type=str)
+    @email_collector.tool
+    async def confirm_email(ctx: RunContext, email_address: str) -> Completed[str]:
+        """Confirm the receipt email address.
 
-        @email_collector.tool
-        async def confirm_email(ctx: RunContext, email_address: str) -> Completed[str]:
-            """Confirm the receipt email address.
+        Args:
+            email_address: the address, as an email address
+        """
+        return Completed(email_address)
 
-            Args:
-                email_address: the address, as an email address
-            """
-            return Completed(email_address)
-
-        @function_tool
-        async def change_receipt_email(ctx: RunContext) -> str:
-            """Collect and confirm a new email address for the refund receipt."""
-            email = await VoiceTask(agent=email_collector).run()
-            return f"{RECEIPT_SET} {email}."
+    @function_tool
+    async def change_receipt_email(ctx: RunContext) -> str:
+        """Collect and confirm a new email address for the refund receipt."""
+        email = await VoiceTask(agent=email_collector).run()
+        return f"{RECEIPT_SET} {email}."
 
     @function_tool
     async def transfer_to_billing(ctx: RunContext) -> str:
         """Transfer the caller to the billing desk."""
-        ctx.session.update_agent(billing)
+        session = ctx.live_session
+        assert session is not None
+        session.update_agent(billing)
         return "Transferred to billing."
 
 
 async def entry(ctx: Any) -> None:
-    import inspect
-
     from livekit import rtc
     from livekit.agents import VoiceSession, inference, room_io
 
@@ -284,10 +279,6 @@ async def entry(ctx: Any) -> None:
     start: dict[str, Any] = {"agent": agent, "room": ctx.room}
     if options:
         start["room_options"] = room_io.RoomOptions(**options)
-    params = inspect.signature(session.start).parameters
-    rec.write("capabilities", start_params=sorted(params))
-    if "record" in params:
-        start["record"] = bool(cfg.get("record"))
     if cfg.get("avatar"):
         from livekit.agents.voice.avatar import DataStreamAudioOutput
 
@@ -299,9 +290,6 @@ async def entry(ctx: Any) -> None:
     # start() connects the room; connecting before it would miss the pre-connect audio
     await session.start(**start)
     rec.write("started")
-    if not ctx.room.isconnected():
-        rec.write("note", what="session.start() left the room unconnected")
-        await ctx.connect()
 
     @ctx.room.local_participant.register_rpc_method("e2e.cmd")
     async def _cmd(data: rtc.RpcInvocationData) -> str:
@@ -370,12 +358,10 @@ def rms(data: Any) -> float:
 class Call:
     """One scenario: its room, its caller, what the caller saw."""
 
-    def __init__(
-        self, stack: str, scenario: str, agent_name: str, lkapi: Any, speech: Any, out: Path
-    ) -> None:
-        self.stack, self.scenario, self.agent_name = stack, scenario, agent_name
+    def __init__(self, scenario: str, agent_name: str, lkapi: Any, speech: Any, out: Path) -> None:
+        self.scenario, self.agent_name = scenario, agent_name
         self.lkapi, self.speech, self.out = lkapi, speech, out
-        self.room_name = f"e2e-{scenario}-{stack}-{uuid.uuid4().hex[:6]}"
+        self.room_name = f"e2e-{scenario}-{uuid.uuid4().hex[:6]}"
         self.room: Any = None
         self.tasks: set[asyncio.Task[Any]] = set()
         self.log: list[dict[str, Any]] = []  # what the caller saw, in order
@@ -947,7 +933,7 @@ SCENARIOS: dict[str, Scenario] = {
         agent={"noise_cancellation": True},
         expect={"get_weather ran": _tool_ran("get_weather")},
     ),
-    "recording": Scenario(sc_recording, agent={"record": True}),
+    "recording": Scenario(sc_recording),
     "realtime": Scenario(
         sc_realtime,
         agent={"realtime": True},
@@ -1035,9 +1021,9 @@ def _keys(v: Any, prefix: str = "") -> set[str]:
     return set()
 
 
-def view(stack_dir: dict[str, Any]) -> dict[str, Any]:
+def view(run: dict[str, Any]) -> dict[str, Any]:
     """What one run shows, normalised: ids, times and a model's words left out."""
-    lines, caller = stack_dir["agent"], stack_dir["caller"]
+    lines, caller = run["agent"], run["caller"]
     events = [x for x in lines if x["kind"] == "event"]
 
     def of(name: str) -> list[dict[str, Any]]:
@@ -1070,7 +1056,6 @@ def view(stack_dir: dict[str, Any]) -> dict[str, Any]:
         for x in transcripts
         if _of_mic(x, mics) and x["attrs"].get("lk.transcription_final") == "true"
     ]
-    caps = next((x for x in lines if x["kind"] == "capabilities"), {})
     v = {
         "started": any(x["kind"] == "started" for x in lines),
         "history": history_view(history),
@@ -1094,7 +1079,6 @@ def view(stack_dir: dict[str, Any]) -> dict[str, Any]:
         "event_schemas": schemas,
         "item_metrics": {k: sorted(s) for k, s in item_metrics.items() if k},
         "item_times": sorted(item_times),
-        "start_params": caps.get("start_params"),
         "dtmf": [x["digit"] for x in lines if x["kind"] == "room" and x["name"] == "dtmf"],
         # what a final transcript event carries: which fields are set, not their values
         "final_transcripts": sorted(
@@ -1207,8 +1191,8 @@ def load_env(path: str | None) -> None:
 
 
 class Worker:
-    def __init__(self, stack: str, name: str, log: Path) -> None:
-        self.stack, self.name, self.log = stack, name, log
+    def __init__(self, name: str, log: Path) -> None:
+        self.name, self.log = name, log
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}
         self.proc = subprocess.Popen(
             [sys.executable, __file__, "agent", "--name", name],
@@ -1227,7 +1211,7 @@ class Worker:
                 break
             await asyncio.sleep(0.5)
         tail = "\n".join(self.log.read_text(errors="replace").splitlines()[-30:])
-        raise SystemExit(f"the {self.stack} worker did not register:\n{tail}")
+        raise SystemExit(f"the worker did not register:\n{tail}")
 
     def stop(self) -> None:
         self.proc.terminate()
@@ -1237,12 +1221,10 @@ class Worker:
             self.proc.kill()
 
 
-async def run_one(
-    name: str, stack: str, agent: str, lkapi: Any, speech: Any, runs: Path
-) -> dict[str, Any]:
-    out = runs / f"{name}.{stack}.jsonl"
+async def run_one(name: str, agent: str, lkapi: Any, speech: Any, runs: Path) -> dict[str, Any]:
+    out = runs / f"{name}.jsonl"
     out.unlink(missing_ok=True)
-    call = Call(stack, name, agent, lkapi, speech, out)
+    call = Call(name, agent, lkapi, speech, out)
     began = time.time()
     try:
         await asyncio.wait_for(SCENARIOS[name].drive(call), 150)
@@ -1272,7 +1254,7 @@ async def drive(args: argparse.Namespace) -> int:
     runs = Path(args.keep or tempfile.mkdtemp(prefix="lk-e2e-"))
     runs.mkdir(parents=True, exist_ok=True)
     speech = await speech_frames(Path(tempfile.gettempdir()) / "lk-e2e-speech")
-    worker = Worker(STACK, f"e2e-{STACK}-{uuid.uuid4().hex[:6]}", runs / f"{STACK}.log")
+    worker = Worker(f"e2e-{uuid.uuid4().hex[:6]}", runs / "worker.log")
     lkapi = api.LiveKitAPI()
     sem = asyncio.Semaphore(args.jobs)
     results: dict[str, dict[str, Any]] = {}
@@ -1280,8 +1262,7 @@ async def drive(args: argparse.Namespace) -> int:
     async def scenario(name: str, attempt: int) -> None:
         async with sem:
             print(f"  {name} (attempt {attempt}) ...", flush=True)
-            run = await run_one(name, STACK, worker.name, lkapi, speech, runs)
-            results[name] = {STACK: run}
+            results[name] = await run_one(name, worker.name, lkapi, speech, runs)
 
     try:
         await worker.registered()
@@ -1302,7 +1283,7 @@ async def drive(args: argparse.Namespace) -> int:
 
 
 def _problems(name: str, run: dict[str, Any]) -> list[str]:
-    v = view(run[STACK])
+    v = view(run)
     failed = [f"did not: {k}" for k, f in SCENARIOS[name].expect.items() if not _safe(f, v)]
     return failed + consistency(v)
 
@@ -1329,14 +1310,14 @@ def report(names: list[str], results: dict[str, Any], runs: Path) -> int:
         for i, found in enumerate(problems, 1):
             for p in found:
                 print(f"    (attempt {i}) {p}")
-        lag = view(results[n][STACK])["caller"]["av_lag"]
+        lag = view(results[n])["caller"]["av_lag"]
         if lag is not None:
             print(f"    video behind audio (s): {lag}")
         if bad:
             failed.append(n)
 
     print("\nlatency per stage (s), every reply of every scenario")
-    lat = latencies({n: results[n][STACK] for n in names})
+    lat = latencies({n: results[n] for n in names})
     print(f"{'stage':<20}{'p50':>10}{'p90':>10}{'n':>6}")
     for stage, values in lat.items():
         if values:
@@ -1344,8 +1325,9 @@ def report(names: list[str], results: dict[str, Any], runs: Path) -> int:
         else:
             print(f"{stage:<20}{'-':>10}{'-':>10}{0:>6}")
 
-    errs = log_errors(runs / f"{STACK}.log")
-    print(f"\nworker: {len(errs)} error lines ({runs / (STACK + '.log')})")
+    log = runs / "worker.log"
+    errs = log_errors(log)
+    print(f"\nworker: {len(errs)} error lines ({log})")
     for line in _dedupe(errs)[:25]:
         print(f"    {line}")
     print(f"\n{len(names) - len(failed)}/{len(names)} scenarios passed; runs kept in {runs}")
@@ -1399,7 +1381,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     p.add_argument("scenarios", nargs="*")
     p.add_argument("--list", action="store_true")
-    p.add_argument("--jobs", type=int, default=4, help="scenarios at once (two rooms each)")
+    p.add_argument("--jobs", type=int, default=4, help="scenarios at once")
     p.add_argument("--env-file", help="KEY=value lines to load (LiveKit credentials)")
     p.add_argument("--keep", help="write the runs here instead of a temp dir")
     p.add_argument("--no-confirm", action="store_true", help="do not rerun a failing scenario")

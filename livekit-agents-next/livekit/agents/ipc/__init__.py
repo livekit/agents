@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import importlib
 import logging
 import os
@@ -71,9 +72,7 @@ class JobLauncher:
         child_end = child.PipeEnd(endpoint) if os.name == "nt" else socket.socket(fileno=endpoint)
         if isinstance(launch, _core.ThreadLaunch):
             try:
-                self._proc = _JobThread(
-                    child.JobArgs(**{**vars(self._args), "mp_cch": child_end}), launch
-                )
+                self._proc = _JobThread(dataclasses.replace(self._args, mp_cch=child_end), launch)
                 self._proc.start()
             except BaseException:
                 child_end.close()
@@ -109,13 +108,13 @@ class JobLauncher:
         for log in logging.Logger.manager.loggerDict.values():
             if isinstance(log, logging.Logger):
                 levels[log.name] = log.level
-        self._args.mp_cch = cch
-        self._args.log_config = _log_config
-        self._args.logger_levels = levels
+        args = dataclasses.replace(
+            self._args, mp_cch=cch, log_config=_log_config, logger_levels=levels
+        )
         return cast(
             BaseProcess,
             mp_ctx.Process(  # type: ignore[attr-defined]
-                target=child.job_main, args=(self._args,), name="job_proc"
+                target=child.job_main, args=(args,), name="job_proc"
             ),
         )
 

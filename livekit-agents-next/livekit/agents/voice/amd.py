@@ -155,31 +155,12 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         return result
 
     async def __aenter__(self) -> AMD:
-        await self._run(self._session)
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        await self.aclose()
-
-    async def aclose(self) -> None:
-        if self._attached:
-            self._session._running.amd_close()
-        self._attached = False
-        self._verdict_ready.set()
-        if self._session._amd is self:
-            self._session._amd = None
-
-    async def _run(self, session: VoiceSession) -> None:
         if self._attached:
             logger.warning("AMD already running, skipping")
-            return
+            return self
 
-        llm = self._resolve_llm(session)
+        session = self._session
+        llm = self._resolve_llm()
         if llm is None:
             raise ValueError(
                 "AMD classifier could not be resolved, please provide a compatible model"
@@ -207,10 +188,27 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         )
         if not accepted:
             logger.warning("AMD already running, skipping")
-            return
+            return self
         self._attached = True
         self._result = None
         session._amd = self
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        if self._attached:
+            self._session._running.amd_close()
+        self._attached = False
+        self._verdict_ready.set()
+        if self._session._amd is self:
+            self._session._amd = None
 
     def _on_prediction(self, result: AMDPredictionEvent) -> None:
         self._result = result
@@ -227,14 +225,14 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         self._verdict_ready.set()
         self.emit("amd_prediction", result)
 
-    def _resolve_llm(self, session: VoiceSession) -> _LLM | None:
+    def _resolve_llm(self) -> _LLM | None:
         llm: _LLM | None = None
         if isinstance(self._llm_config, str):
             llm = inference.LLM(self._llm_config)
         elif isinstance(self._llm_config, _LLM):
             llm = self._llm_config
-        elif isinstance(session.llm, _LLM):
-            llm = session.llm
+        elif isinstance(self._session.llm, _LLM):
+            llm = self._session.llm
         if not self._suppress_compatibility_warning and llm is not None:
             _warn_if_not_evaluated(llm.model, "llm")
         return llm

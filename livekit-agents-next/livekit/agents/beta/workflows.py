@@ -114,7 +114,12 @@ class GetDtmfTask(VoiceTask[GetDtmfResult]):
         agent.tool(name=plan.tool_name, description=plan.tool_description)(_record_inputs)
         agent.on_enter(_ask_digits)
         super().__init__(agent=agent)
-        self._keypad = (num_digits, ask_for_confirmation, dtmf_input_timeout, dtmf_stop_event)
+        self._dtmf = DtmfTaskOptions(
+            num_digits=num_digits,
+            ask_for_confirmation=ask_for_confirmation,
+            timeout=dtmf_input_timeout,
+            stop_event=dtmf_stop_event,
+        )
 
     async def run(self) -> GetDtmfResult:
         binding = _live_binding("GetDtmfTask.run()")
@@ -123,12 +128,7 @@ class GetDtmfTask(VoiceTask[GetDtmfResult]):
             session._frame(agent, task=True),
             origin=binding.origin,
             opens_with_reply=not agent._has_on_enter(),
-            dtmf=DtmfTaskOptions(
-                num_digits=self._keypad[0],
-                ask_for_confirmation=self._keypad[1],
-                timeout=self._keypad[2],
-                stop_event=self._keypad[3],
-            ),
+            dtmf=self._dtmf,
         )
         return (
             GetDtmfResult(user_input=value)

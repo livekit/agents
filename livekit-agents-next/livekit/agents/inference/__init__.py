@@ -4,8 +4,6 @@ import platform
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import JsonValue
-
 from livekit import rtc
 
 from .. import _core
@@ -144,7 +142,7 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
             sample_rate: The rate the detector hears.
             local_fallback: Whether ``v1`` may degrade to the local ``v1-mini`` model when the
                 gateway fails; without it turns commit on the endpointing delay instead.
-            conn_options: The gateway's timeout and retries.
+            conn_options: The gateway's timeout and retries for a stream opened without its own.
         """
         super().__init__()
         self._base_url = base_url if is_given(base_url) else get_default_inference_url()
@@ -161,8 +159,6 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         )
         for warning in selected.warnings:
             logger.warning(warning)
-        self._sample_rate = sample_rate
-        self._local_fallback = local_fallback
         self._detector = _core.InferenceEot(
             selected.model,
             _overrides(unlikely_threshold),
@@ -185,20 +181,6 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
     @property
     def provider(self) -> str:
         return "livekit"
-
-    def describe_options(self) -> dict[str, JsonValue]:
-        """What the session report shows: the model, where it runs and the user's overrides."""
-        options: dict[str, JsonValue] = {
-            "model": self.model,
-            "provider": self.provider,
-            "sample_rate": self._sample_rate,
-            "local_fallback": self._local_fallback,
-        }
-        if (overrides := self._detector.overrides) is not None:
-            options["threshold_overrides"] = _json(overrides)
-        if (overrides := self._detector.backchannel_overrides) is not None:
-            options["backchannel_threshold_overrides"] = _json(overrides)
-        return options
 
     def _warn_overrides(self) -> None:
         for name, value in (
@@ -233,10 +215,6 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
 
     def _emit_metrics(self, ev: EOTInferenceMetrics) -> None:
         self.emit("metrics_collected", ev)
-
-
-def _json(overrides: float | dict[str, float]) -> JsonValue:
-    return dict[str, JsonValue](overrides) if isinstance(overrides, dict) else overrides
 
 
 # imported last: these modules use the helpers above

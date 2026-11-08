@@ -398,12 +398,12 @@ class ToolContext:
 
     @property
     def provider_tools(self) -> list[ProviderTool]:
-        """A copy of all provider tools in the tool context, including those in tool sets."""
+        """All provider tools in the tool context, including those in tool sets."""
         return self._provider_tools
 
     @property
     def toolsets(self) -> list[Toolset]:
-        """A copy of all tool sets in the tool context."""
+        """All tool sets in the tool context."""
         return self._tool_sets
 
     def flatten(self) -> list[Tool]:

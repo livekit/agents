@@ -28,68 +28,46 @@ if TYPE_CHECKING:
     from .agent_session import VoiceSession
 
 
-class AudioInput:
+_FrameT = TypeVar("_FrameT")
+_SourceT = TypeVar("_SourceT", bound="_Input[Any, Any]")
+
+
+class _Input(Generic[_FrameT, _SourceT]):
+    def __init__(self, *, label: str, source: _SourceT | None = None) -> None:
+        self.__label = label
+        self.__source = source
+
+    def __aiter__(self) -> AsyncIterator[_FrameT]:
+        return self
+
+    @property
+    def label(self) -> str:
+        return self.__label
+
+    @property
+    def source(self) -> _SourceT | None:
+        return self.__source
+
+    async def __anext__(self) -> _FrameT:
+        if self.source is None:
+            raise NotImplementedError
+        return await self.source.__anext__()  # type: ignore[no-any-return]
+
+    def on_attached(self) -> None:
+        if self.source:
+            self.source.on_attached()
+
+    def on_detached(self) -> None:
+        if self.source:
+            self.source.on_detached()
+
+
+class AudioInput(_Input[rtc.AudioFrame, "AudioInput"]):
     """A source of audio frames: iterate ``source``, or override ``__anext__``."""
 
-    def __init__(self, *, label: str, source: AudioInput | None = None) -> None:
-        self.__label = label
-        self.__source = source
 
-    def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
-        return self
-
-    @property
-    def label(self) -> str:
-        return self.__label
-
-    @property
-    def source(self) -> AudioInput | None:
-        return self.__source
-
-    async def __anext__(self) -> rtc.AudioFrame:
-        if self.source is None:
-            raise NotImplementedError
-        return await self.source.__anext__()
-
-    def on_attached(self) -> None:
-        if self.source:
-            self.source.on_attached()
-
-    def on_detached(self) -> None:
-        if self.source:
-            self.source.on_detached()
-
-
-class VideoInput:
+class VideoInput(_Input[rtc.VideoFrameEvent, "VideoInput"]):
     """A source of ``rtc.VideoFrameEvent``: iterate ``source``, or override ``__anext__``."""
-
-    def __init__(self, *, label: str, source: VideoInput | None = None) -> None:
-        self.__label = label
-        self.__source = source
-
-    def __aiter__(self) -> AsyncIterator[rtc.VideoFrameEvent]:
-        return self
-
-    @property
-    def label(self) -> str:
-        return self.__label
-
-    @property
-    def source(self) -> VideoInput | None:
-        return self.__source
-
-    async def __anext__(self) -> rtc.VideoFrameEvent:
-        if self.source is None:
-            raise NotImplementedError
-        return await self.source.__anext__()
-
-    def on_attached(self) -> None:
-        if self.source:
-            self.source.on_attached()
-
-    def on_detached(self) -> None:
-        if self.source:
-            self.source.on_detached()
 
 
 _AudioEventT = TypeVar("_AudioEventT", default=Never, contravariant=True)
@@ -412,7 +390,7 @@ class SpeechHandle(_facades.SpeechHandle):
         return handle or SpeechHandle(core)
 
     async def wait_for_playout(self) -> None:
-        from .agent_session import _origin
+        from ._session_callbacks import _origin
 
         await self._native.wait_for_playout(origin=_origin())
 
