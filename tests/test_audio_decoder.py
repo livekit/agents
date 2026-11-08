@@ -377,13 +377,15 @@ def _make_wav(sample_rate: int, num_channels: int, num_samples: int) -> bytes:
 
 
 @pytest.mark.asyncio
-async def test_wav_inline_decoder():
+@pytest.mark.parametrize("data_size", [48000, 0, 0xFFFFFFFF])
+async def test_wav_inline_decoder(data_size: int):
     """WAV inline decoder should produce the correct total number of samples."""
     sample_rate = 24000
     num_channels = 1
     num_samples = 24000  # 1 second of audio
 
     wav_bytes = _make_wav(sample_rate, num_channels, num_samples)
+    wav_bytes = wav_bytes[:40] + struct.pack("<I", data_size) + wav_bytes[44:]
 
     decoder = AudioStreamDecoder(
         sample_rate=sample_rate, num_channels=num_channels, format="audio/wav"
@@ -403,6 +405,29 @@ async def test_wav_inline_decoder():
 
     assert total_samples == num_samples
     await decoder.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunk_size", [37, None])
+async def test_wav_inline_decoder_ignores_trailing_metadata(chunk_size: int | None):
+    num_samples = 4801
+    wav_bytes = _make_wav(24000, 1, num_samples)
+    footer = b"JUNK\x08\x00\x00\x00metadata"
+    wav_bytes = (
+        wav_bytes[:4] + struct.pack("<I", len(wav_bytes) + len(footer) - 8) + wav_bytes[8:] + footer
+    )
+    decoder = AudioStreamDecoder(sample_rate=24000, num_channels=1, format="audio/wav")
+    try:
+        step = chunk_size or len(wav_bytes)
+        for i in range(0, len(wav_bytes), step):
+            decoder.push(wav_bytes[i : i + step])
+        decoder.end_input()
+
+        frames = [frame async for frame in decoder]
+        assert sum(frame.samples_per_channel for frame in frames) == num_samples
+        assert b"".join(bytes(frame.data) for frame in frames) == b"\x00\x00" * num_samples
+    finally:
+        await decoder.aclose()
 
 
 @pytest.mark.asyncio

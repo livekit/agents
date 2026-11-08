@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import struct
 import wave
 
 import pytest
@@ -424,3 +425,24 @@ async def test_segment_end_warns_on_incomplete_pcm(caplog: pytest.LogCaptureFixt
     warnings = [record for record in caplog.records if "incomplete PCM" in record.message]
     assert len(warnings) == 1
     assert warnings[0].levelname == "WARNING"
+
+
+@pytest.mark.asyncio
+async def test_wav_trailing_metadata_is_not_emitted_as_audio():
+    wav_bytes = _make_wav(SR, NC, 200)
+    footer = b"JUNK\x08\x00\x00\x00metadata"
+    wav_bytes = (
+        wav_bytes[:4] + struct.pack("<I", len(wav_bytes) + len(footer) - 8) + wav_bytes[8:] + footer
+    )
+
+    def produce(emitter):
+        emitter.push(wav_bytes)
+        emitter.end_input()
+
+    emitter, events = await _run_emitter(produce, mime_type="audio/wav")
+    try:
+        assert b"".join(bytes(event.frame.data) for event in events) == _make_pcm(SR, NC, 200)
+        assert sum(event.frame.duration for event in events) == pytest.approx(0.2)
+        assert events[-1].is_final
+    finally:
+        await emitter.aclose()
