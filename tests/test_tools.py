@@ -800,6 +800,36 @@ class TestToolExecution:
         assert parsed == {"order_id": ["O_WAAB70"]}
 
     @pytest.mark.asyncio
+    async def test_execute_function_call_repaired_arguments_keep_non_ascii(self):
+        """Repaired arguments keep non-ASCII text as the model wrote it. With
+        escapes ("recepci\\u00f3n") in its own past calls, the model starts
+        writing escapes itself on later turns, and gets them wrong."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        @function_tool
+        async def leave_note(note: str) -> str:
+            return note
+
+        tool_ctx = ToolContext([leave_note])
+        # missing closing brace: json_repair fixes it, so the call is rewritten
+        raw_broken = '{"note": "Cita en recepción con Martín, 東京"'
+        tool_call = FunctionToolCall(
+            name="leave_note", arguments=raw_broken, call_id="call-non-ascii"
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is False
+
+        assert result.fnc_call.arguments != raw_broken
+        assert "recepción con Martín, 東京" in result.fnc_call.arguments
+        assert "\\u" not in result.fnc_call.arguments
+        assert json.loads(result.fnc_call.arguments) == {
+            "note": "Cita en recepción con Martín, 東京"
+        }
+
+    @pytest.mark.asyncio
     async def test_execute_function_call_canonicalizes_when_validation_fails(self):
         """When JSON parses (possibly via repair) but pydantic validation then
         fails, fnc_call.arguments must STILL be canonicalized — otherwise the
