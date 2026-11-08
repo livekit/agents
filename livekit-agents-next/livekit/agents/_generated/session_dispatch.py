@@ -23,7 +23,6 @@ from .session_events import (
     ConversationItemAddedEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
-    SpeechCreatedEvent,
     ToolExecutionUpdatedEvent,
 )
 from .session_wire import (
@@ -34,6 +33,7 @@ from .session_wire import (
     ParticipantLinked,
     ParticipantUnlinked,
     PreemptiveGenerationEvent,
+    SpeechCreatedEvent,
     SpeechDoneWire,
     UserTurnCompletedWire,
 )
@@ -41,6 +41,7 @@ from .session_wire import (
 # `HostWire` members the host emits as public session events: {model class: event name}.
 PUBLIC_EVENTS: dict[type, str] = {
     UserInputTranscribedEvent: "user_input_transcribed",
+    SpeechCreatedEvent: "speech_created",
     UserTurnExceededEvent: "user_turn_exceeded",
     UserTranscriptionTimeoutEvent: "user_transcription_timeout",
     AgentStateChangedEvent: "agent_state_changed",

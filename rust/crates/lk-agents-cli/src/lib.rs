@@ -33,7 +33,7 @@ impl lk_agents_abi::cli::Cli for Commands {
         url: String,
         api_key: String,
         api_secret: String,
-        server: Arc<dyn lk_agents_abi::cli::DevServer>,
+        server: Arc<dyn lk_agents_abi::worker::server_host::ServerJobs>,
     ) {
         dev_channel(cli_addr, agent_name, url, api_key, api_secret, server).await;
     }

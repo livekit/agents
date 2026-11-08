@@ -17,7 +17,7 @@ from livekit.agents.tts import TTS
 from livekit.agents.voice.events import RunContext
 
 from .._core import TtsStream
-from .chat_diff import DiffOps
+from .chat_diff import DiffOps, MergeInsertion
 from .chat_items import ChatItem, ChatRole
 from .connect import APIConnectOptions
 from .duplex import DuplexCapabilities, DuplexInputItem
@@ -26,15 +26,17 @@ from .llm_fallback import RealtimeFallbackMember
 from .mcp import MCPToolOptions, ResolvedToolOptions
 from .metrics import RealtimeModelMetrics
 from .provider_data import TOOL_BEHAVIOR, ProviderFormat, ToolSchema
+from .provider_format import ConvertedItem
 from .realtime import RealtimeCapabilities
 from .realtime_options import OpenAIRealtimeConfig, RealtimeOptions
 from .rtc_frames import AudioFrame
 from .tool_context import RawFunctionDescription
 from .tool_options import ToolSpec
+from .tool_report import ToolReport, ToolReturn
 from .tts import TTSCapabilities
 
 def chat_ctx_copy_plan(
-    facts: Sequence[tuple[str, str, str | None, int, str | None, float, str | None]],
+    items: Sequence[ChatItem],
     *,
     exclude_function_call: bool = False,
     exclude_instructions: bool = False,
@@ -45,21 +47,18 @@ def chat_ctx_copy_plan(
 ) -> list[int]:
     """`ChatContext.copy` as an index plan over the host's own items."""
 
-def chat_ctx_truncate_plan(
-    facts: Sequence[tuple[str, str, str | None, int, str | None, float, str | None]],
-    max_items: int,
-) -> list[int] | None:
+def chat_ctx_truncate_plan(items: Sequence[ChatItem], max_items: int) -> list[int] | None:
     """`ChatContext.truncate` as an index plan; `None` when under the limit."""
 
 def chat_ctx_merge_plan(
-    mine: Sequence[tuple[str, str, str | None, int, str | None, float, str | None]],
-    theirs: Sequence[tuple[str, str, str | None, int, str | None, float, str | None]],
+    mine: Sequence[ChatItem],
+    theirs: Sequence[ChatItem],
     *,
     exclude_function_call: bool = False,
     exclude_instructions: bool = False,
     exclude_config_update: bool = False,
-) -> list[tuple[int, int]]:
-    """`ChatContext.merge` as `(index, j)` insertions."""
+) -> list[MergeInsertion]:
+    """`ChatContext.merge` as insertions, in order."""
 
 def remove_instructions(item_ids: Sequence[str]) -> list[int]:
     """`remove_instructions(chat_ctx)` as a plan: the positions of the rendered prompt's items,
@@ -127,7 +126,7 @@ class FallbackLlm:
     """The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks."""
     def __new__(
         cls,
-        members: Sequence[LLM[Any]],
+        llm: Sequence[LLM[Any]],
         *,
         attempt_timeout: float = 5.0,
         max_retry_per_llm: int = 0,
@@ -135,7 +134,7 @@ class FallbackLlm:
         sticky: bool = False,
         on_availability: FallbackListener | None = None,
     ) -> Self:
-        """`llm.FallbackAdapter` builds it from its attributes, one per loop."""
+        """`llm` in order."""
     @property
     def active_index(self) -> int: ...
     async def aclose(self) -> None: ...
@@ -159,14 +158,14 @@ class FallbackTts:
     """`tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python."""
     def __new__(
         cls,
-        members: Sequence[TTS[Any]],
+        tts: Sequence[TTS[Any]],
         *,
         max_retry_per_tts: int = 2,
         attempt_timeout: float | None = None,
         sample_rate: int | None = None,
         on_availability: FallbackListener | None = None,
     ) -> Self:
-        """`tts.FallbackAdapter` builds it from its attributes, one per loop."""
+        """`tts` in order; `sample_rate` defaults to the highest of theirs, the others resampled."""
     @property
     def active_index(self) -> int: ...
     @property
@@ -205,19 +204,6 @@ class RealtimeFallbackModel:
     def capabilities(self) -> RealtimeCapabilities: ...
     async def restart(self, *, switch_model: bool = False) -> None: ...
 
-class TtsTokenLog:
-    """The pushed-token log as the host's `SynthesizeStream` keeps it (`_core.TtsTokenLog`): the text
-    a recovering stream replays.
-
-    `self._pushed_tokens` plus the live child sink. The text leg may not drop (§1.2d), so nothing
-    here is lossy or bounded.
-    """
-    def __new__(cls) -> Self: ...
-    def push(self, text: str) -> None: ...
-    def flush(self) -> None: ...
-    def end(self) -> None: ...
-    def snapshot(self) -> tuple[list[str | None], bool]: ...
-
 class InferenceLlm:
     """The gateway LLM behind `inference.LLM`. Its options are shared by every view
     (`identified`); each view's requests carry its own job's identification.
@@ -241,8 +227,8 @@ class InferenceLlm:
         LiveKit Inference gateway; without, `api_key` is an OpenAI-compatible provider's own key,
         sent as the bearer with no LiveKit header. `label` is the host class it reports as.
         `strict_tool_schema`, `gzip_body` and `msgpack_body` suit a provider that refuses strict
-        tool schemas or accepts compressed or msgpack bodies. `inference.LLM`'s mixin builds it on
-        first use, after a fork, from the LLM's attributes.
+        tool schemas or accepts compressed or msgpack bodies. `inference.LLM` builds it in its
+        constructor.
         """
     def identified(
         self,
@@ -382,7 +368,7 @@ def convert_mid_conversation_instructions(
     *,
     role: ChatRole,
     template: str,
-) -> list[tuple[int, ChatItem | None]]: ...
+) -> list[ConvertedItem]: ...
 
 def to_fnc_ctx(
     format: ProviderFormat,
@@ -460,6 +446,11 @@ def chat_ctx_to_dict(
 ) -> dict[str, object]:
     """``{"items": [...]}``, each item's JSON dump. Media content needs its exclusion; with
     ``strip_markup`` the ``<expr/>`` dialect is stripped from assistant messages.
+    """
+
+def tool_report(value: ToolReturn) -> ToolReport:
+    """What a tool's body returned or raised, classified for the core, which decides what the
+    model reads and whether it replies.
     """
 
 class ChatRequest:

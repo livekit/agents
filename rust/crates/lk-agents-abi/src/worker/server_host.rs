@@ -1,5 +1,6 @@
-//! The agent server as the host drives it: its configuration, its runtime, and the host server
-//! (`worker._ServerCallbacks`) that owns the job processes and the user's callbacks.
+//! The agent server as the host drives it: its configuration, its runtime (which owns the job
+//! process pool), and the host server (`worker._ServerCallbacks`) with the processes' launcher
+//! and the user's callbacks.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -8,7 +9,7 @@ use crate::a2a::door::TextEndpoint;
 use crate::errors::HostError;
 use crate::invoke::CallContext;
 use crate::worker::http::{EndpointHandler, EndpointKind};
-use crate::worker::ipc_host::WorkerError;
+use crate::worker::ipc_host::{JobLaunchers, WorkerError};
 use crate::worker::job::RunningJobInfo;
 use crate::worker::types::{ProcessOptions, ProcessStartOptions, ServerOptions};
 
@@ -79,57 +80,41 @@ pub struct EndpointRoute {
     pub public: bool,
 }
 
-/// The job processes and the user's callbacks, which the server runtime calls on the host's
-/// loop. Which jobs to take, when, and whether job processes start at all are the runtime's.
+/// What the server runtime asks of the host, on the host's loop: the job processes' launcher and
+/// the user's callbacks. The runtime owns the process pool and every job decision.
 #[crate::host(proxy(host = "livekit.agents.worker._ServerCallbacks"))]
 pub trait ServerHost: Send + Sync {
-    /// A job the runtime took, with the timeline it stamped; its LiveKit job id.
-    #[host(await, name = "_core_launch_job")]
-    fn launch_job(
-        &self,
-        cx: &crate::telemetry::Cx,
-        info: RunningJobInfo,
-    ) -> crate::BoxFuture<'_, Result<String, HostError>>;
-    #[host(await, name = "_core_terminate_job")]
-    fn terminate_job(
-        &self,
-        cx: &crate::telemetry::Cx,
-        job_id: String,
-    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
     /// The user's `load_fnc`, asked only when there is one.
     #[host(await, name = "_core_load")]
     fn load(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<f64, HostError>>;
-    /// The job processes, when the runtime wants them.
+    /// Prepare the job processes (the forkserver's preloads) and return the factory of their
+    /// launchers; `None` when the server runs no jobs.
     #[host(await, name = "_core_start")]
     fn start(
         &self,
         cx: &crate::telemetry::Cx,
         options: ProcessStartOptions,
-    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    ) -> crate::BoxFuture<'_, Result<Option<Arc<dyn JobLaunchers>>, HostError>>;
     #[host(await, name = "_core_started")]
     fn started(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
-    #[host(await, name = "_core_idle_processes")]
-    fn idle_processes(
-        &self,
-        cx: &crate::telemetry::Cx,
-        target: u32,
-    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
     /// Answered by a responsive host on every load interval: `/` reads a silent one as stuck.
     #[host(await, name = "_core_heartbeat")]
     fn heartbeat(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
-    #[host(await, name = "_core_join_jobs")]
-    fn join_jobs(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
-    #[host(await, name = "_core_close")]
-    fn close(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
-    /// The jobs running, for the health check.
-    #[host(await, name = "_core_health")]
-    fn active_jobs(
-        &self,
-        cx: &crate::telemetry::Cx,
-    ) -> crate::BoxFuture<'_, Result<usize, HostError>>;
 }
 
-#[crate::host(class(name = "ServerRuntime"))]
+/// The server's jobs, as the dev channel reads and resumes them across a reload.
+#[crate::host(native(refused = "expected a native ServerRuntime"))]
+pub trait ServerJobs: Any + Send + Sync {
+    /// The jobs running now.
+    fn running_jobs(&self) -> Vec<RunningJobInfo>;
+    /// Launch jobs kept from before a reload, once the job processes started.
+    fn reload_jobs(
+        &self,
+        jobs: Vec<RunningJobInfo>,
+    ) -> crate::BoxFuture<'_, Result<(), WorkerError>>;
+}
+
+#[crate::host(class(name = "ServerRuntime", native = ServerJobs))]
 pub trait ServerRuntime: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]
@@ -148,12 +133,16 @@ pub trait ServerRuntime: Send + Sync + Sized + 'static {
     fn draining(&self) -> bool;
     #[host(getter)]
     fn http_port(&self) -> u16;
+    /// The jobs running now.
+    #[host(getter)]
+    fn active_jobs(&self) -> Vec<RunningJobInfo>;
 
     /// Start the job processes and the health listener and, unless `unregistered`, register;
     /// return once closed. The worker routes `/<name>/...` of each of `text_doors` to that door
     /// (its card and JSON-RPC methods; private, before `routes`), and serves each `text` route
     /// with its door, whose handlers run in the context this call captured; `endpoints`
-    /// receives every other stream for `routes`.
+    /// receives every other stream for `routes`. `asyncio_debug`: the job runners' loops run in
+    /// debug mode.
     #[host(await)]
     #[allow(clippy::too_many_arguments)]
     async fn run(
@@ -166,6 +155,7 @@ pub trait ServerRuntime: Send + Sync + Sized + 'static {
         has_load_fnc: bool,
         endpoints: Arc<dyn EndpointHandler>,
         text_doors: Vec<Arc<dyn TextEndpoint>>,
+        #[host(kw, default = false)] asyncio_debug: bool,
         #[host(context)] context: CallContext,
     ) -> Result<(), WorkerError>;
 
@@ -175,10 +165,6 @@ pub trait ServerRuntime: Send + Sync + Sized + 'static {
 
     #[host(await)]
     async fn aclose(&self) -> Result<(), WorkerError>;
-
-    /// `"running"`, `"failed"` or `"success"`.
-    #[host(call)]
-    fn job_status(&self, job_id: String, status: String);
 
     /// A job in `room` with no dispatch: the console's, a notebook's.
     #[host(await)]

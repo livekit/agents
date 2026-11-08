@@ -104,7 +104,7 @@ impl TelemetrySpan {
         ::pyo3::PyResult::Ok(out)
     }
 
-    /// A JSON scalar or array; `None` removes nothing and is ignored.
+    /// `None` removes nothing and is ignored.
     #[pyo3(signature = (key, value))]
     fn set_attribute(
         &self,
@@ -113,7 +113,7 @@ impl TelemetrySpan {
         value: Bound<'_, PyAny>,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        let value = crate::py_values::value_from_py(value.as_any(), "value")?;
+        let value = crate::py_values::attribute_value_from_py(value.as_any())?;
         py.detach(|| {
             <TelemetrySpanImpl as ::lk_agents_abi::telemetry::host::HostSpan>::set_attribute(
                 &self.0, key, value,
@@ -132,20 +132,8 @@ impl TelemetrySpan {
         timestamp: HostSpanAddEventTimestampInput,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        let attributes = attributes
-            .map(|v| {
-                v.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|dict| {
-                    dict.iter()
-                        .map(|(key, item)| {
-                            Ok((
-                                key.extract::<::std::string::String>()?,
-                                crate::py_values::value_from_py(item.as_any(), "attributes")?,
-                            ))
-                        })
-                        .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
-                })
-            })
-            .transpose()?;
+        let attributes =
+            attributes.map(|v| crate::py_values::attributes_from_py(v.as_any())).transpose()?;
         py.detach(|| {
             <TelemetrySpanImpl as ::lk_agents_abi::telemetry::host::HostSpan>::add_event(
                 &self.0, name, attributes, timestamp,
@@ -265,6 +253,24 @@ pub fn _core_telemetry_conflict(py: Python<'_>) -> PyResult<()> {
     py.detach(
         <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_conflict,
     );
+    Ok(())
+}
+
+/// Records a span the application's OpenTelemetry SDK ended (the bridge of an SDK provider),
+/// counted on `job`'s sessions.
+#[pyfunction]
+#[pyo3(signature = (span, *, job = None))]
+pub fn _core_telemetry_export(
+    py: Python<'_>,
+    span: Bound<'_, PyAny>,
+    job: ::std::option::Option<::std::string::String>,
+) -> PyResult<()> {
+    let span = crate::generated::records::telemetry::ended_span_from_py(span.as_any())?;
+    py.detach(|| {
+        <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_export(
+            span, job,
+        )
+    });
     Ok(())
 }
 

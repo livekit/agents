@@ -5,8 +5,8 @@ use prost::Message as _;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-pub use lk_agents_abi::cli::DevServer;
 use lk_agents_abi::worker::job::{AcceptArguments, RunningJobInfo};
+use lk_agents_abi::worker::server_host::ServerJobs;
 
 const DEV_FRAME_LIMIT: usize = 8 * 1024 * 1024;
 
@@ -78,7 +78,7 @@ pub async fn dev_channel(
     url: String,
     api_key: String,
     api_secret: String,
-    server: Arc<dyn DevServer>,
+    server: Arc<dyn ServerJobs>,
 ) {
     if let Err(err) =
         serve_dev_channel(cli_addr, agent_name, url, api_key, api_secret, server).await
@@ -93,7 +93,7 @@ async fn serve_dev_channel(
     url: String,
     api_key: String,
     api_secret: String,
-    server: Arc<dyn DevServer>,
+    server: Arc<dyn ServerJobs>,
 ) -> Result<(), HostError> {
     use livekit_protocol::agent::{
         AgentDevMessage, GetRunningAgentJobsRequest, GetRunningAgentJobsResponse, ServerInfo,
@@ -128,13 +128,13 @@ async fn serve_dev_channel(
             job.url = url.clone();
             jobs.push(from_proto(job)?);
         }
-        server.reload_jobs(&lk_agents_abi::telemetry::Cx::NONE, jobs).await?;
+        server.reload_jobs(jobs).await.map_err(|e| HostError::new(e.to_string()))?;
     }
     // Asked before the CLI restarts this process: what runs now, to resume after the reload.
     loop {
         let message = recv(&mut stream).await.map_err(io)?;
         if let Some(Message::GetRunningJobsRequest(_)) = message {
-            let jobs = server.running_jobs()?.into_iter().map(to_proto).collect();
+            let jobs = server.running_jobs().into_iter().map(to_proto).collect();
             let reply = Message::GetRunningJobsResponse(GetRunningAgentJobsResponse { jobs });
             send(&mut stream, reply).await.map_err(io)?;
         }

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from livekit.agents.llm import LLM
     from livekit.agents.voice.agent_run import AgentCallbacks
 
-    from .agent_run import AgentDefinition, RunInputRequirement, RunResult, StreamEvent
+    from .agent_run import AgentDefinition, RunFinished, RunInputRequirement, StreamEvent
     from .chat_items import ChatItem, ChatMessage
     from .connect import APIConnectOptions
 
@@ -121,12 +121,6 @@ class LocalAgentTool:
 
 
 @dataclass(kw_only=True, slots=True)
-class TextSessionTurn:
-    result: RunResult
-    state: TextSessionState
-
-
-@dataclass(kw_only=True, slots=True)
 class TextSessionAgent:
     """Shared definitions and live resources; no host resource enters the saved state."""
 
@@ -157,9 +151,11 @@ class TextSessionRequest:
 
 
 @dataclass(kw_only=True, slots=True)
-class TextSessionSettled:
-    turn: TextSessionTurn
-    output: object | None
+class TextSessionFinished:
+    """A settled turn as the host reads it: the active frame's run and the state to save."""
+
+    run: RunFinished
+    state: TextSessionState
 
 
 @dataclass(kw_only=True, slots=True)
@@ -188,7 +184,7 @@ class TextSessionUpdateIncompleteCleanup:
 
 @dataclass(kw_only=True, slots=True)
 class TextSessionUpdateFinished:
-    settled: TextSessionSettled
+    settled: TextSessionFinished
 
 
 @dataclass(kw_only=True, slots=True)

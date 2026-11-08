@@ -192,7 +192,7 @@ pub enum TurnDetectionMode {
 pub enum Detector {
     /// Every turn commits after `min_delay`.
     None,
-    /// `_StreamingTurnDetector`: inference starts on VAD silence, bounded by `prediction_timeout`.
+    /// `inference.TurnDetector`: inference starts on VAD silence, bounded by `prediction_timeout`.
     Streaming { prediction_timeout: Duration },
 }
 

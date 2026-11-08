@@ -59,7 +59,15 @@ pub fn dev_channel<'py>(
     server: Bound<'_, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
-    let server = crate::generated::cli::DevServerProxy::from_host(server.as_any())?;
+    let server = crate::py_objects::native::<dyn ::lk_agents_abi::worker::server_host::ServerJobs>(
+        server.as_any(),
+    )
+    .ok_or_else(|| {
+        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+            "server",
+            ": expected a native ServerRuntime"
+        ))
+    })?;
     crate::py_calls::future_into_py(py, async move {
         let () = <CliImpl as ::lk_agents_abi::cli::Cli>::dev_channel(
             cli_addr, agent_name, url, api_key, api_secret, server,
@@ -162,154 +170,6 @@ impl Shutdown {
         crate::py_calls::check_pid()?;
         py.detach(|| <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::closed(&self.0));
         Ok(())
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/cli.rs.
-
-/// [`::lk_agents_abi::cli::DevServer`] over a host `livekit.agents.cli._DevServer`.
-#[derive(Clone)]
-pub struct DevServerProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
-}
-
-impl DevServerProxy {
-    /// A registered native class as itself, any other host object behind this proxy.
-    pub fn from_host(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::cli::DevServer>> {
-        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::cli::DevServer>(obj)
-        {
-            return Ok(native);
-        }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
-    pub fn in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::cli::DevServer>> {
-        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::cli::DevServer>(obj)
-        {
-            return Ok(native);
-        }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
-    }
-
-    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
-    pub fn owned(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::cli::DevServer>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    fn take(
-        obj: &Bound<'_, PyAny>,
-        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
-    ) -> PyResult<Self> {
-        let context = match context {
-            Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::py_calls::capture_context(obj.py())?,
-        };
-        Ok(DevServerProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
-    }
-}
-
-impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
-    fn running_jobs(
-        &self,
-    ) -> ::std::result::Result<
-        ::std::vec::Vec<::lk_agents_abi::worker::job::RunningJobInfo>,
-        ::lk_agents_abi::errors::HostError,
-    > {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let out = ::lk_agents_runtime::host::call_now(
-            &crate::py_calls::Entry,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((
-                    host.bind(py).getattr("_core_running_jobs")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::pyo3::Python::attach(|py| {
-            let out = match out {
-                Ok(out) => out,
-                Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                }
-            };
-            let o = out.value.bind(py);
-            let out = (o.try_iter().and_then(|items| {
-                items
-                    .map(|item| {
-                        let item = item?;
-                        crate::generated::records::job_records::running_job_info_from_py(
-                            item.as_any(),
-                        )
-                    })
-                    .collect::<PyResult<Vec<_>>>()
-            }))
-            .map_err(|e| {
-                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
-                    py, &e,
-                )
-            })?;
-            Ok(out)
-        })
-    }
-
-    fn reload_jobs(
-        &self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-        jobs: ::std::vec::Vec<::lk_agents_abi::worker::job::RunningJobInfo>,
-    ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
-    {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let jobs_arg = jobs;
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "DevServer._core_reload_jobs",
-            &self.context,
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::types::PyList::new(
-                    py,
-                    jobs_arg
-                        .into_iter()
-                        .map(|x| {
-                            crate::generated::records::job_records::running_job_info_to_py(py, x)
-                        })
-                        .collect::<PyResult<Vec<_>>>()?,
-                )?
-                .into_any()];
-                Ok((
-                    host.bind(py).getattr("_core_reload_jobs")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(())
-            })
-        })
     }
 }
 

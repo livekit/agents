@@ -34,21 +34,6 @@ from .._generated.provider_data import (
 )
 from .._generated.provider_format import DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE
 from .._generated.public_llm_utils import *  # noqa: F403
-from .._generated.tool_report import (
-    ToolOutcomeCompleted,
-    ToolOutcomeFailed,
-    ToolOutcomeInputRequired,
-    ToolOutcomeInternal,
-    ToolOutcomeInvalid,
-    ToolOutcomeModelRetry,
-    ToolOutcomeNothing,
-    ToolOutcomeRejected,
-    ToolOutcomeStopResponse,
-    ToolOutcomeToolError,
-    ToolOutcomeValue,
-    ToolOutcomeWorking,
-    ToolReport,
-)
 from ..log import logger
 from .chat_context import ChatContext, ChatRole, ImageContent
 from .tool_context import FunctionTool, RawFunctionTool, ToolError
@@ -410,68 +395,6 @@ def _value_text(value: object) -> str | None:
     return str(value) if _is_valid_function_output(value) else None
 
 
-def tool_report(output: object, exception: BaseException | None = None) -> ToolReport:
-    """What a tool returned or raised, classified for the core, which decides what the model
-    reads and whether it replies."""
-    from .tool_context import (
-        Completed,
-        Failed,
-        InputRequired,
-        ModelRetry,
-        Rejected,
-        StopResponse,
-        ToolResult,
-        Working,
-    )
-
-    if isinstance(output, ToolReport):
-        return output
-    if isinstance(output, BaseException):
-        exception, output = output, None
-    if isinstance(exception, ToolError):
-        return ToolReport(outcome=ToolOutcomeToolError(message=exception.message))
-    if isinstance(exception, ModelRetry):
-        return ToolReport(outcome=ToolOutcomeModelRetry(message=exception.message))
-    if isinstance(exception, StopResponse):
-        return ToolReport(outcome=ToolOutcomeStopResponse())
-    if exception is not None:
-        return ToolReport(outcome=ToolOutcomeInternal())
-    if isinstance(output, Completed):
-        text = "completed" if output.value is None else _value_text(output.value)
-        if text is None:
-            return ToolReport(outcome=ToolOutcomeInvalid())
-        return ToolReport(outcome=ToolOutcomeCompleted(text=text, verbatim=output.verbatim))
-    if isinstance(output, Failed):
-        return ToolReport(outcome=ToolOutcomeFailed(error=output.error))
-    if isinstance(output, Rejected):
-        return ToolReport(outcome=ToolOutcomeRejected(reason=output.reason))
-    if isinstance(output, InputRequired):
-        tool = output.tool.info.name if output.tool is not None else None
-        asked = ToolOutcomeInputRequired(
-            question=output.question, verbatim=output.verbatim, tool=tool
-        )
-        return ToolReport(outcome=asked)
-    if isinstance(output, Working):
-        return ToolReport(outcome=ToolOutcomeWorking(message=output.message))
-    if output is None:
-        return ToolReport(outcome=ToolOutcomeNothing())
-    if isinstance(output, ToolResult):
-        text = "" if output.output is None else _value_text(output.output)
-        if text is None:
-            return ToolReport(outcome=ToolOutcomeInvalid())
-        value = ToolOutcomeValue(
-            text=text,
-            reply_required=output.reply_required,
-            verbatim=output.verbatim,
-            more=getattr(output, "_more", None),
-        )
-        return ToolReport(outcome=value)
-    text = _value_text(output)
-    if text is None:
-        return ToolReport(outcome=ToolOutcomeInvalid())
-    return ToolReport(outcome=ToolOutcomeValue(text=text))
-
-
 if TYPE_CHECKING:
     from anthropic.types import MessageParam as AnthropicMessage
     from google.genai.types import ContentDict as GoogleMessage
@@ -501,7 +424,9 @@ def convert_mid_conversation_instructions(
     wrapped in ``template``, so it keeps its position; one without text is dropped."""
 
     plan = _core.convert_mid_conversation_instructions(chat_ctx.items, role=role, template=template)
-    return ChatContext([chat_ctx.items[i] if new is None else new for i, new in plan])
+    return ChatContext(
+        [chat_ctx.items[c.index] if c.rewritten is None else c.rewritten for c in plan]
+    )
 
 
 _DATA: dict[ProviderFormat, type[Any]] = {

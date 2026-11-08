@@ -1,12 +1,12 @@
 //! `#[host(facade(..))]` traits as Python classes (docs/internals/rust-core.md "Facades"): one
 //! module `_generated/<family>_facades.py` per declaring family. A class subclasses its `base`,
 //! takes its `#[host(new)]` parameters with their ABI defaults and builds its native object from
-//! them (`cached`: once, on first use; `per_loop`: once per running loop, from its `self._<param>`
-//! attributes). A method forwards to the native method of its name, or `via` a delegate; a
-//! stream's `_run` is its base's native pump over the owner's operation.
+//! them, then its base from the native getters `base_args` names. A method forwards to the native
+//! method of its name, or `via` a delegate; a stream's `_run` is its base's native pump over the
+//! owner's operation.
 
 use crate::class_stub::{Dir, Imports, py_literal};
-use crate::decl::{Build, Class, Declarations, FacadeClass, FacadeMethod, MethodKind, Param, Ty};
+use crate::decl::{Class, Declarations, FacadeClass, FacadeMethod, Method, MethodKind, Param, Ty};
 use crate::python::Out;
 
 pub fn emit(declared: &Declarations, bases: &[crate::bases::Bases]) -> Result<Vec<Out>, String> {
@@ -24,6 +24,7 @@ pub fn emit(declared: &Declarations, bases: &[crate::bases::Bases]) -> Result<Ve
             runtime: Imports::new(declared),
             typing: Imports::new(declared),
             stdlib: std::collections::BTreeSet::new(),
+            casts: false,
         };
         let mut body = String::new();
         let mut identities = String::new();
@@ -41,8 +42,9 @@ pub fn emit(declared: &Declarations, bases: &[crate::bases::Bases]) -> Result<Ve
         for module in &x.stdlib {
             header.push_str(&format!("import {module}\n"));
         }
+        let typing = if x.casts { "TYPE_CHECKING, Any, cast" } else { "TYPE_CHECKING, Any" };
         header
-            .push_str("from typing import TYPE_CHECKING, Any\n\nfrom .. import _bindings, _core\n");
+            .push_str(&format!("from typing import {typing}\n\nfrom .. import _bindings, _core\n"));
         let header = crate::imports::merge(&header, &x.runtime.render(&[]))?;
         text.push_str(header.trim_start_matches('\n'));
         // A name bound at runtime is not imported again for the type checker.
@@ -82,6 +84,8 @@ struct Module<'a> {
     runtime: Imports,
     typing: Imports,
     stdlib: std::collections::BTreeSet<&'static str>,
+    /// A provider method hands its stream the owner through `typing.cast`.
+    casts: bool,
 }
 
 impl Module<'_> {
@@ -124,7 +128,12 @@ impl Module<'_> {
 
     fn class(&mut self, facade: &FacadeClass) -> Result<String, String> {
         let native = self.native(&facade.native)?.clone();
-        let base = facade.base.as_deref().map(|b| self.runtime_name(b)).transpose()?;
+        let mut base = facade.base.as_deref().map(|b| self.runtime_name(b)).transpose()?;
+        // An adapter observing availability emits its event besides its base's.
+        if let (Some(b), Some(availability)) = (&mut base, &facade.availability) {
+            self.runtime.add("typing", "Literal");
+            *b = format!("{b}[Literal[{:?}]]", availability.event);
+        }
         let mut text = format!(
             "\n\nclass {}{}:\n",
             facade.name,
@@ -171,6 +180,12 @@ impl Module<'_> {
                     .map_err(|e| format!("{}.{}: {e}", facade.name, method.method.name))?,
             );
         }
+        let declared = self.declared;
+        for opened in declared.facades.iter().filter(|f| f.native == facade.native) {
+            if let Some(stream) = opened.stream.as_ref().filter(|s| s.method.is_some()) {
+                members.push(self.provider_method(facade, &native, opened, stream)?);
+            }
+        }
         body.push_str(&members.join("\n"));
         if body.trim().is_empty() {
             body.push_str("    pass\n");
@@ -179,7 +194,8 @@ impl Module<'_> {
         Ok(text)
     }
 
-    /// The `_native` member (when not assigned by `__init__`), the leg and availability members.
+    /// The `_native` declaration (when no `#[host(new)]` builds it), the leg and availability
+    /// members.
     fn build(
         &mut self,
         facade: &FacadeClass,
@@ -189,61 +205,9 @@ impl Module<'_> {
     ) -> Result<Vec<String>, String> {
         let name = &native.name;
         let mut members = Vec::new();
-        let constructor = native.methods.iter().find(|m| m.kind == MethodKind::New);
-        let observer = facade.availability.as_ref().map(|a| a.observer.as_str());
-        match facade.build {
-            Build::Eager if has_new => {}
+        if !has_new {
             // The handwritten subclass sets it.
-            Build::Eager => declared.push(format!("_native: _core.{name}\n")),
-            Build::Cached | Build::PerLoop => {
-                let constructor =
-                    constructor.ok_or_else(|| format!("_core.{name} has no #[host(new)]"))?;
-                let mut fields = String::new();
-                let mut arguments = Vec::new();
-                let mut keyword = false;
-                for p in constructor.params.iter().filter(|p| !p.ty.hidden()) {
-                    let n = p.name.trim_start_matches("r#");
-                    keyword |= p.kw_only;
-                    let value = if observer == Some(n) {
-                        "self".to_owned()
-                    } else {
-                        let ty = match facade.annotations.iter().find(|(a, _)| a == n) {
-                            Some((_, text)) => self.typing.annotation(text, ""),
-                            None => annotation(&p.ty, Dir::Out, &mut self.typing),
-                        };
-                        fields.push_str(&format!("_{n}: {ty}\n"));
-                        match facade.resolve.iter().find(|(a, _)| a == n) {
-                            Some((_, function)) => {
-                                format!("{}(self._{n})", self.callable(function)?)
-                            }
-                            None => format!("self._{n}"),
-                        }
-                    };
-                    arguments.push(if keyword { format!("{n}={value}") } else { value });
-                }
-                for (n, _) in facade.annotations.iter().chain(&facade.resolve) {
-                    if !constructor.params.iter().any(|p| &p.name == n) {
-                        return Err(format!("_core.{name}() takes no {n}"));
-                    }
-                }
-                declared.push(fields);
-                members.push(match facade.build {
-                    Build::Cached => {
-                        self.stdlib.insert("functools");
-                        format!(
-                            "    @functools.cached_property\n    def _native(self) -> _core.{name}:\n{}",
-                            call(&format!("return _core.{name}"), &arguments, 8)
-                        )
-                    }
-                    _ => {
-                        let lines: String =
-                            arguments.iter().map(|a| format!("                {a},\n")).collect();
-                        format!(
-                            "    @property\n    def _native(self) -> _core.{name}:\n        return _bindings.on_loop(\n            self,\n            lambda: _core.{name}(\n{lines}            ),\n        )\n"
-                        )
-                    }
-                });
-            }
+            declared.push(format!("_native: _core.{name}\n"));
         }
         if !facade.legs.is_empty() {
             let leg = match &facade.leg {
@@ -261,36 +225,88 @@ impl Module<'_> {
             ));
         }
         if let Some(availability) = &facade.availability {
-            let constructor =
-                constructor.ok_or_else(|| format!("_core.{name} has no #[host(new)]"))?;
-            let parameter = constructor
-                .params
-                .iter()
-                .find(|p| p.name == availability.observer)
-                .ok_or_else(|| "availability observes through no parameter".to_owned())?;
-            if !constructor.params.iter().any(|p| p.name == "members") {
-                return Err("availability names entries of `members`".into());
-            }
-            let (module, record) = availability
-                .record
-                .rsplit_once('.')
-                .ok_or_else(|| format!("`{}` names module.item", availability.record))?;
-            let (package, module) = module.rsplit_once('.').unwrap_or(("", module));
-            let package = match package.trim_start_matches('.') {
-                "" => format!("{package}."),
-                _ => package.to_owned(),
-            };
-            self.runtime.add(&package, module);
-            self.typing.add(".llm_fallback", "AvailabilityChanged");
-            declared.push(self.observed(parameter)?);
+            members.extend(self.availability(facade, native, availability, declared)?);
+        }
+        Ok(members)
+    }
+
+    /// An availability observer's members: the chain's events as the host's, and the serving
+    /// entry as the adapter's identity.
+    fn availability(
+        &mut self,
+        facade: &FacadeClass,
+        native: &Class,
+        availability: &crate::decl::Availability,
+        declared: &mut Vec<String>,
+    ) -> Result<Vec<String>, String> {
+        let name = &native.name;
+        let constructor = native
+            .methods
+            .iter()
+            .find(|m| m.kind == MethodKind::New)
+            .ok_or_else(|| format!("_core.{name} has no #[host(new)]"))?;
+        let parameter = constructor
+            .params
+            .iter()
+            .find(|p| p.name == availability.observer)
+            .ok_or_else(|| "availability observes through no parameter".to_owned())?;
+        let entries = constructor
+            .params
+            .iter()
+            .find(|p| p.name == availability.members)
+            .ok_or_else(|| format!("_core.{name}() takes no {}", availability.members))?;
+        let Ty::List(entry) = &entries.ty else {
+            return Err(format!("availability members `{}` is a list", availability.members));
+        };
+        let entry = annotation(entry, Dir::Out, &mut self.typing);
+        let (module, record) = availability
+            .record
+            .rsplit_once('.')
+            .ok_or_else(|| format!("`{}` names module.item", availability.record))?;
+        let (package, module) = module.rsplit_once('.').unwrap_or(("", module));
+        let package = match package.trim_start_matches('.') {
+            "" => format!("{package}."),
+            _ => package.to_owned(),
+        };
+        self.runtime.add(&package, module);
+        self.runtime.add("..log", "logger");
+        self.typing.add(".llm_fallback", "AvailabilityChanged");
+        self.typing.add(".chat_items", "MetricsMetadata");
+        declared.push(format!("_members: list[{entry}]\n"));
+        let observed = self.observed(parameter)?;
+        if !observed.trim().is_empty() {
+            declared.push(observed);
+        }
+        if facade.base.is_none() {
             declared.push("def emit(self, event: str, *args: Any) -> None: ...\n".into());
-            let event = format!("{:?}", availability.event);
-            let value = format!("{module}.{record}(self._members[ev.index], ev.available)");
+        }
+        let event = format!("{:?}", availability.event);
+        let value = format!("{module}.{record}(self._members[ev.index], ev.available)");
+        let mut members = vec![format!(
+            "    def _core_availability_changed(self, ev: AvailabilityChanged) -> None:\n{}",
+            call("self.emit", &[event, value], 8)
+        )];
+        members.push(format!(
+            "    def _core_all_unavailable(self) -> None:\n        logger.error(\"all {}s are unavailable, retrying..\")\n",
+            availability.kind
+        ));
+        members.push(format!(
+            "    @property\n    def _active(self) -> {entry}:\n        return self._members[self._native.active_index]\n"
+        ));
+        for (property, ty) in
+            [("model", "str"), ("provider", "str"), ("metrics_metadata", "MetricsMetadata")]
+        {
             members.push(format!(
-                "    def _core_availability_changed(self, ev: AvailabilityChanged) -> None:\n{}",
-                call("self.emit", &[event, value], 8)
+                "    @property\n    def {property}(self) -> {ty}:\n        return self._active.{property}\n"
             ));
         }
+        let close = match facade.base {
+            Some(_) => "        await super().aclose()\n",
+            None => "",
+        };
+        members.push(format!(
+            "    async def aclose(self) -> None:\n{close}        await self._native.aclose()\n"
+        ));
         Ok(members)
     }
 
@@ -310,7 +326,8 @@ impl Module<'_> {
             .find(|p| &p.family == family && &p.rust_name == name)
             .ok_or_else(|| format!("no proxy {name}"))?;
         let mut text = String::new();
-        for call in proxy.methods.iter().filter(|m| m.name != "_core_availability_changed") {
+        let generated = ["_core_availability_changed", "_core_all_unavailable"];
+        for call in proxy.methods.iter().filter(|m| !generated.contains(&m.name.as_str())) {
             let mut params = vec!["self".to_owned()];
             for p in call.params.iter().filter(|p| !p.ty.hidden()) {
                 let ty = annotation(&p.ty, Dir::Out, &mut self.typing);
@@ -329,34 +346,48 @@ impl Module<'_> {
     ) -> Result<String, String> {
         let (signature, values) = self.parameters(native, new)?;
         let mut body = String::new();
-        if facade.base.is_some() {
+        // A base built from the native object's getters is built after it.
+        let base_first = facade.base.is_some() && facade.base_args.is_empty();
+        if base_first {
             body.push_str("        super().__init__()\n");
         }
         for p in new.method.params.iter().filter(|p| !p.ty.hidden()) {
             let n = p.name.trim_start_matches("r#");
-            match new.delegated.iter().find(|(d, _)| d == n) {
-                Some((_, attribute)) => body.push_str(&format!("        self.{attribute} = {n}\n")),
-                None if facade.build != Build::Eager => {
-                    body.push_str(&format!("        self._{n} = {n}\n"))
-                }
-                None => {}
+            if let Some((_, attribute)) = new.delegated.iter().find(|(d, _)| d == n) {
+                body.push_str(&format!("        self.{attribute} = {n}\n"));
             }
         }
-        if facade.build == Build::Eager {
-            let constructor = native
-                .methods
-                .iter()
-                .find(|m| m.kind == MethodKind::New)
-                .ok_or_else(|| format!("_core.{} has no #[host(new)]", native.name))?;
-            let observer = facade.availability.as_ref().map(|a| a.observer.as_str());
-            let arguments = sent(&constructor.params, |p| {
-                let n = p.name.trim_start_matches("r#");
-                if observer == Some(n) {
-                    return Some("self".to_owned());
-                }
-                values.iter().find(|(v, _)| v == n).map(|(_, value)| value.clone())
-            })?;
-            body.push_str(&call(&format!("self._native = _core.{}", native.name), &arguments, 8));
+        let constructor = native
+            .methods
+            .iter()
+            .find(|m| m.kind == MethodKind::New)
+            .ok_or_else(|| format!("_core.{} has no #[host(new)]", native.name))?;
+        let observer = facade.availability.as_ref().map(|a| a.observer.as_str());
+        let arguments = sent(&constructor.params, |p| {
+            let n = p.name.trim_start_matches("r#");
+            if observer == Some(n) {
+                return Some("self".to_owned());
+            }
+            values.iter().find(|(v, _)| v == n).map(|(_, value)| value.clone())
+        })?;
+        body.push_str(&call(&format!("self._native = _core.{}", native.name), &arguments, 8));
+        for n in &facade.keep {
+            body.push_str(&format!("        self._{n} = {n}\n"));
+        }
+        if let Some(availability) = &facade.availability {
+            body.push_str(&format!("        self._members = list({})\n", availability.members));
+        }
+        if !base_first && (facade.base.is_some() || !facade.base_args.is_empty()) {
+            for n in &facade.base_args {
+                native
+                    .methods
+                    .iter()
+                    .find(|m| &m.name == n && m.kind == MethodKind::Getter)
+                    .ok_or_else(|| format!("_core.{} has no getter {n}", native.name))?;
+            }
+            let arguments: Vec<String> =
+                facade.base_args.iter().map(|n| format!("{n}=self._native.{n}")).collect();
+            body.push_str(&call("super().__init__", &arguments, 8));
         }
         let mut text = def("__init__", false, &signature, "None");
         crate::python::docstring(&mut text, &new.method.doc, 8);
@@ -598,6 +629,99 @@ impl Module<'_> {
         Ok(with_doc(text, &m.doc, &body))
     }
 
+    /// The per-call parameters of a stream's native operation: each one's provider-method
+    /// parameter, the annotation the stream stores it under and the value the method passes.
+    fn per_call(
+        &mut self,
+        op: &Method,
+        stream: &crate::decl::StreamForm,
+    ) -> Result<Vec<PerCall>, String> {
+        let mut out = Vec::new();
+        let mut star = false;
+        for p in op.params.iter().filter(|p| !p.ty.hidden()) {
+            let n = p.name.trim_start_matches("r#").to_owned();
+            if stream.state.contains(&n) {
+                continue;
+            }
+            let given = stream.annotations.iter().find(|(a, _)| *a == n);
+            let shown = |x: &mut Self, ty: &Ty| match given {
+                Some((_, text)) => x.typing.annotation(text, ""),
+                None => annotation(ty, Dir::In, &mut x.typing),
+            };
+            let defaults_none = p.default.as_ref().map(py_literal).as_deref() == Some("None");
+            let host_default = stream.defaults.iter().find(|(a, _)| *a == n);
+            let (signature, stored, value) = match (&p.ty, host_default) {
+                (Ty::Optional(inner), Some((_, value))) => {
+                    let value = self.callable(value)?;
+                    let a = shown(self, inner);
+                    (format!("{n}: {a} = {value}"), a, n.clone())
+                }
+                (Ty::Optional(inner), None) if stream.not_given && defaults_none => {
+                    self.runtime.add("..types", "NOT_GIVEN");
+                    self.typing.add("..types", "NotGivenOr");
+                    self.runtime.add("..utils", "is_given");
+                    let a = shown(self, inner);
+                    let value = format!("{n} if is_given({n}) else None");
+                    (format!("{n}: NotGivenOr[{a}] = NOT_GIVEN"), format!("{a} | None"), value)
+                }
+                (_, Some(_)) => return Err(format!("default({n}) is for an `Option` parameter")),
+                (ty, None) => {
+                    let a = shown(self, ty);
+                    let signature = match &p.default {
+                        Some(d) => format!("{n}: {a} = {}", py_literal(d)),
+                        None => format!("{n}: {a}"),
+                    };
+                    (signature, a, n.clone())
+                }
+            };
+            let keyword = p.kw_only && !star;
+            star |= keyword;
+            out.push(PerCall { name: n, signature, stored, value, keyword });
+        }
+        for n in stream.state.iter().chain(&stream.base_args) {
+            if !op.params.iter().any(|p| &p.name == n) {
+                return Err(format!("{} takes no {n}", stream.op));
+            }
+        }
+        Ok(out)
+    }
+
+    /// The owner's provider method (`stream()`, `chat()`) that opens the stream facade `opened`.
+    fn provider_method(
+        &mut self,
+        owner: &FacadeClass,
+        native: &Class,
+        opened: &FacadeClass,
+        stream: &crate::decl::StreamForm,
+    ) -> Result<String, String> {
+        if opened.module != owner.module {
+            return Err(format!("{} opens {} of another module", owner.name, opened.name));
+        }
+        let op = native
+            .methods
+            .iter()
+            .find(|m| m.name == stream.op)
+            .ok_or_else(|| format!("_core.{} has no operation {}", native.name, stream.op))?
+            .clone();
+        let owner_param = stream.owner.trim_start_matches('_');
+        let public = owner.path.strip_prefix("livekit.agents.").unwrap_or(&owner.path);
+        let module = public.rsplit('.').next().unwrap_or(public);
+        self.casts = true;
+        let mut params = vec!["self".to_owned()];
+        let mut arguments = vec![format!("{owner_param}=cast(\"{module}.{}\", self)", owner.name)];
+        for p in self.per_call(&op, stream)? {
+            if p.keyword {
+                params.push("*".into());
+            }
+            params.push(p.signature);
+            arguments.push(format!("{}={}", p.name, p.value));
+        }
+        let name = stream.method.as_deref().unwrap_or_default();
+        let mut text = def(name, false, &params, &opened.name);
+        text.push_str(&call(&format!("return {}", opened.name), &arguments, 8));
+        Ok(text)
+    }
+
     fn record(&mut self, module: &str, name: &str) -> String {
         self.runtime.add(&format!(".{module}"), name);
         name.to_owned()
@@ -649,6 +773,24 @@ impl Module<'_> {
             text.push_str("    _core_native_retries = True\n");
         }
         text.push_str(&format!("    {}: {owner_class}\n\n", stream.owner));
+        if stream.method.is_some() {
+            let owner_param = stream.owner.trim_start_matches('_');
+            let mut params = vec!["self".to_owned(), "*".to_owned()];
+            params.push(format!("{owner_param}: {owner_class}"));
+            let mut base = vec![format!("{owner_param}={owner_param}")];
+            let mut kept = String::new();
+            for p in self.per_call(op, stream)? {
+                params.push(format!("{}: {}", p.name, p.stored));
+                match stream.base_args.contains(&p.name) {
+                    true => base.push(format!("{0}={0}", p.name)),
+                    false => kept.push_str(&format!("        self._{0} = {0}\n", p.name)),
+                }
+            }
+            text.push_str(&def("__init__", false, &params, "None"));
+            text.push_str(&call("super().__init__", &base, 8));
+            text.push_str(&kept);
+            text.push('\n');
+        }
         text.push_str(&format!("    async def _core_open(self) -> {opened}:\n"));
         text.push_str(&call(
             &format!("return await self.{}._native.{}", stream.owner, stream.op),
@@ -660,12 +802,28 @@ impl Module<'_> {
     }
 }
 
+/// One per-call parameter of a stream's native operation (`Module::per_call`).
+struct PerCall {
+    name: String,
+    /// In the provider method's signature.
+    signature: String,
+    /// The stream constructor's annotation for it.
+    stored: String,
+    /// What the provider method passes the stream.
+    value: String,
+    /// The first keyword-only parameter.
+    keyword: bool,
+}
+
 /// A host annotation, a native class named through `_core` (a generated class may share its name).
 fn annotation(ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
     match ty {
-        Ty::Instance { class, .. } | Ty::Handle { class, .. } | Ty::Shared { class, .. } => {
-            format!("_core.{class}")
-        }
+        Ty::Instance { class, .. }
+        | Ty::Handle { class, .. }
+        | Ty::Shared { class, .. }
+        | Ty::Source { class, .. }
+        | Ty::Sink { class, .. }
+        | Ty::Duplex { class, .. } => format!("_core.{class}"),
         Ty::Optional(inner) => format!("{} | None", annotation(inner, dir, imports)),
         other => crate::class_stub::annotation("", other, dir, imports),
     }
@@ -838,8 +996,10 @@ mod tests {
             #[host(await)]
             async fn synthesize(&self, input_text: String, #[host(default = None)] conn_options: Option<u32>) -> Result<u64, crate::errors::ApiError>;
         }
-        #[crate::host(facade(path = "livekit.agents.tts", extended, native = Chain, per_loop, resolve(members = ".._bindings.core_legs"), legs(synthesize)))]
+        #[crate::host(facade(path = "livekit.agents.tts", extended, native = Chain, legs(synthesize), keep(members)))]
         pub trait Adapter {
+            #[host(new, resolve(members = ".._bindings.core_legs"))]
+            fn new(members: Vec<String>, #[host(kw, default = 1.0)] timeout: f64) -> Self;
             #[host(getter)]
             fn model(&self) -> String;
         }
@@ -847,7 +1007,8 @@ mod tests {
         pub trait AdapterStream {}
     "#;
 
-    // Catches: a per-loop engine built once, or a stream retried on top of a native chain.
+    // Catches: an engine not built by the constructor, or a stream retried on top of a native
+    // chain.
     #[test]
     fn a_stream_opens_its_owners_native_operation_and_the_base_pumps_it() {
         let text = emit(STREAM).unwrap();
@@ -856,12 +1017,35 @@ mod tests {
         ));
         assert!(text.contains("    from .. import tts\n"));
         assert!(text.contains(
-            "\n\nclass Adapter:\n    if TYPE_CHECKING:\n        _members: list[str]\n        _timeout: float\n"
+            "    def __init__(self, members: Sequence[str], *, timeout: float = 1.0) -> None:\n        self._native = _core.Chain(core_legs(members), timeout=timeout)\n        self._members = members\n"
         ));
-        assert!(text.contains("lambda: _core.Chain(\n                core_legs(self._members),\n                timeout=self._timeout,\n            ),"));
         assert!(text.contains("replaced = _bindings.overrides(self, Adapter, \"synthesize\")\n"));
         assert!(text.contains(
             "    @property\n    def model(self) -> str:\n        return self._native.model\n"
         ));
+    }
+
+    // Catches: a per-call argument retyped beside its native operation, or a stream retried on
+    // top of a native operation that retries itself.
+    #[test]
+    fn a_provider_method_takes_the_operations_per_call_arguments_and_the_stream_keeps_them() {
+        let source = STREAM.replace(
+            "async fn synthesize(&self, input_text: String,",
+            "async fn listen(&self, #[host(kw, default = None)] language: Option<String>, #[host(default = None)] offset: Option<f64>, #[host(default = None)] conn_options: Option<u32>) -> Result<u64, crate::errors::ApiError>;\n            #[host(await)]\n            async fn synthesize(&self, input_text: String,",
+        ) + r#"
+        #[crate::host(facade(path = "livekit.agents.tts", base = "tts.ChunkedStream", native = Chain, stream(op = listen, owner = "_tts", native_retries, method = "listen", base_args(conn_options), state(offset), default(conn_options = "..types.DEFAULT"), not_given)))]
+        pub trait Listening {}
+        "#;
+        let text = emit(&source).unwrap();
+        assert!(text.contains(
+            "    def listen(\n        self,\n        *,\n        language: NotGivenOr[str] = NOT_GIVEN,\n        conn_options: int = DEFAULT,\n    ) -> Listening:\n        return Listening(\n            tts=cast(\"tts.Adapter\", self),\n            language=language if is_given(language) else None,\n            conn_options=conn_options,\n        )\n"
+        ));
+        assert!(text.contains(
+            "    def __init__(self, *, tts: tts.Adapter, language: str | None, conn_options: int) -> None:\n        super().__init__(tts=tts, conn_options=conn_options)\n        self._language = language\n"
+        ));
+        assert!(text.contains(
+            "return await self._tts._native.listen(\n            language=self._language,\n            offset=self._offset,\n            conn_options=self._conn_options,\n        )\n"
+        ));
+        assert!(text.contains("from typing import TYPE_CHECKING, Any, cast\n"));
     }
 }

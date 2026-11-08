@@ -64,9 +64,9 @@ impl lk_agents_abi::turn::inference::InterruptionDetector for NativeInterruption
         conn_options: Option<ApiConnectOptions>,
         token_ttl_secs: u64,
     ) -> Result<Self, Invalid> {
-        let required = |value: Option<String>, name: &str| {
-            value.filter(|v| !v.is_empty()).ok_or_else(|| Invalid(format!("{name} is required")))
-        };
+        use lk_agents_abi::inference::InferenceCredentials as _;
+        let credentials =
+            crate::credentials::Credentials::inference_credentials(base_url, api_key, api_secret)?;
         let opts = InterruptionOptions::new(
             threshold,
             min_interruption_duration,
@@ -74,9 +74,9 @@ impl lk_agents_abi::turn::inference::InterruptionDetector for NativeInterruption
             audio_prefix_duration,
             detection_interval,
             inference_timeout,
-            required(base_url, "base_url")?,
-            required(api_key, "api_key")?,
-            required(api_secret, "api_secret")?,
+            credentials.base_url,
+            credentials.api_key,
+            credentials.api_secret,
         )
         .map_err(|e| Invalid(e.to_string()))?;
         // The session's stream owns its retries.

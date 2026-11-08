@@ -8,7 +8,7 @@ import contextlib
 import weakref
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Sequence
-from typing import TYPE_CHECKING, Any, Generic, Literal, Never, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Generic, Literal, Never, TypeAlias
 
 from typing_extensions import TypeVar
 
@@ -22,16 +22,12 @@ from .._generated import (
     speech_defaults,
 )
 from .._generated.io_events import PlaybackSegment as PlaybackSegment
-from .._generated.language import LanguageCode
 from .._generated.public_voice_io import *  # noqa: F403
 from ..log import logger
-from ..types import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectOptions,
-    TranscriptChunk as TranscriptChunk,
-)
+from ..types import TranscriptChunk as TranscriptChunk
 
 if TYPE_CHECKING:
+    from ..inference import TurnDetector
     from .agent_session import VoiceSession
 
 
@@ -68,13 +64,14 @@ class AudioInput:
 
 
 class VideoInput:
-    """A source of video frames: iterate ``source``, or override ``__anext__``."""
+    """A source of video frames, each an ``rtc.VideoFrameEvent`` (the frame and its capture
+    stamp): iterate ``source``, or override ``__anext__``."""
 
     def __init__(self, *, label: str, source: VideoInput | None = None) -> None:
         self.__label = label
         self.__source = source
 
-    def __aiter__(self) -> AsyncIterator[rtc.VideoFrame]:
+    def __aiter__(self) -> AsyncIterator[rtc.VideoFrameEvent]:
         return self
 
     @property
@@ -85,7 +82,7 @@ class VideoInput:
     def source(self) -> VideoInput | None:
         return self.__source
 
-    async def __anext__(self) -> rtc.VideoFrame:
+    async def __anext__(self) -> rtc.VideoFrameEvent:
         if self.source is None:
             raise NotImplementedError
         return await self.source.__anext__()
@@ -517,48 +514,7 @@ class _DoneCallback:
     __hash__ = None  # type: ignore[assignment]
 
 
-@runtime_checkable
-class _StreamingTurnDetectorStream(Protocol):
-    """I/O stream for the streaming turn detector."""
-
-    @property
-    def model(self) -> str: ...
-    @property
-    def provider(self) -> str: ...
-    @property
-    def is_fallback(self) -> bool: ...
-    @property
-    def prediction_timeout(self) -> float: ...
-
-    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None: ...
-    async def backchannel_threshold(self, language: LanguageCode | None) -> float | None: ...
-    async def supports_language(self, language: LanguageCode | None) -> bool: ...
-
-    def predict(self) -> asyncio.Future[TurnDetectionEvent]: ...
-    def cancel_inference(self, *, timed_out: bool = False) -> None: ...
-    def flush(self, reason: str | None = None) -> None: ...
-    def push_audio(self, frame: rtc.AudioFrame) -> None: ...
-    def end_input(self) -> None: ...
-    async def aclose(self) -> None: ...
-
-
-@runtime_checkable
-class _StreamingTurnDetector(Protocol):
-    """Turn detector that processes streaming data."""
-
-    @property
-    def model(self) -> str: ...
-    @property
-    def provider(self) -> str: ...
-
-    def stream(
-        self,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> _StreamingTurnDetectorStream: ...
-
-
-TurnDetectionMode = _session_options.TurnDetectionMode | _StreamingTurnDetector
+TurnDetectionMode: TypeAlias = "_session_options.TurnDetectionMode | TurnDetector"
 """
 The mode of turn detection to use.
 
@@ -566,8 +522,8 @@ The mode of turn detection to use.
 - "vad": use VAD to detect the start and end of the user's turn
 - "realtime_llm": use server-side turn detection provided by the realtime LLM
 - "manual": manually manage the turn detection
-- a turn detector (``inference.TurnDetector`` by default): the default mode, the end of the
-  user's turn predicted on their audio
+- an ``inference.TurnDetector`` (the default): the end of the user's turn predicted on their
+  audio
 
 (default) If not provided, automatically choose the best mode based on
     available models (realtime_llm -> vad -> stt -> manual)

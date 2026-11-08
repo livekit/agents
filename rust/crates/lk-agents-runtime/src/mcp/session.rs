@@ -608,3 +608,22 @@ fn timed_out(timeout: Duration) -> McpError {
 fn cancelled() -> McpError {
     McpError::Cancelled(Arc::new(ServiceError::Cancelled { reason: Some(SESSION_CLOSED.into()) }))
 }
+
+#[cfg(test)]
+mod target_tests {
+    use super::*;
+    // Catches: a run's refreshed token kept on the old connection, or an unchanged one reconnecting
+    // before every request. The host connects with the run's current credentials each time; this
+    // decides whether that is a new connection.
+    #[tokio::test]
+    async fn only_changed_credentials_are_a_new_connection() {
+        let http = |token: &str| Target::Http {
+            env: ProcessEnv::current_runtime(),
+            url: "https://mcp.example.com/mcp".into(),
+            headers: vec![("x-tenant".into(), "acme".into())],
+            auth: Some(token.into()),
+        };
+        assert!(http("first").same_as(&http("first")));
+        assert!(!http("first").same_as(&http("refreshed")));
+    }
+}

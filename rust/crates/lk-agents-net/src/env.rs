@@ -83,3 +83,31 @@ impl ProcessEnv {
         }
     }
 }
+
+/// The server's settings (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, ...) as the jobs this process runs
+/// read them: what `AgentServer` was given, else its environment. A job process inherits them as
+/// its environment; a job thread reads the ones its server registered here.
+static SERVER_SETTINGS: parking_lot::RwLock<Vec<(&'static str, String)>> =
+    parking_lot::RwLock::new(Vec::new());
+
+/// The registration of a server's settings for its job threads, withdrawn when dropped.
+pub struct ServerSettings(());
+
+impl Drop for ServerSettings {
+    fn drop(&mut self) {
+        SERVER_SETTINGS.write().clear();
+    }
+}
+
+/// Registers the running server's settings until the returned value drops.
+pub fn serve_settings(settings: Vec<(&'static str, String)>) -> ServerSettings {
+    *SERVER_SETTINGS.write() = settings;
+    ServerSettings(())
+}
+
+/// The server setting `name`: the running server's, else the environment variable.
+pub fn server_setting(name: &str) -> Option<String> {
+    let registered =
+        SERVER_SETTINGS.read().iter().find(|(n, _)| *n == name).map(|(_, v)| v.clone());
+    registered.or_else(|| std::env::var(name).ok())
+}

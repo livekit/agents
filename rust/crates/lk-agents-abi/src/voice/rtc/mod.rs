@@ -13,6 +13,7 @@ mod error;
 pub mod events;
 pub mod media;
 pub mod ports;
+pub mod rpc;
 pub use capabilities::{
     AudioInputStream, AudioSource, ByteStreamWriter, LocalParticipant, RemoteParticipant, RtcRoom,
     TextStreamWriter, TrackPublication,
@@ -371,18 +372,23 @@ pub enum AudioStreamItem {
     ProcessorFailed(ProcessorFailure),
 }
 
-/// One frame off an `rtc.VideoStream`, as a host `io.VideoInput` answers `_core_next_frame()`: the
-/// host frame (the pixels never cross), the size read at the seam to reject non-frames, and the
-/// frame's own capture stamp.
+/// One `rtc.VideoFrameEvent`, off an `rtc.VideoStream` or an `io.VideoInput`: the host frame
+/// (the pixels never cross), the size read at the seam to reject non-frames, and the frame's own
+/// capture stamp.
 #[derive(Debug, Clone)]
-#[crate::host(record(module = "rtc_wire", extract))]
+#[crate::host(record(
+    module = "rtc_wire",
+    host_type = "livekit.rtc.VideoFrameEvent",
+    boundary,
+    extract
+))]
 pub struct VideoFrameRef {
     /// Released when the last clone drops.
     pub frame: std::sync::Arc<dyn lk_agents_abi::utils::video::RtcVideoFrame>,
+    #[host(path = "frame.width")]
     pub width: u32,
+    #[host(path = "frame.height")]
     pub height: u32,
-    /// `VideoFrameEvent.timestamp_us`, the host's.
-    #[host(default = 0)]
     pub timestamp_us: i64,
 }
 

@@ -8,9 +8,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Literal, Self
 
+from opentelemetry.trace import SpanKind as HostSpanKind, StatusCode as HostStatusCode
+from opentelemetry.util.types import AttributeValue
+
 from livekit.agents._core import SpanKind, StatusCode
 
 from .telemetry import (
+    EndedSpan,
     EvaluationRecord,
     Outcome,
     ReportTag,
@@ -29,7 +33,7 @@ class TelemetrySpan:
         scope: str,
         *,
         parent: SpanContext | None = None,
-        kind: SpanKind | None = None,
+        kind: SpanKind | HostSpanKind | None = None,
         start_time: int | None = None,
         ids: SpanContext | None = None,
         job: str | None = None,
@@ -41,15 +45,15 @@ class TelemetrySpan:
     def context(self) -> SpanContext: ...
     def is_recording(self) -> bool:
         """Whether the span has not ended."""
-    def set_attribute(self, key: str, value: object) -> None:
-        """A JSON scalar or array; `None` removes nothing and is ignored."""
+    def set_attribute(self, key: str, value: AttributeValue) -> None:
+        """`None` removes nothing and is ignored."""
     def add_event(
         self,
         name: str,
-        attributes: Mapping[str, object] | None = None,
+        attributes: Mapping[str, AttributeValue] | None = None,
         timestamp: int | None = None,
     ) -> None: ...
-    def set_status(self, code: StatusCode, description: str | None = None) -> None:
+    def set_status(self, code: StatusCode | HostStatusCode, description: str | None = None) -> None:
         """`description` is kept only with `Error`; `Ok` is final."""
     def update_name(self, name: str) -> None: ...
     def end(self, end_time: int | None = None) -> None:
@@ -76,6 +80,11 @@ def diagnostics() -> TelemetryDiagnostics:
 
 def _core_telemetry_conflict() -> None:
     """Counts a configuration conflict the host found (a tracer provider it cannot bridge)."""
+
+def _core_telemetry_export(span: EndedSpan, *, job: str | None = None) -> None:
+    """Records a span the application's OpenTelemetry SDK ended (the bridge of an SDK provider),
+    counted on `job`'s sessions.
+    """
 
 def set_capture_content(enabled: bool) -> None:
     """Whether model request and response messages and judge explanations are recorded."""

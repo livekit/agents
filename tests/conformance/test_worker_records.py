@@ -12,9 +12,8 @@ import pytest
 from livekit.agents import AgentServer, JobContext, _core, cli
 from livekit.agents._generated.cli import CliArgsConsole, CliArgsStart
 from livekit.agents._generated.worker_options import ProcessOptions
-from livekit.agents.job import RunningJobInfo
+from livekit.agents.job import JobExecutorType
 from livekit.agents.types import NOT_GIVEN
-from livekit.agents.worker import _ServerCallbacks
 
 pytestmark = pytest.mark.unit
 
@@ -101,20 +100,16 @@ async def test_non_linux_forkserver_fallback_is_reported_after_native_start(
         await asyncio.wait_for(running, timeout=3)
 
 
-async def test_native_simulated_job_reaches_python_launch_adapter(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    launched: list[RunningJobInfo] = []
-
-    async def launch(host: _ServerCallbacks, info: RunningJobInfo) -> None:
-        launched.append(info)
-
-    monkeypatch.setattr(_ServerCallbacks, "launch", launch)
+async def test_native_simulated_job_reaches_the_entrypoint() -> None:
+    loop = asyncio.get_running_loop()
+    seen: asyncio.Future[tuple[str, bool]] = loop.create_future()
     server = AgentServer(num_idle_processes=0)
+    server._update_options(ProcessOptions(job_executor_type=JobExecutorType.THREAD))
 
     @server.rtc_session()
     async def entrypoint(context: JobContext) -> None:
-        pass
+        job = (context.job.room.name, context.is_fake_job())
+        loop.call_soon_threadsafe(seen.set_result, job)
 
     server._config.simulation = True
     started = asyncio.Event()
@@ -123,9 +118,7 @@ async def test_native_simulated_job_reaches_python_launch_adapter(
     try:
         await asyncio.wait_for(started.wait(), timeout=3)
         await server._simulate_job("typed-launch", fake_job=True)
-        assert len(launched) == 1
-        assert launched[0].fake_job
-        assert launched[0].job.room.name == "typed-launch"
+        assert await asyncio.wait_for(seen, timeout=10) == ("typed-launch", True)
     finally:
         await server.aclose()
         await asyncio.wait_for(running, timeout=3)

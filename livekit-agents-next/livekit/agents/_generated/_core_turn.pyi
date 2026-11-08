@@ -46,11 +46,6 @@ class InferenceEot:
         """`None` is `NOT_GIVEN`."""
     @property
     def backchannel_overrides(self) -> ThresholdOverride | None: ...
-    def lookup(self, language: str | None = None) -> float | None:
-        """`language=None` scores as English, not the global default."""
-    def lookup_backchannel(self, language: str | None = None) -> float | None:
-        """`None` disables backchannel detection; a `0.0` threshold also means off."""
-    def supports(self, language: str | None = None) -> bool: ...
     def update_overrides(self, overrides: ThresholdOverride | None = None) -> None: ...
     def update_backchannel_overrides(self, overrides: ThresholdOverride | None = None) -> None: ...
     def stream(
@@ -83,7 +78,7 @@ class TurnDetectorStream:
     def end_input(self) -> None: ...
     async def aclose(self) -> None: ...
 
-class InterruptionDetector:
+class AdaptiveInterruptionDetector:
     """`inference.AdaptiveInterruptionDetector`: the gateway model that tells an interruption from a
     backchannel while the agent speaks. Natively the session's interruption source.
     """
@@ -102,8 +97,8 @@ class InterruptionDetector:
         conn_options: APIConnectOptions | None = None,
         token_ttl_secs: int = 600,
     ) -> Self:
-        """`base_url`, `api_key` and `api_secret` are required; the Python class resolves them from
-        the server's settings.
+        """`base_url`, `api_key` and `api_secret` default to the inference ladders over the server's
+        settings (`inference_credentials`).
         """
     def update_options(
         self,

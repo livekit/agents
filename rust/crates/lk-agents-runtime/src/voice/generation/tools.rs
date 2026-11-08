@@ -339,7 +339,7 @@ impl ToolBody {
     ) -> ToolReport {
         let (host, invocation, prepared) = (&self.host, &self.invocation, &self.prepared);
         let mut report = match host.run_tool(&self.cx, invocation, prepared).await {
-            Ok((report, _)) => report,
+            Ok(ran) => ran.report,
             Err(error) => {
                 log::error!(target: lk_agents_abi::LOG_TARGET, "the tool's host failed outside its error handling: {error}");
                 ToolOutcome::Internal.into()

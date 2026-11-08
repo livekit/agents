@@ -11,6 +11,15 @@ pub enum TokenizerToken {
     Span((String, usize, usize)),
 }
 
+/// `replace_words` over a chunk: the text with its replacements, and how much of it is final
+/// (`processed`, in characters); the rest may still change with the next chunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[crate::host(record(module = "tokenizer", dataclass, emit))]
+pub struct ReplacedWords {
+    pub text: String,
+    pub processed: usize,
+}
+
 /// A synchronous, application-supplied tokenizer, invoked by the runtime.
 #[crate::host(proxy(host = "collections.abc.Callable"))]
 pub trait TokenizerCallback: Send + Sync {
@@ -33,7 +42,7 @@ pub trait TokenizeFunctions {
         text: String,
         replacements: indexmap::IndexMap<String, String>,
         #[host(default = false)] hold_last_word: bool,
-    ) -> Option<(String, usize)>;
+    ) -> Option<ReplacedWords>;
 
     #[host(function)]
     #[python(forward(module = "tokenize_basic"))]

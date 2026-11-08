@@ -8,8 +8,9 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Sequence
 from typing import Self
 
-from .tokenizer import TokenizerToken
+from .tokenizer import ReplacedWords, TokenizerToken
 from .tool_context import RawFunctionDescription
+from .tool_search import SearchFields
 
 def split_words(
     text: str,
@@ -23,7 +24,7 @@ def replace_words(
     text: str,
     replacements: dict[str, str],
     hold_last_word: bool = False,
-) -> tuple[str, int] | None: ...
+) -> ReplacedWords | None: ...
 
 def tokenize_paragraphs(text: str) -> list[str]: ...
 
@@ -149,12 +150,7 @@ def language_name(code: str) -> str | None:
 
 class SearchDocument:
     """One tool as the search sees it; identity stays with the host."""
-    def __new__(
-        cls,
-        name: str,
-        description: str,
-        parameters: Sequence[tuple[str, str]],
-    ) -> Self: ...
+    def __new__(cls, item: SearchFields) -> Self: ...
     def keyword_score(self, terms: Sequence[str]) -> float: ...
 
 class BM25Index:

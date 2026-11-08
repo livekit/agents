@@ -12,57 +12,37 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias
 
+from livekit.agents._generated.function_tools import InputRequired
+from livekit.agents._generated.run_result import RunCompleted, RunInputRequired, RunNoOutput
+from livekit.agents._generated.tool_outcomes import Failed, Rejected, Working
+from livekit.agents.llm.tool_context import Completed
+
 if TYPE_CHECKING:
-    from .chat_items import ChatItem
-    from .storage_turn import PendingCall
-    from .usage import Usage
+    from livekit.agents._generated.run_result import _Settled as _HostHandlerRun
 
 
 @dataclass(kw_only=True, slots=True)
-class HandlerOutcomeValue:
-    value: object
+class HandlerCompleted:
+    """A `Completed` transition's value, as JSON, and whether it reaches the person as written."""
 
-
-@dataclass(kw_only=True, slots=True)
-class HandlerOutcomeCompleted:
     value: object
     verbatim: bool
 
 
-@dataclass(kw_only=True, slots=True)
-class HandlerOutcomeInputRequired:
-    question: str
-
-
-@dataclass(kw_only=True, slots=True)
-class HandlerOutcomeFailed:
-    error: str
-
-
-@dataclass(kw_only=True, slots=True)
-class HandlerOutcomeRejected:
-    reason: str
-
-
-@dataclass(kw_only=True, slots=True)
-class HandlerOutcomeWorking:
-    message: str | None
+HandlerRun: TypeAlias = "_HostHandlerRun"
 
 
 HandlerOutcome: TypeAlias = (
-    HandlerOutcomeValue
-    | HandlerOutcomeCompleted
-    | HandlerOutcomeInputRequired
-    | HandlerOutcomeFailed
-    | HandlerOutcomeRejected
-    | HandlerOutcomeWorking
+    RunCompleted
+    | RunInputRequired
+    | RunNoOutput
+    | Completed
+    | InputRequired
+    | Failed
+    | Rejected
+    | Working
+    | object
 )
-
-
-@dataclass(kw_only=True, slots=True)
-class HandlerRun:
-    items: list[ChatItem]
-    usage: Usage
-    verbatim: str | None
-    question: str | None
-    pending_call: PendingCall | None
+"""What an `a2a_session` handler returned, told apart by its class (docs/server.md#handler-outcomes);
+a value is read as its JSON (`to_jsonable_python`).
+"""

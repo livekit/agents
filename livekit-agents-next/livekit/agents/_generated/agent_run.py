@@ -19,13 +19,13 @@ if TYPE_CHECKING:
 
     from .chat_items import ChatItem, FunctionCall
     from .connect import APIConnectOptions
+    from .run_result import RunResult
     from .storage_turn import PendingCall
     from .telemetry import SpanContext
     from .text_session import FrameId
     from .tool_context import DuplicateMode, DuplicateScope
     from .tool_options import ToolSpec
     from .tool_report import Approval
-    from .usage import Usage
 
 
 @dataclass(kw_only=True, slots=True)
@@ -338,83 +338,6 @@ class RunInputRequirement:
 
 
 @dataclass(kw_only=True, slots=True)
-class RunResult:
-    """The settled invocation (`RunResult[Output]`): its status, then the history and usage both
-    branches expose.
-    """
-
-    outcome: RunOutcome
-    interrupted: bool
-    """The managed turn yielded at a safe boundary; history and usage still describe its work."""
-    new_messages: list[ChatItem]
-    """The incoming message and everything this invocation recorded, in order."""
-    all_messages: list[ChatItem]
-    """The supplied history plus this invocation, without instructions."""
-    usage: Usage
-    """This invocation's usage, settled (usage.md)."""
-    verbatim: str | None
-    """The part of the answer or question that reached the person exactly as written."""
-    pending_call: PendingCall | None
-    """The selected tool call waiting on human input, supplied by the execution core."""
-    input_requirements: list[RunInputRequirement] = field(default_factory=list)
-    """Every tool-originated input requirement, in model-call order. The singular outcome and
-    `pending_call` remain the compatibility projection; other requirements are not answered.
-    """
-
-
-@dataclass(kw_only=True, slots=True)
-class RunOutcomeCompleted:
-    output: Output
-
-
-@dataclass(kw_only=True, slots=True)
-class RunOutcomeInputRequired:
-    """The run ends on a question for the person."""
-
-    question: RunQuestion
-
-
-@dataclass(kw_only=True, slots=True)
-class RunOutcomeNoOutput:
-    """The turn ended with no output: `StopResponse`, a tool result asking for no reply, an
-    all-silent step or an interruption. Never `Completed`, whose output is the declared type.
-    """
-
-
-RunOutcome: TypeAlias = RunOutcomeCompleted | RunOutcomeInputRequired | RunOutcomeNoOutput
-
-
-@dataclass(kw_only=True, slots=True)
-class RunQuestion:
-    """The question a run ends on (`InputRequired`): asked as written when `verbatim`. The person's
-    next message goes to `answer_tool`, when one is named, as its first string parameter
-    (`InputRequired(tool=)`); the next invocation is told so.
-    """
-
-    question: str
-    verbatim: bool
-    answer_tool: str | None
-
-
-@dataclass(kw_only=True, slots=True)
-class OutputText:
-    """A `str` output."""
-
-    text: str
-
-
-@dataclass(kw_only=True, slots=True)
-class OutputValidated:
-    """The value the host validated for this candidate; the runtime retains it and the update
-    carries it.
-    """
-
-
-Output: TypeAlias = OutputText | OutputValidated
-"""The accepted output of a completed invocation."""
-
-
-@dataclass(kw_only=True, slots=True)
 class StreamEventTextDelta:
     message_id: str
     delta: str
@@ -493,11 +416,13 @@ class RunRequest:
 
 
 @dataclass(kw_only=True, slots=True)
-class RunSettled:
-    """A settled invocation, with the value the host validated when the output is one."""
+class RunFinished:
+    """A settled invocation as the host reads it: the caller's `RunResult` branch, and whether the
+    managed turn yielded at a safe boundary.
+    """
 
     result: RunResult
-    output: object | None
+    interrupted: bool
 
 
 @dataclass(kw_only=True, slots=True)
@@ -516,7 +441,7 @@ class RunUpdateIncompleteCleanup:
 class RunUpdateFinished:
     """The last update of a run that settled with a result."""
 
-    settled: RunSettled
+    settled: RunFinished
 
 
 @dataclass(kw_only=True, slots=True)

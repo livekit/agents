@@ -16,7 +16,7 @@ impl Resolver<'_> {
             .map(|entry| entry.nested.as_slice())
             .unwrap_or_default();
         let allowed = if class.is_some() {
-            &["name", "native", "module", "subclass", "pid"][..]
+            &["name", "native", "module", "subclass", "pid", "implements"][..]
         } else {
             &["pid"][..]
         };
@@ -31,6 +31,7 @@ impl Resolver<'_> {
             value => value.is_some(),
         };
         let name = voc::text(at, nested, "name")?.unwrap_or_else(|| tr.ident.to_string());
+        let implements = voc::text(at, nested, "implements")?;
         let native = match voc::rust(at, nested, "native")? {
             None => Vec::new(),
             Some(t) => match self.shape(self.module, &t, &[], at)? {
@@ -141,6 +142,7 @@ impl Resolver<'_> {
             pid,
             host_module,
             subclass,
+            implements,
             name,
             rust_name: tr.ident.to_string(),
             trait_path: krate.extern_path(self.module, item).map_err(|e| format!("{at}: {e}"))?,

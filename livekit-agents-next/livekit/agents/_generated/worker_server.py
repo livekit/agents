@@ -14,34 +14,23 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .job_records import JobExecutorType
     from .worker_endpoint import EndpointKind
     from .worker_options import MultiprocessingContext
 
 
 @dataclass(kw_only=True, slots=True)
-class ProcessPoolOptions:
-    """Process-pool settings resolved before the host launch callback."""
-
-    num_idle_processes: int
-    initialize_timeout: float
-    close_timeout: float
-    session_end_timeout: float
-    memory_warn_mb: float
-    memory_limit_mb: float
-    http_proxy: str | None
-
-
-@dataclass(kw_only=True, slots=True)
 class ProcessStartOptions:
-    """Resolved server settings handed to the process launch adapter."""
+    """What the host's process launcher needs, resolved by the server before it starts the job
+    processes.
+    """
 
-    devmode: bool
     job_processes: bool
+    """The server runs jobs: the host returns its launcher factory."""
     env: list[tuple[str, str]]
-    job_executor_type: JobExecutorType
+    """The job processes' environment, beside this process's."""
     multiprocessing_context: MultiprocessingContext
-    pool: ProcessPoolOptions
+    session_end_timeout: float
+    """Seconds a session's end callbacks have to finish."""
 
 
 @dataclass(kw_only=True, slots=True)

@@ -5,8 +5,8 @@
 use crate::errors::HostError;
 use crate::voice::io::{AudioInput, AudioOutput, TextOutput, VideoInput};
 use crate::voice::session_options::{
-    Expressive, ResolvedSessionOptions, SessionKwargs, SessionLegs, TurnHandlingKwargs,
-    UpdateKwargs,
+    Expressive, ResolvedSessionOptions, SessionConnOptions, SessionKwargs, SessionLegs,
+    TurnHandlingKwargs, UpdateKwargs,
 };
 use crate::{BoxFuture, ChatItem, HostRef, Llm, Maybe, Stt, ToolSpec, Tts, Vad};
 use std::sync::Arc;
@@ -346,7 +346,7 @@ pub struct VoiceSessionArgs {
 #[crate::host(class(name = "SessionOptions"))]
 pub trait SessionOptions: Clone + Send + Sync + Sized + 'static {
     #[host(new)]
-    fn new(kwargs: SessionKwargs) -> Self;
+    fn new(kwargs: SessionKwargs, conn_options: SessionConnOptions) -> Self;
 
     /// `update_options(..)` before the session runs, on the same `merge` the driver uses.
     #[host(call)]

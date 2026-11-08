@@ -1,5 +1,5 @@
-"""The inference clients' generated host mixins: one native client per instance, built on first
-use from the wrapper's attributes, and the options it owns."""
+"""The inference clients' generated facades: one native client per instance, built with it, and
+the options it owns."""
 
 from __future__ import annotations
 
@@ -13,9 +13,8 @@ pytestmark = pytest.mark.unit
 _CREDENTIALS = {"base_url": "https://gateway.invalid", "api_key": "key", "api_secret": "secret"}
 
 
-def test_the_client_is_built_once_on_first_use() -> None:
+def test_each_instance_holds_one_client() -> None:
     llm = inference.LLM("openai/gpt-4.1-mini", **_CREDENTIALS)
-    assert "_native" not in llm.__dict__
     assert llm._native is llm._native
     stt = inference.STT("deepgram/nova-3", **_CREDENTIALS)
     assert stt._native is stt._native

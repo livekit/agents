@@ -165,7 +165,10 @@ impl AvatarLifecycle {
         spawner: Arc<dyn Spawner>,
     ) -> Result<Self, HostError> {
         match &job {
-            Some(job) => job.on_avatar_shutdown(avatar.close()?)?,
+            Some(job) => job.run().add_framework_shutdown(
+                "AvatarSession.aclose".into(),
+                lk_agents_abi::worker::ipc_host::FrameworkShutdown::Host(avatar.close()?),
+            ),
             None => log::debug!(
                 target: lk_agents_abi::LOG_TARGET,
                 "AvatarSession started outside a job context; call aclose() manually to release \

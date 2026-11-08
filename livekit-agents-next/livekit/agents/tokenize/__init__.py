@@ -235,7 +235,7 @@ def replace_words(
     def replace_all(text: str) -> str:
         replaced = _core.replace_words(text, replacements)
         assert replaced is not None, "only the streaming mode holds a word back"
-        return replaced[0]
+        return replaced.text
 
     if isinstance(text, str):
         return replace_all(text)
@@ -246,9 +246,8 @@ def replace_words(
         async for chunk in text:
             buffer += chunk
             if (replaced := _core.replace_words(buffer, replacements, True)) is not None:
-                buffer, processed = replaced
-                yield buffer[:processed]
-                buffer = buffer[processed:]
+                yield replaced.text[: replaced.processed]
+                buffer = replaced.text[replaced.processed :]
         if buffer:
             yield replace_all(buffer)
 

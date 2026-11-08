@@ -14,9 +14,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
+from opentelemetry.trace import SpanContext as _HostSpanContext
+
 if TYPE_CHECKING:
+    from opentelemetry.sdk.trace import Event as _HostEndedSpanEvent, ReadableSpan as _HostEndedSpan
+
     from .chat_items import ChatItem
     from .usage import Usage
+
+EndedSpan: TypeAlias = "_HostEndedSpan"
+
+
+EndedSpanEvent: TypeAlias = "_HostEndedSpanEvent"
 
 
 @dataclass(kw_only=True, slots=True)
@@ -37,15 +46,7 @@ class TelemetryDiagnostics:
     """Voice sessions dropped without their close; their open spans were ended and exported."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
-class SpanContext:
-    """A span's W3C identity: what a child, a link, an effect, a host call or a `traceparent`
-    carries. Ids are never zero; [`SpanContext::valid`] refuses a host's zero ids.
-    """
-
-    trace_id: int
-    span_id: int
-    sampled: bool
+SpanContext = _HostSpanContext
 
 
 @dataclass(kw_only=True, slots=True)

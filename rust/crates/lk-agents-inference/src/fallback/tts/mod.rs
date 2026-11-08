@@ -48,8 +48,8 @@ pub enum Token {
     Flush,
 }
 
-/// The pushed-token log as the host's `SynthesizeStream` keeps it (`_core.TtsTokenLog`): the text
-/// a recovering stream replays.
+/// The pushed-token log as the host's `SynthesizeStream` keeps it: the text a recovering stream
+/// replays.
 ///
 /// `self._pushed_tokens` plus the live child sink. The text leg may not drop (§1.2d), so nothing
 /// here is lossy or bounded.
@@ -705,32 +705,5 @@ impl port::FallbackTts for FallbackTts {
                 TtsStream::new(Some(sink), source, self.chain.clock())
             },
         )
-    }
-}
-
-impl port::TtsTokenLog for TokenLog {
-    fn new() -> Self {
-        Self::default()
-    }
-    fn push(&self, text: String) {
-        TokenLog::push(self, Token::Text(text));
-    }
-    fn flush(&self) {
-        TokenLog::push(self, Token::Flush);
-    }
-    fn end(&self) {
-        TokenLog::end(self);
-    }
-    /// Everything pushed so far (`None` for a flush) and whether the input ended.
-    fn snapshot(&self) -> (Vec<Option<String>>, bool) {
-        let (tokens, ended) = TokenLog::snapshot(self);
-        let tokens = tokens
-            .into_iter()
-            .map(|token| match token {
-                Token::Text(text) => Some(text),
-                Token::Flush => None,
-            })
-            .collect();
-        (tokens, ended)
     }
 }

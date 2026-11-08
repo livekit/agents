@@ -227,6 +227,7 @@ impl Connection {
                 let size = data.len();
                 self.send_message(Message::binary(data), size).await
             }
+            ExchangeMessage::Trailers => Ok(()),
             ExchangeMessage::Close { code, reason } => {
                 if !CloseCode::from(code).is_allowed() {
                     return Err(ExchangeError::Protocol(format!(

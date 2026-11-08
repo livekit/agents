@@ -54,7 +54,7 @@ async def test_tool_progress_and_completion_reach_session_listeners() -> None:
             completed.set()
 
     async with VoiceSession(
-        llm=_tool_model("lookup"), vad=None, turn_detection="manual"
+        llm=_tool_model("lookup"), vad=None, turn_handling={"turn_detection": "manual"}
     ) as session:
         session.on("tool_execution_updated", on_update)
         await session.start(agent)

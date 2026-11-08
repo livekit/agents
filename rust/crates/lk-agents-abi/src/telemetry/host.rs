@@ -37,15 +37,15 @@ pub trait HostSpan: Send + Sync + Sized + 'static {
     #[host(call)]
     fn is_recording(&self) -> bool;
 
-    /// A JSON scalar or array; `None` removes nothing and is ignored.
+    /// `None` removes nothing and is ignored.
     #[host(call)]
-    fn set_attribute(&self, key: String, value: Value);
+    fn set_attribute(&self, key: String, value: AttributeValue);
 
     #[host(call)]
     fn add_event(
         &self,
         name: String,
-        #[host(default = None)] attributes: Option<BTreeMap<String, Value>>,
+        #[host(default = None)] attributes: Option<Attributes>,
         #[host(default = None)] timestamp: Option<u64>,
     );
 
@@ -87,6 +87,11 @@ pub trait Telemetry {
     #[host(function)]
     fn _core_telemetry_conflict();
 
+    /// Records a span the application's OpenTelemetry SDK ended (the bridge of an SDK provider),
+    /// counted on `job`'s sessions.
+    #[host(function)]
+    fn _core_telemetry_export(span: EndedSpan, #[host(kw, default = None)] job: Option<String>);
+
     /// Whether model request and response messages and judge explanations are recorded.
     #[host(function, name = "set_capture_content", path = "livekit.agents.telemetry")]
     fn _core_set_capture_content(enabled: bool);
@@ -122,8 +127,66 @@ pub trait LoopWatch: Send + Sync + Sized + 'static {
     fn close(&self);
 }
 
+/// An OpenTelemetry attribute value: a scalar, or a sequence of scalars (a tuple too).
+#[crate::host(codec(
+    extract,
+    host = "opentelemetry.util.types.AttributeValue",
+    py = "py_values::attribute_value"
+))]
+pub type AttributeValue = Value;
+
+/// OpenTelemetry attributes: any mapping of keys to attribute values.
+#[crate::host(codec(
+    extract,
+    host = "collections.abc.Mapping[str, opentelemetry.util.types.AttributeValue]",
+    py = "py_values::attributes"
+))]
+pub type Attributes = BTreeMap<String, Value>;
+
+/// A span an application's OpenTelemetry SDK ended.
+#[crate::host(record(
+    module = "telemetry",
+    host_type = "opentelemetry.sdk.trace.ReadableSpan",
+    boundary,
+    extract
+))]
+#[derive(Debug, Clone)]
+pub struct EndedSpan {
+    pub name: String,
+    #[host(path = "instrumentation_scope.name", missing_default)]
+    pub scope: String,
+    #[host(call = "get_span_context")]
+    pub context: Option<SpanContext>,
+    pub parent: Option<SpanContext>,
+    pub kind: SpanKind,
+    pub start_time: Option<u64>,
+    pub end_time: Option<u64>,
+    #[host(missing_default)]
+    pub attributes: Attributes,
+    pub events: Vec<EndedSpanEvent>,
+    #[host(path = "status.status_code")]
+    pub status: StatusCode,
+    #[host(path = "status.description")]
+    pub description: Option<String>,
+}
+
+/// An event of an [`EndedSpan`].
+#[crate::host(record(
+    module = "telemetry",
+    host_type = "opentelemetry.sdk.trace.Event",
+    boundary,
+    extract
+))]
+#[derive(Debug, Clone)]
+pub struct EndedSpanEvent {
+    pub name: String,
+    #[host(missing_default)]
+    pub attributes: Attributes,
+    pub timestamp: u64,
+}
+
 /// OpenTelemetry's `StatusCode`.
-#[crate::host(native_enum(name = "StatusCode"))]
+#[crate::host(native_enum(name = "StatusCode", host_type = "opentelemetry.trace.StatusCode"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusCode {
     Unset,

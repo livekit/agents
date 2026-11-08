@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use lk_agents_abi::telemetry::decl::json;
-use lk_agents_abi::telemetry::host::StatusCode;
+use lk_agents_abi::telemetry::host::{EndedSpan, HostSpan as _, StatusCode};
 use lk_agents_abi::telemetry::record::{
     EventRecord, JobKey, Key, KeyValues, Record, SpanContext, SpanKind, SpanRecord, Status,
 };
@@ -36,11 +36,10 @@ fn attributes(values: BTreeMap<String, Value>) -> KeyValues {
     values.into_iter().filter_map(|(k, v)| Some((Key::Owned(k), json(&v)?))).collect()
 }
 
-impl lk_agents_abi::telemetry::host::HostSpan for HostSpan {
-    type Env = ProcessEnv;
-
-    fn new(
-        env: &ProcessEnv,
+impl HostSpan {
+    #[allow(clippy::too_many_arguments, reason = "The host span's constructor arguments")]
+    fn open(
+        tracer: Tracer,
         name: String,
         scope: String,
         parent: Option<SpanContext>,
@@ -49,7 +48,6 @@ impl lk_agents_abi::telemetry::host::HostSpan for HostSpan {
         ids: Option<SpanContext>,
         job: Option<String>,
     ) -> Self {
-        let tracer = env.tracer.clone();
         let parent = parent.and_then(SpanContext::valid);
         let context = match ids.and_then(SpanContext::valid) {
             Some(ids) => ids,
@@ -66,6 +64,46 @@ impl lk_agents_abi::telemetry::host::HostSpan for HostSpan {
             status: Status::Unset,
         };
         HostSpan { tracer, context, job: job.map(JobKey), open: Mutex::new(Some(open)) }
+    }
+}
+
+/// Records a span the application's OpenTelemetry SDK ended, as its host span would have.
+pub fn record_ended(tracer: Tracer, span: EndedSpan, job: Option<String>) {
+    let Some(ids) = span.context else { return };
+    let host = HostSpan::open(
+        tracer,
+        span.name,
+        span.scope,
+        span.parent,
+        Some(span.kind),
+        span.start_time,
+        Some(ids),
+        job,
+    );
+    for (key, value) in span.attributes {
+        host.set_attribute(key, value);
+    }
+    for event in span.events {
+        host.add_event(event.name, Some(event.attributes), Some(event.timestamp));
+    }
+    host.set_status(span.status, span.description);
+    host.end(span.end_time);
+}
+
+impl lk_agents_abi::telemetry::host::HostSpan for HostSpan {
+    type Env = ProcessEnv;
+
+    fn new(
+        env: &ProcessEnv,
+        name: String,
+        scope: String,
+        parent: Option<SpanContext>,
+        kind: Option<SpanKind>,
+        start_time: Option<u64>,
+        ids: Option<SpanContext>,
+        job: Option<String>,
+    ) -> Self {
+        HostSpan::open(env.tracer.clone(), name, scope, parent, kind, start_time, ids, job)
     }
 
     fn context(&self) -> SpanContext {

@@ -362,10 +362,12 @@ def agent_host():
         async def run_tool(self, invocation, prepared):
             report = reports.ToolReport(outcome=reports.ToolOutcomeValue(text="answered"))
             if prepared.get("bad_arity"):
-                return (report,)
+                return report
             if prepared.get("bad_metadata"):
-                return report, ["not a map"]
-            return report, {"lk.delegation.task_id": "original-task"}
+                return reports.ToolCompletion(report=report, extra=["not a map"])
+            return reports.ToolCompletion(
+                report=report, extra={"lk.delegation.task_id": "original-task"}
+            )
 
         async def validate_output(self, invocation, candidate):
             self.seen["candidate"] = candidate
@@ -380,14 +382,16 @@ def agent_host():
 
 
 def _span_tuple(span):
-    """A span context as `(trace_id, span_id, sampled)`, or `None`."""
-    return None if span is None else (span.trace_id, span.span_id, span.sampled)
+    """A span context as `(trace_id, span_id, sampled)`, or `None` for an invalid one."""
+    if not span.is_valid:
+        return None
+    return (span.trace_id, span.span_id, span.trace_flags.sampled)
 
 
 def telemetry_host():
     import contextvars
 
-    from livekit.agents import telemetry
+    from livekit.agents import _core, telemetry
 
     loop = asyncio.new_event_loop()
     ready = threading.Event()
@@ -412,8 +416,9 @@ def telemetry_host():
 
         def __init__(self):
             self.parents = []
+            self._run = _core.JobRun(fake_job=True, session_end_timeout=5, redaction=False)
 
-        async def _core_connect(self):
+        async def connect(self):
             span = tracer.start_span("room_connect")
             self.parents.append(_span_tuple(telemetry._current()))
             span.end()

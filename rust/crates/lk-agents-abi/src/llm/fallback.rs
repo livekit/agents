@@ -34,11 +34,11 @@ pub trait FallbackLlm: Send + Sync + Sized + 'static {
     #[host(source(item = crate::LlmChunk, class = "FallbackLlmChunks"))]
     type Chunks: crate::StreamOutput<crate::LlmChunk> + 'static;
 
-    /// `llm.FallbackAdapter` builds it from its attributes, one per loop.
+    /// `llm` in order.
     #[host(new)]
     fn new(
         env: &Self::Env,
-        members: Vec<std::sync::Arc<dyn crate::Llm>>,
+        llm: Vec<std::sync::Arc<dyn crate::Llm>>,
         #[host(kw, default = 5.0)] attempt_timeout: f64,
         #[host(default = 0)] max_retry_per_llm: u32,
         #[host(default = 0.5)] retry_interval: f64,
@@ -66,23 +66,41 @@ pub trait FallbackLlm: Send + Sync + Sized + 'static {
     ) -> Result<Self::Chunks, crate::errors::ProviderError>;
 }
 
-/// `llm.FallbackAdapter`'s chain, built once per loop from the adapter's attributes; a failed LLM
-/// is skipped until it recovers.
+/// `llm.FallbackAdapter`: several LLMs behind one; a failed one is skipped until it recovers.
 #[crate::host(facade(
     path = "livekit.agents.llm",
     extended,
     name = "FallbackAdapter",
+    base = "llm.LLM",
     native = FallbackLlm,
-    per_loop,
     legs(chat),
-    resolve(members = ".._bindings.core_legs"),
     availability(
         observer = "on_availability",
+        members = "llm",
+        kind = "LLM",
         event = "llm_availability_changed",
         record = ".llm_availability.AvailabilityChangedEvent"
     )
 ))]
-pub trait FallbackLlmAdapter {}
+pub trait FallbackLlmAdapter {
+    /// Several LLMs behind one: a failed one is skipped until it recovers.
+    ///
+    /// Args:
+    ///     llm: The LLMs, in order of preference.
+    ///     attempt_timeout: The timeout of one attempt.
+    ///     max_retry_per_llm: Retries of each before moving to the next.
+    ///     retry_interval: The wait between retries.
+    ///     sticky: Keep the LLM that last served until it fails, even once a preferred one
+    ///         recovers; on failure the rest are tried in order.
+    #[host(new, resolve(llm = ".._bindings.core_legs"))]
+    fn new(
+        llm: Vec<std::sync::Arc<dyn crate::Llm>>,
+        #[host(kw, default = 5.0)] attempt_timeout: f64,
+        #[host(default = 0)] max_retry_per_llm: u32,
+        #[host(default = 0.5)] retry_interval: f64,
+        #[host(default = false)] sticky: bool,
+    ) -> Self;
+}
 
 /// `tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
 #[crate::host(class(name = "FallbackTts", native = crate::Tts))]
@@ -93,11 +111,11 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
 
     #[host(class(name = "TtsStream"))]
     type Stream;
-    /// `tts.FallbackAdapter` builds it from its attributes, one per loop.
+    /// `tts` in order; `sample_rate` defaults to the highest of theirs, the others resampled.
     #[host(new)]
     fn new(
         env: &Self::Env,
-        members: Vec<std::sync::Arc<dyn crate::Tts>>,
+        tts: Vec<std::sync::Arc<dyn crate::Tts>>,
         #[host(kw, default = 2)] max_retry_per_tts: u32,
         #[host(default = None)] attempt_timeout: Option<f64>,
         #[host(default = None)] sample_rate: Option<u32>,
@@ -127,24 +145,41 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
     ) -> Result<Self::Stream, crate::errors::ProviderError>;
 }
 
-/// `tts.FallbackAdapter`'s chain, built once per loop from the adapter's attributes; a failed
-/// TTS is skipped until it recovers.
+/// `tts.FallbackAdapter`: several TTS behind one; a failed one is skipped until it recovers.
 #[crate::host(facade(
     path = "livekit.agents.tts",
     extended,
     name = "FallbackAdapter",
+    base = "tts.TTS",
     native = FallbackTts,
-    per_loop,
     legs(synthesize, stream),
-    resolve(members = ".._bindings.core_legs"),
-    annotation(sample_rate = "int"),
+    base_args(capabilities, sample_rate, num_channels),
     availability(
         observer = "on_availability",
+        members = "tts",
+        kind = "TTS",
         event = "tts_availability_changed",
         record = ".tts_availability.AvailabilityChangedEvent"
     )
 ))]
-pub trait FallbackTtsAdapter {}
+pub trait FallbackTtsAdapter {
+    /// Several TTS behind one: a failed one is skipped until it recovers.
+    ///
+    /// Args:
+    ///     tts: The TTS, in order of preference.
+    ///     max_retry_per_tts: Retries of each before moving to the next.
+    ///     attempt_timeout: Caps each phase of one attempt; ``None`` keeps the caller's
+    ///         ``conn_options`` limits.
+    ///     sample_rate: The output rate; the highest of the TTS by default, the others
+    ///         resampled.
+    #[host(new, resolve(tts = ".._bindings.core_legs"))]
+    fn new(
+        tts: Vec<std::sync::Arc<dyn crate::Tts>>,
+        #[host(kw, default = 2)] max_retry_per_tts: u32,
+        #[host(default = None)] attempt_timeout: Option<f64>,
+        #[host(default = None)] sample_rate: Option<u32>,
+    ) -> Self;
+}
 
 /// `tts.FallbackAdapter.synthesize()`: the chain's synthesis, which retries and falls back.
 #[crate::host(facade(
@@ -204,25 +239,6 @@ pub trait RealtimeFallbackModel: Send + Sync + Sized + 'static {
     fn capabilities(&self) -> crate::llm::realtime::RealtimeCapabilities;
     #[host(await)]
     async fn restart(&self, #[host(kw, default = false)] switch_model: bool);
-}
-
-/// The pushed-token log as the host's `SynthesizeStream` keeps it (`_core.TtsTokenLog`): the text
-/// a recovering stream replays.
-///
-/// `self._pushed_tokens` plus the live child sink. The text leg may not drop (§1.2d), so nothing
-/// here is lossy or bounded.
-#[crate::host(class(name = "TtsTokenLog"))]
-pub trait TtsTokenLog: Send + Sync + Sized + 'static {
-    #[host(new)]
-    fn new() -> Self;
-    #[host(call)]
-    fn push(&self, text: String);
-    #[host(call)]
-    fn flush(&self);
-    #[host(call)]
-    fn end(&self);
-    #[host(call)]
-    fn snapshot(&self) -> (Vec<Option<String>>, bool);
 }
 
 // Public data contracts. Python behavior remains in its adapters.

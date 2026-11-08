@@ -25,8 +25,8 @@ pub const HEADER_INFERENCE_PRIORITY: &str = "X-LiveKit-Inference-Priority";
 
 /// The inference gateway's credentials and identification. The core reads
 /// `LIVEKIT_INFERENCE_URL`, `LIVEKIT_INFERENCE_API_KEY`, `LIVEKIT_INFERENCE_API_SECRET` and
-/// `LIVEKIT_WORKER_TOKEN` from the environment; `server_*` are the server's `LIVEKIT_URL` and key
-/// pair as the host resolves them (in a job, its `AgentServer`'s settings).
+/// `LIVEKIT_WORKER_TOKEN` from the environment, and the server's `LIVEKIT_URL` and key pair from
+/// the running server's settings (in a job, its `AgentServer`'s), else the environment.
 /// Where a gateway client connects, and with what.
 #[crate::host(record(
     module = "inference_credentials",
@@ -45,36 +45,27 @@ pub struct GatewayCredentials {
 
 #[crate::host(functions)]
 pub trait InferenceCredentials {
-    /// `explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `server`; `""` when nothing resolves. A
-    /// set but empty `LIVEKIT_INFERENCE_API_KEY` shadows `server`.
+    /// `explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else the server's `LIVEKIT_API_KEY`; `""`
+    /// when nothing resolves. A set but empty `LIVEKIT_INFERENCE_API_KEY` shadows the server's.
     #[host(function)]
-    fn inference_api_key(
-        #[host(default = None)] explicit: Option<String>,
-        #[host(default = None)] server: Option<String>,
-    ) -> String;
+    fn inference_api_key(#[host(default = None)] explicit: Option<String>) -> String;
 
     /// The same ladder for the secret, over `LIVEKIT_INFERENCE_API_SECRET`.
     #[host(function)]
-    fn inference_api_secret(
-        #[host(default = None)] explicit: Option<String>,
-        #[host(default = None)] server: Option<String>,
-    ) -> String;
+    fn inference_api_secret(#[host(default = None)] explicit: Option<String>) -> String;
 
-    /// A nonempty `LIVEKIT_INFERENCE_URL`, then staging if `server_url` names the staging cloud,
-    /// then production.
+    /// A nonempty `LIVEKIT_INFERENCE_URL`, then staging if the server's `LIVEKIT_URL` names the
+    /// staging cloud, then production.
     #[host(function)]
-    fn inference_url(#[host(default = None)] server_url: Option<String>) -> String;
+    fn inference_url() -> String;
 
     /// The gateway's URL (a nonempty `base_url`, else [`Self::inference_url`]) and key pair (the
     /// ladders above); a `ValueError` when the key or the secret does not resolve.
     #[host(function)]
     fn inference_credentials(
-        base_url: Option<String>,
-        api_key: Option<String>,
-        api_secret: Option<String>,
-        server_url: Option<String>,
-        server_api_key: Option<String>,
-        server_api_secret: Option<String>,
+        #[host(default = None)] base_url: Option<String>,
+        #[host(default = None)] api_key: Option<String>,
+        #[host(default = None)] api_secret: Option<String>,
     ) -> Result<GatewayCredentials, Invalid>;
 
     /// An inference request's identification headers, in order: `user_agent`, the priority of a
@@ -146,7 +137,7 @@ pub trait InferenceModels {
         #[host(default = None)] reasoning: Option<String>,
     ) -> Vec<String>;
 
-    /// The turn detector a host constructs: `(model, cloud, warnings)`.
+    /// The turn detector a host constructs.
     #[host(function)]
     #[allow(clippy::too_many_arguments)]
     fn eot_select(
@@ -157,7 +148,7 @@ pub trait InferenceModels {
         key: String,
         secret: String,
         local_fallback: bool,
-    ) -> Result<(crate::tokenize::language::TurnDetectorModel, bool, Vec<String>), Invalid>;
+    ) -> Result<EotSelection, Invalid>;
 
     /// `_resolve_vad_for_model`: what the host does with the caller's VAD for this model.
     #[host(function)]
@@ -215,3 +206,11 @@ pub enum VadResolution {
 }
 
 pub mod tts_client;
+
+/// The model a turn detector runs, and why it is not the one asked for, to log.
+#[crate::host(record(module = "inference_models", emit))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct EotSelection {
+    pub model: crate::tokenize::language::TurnDetectorModel,
+    pub warnings: Vec<String>,
+}

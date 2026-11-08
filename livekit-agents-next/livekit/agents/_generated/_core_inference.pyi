@@ -13,33 +13,30 @@ from livekit.agents.tts import TTS
 from .._core import TtsStream
 from .connect import APIConnectOptions
 from .inference_credentials import Credentials
+from .inference_models import EotSelection
 from .inference_stt import FallbackModel
 from .inference_tts import FallbackModel as HostFallbackModel
 from .realtime import RealtimeCapabilities
 from .stt import STTCapabilities
 from .tts import TTSCapabilities
-from .turn_events import TurnDetectorModel
 
-def inference_api_key(explicit: str | None = None, server: str | None = None) -> str:
-    """`explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `server`; `""` when nothing resolves. A
-    set but empty `LIVEKIT_INFERENCE_API_KEY` shadows `server`.
+def inference_api_key(explicit: str | None = None) -> str:
+    """`explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else the server's `LIVEKIT_API_KEY`; `""`
+    when nothing resolves. A set but empty `LIVEKIT_INFERENCE_API_KEY` shadows the server's.
     """
 
-def inference_api_secret(explicit: str | None = None, server: str | None = None) -> str:
+def inference_api_secret(explicit: str | None = None) -> str:
     """The same ladder for the secret, over `LIVEKIT_INFERENCE_API_SECRET`."""
 
-def inference_url(server_url: str | None = None) -> str:
-    """A nonempty `LIVEKIT_INFERENCE_URL`, then staging if `server_url` names the staging cloud,
-    then production.
+def inference_url() -> str:
+    """A nonempty `LIVEKIT_INFERENCE_URL`, then staging if the server's `LIVEKIT_URL` names the
+    staging cloud, then production.
     """
 
 def inference_credentials(
-    base_url: str | None,
-    api_key: str | None,
-    api_secret: str | None,
-    server_url: str | None,
-    server_api_key: str | None,
-    server_api_secret: str | None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    api_secret: str | None = None,
 ) -> Credentials:
     """The gateway's URL (a nonempty `base_url`, else [`Self::inference_url`]) and key pair (the
     ladders above); a `ValueError` when the key or the secret does not resolve.
@@ -108,8 +105,8 @@ def eot_select(
     key: str,
     secret: str,
     local_fallback: bool,
-) -> tuple[TurnDetectorModel, bool, list[str]]:
-    """The turn detector a host constructs: `(model, cloud, warnings)`."""
+) -> EotSelection:
+    """The turn detector a host constructs."""
 
 def stt_resolve_vad_for_model(
     model: str | None = None,
@@ -212,7 +209,7 @@ class InferenceTts:
         extra_kwargs: dict[str, object] | None = None,
         fallback: list[HostFallbackModel] | None = None,
     ) -> Self:
-        """`inference.TTS` builds it on first use, after a fork, from its attributes."""
+        """`inference.TTS` builds it in its constructor."""
     @property
     def sample_rate(self) -> int: ...
     @property

@@ -89,8 +89,6 @@ pub trait SessionRecorder: Send + Sync + Sized + 'static {
     fn bytes_written(&self) -> u64;
     #[host(getter)]
     fn started_at(&self) -> Option<f64>;
-    #[host(getter)]
-    fn dropped_samples(&self) -> (u64, u64);
 
     #[host(await)]
     async fn flush(&self, now: f64) -> Result<RecordingSummary, RecordingFailure>;

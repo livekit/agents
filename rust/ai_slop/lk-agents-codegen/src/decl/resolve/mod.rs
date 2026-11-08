@@ -983,7 +983,15 @@ impl Resolver<'_> {
                     if has("py") {
                         return Err(format!("{at}: via and Python codec are alternatives"));
                     }
-                    if !record::representation(&via) {
+                    // An emit-only value may also cross as a declared record it converts into.
+                    let resolved = self.ty(&via, at)?;
+                    let into_record = has("emit")
+                        && !has("extract")
+                        && matches!(
+                            &resolved,
+                            Ty::Record(Record { host: HostForm::Record { .. }, emit: true, .. })
+                        );
+                    if !record::representation(&via) && !into_record {
                         return Err(format!("{at}: via requires a data representation"));
                     }
                     let attribute = voc::text(at, &own.nested, "attribute")?;
@@ -996,7 +1004,7 @@ impl Resolver<'_> {
                             "{at}: an attribute representation names a qualified host class"
                         ));
                     }
-                    HostForm::Via { host, via: Box::new(self.ty(&via, at)?), attribute }
+                    HostForm::Via { host, via: Box::new(resolved), attribute }
                 } else if has("py") {
                     HostForm::Converted(host, record::primitive_path(at, own, &ident)?)
                 } else {

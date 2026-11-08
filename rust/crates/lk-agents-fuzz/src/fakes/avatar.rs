@@ -37,7 +37,8 @@ use lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
 use lk_agents_runtime::avatar::runner::{self, AvatarIo};
 use lk_agents_voice::{
     avatar::machine::runner::{
-        AudioReceiverFrame, AvatarAudioReceiver, AvatarFrame, AvatarMedia, AvatarVideoGenerator,
+        AudioReceiverFrame, AvatarAudio, AvatarAudioReceiver, AvatarFrame, AvatarMedia,
+        AvatarVideoGenerator,
     },
     avatar::{RPC_CLEAR_BUFFER, Received, ReceiverEnd},
 };
@@ -153,10 +154,9 @@ fn receiver_error(error: ReceiverEnd) -> ProviderError {
     ProviderError::Local(ApiError::new(format!("{error:?}")))
 }
 
-impl AvatarAudioReceiver for Receiver {
+impl AvatarAudio for Receiver {
     fn next_audio(
         &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, Result<AudioReceiverObservation, ProviderError>> {
         Box::pin(async move {
             let observation = |epoch, starts_segment, segment, frame| AudioReceiverObservation {
@@ -204,9 +204,14 @@ impl AvatarAudioReceiver for Receiver {
         })
     }
 
+    fn next_clear(&self, after: u64) -> lk_agents_abi::BoxFuture<'_, Option<u64>> {
+        AvatarAudio::next_clear(&*self.rx, after)
+    }
+}
+
+impl AvatarAudioReceiver for Receiver {
     fn notify_playback_started(
         &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
         segment: AvatarPlaybackSegment,
     ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move {
@@ -217,7 +222,6 @@ impl AvatarAudioReceiver for Receiver {
 
     fn notify_playback_finished(
         &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
         position: f64,
         interrupted: bool,
         segment: AvatarPlaybackSegment,
@@ -228,10 +232,7 @@ impl AvatarAudioReceiver for Receiver {
         })
     }
 
-    fn aclose(
-        &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move {
             *self.closed.lock().unwrap() = true;
             self.rx.aclose();
@@ -582,7 +583,7 @@ impl FakeAvatarWorker {
         let period_ms = 1000 / fps;
         record(&log, &stamps, AvatarStep::Started { period_ms, latency_ms, queue_ms: QUEUE_MS });
 
-        // the receiver's `clear_buffer` event, which the host wires to the runner
+        // the receiver's `clear_buffer` event; the runner reads the clear from the receiver
         let worker: Arc<OnceLock<Weak<FakeAvatarWorker>>> = Arc::default();
         let on_clear: Arc<dyn Fn() + Send + Sync> = {
             let worker = worker.clone();
@@ -590,12 +591,7 @@ impl FakeAvatarWorker {
                 if let Some(w) = worker.get().and_then(Weak::upgrade) {
                     record(&w.log, &w.stamps, AvatarStep::Clear);
                     w.receiver.next_segment();
-                    let epoch = {
-                        let mut segment = w.receiver.segment.lock().unwrap();
-                        segment.2 += 1;
-                        segment.2
-                    };
-                    w.runner.clear_buffer(epoch);
+                    w.receiver.segment.lock().unwrap().2 += 1;
                 }
             })
         };

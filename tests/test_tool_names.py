@@ -33,14 +33,19 @@ def _agent() -> Agent:
 
 async def test_a_session_tool_named_as_an_agents_tool_refuses_the_call() -> None:
     async with VoiceSession(
-        llm=_calls("hello"), vad=None, turn_detection="manual", tools=[session_check]
+        llm=_calls("hello"),
+        vad=None,
+        turn_handling={"turn_detection": "manual"},
+        tools=[session_check],
     ) as session:
         with pytest.raises(ValueError, match=REFUSED):
             await session.start(_agent())
 
 
 def test_a_frames_tools_refuse_a_session_tool_added_under_an_agents_name() -> None:
-    session = VoiceSession(llm=_calls("hello"), vad=None, turn_detection="manual")
+    session = VoiceSession(
+        llm=_calls("hello"), vad=None, turn_handling={"turn_detection": "manual"}
+    )
     agent = _agent()
     binding = _VoiceBinding(session, agent)
     assert _voice_tools(binding).get_function_tool("check") is not None

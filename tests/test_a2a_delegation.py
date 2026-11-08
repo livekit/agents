@@ -417,7 +417,9 @@ async def test_a_remote_agent_on_a_call_delegates_and_its_result_reaches_the_cal
     )
     tool = _remote(peer).as_tool()
     agent = Agent(instructions="Ask the expert.", name="desk", tools=[tool])
-    async with VoiceSession(llm=model, vad=None, turn_detection="manual") as session:
+    async with VoiceSession(
+        llm=model, vad=None, turn_handling={"turn_detection": "manual"}
+    ) as session:
         await session.start(agent)
         await session._run(user_input="Check coverage")
 

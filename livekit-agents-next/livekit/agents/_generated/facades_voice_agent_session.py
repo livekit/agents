@@ -17,8 +17,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterable, Sequence
 
     from livekit.agents._generated.expressive import ExpressiveOptions
+    from livekit.agents.inference import TurnDetector
     from livekit.agents.llm.tool_context import ToolChoice
-    from livekit.agents.voice.io import _StreamingTurnDetector
 
     from ..llm import ChatContext
     from ..stt import STT
@@ -60,7 +60,7 @@ class VoiceSession:
         stt: NotGivenOr[STT | str | None] = NOT_GIVEN,
         tts: NotGivenOr[TTS | str | None] = NOT_GIVEN,
         vad: NotGivenOr[VAD | None] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetectionMode | _StreamingTurnDetector | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | TurnDetector | None] = NOT_GIVEN,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         interruption: NotGivenOr[InterruptionOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,

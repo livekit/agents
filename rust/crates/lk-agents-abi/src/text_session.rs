@@ -160,7 +160,6 @@ impl std::error::Error for RoutingError {
 
 use crate::agent::run::{RunError, RunResult};
 
-#[crate::host(record(module = "text_session", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextSessionTurn {
     pub result: RunResult,
@@ -228,11 +227,28 @@ pub struct TextSessionRequest {
     pub conn_options: ApiConnectOptions,
 }
 
-#[crate::host(record(module = "text_session", emit))]
+/// A settled turn, with the value the host validated when the output is one. The host reads it
+/// as its [`TextSessionFinished`].
+#[crate::host(codec(emit, host = "TextSessionFinished", via = crate::text_session::TextSessionFinished))]
 #[derive(Debug, Clone)]
 pub struct TextSessionSettled {
     pub turn: TextSessionTurn,
     pub output: Option<HostRef>,
+}
+
+/// A settled turn as the host reads it: the active frame's run and the state to save.
+#[crate::host(record(module = "text_session", emit))]
+#[derive(Debug, Clone)]
+pub struct TextSessionFinished {
+    pub run: crate::agent::run::RunFinished,
+    pub state: TextSessionState,
+}
+
+impl From<TextSessionSettled> for TextSessionFinished {
+    fn from(TextSessionSettled { turn, output }: TextSessionSettled) -> Self {
+        let run = crate::agent::run::RunSettled { result: turn.result, output }.into();
+        TextSessionFinished { run, state: turn.state }
+    }
 }
 
 #[crate::host(record(module = "text_session", emit))]

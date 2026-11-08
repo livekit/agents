@@ -36,7 +36,7 @@ pub trait LlmAlgorithms {
         items: Vec<ChatItem>,
         #[host(kw)] role: Role,
         template: &str,
-    ) -> Vec<(usize, Option<ChatItem>)>;
+    ) -> Vec<ConvertedItem>;
     #[host(function, pid = true)]
     fn to_fnc_ctx(
         format: ProviderFormat,
@@ -77,4 +77,12 @@ pub trait LlmAlgorithms {
     fn parse_function_arguments(raw: &str) -> Result<Map<String, Value>, Invalid>;
     #[host(function)]
     fn inject_confirm_duplicate(parameters: &Value) -> Map<String, Value>;
+}
+
+/// One item of a converted conversation: the item at `index`, or `rewritten` in its place.
+#[crate::host(record(module = "provider_format", dataclass, emit))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConvertedItem {
+    pub index: usize,
+    pub rewritten: Option<ChatItem>,
 }

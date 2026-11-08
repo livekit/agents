@@ -347,7 +347,7 @@ impl VoiceRuntime {
                 if let lk_agents_voice::agent_session::VoiceEvent::Eot(_, _, thresholds) =
                     &mut input
                 {
-                    *thresholds = self.eot.as_ref().and_then(|detector| detector.thresholds());
+                    *thresholds = self.eot.as_ref().map(|detector| detector.thresholds());
                 }
                 self.step(Some(input), now);
             }

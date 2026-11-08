@@ -16,7 +16,6 @@ use tokio::time::Instant;
 
 use crate::ipc::telemetry;
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::worker::ipc_host::ProcessEvent;
 use lk_agents_abi::worker::job::RunningJobInfo;
 
 use super::process_pool::Executor;
@@ -31,6 +30,19 @@ const PENDING_JOBS: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProcessId(pub u64);
+
+/// A process's step in the pool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProcessEvent {
+    Created,
+    Started,
+    Ready,
+    Closed,
+    JobLaunched,
+    CleanupIncomplete,
+    JoinFailed,
+    ExitFailed,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ReservationId(u64);

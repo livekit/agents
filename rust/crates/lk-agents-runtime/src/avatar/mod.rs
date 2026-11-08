@@ -1,4 +1,5 @@
 //! Executes avatar transport and media effects over the voice decision cores.
+pub mod host_receiver;
 pub mod lifecycle;
 pub mod media;
 pub mod output;

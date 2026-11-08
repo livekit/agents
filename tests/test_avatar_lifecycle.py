@@ -1,5 +1,5 @@
-"""`AvatarSession`'s lifecycle: the join wait and its timeout, the close on the job's shutdown,
-and what a close ends."""
+"""`AvatarSession`'s lifecycle: the join wait and its timeout, and what a close ends. The close on
+the job's shutdown is covered natively (`lk-agents-fuzz` avatar_lifecycle_tests)."""
 
 import asyncio
 
@@ -28,17 +28,6 @@ class Avatar(AvatarSession):
         await super().aclose()
 
 
-class Job:
-    """What the avatar's lifecycle reads of its `JobContext`."""
-
-    def __init__(self) -> None:
-        self.shutdown: list[object] = []
-        self._server_env: dict[str, str] = {}
-
-    def _core_on_avatar_shutdown(self, close: object) -> None:
-        self.shutdown.append(close)
-
-
 async def test_wait_for_join_times_out_without_ending_the_wait_and_a_close_ends_it():
     avatar = Avatar()
     await avatar.wait_for_join(timeout=0)  # not started: returns at once
@@ -53,18 +42,6 @@ async def test_wait_for_join_times_out_without_ending_the_wait_and_a_close_ends_
         await asyncio.wait_for(waiting, 1)
     await avatar.wait_for_join(timeout=0)  # closed: returns at once
     await avatar.aclose()
-
-
-async def test_the_jobs_shutdown_runs_the_subclass_close(monkeypatch):
-    job = Job()
-    monkeypatch.setattr("livekit.agents.voice.avatar.get_job_context", lambda **_: job)
-    avatar = Avatar()
-    await avatar.start(VoiceSession(vad=None), rtc.Room())
-    assert len(job.shutdown) == 1
-    close = job.shutdown[0]
-    assert close == avatar.aclose  # the subclass's own aclose
-    await close()  # an unconnected room removes nobody
-    assert avatar.closes == 1
 
 
 async def test_concurrent_closes_wait_for_one_close_and_a_new_start_begins_again():

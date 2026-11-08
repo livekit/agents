@@ -135,7 +135,7 @@ pub trait AgentConfig: Send + Sized + 'static {
     #[host(call)]
     fn check_mutable(&self, what: String) -> Result<(), AuthoringError>;
     #[host(call)]
-    fn register(&mut self, kind: CallbackKind) -> Result<(u64, Option<u64>), AuthoringError>;
+    fn register(&mut self, kind: CallbackKind) -> Result<Registered, AuthoringError>;
     #[host(call)]
     fn callbacks(&self, kind: CallbackKind) -> Vec<u64>;
     #[host(call)]
@@ -155,4 +155,13 @@ pub trait AgentConfig: Send + Sized + 'static {
     fn join_instructions(&self, parts: Vec<String>) -> String;
     #[host(getter)]
     fn retries(&self) -> Retries;
+}
+
+/// A callback's registration: its `token`, and the one it replaced (`retired`), an `on_enter` or
+/// `on_exit` registered again.
+#[crate::host(record(module = "agent_authoring", emit))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Registered {
+    pub token: u64,
+    pub retired: Option<u64>,
 }

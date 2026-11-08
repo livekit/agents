@@ -12,11 +12,25 @@ pub struct PatternError(pub String);
 #[error("{0}")]
 pub struct ToolSearchError(pub String);
 
+/// What the search reads of a tool's `SearchItem`.
+#[crate::host(record(
+    module = "tool_search",
+    host_type = "livekit.agents._generated.toolset_events.SearchItem",
+    boundary,
+    extract
+))]
+#[derive(Debug, Clone, Default)]
+pub struct SearchFields {
+    pub name: String,
+    pub description: String,
+    pub parameters: std::collections::BTreeMap<String, String>,
+}
+
 /// One tool as the search sees it; identity stays with the host.
 #[crate::host(class(name = "SearchDocument", pid = false))]
 pub trait SearchDocument: Clone + Send + Sized + 'static {
     #[host(new)]
-    fn new(name: String, description: String, parameters: Vec<(String, String)>) -> Self;
+    fn new(item: SearchFields) -> Self;
     #[host(call)]
     fn keyword_score(&self, terms: Vec<String>) -> Result<f64, PatternError>;
 }

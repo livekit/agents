@@ -285,6 +285,19 @@ impl TooLarge {
     }
 }
 
+/// Python interface: `livekit.rtc.RpcError`.
+pub use crate::py_errors::interfaces::RpcError;
+impl RpcError {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
+            pyo3::sync::PyOnceLock::new();
+        Ok(CLASS.import(py, "livekit.rtc", "RpcError")?.as_any().clone())
+    }
+    pub fn code<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("code")
+    }
+}
+
 /// Python interface: `logging`.
 pub use crate::py_logging::interfaces::LoggingModule;
 impl LoggingModule {
@@ -447,11 +460,13 @@ impl MemoryView {
     }
 }
 
-/// Python interface: `streaming turn detector`.
+/// Python interface: `livekit.agents.inference.TurnDetector`.
 pub use crate::py_values::interfaces::TurnDetector;
 impl TurnDetector {
-    pub fn streaming(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
-        Ok(obj.hasattr("model")? && obj.hasattr("provider")? && obj.hasattr("stream")?)
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
+            pyo3::sync::PyOnceLock::new();
+        Ok(CLASS.import(py, "livekit.agents.inference", "TurnDetector")?.as_any().clone())
     }
 }
 
@@ -504,6 +519,32 @@ impl TimeModule {
         obj: &Bound<'py, impl pyo3::PyTypeInfo>,
     ) -> PyResult<Bound<'py, PyAny>> {
         obj.as_any().getattr("perf_counter")
+    }
+}
+
+/// Python interface: `pydantic_core`.
+pub use crate::py_values::interfaces::PydanticCoreModule;
+impl PydanticCoreModule {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyModule>> {
+        py.import("pydantic_core")
+    }
+    pub fn to_jsonable_python<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("to_jsonable_python")
+    }
+}
+
+/// Python interface: `livekit.agents.llm.utils`.
+pub use crate::py_values::interfaces::LlmUtilsModule;
+impl LlmUtilsModule {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyModule>> {
+        py.import("livekit.agents.llm.utils")
+    }
+    pub fn _value_text<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("_value_text")
     }
 }
 

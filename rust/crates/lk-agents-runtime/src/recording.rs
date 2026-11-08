@@ -735,10 +735,6 @@ impl lk_agents_abi::recorder::SessionRecorder for SessionRecorder {
     fn started_at(&self) -> Option<f64> {
         self.shared.summary.borrow().started_at
     }
-    fn dropped_samples(&self) -> (u64, u64) {
-        let summary = self.shared.summary.borrow();
-        (summary.dropped_input_samples, summary.dropped_output_samples)
-    }
     async fn flush(&self, now: f64) -> Result<RecordingSummary, RecordingFailure> {
         Self::flush(self, now).await
     }

@@ -450,7 +450,7 @@ struct LocalState {
     text_streams: Vec<Arc<Mutex<RecordedTextStream>>>,
     byte_streams: Vec<Arc<Mutex<RecordedByteStream>>>,
     rpc_calls: Vec<(ParticipantIdentity, String, String)>,
-    /// What the next `perform_rpc` answers; `(0, "")` when unset.
+    /// What the next `perform_rpc` answers, as `(code, text)`; `(0, "")` when unset.
     rpc_reply: Option<(u32, String)>,
     rpc_handlers: BTreeMap<String, Arc<dyn RpcCallback>>,
     fail_with: Option<RtcError>,
@@ -741,7 +741,7 @@ impl LocalParticipant for FakeLocalParticipant {
         destination: ParticipantIdentity,
         method: String,
         payload: String,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<(u32, String)>> {
+    ) -> lk_agents_abi::BoxFuture<'a, Result<String>> {
         Box::pin(async move {
             self.check()?;
             let mut state = self.state.lock().unwrap();
@@ -751,7 +751,13 @@ impl LocalParticipant for FakeLocalParticipant {
                 payload: payload.clone(),
             });
             state.rpc_calls.push((destination, method, payload));
-            Ok(state.rpc_reply.clone().unwrap_or((0, String::new())))
+            match state.rpc_reply.clone().unwrap_or_default() {
+                (0, response) => Ok(response),
+                (code, message) => Err(RtcError::Host(lk_agents_abi::errors::HostError {
+                    kind: lk_agents_abi::errors::HostErrorKind::Rpc { code },
+                    ..lk_agents_abi::errors::HostError::new(message)
+                })),
+            }
         })
     }
 

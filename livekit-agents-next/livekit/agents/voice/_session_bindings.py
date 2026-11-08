@@ -15,7 +15,7 @@ from typing_extensions import TypeVar
 from livekit import rtc
 
 from .. import _bindings, _core, inference, llm, stt, tts
-from .._bindings import TurnDetector, realtime_model, tool_specs
+from .._bindings import realtime_model, tool_specs
 from .._generated.connect import SessionConnectOptions as SessionConnectOptions
 from .._generated.keyterms import STTContextOptions
 from .._generated.remote_session import (
@@ -64,7 +64,6 @@ if TYPE_CHECKING:
     from ..evals import SimulationVerdict
     from ..storage import Thread
     from .agent_session import VoiceSession
-    from .io import EndpointingOptions, TurnDetectionMode
 
 
 # the session's pipeline callbacks (voice-session.md "Customizing the pipeline"): each receives
@@ -93,9 +92,6 @@ UserTurnExceededHook = Callable[[RunContext[_C], UserTurnExceededEvent], Corouti
 _CallbackT = TypeVar("_CallbackT", bound=Callable[..., object])
 
 
-_OPTION_KEYS = (SessionKwargs.__required_keys__ | SessionKwargs.__optional_keys__) - {
-    "conn_options"
-}
 _NODES = ("llm_node", "tts_node", "stt_node", "transcription_node")
 
 
@@ -111,25 +107,12 @@ def initialize(
     thread: Thread | None = None,
     video_sampler: NotGivenOr[VoiceActivityVideoSampler | None] = NOT_GIVEN,
     conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
-    turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-    endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
     stt_context_options: NotGivenOr[STTContextOptions | None] = NOT_GIVEN,
-    **options: Any,
+    options: SessionKwargs,
 ) -> None:
     """``VoiceSession.__init__``: resolves the providers and options onto ``session``."""
-    if unknown := options.keys() - _OPTION_KEYS:
-        raise TypeError(f"unexpected VoiceSession options: {sorted(unknown)}")
-    listening = dict(options.get("turn_handling") or {})
-    if is_given(turn_detection):
-        listening["turn_detection"] = turn_detection
-    if is_given(endpointing_opts):
-        listening["endpointing"] = endpointing_opts
-    if listening:
-        options["turn_handling"] = listening
     session._conn_options = conn_options or SessionConnectOptions()
-    session._options = _core.SessionOptions(
-        cast(SessionKwargs, {**_given(**options), "conn_options": session._conn_options})
-    )
+    session._options = _core.SessionOptions(options, session._conn_options)
     session._stt_context = stt_context_options if is_given(stt_context_options) else None
 
     stt_model = inference.STT.from_model_string(stt) if isinstance(stt, str) else stt or None
@@ -148,13 +131,9 @@ def initialize(
     vad_model = session._default_vad or (vad if is_given(vad) else None)
     if not is_given(detection):
         detection = inference.TurnDetector() if defaults.turn_detector else None
-    # the gateway detector's stream is the core's own detector; a plugin's is seen through a view
+    # the session options refused anything else: the detector's stream is the core's detector
     session._turn_detector = (
-        None
-        if isinstance(detection, str | None)
-        else detection.stream()
-        if isinstance(detection, inference.TurnDetector)
-        else TurnDetector(detection)
+        detection.stream() if isinstance(detection, inference.TurnDetector) else None
     )
     session._video_sampler = (
         video_sampler if is_given(video_sampler) else VoiceActivityVideoSampler()
@@ -328,10 +307,6 @@ class SessionAdapter:
         )
         if transcript is not None:
             session._running.ivr_final(transcript)
-
-
-def _given(**options: Any) -> dict[str, Any]:
-    return {k: v for k, v in options.items() if is_given(v)}
 
 
 def _stt_model(model: NotGivenOr[stt.STT | str | None]) -> NotGivenOr[stt.STT | None]:

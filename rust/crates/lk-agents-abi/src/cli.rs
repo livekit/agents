@@ -104,7 +104,7 @@ pub trait Cli {
         url: String,
         api_key: String,
         api_secret: String,
-        server: std::sync::Arc<dyn DevServer>,
+        server: std::sync::Arc<dyn crate::worker::server_host::ServerJobs>,
     );
 }
 
@@ -137,21 +137,4 @@ pub trait CliShutdown: Send + Sync + Sized + 'static {
     /// Disarm only after host cleanup and event-loop closure finish.
     #[host(call)]
     fn closed(&self);
-}
-
-/// The agent server the dev channel reports on (`cli.py`'s `_DevServer`).
-#[crate::host(proxy(host = "livekit.agents.cli._DevServer"))]
-pub trait DevServer: Send + Sync {
-    /// The jobs running now, read when the CLI asks.
-    #[host(call, name = "_core_running_jobs")]
-    fn running_jobs(
-        &self,
-    ) -> Result<Vec<crate::worker::job::RunningJobInfo>, crate::errors::HostError>;
-    /// Resume the jobs the CLI kept from before the reload, on this server's URL and a fresh token.
-    #[host(await, name = "_core_reload_jobs")]
-    fn reload_jobs(
-        &self,
-        cx: &crate::telemetry::Cx,
-        jobs: Vec<crate::worker::job::RunningJobInfo>,
-    ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 }

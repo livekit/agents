@@ -17,9 +17,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from livekit.agents._generated.expressive import ExpressiveOptions
-    from livekit.agents.voice.io import _StreamingTurnDetector
+    from livekit.agents.inference import TurnDetector
 
-    from .connect import SessionConnectOptions
     from .turn import (
         EndpointingMode,
         EndpointingOptions,
@@ -40,34 +39,33 @@ TextTransforms: TypeAlias = Literal["filter_markdown", "filter_emoji"]
 """A transform the core applies to the text it sends to the TTS."""
 
 
-class SessionKwargs(TypedDict):
+class SessionKwargs(TypedDict, total=False):
     """Every option keyword of the reference's `AgentSession.__init__`, once. Host-object kwargs
     (`stt`, `llm`, `tools`, ...) are legs, not options.
     """
 
-    turn_handling: NotRequired[TurnHandlingOptions]
-    max_tool_steps: NotRequired[int]
-    use_tts_aligned_transcript: NotRequired[bool]
-    tts_text_transforms: NotRequired[Sequence[TextTransforms] | None]
+    turn_handling: TurnHandlingOptions
+    max_tool_steps: int
+    use_tts_aligned_transcript: bool
+    tts_text_transforms: Sequence[TextTransforms] | None
     """Unsaid, "none", or a set."""
-    min_consecutive_speech_delay: NotRequired[float]
-    expressive: NotRequired[bool | ExpressiveOptions | None]
-    aec_warmup_duration: NotRequired[float | None]
+    min_consecutive_speech_delay: float
+    expressive: bool | ExpressiveOptions | None
+    aec_warmup_duration: float | None
     """Unsaid is the default warmup, `None` none at all (outbound SIP)."""
-    ivr_detection: NotRequired[bool]
-    user_away_timeout: NotRequired[float | None]
+    ivr_detection: bool
+    user_away_timeout: float | None
     """`None` disables the away timer."""
-    transcription_timeout: NotRequired[float]
+    transcription_timeout: float
     """`None` disables the timeout, `0` arms it with nothing left to wait."""
-    session_close_transcript_timeout: NotRequired[float]
-    conn_options: SessionConnectOptions
+    session_close_transcript_timeout: float
 
 
 class UpdateKwargs(TypedDict, total=False):
     """`AgentSession.update_options(..)`'s option surface."""
 
     endpointing_opts: EndpointingOptions
-    turn_detection: TurnDetectionMode | _StreamingTurnDetector | None
+    turn_detection: TurnDetectionMode | TurnDetector | None
     """`None` reverts to automatic selection."""
     expressive: bool | ExpressiveOptions | None
     keyterms: list[str]

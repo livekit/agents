@@ -14,123 +14,7 @@ use pyo3::prelude::*;
 type ChatContextPlansImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ChatContextPlans;
 type ChatContextPlansCopyPlanOutput = ::std::vec::Vec<usize>;
-
-fn _extract_chat_context_plans_copy_plan_facts(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<ChatContextPlansCopyPlanFactsInput> {
-    obj.try_iter().and_then(|items| {
-        items
-            .map(|item| {
-                let item = item?;
-                (|| -> ::pyo3::PyResult<_> {
-                    let tuple = item.cast::<::pyo3::types::PyTuple>()?;
-                    if tuple.len() != 7 {
-                        return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                            "{}: expected a tuple of 7 items",
-                            "facts"
-                        )));
-                    }
-                    let item_0 = tuple.get_item(0)?;
-                    let item_1 = tuple.get_item(1)?;
-                    let item_2 = tuple.get_item(2)?;
-                    let item_3 = tuple.get_item(3)?;
-                    let item_4 = tuple.get_item(4)?;
-                    let item_5 = tuple.get_item(5)?;
-                    let item_6 = tuple.get_item(6)?;
-                    Ok((
-                        (item_0.extract::<::std::string::String>())?,
-                        (item_1.extract::<::std::string::String>())?,
-                        (if item_2.is_none() {
-                            Ok(None)
-                        } else {
-                            (item_2.extract::<::std::string::String>()).map(Some)
-                        })?,
-                        (crate::py_values::number_from_py::<usize>(item_3.as_any(), "facts"))?,
-                        (if item_4.is_none() {
-                            Ok(None)
-                        } else {
-                            (item_4.extract::<::std::string::String>()).map(Some)
-                        })?,
-                        (crate::py_values::number_from_py::<f64>(item_5.as_any(), "facts"))?,
-                        (if item_6.is_none() {
-                            Ok(None)
-                        } else {
-                            (item_6.extract::<::std::string::String>()).map(Some)
-                        })?,
-                    ))
-                })()
-            })
-            .collect::<PyResult<Vec<_>>>()
-    })
-}
-type ChatContextPlansCopyPlanFactsInput = ::std::vec::Vec<(
-    ::std::string::String,
-    ::std::string::String,
-    ::std::option::Option<::std::string::String>,
-    usize,
-    ::std::option::Option<::std::string::String>,
-    f64,
-    ::std::option::Option<::std::string::String>,
-)>;
 type ChatContextPlansTruncatePlanOutput = ::std::option::Option<::std::vec::Vec<usize>>;
-
-fn _extract_chat_context_plans_truncate_plan_facts(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<ChatContextPlansTruncatePlanFactsInput> {
-    obj.try_iter().and_then(|items| {
-        items
-            .map(|item| {
-                let item = item?;
-                (|| -> ::pyo3::PyResult<_> {
-                    let tuple = item.cast::<::pyo3::types::PyTuple>()?;
-                    if tuple.len() != 7 {
-                        return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                            "{}: expected a tuple of 7 items",
-                            "facts"
-                        )));
-                    }
-                    let item_0 = tuple.get_item(0)?;
-                    let item_1 = tuple.get_item(1)?;
-                    let item_2 = tuple.get_item(2)?;
-                    let item_3 = tuple.get_item(3)?;
-                    let item_4 = tuple.get_item(4)?;
-                    let item_5 = tuple.get_item(5)?;
-                    let item_6 = tuple.get_item(6)?;
-                    Ok((
-                        (item_0.extract::<::std::string::String>())?,
-                        (item_1.extract::<::std::string::String>())?,
-                        (if item_2.is_none() {
-                            Ok(None)
-                        } else {
-                            (item_2.extract::<::std::string::String>()).map(Some)
-                        })?,
-                        (crate::py_values::number_from_py::<usize>(item_3.as_any(), "facts"))?,
-                        (if item_4.is_none() {
-                            Ok(None)
-                        } else {
-                            (item_4.extract::<::std::string::String>()).map(Some)
-                        })?,
-                        (crate::py_values::number_from_py::<f64>(item_5.as_any(), "facts"))?,
-                        (if item_6.is_none() {
-                            Ok(None)
-                        } else {
-                            (item_6.extract::<::std::string::String>()).map(Some)
-                        })?,
-                    ))
-                })()
-            })
-            .collect::<PyResult<Vec<_>>>()
-    })
-}
-type ChatContextPlansTruncatePlanFactsInput = ::std::vec::Vec<(
-    ::std::string::String,
-    ::std::string::String,
-    ::std::option::Option<::std::string::String>,
-    usize,
-    ::std::option::Option<::std::string::String>,
-    f64,
-    ::std::option::Option<::std::string::String>,
-)>;
 
 fn _extract_chat_context_plans_truncate_plan_max_items(
     obj: &Bound<'_, PyAny>,
@@ -138,132 +22,14 @@ fn _extract_chat_context_plans_truncate_plan_max_items(
     crate::py_values::number_from_py::<i64>(obj.as_any(), "max_items")
 }
 type ChatContextPlansTruncatePlanMaxItemsInput = i64;
-type ChatContextPlansMergePlanOutput = ::std::vec::Vec<(usize, usize)>;
-
-fn _extract_chat_context_plans_merge_plan_mine(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<ChatContextPlansMergePlanMineInput> {
-    obj.try_iter().and_then(|items| {
-        items
-            .map(|item| {
-                let item = item?;
-                (|| -> ::pyo3::PyResult<_> {
-                    let tuple = item.cast::<::pyo3::types::PyTuple>()?;
-                    if tuple.len() != 7 {
-                        return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                            "{}: expected a tuple of 7 items",
-                            "mine"
-                        )));
-                    }
-                    let item_0 = tuple.get_item(0)?;
-                    let item_1 = tuple.get_item(1)?;
-                    let item_2 = tuple.get_item(2)?;
-                    let item_3 = tuple.get_item(3)?;
-                    let item_4 = tuple.get_item(4)?;
-                    let item_5 = tuple.get_item(5)?;
-                    let item_6 = tuple.get_item(6)?;
-                    Ok((
-                        (item_0.extract::<::std::string::String>())?,
-                        (item_1.extract::<::std::string::String>())?,
-                        (if item_2.is_none() {
-                            Ok(None)
-                        } else {
-                            (item_2.extract::<::std::string::String>()).map(Some)
-                        })?,
-                        (crate::py_values::number_from_py::<usize>(item_3.as_any(), "mine"))?,
-                        (if item_4.is_none() {
-                            Ok(None)
-                        } else {
-                            (item_4.extract::<::std::string::String>()).map(Some)
-                        })?,
-                        (crate::py_values::number_from_py::<f64>(item_5.as_any(), "mine"))?,
-                        (if item_6.is_none() {
-                            Ok(None)
-                        } else {
-                            (item_6.extract::<::std::string::String>()).map(Some)
-                        })?,
-                    ))
-                })()
-            })
-            .collect::<PyResult<Vec<_>>>()
-    })
-}
-type ChatContextPlansMergePlanMineInput = ::std::vec::Vec<(
-    ::std::string::String,
-    ::std::string::String,
-    ::std::option::Option<::std::string::String>,
-    usize,
-    ::std::option::Option<::std::string::String>,
-    f64,
-    ::std::option::Option<::std::string::String>,
-)>;
-
-fn _extract_chat_context_plans_merge_plan_theirs(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<ChatContextPlansMergePlanTheirsInput> {
-    obj.try_iter().and_then(|items| {
-        items
-            .map(|item| {
-                let item = item?;
-                (|| -> ::pyo3::PyResult<_> {
-                    let tuple = item.cast::<::pyo3::types::PyTuple>()?;
-                    if tuple.len() != 7 {
-                        return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                            "{}: expected a tuple of 7 items",
-                            "theirs"
-                        )));
-                    }
-                    let item_0 = tuple.get_item(0)?;
-                    let item_1 = tuple.get_item(1)?;
-                    let item_2 = tuple.get_item(2)?;
-                    let item_3 = tuple.get_item(3)?;
-                    let item_4 = tuple.get_item(4)?;
-                    let item_5 = tuple.get_item(5)?;
-                    let item_6 = tuple.get_item(6)?;
-                    Ok((
-                        (item_0.extract::<::std::string::String>())?,
-                        (item_1.extract::<::std::string::String>())?,
-                        (if item_2.is_none() {
-                            Ok(None)
-                        } else {
-                            (item_2.extract::<::std::string::String>()).map(Some)
-                        })?,
-                        (crate::py_values::number_from_py::<usize>(item_3.as_any(), "theirs"))?,
-                        (if item_4.is_none() {
-                            Ok(None)
-                        } else {
-                            (item_4.extract::<::std::string::String>()).map(Some)
-                        })?,
-                        (crate::py_values::number_from_py::<f64>(item_5.as_any(), "theirs"))?,
-                        (if item_6.is_none() {
-                            Ok(None)
-                        } else {
-                            (item_6.extract::<::std::string::String>()).map(Some)
-                        })?,
-                    ))
-                })()
-            })
-            .collect::<PyResult<Vec<_>>>()
-    })
-}
-type ChatContextPlansMergePlanTheirsInput = ::std::vec::Vec<(
-    ::std::string::String,
-    ::std::string::String,
-    ::std::option::Option<::std::string::String>,
-    usize,
-    ::std::option::Option<::std::string::String>,
-    f64,
-    ::std::option::Option<::std::string::String>,
-)>;
 type ChatContextPlansRemoveInstructionsOutput = ::std::vec::Vec<usize>;
 
 /// `ChatContext.copy` as an index plan over the host's own items.
 #[pyfunction]
-#[pyo3(signature = (facts, *, exclude_function_call = false, exclude_instructions = false, exclude_empty_message = false, exclude_handoff = false, exclude_config_update = false, tools = None))]
+#[pyo3(signature = (items, *, exclude_function_call = false, exclude_instructions = false, exclude_empty_message = false, exclude_handoff = false, exclude_config_update = false, tools = None))]
 pub fn chat_ctx_copy_plan(
     py: Python<'_>,
-    #[pyo3(from_py_with = _extract_chat_context_plans_copy_plan_facts)]
-    facts: ChatContextPlansCopyPlanFactsInput,
+    items: Bound<'_, PyAny>,
     exclude_function_call: bool,
     exclude_instructions: bool,
     exclude_empty_message: bool,
@@ -271,39 +37,94 @@ pub fn chat_ctx_copy_plan(
     exclude_config_update: bool,
     tools: ::std::option::Option<::std::vec::Vec<::std::string::String>>,
 ) -> PyResult<ChatContextPlansCopyPlanOutput> {
-    let out = py.detach(|| <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::copy_plan(facts, exclude_function_call, exclude_instructions, exclude_empty_message, exclude_handoff, exclude_config_update, tools)).map_err(|e: ::lk_agents_abi::llm::chat_context::ChatFactsError| <::lk_agents_abi::llm::chat_context::ChatFactsError as crate::py_errors::HostException>::to_py_err(&e))?;
+    let items = items.try_iter().and_then(|items| {
+        items
+            .map(|item| {
+                let item = item?;
+                crate::generated::records::chat_items::chat_item_from_py(item.as_any())
+            })
+            .collect::<PyResult<Vec<_>>>()
+    })?;
+    let out = py.detach(|| {
+        <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::copy_plan(
+            items,
+            exclude_function_call,
+            exclude_instructions,
+            exclude_empty_message,
+            exclude_handoff,
+            exclude_config_update,
+            tools,
+        )
+    });
     ::pyo3::PyResult::Ok(out)
 }
 
 /// `ChatContext.truncate` as an index plan; `None` when under the limit.
 #[pyfunction]
-#[pyo3(signature = (facts, max_items))]
+#[pyo3(signature = (items, max_items))]
 pub fn chat_ctx_truncate_plan(
     py: Python<'_>,
-    #[pyo3(from_py_with = _extract_chat_context_plans_truncate_plan_facts)]
-    facts: ChatContextPlansTruncatePlanFactsInput,
+    items: Bound<'_, PyAny>,
     #[pyo3(from_py_with = _extract_chat_context_plans_truncate_plan_max_items)]
     max_items: ChatContextPlansTruncatePlanMaxItemsInput,
 ) -> PyResult<ChatContextPlansTruncatePlanOutput> {
-    let out = py.detach(|| <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::truncate_plan(facts, max_items)).map_err(|e: ::lk_agents_abi::llm::chat_context::ChatFactsError| <::lk_agents_abi::llm::chat_context::ChatFactsError as crate::py_errors::HostException>::to_py_err(&e))?;
+    let items = items.try_iter().and_then(|items| {
+        items
+            .map(|item| {
+                let item = item?;
+                crate::generated::records::chat_items::chat_item_from_py(item.as_any())
+            })
+            .collect::<PyResult<Vec<_>>>()
+    })?;
+    let out = py.detach(|| <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::truncate_plan(items, max_items));
     ::pyo3::PyResult::Ok(out)
 }
 
-/// `ChatContext.merge` as `(index, j)` insertions.
+/// `ChatContext.merge` as insertions, in order.
 #[pyfunction]
 #[pyo3(signature = (mine, theirs, *, exclude_function_call = false, exclude_instructions = false, exclude_config_update = false))]
-pub fn chat_ctx_merge_plan(
-    py: Python<'_>,
-    #[pyo3(from_py_with = _extract_chat_context_plans_merge_plan_mine)]
-    mine: ChatContextPlansMergePlanMineInput,
-    #[pyo3(from_py_with = _extract_chat_context_plans_merge_plan_theirs)]
-    theirs: ChatContextPlansMergePlanTheirsInput,
+pub fn chat_ctx_merge_plan<'py>(
+    py: Python<'py>,
+    mine: Bound<'_, PyAny>,
+    theirs: Bound<'_, PyAny>,
     exclude_function_call: bool,
     exclude_instructions: bool,
     exclude_config_update: bool,
-) -> PyResult<ChatContextPlansMergePlanOutput> {
-    let out = py.detach(|| <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::merge_plan(mine, theirs, exclude_function_call, exclude_instructions, exclude_config_update)).map_err(|e: ::lk_agents_abi::llm::chat_context::ChatFactsError| <::lk_agents_abi::llm::chat_context::ChatFactsError as crate::py_errors::HostException>::to_py_err(&e))?;
-    ::pyo3::PyResult::Ok(out)
+) -> PyResult<Bound<'py, PyAny>> {
+    let mine = mine.try_iter().and_then(|items| {
+        items
+            .map(|item| {
+                let item = item?;
+                crate::generated::records::chat_items::chat_item_from_py(item.as_any())
+            })
+            .collect::<PyResult<Vec<_>>>()
+    })?;
+    let theirs = theirs.try_iter().and_then(|items| {
+        items
+            .map(|item| {
+                let item = item?;
+                crate::generated::records::chat_items::chat_item_from_py(item.as_any())
+            })
+            .collect::<PyResult<Vec<_>>>()
+    })?;
+    let out = py.detach(|| {
+        <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::merge_plan(
+            mine,
+            theirs,
+            exclude_function_call,
+            exclude_instructions,
+            exclude_config_update,
+        )
+    });
+    ::pyo3::PyResult::Ok(
+        ::pyo3::types::PyList::new(
+            py,
+            out.into_iter()
+                .map(|x| crate::generated::records::chat_diff::merge_insertion_to_py(py, x))
+                .collect::<PyResult<Vec<_>>>()?,
+        )?
+        .into_any(),
+    )
 }
 
 /// `remove_instructions(chat_ctx)` as a plan: the positions of the rendered prompt's items,
@@ -750,12 +571,12 @@ pub struct FallbackLlm(pub(crate) ::std::sync::Arc<FallbackLlmImpl>);
 
 #[pymethods]
 impl FallbackLlm {
-    /// `llm.FallbackAdapter` builds it from its attributes, one per loop.
+    /// `llm` in order.
     #[new]
-    #[pyo3(signature = (members, *, attempt_timeout = 5.0, max_retry_per_llm = 0, retry_interval = 0.5, sticky = false, on_availability = None))]
+    #[pyo3(signature = (llm, *, attempt_timeout = 5.0, max_retry_per_llm = 0, retry_interval = 0.5, sticky = false, on_availability = None))]
     fn new(
         py: Python<'_>,
-        members: Bound<'_, PyAny>,
+        llm: Bound<'_, PyAny>,
         #[pyo3(from_py_with = _extract_fallback_llm_new_attempt_timeout)]
         attempt_timeout: FallbackLlmNewAttemptTimeoutInput,
         #[pyo3(from_py_with = _extract_fallback_llm_new_max_retry_per_llm)]
@@ -767,7 +588,7 @@ impl FallbackLlm {
     ) -> PyResult<FallbackLlm> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let members = members.try_iter().and_then(|items| {
+        let llm = llm.try_iter().and_then(|items| {
             items
                 .map(|item| {
                     let item = item?;
@@ -782,7 +603,7 @@ impl FallbackLlm {
             .detach(|| {
                 <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::new(
                     &env,
-                    members,
+                    llm,
                     attempt_timeout,
                     max_retry_per_llm,
                     retry_interval,
@@ -944,12 +765,12 @@ pub struct FallbackTts(pub(crate) ::std::sync::Arc<FallbackTtsImpl>);
 
 #[pymethods]
 impl FallbackTts {
-    /// `tts.FallbackAdapter` builds it from its attributes, one per loop.
+    /// `tts` in order; `sample_rate` defaults to the highest of theirs, the others resampled.
     #[new]
-    #[pyo3(signature = (members, *, max_retry_per_tts = 2, attempt_timeout = None, sample_rate = None, on_availability = None))]
+    #[pyo3(signature = (tts, *, max_retry_per_tts = 2, attempt_timeout = None, sample_rate = None, on_availability = None))]
     fn new(
         py: Python<'_>,
-        members: Bound<'_, PyAny>,
+        tts: Bound<'_, PyAny>,
         #[pyo3(from_py_with = _extract_fallback_tts_new_max_retry_per_tts)]
         max_retry_per_tts: FallbackTtsNewMaxRetryPerTtsInput,
         #[pyo3(from_py_with = _extract_fallback_tts_new_attempt_timeout)]
@@ -960,7 +781,7 @@ impl FallbackTts {
     ) -> PyResult<FallbackTts> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let members = members.try_iter().and_then(|items| {
+        let tts = tts.try_iter().and_then(|items| {
             items
                 .map(|item| {
                     let item = item?;
@@ -975,7 +796,7 @@ impl FallbackTts {
             .detach(|| {
                 <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::new(
                     &env,
-                    members,
+                    tts,
                     max_retry_per_tts,
                     attempt_timeout,
                     sample_rate,
@@ -1193,63 +1014,6 @@ inventory::submit! {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
-type TtsTokenLogImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::TtsTokenLog;
-type TtsTokenLogSnapshotOutput =
-    (::std::vec::Vec<::std::option::Option<::std::string::String>>, bool);
-
-/// The pushed-token log as the host's `SynthesizeStream` keeps it (`_core.TtsTokenLog`): the text
-/// a recovering stream replays.
-///
-/// `self._pushed_tokens` plus the live child sink. The text leg may not drop (§1.2d), so nothing
-/// here is lossy or bounded.
-#[pyclass(frozen, name = "TtsTokenLog", module = "livekit.agents._core")]
-pub struct TtsTokenLog(pub(crate) ::std::sync::Arc<TtsTokenLogImpl>);
-
-#[pymethods]
-impl TtsTokenLog {
-    #[new]
-    fn new(py: Python<'_>) -> PyResult<TtsTokenLog> {
-        crate::py_calls::check_pid()?;
-        let out = py.detach(<TtsTokenLogImpl as ::lk_agents_abi::llm::fallback::TtsTokenLog>::new);
-        ::pyo3::PyResult::Ok(TtsTokenLog(::std::sync::Arc::new(out)))
-    }
-
-    #[pyo3(signature = (text))]
-    fn push(&self, py: Python<'_>, text: ::std::string::String) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        py.detach(|| {
-            <TtsTokenLogImpl as ::lk_agents_abi::llm::fallback::TtsTokenLog>::push(&self.0, text)
-        });
-        Ok(())
-    }
-
-    fn flush(&self, py: Python<'_>) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        py.detach(|| {
-            <TtsTokenLogImpl as ::lk_agents_abi::llm::fallback::TtsTokenLog>::flush(&self.0)
-        });
-        Ok(())
-    }
-
-    fn end(&self, py: Python<'_>) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        py.detach(|| {
-            <TtsTokenLogImpl as ::lk_agents_abi::llm::fallback::TtsTokenLog>::end(&self.0)
-        });
-        Ok(())
-    }
-
-    fn snapshot(&self, py: Python<'_>) -> PyResult<TtsTokenLogSnapshotOutput> {
-        crate::py_calls::check_pid()?;
-        let out = py.detach(|| {
-            <TtsTokenLogImpl as ::lk_agents_abi::llm::fallback::TtsTokenLog>::snapshot(&self.0)
-        });
-        ::pyo3::PyResult::Ok(out)
-    }
-}
-
 // Declared in rust/crates/lk-agents-abi/src/llm/inference.rs.
 type InferenceLlmImpl =
     <crate::generated::implementations::Selected as super::Implementations>::InferenceLlm;
@@ -1265,8 +1029,8 @@ impl InferenceLlm {
     /// LiveKit Inference gateway; without, `api_key` is an OpenAI-compatible provider's own key,
     /// sent as the bearer with no LiveKit header. `label` is the host class it reports as.
     /// `strict_tool_schema`, `gzip_body` and `msgpack_body` suit a provider that refuses strict
-    /// tool schemas or accepts compressed or msgpack bodies. `inference.LLM`'s mixin builds it on
-    /// first use, after a fork, from the LLM's attributes.
+    /// tool schemas or accepts compressed or msgpack bodies. `inference.LLM` builds it in its
+    /// constructor.
     #[new]
     #[pyo3(signature = (model, *, provider = None, base_url, api_key, api_secret, label, inference_class = None, strict_tool_schema = true, gzip_body = false, msgpack_body = false, extra_kwargs = None))]
     fn new(
@@ -2131,26 +1895,7 @@ pub fn convert_mid_conversation_instructions<'py>(
         ::pyo3::types::PyList::new(
             py,
             out.into_iter()
-                .map(|x| {
-                    ::pyo3::PyResult::Ok({
-                        let (x0, x1) = x;
-                        ::pyo3::types::PyTuple::new(
-                            py,
-                            [
-                                ::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?,
-                                match x1 {
-                                    None => py.None().into_bound(py),
-                                    Some(x) => {
-                                        crate::generated::records::chat_items::chat_item_to_py(
-                                            py, x,
-                                        )?
-                                    }
-                                },
-                            ],
-                        )?
-                        .into_any()
-                    })
-                })
+                .map(|x| crate::generated::records::provider_format::converted_item_to_py(py, x))
                 .collect::<PyResult<Vec<_>>>()?,
         )?
         .into_any(),
@@ -2496,6 +2241,22 @@ pub fn chat_ctx_to_dict<'py>(
     })?;
     let out = py.detach(|| <ChatContextDictImpl as ::lk_agents_abi::llm::to_dict::ChatContextDict>::chat_ctx_to_dict(items, exclude_image, exclude_audio, exclude_timestamp, exclude_function_call, exclude_metrics, exclude_config_update, strip_markup)).map_err(|e: ::lk_agents_abi::ToDictError| <::lk_agents_abi::ToDictError as crate::py_errors::HostException>::to_py_err(&e))?;
     ::pyo3::PyResult::Ok(crate::py_values::extra_to_py(py, &out)?.into_any())
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
+type ToolReportsImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::ToolReports;
+
+/// What a tool's body returned or raised, classified for the core, which decides what the
+/// model reads and whether it replies.
+#[pyfunction]
+#[pyo3(signature = (value))]
+pub fn tool_report<'py>(py: Python<'py>, value: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let value = crate::generated::records::tool_report::tool_return_from_py(value.as_any())?;
+    let out = py.detach(|| {
+        <ToolReportsImpl as ::lk_agents_abi::llm::tool_executor::ToolReports>::tool_report(value)
+    });
+    crate::generated::records::tool_report::tool_report_to_py(py, out)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/llm.rs.
@@ -2999,8 +2760,9 @@ impl ::lk_agents_abi::llm::duplex::AudioGate for AudioGateProxy {
 #[derive(Clone)]
 pub struct DuplexHostProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The host's running loop and a copy of its context, captured when it was taken;
+    /// none when taken with no running loop: each call then runs in its driving operation's.
+    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
 }
 
 impl DuplexHostProxy {
@@ -3041,8 +2803,8 @@ impl DuplexHostProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let context = match context {
-            Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::py_calls::capture_context(obj.py())?,
+            Some(context) => Some(::std::clone::Clone::clone(context)),
+            None => crate::py_calls::proxy_context(obj.py()),
         };
         Ok(DuplexHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
@@ -3125,7 +2887,10 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
         ::lk_agents_abi::errors::HostError,
     > {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
@@ -3178,11 +2943,10 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
         >,
     > {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexHost._core_session",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -3194,6 +2958,10 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -3221,9 +2989,12 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
 #[derive(Clone)]
 pub struct DuplexSessionProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The host's running loop and a copy of its context, captured when it was taken;
+    /// none when taken with no running loop: each call then runs in its driving operation's.
+    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
     input: ::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexInputQueue>,
+    /// The host iterator `next_audio` pulls, opened by its first pull.
+    next_audio_iter: ::std::sync::Arc<::pyo3::sync::PyOnceLock<Py<PyAny>>>,
 }
 
 impl DuplexSessionProxy {
@@ -3264,8 +3035,8 @@ impl DuplexSessionProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let context = match context {
-            Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::py_calls::capture_context(obj.py())?,
+            Some(context) => Some(::std::clone::Clone::clone(context)),
+            None => crate::py_calls::proxy_context(obj.py()),
         };
         let input = {
             let v = obj.getattr("plugin")?.getattr("_input")?;
@@ -3279,7 +3050,12 @@ impl DuplexSessionProxy {
                 ))
             })?
         };
-        Ok(DuplexSessionProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, input })
+        Ok(DuplexSessionProxy {
+            host: ::std::sync::Arc::new(obj.clone().unbind()),
+            context,
+            input,
+            next_audio_iter: ::std::sync::Arc::new(::pyo3::sync::PyOnceLock::new()),
+        })
     }
 }
 
@@ -3303,7 +3079,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexSession._core_configure",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -3357,7 +3133,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexSession.plugin._update_instructions",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -3397,7 +3173,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexSession.plugin._append_items",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -3443,7 +3219,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexSession._core_update_tools",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -3485,7 +3261,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexSession._core_generate",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -3533,16 +3309,30 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         >,
     > {
         let host = ::std::sync::Arc::clone(&self.host);
+        let iterator = ::std::sync::Arc::clone(&self.next_audio_iter);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "DuplexSession._core_next_audio",
-            &self.context,
+            "DuplexSession.plugin.audio_stream",
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    iterator
+                        .get_or_try_init(py, || {
+                            crate::py_calls::call(
+                                &py.import("builtins")?.getattr("aiter")?,
+                                (host.bind(py).getattr("plugin")?.getattr("audio_stream")?,),
+                                None,
+                            )
+                            .map(::pyo3::Bound::unbind)
+                        })?
+                        .bind(py)
+                        .clone(),
+                    py.None().into_bound(py),
+                ];
                 Ok((
-                    host.bind(py).getattr("_core_next_audio")?,
+                    py.import("builtins")?.getattr("anext")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3578,7 +3368,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexSession.events.get",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -3614,7 +3404,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexSession.plugin.aclose",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -3638,7 +3428,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexSession._core_aclose",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -3664,8 +3454,9 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
 #[derive(Clone)]
 pub struct ChainObserverProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The host's running loop and a copy of its context, captured when it was taken;
+    /// none when taken with no running loop: each call then runs in its driving operation's.
+    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
     /// The `notify` calls, delivered in order.
     notifier: crate::py_calls::Notifier,
 }
@@ -3708,8 +3499,8 @@ impl ChainObserverProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let context = match context {
-            Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::py_calls::capture_context(obj.py())?,
+            Some(context) => Some(::std::clone::Clone::clone(context)),
+            None => crate::py_calls::proxy_context(obj.py()),
         };
         Ok(ChainObserverProxy {
             host: ::std::sync::Arc::new(obj.clone().unbind()),
@@ -3726,7 +3517,7 @@ impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "ChainObserver._core_availability_changed",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
@@ -3748,7 +3539,7 @@ impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "ChainObserver._core_all_unavailable",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
@@ -3988,8 +3779,9 @@ impl ::lk_agents_abi::llm::mcp::McpToolsetHost for McpToolsetHostProxy {
 #[derive(Clone)]
 pub struct HostRealtimeProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The host's running loop and a copy of its context, captured when it was taken;
+    /// none when taken with no running loop: each call then runs in its driving operation's.
+    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
     instance_id: ::std::option::Option<usize>,
     label: ::std::string::String,
     capabilities: ::lk_agents_abi::llm::realtime::RealtimeCapabilities,
@@ -4034,8 +3826,8 @@ impl HostRealtimeProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let context = match context {
-            Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::py_calls::capture_context(obj.py())?,
+            Some(context) => Some(::std::clone::Clone::clone(context)),
+            None => crate::py_calls::proxy_context(obj.py()),
         };
         let instance_id = {
             let v = crate::py_calls::read(obj, "_core_instance_id")?;
@@ -4102,11 +3894,10 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let turn_detection_disabled_arg = turn_detection_disabled;
-        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtime._core_session",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -4119,6 +3910,10 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -4146,8 +3941,9 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
 #[derive(Clone)]
 pub struct HostRealtimeSessionProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The host's running loop and a copy of its context, captured when it was taken;
+    /// none when taken with no running loop: each call then runs in its driving operation's.
+    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
     /// The `notify` calls, delivered in order.
     notifier: crate::py_calls::Notifier,
 }
@@ -4192,8 +3988,8 @@ impl HostRealtimeSessionProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let context = match context {
-            Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::py_calls::capture_context(obj.py())?,
+            Some(context) => Some(::std::clone::Clone::clone(context)),
+            None => crate::py_calls::proxy_context(obj.py()),
         };
         Ok(HostRealtimeSessionProxy {
             host: ::std::sync::Arc::new(obj.clone().unbind()),
@@ -4210,7 +4006,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "HostRealtimeSession._core_send",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
@@ -4238,7 +4034,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtimeSession._core_update_instructions",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -4278,7 +4074,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtimeSession._core_update_chat_ctx",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -4324,7 +4120,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtimeSession._core_push_item",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -4364,7 +4160,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtimeSession._core_update_tools",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -4409,7 +4205,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtimeSession._core_request",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -4456,7 +4252,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtimeSession._core_generation",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -4495,7 +4291,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtimeSession._core_cancel",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -4527,7 +4323,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtimeSession._core_drain",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -4563,7 +4359,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtimeSession._core_next_event",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -4596,7 +4392,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtimeSession._core_aclose",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -4622,8 +4418,9 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
 #[derive(Clone)]
 pub struct LlmProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The host's running loop and a copy of its context, captured when it was taken;
+    /// none when taken with no running loop: each call then runs in its driving operation's.
+    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
     /// The `notify` calls, delivered in order.
     notifier: crate::py_calls::Notifier,
     instance_id: ::std::option::Option<usize>,
@@ -4666,8 +4463,8 @@ impl LlmProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let context = match context {
-            Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::py_calls::capture_context(obj.py())?,
+            Some(context) => Some(::std::clone::Clone::clone(context)),
+            None => crate::py_calls::proxy_context(obj.py()),
         };
         let instance_id = {
             let v = crate::py_calls::read(obj, "_core_instance_id")?;
@@ -4725,7 +4522,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "Llm._core_prewarm",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
@@ -4766,7 +4563,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "Llm._core_failed",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
@@ -4797,11 +4594,10 @@ impl ::lk_agents_abi::Llm for LlmProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let req_arg = ::std::clone::Clone::clone(req);
         let bound = ::std::clone::Clone::clone(&self.conn);
-        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "Llm._core_chat",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -4823,6 +4619,10 @@ impl ::lk_agents_abi::Llm for LlmProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -4850,8 +4650,9 @@ impl ::lk_agents_abi::Llm for LlmProxy {
 #[derive(Clone)]
 pub struct ToolsetHooksProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The host's running loop and a copy of its context, captured when it was taken;
+    /// none when taken with no running loop: each call then runs in its driving operation's.
+    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
     lifetime: ::std::sync::Arc<dyn ::lk_agents_abi::llm::toolsets::Lifetime>,
 }
 
@@ -4893,8 +4694,8 @@ impl ToolsetHooksProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let context = match context {
-            Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::py_calls::capture_context(obj.py())?,
+            Some(context) => Some(::std::clone::Clone::clone(context)),
+            None => crate::py_calls::proxy_context(obj.py()),
         };
         let lifetime = {
             let v = obj.getattr("_lifetime")?;
@@ -4929,7 +4730,7 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
         let started = ::lk_agents_runtime::host::call_cancellable(
             &crate::py_calls::Entry,
             "ToolsetHooks.setup",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             cancel,
@@ -4963,7 +4764,7 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "ToolsetHooks.aclose",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -5041,12 +4842,6 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
 }
 
 impl crate::py_errors::HostException for ::lk_agents_abi::llm::chat_context::RemoteError {
-    fn to_py_err(&self) -> ::pyo3::PyErr {
-        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
-    }
-}
-
-impl crate::py_errors::HostException for ::lk_agents_abi::llm::chat_context::ChatFactsError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
     }

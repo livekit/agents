@@ -6,7 +6,7 @@ use crate::rtc::wait;
 use crate::telemetry;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::voice::avatar::{
-    self, AudioReceiverObservation, AvatarAudioReceiver, ClearBufferListener,
+    self, AudioReceiverObservation, AvatarAudio, AvatarAudioReceiver, ClearBufferListener,
 };
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::voice::rtc::{ByteStream, ParticipantIdentity, Receiver, RoomEvent, RtcRoom};
@@ -266,7 +266,7 @@ impl RxInner {
             let mut attempts = report.attempts(self.rpc_max_retries);
             while attempts.pending() {
                 log::debug!(target: lk_agents_abi::LOG_TARGET, payload = report.payload.as_str(); "notifying {}", report.method);
-                let (code, message) = self
+                let reply = self
                     .room
                     .local()
                     .perform_rpc(
@@ -275,9 +275,12 @@ impl RxInner {
                         report.method.clone(),
                         report.payload.clone(),
                     )
-                    .await
-                    .map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
-                match attempts.reply(&report.method, code, &message) {
+                    .await;
+                let reply = match reply {
+                    Ok(response) => Ok(response),
+                    Err(error) => Err(error.rpc().ok_or(ReceiverEnd::Failed(error.to_string()))?),
+                };
+                match attempts.reply(&report.method, reply) {
                     ReportStep::Sent => break,
                     ReportStep::Failed(end) => return Err(end),
                     ReportStep::RetryAfter(delay) => {
@@ -547,16 +550,38 @@ impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
 }
 
 /// The runner reads the native receiver directly; its host `start()` already started it.
-impl AvatarAudioReceiver for DataStreamAudioReceiver {
-    fn next_audio(
-        &self,
-        _cx: &telemetry::Cx,
-    ) -> BoxFuture<'_, Result<AudioReceiverObservation, ProviderError>> {
+impl AvatarAudio for DataStreamAudioReceiver {
+    fn next_audio(&self) -> BoxFuture<'_, Result<AudioReceiverObservation, ProviderError>> {
         Box::pin(avatar::DataStreamAudioReceiver::next_audio(self))
     }
+    fn next_clear(&self, after: u64) -> BoxFuture<'_, Option<u64>> {
+        Box::pin(async move {
+            loop {
+                let wake = self.inner.superseded_wake.notified();
+                tokio::pin!(wake);
+                wake.as_mut().enable();
+                {
+                    let state = self.inner.state.lock();
+                    if state.epoch() > after {
+                        return Some(state.epoch());
+                    }
+                    if state.ended() {
+                        return None;
+                    }
+                }
+                tokio::select! {
+                    biased;
+                    () = self.inner.ended.cancelled() => {}
+                    () = wake => {}
+                }
+            }
+        })
+    }
+}
+
+impl AvatarAudioReceiver for DataStreamAudioReceiver {
     fn notify_playback_started(
         &self,
-        _cx: &telemetry::Cx,
         segment: AvatarPlaybackSegment,
     ) -> BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(
@@ -565,7 +590,6 @@ impl AvatarAudioReceiver for DataStreamAudioReceiver {
     }
     fn notify_playback_finished(
         &self,
-        _cx: &telemetry::Cx,
         playback_position: f64,
         interrupted: bool,
         segment: AvatarPlaybackSegment,
@@ -579,7 +603,7 @@ impl AvatarAudioReceiver for DataStreamAudioReceiver {
             )
         })
     }
-    fn aclose(&self, _cx: &telemetry::Cx) -> BoxFuture<'_, Result<(), ProviderError>> {
+    fn aclose(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move { avatar::DataStreamAudioReceiver::aclose(self) })
     }
 }

@@ -51,29 +51,23 @@ impl lk_agents_abi::metrics::provider::ProviderMetrics for ProviderMetrics {
         label: String,
         model: String,
         provider: String,
-    ) -> Result<(Option<SttMetrics>, bool), RecognitionUsageMissing> {
-        if event.kind == SpeechEventType::FinalTranscript {
-            return Ok((None, true));
-        }
+    ) -> Result<Option<SttMetrics>, RecognitionUsageMissing> {
         if event.kind != SpeechEventType::RecognitionUsage {
-            return Ok((None, false));
+            return Ok(None);
         }
         let usage = event.recognition_usage.as_ref().ok_or(RecognitionUsageMissing)?;
-        Ok((
-            Some(SttMetrics {
-                label,
-                request_id: event.request_id.clone(),
-                timestamp,
-                duration: None,
-                audio_duration: usage.audio_duration,
-                streamed: true,
-                tokens: usage.tokens.clone(),
-                acquire_time: usage.connection.map(|c| c.acquire_time),
-                connection_reused: usage.connection.is_some_and(|c| c.reused),
-                metadata: host_metadata(model, provider),
-            }),
-            false,
-        ))
+        Ok(Some(SttMetrics {
+            label,
+            request_id: event.request_id.clone(),
+            timestamp,
+            duration: None,
+            audio_duration: usage.audio_duration,
+            streamed: true,
+            tokens: usage.tokens.clone(),
+            acquire_time: usage.connection.map(|c| c.acquire_time),
+            connection_reused: usage.connection.is_some_and(|c| c.reused),
+            metadata: host_metadata(model, provider),
+        }))
     }
 }
 

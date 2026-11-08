@@ -133,3 +133,29 @@ fn sdk_events_subscribe_each_event_to_its_entry() {
         .expect_err("a path starts at an argument");
     assert!(err.contains("starts at an argument"), "{err}");
 }
+
+// Catches: a presence read handed the attribute itself, or `present` accepted beyond a `call`
+// getter answering `bool`.
+#[test]
+fn a_presence_read_answers_whether_the_attribute_is_set() {
+    let decls = read(&proxy(
+        "#[host(call, getter = \"sdk.track\", present)] fn subscribed(&self) -> Result<bool, HostError>;",
+    ))
+    .expect("resolves");
+    let emitted = crate::proxy::proxy(&decls.proxies[0]).expect("emits");
+    assert!(
+        emitted.contains("PyString::new(py, \"track\")") && emitted.contains("Ok(!o.is_none())"),
+        "{emitted}"
+    );
+    let err = read(&proxy(
+        "#[host(call, name = \"sdk.track\", present)] fn subscribed(&self) -> Result<bool, HostError>;",
+    ))
+    .expect_err("a method call has no presence");
+    assert!(err.contains("`present` reads a `call` getter's presence"), "{err}");
+    let decls = read(&proxy(
+        "#[host(call, getter = \"sdk.track\", present)] fn subscribed(&self) -> Result<String, HostError>;",
+    ))
+    .expect("resolves");
+    let err = crate::proxy::proxy(&decls.proxies[0]).expect_err("a presence is a bool");
+    assert!(err.contains("a presence read answers `bool`"), "{err}");
+}

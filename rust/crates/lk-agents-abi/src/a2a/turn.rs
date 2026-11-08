@@ -166,24 +166,65 @@ pub trait Turn: Send + Sync + Sized + 'static {
     ) -> Result<crate::a2a::turn::TurnResult, StorageError>;
 }
 
-#[crate::host(record(module = "storage_handler", extract))]
+/// What an `a2a_session` handler returned, told apart by its class (docs/server.md#handler-outcomes);
+/// a value is read as its JSON (`to_jsonable_python`).
+#[crate::host(record(module = "storage_handler", transparent, extract))]
 #[derive(Clone)]
 pub enum HandlerOutcome {
-    Value { value: Value },
-    Completed { value: Value, verbatim: bool },
-    InputRequired { question: String },
-    Failed { error: String },
-    Rejected { reason: String },
-    Working { message: Option<String> },
+    /// A `RunCompleted`: its output.
+    #[host(
+        host_type = "livekit.agents._generated.run_result.RunCompleted",
+        path = "output",
+        extract_with = "py_values::jsonable"
+    )]
+    Answer(Value),
+    /// A `RunInputRequired`: its question.
+    #[host(host_type = "livekit.agents._generated.run_result.RunInputRequired", path = "question")]
+    Asked(String),
+    /// A `RunNoOutput`: no answer.
+    #[host(host_type = "livekit.agents._generated.run_result.RunNoOutput")]
+    NoOutput,
+    #[host(host_type = "livekit.agents.llm.tool_context.Completed")]
+    Completed(HandlerCompleted),
+    #[host(host_type = "livekit.agents._generated.function_tools.InputRequired", path = "question")]
+    InputRequired(String),
+    #[host(host_type = "livekit.agents._generated.tool_outcomes.Failed", path = "error")]
+    Failed(String),
+    #[host(host_type = "livekit.agents._generated.tool_outcomes.Rejected", path = "reason")]
+    Rejected(String),
+    #[host(host_type = "livekit.agents._generated.tool_outcomes.Working", path = "message")]
+    Working(Option<String>),
+    /// Any other value, the answer itself.
+    #[host(otherwise, annotation = "object", extract_with = "py_values::jsonable")]
+    Value(Value),
 }
 
-#[crate::host(record(module = "storage_handler", extract))]
+/// A `Completed` transition's value, as JSON, and whether it reaches the person as written.
+#[crate::host(record(module = "storage_handler", boundary, extract))]
+#[derive(Clone)]
+pub struct HandlerCompleted {
+    #[host(extract_with = "py_values::jsonable")]
+    pub value: Value,
+    pub verbatim: bool,
+}
+
+/// What one invocation the handler ran recorded: read off its `RunResult`.
+#[crate::host(record(
+    module = "storage_handler",
+    host_type = "livekit.agents._generated.run_result._Settled",
+    boundary,
+    extract
+))]
 #[derive(Clone)]
 pub struct HandlerRun {
+    #[host(call = "new_messages")]
     pub items: Vec<ChatItem>,
     pub usage: Usage,
     pub verbatim: Option<String>,
+    /// A `RunInputRequired`'s question.
+    #[host(missing_default)]
     pub question: Option<String>,
+    #[host(rename = "_pending_call")]
     pub pending_call: Option<PendingCall>,
 }
 

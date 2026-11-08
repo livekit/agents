@@ -116,7 +116,7 @@ class Toolset:
 ToolChoice = NamedToolChoice | Literal["auto", "required", "none"]
 
 
-Transition_T = TypeVar("Transition_T", covariant=True)
+Transition_T = TypeVar("Transition_T", default=object, covariant=True)
 
 
 @dataclass(frozen=True)

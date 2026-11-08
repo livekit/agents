@@ -23,7 +23,7 @@ from livekit.rtc import (
 )
 
 if TYPE_CHECKING:
-    from livekit.rtc import VideoFrame
+    from livekit.rtc import VideoFrameEvent as _HostVideoFrameRef
 
     from .rtc_frames import AudioFrame
 
@@ -98,19 +98,7 @@ follows, which arrives as that processor received it.
 """
 
 
-@dataclass(kw_only=True, slots=True)
-class VideoFrameRef:
-    """One frame off an `rtc.VideoStream`, as a host `io.VideoInput` answers `_core_next_frame()`: the
-    host frame (the pixels never cross), the size read at the seam to reject non-frames, and the
-    frame's own capture stamp.
-    """
-
-    frame: VideoFrame
-    """Released when the last clone drops."""
-    width: int
-    height: int
-    timestamp_us: int = 0
-    """`VideoFrameEvent.timestamp_us`, the host's."""
+VideoFrameRef: TypeAlias = "_HostVideoFrameRef"
 
 
 class StreamTextOptions(TypedDict):

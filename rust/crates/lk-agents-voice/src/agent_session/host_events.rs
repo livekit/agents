@@ -155,10 +155,11 @@ impl SessionEvent {
             SessionEvent::StartOfSpeech(e) => HostWire::StartOfSpeech(*e),
             SessionEvent::EndOfSpeech(e) => HostWire::EndOfSpeech(*e),
             SessionEvent::SpeechCreated { speech, kind, user_initiated } => {
-                HostWire::SpeechCreated(w::SpeechCreated {
+                HostWire::SpeechCreated(w::SpeechCreatedEvent {
                     user_initiated: *user_initiated,
                     source: kind.source(),
                     speech_handle: speeches(*speech),
+                    created_at: host_stamp,
                 })
             }
             SessionEvent::Diagnostic(d) => HostWire::Diagnostic(d.wire()),

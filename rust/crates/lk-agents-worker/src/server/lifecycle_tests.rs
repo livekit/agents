@@ -1,10 +1,12 @@
 use super::*;
 
 use lk_agents_abi::errors::HostError;
+use lk_agents_abi::worker::ipc_host::{JobLauncher, JobLaunchers};
 use lk_agents_abi::worker::server_host::ServerHost;
 use lk_agents_abi::worker::types::ProcessStartOptions;
 
 use crate::RunningJobInfo;
+use host::{JobPool, PoolFactory};
 
 #[derive(Clone)]
 struct Host {
@@ -15,7 +17,6 @@ struct Host {
     /// Holds the host's start until released.
     start_gate: Option<Arc<tokio::sync::Semaphore>>,
     fail_start: bool,
-    fail_close: bool,
 }
 
 impl Host {
@@ -27,26 +28,22 @@ impl Host {
             release_close: Arc::new(tokio::sync::Semaphore::new(0)),
             start_gate: None,
             fail_start: false,
-            fail_close: false,
         }
     }
 }
 
+struct Launchers;
+
+impl JobLaunchers for Launchers {
+    fn create(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> BoxFuture<'_, Result<Arc<dyn JobLauncher>, HostError>> {
+        async { Err("the fake pool launches nothing".into()) }.boxed()
+    }
+}
+
 impl ServerHost for Host {
-    fn launch_job(
-        &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-        _: RunningJobInfo,
-    ) -> BoxFuture<'_, Result<String, HostError>> {
-        async { Ok("job".into()) }.boxed()
-    }
-    fn terminate_job(
-        &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-        _: String,
-    ) -> BoxFuture<'_, Result<(), HostError>> {
-        async { Ok(()) }.boxed()
-    }
     fn load(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<f64, HostError>> {
         async { Ok(0.0) }.boxed()
     }
@@ -54,25 +51,22 @@ impl ServerHost for Host {
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
         _: ProcessStartOptions,
-    ) -> BoxFuture<'_, Result<(), HostError>> {
+    ) -> BoxFuture<'_, Result<Option<Arc<dyn JobLaunchers>>, HostError>> {
         let (fail, gate) = (self.fail_start, self.start_gate.clone());
         async move {
             if let Some(gate) = gate {
                 let _permit = gate.acquire().await.unwrap();
             }
-            if fail { Err("pool warmup timed out".into()) } else { Ok(()) }
+            if fail {
+                Err("pool warmup timed out".into())
+            } else {
+                Ok(Some(Arc::new(Launchers) as Arc<dyn JobLaunchers>))
+            }
         }
         .boxed()
     }
     fn started(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
         self.started.notify_one();
-        async { Ok(()) }.boxed()
-    }
-    fn idle_processes(
-        &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-        _: u32,
-    ) -> BoxFuture<'_, Result<(), HostError>> {
         async { Ok(()) }.boxed()
     }
     fn heartbeat(
@@ -81,31 +75,39 @@ impl ServerHost for Host {
     ) -> BoxFuture<'_, Result<(), HostError>> {
         async { Ok(()) }.boxed()
     }
-    fn join_jobs(
-        &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-    ) -> BoxFuture<'_, Result<(), HostError>> {
-        self.joining.notify_one();
-        std::future::pending().boxed()
+}
+
+/// A pool whose drain never ends and whose close waits for the test.
+struct Pool(Host);
+
+#[async_trait::async_trait]
+impl JobPool for Pool {
+    async fn start(&self) -> Result<(), HostError> {
+        Ok(())
     }
-    fn close(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
-        async {
-            self.closing.notify_one();
-            let _permit = self.release_close.acquire().await.unwrap();
-            if self.fail_close { Err("host close failed".into()) } else { Ok(()) }
-        }
-        .boxed()
+    async fn launch(&self, _: RunningJobInfo) -> Result<(), HostError> {
+        Ok(())
     }
-    fn active_jobs(
-        &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-    ) -> BoxFuture<'_, Result<usize, HostError>> {
-        async { Ok(0) }.boxed()
+    async fn terminate(&self, _: &str) {}
+    fn set_target_idle(&self, _: usize) {}
+    fn active_jobs(&self) -> Vec<RunningJobInfo> {
+        Vec::new()
+    }
+    async fn join(&self) {
+        self.0.joining.notify_one();
+        std::future::pending().await
+    }
+    async fn close(&self) {
+        self.0.closing.notify_one();
+        let _permit = self.0.release_close.acquire().await.unwrap();
     }
 }
 
 fn hosted(host: &Host) -> ServerCallbacks {
-    ServerCallbacks::new(Arc::new(host.clone()))
+    let pool = host.clone();
+    let pools: PoolFactory =
+        Arc::new(move |_| Ok(Arc::new(Pool(pool.clone())) as Arc<dyn JobPool>));
+    ServerCallbacks::new(Arc::new(host.clone()), pools)
 }
 
 fn options() -> ServerStart {
@@ -117,12 +119,14 @@ fn options() -> ServerStart {
         },
         devmode: true,
         unregistered: true,
-        has_rtc: false,
+        has_rtc: true,
         has_text_doors: true,
         has_load_fnc: false,
         endpoints: vec![],
         transport: crate::TransportConfig::WebSocket { heartbeat: crate::HEARTBEAT_INTERVAL },
         serving: Arc::default(),
+        context: Default::default(),
+        asyncio_debug: false,
     }
 }
 
@@ -218,22 +222,7 @@ async fn server_startup_lifecycle_reports_warmup_failure_and_joins_cleanup() {
 }
 
 #[tokio::test]
-async fn server_shutdown_resources_reports_host_close_failure_to_every_caller() {
-    let mut host = Host::new();
-    host.fail_close = true;
-    host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()));
-    let run = runtime.run(options());
-    tokio::pin!(run);
-    assert!(futures_util::poll!(&mut run).is_pending());
-    tokio::time::timeout(Duration::from_secs(1), host.started.notified()).await.unwrap();
-    assert_eq!(runtime.close().await, Err("Host: host close failed".into()));
-    assert_eq!(run.await, Err("Host: host close failed".into()));
-    assert_eq!(runtime.close().await, Err("Host: host close failed".into()));
-}
-
-#[tokio::test]
-async fn server_cleanup_deadline_returns_while_the_actor_retains_the_host() {
+async fn server_cleanup_deadline_returns_while_the_actor_retains_the_pool() {
     let host = Host::new();
     let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()));
     let mut start = options();
@@ -245,7 +234,7 @@ async fn server_cleanup_deadline_returns_while_the_actor_retains_the_host() {
     assert_eq!(runtime.close().await, Ok(()));
     let snapshot = runtime.snapshot();
     assert_eq!(snapshot.phase, ServerPhase::Closing);
-    assert_eq!(snapshot.incomplete_cleanup, vec![ServerResource::Host]);
+    assert_eq!(snapshot.incomplete_cleanup, vec![ServerResource::Processes]);
     assert_eq!(run.await, Ok(()));
     host.release_close.add_permits(1);
     let mut snapshots = runtime.snapshot.subscribe();

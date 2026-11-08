@@ -5,9 +5,8 @@ use crate::errors::ProviderError;
 use crate::utils::video::{AudioReceiverFrame, AvatarFrame, MediaFrame};
 use crate::voice::io::AvatarPlaybackSegment;
 
-/// What the avatar runner reads from its receiver: the receiver's clear epoch, whether this
-/// first frame opened a segment, the segment, and the frame (`None` at the end). The receiver
-/// stamps it before crossing the async boundary.
+/// What the avatar runner reads from its receiver: the clear epoch the frame was captured in,
+/// whether this first frame opened a segment, the segment, and the frame (`None` at the end).
 #[crate::host(record(module = "avatar", extract, emit))]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AudioReceiverObservation {
@@ -24,23 +23,42 @@ pub trait ClearBufferListener: Send + Sync {
     fn clear_buffer(&self);
 }
 
-/// `AudioReceiver`: the agent's audio as the avatar worker receives it, and where its playback is
-/// reported. A host `AudioReceiver` carries this surface (`voice/avatar.py`).
-#[crate::host(proxy(host = "livekit.agents.voice.avatar.AudioReceiver"))]
-pub trait AvatarAudioReceiver: Send + Sync {
-    /// Begin receiving. A host receiver opens its iterator with its first read.
-    fn open_audio(
-        &self,
-        _cx: &crate::telemetry::Cx,
-    ) -> crate::BoxFuture<'_, Result<(), ProviderError>> {
-        Box::pin(async { Ok(()) })
-    }
+/// Audio the avatar runner reads natively: each item stamped with the clear epoch it was
+/// captured in, and the clears themselves.
+#[crate::host(native(refused = "expected a native avatar audio source"))]
+pub trait AvatarAudio: std::any::Any + Send + Sync {
     /// The next observation; its `frame` is `None` at the end.
-    #[host(await, name = "_core_next_audio")]
-    fn next_audio(
+    fn next_audio(&self) -> crate::BoxFuture<'_, Result<AudioReceiverObservation, ProviderError>>;
+    /// The epoch of the receiver's latest clear once it is past `after`; `None` once it closed.
+    fn next_clear(&self, after: u64) -> crate::BoxFuture<'_, Option<u64>>;
+}
+
+/// `AudioReceiver`: the agent's audio as the avatar worker receives it, and where its playback is
+/// reported: `DataStreamAudioReceiver`, or `HostAudioReceiver` over any other.
+#[crate::host(native(refused = "expected a DataStreamAudioReceiver or a HostAudioReceiver"))]
+pub trait AvatarAudioReceiver: AvatarAudio {
+    fn notify_playback_started(
+        &self,
+        segment: AvatarPlaybackSegment,
+    ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
+    fn notify_playback_finished(
+        &self,
+        playback_position: f64,
+        interrupted: bool,
+        segment: AvatarPlaybackSegment,
+    ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
+    fn aclose(&self) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
+}
+
+/// A host `AudioReceiver` (`voice/avatar.py`): its audio iterated, and its playback reports.
+#[crate::host(proxy(host = "livekit.agents.voice.avatar.AudioReceiver"))]
+pub trait AudioReceiverHost: Send + Sync {
+    /// The next frame or segment end; `None` once the receiver is exhausted.
+    #[host(await, iter)]
+    fn next_frame(
         &self,
         cx: &crate::telemetry::Cx,
-    ) -> crate::BoxFuture<'_, Result<AudioReceiverObservation, ProviderError>>;
+    ) -> crate::BoxFuture<'_, Result<Option<AudioReceiverFrame>, ProviderError>>;
     #[host(await)]
     fn notify_playback_started(
         &self,
@@ -57,6 +75,26 @@ pub trait AvatarAudioReceiver: Send + Sync {
     ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     #[host(await)]
     fn aclose(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
+}
+
+/// The avatar runner's receiver over a host `AudioReceiver`: its audio read from `audio` when
+/// given (`QueueAudioOutput`'s native queue), else from the host's iterator into a queue that
+/// drops its oldest audio only when far behind (measured) and is flushed by each `clear_buffer`. Playback reports reach the host receiver.
+#[crate::host(class(name = "HostAudioReceiver", native = AvatarAudioReceiver))]
+pub trait HostAudioReceiver: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
+    #[host(new)]
+    fn new(
+        env: &Self::Env,
+        receiver: std::sync::Arc<dyn AudioReceiverHost>,
+        #[host(kw, default = None)] audio: Option<std::sync::Arc<dyn AvatarAudio>>,
+    ) -> Result<Self, ProviderError>;
+    /// The host receiver's `clear_buffer` event: the audio queued so far is dropped.
+    #[host(call)]
+    fn clear_buffer(&self);
 }
 
 /// `VideoGenerator`: the avatar's model, fed the audio and yielding the frames to publish. A host
@@ -227,8 +265,6 @@ pub trait AvatarRunner: Send + Sync + Sized + 'static {
     async fn start(&self) -> Result<(), RunnerError>;
     #[host(await)]
     async fn wait_for_complete(&self) -> Result<(), RunnerError>;
-    #[host(call)]
-    fn clear_buffer(&self, epoch: u64);
     #[host(await)]
     async fn aclose(&self) -> Result<(), RunnerError>;
 }

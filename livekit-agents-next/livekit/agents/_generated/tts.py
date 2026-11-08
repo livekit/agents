@@ -35,6 +35,7 @@ from .usage import TokenUsage
 
 # Record declarations:
 #     rust/crates/lk-agents-abi/src/tts/markup.rs
+#     rust/crates/lk-agents-abi/src/tts/streams.rs
 #     rust/crates/lk-agents-abi/src/tts/tts.rs
 
 
@@ -47,6 +48,14 @@ class ExpressiveTag(TypedDict):
     """The markup tag name (``"emotion"``, ``"sound"``, ...) or the expr marker type."""
     value: str
     """The payload: the ``value="..."`` attribute, the expr ``label``, or the tag's inner text."""
+
+
+@dataclass
+class SegmentCount:
+    """A streamed synthesis's segments: the flushes asked for (`expected`) and the segments pushed."""
+
+    expected: int
+    actual: int
 
 
 @dataclass
@@ -572,7 +581,7 @@ class SynthesizeStream(ABC):
         return _core.validate_synthesis(
             self._pushed_text,
             output_emitter.pushed_duration(),
-            (self._num_segments, output_emitter.num_segments),
+            SegmentCount(expected=self._num_segments, actual=output_emitter.num_segments),
         )
 
     def mark_started(self) -> None:

@@ -5,16 +5,32 @@ use crate::python::Out;
 use crate::surface::Stub;
 
 fn name(entry: &voc::Entry) -> Result<String, String> {
-    voc::only("native_enum", &entry.nested, &["name"])?;
+    voc::only("native_enum", &entry.nested, &["name", "host_type"])?;
     voc::text("native_enum", &entry.nested, "name")?.ok_or("native_enum needs name".into())
+}
+
+/// `host_type = "module.Enum"`: a foreign enum whose members are the variants' upper snake names.
+fn host_type(entry: &voc::Entry) -> Result<Option<String>, String> {
+    let host = voc::text("native_enum", &entry.nested, "host_type")?;
+    if host
+        .as_ref()
+        .is_some_and(|h| !h.rsplit_once('.').is_some_and(|(m, n)| !m.is_empty() && !n.is_empty()))
+    {
+        return Err("native_enum host_type is a dotted class path".into());
+    }
+    Ok(host)
 }
 
 pub fn ty(entry: &voc::Entry, rust: &str) -> Result<Ty, String> {
     let name = name(entry)?;
+    let annotation = match host_type(entry)? {
+        Some(host) => format!("livekit.agents._core.{name} | {host}"),
+        None => format!("livekit.agents._core.{name}"),
+    };
     Ok(Ty::Record(Record {
         rust: rust.into(),
         host: HostForm::Converted(
-            format!("livekit.agents._core.{name}"),
+            annotation,
             format!("generated::native_enums::{}", crate::decl::resolve::snake(&name)),
         ),
         extract: true,
@@ -45,7 +61,12 @@ pub fn resolve(
             Ok(variant.ident.to_string())
         })
         .collect::<Result<_, String>>()?;
-    Ok(NativeEnum { name, rust: abi.extern_path(module, index)?, variants })
+    Ok(NativeEnum {
+        name,
+        rust: abi.extern_path(module, index)?,
+        variants,
+        host_type: host_type(entry)?,
+    })
 }
 
 pub fn emit(decls: &Declarations) -> Result<(Out, Stub), String> {
@@ -64,13 +85,23 @@ pub fn emit(decls: &Declarations) -> Result<(Out, Stub), String> {
         body.push_str(&format!("\nclass {name}(Enum):\n"));
         let mut read = String::new();
         let mut write = String::new();
+        let mut members = String::new();
         for variant in &item.variants {
             text.push_str(&format!("{variant},\n"));
             body.push_str(&format!("    {variant} = ...\n"));
             read.push_str(&format!("{name}::{variant} => {rust}::{variant},"));
             write.push_str(&format!("{rust}::{variant} => {name}::{variant},"));
+            let member = crate::decl::resolve::snake(variant).to_uppercase();
+            members.push_str(&format!("{member:?} => {rust}::{variant},"));
         }
-        text.push_str(&format!("}}\npub fn {converter}_from_py(obj: &Bound<'_, PyAny>) -> PyResult<{rust}> {{ Ok(match obj.extract::<{name}>()? {{ {read} }}) }}\npub fn {converter}_to_py(py: Python<'_>, value: {rust}) -> PyResult<Bound<'_, PyAny>> {{ Ok(Bound::new(py, match value {{ {write} }})?.into_any()) }}\n"));
+        // A foreign enum's member is read by its name.
+        let extract = match &item.host_type {
+            None => format!("Ok(match obj.extract::<{name}>()? {{ {read} }})"),
+            Some(host) => format!(
+                "if let Ok(native) = obj.extract::<{name}>() {{ return Ok(match native {{ {read} }}); }}\nlet member = obj.getattr(\"name\")?.extract::<pyo3::pybacked::PyBackedStr>()?;\nOk(match &*member {{ {members} other => return Err(pyo3::exceptions::PyValueError::new_err(format!(\"{{other:?}} is not a {host} member\"))) }})"
+            ),
+        };
+        text.push_str(&format!("}}\npub fn {converter}_from_py(obj: &Bound<'_, PyAny>) -> PyResult<{rust}> {{ {extract} }}\npub fn {converter}_to_py(py: Python<'_>, value: {rust}) -> PyResult<Bound<'_, PyAny>> {{ Ok(Bound::new(py, match value {{ {write} }})?.into_any()) }}\n"));
         register.push_str(&format!("m.add_class::<{name}>()?;\n"));
         names.push(name.clone());
     }
@@ -177,7 +208,16 @@ mod tests {
         assert!(rust.text.contains("::lk_agents_abi::ProcessRole::Job => Role::Job"));
         assert_eq!(stub.names, ["Role"]);
         assert!(stub.out.text.contains("class Role(Enum)"));
+        let (rust, _) = emit(
+            &build("#[host(native_enum(name = \"Kind\", host_type = \"otel.SpanKind\"))] pub enum Kind { Internal, LongName }")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(rust.text.contains("obj.getattr(\"name\")"));
+        assert!(rust.text.contains("\"LONG_NAME\" => ::lk_agents_abi::Kind::LongName"));
+        assert!(rust.text.contains("is not a otel.SpanKind member"));
         for source in [
+            "#[host(native_enum(name = \"Role\", host_type = \"SpanKind\"))] enum Role { Worker }",
             "#[host(native_enum(name = \"Role\"))] enum Role { Worker(u8) }",
             "#[host(native_enum(name = \"Role\"))] enum Role { Worker = 5 }",
             "#[host(native_enum(name = \"Role\"))] enum Role {}",

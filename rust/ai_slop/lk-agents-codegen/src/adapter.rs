@@ -707,6 +707,7 @@ fn duplex_class(
         trait_path: sink.trait_path.clone(),
         methods: sink.methods.clone(),
         sinks: Vec::new(),
+        implements: None,
         ..c.clone()
     };
     let mut s = format!(

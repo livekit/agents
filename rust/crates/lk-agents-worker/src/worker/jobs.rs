@@ -1,7 +1,6 @@
 //! The worker's registration, job offers, assignments, launches and drain, decided on the
 //! worker's loop as each event arrives.
 
-use crate::WorkerPermissions;
 use livekit_protocol as pb;
 use lk_agents_abi::ATTRIBUTE_AGENT_NAME;
 use std::collections::BTreeMap;
@@ -186,7 +185,6 @@ impl Worker {
             &self.cfg.agent_name,
             &self.cfg.deployment,
             &self.cfg.version,
-            &self.cfg.permissions,
             &self.cfg.endpoints,
             &self.cfg.instance_id,
         );
@@ -612,17 +610,15 @@ impl Worker {
     }
 }
 
-/// `agent: true` is not a `WorkerPermissions` field but always set: it marks the participant as an
-/// agent (deprecated in the proto, still read by the server).
-fn permissions_proto(permissions: &WorkerPermissions) -> pb::ParticipantPermission {
+/// The agent's participant may publish, subscribe, send data and update its metadata. `agent:
+/// true` marks it as an agent (deprecated in the proto, still read by the server).
+fn permissions_proto() -> pb::ParticipantPermission {
     #[allow(deprecated)] // `agent`, see above
     pb::ParticipantPermission {
-        can_subscribe: permissions.can_subscribe,
-        can_publish: permissions.can_publish,
-        can_publish_data: permissions.can_publish_data,
-        can_publish_sources: permissions.can_publish_sources.clone(),
-        hidden: permissions.hidden,
-        can_update_metadata: permissions.can_update_metadata,
+        can_subscribe: true,
+        can_publish: true,
+        can_publish_data: true,
+        can_update_metadata: true,
         agent: true,
         ..Default::default()
     }
@@ -640,7 +636,6 @@ pub(super) fn register(
     agent_name: &str,
     deployment: &str,
     version: &str,
-    permissions: &WorkerPermissions,
     endpoints: &[pb::agent_http::AgentEndpoint],
     instance_id: &str,
 ) -> WorkerMessage {
@@ -649,7 +644,7 @@ pub(super) fn register(
         agent_name: agent_name.to_string(),
         version: version.to_string(),
         deployment: deployment.to_string(),
-        allowed_permissions: Some(permissions_proto(permissions)),
+        allowed_permissions: Some(permissions_proto()),
         endpoints: endpoints.to_vec(),
         endpoint_protocol: if endpoints.is_empty() { 0 } else { ENDPOINT_PROTOCOL },
         instance_id: instance_id.to_string(),
@@ -739,7 +734,7 @@ mod tests {
     // Catches: forgetting `agent: true` on the register permissions.
     #[test]
     fn register_marks_the_permission_as_an_agent() {
-        let msg = register("a", "d", "1.2.3", &WorkerPermissions::default(), &[], "i1");
+        let msg = register("a", "d", "1.2.3", &[], "i1");
         let Some(pb::worker_message::Message::Register(r)) = msg.message else {
             panic!("wrong variant")
         };

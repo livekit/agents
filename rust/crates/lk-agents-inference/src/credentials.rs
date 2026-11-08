@@ -53,48 +53,51 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
+fn server(name: &str) -> Option<String> {
+    lk_agents_net::env::server_setting(name)
+}
+
 /// The ladders, the gateway URL and the identification headers as the host calls them.
 pub struct Credentials;
 
 impl lk_agents_abi::inference::InferenceCredentials for Credentials {
-    fn inference_api_key(explicit: Option<String>, server: Option<String>) -> String {
-        let inference = env("LIVEKIT_INFERENCE_API_KEY");
+    fn inference_api_key(explicit: Option<String>) -> String {
+        let (inference, server) = (env("LIVEKIT_INFERENCE_API_KEY"), server("LIVEKIT_API_KEY"));
         resolve_credential(explicit.as_deref(), inference.as_deref(), server.as_deref())
     }
 
-    fn inference_api_secret(explicit: Option<String>, server: Option<String>) -> String {
+    fn inference_api_secret(explicit: Option<String>) -> String {
         let inference = env("LIVEKIT_INFERENCE_API_SECRET");
+        let server = server("LIVEKIT_API_SECRET");
         resolve_credential(explicit.as_deref(), inference.as_deref(), server.as_deref())
     }
 
-    fn inference_url(server_url: Option<String>) -> String {
-        let inference = env("LIVEKIT_INFERENCE_URL");
-        crate::headers::default_inference_url(inference.as_deref(), server_url.as_deref())
+    fn inference_url() -> String {
+        let (inference, server) = (env("LIVEKIT_INFERENCE_URL"), server("LIVEKIT_URL"));
+        crate::headers::default_inference_url(inference.as_deref(), server.as_deref())
     }
 
     fn inference_credentials(
         base_url: Option<String>,
         api_key: Option<String>,
         api_secret: Option<String>,
-        server_url: Option<String>,
-        server_api_key: Option<String>,
-        server_api_secret: Option<String>,
     ) -> Result<GatewayCredentials, Invalid> {
         let invalid = |error: ApiError| Invalid(error.message);
         let inference = env("LIVEKIT_INFERENCE_API_KEY");
-        let key =
-            resolve_api_key(api_key.as_deref(), inference.as_deref(), server_api_key.as_deref())
-                .map_err(invalid)?;
+        let server_key = server("LIVEKIT_API_KEY");
+        let key = resolve_api_key(api_key.as_deref(), inference.as_deref(), server_key.as_deref())
+            .map_err(invalid)?;
         let inference = env("LIVEKIT_INFERENCE_API_SECRET");
+        let server_secret = server("LIVEKIT_API_SECRET");
         let secret = resolve_api_secret(
             api_secret.as_deref(),
             inference.as_deref(),
-            server_api_secret.as_deref(),
+            server_secret.as_deref(),
         )
         .map_err(invalid)?;
         let url = match base_url.filter(|url| !url.is_empty()) {
             Some(url) => url,
-            None => Self::inference_url(server_url),
+            None => Self::inference_url(),
         };
         Ok(GatewayCredentials { base_url: url, api_key: key, api_secret: secret })
     }

@@ -9,28 +9,31 @@
 
 from __future__ import annotations
 
-from livekit.agents.voice.room_io import (
-    AudioInputOptions as _HostAudioInputConfig,
-    AudioOutputOptions as _HostAudioOutputConfig,
-    AudioOutputOptions as _HostAudioOutputOptionsWire,
-    RoomOptions as _HostRoomIoConfig,
-    TextOutputOptions as _HostTextOutputConfig,
-)
-from livekit.rtc import TrackPublishOptions as _HostAudioTrackPublishOptions
+from typing import TYPE_CHECKING, TypeAlias
 
-AudioInputConfig = _HostAudioInputConfig
+if TYPE_CHECKING:
+    from livekit.agents.voice.room_io import (
+        AudioInputOptions as _HostAudioInputConfig,
+        AudioOutputOptions as _HostAudioOutputConfig,
+        AudioOutputOptions as _HostAudioOutputOptionsWire,
+        RoomOptions as _HostRoomIoConfig,
+        TextOutputOptions as _HostTextOutputConfig,
+    )
+    from livekit.rtc import TrackPublishOptions as _HostAudioTrackPublishOptions
 
-
-AudioOutputConfig = _HostAudioOutputConfig
-
-
-TextOutputConfig = _HostTextOutputConfig
+AudioInputConfig: TypeAlias = "_HostAudioInputConfig"
 
 
-RoomIoConfig = _HostRoomIoConfig
+AudioOutputConfig: TypeAlias = "_HostAudioOutputConfig"
 
 
-AudioTrackPublishOptions = _HostAudioTrackPublishOptions
+TextOutputConfig: TypeAlias = "_HostTextOutputConfig"
 
 
-AudioOutputOptionsWire = _HostAudioOutputOptionsWire
+RoomIoConfig: TypeAlias = "_HostRoomIoConfig"
+
+
+AudioTrackPublishOptions: TypeAlias = "_HostAudioTrackPublishOptions"
+
+
+AudioOutputOptionsWire: TypeAlias = "_HostAudioOutputOptionsWire"

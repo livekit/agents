@@ -153,16 +153,6 @@ class LocalParticipant:
             raise
         return AudioSource(source), self._room._publication(publication)
 
-    async def _core_perform_rpc(
-        self, destination: str, method: str, payload: str
-    ) -> tuple[int, str]:
-        try:
-            return 0, await self.sdk.perform_rpc(
-                destination_identity=destination, method=method, payload=payload
-            )
-        except rtc.RpcError as e:
-            return e.code, e.message
-
     def _core_register_rpc_method(self, method: str, handler: _core.RpcHandler) -> None:
         self.sdk.register_rpc_method(
             method, lambda data: handler.call(data.caller_identity, data.payload)
@@ -210,9 +200,6 @@ class TrackPublication:
     def __init__(self, room: Room, publication: rtc.TrackPublication) -> None:
         self._room = room
         self.sdk = publication
-
-    def _core_is_subscribed(self) -> bool:
-        return self.sdk.track is not None
 
     def _core_open_audio_stream(self, opts: rtc_wire.AudioStreamOptions) -> _AudioStream:
         track = self.sdk.track
@@ -373,7 +360,7 @@ def _processor_failed(processor: object, cause: Exception) -> rtc_wire.AudioStre
     )
 
 
-class _VideoStream(AsyncIterator[rtc_wire.VideoFrameRef]):
+class _VideoStream(AsyncIterator[rtc.VideoFrameEvent]):
     """One input track's frames; the SDK stream opens on the first read, as `_AudioStream`."""
 
     def __init__(self, open_stream: Callable[[], rtc.VideoStream]) -> None:
@@ -383,16 +370,10 @@ class _VideoStream(AsyncIterator[rtc_wire.VideoFrameRef]):
     def __aiter__(self) -> _VideoStream:
         return self
 
-    async def __anext__(self) -> rtc_wire.VideoFrameRef:
+    async def __anext__(self) -> rtc.VideoFrameEvent:
         if self._stream is None:
             self._stream = self._open()
-        event = await self._stream.__anext__()
-        return rtc_wire.VideoFrameRef(
-            frame=event.frame,
-            width=event.frame.width,
-            height=event.frame.height,
-            timestamp_us=event.timestamp_us,
-        )
+        return await self._stream.__anext__()
 
     async def aclose(self) -> None:
         if self._stream is not None:

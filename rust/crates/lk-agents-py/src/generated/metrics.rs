@@ -124,7 +124,7 @@ pub fn stt_batch_metrics<'py>(
     crate::generated::records::metrics::stt_metrics_to_py(py, out)
 }
 
-/// `RecognizeStream`'s metrics for one event, and whether it resets the retry count.
+/// `RecognizeStream`'s metrics for one event: a recognition usage event's.
 #[pyfunction]
 #[pyo3(signature = (event, timestamp, label, model, provider))]
 pub fn stt_stream_metrics<'py>(
@@ -135,23 +135,10 @@ pub fn stt_stream_metrics<'py>(
     label: ::std::string::String,
     model: ::std::string::String,
     provider: ::std::string::String,
-) -> PyResult<Bound<'py, PyAny>> {
+) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
     let event = crate::generated::records::stt::speech_event_from_py(event.as_any())?;
     let out = py.detach(|| <ProviderMetricsImpl as ::lk_agents_abi::metrics::provider::ProviderMetrics>::stt_stream_metrics(event, timestamp, label, model, provider)).map_err(|e: ::lk_agents_abi::metrics::provider::RecognitionUsageMissing| <::lk_agents_abi::metrics::provider::RecognitionUsageMissing as crate::py_errors::HostException>::to_py_err(&e))?;
-    ::pyo3::PyResult::Ok({
-        let (x0, x1) = out;
-        ::pyo3::types::PyTuple::new(
-            py,
-            [
-                match x0 {
-                    None => py.None().into_bound(py),
-                    Some(x) => crate::generated::records::metrics::stt_metrics_to_py(py, x)?,
-                },
-                ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?,
-            ],
-        )?
-        .into_any()
-    })
+    out.map(|value| crate::generated::records::metrics::stt_metrics_to_py(py, value)).transpose()
 }
 
 // Declared in rust/crates/lk-agents-abi/src/metrics/provider.rs.

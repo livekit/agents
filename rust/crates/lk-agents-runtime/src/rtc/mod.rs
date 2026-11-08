@@ -1,6 +1,7 @@
 //! SDK capability execution and owned room stream admission.
 
 pub mod events;
+pub mod rpc;
 pub mod synchronizer;
 pub(crate) mod wait;
 

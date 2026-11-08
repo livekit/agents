@@ -25,7 +25,8 @@ fn words(text: &str, identifiers: bool) -> Vec<String> {
 }
 
 impl abi::SearchDocument for Document {
-    fn new(name: String, description: String, parameters: Vec<(String, String)>) -> Self {
+    fn new(item: abi::SearchFields) -> Self {
+        let abi::SearchFields { name, description, parameters } = item;
         let mut tokens = Vec::new();
         for _ in 0..3 {
             tokens.extend(words(&name, true));
@@ -289,7 +290,11 @@ mod tests {
     use abi::{SearchDocument as _, SearchIndex as _, ToolSearch as _};
 
     fn doc(name: &str, description: &str) -> Document {
-        Document::new(name.into(), description.into(), Vec::new())
+        Document::new(abi::SearchFields {
+            name: name.into(),
+            description: description.into(),
+            ..Default::default()
+        })
     }
 
     #[test]

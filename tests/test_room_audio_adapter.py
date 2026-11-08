@@ -411,7 +411,6 @@ async def test_stalled_sdk_media_retains_only_its_latest_bounded_window(
     kind: str,
     capacity: int,
 ) -> None:
-    from livekit.agents.voice import room_io as adapter
     from livekit.rtc._utils import RingQueue
 
     closed = []
@@ -438,7 +437,6 @@ async def test_stalled_sdk_media_retains_only_its_latest_bounded_window(
 
     monkeypatch.setattr(rtc.AudioStream, "from_track", Stream)
     monkeypatch.setattr(rtc.VideoStream, "from_track", Stream)
-    monkeypatch.setattr(adapter.rtc_wire, "VideoFrameRef", lambda *, frame, **_: frame)
     publication = TrackPublication(
         object.__new__(Room),
         cast(rtc.TrackPublication, SimpleNamespace(sid="TR_input", track=object())),
@@ -458,8 +456,8 @@ async def test_stalled_sdk_media_retains_only_its_latest_bounded_window(
         assert int.from_bytes(frame.data, "little") == 1000 - capacity
     else:
         source = publication._core_open_video_stream()
-        frame = await anext(source)
-        assert frame.tag == 1000 - capacity
+        event = await anext(source)
+        assert event.frame.tag == 1000 - capacity
     await source.aclose()
     assert len(closed) == 1
 

@@ -20,8 +20,6 @@ fn _extract_inference_eot_new_sample_rate(
     crate::py_values::number_from_py::<u32>(obj.as_any(), "sample_rate")
 }
 type InferenceEotNewSampleRateInput = u32;
-type InferenceEotLookupOutput = ::std::option::Option<f64>;
-type InferenceEotLookupBackchannelOutput = ::std::option::Option<f64>;
 
 /// The detector behind `inference.TurnDetector`: the user's threshold overrides over the model's
 /// defaults, shared by every stream it opens, so a stream's cloud-to-local fallback rescales the
@@ -115,48 +113,6 @@ impl InferenceEot {
         let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::backchannel_overrides(&self.0));
         out.map(|value| crate::generated::records::turn_events::threshold_override_to_py(py, value))
             .transpose()
-    }
-
-    /// `language=None` scores as English, not the global default.
-    #[pyo3(signature = (language = None))]
-    fn lookup(
-        &self,
-        py: Python<'_>,
-        language: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<InferenceEotLookupOutput> {
-        crate::py_calls::check_pid()?;
-        let language = language.map(|v| crate::py_values::str_from_py(v.as_any())).transpose()?;
-        let out = py.detach(|| {
-            <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::lookup(
-                &self.0, language,
-            )
-        });
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    /// `None` disables backchannel detection; a `0.0` threshold also means off.
-    #[pyo3(signature = (language = None))]
-    fn lookup_backchannel(
-        &self,
-        py: Python<'_>,
-        language: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<InferenceEotLookupBackchannelOutput> {
-        crate::py_calls::check_pid()?;
-        let language = language.map(|v| crate::py_values::str_from_py(v.as_any())).transpose()?;
-        let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::lookup_backchannel(&self.0, language));
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[pyo3(signature = (language = None))]
-    fn supports(&self, py: Python<'_>, language: Option<Bound<'_, PyAny>>) -> PyResult<bool> {
-        crate::py_calls::check_pid()?;
-        let language = language.map(|v| crate::py_values::str_from_py(v.as_any())).transpose()?;
-        let out = py.detach(|| {
-            <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::supports(
-                &self.0, language,
-            )
-        });
-        ::pyo3::PyResult::Ok(out)
     }
 
     #[pyo3(signature = (overrides = None))]
@@ -370,7 +326,7 @@ inventory::submit! {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/turn/inference.rs.
-type InterruptionDetectorImpl =
+type AdaptiveInterruptionDetectorImpl =
     <crate::generated::implementations::Selected as super::Implementations>::InterruptionDetector;
 
 fn _extract_interruption_detector_new_threshold(
@@ -451,13 +407,20 @@ type InterruptionDetectorUpdateOptionsMinInterruptionDurationInput = ::std::opti
 
 /// `inference.AdaptiveInterruptionDetector`: the gateway model that tells an interruption from a
 /// backchannel while the agent speaks. Natively the session's interruption source.
-#[pyclass(frozen, subclass, name = "InterruptionDetector", module = "livekit.agents._core")]
-pub struct InterruptionDetector(pub(crate) ::std::sync::Arc<InterruptionDetectorImpl>);
+#[pyclass(
+    frozen,
+    subclass,
+    name = "AdaptiveInterruptionDetector",
+    module = "livekit.agents.inference"
+)]
+pub struct AdaptiveInterruptionDetector(
+    pub(crate) ::std::sync::Arc<AdaptiveInterruptionDetectorImpl>,
+);
 
 #[pymethods]
-impl InterruptionDetector {
-    /// `base_url`, `api_key` and `api_secret` are required; the Python class resolves them from
-    /// the server's settings.
+impl AdaptiveInterruptionDetector {
+    /// `base_url`, `api_key` and `api_secret` default to the inference ladders over the server's
+    /// settings (`inference_credentials`).
     #[new]
     #[pyo3(signature = (*, threshold = None, min_interruption_duration = 0.05, max_audio_duration = 3.0, audio_prefix_duration = 1.0, detection_interval = 0.1, inference_timeout = 0.7, base_url = None, api_key = None, api_secret = None, conn_options = None, token_ttl_secs = 600))]
     fn new(
@@ -480,14 +443,14 @@ impl InterruptionDetector {
         conn_options: Option<Bound<'_, PyAny>>,
         #[pyo3(from_py_with = _extract_interruption_detector_new_token_ttl_secs)]
         token_ttl_secs: InterruptionDetectorNewTokenTtlSecsInput,
-    ) -> PyResult<InterruptionDetector> {
+    ) -> PyResult<AdaptiveInterruptionDetector> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
         let conn_options = conn_options
             .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
             .transpose()?;
-        let out = py.detach(|| <InterruptionDetectorImpl as ::lk_agents_abi::turn::inference::InterruptionDetector>::new(&env, threshold, min_interruption_duration, max_audio_duration, audio_prefix_duration, detection_interval, inference_timeout, base_url, api_key, api_secret, conn_options, token_ttl_secs)).map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
-        ::pyo3::PyResult::Ok(InterruptionDetector(::std::sync::Arc::new(out)))
+        let out = py.detach(|| <AdaptiveInterruptionDetectorImpl as ::lk_agents_abi::turn::inference::InterruptionDetector>::new(&env, threshold, min_interruption_duration, max_audio_duration, audio_prefix_duration, detection_interval, inference_timeout, base_url, api_key, api_secret, conn_options, token_ttl_secs)).map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
+        ::pyo3::PyResult::Ok(AdaptiveInterruptionDetector(::std::sync::Arc::new(out)))
     }
 
     /// Shared with live streams, which reconnect to pick the options up.
@@ -500,7 +463,7 @@ impl InterruptionDetector {
         #[pyo3(from_py_with = _extract_interruption_detector_update_options_min_interruption_duration)] min_interruption_duration: InterruptionDetectorUpdateOptionsMinInterruptionDurationInput,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        py.detach(|| <InterruptionDetectorImpl as ::lk_agents_abi::turn::inference::InterruptionDetector>::update_options(&self.0, threshold, min_interruption_duration));
+        py.detach(|| <AdaptiveInterruptionDetectorImpl as ::lk_agents_abi::turn::inference::InterruptionDetector>::update_options(&self.0, threshold, min_interruption_duration));
         Ok(())
     }
 }
@@ -510,7 +473,7 @@ inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::turn::interruption::InterruptionSource>(),
         read: |obj| {
-            let this = obj.cast::<InterruptionDetector>().ok()?;
+            let this = obj.cast::<AdaptiveInterruptionDetector>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::turn::interruption::InterruptionSource> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },
@@ -534,215 +497,6 @@ pub fn resolve_keyterm_detection<'py>(
         .transpose()?;
     let out = py.detach(|| <KeytermFunctionsImpl as ::lk_agents_abi::turn::keyterms::KeytermFunctions>::resolve_keyterm_detection(config));
     crate::generated::records::keyterms::resolved_keyterm_detection_to_py(py, out)
-}
-
-// Declared in rust/crates/lk-agents-abi/src/turn/detector.rs.
-
-/// [`::lk_agents_abi::EotDetector`] over a host `livekit.agents._bindings.TurnDetector`.
-#[derive(Clone)]
-pub struct EotDetectorProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
-    /// The `notify` calls, delivered in order.
-    notifier: crate::py_calls::Notifier,
-    id: ::lk_agents_abi::ProviderId,
-}
-
-impl EotDetectorProxy {
-    /// A registered native class as itself, any other host object behind this proxy.
-    pub fn from_host(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::EotDetector>> {
-        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::EotDetector>(obj) {
-            return Ok(native);
-        }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
-    pub fn in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::EotDetector>> {
-        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::EotDetector>(obj) {
-            return Ok(native);
-        }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
-    }
-
-    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
-    pub fn owned(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::EotDetector>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    fn take(
-        obj: &Bound<'_, PyAny>,
-        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
-    ) -> PyResult<Self> {
-        let context = match context {
-            Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::py_calls::capture_context(obj.py())?,
-        };
-        let id = {
-            let v = crate::py_calls::read(obj, "_core_id")?;
-            crate::generated::records::types::provider_id_from_py(v.as_any())?
-        };
-        Ok(EotDetectorProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
-            context,
-            notifier: ::std::default::Default::default(),
-            id,
-        })
-    }
-}
-
-impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
-    fn id(&self) -> ::lk_agents_abi::ProviderId {
-        ::std::clone::Clone::clone(&self.id)
-    }
-
-    fn push_audio(&self, frame: ::lk_agents_abi::AudioFrame) {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let frame_arg = frame;
-        ::lk_agents_runtime::host::notify(
-            &self.notifier,
-            "EotDetector.stream.push_audio",
-            &self.context,
-            &[],
-            true,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [crate::generated::records::rtc_frames::audio_frame_to_py(py, frame_arg)?];
-                Ok((
-                    host.bind(py).getattr("stream")?.getattr("push_audio")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-    }
-
-    fn cancel_inference(&self, timed_out: bool) {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let timed_out_arg = timed_out;
-        ::lk_agents_runtime::host::notify(
-            &self.notifier,
-            "EotDetector.stream.cancel_inference",
-            &self.context,
-            &[],
-            false,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((
-                    host.bind(py).getattr("stream")?.getattr("cancel_inference")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    Some({
-                        let kwargs = ::pyo3::types::PyDict::new(py);
-                        kwargs.set_item(
-                            "timed_out",
-                            ::pyo3::IntoPyObjectExt::into_bound_py_any(timed_out_arg, py)?,
-                        )?;
-                        kwargs
-                    }),
-                ))
-            }),
-        );
-    }
-
-    fn flush(&self, reason: ::std::option::Option<::lk_agents_abi::turn::detector::FlushReason>) {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let reason_arg = reason;
-        ::lk_agents_runtime::host::notify(
-            &self.notifier,
-            "EotDetector.stream.flush",
-            &self.context,
-            &[],
-            false,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [match reason_arg {
-                    None => py.None().into_bound(py),
-                    Some(x) => crate::generated::records::turn_events::flush_reason_to_py(py, x)?,
-                }];
-                Ok((
-                    host.bind(py).getattr("stream")?.getattr("flush")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-    }
-
-    fn predict(
-        &self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-        timeout: ::std::option::Option<::std::time::Duration>,
-    ) -> ::lk_agents_abi::BoxFuture<
-        '_,
-        ::std::result::Result<
-            ::lk_agents_abi::EotPrediction,
-            ::lk_agents_abi::errors::ProviderError,
-        >,
-    > {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let timeout_arg = timeout;
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "EotDetector._core_predict",
-            &self.context,
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [::pyo3::IntoPyObjectExt::into_bound_py_any(timeout_arg, py)?];
-                Ok((
-                    host.bind(py).getattr("_core_predict")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let out = (crate::generated::records::turn_events::eot_prediction_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(out)
-            })
-        })
-    }
-
-    fn aclose(&self, cx: &::lk_agents_abi::telemetry::Cx) -> ::lk_agents_abi::BoxFuture<'_, ()> {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "EotDetector.stream.aclose",
-            &self.context,
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((
-                    host.bind(py).getattr("stream")?.getattr("aclose")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            if let Err(e) = started.await {
-                log::warn!("EotDetector.stream.aclose failed: {e}");
-            }
-        })
-    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/turn/inference.rs.

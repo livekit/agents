@@ -682,6 +682,7 @@ impl Http {
                     self.phase.send_replace(Phase::Done);
                 }
             }
+            ExchangeMessage::Trailers => {}
             _ => {
                 return Err(ExchangeError::Protocol(
                     "a WebSocket message on an HTTP exchange".into(),

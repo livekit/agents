@@ -37,7 +37,6 @@ fn _extract_session_recorder_new_bitrate(
 }
 type SessionRecorderNewBitrateInput = u32;
 type SessionRecorderStartedAtOutput = ::std::option::Option<f64>;
-type SessionRecorderDroppedSamplesOutput = (u64, u64);
 
 fn _extract_session_recorder_flush_now(
     obj: &Bound<'_, PyAny>,
@@ -107,17 +106,6 @@ impl SessionRecorder {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| {
             <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::started_at(&self.0)
-        });
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[getter]
-    fn dropped_samples(&self, py: Python<'_>) -> PyResult<SessionRecorderDroppedSamplesOutput> {
-        crate::py_calls::check_pid()?;
-        let out = py.detach(|| {
-            <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::dropped_samples(
-                &self.0,
-            )
         });
         ::pyo3::PyResult::Ok(out)
     }

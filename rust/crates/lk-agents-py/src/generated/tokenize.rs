@@ -14,7 +14,6 @@ use pyo3::prelude::*;
 type TokenizeFunctionsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::TokenizeFunctions;
 type TokenizeFunctionsSplitWordsOutput = ::std::vec::Vec<(::std::string::String, usize, usize)>;
-type TokenizeFunctionsReplaceWordsOutput = ::std::option::Option<(::std::string::String, usize)>;
 type TokenizeFunctionsTokenizeParagraphsOutput = ::std::vec::Vec<::std::string::String>;
 type TokenizeFunctionsHyphenateWordOutput = ::std::vec::Vec<::std::string::String>;
 
@@ -33,12 +32,12 @@ pub fn split_words(
 
 #[pyfunction]
 #[pyo3(signature = (text, replacements, hold_last_word = false))]
-pub fn replace_words(
-    py: Python<'_>,
+pub fn replace_words<'py>(
+    py: Python<'py>,
     text: ::std::string::String,
     replacements: Bound<'_, PyAny>,
     hold_last_word: bool,
-) -> PyResult<TokenizeFunctionsReplaceWordsOutput> {
+) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
     let replacements = replacements
         .cast::<::pyo3::types::PyDict>()
         .map_err(::pyo3::PyErr::from)
@@ -53,7 +52,8 @@ pub fn replace_words(
                 .collect::<PyResult<::indexmap::IndexMap<_, _>>>()
         })?;
     let out = py.detach(|| <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::replace_words(text, replacements, hold_last_word));
-    ::pyo3::PyResult::Ok(out)
+    out.map(|value| crate::generated::records::tokenizer::replaced_words_to_py(py, value))
+        .transpose()
 }
 
 #[pyfunction]
@@ -566,19 +566,11 @@ pub struct SearchDocument(pub(crate) ::std::sync::Arc<SearchDocumentImpl>);
 #[pymethods]
 impl SearchDocument {
     #[new]
-    #[pyo3(signature = (name, description, parameters))]
-    fn new(
-        py: Python<'_>,
-        name: ::std::string::String,
-        description: ::std::string::String,
-        parameters: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
-    ) -> PyResult<SearchDocument> {
+    #[pyo3(signature = (item))]
+    fn new(py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<SearchDocument> {
+        let item = crate::generated::records::tool_search::search_fields_from_py(item.as_any())?;
         let out = py.detach(|| {
-            <SearchDocumentImpl as ::lk_agents_abi::tokenize::search::SearchDocument>::new(
-                name,
-                description,
-                parameters,
-            )
+            <SearchDocumentImpl as ::lk_agents_abi::tokenize::search::SearchDocument>::new(item)
         });
         ::pyo3::PyResult::Ok(SearchDocument(::std::sync::Arc::new(out)))
     }

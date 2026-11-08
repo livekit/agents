@@ -304,7 +304,7 @@ mod proxies {
                 prepared.identity,
                 lk_agents_abi::agent::ArgumentIdentity::Json(serde_json::json!({"city": true}))
             );
-            let (report, extra) = proxy.run_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, &prepared.prepared).await.unwrap();
+            let lk_agents_abi::agent::ToolCompletion { report, extra } = proxy.run_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, &prepared.prepared).await.unwrap();
             assert!(matches!(
                 report.outcome,
                 lk_agents_abi::llm::tool_executor::ToolOutcome::Value { text, .. } if text == "answered"
@@ -314,7 +314,7 @@ mod proxies {
                 let prepared = proxy.prepare_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, args(key)).await.unwrap().unwrap();
                 let error = proxy.run_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, &prepared.prepared).await.unwrap_err();
                 assert_eq!(error.class, "TypeError");
-                let expected = if key == "bad_arity" { "tuple of 2 items" } else { "expected a dict" };
+                let expected = if key == "bad_arity" { "expected ToolCompletion" } else { "ToolCompletion.extra" };
                 assert!(error.message.contains(expected), "{error}");
             }
             let refused = proxy.prepare_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, args("bad")).await.unwrap().unwrap_err();

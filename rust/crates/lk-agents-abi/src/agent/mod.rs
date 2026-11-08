@@ -9,9 +9,6 @@ pub mod resources;
 pub mod run;
 pub mod stream;
 
-/// A tool result and the host metadata collected while it ran.
-pub type ToolCompletion = (ToolReport, Map<String, Value>);
-
 use serde_json::{Map, Value};
 
 use crate::errors::HostError;
@@ -21,6 +18,14 @@ use crate::llm::tool_executor::{Approval, ToolReport};
 use crate::utils::host_ref::HostRef;
 use crate::{FunctionCall, ToolSpec};
 use std::sync::Arc;
+
+/// What a tool's run reports: its outcome, and the call's `extra` as the body left it.
+#[crate::host(record(module = "tool_report", dataclass, extract))]
+#[derive(Debug, Clone)]
+pub struct ToolCompletion {
+    pub report: ToolReport,
+    pub extra: Map<String, Value>,
+}
 
 /// A definition no invocation can run.
 #[crate::host(record(module = "agent_run", emit))]
@@ -84,8 +89,10 @@ pub struct Invocation {
 }
 
 /// What a host call runs in: the host context captured at its operation's entry, and the
-/// framework scopes that operation holds; the span it runs under is its `cx`. A `#[host(context)]` proxy parameter is one; a proxy
-/// call without one runs in the context captured when the proxy was taken, holding no scope.
+/// framework scopes that operation holds; the span it runs under is its `cx`. A `#[host(context)]`
+/// proxy parameter is one; a proxy call without one runs in the context captured when the proxy
+/// was taken, else (taken with no running loop) the one of the operation driving the call
+/// (`lk_agents_net::task::host_context`), holding no scope.
 pub trait HostContext {
     fn host_context(&self) -> Option<&HostRef>;
 
@@ -98,6 +105,13 @@ pub trait HostContext {
 impl HostContext for HostRef {
     fn host_context(&self) -> Option<&HostRef> {
         Some(self)
+    }
+}
+
+/// A proxy's context: the one it captured when taken, else the one its driving operation set.
+impl HostContext for Option<HostRef> {
+    fn host_context(&self) -> Option<&HostRef> {
+        self.as_ref()
     }
 }
 

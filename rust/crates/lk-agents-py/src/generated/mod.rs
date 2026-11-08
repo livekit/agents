@@ -86,7 +86,6 @@ pub trait Implementations: 'static {
     type FallbackLlm: ::lk_agents_abi::llm::fallback::FallbackLlm;
     type FallbackTts: ::lk_agents_abi::llm::fallback::FallbackTts<Stream = Self::TtsStream>;
     type RealtimeFallbackModel: ::lk_agents_abi::llm::fallback::RealtimeFallbackModel;
-    type TtsTokenLog: ::lk_agents_abi::llm::fallback::TtsTokenLog;
     type InferenceLlm: ::lk_agents_abi::llm::inference::InferenceLlm;
     type ChoiceParser: ::lk_agents_abi::llm::inference::ChoiceParser;
     type CompletionWire: ::lk_agents_abi::llm::inference::CompletionWire;
@@ -98,6 +97,7 @@ pub trait Implementations: 'static {
     type HostRealtimeModel: ::lk_agents_abi::llm::realtime::HostRealtimeModel;
     type OpenAIRealtimeModel: ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel;
     type ChatContextDict: ::lk_agents_abi::llm::to_dict::ChatContextDict;
+    type ToolReports: ::lk_agents_abi::llm::tool_executor::ToolReports;
     type ChatRequestView: ::lk_agents_abi::llm::types::ChatRequestView;
     type ToolNameFunctions: ::lk_agents_abi::llm::types::ToolNameFunctions;
     type ToolsetLifetime: ::lk_agents_abi::llm::toolsets::ToolsetLifetime;
@@ -166,6 +166,7 @@ pub trait Implementations: 'static {
     type MovingAverage: ::lk_agents_abi::utils::filters::MovingAverage;
     type InferenceVad: ::lk_agents_abi::vad::inference::InferenceVad;
     type AmdFunctions: ::lk_agents_abi::voice::amd::AmdFunctions;
+    type HostAudioReceiver: ::lk_agents_abi::voice::avatar::HostAudioReceiver;
     type DataStreamAudioOutput: ::lk_agents_abi::voice::avatar::DataStreamAudioOutput;
     type DataStreamAudioReceiver: ::lk_agents_abi::voice::avatar::DataStreamAudioReceiver;
     type AvatarRunner: ::lk_agents_abi::voice::avatar::AvatarRunner<Synchronizer = Self::AVSynchronizer>;
@@ -193,6 +194,7 @@ pub trait Implementations: 'static {
     type TextStreamSender: ::lk_agents_abi::voice::rtc::ports::TextStreamSender;
     type RpcHandler: ::lk_agents_abi::voice::rtc::ports::RpcHandler;
     type RoomRpcRouter: ::lk_agents_abi::voice::rtc::ports::RoomRpcRouter;
+    type RpcTracing: ::lk_agents_abi::voice::rtc::rpc::RpcTracing;
     type SessionOptions: ::lk_agents_abi::voice::session::SessionOptions;
     type VoiceSession: ::lk_agents_abi::voice::session::VoiceSession<
             Options = Self::SessionOptions,
@@ -323,7 +325,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::FallbackLlmChunks>()?;
     m.add_class::<llm::FallbackTts>()?;
     m.add_class::<llm::RealtimeFallbackModel>()?;
-    m.add_class::<llm::TtsTokenLog>()?;
     m.add_class::<llm::InferenceLlm>()?;
     m.add_class::<llm::InferenceLlmChunks>()?;
     m.add_class::<llm::LlmChoiceParser>()?;
@@ -347,6 +348,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::HostRealtimeModel>()?;
     m.add_class::<llm::OpenAIRealtimeModel>()?;
     m.add_function(wrap_pyfunction!(llm::chat_ctx_to_dict, m)?)?;
+    m.add_function(wrap_pyfunction!(llm::tool_report, m)?)?;
     m.add_class::<llm::ChatRequest>()?;
     m.add_function(wrap_pyfunction!(llm::check_tool_names, m)?)?;
     m.add_class::<llm::CoreToolsetLifetime>()?;
@@ -384,6 +386,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(telemetry::configure, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::diagnostics, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_conflict, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_export, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::set_capture_content, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_shutdown, m)?)?;
     m.add_class::<telemetry::CoreLoopWatch>()?;
@@ -428,7 +431,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tts::validate_synthesis, m)?)?;
     m.add_class::<turn::InferenceEot>()?;
     m.add_class::<turn::TurnDetectorStream>()?;
-    m.add_class::<turn::InterruptionDetector>()?;
+    m.add_class::<turn::AdaptiveInterruptionDetector>()?;
     m.add_function(wrap_pyfunction!(turn::resolve_keyterm_detection, m)?)?;
     m.add_function(wrap_pyfunction!(types::api_connect_options_check, m)?)?;
     m.add_function(wrap_pyfunction!(types::api_retry_interval, m)?)?;
@@ -442,6 +445,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::amd_resolve_max_endpointing_delay, m)?)?;
     m.add_function(wrap_pyfunction!(voice::amd_prediction_is_human, m)?)?;
     m.add_function(wrap_pyfunction!(voice::amd_prediction_is_machine, m)?)?;
+    m.add_class::<voice::HostAudioReceiver>()?;
     m.add_class::<voice::DataStreamAudioOutput>()?;
     m.add_class::<voice::DataStreamAudioReceiver>()?;
     m.add_class::<voice::AvatarRunner>()?;
@@ -483,6 +487,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::TextStreamSender>()?;
     m.add_class::<voice::RpcHandler>()?;
     m.add_class::<voice::CoreRoomRpcRouter>()?;
+    m.add_class::<voice::CoreRpcTracing>()?;
     m.add_class::<voice::SessionOptions>()?;
     m.add_class::<voice::VoiceSession>()?;
     m.add_function(wrap_pyfunction!(voice::default_session_models, m)?)?;
@@ -512,7 +517,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::RoomVideoInput>()?;
     m.add_class::<voice::CoreRoomSession>()?;
     m.add_function(wrap_pyfunction!(voice::_core_create_room_session, m)?)?;
-    m.add_function(wrap_pyfunction!(voice::wait_avatar_join, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_for_participant, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_for_agent, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_for_track_publication, m)?)?;

@@ -26,8 +26,7 @@ pub trait InferenceStt: Stt + Sized + 'static {
     type Events: StreamOutput<SpeechEvent> + 'static;
 
     /// A client of `model` on the gateway at `base_url`. Starts nothing. `vad`'s end of speech
-    /// finalizes the transcript (Speechmatics only). `inference.STT` builds it on first use, after
-    /// a fork, from its attributes.
+    /// finalizes the transcript (Speechmatics only). `inference.STT` builds it in its constructor.
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -100,20 +99,14 @@ pub trait InferenceStt: Stt + Sized + 'static {
     ) -> Result<crate::DuplexStream<Self::Audio, Self::Events>, ProviderError>;
 }
 
-/// `inference.STT`'s client, built on first use, after a fork, from the STT's attributes.
+/// `inference.STT`'s client, built by its constructor.
 #[crate::host(facade(
     path = "livekit.agents.inference.stt",
     extended,
     name = "STT",
     native = InferenceStt,
-    cached,
     legs(stream),
-    leg = "_core_native",
-    annotation(
-        language = ".language.LanguageCode | None",
-        extra_kwargs = "dict[str, Any]",
-        fallback = "list[.inference_stt.FallbackModel]"
-    )
+    leg = "_core_native"
 ))]
 pub trait InferenceSttFacade {}
 

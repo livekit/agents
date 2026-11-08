@@ -44,12 +44,12 @@ impl EotDetector for FakeEot {
 
     fn flush(&self, _reason: Option<lk_agents_abi::turn::detector::FlushReason>) {}
 
-    fn thresholds(&self) -> Option<ThresholdOptions> {
-        Some(ThresholdOptions::new(
+    fn thresholds(&self) -> ThresholdOptions {
+        ThresholdOptions::new(
             TurnDetectorModel::V1Mini,
             Some(ThresholdOverride::All(THRESHOLD)),
             None,
-        ))
+        )
     }
 
     fn predict(

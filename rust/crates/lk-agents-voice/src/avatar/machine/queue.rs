@@ -25,6 +25,8 @@ pub struct Queue {
     items: VecDeque<Item>,
     capture: Option<(PlaybackSegment, u64)>,
     clear_requested: bool,
+    /// Advanced by each clear; captured audio is stamped with it.
+    epoch: u64,
     closed: bool,
 }
 
@@ -36,6 +38,7 @@ impl Queue {
             items: VecDeque::new(),
             capture: None,
             clear_requested: true,
+            epoch: 0,
             closed: false,
         }
     }
@@ -46,11 +49,11 @@ impl Queue {
         &mut self,
         frame: AudioFrame,
         key: PlaybackSegment,
-        epoch: u64,
     ) -> Result<QueueEffects, QueueClosed> {
         self.check_open()?;
         let mut effects = QueueEffects::default();
         self.clear_requested = false;
+        let epoch = self.epoch;
         let (key, epoch) = *self.capture.get_or_insert_with(|| {
             self.segments.push_back(Segment {
                 key,
@@ -86,6 +89,9 @@ impl Queue {
         }
         let mut effects =
             QueueEffects { flushed: true, clear: !self.clear_requested, ..Default::default() };
+        if effects.clear {
+            self.epoch += 1;
+        }
         self.clear_requested = true;
         self.finish_discarded(&mut effects);
         effects
@@ -139,6 +145,10 @@ impl Queue {
         }
         effects
     }
+    /// The latest clear's epoch; `None` once closed.
+    pub fn clear_epoch(&self) -> Option<u64> {
+        (!self.closed).then_some(self.epoch)
+    }
     /// None means wait; a closed queue returns its terminal observation on every read.
     pub fn next_audio(&mut self) -> Option<AudioReceiverObservation> {
         if let Some(item) = self.items.pop_front() {
@@ -189,10 +199,10 @@ mod tests {
     #[test]
     fn delayed_acknowledgement_cannot_finish_the_replacement() {
         let mut queue = Queue::new(false);
-        queue.capture(frame(), key(1), 0).unwrap();
+        queue.capture(frame(), key(1)).unwrap();
         assert!(queue.next_audio().unwrap().starts_segment);
         assert!(queue.clear().clear);
-        queue.capture(frame(), key(2), 1).unwrap();
+        queue.capture(frame(), key(2)).unwrap();
         queue.flush().unwrap();
         queue.next_audio().unwrap();
         queue.next_audio().unwrap();
@@ -206,13 +216,13 @@ mod tests {
     #[test]
     fn cut_unread_segments_wait_for_older_delivered_acknowledgements() {
         let mut queue = Queue::new(false);
-        queue.capture(frame(), key(1), 0).unwrap();
+        queue.capture(frame(), key(1)).unwrap();
         queue.flush().unwrap();
         queue.next_audio();
         queue.next_audio();
-        queue.capture(frame(), key(2), 0).unwrap();
+        queue.capture(frame(), key(2)).unwrap();
         queue.flush().unwrap();
-        queue.capture(frame(), key(3), 0).unwrap();
+        queue.capture(frame(), key(3)).unwrap();
         assert!(queue.clear().finished.is_empty());
         let effects = queue.finished(0.02, true, report(1));
         assert_eq!(
@@ -228,18 +238,22 @@ mod tests {
     #[test]
     fn reader_stamps_epoch_and_start_once_and_close_discards_buffered_frames() {
         let mut queue = Queue::new(true);
-        assert!(queue.capture(frame(), key(1), 5).unwrap().started.is_empty());
-        queue.capture(frame(), key(1), 5).unwrap();
+        queue.capture(frame(), key(0)).unwrap();
+        assert!(queue.clear().clear);
+        assert_eq!(queue.clear_epoch(), Some(1));
+        assert!(queue.capture(frame(), key(1)).unwrap().started.is_empty());
+        queue.capture(frame(), key(1)).unwrap();
         let observation = queue.next_audio().unwrap();
-        assert_eq!(observation.epoch, 5);
+        assert_eq!(observation.epoch, 1);
         assert!(observation.starts_segment);
         assert_eq!(queue.started(None).started, vec![key(1)]);
         assert!(queue.started(None).started.is_empty());
         assert!(!queue.next_audio().unwrap().starts_segment);
-        queue.capture(frame(), key(1), 5).unwrap();
+        queue.capture(frame(), key(1)).unwrap();
         assert!(queue.close().reset);
         assert_eq!(queue.next_audio().unwrap(), AudioReceiverObservation::default());
-        assert!(queue.capture(frame(), key(2), 6).is_err());
+        assert_eq!(queue.clear_epoch(), None);
+        assert!(queue.capture(frame(), key(2)).is_err());
         assert!(!queue.close().reset);
     }
 }

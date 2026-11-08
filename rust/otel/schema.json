@@ -2626,13 +2626,13 @@
         {
           "key": "lk.pii.rpc.payload",
           "type": "string",
-          "required": true,
+          "required": false,
           "content": "pii"
         },
         {
           "key": "lk.rpc.response_timeout",
           "type": "double",
-          "required": true,
+          "required": false,
           "unit": "s"
         }
       ],
@@ -2652,6 +2652,11 @@
           "type": "string",
           "required": false,
           "content": "pii"
+        },
+        {
+          "key": "lk.rpc.handler_registered",
+          "type": "boolean",
+          "required": false
         }
       ],
       "events": []
@@ -2688,11 +2693,6 @@
           "unit": "s"
         },
         {
-          "key": "lk.rpc.handler_registered",
-          "type": "boolean",
-          "required": true
-        },
-        {
           "key": "lk.rpc.payload_size",
           "type": "int",
           "required": true
@@ -2700,7 +2700,7 @@
         {
           "key": "lk.pii.rpc.payload",
           "type": "string",
-          "required": true,
+          "required": false,
           "content": "pii"
         }
       ],
@@ -2720,6 +2720,11 @@
           "type": "string",
           "required": false,
           "content": "pii"
+        },
+        {
+          "key": "lk.rpc.handler_registered",
+          "type": "boolean",
+          "required": false
         }
       ],
       "events": []
@@ -4411,7 +4416,8 @@
             "stt_node",
             "recording",
             "duplex",
-            "background_audio"
+            "background_audio",
+            "avatar_receiver"
           ],
           "label": true
         }
@@ -4464,7 +4470,8 @@
             "stt_node",
             "recording",
             "duplex",
-            "background_audio"
+            "background_audio",
+            "avatar_receiver"
           ],
           "label": true
         }

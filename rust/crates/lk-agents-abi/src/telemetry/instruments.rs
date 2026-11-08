@@ -310,6 +310,8 @@ pub enum AudioConsumer {
     Duplex,
     /// A background audio source's frames, ahead of the mixer.
     BackgroundAudio,
+    /// An avatar worker's audio from a custom `AudioReceiver`, ahead of its runner.
+    AvatarReceiver,
 }
 
 /// Input tokens of each LLM response, one measurement per modality.

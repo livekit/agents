@@ -71,7 +71,7 @@ from .events import (
 from .io import SpeechHandle
 
 if TYPE_CHECKING:
-    from .._generated.agent_run import RunSettled
+    from .._generated.agent_run import RunFinished
     from .._generated.voice_session import VoiceCommandOrigin
     from ..inference import LLMModels, RealtimeModels
     from ..llm.tool_context import ToolHandlingOptions
@@ -286,7 +286,7 @@ class Agent(Generic[Context_T, Output_T]):
 
         self._tools: dict[int, Tool | Toolset] = {}
         for tool in [*tools, *find_function_tools(self)]:
-            token, _ = self._config.register(CallbackKind.TOOL)
+            token = self._config.register(CallbackKind.TOOL).token
             self._tools[token] = tool
         # registered at import by the decorators below; frozen once the agent is first bound
         self._instruction_fns: dict[int, _InstructionsFn] = {}
@@ -450,7 +450,7 @@ class Agent(Generic[Context_T, Output_T]):
                 conn_options=DEFAULT_API_CONNECT_OPTIONS,
             )
 
-            def settle(finished: RunSettled | None) -> RunResult[Output_T]:
+            def settle(finished: RunFinished | None) -> RunResult[Output_T]:
                 assert finished is not None
                 result = settled_result(finished, run.hooks)
                 if run.hooks is not None and run.hooks.on_result is not None:
@@ -474,7 +474,7 @@ class Agent(Generic[Context_T, Output_T]):
             async def cites_real_jobs(ctx: RunContext, output: Claim) -> Claim: ...
         """
         self._check_not_frozen("an output validator")
-        token, _ = self._config.register(CallbackKind.VALIDATOR)
+        token = self._config.register(CallbackKind.VALIDATOR).token
         self._output_validators[token] = f
         return f
 
@@ -549,7 +549,7 @@ class Agent(Generic[Context_T, Output_T]):
             else:
                 # `function_tool` refuses what a raw schema cannot take (`needs_approval`)
                 tool = function_tool(func, **options)
-            token, _ = self._config.register(CallbackKind.TOOL)
+            token = self._config.register(CallbackKind.TOOL).token
             self._tools[token] = tool
             return tool
 
@@ -557,7 +557,7 @@ class Agent(Generic[Context_T, Output_T]):
 
     def _register_instructions(self, f: _InstructionsFn) -> _InstructionsFn:
         self._check_not_frozen("an instructions function")
-        token, _ = self._config.register(CallbackKind.INSTRUCTIONS)
+        token = self._config.register(CallbackKind.INSTRUCTIONS).token
         self._instruction_fns[token] = f
         return f
 
@@ -598,10 +598,10 @@ class Agent(Generic[Context_T, Output_T]):
 
     def _register_hook(self, name: str, f: _HookFn) -> _HookFn:
         self._check_not_frozen(f"an {name} function")
-        token, retired = self._config.register(cast(CallbackKind, name))
-        if retired is not None:
-            self._hook_fns.pop(retired)
-        self._hook_fns[token] = f
+        registered = self._config.register(cast(CallbackKind, name))
+        if registered.retired is not None:
+            self._hook_fns.pop(registered.retired)
+        self._hook_fns[registered.token] = f
         return f
 
     async def _run_hook(self, name: str) -> Any:

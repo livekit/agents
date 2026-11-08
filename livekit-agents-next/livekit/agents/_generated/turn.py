@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
-    from livekit.agents.voice.io import _StreamingTurnDetector
+    from livekit.agents.inference import TurnDetector
 
     from .session_options import BackchannelBoundary, TurnDetectionMode
 
@@ -160,7 +160,7 @@ class TurnHandlingOptions(TypedDict, total=False):
     All keys are optional and default to sensible values.
     """
 
-    turn_detection: TurnDetectionMode | _StreamingTurnDetector | None
+    turn_detection: TurnDetectionMode | TurnDetector | None
     """Strategy for deciding when the user has finished speaking.
     Absent means the session auto-selects.
     """

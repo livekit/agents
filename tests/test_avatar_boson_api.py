@@ -18,12 +18,11 @@ import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
-import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, http
 from livekit.plugins.boson_avatar.api import (
     AvatarInfo,
     AvatarSessionInfo,
@@ -52,7 +51,7 @@ class _Peer:
         self.url = str(server.make_url("")).rstrip("/")
 
     async def close(self):
-        await self.http.close()
+        await self.http.aclose()
         await self.server.close()
 
 
@@ -117,7 +116,7 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         app.router.add_route("*", "/{path:.*}", respond)
         server = TestServer(app)
         await server.start_server()
-        peer = _Peer(server, aiohttp.ClientSession(), calls)
+        peer = _Peer(server, http.HttpSession(), calls)
         self._peers.append(peer)
         os.environ["BOSON_AVATAR_API_URL"] = peer.url + "/v1"
         return peer

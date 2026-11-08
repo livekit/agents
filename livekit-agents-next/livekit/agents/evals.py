@@ -14,7 +14,6 @@ from ._generated.evals import (
     IntentJudgment,
     JudgeOutcome,
     JudgeOutcomeFailed,
-    JudgeSpec,
 )
 from ._generated.public_evals import *  # noqa: F403
 from .llm import LLM, ChatContext, Tool, function_tool
@@ -211,9 +210,7 @@ async def _evaluate(
     llm: LLM | None,
 ) -> list[JudgeOutcome]:
     """Every judge's outcome, in judge order; the core records one span per judge."""
-    return await _runner(llm, _Evaluation(chat_ctx, reference, llm)).evaluate(
-        [JudgeSpec(name=j.name, evaluator=j) for j in judges]
-    )
+    return await _runner(llm, _Evaluation(chat_ctx, reference, llm)).evaluate(list(judges))
 
 
 async def _judge_intent(llm: LLM, intent: str, message: str) -> IntentJudgment:

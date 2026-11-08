@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::llm::provider_format::ProviderFormat;
+use lk_agents_abi::llm::provider_format::host::ConvertedItem;
 use lk_agents_abi::llm::provider_format::vocabulary::GeminiToolBehavior;
 use serde::Serialize;
 use serde_json::Value;
@@ -58,22 +59,26 @@ pub fn to_provider_format(
     formatted.map_err(|error| Invalid(error.to_string()))
 }
 
-/// `convert_mid_conversation_instructions(chat_ctx, role=, template=)` as `(index, rewritten)`: the
-/// input item each output item comes from, and the message replacing it when it was rewritten, so
-/// the host keeps its own objects for the rest.
+/// `convert_mid_conversation_instructions(chat_ctx, role=, template=)`: the input item each output
+/// item comes from, and the message replacing it when it was rewritten, so the host keeps its own
+/// objects for the rest.
 pub fn convert_mid_conversation_instructions(
     items: Vec<ChatItem>,
     role: lk_agents_abi::Role,
     template: &str,
-) -> Vec<(usize, Option<ChatItem>)> {
+) -> Vec<ConvertedItem> {
     let ctx = ChatContext::new(items);
     let index =
         |found: &dyn Fn(&ChatItem) -> bool| ctx.items.iter().position(found).unwrap_or_default();
     super::convert_mid_conversation_instructions(&ctx, role, template)
         .into_iter()
         .map(|item| match item {
-            std::borrow::Cow::Borrowed(kept) => (index(&|i| std::ptr::eq(i, kept)), None),
-            std::borrow::Cow::Owned(new) => (index(&|i| i.id() == new.id()), Some(new)),
+            std::borrow::Cow::Borrowed(kept) => {
+                ConvertedItem { index: index(&|i| std::ptr::eq(i, kept)), rewritten: None }
+            }
+            std::borrow::Cow::Owned(new) => {
+                ConvertedItem { index: index(&|i| i.id() == new.id()), rewritten: Some(new) }
+            }
         })
         .collect()
 }
@@ -146,10 +151,10 @@ mod tests {
             msg("s2", Role::Developer, &["mid"]),
         ];
         let plan = convert_mid_conversation_instructions(items, Role::User, "<{content}>");
-        let indices: Vec<usize> = plan.iter().map(|(i, _)| *i).collect();
+        let indices: Vec<usize> = plan.iter().map(|c| c.index).collect();
         assert_eq!(indices, [0, 2, 3]);
-        assert!(plan[0].1.is_none() && plan[1].1.is_none());
-        let rewritten = plan[2].1.as_ref().and_then(ChatItem::as_message).unwrap();
+        assert!(plan[0].rewritten.is_none() && plan[1].rewritten.is_none());
+        let rewritten = plan[2].rewritten.as_ref().and_then(ChatItem::as_message).unwrap();
         assert_eq!(
             (rewritten.role, rewritten.raw_text_content().as_deref()),
             (Role::User, Some("<mid>"))

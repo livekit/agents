@@ -3,7 +3,7 @@
 
 use livekit_protocol as proto;
 
-use crate::{EnvOption, RuntimeConfig, WorkerConfig, WorkerPermissions};
+use crate::{EnvOption, RuntimeConfig, WorkerConfig};
 use lk_agents_abi::worker::ipc_host::WorkerError;
 use lk_agents_abi::worker::job::JobExecutorType;
 use lk_agents_abi::worker::types::{
@@ -78,7 +78,6 @@ pub struct ServerSettings {
     /// Overall launcher budget, including draining and host cleanup.
     pub shutdown_timeout: f64,
     pub max_retry: u32,
-    pub permissions: WorkerPermissions,
     pub http_proxy: Option<String>,
     /// Set by `--simulation`: load shedding off, and no health listener (runs share a host).
     pub simulation: bool,
@@ -93,6 +92,8 @@ pub struct ServerSettings {
     pub shutdown_process_timeout: f64,
     pub session_end_timeout: f64,
     pub initialize_process_timeout: f64,
+    /// Seconds a job process may leave a ping unanswered before it is killed.
+    pub ping_timeout: f64,
 }
 
 /// `AgentServer()`'s defaults, for the options a caller leaves out.
@@ -113,7 +114,6 @@ impl Default for ServerSettings {
             drain_timeout: crate::DRAIN_TIMEOUT.as_secs_f64(),
             shutdown_timeout: crate::DRAIN_TIMEOUT.as_secs_f64() + 10.0,
             max_retry: 16,
-            permissions: WorkerPermissions::default(),
             http_proxy: None,
             simulation: false,
             version: env!("CARGO_PKG_VERSION").into(),
@@ -129,6 +129,7 @@ impl Default for ServerSettings {
             shutdown_process_timeout: 10.0,
             session_end_timeout: 300.0,
             initialize_process_timeout: 10.0,
+            ping_timeout: 60.0,
         }
     }
 }
@@ -160,9 +161,6 @@ impl ServerSettings {
         if let Given(value) = process.max_retry {
             next.max_retry = value;
         }
-        if let Given(value) = process.permissions {
-            next.permissions = value;
-        }
         if let Given(value) = process.http_proxy {
             next.http_proxy = value;
         }
@@ -187,6 +185,9 @@ impl ServerSettings {
         }
         if let Given(value) = process.initialize_process_timeout {
             next.initialize_process_timeout = value;
+        }
+        if let Given(value) = process.ping_timeout {
+            next.ping_timeout = value;
         }
         if let Given(value) = options.load_threshold {
             // The host's float; the load arithmetic is single precision.
@@ -223,6 +224,7 @@ impl ServerSettings {
             ("shutdown_process_timeout", self.shutdown_process_timeout),
             ("session_end_timeout", self.session_end_timeout),
             ("initialize_process_timeout", self.initialize_process_timeout),
+            ("ping_timeout", self.ping_timeout),
         ] {
             if lk_agents_abi::types::connect::duration_from_seconds(value).is_none() {
                 return Err(WorkerError::Invalid(format!(
@@ -329,7 +331,6 @@ impl ServerSettings {
             agent_name: self.agent_name.clone(),
             deployment: self.deployment.clone(),
             version: self.version.clone(),
-            permissions: self.permissions.clone(),
             endpoints,
             instance_id: crate::config::new_instance_id(),
             ws_url: self.ws_url.clone(),

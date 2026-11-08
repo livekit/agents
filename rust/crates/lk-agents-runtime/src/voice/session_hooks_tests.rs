@@ -132,10 +132,16 @@ impl SessionHooks for ScriptedHooks {
         _: f64,
     ) -> lk_agents_abi::BoxFuture<
         'a,
-        Result<(Option<String>, Option<Vec<lk_agents_abi::ChatItem>>, bool), HostError>,
+        Result<lk_agents_abi::voice::session_effects::CompletedUserTurn, HostError>,
     > {
         self.under.lock().push(cx.span());
-        Box::pin(async move { self.result((self.user_text.clone(), Some(Vec::new()), self.stop)) })
+        Box::pin(async move {
+            self.result(lk_agents_abi::voice::session_effects::CompletedUserTurn {
+                user_text: self.user_text.clone(),
+                items: Some(Vec::new()),
+                stop_response: self.stop,
+            })
+        })
     }
     fn on_user_turn_exceeded<'a>(
         &'a self,

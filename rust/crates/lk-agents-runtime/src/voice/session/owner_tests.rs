@@ -8,7 +8,7 @@ use tokio::sync::Notify;
 fn owner() -> SessionOwner {
     SessionOwner::new(
         &ProcessEnv::current_runtime(),
-        SessionOptions::new(crate::voice::session::tests::option_kwargs()),
+        SessionOptions::new(crate::voice::session::tests::option_kwargs(), Default::default()),
     )
 }
 
@@ -251,7 +251,7 @@ fn storage() -> Arc<SessionStorage> {
 struct Job {
     record: bool,
     dir: String,
-    calls: Mutex<Vec<String>>,
+    calls: Arc<Mutex<Vec<String>>>,
     claimed: Mutex<Vec<u64>>,
 }
 
@@ -279,22 +279,32 @@ impl lk_agents_abi::worker::job::SessionJob for Job {
         self.calls.lock().push(format!("init_recording audio={}", options["audio"]));
         Ok(())
     }
-    fn on_shutdown(&self, session: HostRef) -> Result<(), HostError> {
-        self.calls.lock().push(format!("on_shutdown {}", session.id()));
-        Ok(())
-    }
-    fn on_avatar_shutdown(&self, _: HostRef) -> Result<(), HostError> {
-        unreachable!("only an avatar closes on the job's shutdown")
+    fn run(&self) -> Arc<dyn lk_agents_abi::worker::ipc_host::JobExecution> {
+        Arc::new(Run(self.calls.clone()))
     }
     fn server_env(&self) -> Result<std::collections::BTreeMap<String, String>, HostError> {
         unreachable!("only an avatar calls the job's RoomService")
     }
 }
 
-struct Run;
+/// The job's run, recording the closes registered on its shutdown.
+#[derive(Default)]
+struct Run(Arc<Mutex<Vec<String>>>);
 
 impl lk_agents_abi::worker::ipc_host::JobExecution for Run {
     fn session_closed(&self, _reason: String) {}
+    fn add_framework_shutdown(
+        &self,
+        name: String,
+        shutdown: lk_agents_abi::worker::ipc_host::FrameworkShutdown,
+    ) {
+        use lk_agents_abi::worker::ipc_host::FrameworkShutdown;
+        let kind = match shutdown {
+            FrameworkShutdown::Native(_) => "native",
+            FrameworkShutdown::Host(_) => "host",
+        };
+        self.0.lock().push(format!("shutdown {name} {kind}"));
+    }
 }
 
 /// The host of session `id`, already prepared.
@@ -333,7 +343,7 @@ fn join(
     let owner = owner();
     let mut args = lk_agents_abi::voice::session::VoiceSessionArgs {
         job: Some(job.clone()),
-        job_run: Some(Arc::new(Run)),
+        job_run: Some(Arc::new(Run::default())),
         ..Default::default()
     };
     let joined = owner.0.join_job(&JobHost(HostRef::new(id, &registry)), &mut args, false);
@@ -360,10 +370,10 @@ async fn the_first_session_claimed_is_the_jobs_primary_and_every_one_closes_with
         [
             "claim 1",
             "init_recording audio=false",
-            "on_shutdown 1",
+            "shutdown VoiceSession.aclose native",
             "claim 2",
             "init_recording audio=false",
-            "on_shutdown 2"
+            "shutdown VoiceSession.aclose native"
         ]
     );
 }

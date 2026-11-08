@@ -177,17 +177,17 @@ pub struct SessionConnOptions {
     pub tts: Option<crate::ApiConnectOptions>,
 }
 
-/// Of a detector object only whether it streams crosses.
+/// A mode, an `inference.TurnDetector` (its stream crosses as the session's `turn_detector`) or
+/// `None`.
 #[crate::host(codec(
     extract,
-    host = ".session_options.TurnDetectionMode | livekit.agents.voice.io._StreamingTurnDetector \
-            | None",
+    host = ".session_options.TurnDetectionMode | livekit.agents.inference.TurnDetector | None",
     py = "py_values::turn_detection_kwarg"
 ))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnDetectionKwarg {
     Mode(TurnDetection),
-    Detector { streaming: bool },
+    Detector,
     Null,
 }
 
@@ -196,7 +196,7 @@ impl TurnDetectionKwarg {
     pub fn detection(self) -> Option<TurnDetection> {
         match self {
             TurnDetectionKwarg::Mode(m) => Some(m),
-            TurnDetectionKwarg::Detector { streaming: _ } | TurnDetectionKwarg::Null => None,
+            TurnDetectionKwarg::Detector | TurnDetectionKwarg::Null => None,
         }
     }
 }
@@ -421,7 +421,6 @@ pub struct SessionKwargs {
     pub transcription_timeout: Option<f64>,
     #[host(default = 2.0)]
     pub session_close_transcript_timeout: f64,
-    pub conn_options: SessionConnOptions,
 }
 
 /// `AgentSession.update_options(..)`'s option surface.
@@ -479,7 +478,7 @@ debug_record!(TurnHandlingKwargs {
 debug_record!(SessionKwargs {
     turn_handling, max_tool_steps, min_consecutive_speech_delay,
     ivr_detection, user_away_timeout, transcription_timeout,
-    session_close_transcript_timeout, conn_options;
+    session_close_transcript_timeout;
     use_tts_aligned_transcript, tts_text_transforms, aec_warmup_duration, expressive
 });
 

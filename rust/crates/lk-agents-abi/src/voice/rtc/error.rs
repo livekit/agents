@@ -69,6 +69,19 @@ impl RtcError {
     pub fn host(message: impl Into<String>) -> Self {
         RtcError::Host(crate::errors::HostError::new(message))
     }
+
+    /// The `rtc.RpcError` a failed `perform_rpc` raised.
+    pub fn rpc(&self) -> Option<super::rpc::RpcError> {
+        match self {
+            RtcError::Host(error) => match error.kind {
+                crate::errors::HostErrorKind::Rpc { code } => {
+                    Some(super::rpc::RpcError { code, message: error.message.clone() })
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
 }
 
 /// A host failure keeps the host's exception; any other room failure is its message.

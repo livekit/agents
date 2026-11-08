@@ -11,7 +11,6 @@ from typing import Any, Generic
 
 from . import _core, llm, utils
 from ._generated import public_text_session as _public, text_session as records
-from ._generated.agent_run import RunSettled
 from ._generated.public_text_session import *  # noqa: F403
 from ._generated.run_result import Output_T
 from .storage.context import ContextStore
@@ -148,15 +147,12 @@ class TextSession(Generic[Context_T, Output_T]):
                     resources,
                 )
 
-                def settle(finished: records.TextSessionSettled) -> TextSessionTurn[Output_T]:
-                    frame = finished.turn.state.frames[finished.turn.state.active_frame_id]
-                    result = settled_result(
-                        RunSettled(result=finished.turn.result, output=finished.output),
-                        runs[frame.agent_name].hooks,
-                    )
+                def settle(finished: records.TextSessionFinished) -> TextSessionTurn[Output_T]:
+                    frame = finished.state.frames[finished.state.active_frame_id]
+                    result = settled_result(finished.run, runs[frame.agent_name].hooks)
                     if hooks is not None and hooks.on_result is not None:
                         hooks.on_result(result)
-                    return TextSessionTurn(result=result, state=finished.turn.state)
+                    return TextSessionTurn(result=result, state=finished.state)
 
                 return _Started(settle=settle)
 

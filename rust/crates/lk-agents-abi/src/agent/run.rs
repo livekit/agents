@@ -27,9 +27,8 @@ pub struct RunInputRequirement {
     pub verbatim: bool,
 }
 
-/// The settled invocation (`RunResult[Output]`): its status, then the history and usage both
-/// branches expose.
-#[crate::host(record(module = "agent_run", emit))]
+/// The settled invocation: its status, then the history and usage every branch exposes. The host
+/// reads it as the caller's `RunResult` ([`RunFinished`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunResult {
     pub outcome: RunOutcome,
@@ -47,18 +46,15 @@ pub struct RunResult {
     pub pending_call: Option<crate::a2a::turn::PendingCall>,
     /// Every tool-originated input requirement, in model-call order. The singular outcome and
     /// `pending_call` remain the compatibility projection; other requirements are not answered.
-    #[host(default_factory = "list")]
     pub input_requirements: Vec<RunInputRequirement>,
 }
 
-#[crate::host(record(module = "agent_run", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunOutcome {
     Completed {
         output: Output,
     },
     /// The run ends on a question for the person.
-    #[host(field = "question")]
     InputRequired(RunQuestion),
     /// The turn ended with no output: `StopResponse`, a tool result asking for no reply, an
     /// all-silent step or an interruption. Never `Completed`, whose output is the declared type.
@@ -68,7 +64,6 @@ pub enum RunOutcome {
 /// The question a run ends on (`InputRequired`): asked as written when `verbatim`. The person's
 /// next message goes to `answer_tool`, when one is named, as its first string parameter
 /// (`InputRequired(tool=)`); the next invocation is told so.
-#[crate::host(record(module = "agent_run", emit, extract))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunQuestion {
     pub question: String,
@@ -77,21 +72,18 @@ pub struct RunQuestion {
 }
 
 /// The accepted output of a completed invocation.
-#[crate::host(record(module = "agent_run", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Output {
     /// A `str` output.
-    #[host(field = "text")]
     Text(String),
     /// The value the host validated for this candidate; the runtime retains it and the update
     /// carries it.
-    #[host(skip)]
     Validated(ValidationId),
 }
 
 /// What every branch of the caller's `RunResult` exposes: its history, usage and correlated
 /// input requests. The host builds a branch from a `RunSettled`.
-#[crate::host(record(module = "run_result", name = "_Settled", dataclass, kw_only))]
+#[crate::host(record(module = "run_result", name = "_Settled", emit, dataclass, kw_only))]
 #[python(
     method(
         name = "new_messages",
@@ -138,6 +130,7 @@ pub struct SettledRun {
 #[crate::host(record(
     module = "run_result",
     path = "livekit.agents.voice.run_result",
+    emit,
     dataclass,
     kw_only,
     base = "_Settled",
@@ -146,14 +139,25 @@ pub struct SettledRun {
 ))]
 #[derive(Debug, Clone)]
 pub struct RunCompleted {
+    #[host(flatten)]
+    pub settled: SettledRun,
     #[host(annotation = "Output_T")]
-    pub output: HostRef,
+    pub output: RunOutput,
+}
+
+/// A completed invocation's output: its text, or the value the host validated.
+#[crate::host(record(module = "run_result", emit, transparent))]
+#[derive(Debug, Clone)]
+pub enum RunOutput {
+    Text(String),
+    Validated(HostRef),
 }
 
 /// `RunResult` with `status == "input_required"`: the invocation asks `question`.
 #[crate::host(record(
     module = "run_result",
     path = "livekit.agents.voice.run_result",
+    emit,
     dataclass,
     kw_only,
     base = "_Settled",
@@ -161,6 +165,8 @@ pub struct RunCompleted {
 ))]
 #[derive(Debug, Clone)]
 pub struct RunInputRequired {
+    #[host(flatten)]
+    pub settled: SettledRun,
     pub question: String,
 }
 
@@ -169,13 +175,17 @@ pub struct RunInputRequired {
 #[crate::host(record(
     module = "run_result",
     path = "livekit.agents.voice.run_result",
+    emit,
     dataclass,
     kw_only,
     base = "_Settled",
     constant(status = "no_output")
 ))]
 #[derive(Debug, Clone)]
-pub struct RunNoOutput {}
+pub struct RunNoOutput {
+    #[host(flatten)]
+    pub settled: SettledRun,
+}
 
 /// One agent invocation (agents.md "Running a turn"): narrow on `status` for `output` or
 /// `question`; every branch exposes `new_messages()`, `all_messages()` and `usage`.
@@ -183,6 +193,7 @@ pub struct RunNoOutput {}
     module = "run_result",
     name = "RunResult",
     path = "livekit.agents.voice.run_result",
+    emit,
     transparent,
     generic = "Output_T"
 ))]
@@ -305,12 +316,62 @@ pub struct RunRequest {
     pub parent: Option<crate::telemetry::record::SpanContext>,
 }
 
-/// A settled invocation, with the value the host validated when the output is one.
-#[crate::host(record(module = "agent_run", emit))]
+/// A settled invocation, with the value the host validated when the output is one. The host
+/// reads it as its [`RunFinished`].
+#[crate::host(codec(emit, host = "RunFinished", via = crate::agent::run::RunFinished))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunSettled {
     pub result: RunResult,
     pub output: Option<HostRef>,
+}
+
+/// A settled invocation as the host reads it: the caller's `RunResult` branch, and whether the
+/// managed turn yielded at a safe boundary.
+#[crate::host(record(module = "agent_run", emit))]
+#[derive(Debug, Clone)]
+pub struct RunFinished {
+    pub result: CallerRunResult,
+    pub interrupted: bool,
+}
+
+impl From<RunSettled> for RunFinished {
+    /// A validated output the runtime no longer holds reads as no output.
+    fn from(RunSettled { result, output }: RunSettled) -> Self {
+        let RunResult {
+            outcome,
+            interrupted,
+            new_messages,
+            all_messages,
+            usage,
+            verbatim,
+            pending_call,
+            input_requirements,
+        } = result;
+        let settled = SettledRun {
+            new_messages,
+            all_messages,
+            usage,
+            verbatim,
+            pending_call,
+            input_requirements,
+        };
+        let result = match (outcome, output) {
+            (RunOutcome::Completed { output: Output::Text(text) }, _) => {
+                CallerRunResult::Completed(RunCompleted { settled, output: RunOutput::Text(text) })
+            }
+            (RunOutcome::Completed { output: Output::Validated(_) }, Some(value)) => {
+                let output = RunOutput::Validated(value);
+                CallerRunResult::Completed(RunCompleted { settled, output })
+            }
+            (RunOutcome::InputRequired(RunQuestion { question, .. }), _) => {
+                CallerRunResult::InputRequired(RunInputRequired { settled, question })
+            }
+            (RunOutcome::Completed { .. } | RunOutcome::NoOutput, _) => {
+                CallerRunResult::NoOutput(RunNoOutput { settled })
+            }
+        };
+        RunFinished { result, interrupted }
+    }
 }
 
 /// What the consumer of a run receives, in order.

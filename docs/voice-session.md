@@ -27,7 +27,6 @@ again when left empty.
 |---|---|
 | `llm` | Session default when the agent does not select a model; supports a realtime model |
 | `stt`, `tts`, `vad` | Session-owned recognition, synthesis, and voice activity models |
-| `turn_detection`, `endpointing_opts` | Session-owned turn completion (a `TurnDetectionMode`) and endpointing policy |
 | `turn_handling` | a `TurnHandlingOptions`: `turn_detection`, `endpointing` (`EndpointingOptions`), `interruption` (`InterruptionOptions`), `preemptive_generation` (`PreemptiveGenerationOptions`) and `user_turn_limit` (`UserTurnLimitOptions`) in one dict |
 | `conn_options` | a `SessionConnectOptions`: each leg's [connection policy](models.md#connection-options) (`stt_conn_options`, `llm_conn_options`, `tts_conn_options`) and `max_unrecoverable_errors` |
 | `video_sampler` | a `VoiceActivityVideoSampler(speaking_fps=, silent_fps=)`: how often camera frames reach the model; `None` sends every frame |
@@ -38,6 +37,12 @@ again when left empty.
 | `tools` | tools and toolsets every agent of the call is offered, besides its own; a name an agent's tool already has is refused (`ValueError`) when that agent runs, see [tools](tools.md#tools-on-an-agent) |
 | `context` | the application object; marked fields require explicit loading and saving |
 | `thread` | the call's durable thread, `ctx.thread`; omitted, the history is kept in memory and not saved |
+
+`turn_detection` is a mode (`"stt"`, `"vad"`, `"realtime_llm"`, `"manual"`) or an
+`inference.TurnDetector`, which predicts the end of the person's turn on their audio; any other
+object is refused (`TypeError`). Left out, a session without a realtime model runs
+`inference.TurnDetector()`. A detector object is set at construction;
+`update_options(turn_detection=)` on a running session takes a mode.
 
 `session.start(agent, chat_ctx=)` and `session.update_agent(agent, chat_ctx=)`
 are the two places to supply a different history. An explicit agent switch
@@ -129,7 +134,7 @@ session = VoiceSession(
     stt=recognizer,
     tts=front_desk_voice,
     vad=voice_activity_detector,
-    turn_detection="vad",
+    turn_handling={"turn_detection": "vad"},
     context=app,
     thread=ctx.thread,
 )

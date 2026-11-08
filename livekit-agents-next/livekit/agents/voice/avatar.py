@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Coroutine
-from typing import TYPE_CHECKING, Generic, Literal, Never, cast
+from typing import TYPE_CHECKING, Generic, Literal, Never
 
 from typing_extensions import TypeVar
 
@@ -21,7 +21,6 @@ from livekit import rtc
 
 from .. import _core, utils
 from .._generated import public_voice_avatar as _public
-from .._generated.avatar import AudioReceiverObservation
 from .._generated.avatar_queue import QueueEffects
 from .._generated.io_events import AvatarPlaybackSegment
 from .._generated.public_voice_avatar import *  # noqa: F403
@@ -58,9 +57,6 @@ class AudioReceiver(
     ``notify_playback_finished`` receive that segment's key.
     """
 
-    _core_audio_epoch = 0
-    _core_audio: AsyncIterator[rtc.AudioFrame | AudioSegmentEnd] | None = None
-
     async def start(self) -> None:
         pass
 
@@ -82,19 +78,6 @@ class AudioReceiver(
 
     async def aclose(self) -> None:
         pass
-
-    # what `_core.AvatarRunner` reads (`AvatarAudioReceiver.next_audio`), stamped with the
-    # runner's clear epoch on this loop
-
-    async def _core_next_audio(self) -> AudioReceiverObservation:
-        if (audio := self._core_audio) is None:
-            audio = self._core_audio = self.__aiter__()
-        return AudioReceiverObservation(
-            epoch=self._core_audio_epoch,
-            starts_segment=False,
-            segment=None,
-            frame=await anext(audio, None),
-        )
 
 
 class VideoGenerator(ABC):
@@ -316,7 +299,7 @@ class QueueAudioOutput(
         await super().capture_frame(frame)
         key = self.playback_segment
         assert key is not None
-        self._apply(self._native.capture(frame, key, self._core_audio_epoch))
+        self._apply(self._native.capture(frame, key))
 
     def flush(self) -> None:
         super().flush()
@@ -339,9 +322,6 @@ class QueueAudioOutput(
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
         return self
-
-    async def _core_next_audio(self) -> AudioReceiverObservation:
-        return await self._native.next_audio()
 
     async def __anext__(self) -> rtc.AudioFrame | AudioSegmentEnd:
         if (item := (await self._native.next_audio()).frame) is None:
@@ -368,10 +348,15 @@ class AvatarRunner:
         # publish video and audio tracks until the first frame pushed
     ) -> None:
         self._audio_recv = audio_recv
-        receiver = audio_recv
+        self._host_receiver: _core.HostAudioReceiver | None = None
+        receiver: _core.DataStreamAudioReceiver | _core.HostAudioReceiver
         if isinstance(audio_recv, DataStreamAudioReceiver):
-            # the native receiver is the runner's own receiver (its stub names the host class)
-            receiver = cast(AudioReceiver, audio_recv._native)
+            receiver = audio_recv._native
+        elif isinstance(audio_recv, QueueAudioOutput):
+            # the queue stamps and reports its own clears
+            receiver = _core.HostAudioReceiver(audio_recv, audio=audio_recv._native)
+        else:
+            receiver = self._host_receiver = _core.HostAudioReceiver(audio_recv)
         self._core = _core.AvatarRunner(
             _core._core_create_room_session(room),
             receiver=receiver,
@@ -388,12 +373,9 @@ class AvatarRunner:
     async def start(self) -> None:
         """Start the worker"""
         await self._audio_recv.start()
-        self._audio_recv.on("clear_buffer", self._on_clear_buffer)
+        if self._host_receiver is not None:
+            self._audio_recv.on("clear_buffer", self._host_receiver.clear_buffer)
         await self._core.start()
-
-    def _on_clear_buffer(self) -> None:
-        self._audio_recv._core_audio_epoch += 1
-        self._core.clear_buffer(self._audio_recv._core_audio_epoch)
 
     async def wait_for_complete(self) -> None:
         await self._core.wait_for_complete()
@@ -402,4 +384,5 @@ class AvatarRunner:
         try:
             await self._core.aclose()
         finally:
-            self._audio_recv.off("clear_buffer", self._on_clear_buffer)
+            if self._host_receiver is not None:
+                self._audio_recv.off("clear_buffer", self._host_receiver.clear_buffer)

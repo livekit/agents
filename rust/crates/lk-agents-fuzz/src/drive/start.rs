@@ -72,6 +72,7 @@ impl Run {
         });
         let options = <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(
             session_kwargs(setup),
+            session_conn(setup),
         );
         let room_io = RoomIoConfig {
             close_on_disconnect: setup.room.is_some_and(|r| r.close_on_disconnect),
@@ -626,19 +627,20 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
         user_away_timeout: Some(15.0),
         transcription_timeout: setup.transcription_timeout_ms.map(secs),
         session_close_transcript_timeout: 2.0,
-        conn_options: setup.conn.map_or_else(SessionConnOptions::default, |c| {
-            let leg = |max_retry| lk_agents_abi::ApiConnectOptions {
-                max_retry,
-                retry_interval: secs(c.interval_ms),
-                ..lk_agents_abi::ApiConnectOptions::default()
-            };
-            SessionConnOptions {
-                stt: Some(leg(c.stt)),
-                llm: Some(leg(c.llm)),
-                tts: Some(leg(c.tts)),
-            }
-        }),
     }
+}
+
+/// `AgentSession(conn_options=)` for a setup.
+fn session_conn(setup: &Setup) -> SessionConnOptions {
+    let secs = |ms: u64| ms as f64 / 1000.0;
+    setup.conn.map_or_else(SessionConnOptions::default, |c| {
+        let leg = |max_retry| lk_agents_abi::ApiConnectOptions {
+            max_retry,
+            retry_interval: secs(c.interval_ms),
+            ..lk_agents_abi::ApiConnectOptions::default()
+        };
+        SessionConnOptions { stt: Some(leg(c.stt)), llm: Some(leg(c.llm)), tts: Some(leg(c.tts)) }
+    })
 }
 
 pub(super) type Stt = dyn lk_agents_abi::Stt;
@@ -876,6 +878,13 @@ struct JobRun {
 impl lk_agents_abi::worker::ipc_host::JobExecution for JobRun {
     fn session_closed(&self, reason: String) {
         self.host.lock().unwrap().push((self.stamps.next(), Host::JobEnded(reason), None));
+    }
+    fn add_framework_shutdown(
+        &self,
+        _: String,
+        _: lk_agents_abi::worker::ipc_host::FrameworkShutdown,
+    ) {
+        unreachable!("the simulated session joins no job")
     }
 }
 

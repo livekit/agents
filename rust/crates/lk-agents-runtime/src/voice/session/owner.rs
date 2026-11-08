@@ -22,6 +22,7 @@ use lk_agents_abi::voice::session_owner::{
     OptionsRefused, SessionBindings, SessionBindingsPort, SessionHost,
 };
 use lk_agents_abi::voice::session_storage::SessionStorage as _;
+use lk_agents_abi::worker::ipc_host::FrameworkShutdown;
 use lk_agents_abi::{BoxFuture, HostRef, Maybe};
 use lk_agents_net::{env::ProcessEnv, task::TaskSet};
 use lk_agents_voice::agent_session::lifecycle::{
@@ -202,6 +203,34 @@ impl SessionEvents for Events {
 }
 
 impl Inner {
+    /// Admits the close and owns its work; the future waits until the session closed.
+    fn close(
+        self: &Arc<Self>,
+        reason: CloseReason,
+        drain: bool,
+    ) -> Result<BoxFuture<'static, ()>, HostError> {
+        let spawner = (self.env.spawner)().map_err(|e| HostError::new(e.to_string()))?;
+        let action = self.lifecycle.lock().close();
+        if let CloseOwner::Close { wait_start } = action {
+            let inner = self.clone();
+            self.tasks.spawn(
+                spawner.as_ref(),
+                "session cleanup",
+                Box::pin(async move {
+                    if wait_start && opened(inner.opened.subscribe()).await.is_err() {
+                        return; // Failed startup already performed cleanup.
+                    }
+                    inner.cleanup(reason, drain).await;
+                    inner.closed.send_replace(true);
+                }),
+            );
+        }
+        let mut receiver = self.closed.subscribe();
+        Ok(Box::pin(async move {
+            let _ = receiver.wait_for(|closed| *closed).await;
+        }))
+    }
+
     async fn open(self: &Arc<Self>, startup: Startup) -> Result<(), HostError> {
         let Startup { storage, host, trace, job_ids, mut opening } = startup;
         let ready =
@@ -253,12 +282,16 @@ impl Inner {
             args.chat_ctx = Some(history);
         }
         let initial_agent = args.agent_host.clone();
+        let job_run = args.job_run.clone();
         let session = Arc::new(
             VoiceSession::new(&self.env, bindings.room, args, Some(self.options.clone()))
                 .map_err(|error| HostError::new(error.to_string()))?,
         );
         session.attach_recorder(self.recorder.get().cloned());
         let in_session = trace.clone().under::<telemetry::AgentSession>(opening.session.context);
+        if let Some(run) = &job_run {
+            run.session_started(in_session.clone());
+        }
         session.trace_under(trace, job_ids, opening);
         let _ = self.session.set(session.clone());
         let initial = self.select(initial_agent);
@@ -278,7 +311,7 @@ impl Inner {
     /// `<recording_dir>/audio.ogg` when the session records audio, and the job's shutdown closes
     /// the session, in that order.
     fn join_job(
-        &self,
+        self: &Arc<Self>,
         host: &dyn SessionHost,
         args: &mut lk_agents_abi::voice::session::VoiceSessionArgs,
         record_audio: bool,
@@ -317,7 +350,21 @@ impl Inner {
             let _ = self.recorder.set(recorder.clone());
             let _ = self.audio.set((path, recorder));
         }
-        job.on_shutdown(host.session()?)
+        let owner = Arc::downgrade(self);
+        let close = move || -> BoxFuture<'static, ()> {
+            Box::pin(async move {
+                let closing =
+                    owner.upgrade().map(|inner| inner.close(CloseReason::JobShutdown, false));
+                if let Some(Ok(closed)) = closing {
+                    closed.await;
+                }
+            })
+        };
+        job.run().add_framework_shutdown(
+            "VoiceSession.aclose".into(),
+            FrameworkShutdown::Native(Box::new(close)),
+        );
+        Ok(())
     }
 
     /// Bind the providers whose effective value changed to the running session; before it runs,
@@ -634,26 +681,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         drain: bool,
     ) -> Result<BoxFuture<'static, ()>, UnknownCloseReason> {
         let reason = CloseReason::from_wire(&reason).ok_or(UnknownCloseReason(reason))?;
-        let spawner = (self.0.env.spawner)().map_err(|e| UnknownCloseReason(e.to_string()))?;
-        let action = self.0.lifecycle.lock().close();
-        if let CloseOwner::Close { wait_start } = action {
-            let inner = self.0.clone();
-            self.0.tasks.spawn(
-                spawner.as_ref(),
-                "session cleanup",
-                Box::pin(async move {
-                    if wait_start && opened(inner.opened.subscribe()).await.is_err() {
-                        return; // Failed startup already performed cleanup.
-                    }
-                    inner.cleanup(reason, drain).await;
-                    inner.closed.send_replace(true);
-                }),
-            );
-        }
-        let mut receiver = self.0.closed.subscribe();
-        Ok(Box::pin(async move {
-            let _ = receiver.wait_for(|closed| *closed).await;
-        }))
+        self.0.close(reason, drain).map_err(|e| UnknownCloseReason(e.to_string()))
     }
 
     fn shutdown(&self, reason: String, drain: bool) -> Result<(), UnknownCloseReason> {

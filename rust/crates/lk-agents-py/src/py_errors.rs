@@ -46,6 +46,9 @@ pub mod interfaces {
 
     #[lk_agents_abi::host(interface(host = "livekit.agents._generated.storage_errors.TooLarge"))]
     pub struct TooLarge;
+
+    #[lk_agents_abi::host(interface(host = "livekit.rtc.RpcError", attrs(code)))]
+    pub struct RpcError;
 }
 
 use crate::generated::accessors as access;
@@ -154,6 +157,12 @@ fn host_kind(value: &Bound<'_, PyAny>) -> HostErrorKind {
         return HostErrorKind::Cancelled;
     }
     type Import = for<'py> fn(Python<'py>) -> PyResult<Bound<'py, PyAny>>;
+    let is =
+        |import: Import| import(value.py()).and_then(|c| value.is_instance(&c)).unwrap_or(false);
+    if is(access::RpcError::import) {
+        let code = access::RpcError::code(value).and_then(|code| code.extract::<u32>());
+        return HostErrorKind::Rpc { code: code.unwrap_or_default() };
+    }
     let storage: [(Import, HostErrorKind); 6] = [
         (access::ThreadNotFound::import, HostErrorKind::NotFound),
         (access::StorageUnavailable::import, HostErrorKind::Unavailable),
@@ -162,8 +171,6 @@ fn host_kind(value: &Bound<'_, PyAny>) -> HostErrorKind {
         (access::NotSerializable::import, HostErrorKind::NotSerializable),
         (access::TooLarge::import, HostErrorKind::TooLarge),
     ];
-    let is =
-        |import: Import| import(value.py()).and_then(|c| value.is_instance(&c)).unwrap_or(false);
     storage.into_iter().find(|(import, _)| is(*import)).map_or(HostErrorKind::Other, |(_, k)| k)
 }
 

@@ -1,5 +1,7 @@
 """The OpenTelemetry API backed by the Rust core, and the bridge from an application SDK."""
 
+from typing import Any
+
 import pytest
 from opentelemetry import context as otel_context, trace
 
@@ -15,15 +17,10 @@ def test_current_span_is_an_api_span_and_parents_application_spans() -> None:
         assert current is outer and isinstance(current, trace.Span)
         inner = tracer.start_span("clinic.inner")
         assert inner.get_span_context().trace_id == outer.get_span_context().trace_id
-        current = telemetry._current()
-        assert current is not None
-        assert (current.trace_id, current.span_id) == (
-            outer.get_span_context().trace_id,
-            outer.get_span_context().span_id,
-        )
+        assert telemetry._current() == outer.get_span_context()
         inner.end()
     assert not outer.is_recording()
-    assert telemetry._current() is None
+    assert not telemetry._current().is_valid
 
 
 def test_start_as_current_span_decorates_and_records_failures() -> None:
@@ -44,7 +41,8 @@ def test_an_activated_framework_span_parents_application_spans() -> None:
     tracer = telemetry._TracerProvider().get_tracer("clinic")
     token = otel_context.attach(otel_context.Context())
     try:
-        telemetry._activate(0xABC, 0x42, True)
+        sampled = trace.TraceFlags(trace.TraceFlags.SAMPLED)
+        telemetry._activate(trace.SpanContext(0xABC, 0x42, is_remote=False, trace_flags=sampled))
         span = tracer.start_span("clinic.child")
         assert span.get_span_context().trace_id == 0xABC
         span.end()
@@ -57,20 +55,19 @@ def test_the_bridge_forwards_an_sdk_span_with_its_ids() -> None:
     provider = sdk.TracerProvider()
     forwarded: list[tuple[str, int]] = []
     bridge = telemetry._bridge()
-    real = _core.TelemetrySpan
+    real = _core._core_telemetry_export
 
-    def record(name: str, scope: str, **kwargs: object) -> object:
-        span = real(name, scope, **kwargs)
-        forwarded.append((name, span.context.span_id))
-        return span
+    def export(span: Any, **kwargs: Any) -> None:
+        forwarded.append((span.name, span.get_span_context().span_id))
+        real(span, **kwargs)
 
-    _core.TelemetrySpan = record  # type: ignore[attr-defined]
+    _core._core_telemetry_export = export  # type: ignore[attr-defined]
     try:
         provider.add_span_processor(bridge)
         with provider.get_tracer("app").start_as_current_span("app.work") as span:
             span_id = span.get_span_context().span_id
     finally:
-        _core.TelemetrySpan = real  # type: ignore[attr-defined]
+        _core._core_telemetry_export = real  # type: ignore[attr-defined]
     assert forwarded == [("app.work", span_id)]
 
 

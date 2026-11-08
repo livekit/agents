@@ -505,6 +505,18 @@ fn external_records_generate_structural_conversions_and_reuse_the_host_class() {
 }
 
 #[test]
+fn a_read_only_external_record_imports_its_class_for_typing_only() {
+    let declarations = super::read(r#"
+        #[crate::host(record(module = "spans", name = "Span", host_type = "optional.sdk.Span", extract))]
+        pub struct Span { pub name: String }
+    "#).unwrap();
+    let python = crate::records::python(&declarations).unwrap();
+    let python = &python.iter().find(|out| out.path == "spans.py").unwrap().text;
+    assert!(python.contains("if TYPE_CHECKING:\n    from optional.sdk import Span as _HostSpan"));
+    assert!(python.contains("Span: TypeAlias = \"_HostSpan\""));
+}
+
+#[test]
 fn capture_variants_generate_the_reverse_error_mapping_and_refuse_ambiguity() {
     let source = r#"
         #[crate::host(error(kind = "RuntimeError"))]
@@ -601,6 +613,108 @@ fn structural_boundary_extraction_normalizes_attributes_and_flattened_values() {
     );
 }
 
+// Catches: a foreign class's nested attribute copied by hand (`ctx.trace_flags.sampled`), or a
+// constructor constant retyped at each call site.
+#[test]
+fn boundary_paths_read_nested_attributes_and_fixed_keywords_build_the_host_class() {
+    let source = r#"
+        #[host(record(module = "wire", host_type = "otel.SpanContext", boundary, extract, emit, fixed(is_remote = false)))]
+        pub struct Ids {
+            pub trace_id: u64,
+            #[host(path = "trace_flags.sampled", emit_class = "otel.TraceFlags")]
+            pub sampled: bool,
+        }
+    "#;
+    let rust = crate::records::conversions(&read(source).unwrap()).unwrap().text;
+    assert!(rust.contains("obj.clone().getattr(\"trace_flags\")?.getattr(\"sampled\")?"), "{rust}");
+    assert!(rust.contains("kwargs.set_item(\"is_remote\", false)?"), "{rust}");
+    assert!(rust.contains("kwargs.set_item(\"trace_flags\", crate::py_calls::call("), "{rust}");
+    assert!(rust.contains("\"otel\", \"TraceFlags\""), "{rust}");
+    let optional = r#"#[host(record(module = "wire", host_type = "app.Asked", boundary, extract))] pub struct Asked { #[host(path = "tool.info.name", missing_default)] pub tool: Option<String> }"#;
+    let rust_optional = crate::records::conversions(&read(optional).unwrap()).unwrap().text;
+    assert!(
+        rust_optional.contains(".filter(|m| !m.is_none()).and_then(|m| m.getattr(\"info\").ok())"),
+        "{rust_optional}"
+    );
+    let unbuilt = source.replace(", emit_class = \"otel.TraceFlags\"", "");
+    assert!(crate::records::conversions(&read(&unbuilt).unwrap()).is_err());
+    let unemitted = r#"#[host(record(module = "wire", host_type = "otel.X", boundary, extract, fixed(a = 1)))] pub struct X { pub a: u64 }"#;
+    assert!(read(unemitted).is_err());
+}
+
+// Catches: an ASGI message converted by a handwritten match (renamed keys, defaults and the
+// bytes/text choice retyped in Python), or a shared tag accepting both or neither key.
+#[test]
+fn tagged_dict_unions_read_and_emit_plain_dicts_by_their_tag() {
+    let source = r#"
+        #[host(record(module = "asgi", typed_dict, tag = "type", extract, emit))]
+        pub enum Message {
+            #[host(tag = "http.response.body | websocket.http.response.body")]
+            Body { #[host(rename = "body", missing_default)] data: Vec<u8>, #[host(rename = "more_body", missing_default)] more: bool },
+            #[host(tag = "websocket.send")]
+            Text { text: String },
+            #[host(tag = "websocket.send")]
+            Binary { #[host(rename = "bytes")] data: Vec<u8> },
+            #[host(tag = "websocket.close")]
+            Close { #[host(default = 1000)] code: u16, reason: Option<String> },
+            #[host(tag = "http.response.trailers")]
+            Trailers,
+        }
+    "#;
+    let decls = read(source).unwrap();
+    let rust = crate::records::conversions(&decls).unwrap().text;
+    assert!(
+        rust.contains("\"http.response.body\" => ::lk_agents_abi::llm::class::Message::Body"),
+        "{rust}"
+    );
+    assert!(rust.contains("\"websocket.http.response.body\" =>"), "{rust}");
+    assert!(rust.contains("item(\"more_body\")?.filter(|v| !v.is_none())"), "{rust}");
+    assert!(rust.contains("websocket.send carries exactly one of text, bytes"), "{rust}");
+    assert!(rust.contains("(true, false) => ::lk_agents_abi::llm::class::Message::Text"), "{rust}");
+    assert!(rust.contains("None => 1000"), "{rust}");
+    assert!(rust.contains("dict.set_item(\"type\", \"http.response.body\")?"), "{rust}");
+    assert!(
+        rust.contains(
+            "Message::Trailers => { dict.set_item(\"type\", \"http.response.trailers\")?;"
+        ),
+        "{rust}"
+    );
+    let python = crate::records::python(&decls).unwrap();
+    let python = &python.iter().find(|out| out.path == "asgi.py").unwrap().text;
+    assert!(python.contains("Message: TypeAlias = MutableMapping[str, Any]"), "{python}");
+    assert!(!python.contains("class MessageBody"), "{python}");
+    assert!(read(&source.replace("#[host(tag = \"http.response.trailers\")]", "")).is_err());
+    assert!(read(&source.replace("typed_dict, tag", "tag")).is_err());
+}
+
+// Catches: an isinstance ladder over host outcome classes handwritten in Python, or a fallback
+// member that shadows the classes declared before it.
+#[test]
+fn transparent_members_read_attributes_and_take_any_other_value_last() {
+    let source = r#"
+        #[host(record(module = "outcomes", transparent, extract))]
+        pub enum Outcome {
+            #[host(host_type = "app.Failed", path = "error")]
+            Failed(String),
+            #[host(host_type = "app.Done", path = "result.value", extract_with = "py_values::jsonable")]
+            Done(serde_json::Value),
+            #[host(otherwise, extract_with = "py_values::jsonable")]
+            Value(serde_json::Value),
+        }
+    "#;
+    let rust = crate::records::conversions(&read(source).unwrap()).unwrap().text;
+    let reader = rust.split("pub fn outcome_from_py").nth(1).unwrap();
+    assert!(reader.contains("let member = obj.clone().getattr(\"error\")?;"), "{reader}");
+    assert!(reader.contains("obj.clone().getattr(\"result\")?.getattr(\"value\")?"), "{reader}");
+    assert!(reader.contains("crate::py_values::jsonable(v, \"Outcome.Value\")"), "{reader}");
+    assert!(!reader.contains("not_a(obj"), "{reader}");
+    let early = source.replace("#[host(otherwise, ", "#[host(").replace(
+        "#[host(host_type = \"app.Failed\", path = \"error\")]",
+        "#[host(otherwise, path = \"error\")]",
+    );
+    assert!(crate::records::conversions(&read(&early).unwrap()).is_err());
+}
+
 #[test]
 fn boundary_declarations_reject_inferred_or_ambiguous_structure() {
     for source in [
@@ -681,8 +795,77 @@ fn a_generic_union_of_dataclass_subclasses_shares_its_base_and_caches_a_view() {
     let crossing = read(
         r#"#[crate::host(record(module = "results", name = "_Base", dataclass))]
         pub struct Base { pub items: Vec<i64> }
-        #[crate::host(record(module = "results", dataclass, base = "_Base", emit))]
+        #[crate::host(record(module = "results", dataclass, base = "_Base", extract))]
         pub struct Done { pub value: String }"#,
     );
-    assert!(crossing.err().is_some_and(|e| e.contains("model only")));
+    assert!(crossing.err().is_some_and(|e| e.contains("it is never read back")));
+}
+
+// Catches: an emitted dataclass subclass redeclaring its base's fields in its model, its emission
+// missing the flattened base's keywords, or an emitted subclass that holds no base record.
+#[test]
+fn an_emitted_dataclass_subclass_flattens_its_base_into_its_keywords() {
+    let source = r#"
+        #[crate::host(record(module = "runs", name = "_Base", emit, dataclass, kw_only))]
+        #[derive(Clone)]
+        pub struct Base { pub usage: u32, #[host(rename = "_items")] pub items: Vec<String> }
+        #[crate::host(record(module = "runs", emit, dataclass, kw_only, base = "_Base"))]
+        #[derive(Clone)]
+        pub struct Done { #[host(flatten)] pub base: Base, pub question: String }
+    "#;
+    let decls = read(source).expect("resolves");
+    let rust = crate::records::conversions(&decls).unwrap().text;
+    assert!(
+        rust.contains("let ::lk_agents_abi::llm::class::Base { usage, items } = base;")
+            && rust.contains("kwargs.set_item(\"_items\"")
+            && rust.contains("kwargs.set_item(\"question\""),
+        "{rust}"
+    );
+    let models = crate::records::python(&decls).unwrap();
+    let model = &models.iter().find(|out| out.path == "runs.py").unwrap().text;
+    let done = &model[model.find("class Done(_Base)").expect("subclasses its base")..];
+    assert!(done.contains("question: str") && !done.contains("usage:"), "{model}");
+    let unflattened = source.replace("#[host(flatten)] pub base: Base, ", "");
+    let err = crate::records::python(&read(&unflattened).unwrap()).err().expect("refused");
+    assert!(err.contains("an emitted dataclass subclass flattens its base"), "{err}");
+}
+
+// Catches: an emit-only codec crossing through a record not converted into it first, a field hook
+// not called on the emitted value, or `resolve` accepted on a field the host passes in.
+#[test]
+fn emitted_values_cross_as_a_declared_record_or_through_a_field_hook() {
+    let decls = read(
+        r#"
+        #[crate::host(record(module = "runs", emit))]
+        pub struct Finished { pub done: bool }
+        #[crate::host(codec(emit, host = "Finished", via = crate::llm::class::Finished))]
+        pub struct Settled { pub done: bool }
+        impl From<Settled> for Finished { fn from(s: Settled) -> Self { Finished { done: s.done } } }
+        #[crate::host(record(module = "runs", emit))]
+        pub struct Update {
+            pub settled: Settled,
+            #[host(resolve(module = "pkg.io", name = "Handle._of"))]
+            pub handle: crate::utils::host_ref::HostRef,
+        }
+    "#,
+    )
+    .expect("resolves");
+    let rust = crate::records::conversions(&decls).unwrap().text;
+    assert!(
+        rust.contains("let scalar: ::lk_agents_abi::llm::class::Finished = settled.into();")
+            && rust.contains("finished_to_py(py, scalar)")
+            && rust.contains("py.import(\"pkg.io\")?.getattr(\"Handle\")?.getattr(\"_of\")?"),
+        "{rust}"
+    );
+    let err = read(
+        r#"
+        #[crate::host(record(module = "runs", extract))]
+        pub struct Taken {
+            #[host(resolve(module = "pkg.io", name = "Handle._of"))]
+            pub handle: crate::utils::host_ref::HostRef,
+        }
+    "#,
+    )
+    .unwrap_err();
+    assert!(err.contains("resolve shapes an emit-only record's field"), "{err}");
 }

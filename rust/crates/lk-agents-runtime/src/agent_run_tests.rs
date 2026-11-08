@@ -16,7 +16,7 @@ use lk_agents_abi::agent::{
 };
 use lk_agents_abi::errors::{HostError, ProviderError, RefRegistry};
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
-use lk_agents_abi::llm::tool_executor::{ToolOutcome, ToolReport};
+use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::resources::LlmRef;
 use lk_agents_abi::{
     ChatMessage, ChoiceDelta, Closed, FunctionToolCall, LlmChunk, LlmStream, ProviderId, Role,
@@ -264,8 +264,7 @@ impl AgentCallbacks for FakeHost {
         _cx: &lk_agents_abi::telemetry::Cx,
         invocation: &'a Invocation,
         _prepared: &'a HostRef,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<(ToolReport, serde_json::Map<String, Value>), HostError>>
-    {
+    ) -> lk_agents_abi::BoxFuture<'a, Result<lk_agents_abi::agent::ToolCompletion, HostError>> {
         let span = _cx.span();
         Box::pin(async move {
             self.saw("run", invocation, span);
@@ -273,7 +272,10 @@ impl AgentCallbacks for FakeHost {
                 Body::Returns => {}
                 Body::UntilCancelled => {
                     self.cancel.notified().await;
-                    return Ok((ToolOutcome::Cancelled.into(), Default::default()));
+                    return Ok(lk_agents_abi::agent::ToolCompletion {
+                        report: ToolOutcome::Cancelled.into(),
+                        extra: Default::default(),
+                    });
                 }
                 Body::Stuck => std::future::pending::<()>().await,
                 Body::Reports => {
@@ -281,18 +283,18 @@ impl AgentCallbacks for FakeHost {
                     assert_eq!(progress.report(invocation.operation, "halfway".into()), Ok(()));
                 }
             }
-            Ok((
-                ToolOutcome::Value {
+            Ok(lk_agents_abi::agent::ToolCompletion {
+                report: ToolOutcome::Value {
                     text: "9:00 is free".into(),
                     reply_required: true,
                     verbatim: false,
                     more: None,
                 }
                 .into(),
-                [("application_receipt".into(), json!("confirmed-appointment"))]
+                extra: [("application_receipt".into(), json!("confirmed-appointment"))]
                     .into_iter()
                     .collect(),
-            ))
+            })
         })
     }
 

@@ -35,7 +35,7 @@ pub fn running_layer(
     update: &UpdateKwargs,
 ) -> Result<AgentSessionOptions, lk_agents_abi::voice::session::CommandRefused> {
     validate_session_update(update)?;
-    if let Maybe::Given(TurnDetectionKwarg::Detector { .. }) = update.turn_detection {
+    if let Maybe::Given(TurnDetectionKwarg::Detector) = update.turn_detection {
         return Err(lk_agents_abi::voice::session::CommandRefused::Invalid(
             "update_options(turn_detection=) takes a mode on a running session; a turn detector object is set with VoiceSession(turn_handling=)".to_owned(),
         ));
@@ -326,7 +326,6 @@ pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
         user_away_timeout,
         transcription_timeout,
         session_close_transcript_timeout,
-        conn_options: _,
     } = kw.clone();
 
     let mut o = turn_handling_layer(&session_turn_handling(kw));
@@ -367,7 +366,7 @@ pub fn update_layer(kw: &UpdateKwargs) -> AgentSessionOptions {
         Maybe::Given(TurnDetectionKwarg::Null) => Maybe::Given(None),
         Maybe::Given(TurnDetectionKwarg::Mode(m)) => Maybe::Given(Some(m)),
         // A detector object: refused by `update_turn_options` before this.
-        Maybe::Given(TurnDetectionKwarg::Detector { streaming: _ }) => Maybe::NotGiven,
+        Maybe::Given(TurnDetectionKwarg::Detector) => Maybe::NotGiven,
     };
     o
 }

@@ -427,7 +427,7 @@ impl DriverBuilder {
                 .as_ref()
                 .map(|input| self.resources.register_video_input(Arc::clone(input))),
             video_sampler: self.video_sampler.take(),
-            eot_thresholds: eot.as_ref().and_then(|detector| detector.thresholds()),
+            eot_thresholds: eot.as_ref().map(|detector| detector.thresholds()),
             eot_provider: eot.as_ref().map(|detector| detector.id()),
             rt_session,
             rt_caps,

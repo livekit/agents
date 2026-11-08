@@ -9,9 +9,8 @@ use super::{
 };
 use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::errors::{ApiError, HostError, ProviderError};
-use lk_agents_abi::tokenize::language::{
-    LanguageCode, ThresholdOptions, ThresholdOverride, TurnDetectorModel,
-};
+use lk_agents_abi::inference::EotSelection;
+use lk_agents_abi::tokenize::language::{ThresholdOptions, ThresholdOverride, TurnDetectorModel};
 use lk_agents_abi::turn::inference::{EotMetricsObserver, EotModel, EotModelFactory};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame};
 use lk_agents_net::env::ProcessEnv;
@@ -135,18 +134,6 @@ impl lk_agents_abi::turn::inference::InferenceEot for AudioEot {
         self.table().backchannel_overrides().cloned()
     }
 
-    fn lookup(&self, language: Option<LanguageCode>) -> Option<f64> {
-        self.table().lookup(language.as_ref())
-    }
-
-    fn lookup_backchannel(&self, language: Option<LanguageCode>) -> Option<f64> {
-        self.table().lookup_backchannel(language.as_ref())
-    }
-
-    fn supports(&self, language: Option<LanguageCode>) -> bool {
-        self.table().supports(language.as_ref())
-    }
-
     fn update_overrides(&self, overrides: Option<ThresholdOverride>) {
         self.table().update_overrides(overrides);
     }
@@ -207,7 +194,7 @@ impl EotTransport for FailedTransport {
     }
 }
 
-/// The turn detector a host constructs: `(model, cloud, warnings)`.
+/// The turn detector a host constructs.
 pub fn select(
     version: Option<&str>,
     hosted: bool,
@@ -216,7 +203,7 @@ pub fn select(
     key: &str,
     secret: &str,
     local_fallback: bool,
-) -> Result<(TurnDetectorModel, bool, Vec<String>), Invalid> {
+) -> Result<EotSelection, Invalid> {
     let mut cloud = version.map_or(hosted || dev, |v| v == "v1");
     let mut warnings = vec![];
     if cloud {
@@ -247,7 +234,7 @@ pub fn select(
             model.as_str()
         ));
     }
-    Ok((model, cloud, warnings))
+    Ok(EotSelection { model, warnings })
 }
 
 #[cfg(test)]
@@ -256,13 +243,13 @@ mod tests {
     #[test]
     fn explicit_cloud_requires_credentials_but_auto_degrades() {
         assert!(select(Some("v1"), false, false, "url", "", "secret", true).is_err());
-        let (model, cloud, warnings) =
+        let EotSelection { model, warnings } =
             select(None, true, false, "url", "", "secret", true).unwrap();
-        assert!(!cloud);
         assert_eq!(model, TurnDetectorModel::V1Mini);
         assert_eq!(warnings.len(), 1);
-        assert!(select(None, false, true, "url", "key", "secret", true).unwrap().1);
-        assert!(!select(Some("v1-mini"), true, true, "url", "key", "secret", true).unwrap().1);
-        assert_eq!(select(None, false, false, "", "", "", false).unwrap().2.len(), 1);
+        let model = |version, hosted| select(version, hosted, true, "url", "key", "secret", true);
+        assert_eq!(model(None, false).unwrap().model, TurnDetectorModel::V1);
+        assert_eq!(model(Some("v1-mini"), true).unwrap().model, TurnDetectorModel::V1Mini);
+        assert_eq!(select(None, false, false, "", "", "", false).unwrap().warnings.len(), 1);
     }
 }

@@ -1,7 +1,8 @@
 //! The agent server as the host drives it: `_core.ServerConfig` (`AgentServer`'s options, the
 //! environment read where one was left empty, writable until the server starts) and
-//! `_core.ServerRuntime` (the server over the host's job processes and callbacks, which it
-//! reaches through the declared `ServerHost`), with endpoint streams dispatched to the host.
+//! `_core.ServerRuntime` (the server and its job process pool, over the host's launchers and
+//! callbacks, which it reaches through the declared `ServerHost`), with endpoint streams
+//! dispatched to the host.
 
 use crate::ipc::telemetry;
 use std::any::Any;
@@ -16,20 +17,22 @@ use lk_agents_abi::worker::http::{EndpointHandler, EndpointKind};
 use crate::http::{EndpointServer, HttpServerLimits, TextDoors};
 use lk_agents_abi::a2a::door::TextEndpoint;
 use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::worker::ipc_host::WorkerError;
+use lk_agents_abi::worker::ipc::JobRunnerOptions;
+use lk_agents_abi::worker::ipc_host::{JobLaunchers, WorkerError};
+use lk_agents_abi::worker::job::JobExecutorType;
 use lk_agents_abi::worker::server_host::{
-    EndpointRoute, ServerConfig, ServerConfiguration, ServerHost as Host, ServerRuntime,
+    EndpointRoute, ServerConfig, ServerConfiguration, ServerHost as Host, ServerJobs, ServerRuntime,
 };
-use lk_agents_abi::worker::types::{
-    ProcessOptions, ProcessPoolOptions, ProcessStartOptions, ServerOptions,
-};
+use lk_agents_abi::worker::types::{ProcessOptions, ProcessStartOptions, ServerOptions};
 use parking_lot::{Mutex, MutexGuard};
 
+use crate::ipc::ProcessPool;
+use crate::ipc::process_pool::JobObserver;
 use crate::server::{self, HealthProbe, ServerPhase, ServerSettings, ServerStart};
 use crate::transport::AgentEndpointKind;
 use crate::{
     EnvOption, HEARTBEAT_INTERVAL, IncomingRequest, JobDecision, JobId, JobRequest, RunningJobInfo,
-    TransportConfig, WorkerCommand, WorkerHost,
+    TransportConfig, WorkerHost,
 };
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TokioSpawner;
@@ -144,10 +147,63 @@ impl ServerConfig for Configuration {
 /// What serves the endpoint routes, once the server runs.
 pub(crate) type Mounted = Arc<OnceLock<Arc<EndpointServer>>>;
 
-/// The host server with what the runtime decides on its own.
+/// The job processes as the server drives them: the native pool, or a test's fake.
+#[async_trait]
+pub trait JobPool: Send + Sync {
+    /// Fill the pool for the first time.
+    async fn start(&self) -> Result<(), HostError>;
+    async fn launch(&self, info: RunningJobInfo) -> Result<(), HostError>;
+    async fn terminate(&self, job_id: &str);
+    fn set_target_idle(&self, target: usize);
+    /// The jobs whose process runs them now.
+    fn active_jobs(&self) -> Vec<RunningJobInfo>;
+    /// Waits until every process a job was launched on exited (the drain).
+    async fn join(&self);
+    async fn close(&self);
+}
+
+/// What the server's pool is made of, once the host supplied its launchers.
+pub struct PoolSetup {
+    pub launchers: Arc<dyn JobLaunchers>,
+    pub num_idle_processes: usize,
+    pub options: JobRunnerOptions,
+    /// The context the launchers' host calls run in.
+    pub context: CallContext,
+    pub observer: JobObserver,
+}
+
+pub type PoolFactory = Arc<dyn Fn(PoolSetup) -> Result<Arc<dyn JobPool>, HostError> + Send + Sync>;
+
+/// The native pool of supervised job processes.
+fn native_pools(env: ProcessEnv) -> PoolFactory {
+    Arc::new(move |setup: PoolSetup| {
+        let pool = ProcessPool::observed(
+            &env,
+            setup.launchers,
+            setup.num_idle_processes,
+            setup.options,
+            setup.context,
+            Some(setup.observer),
+        )
+        .map_err(|error| HostError::new(error.to_string()))?;
+        Ok(Arc::new(pool) as Arc<dyn JobPool>)
+    })
+}
+
+/// What the runtime hands the pool it starts.
+pub(crate) struct PoolLaunch {
+    pub context: CallContext,
+    pub asyncio_debug: bool,
+    pub observer: JobObserver,
+}
+
+/// The host server, the job processes the runtime owns, and what the runtime decides on its own.
 #[derive(Clone)]
 pub struct ServerCallbacks {
     pub(crate) proxy: Arc<dyn Host>,
+    pools: PoolFactory,
+    /// The job processes once the host started them; `None` when the server runs no jobs.
+    pool: Arc<tokio::sync::SetOnce<Option<Arc<dyn JobPool>>>>,
     /// The user gave a `load_fnc` the worker may call (not on Cloud).
     user_load: bool,
     /// The server has a voice door.
@@ -156,40 +212,111 @@ pub struct ServerCallbacks {
 }
 
 impl ServerCallbacks {
-    pub(crate) fn new(proxy: Arc<dyn Host>) -> Self {
-        ServerCallbacks { proxy, user_load: true, has_rtc: false, mounted: Mounted::default() }
+    pub(crate) fn new(proxy: Arc<dyn Host>, pools: PoolFactory) -> Self {
+        ServerCallbacks {
+            proxy,
+            pools,
+            pool: Arc::default(),
+            user_load: true,
+            has_rtc: false,
+            mounted: Mounted::default(),
+        }
     }
 
     pub(crate) fn configured(&self, has_rtc: bool, user_load: bool) -> Self {
         Self { has_rtc, user_load, ..self.clone() }
     }
 
+    fn pool(&self) -> Option<Arc<dyn JobPool>> {
+        self.pool.get().cloned().flatten()
+    }
+
+    /// The host prepares the job processes and hands over their launchers; the pool fills.
     pub(crate) async fn start(
         &self,
         start: ServerSettings,
         devmode: bool,
         has_rtc: bool,
+        launch: PoolLaunch,
     ) -> Result<(), HostError> {
         let options = ProcessStartOptions {
-            devmode,
             job_processes: has_rtc,
             env: start.child_env().into_iter().map(|(key, value)| (key.into(), value)).collect(),
-            job_executor_type: start.job_executor_type,
             multiprocessing_context: start.multiprocessing_context,
-            pool: ProcessPoolOptions {
-                num_idle_processes: start
-                    .num_idle_processes
-                    .unwrap_or(EnvOption::Fixed(0))
-                    .get(devmode),
-                initialize_timeout: start.initialize_process_timeout,
-                close_timeout: start.shutdown_process_timeout,
-                session_end_timeout: start.session_end_timeout,
-                memory_warn_mb: start.job_memory_warn_mb,
-                memory_limit_mb: start.job_memory_limit_mb,
-                http_proxy: start.http_proxy.filter(|proxy| !proxy.is_empty()),
-            },
+            session_end_timeout: start.session_end_timeout,
         };
-        self.proxy.start(&telemetry::Cx::NONE, options).await
+        let launchers = match self.proxy.start(&telemetry::Cx::NONE, options).await {
+            Ok(Some(launchers)) if has_rtc => launchers,
+            started => {
+                let _ = self.pool.set(None);
+                return started.map(drop);
+            }
+        };
+        let options = JobRunnerOptions {
+            thread: start.job_executor_type == JobExecutorType::Thread,
+            initialize_timeout: start.initialize_process_timeout,
+            close_timeout: start.shutdown_process_timeout,
+            memory_warn_mb: start.job_memory_warn_mb,
+            memory_limit_mb: start.job_memory_limit_mb,
+            ping_interval: 2.5,
+            ping_timeout: start.ping_timeout,
+            high_ping_threshold: 0.5,
+            http_proxy: start.http_proxy.filter(|proxy| !proxy.is_empty()),
+            asyncio_debug: launch.asyncio_debug,
+        };
+        let num_idle = start.num_idle_processes.unwrap_or(EnvOption::Fixed(0)).get(devmode);
+        let pool = (self.pools)(PoolSetup {
+            launchers,
+            num_idle_processes: num_idle as usize,
+            options,
+            context: launch.context,
+            observer: launch.observer,
+        });
+        let pool = match pool {
+            Ok(pool) => pool,
+            Err(error) => {
+                let _ = self.pool.set(None);
+                return Err(error);
+            }
+        };
+        let _ = self.pool.set(Some(pool.clone()));
+        pool.start().await
+    }
+
+    pub(crate) fn set_target_idle(&self, target: u32) {
+        if let Some(pool) = self.pool() {
+            pool.set_target_idle(target as usize);
+        }
+    }
+
+    pub(crate) fn active_jobs(&self) -> Vec<RunningJobInfo> {
+        self.pool().map(|pool| pool.active_jobs()).unwrap_or_default()
+    }
+
+    pub(crate) async fn join_jobs(&self) {
+        if let Some(pool) = self.pool() {
+            pool.join().await;
+        }
+    }
+
+    /// Closes the job processes; a server that never started them releases the reloads waiting.
+    pub(crate) async fn close_pool(&self) {
+        let _ = self.pool.set(None);
+        if let Some(pool) = self.pool() {
+            pool.close().await;
+        }
+    }
+
+    /// Jobs kept from before a reload, launched once the job processes started.
+    pub(crate) async fn reload(&self, jobs: Vec<RunningJobInfo>) -> Result<(), WorkerError> {
+        let Some(pool) = self.pool.wait().await.clone() else {
+            return Err(WorkerError::Failed("a server with no rtc_session runs no job".into()));
+        };
+        for info in jobs {
+            log::info!(target: lk_agents_abi::LOG_TARGET, job_id = info.job.id.as_str(); "reloading job");
+            pool.launch(info).await?;
+        }
+        Ok(())
     }
 
     /// Admit no new exchange, close WebSockets and wait for the exchanges in flight.
@@ -207,11 +334,17 @@ impl WorkerHost for ServerCallbacks {
     }
 
     async fn launch_job(&self, info: RunningJobInfo) -> Result<JobId, HostError> {
-        self.proxy.launch_job(&telemetry::Cx::NONE, info).await
+        let pool = self.pool().ok_or_else(|| HostError::new("the server runs no job processes"))?;
+        let job_id = info.job.id.clone();
+        pool.launch(info).await?;
+        Ok(job_id)
     }
 
     async fn terminate_job(&self, id: JobId) -> Result<(), HostError> {
-        self.proxy.terminate_job(&telemetry::Cx::NONE, id).await
+        if let Some(pool) = self.pool() {
+            pool.terminate(&id).await;
+        }
+        Ok(())
     }
 
     /// A raising `load_fnc` must not read as idle (that over-schedules); `None` falls back to the
@@ -239,7 +372,7 @@ impl WorkerHost for ServerCallbacks {
 #[async_trait]
 impl HealthProbe for ServerCallbacks {
     async fn health(&self) -> usize {
-        self.proxy.active_jobs(&telemetry::Cx::NONE).await.unwrap_or(0)
+        self.active_jobs().len()
     }
 }
 
@@ -286,6 +419,8 @@ pub struct AgentServerRuntime {
     serving: Arc<Mutex<server::Serving>>,
     running: Arc<AtomicBool>,
     runtime: server::ServerRuntime,
+    /// The runtime's host server, with the job processes the dev channel reads.
+    host: ServerCallbacks,
     mounted: Mounted,
     spawner: TokioSpawner,
     /// The process's span recording, for the endpoint server's `http_request` spans.
@@ -312,13 +447,14 @@ impl ServerRuntime for AgentServerRuntime {
             .map_err(|_| WorkerError::Invalid("expected a native ServerConfig".into()))?;
         let runtime = (env.runtime)().map_err(|error| WorkerError::Failed(error.to_string()))?;
         let spawner = TokioSpawner::new(runtime);
-        let host = ServerCallbacks::new(host);
+        let host = ServerCallbacks::new(host, native_pools(env.clone()));
         let mounted = host.mounted.clone();
         Ok(Self {
             settings: config.settings.clone(),
             serving: config.serving.clone(),
             running: config.running.clone(),
-            runtime: server::ServerRuntime::new(host, None),
+            runtime: server::ServerRuntime::new(host.clone(), None),
+            host,
             mounted,
             spawner,
             tracer: env.tracer.clone(),
@@ -337,6 +473,10 @@ impl ServerRuntime for AgentServerRuntime {
         self.runtime.snapshot().http_port
     }
 
+    fn active_jobs(&self) -> Vec<RunningJobInfo> {
+        self.host.active_jobs()
+    }
+
     async fn run(
         &self,
         devmode: bool,
@@ -347,6 +487,7 @@ impl ServerRuntime for AgentServerRuntime {
         has_load_fnc: bool,
         endpoints: Arc<dyn EndpointHandler>,
         text_doors: Vec<Arc<dyn TextEndpoint>>,
+        asyncio_debug: bool,
         context: CallContext,
     ) -> Result<(), WorkerError> {
         let door_routes = text_doors.iter().map(|door| door_route(door.name()));
@@ -355,7 +496,7 @@ impl ServerRuntime for AgentServerRuntime {
             doors: text_doors,
             settings: self.settings.clone(),
             serving: self.serving.clone(),
-            host_context: context.host_context,
+            host_context: context.host_context.clone(),
         };
         let limits = HttpServerLimits::default();
         let server = EndpointServer::new(endpoints, limits, self.tracer.clone()).with_text(text);
@@ -370,6 +511,8 @@ impl ServerRuntime for AgentServerRuntime {
             endpoints: routes,
             has_load_fnc,
             serving: self.serving.clone(),
+            context,
+            asyncio_debug,
         };
         self.running.store(true, Ordering::Release);
         let runtime = self.runtime.clone();
@@ -392,19 +535,6 @@ impl ServerRuntime for AgentServerRuntime {
         let runtime = self.runtime.clone();
         let closed = self.spawner.run(async move { runtime.close().await }).await;
         closed.map_err(|error| WorkerError::Failed(error.to_string()))
-    }
-
-    fn job_status(&self, job_id: String, status: String) {
-        let status = match status.as_str() {
-            "failed" => livekit_protocol::JobStatus::JsFailed,
-            "success" => livekit_protocol::JobStatus::JsSuccess,
-            _ => livekit_protocol::JobStatus::JsRunning,
-        };
-        if let Some(worker) = self.runtime.snapshot().worker
-            && worker.send(WorkerCommand::JobStatus { job_id: job_id.clone(), status }).is_err()
-        {
-            log::error!(target: lk_agents_abi::LOG_TARGET, job_id = job_id.as_str(); "worker job status admission failed");
-        }
     }
 
     async fn simulate_job(
@@ -434,6 +564,20 @@ impl ServerRuntime for AgentServerRuntime {
             .run(async move { runtime.simulate_job(info).await })
             .await
             .map_err(|error| WorkerError::Failed(error.to_string()))
+    }
+}
+
+impl ServerJobs for AgentServerRuntime {
+    fn running_jobs(&self) -> Vec<RunningJobInfo> {
+        self.host.active_jobs()
+    }
+
+    fn reload_jobs(
+        &self,
+        jobs: Vec<RunningJobInfo>,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), WorkerError>> {
+        let host = self.host.clone();
+        Box::pin(async move { self.spawner.run(async move { host.reload(jobs).await }).await })
     }
 }
 

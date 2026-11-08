@@ -12,8 +12,8 @@ use parking_lot::Mutex;
 use std::task::Poll;
 
 use lk_agents_abi::{
-    BoxFuture, Clock, Launch, OwnedTask, Settle, Spawner, SpawnerExt, TaskControl, TaskError,
-    TaskOutcome, Ts,
+    BoxFuture, Clock, HostRef, Launch, OwnedTask, Settle, Spawner, SpawnerExt, TaskControl,
+    TaskError, TaskOutcome, Ts,
 };
 use tokio::runtime::Handle;
 use tokio::sync::{Notify, oneshot};
@@ -102,7 +102,36 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
         .unwrap_or_else(|| "non-string payload".to_owned())
 }
 
+tokio::task_local! {
+    /// The host context of the binding entry whose native future this task runs, or descends
+    /// from: what a proxy taken with no running loop calls in (`HostContext for Option<HostRef>`).
+    static HOST_CONTEXT: HostRef;
+}
+
+/// The host context of the operation driving this task, if a binding entry set one.
+pub fn host_context() -> Option<HostRef> {
+    HOST_CONTEXT.try_with(Clone::clone).ok()
+}
+
+/// `fut` driven by the operation whose host context is `context`, and every task it spawns on a
+/// [`TokioSpawner`] (or through [`inherit`]).
+pub fn in_host_context<F: Future + Send + 'static>(
+    context: HostRef,
+    fut: F,
+) -> BoxFuture<'static, F::Output> {
+    Box::pin(HOST_CONTEXT.scope(context, fut))
+}
+
+/// `fut` in the current task's host context, for a task spawned with it.
+pub fn inherit<F: Future + Send + 'static>(fut: F) -> BoxFuture<'static, F::Output> {
+    match host_context() {
+        Some(context) => in_host_context(context, fut),
+        None => Box::pin(fut),
+    }
+}
+
 /// Never builds a runtime: an import-time thread would not survive the forkserver's `fork()`.
+/// A task it spawns inherits the spawning task's host context.
 #[derive(Clone, Debug)]
 pub struct TokioSpawner {
     handle: Handle,
@@ -138,7 +167,7 @@ impl TokioSpawner {
 impl Spawner for TokioSpawner {
     fn launch(&self, task: Launch) -> OwnedTask<Box<dyn Any + Send>> {
         let (run, owned) = launch(task);
-        drop(self.handle.spawn(run));
+        drop(self.handle.spawn(inherit(run)));
         owned
     }
 }

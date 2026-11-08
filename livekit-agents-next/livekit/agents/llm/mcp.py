@@ -1,5 +1,18 @@
-"""MCP servers as tool sources. The client sessions and their transports are the core's
-(``_core.McpSession``)."""
+"""MCP servers as tool sources (docs/tools.md, "MCP servers").
+
+The Rust core does the MCP work: the protocol, the stdio and Streamable HTTP transports, listing
+and paginating tools, rendering their schemas and results, the reconnect backoff, recovering an
+unreachable server in the background and closing an idle connection (``_core.McpSession`` and
+``_core._core_McpToolsetLifecycle``).
+
+This module is what an application touches:
+
+- ``MCPServerHTTP`` and ``MCPServerStdio`` say where a server is;
+- ``MCPToolset`` gives an agent its tools;
+- credentials that come from a run (``headers=``/``auth=`` functions of the ``RunContext``) are
+  resolved here, because they are application code;
+- each MCP tool becomes a function tool here, because tools are host objects.
+"""
 
 from __future__ import annotations
 
@@ -35,10 +48,15 @@ HeadersFor = Callable[[RunContext[Any]], dict[str, str]]
 TokenFor = Callable[[RunContext[Any]], "str | None"]
 """A run's bearer token, from its ``RunContext``."""
 _Credentials = tuple[tuple[tuple[str, str], ...], "str | None"]
+"""Headers (sorted name/value pairs) and a bearer token, comparable and hashable."""
+
+
+# --- servers ----------------------------------------------------------------------------------
 
 
 class MCPServer:
-    """An MCP server: a session that reconnects on its own after losing its connection."""
+    """An MCP server: a core session that reconnects on its own after losing its connection.
+    Subclasses say how to connect."""
 
     def __init__(
         self,
@@ -47,6 +65,7 @@ class MCPServer:
         request_timeout: float | None,
         read_timeout: float | None = None,
     ) -> None:
+        self._timeouts = (init_timeout, request_timeout, read_timeout)
         self._session = _core.McpSession(init_timeout, request_timeout, read_timeout)
 
     @property
@@ -59,69 +78,21 @@ class MCPServer:
     async def list_tools(
         self, *, tool_options: dict[str, MCPToolOptions] | None = None
     ) -> list[RawFunctionTool]:
+        """The server's tools as function tools, each with its ``MCPToolOptions``."""
         options = tool_options or {}
         await self._refresh()
-        tools = cast(list[dict[str, Any]], await self._session.list_tools())
+        listed = cast(list[dict[str, Any]], await self._session.list_tools())
         return [
-            self._make_function_tool(
-                tool["name"],
-                tool.get("description"),
-                tool.get("inputSchema") or {},
-                tool.get("_meta"),
-                options=_core.resolve_mcp_tool_options(options.get(tool["name"])),
-            )
-            for tool in tools
+            _function_tool(self, tool, _core.resolve_mcp_tool_options(options.get(tool["name"])))
+            for tool in listed
         ]
-
-    def _make_function_tool(
-        self,
-        name: str,
-        description: str | None,
-        input_schema: dict[str, Any],
-        meta: dict[str, Any] | None,
-        *,
-        options: ResolvedToolOptions,
-    ) -> RawFunctionTool:
-        timeout = options["timeout"]
-
-        async def _call(raw_arguments: dict[str, Any], progress: RunContext | None) -> Any:
-            await self._refresh()
-            result = await self._session.call_tool(
-                name,
-                raw_arguments,
-                timeout,
-                progress,
-                (asyncio.get_running_loop(), contextvars.copy_context()),
-            )
-            return _core.mcp_render_result(name, result)
-
-        impl: Callable[..., Awaitable[Any]]
-        if options["report_progress"]:
-            # progress becomes ctx.update(); the first update frees the reply loop
-            async def impl(ctx: RunContext, raw_arguments: dict[str, Any]) -> Any:
-                return await _call(raw_arguments, ctx)
-        else:
-
-            async def impl(raw_arguments: dict[str, Any]) -> Any:
-                return await _call(raw_arguments, None)
-
-        return function_tool(
-            impl,
-            raw_schema=cast(
-                dict[str, JsonValue], _core.mcp_raw_schema(name, description, input_schema, meta)
-            ),
-            flags=options["flags"],
-            on_duplicate=options["on_duplicate"],
-            duplicate_scope=options["duplicate_scope"],
-            retries=options["retries"],
-        )
 
     async def aclose(self) -> None:
         await self._session.close()
 
     async def _refresh(self) -> None:
-        """Reconnect with the run's current credentials when they changed since the last
-        request."""
+        """Called before each request; a server with per-run credentials reconnects here when
+        they changed."""
 
 
 class MCPServerHTTP(MCPServer):
@@ -159,10 +130,9 @@ class MCPServerHTTP(MCPServer):
         self.url = url
         self._headers = headers
         self._auth = auth
-        self._limits = (init_timeout, read_timeout, request_timeout)
-        # a per-run copy's credentials, read again before each request
-        self._credentials_of_run: Callable[[], _Credentials] | None = None
-        self._connected_with: _Credentials | None = None
+        # set on a run's copy (``_for_run``): its credentials, resolved again before a request
+        self._run_credentials: Callable[[], _Credentials] | None = None
+        self._connected = False
 
     @property
     def _per_run(self) -> bool:
@@ -180,35 +150,39 @@ class MCPServerHTTP(MCPServer):
         return tuple(sorted((name, str(value)) for name, value in (headers or {}).items())), auth
 
     def _for_run(self, ctx: RunContext[Any]) -> MCPServerHTTP:
-        """A copy connecting with ``ctx``'s credentials."""
-        init_timeout, read_timeout, request_timeout = self._limits
+        """A copy of this server that connects with ``ctx``'s credentials."""
+        init_timeout, request_timeout, read_timeout = self._timeouts
         copy = MCPServerHTTP(
             self.url,
             init_timeout=init_timeout,
             read_timeout=read_timeout,
             request_timeout=request_timeout,
         )
-        copy._credentials_of_run = lambda: self._credentials(ctx)
+        copy._run_credentials = lambda: self._credentials(ctx)
         return copy
 
     async def initialize(self) -> None:
-        if self._per_run and self._credentials_of_run is None:
+        if self._run_credentials is not None:
+            await self._connect(self._run_credentials())
+        elif self._per_run:
             raise RuntimeError("an MCPServerHTTP with per-run credentials connects per run")
-        await self._connect(
-            self._credentials_of_run() if self._credentials_of_run else self._credentials(None)
-        )
+        else:
+            await self._connect(self._credentials(None))
 
     async def _connect(self, credentials: _Credentials) -> None:
         headers, auth = credentials
         await self._session.connect_http(self.url, list(headers), auth)
-        self._connected_with = credentials
+        self._connected = True
 
     async def _refresh(self) -> None:
-        if self._credentials_of_run is None or self._connected_with is None:
-            return
-        credentials = self._credentials_of_run()
-        if credentials != self._connected_with:
-            await self._connect(credentials)
+        # the core keeps the connection when the credentials are unchanged and replaces it when
+        # they changed; a closed server is not reopened by a request
+        if self._run_credentials is not None and self._connected:
+            await self._connect(self._run_credentials())
+
+    async def aclose(self) -> None:
+        self._connected = False
+        await super().aclose()
 
     def __repr__(self) -> str:
         return f"MCPServerHTTP(url={self.url})"
@@ -253,6 +227,9 @@ class MCPServerStdio(MCPServer):
         return f"MCPServerStdio(command={self.command}, args={self.args}, cwd={self.cwd})"
 
 
+# --- the toolset ------------------------------------------------------------------------------
+
+
 class MCPToolset(AsyncToolset):
     """An ``MCPServer``'s tools for an ``Agent``; ``setup()`` connects and fetches them.
 
@@ -286,25 +263,31 @@ class MCPToolset(AsyncToolset):
         super().__init__(id=id)
         self._mcp_server = mcp_server
         self._tool_options = dict(tool_options or {})
-        # the listing's recovery and the idle close are the core's
+        # the core decides when to list, recover and close; it calls back _core_list and
+        # _core_close_idle
         self._lifecycle = _core._core_McpToolsetLifecycle(repr(mcp_server), mcp_server._session)
-        # per-run credentials: one toolset per credential set, and each call's
+        # per-run credentials: one toolset per credential set, kept by a call for its length
         self._by_credentials: dict[str, MCPToolset] = {}
         self._by_call: weakref.WeakKeyDictionary[object, MCPToolset] = weakref.WeakKeyDictionary()
         self._release: Callable[[], object] | None = None
 
+    @property
+    def _per_run(self) -> bool:
+        server = self._mcp_server
+        return isinstance(server, MCPServerHTTP) and server._per_run
+
     def for_run(self, ctx: RunContext[Any]) -> Toolset:
         """This toolset, or with per-run credentials the one for ``ctx``'s: shared by the runs
         whose credentials are the same, and kept by a call for its whole length."""
-        server = self._mcp_server
-        if not isinstance(server, MCPServerHTTP) or not server._per_run:
+        if not self._per_run:
             return self
         call = ctx.live_session
         if call is not None and (kept := self._by_call.get(call)) is not None:
             return kept
+        server = cast(MCPServerHTTP, self._mcp_server)
+        # keyed by a digest, so the dict never holds the credentials themselves
         key = hashlib.sha256(repr(server._credentials(ctx)).encode()).hexdigest()
-        toolset = self._by_credentials.get(key)
-        if toolset is None:
+        if (toolset := self._by_credentials.get(key)) is None:
             toolset = MCPToolset(
                 id=self.id, mcp_server=server._for_run(ctx), tool_options=self._tool_options
             )
@@ -317,9 +300,10 @@ class MCPToolset(AsyncToolset):
 
     async def setup(self) -> Self:
         """Fetch the server's tools, connecting it when it is not; without them while the server
-        cannot be reached, which is listed again in the background at the session's backoff."""
+        cannot be reached, which is listed again in the background at the session's backoff.
+        A per-run toolset lists nothing itself: each run's copy does."""
         await super().setup()
-        if not (isinstance(self._mcp_server, MCPServerHTTP) and self._mcp_server._per_run):
+        if not self._per_run:
             await self._lifecycle.setup(self)
         return self
 
@@ -341,3 +325,49 @@ class MCPToolset(AsyncToolset):
         if self._release is not None:
             self._release()
         await self._mcp_server.aclose()
+
+
+# --- tools ------------------------------------------------------------------------------------
+
+
+def _function_tool(
+    server: MCPServer, tool: dict[str, Any], options: ResolvedToolOptions
+) -> RawFunctionTool:
+    """``tool`` (an MCP listing entry) as a function tool calling ``server``. With
+    ``report_progress``, the tool takes the ``RunContext`` so its progress reaches
+    ``ctx.update()``."""
+    name = tool["name"]
+
+    async def call(arguments: dict[str, Any], progress: RunContext | None) -> Any:
+        await server._refresh()
+        result = await server._session.call_tool(
+            name,
+            arguments,
+            options["timeout"],
+            progress,
+            (asyncio.get_running_loop(), contextvars.copy_context()),
+        )
+        return _core.mcp_render_result(name, result)
+
+    impl: Callable[..., Awaitable[Any]]
+    if options["report_progress"]:
+
+        async def impl(ctx: RunContext, raw_arguments: dict[str, Any]) -> Any:
+            return await call(raw_arguments, ctx)
+
+    else:
+
+        async def impl(raw_arguments: dict[str, Any]) -> Any:
+            return await call(raw_arguments, None)
+
+    schema = _core.mcp_raw_schema(
+        name, tool.get("description"), tool.get("inputSchema") or {}, tool.get("_meta")
+    )
+    return function_tool(
+        impl,
+        raw_schema=cast(dict[str, JsonValue], schema),
+        flags=options["flags"],
+        on_duplicate=options["on_duplicate"],
+        duplicate_scope=options["duplicate_scope"],
+        retries=options["retries"],
+    )

@@ -85,9 +85,9 @@ impl Resolver<'_> {
             {
                 return Err(format!("{at}: a mutable dataclass record is a plain model struct"));
             }
-            Some(_) if voc::find(&record.nested, "base").is_some() && (extract || emit) => {
+            Some(_) if voc::find(&record.nested, "base").is_some() && extract => {
                 return Err(format!(
-                    "{at}: a dataclass subclass is a model only: its Rust struct holds none of its base's fields"
+                    "{at}: a dataclass subclass is a model or emitted: it is never read back"
                 ));
             }
             Some(_) => Some(Dataclass {
@@ -208,7 +208,11 @@ impl Resolver<'_> {
                 "{at}: a transparent record is an enum of one-value tuple variants, each crossing as its value, and at most one unit variant crossing as None"
             ));
         }
-        if typed_dict && (persisted || !matches!(item, syn::Item::Struct(_))) {
+        let tag = voc::text(at, &record.nested, "tag")?;
+        if tag.is_some() && !(typed_dict && matches!(item, syn::Item::Enum(_)) && !persisted) {
+            return Err(format!("{at}: tag names the key of a typed_dict enum"));
+        }
+        if typed_dict && tag.is_none() && (persisted || !matches!(item, syn::Item::Struct(_))) {
             return Err(format!("{at}: a typed_dict record is a plain struct of keys"));
         }
         let kwargs = voc::find(&record.nested, "kwargs").is_some();
@@ -403,7 +407,26 @@ impl Resolver<'_> {
         } else {
             None
         };
+        let fixed = match voc::find(&record.nested, "fixed") {
+            Some(fixed) if host_type.is_some() && emit => fixed
+                .nested
+                .iter()
+                .map(|entry| match &entry.value {
+                    Some(voc::Value::Literal(value)) => Ok((entry.key.clone(), value.clone())),
+                    _ => Err(format!("{at}: fixed keyword `{}` takes a literal", entry.key)),
+                })
+                .collect::<Result<_, String>>()?,
+            Some(_) => return Err(format!("{at}: fixed builds an emitted host_type class")),
+            None => Vec::new(),
+        };
+        if tag.is_some()
+            && !matches!(&body, RecordBody::Variants(vs) if vs.iter().all(|v| !v.tags.is_empty()))
+        {
+            return Err(format!("{at}: every variant of a tagged dict union declares its tag"));
+        }
         Ok(RecordDecl {
+            tag,
+            fixed,
             marker,
             missing,
             output: voc::rust(at, &record.nested, "output")?
@@ -476,12 +499,12 @@ impl Resolver<'_> {
                 voc::only(
                     &at,
                     &entries,
-                    if transparent { &["name", "host_type"] } else { &["name"] },
+                    if transparent { &["name", "host_type"] } else { &["name", "tag"] },
                 )?;
                 VariantShape::Unit
             }
             syn::Fields::Named(named) => {
-                voc::only(&at, &entries, &["name"])?;
+                voc::only(&at, &entries, &["name", "tag"])?;
                 let fields = self.fields(named.named.iter(), owner, dirs)?;
                 if fields.iter().any(|f| f.omitted.is_some()) {
                     return Err(format!("{at}: `omitted` belongs to a record struct's field"));
@@ -490,7 +513,17 @@ impl Resolver<'_> {
             }
             syn::Fields::Unnamed(unnamed) => {
                 let allowed = if transparent {
-                    &["name", "field", "skip", "default", "host_type", "annotation"][..]
+                    &[
+                        "name",
+                        "field",
+                        "skip",
+                        "default",
+                        "host_type",
+                        "annotation",
+                        "path",
+                        "extract_with",
+                        "otherwise",
+                    ][..]
                 } else {
                     &["name", "field", "skip", "default"][..]
                 };
@@ -522,10 +555,17 @@ impl Resolver<'_> {
                     let default = literal_default(&at, &entries)?;
                     check_default(&at, &ty, default.as_ref())?;
                     check_record_field(&at, &ty, dirs)?;
+                    let conversion = FieldConversion {
+                        path: voc::text(&at, &entries, "path")?
+                            .map(|path| path.split('.').map(str::to_owned).collect())
+                            .unwrap_or_default(),
+                        extract_with: voc::text(&at, &entries, "extract_with")?,
+                        ..FieldConversion::default()
+                    };
                     VariantShape::Tuple(Some(Box::new(Field {
                         kw_only: false,
                         hide_repr: false,
-                        conversion: FieldConversion::default(),
+                        conversion,
                         rust_name: field,
                         ty,
                         default,
@@ -549,7 +589,13 @@ impl Resolver<'_> {
             })
             .transpose()?;
         let rust_name = v.ident.to_string();
+        let otherwise = voc::find(&entries, "otherwise").is_some();
+        let tags = voc::text(&at, &entries, "tag")?
+            .map(|tags| tags.split('|').map(|tag| tag.trim().to_owned()).collect())
+            .unwrap_or_default();
         Ok(Variant {
+            otherwise,
+            tags,
             name: voc::text(&at, &entries, "name")?
                 .unwrap_or_else(|| format!("{owner}{rust_name}")),
             rust_name,
@@ -610,8 +656,23 @@ impl Resolver<'_> {
                     "getter",
                     "kw_only",
                     "hide_repr",
+                    "path",
+                    "emit_class",
+                    "resolve",
                 ],
             )?;
+            let resolve = match voc::find(&entries, "resolve") {
+                Some(hook) if dirs.1 && !dirs.0 => {
+                    voc::only(&at, &hook.nested, &["module", "name"])?;
+                    let need = |key| {
+                        voc::text(&at, &hook.nested, key)?
+                            .ok_or_else(|| format!("{at}: resolve needs {key}"))
+                    };
+                    Some((need("module")?, need("name")?))
+                }
+                Some(_) => return Err(format!("{at}: resolve shapes an emit-only record's field")),
+                None => None,
+            };
             let host_type = voc::text(&at, &entries, "host_type")?
                 .map(|path| {
                     path.rsplit_once('.')
@@ -728,6 +789,11 @@ impl Resolver<'_> {
                 flatten: voc::find(&entries, "flatten").is_some(),
                 own_value: voc::find(&entries, "own_value").is_some(),
                 omit_none: voc::find(&entries, "omit_none").is_some(),
+                path: voc::text(&at, &entries, "path")?
+                    .map(|path| path.split('.').map(str::to_owned).collect())
+                    .unwrap_or_default(),
+                emit_class: voc::text(&at, &entries, "emit_class")?,
+                resolve,
             };
             out.push(Field {
                 kw_only: voc::find(&entries, "kw_only").is_some(),
@@ -860,6 +926,8 @@ pub(super) fn record_target(
             "output",
             "finish",
             "try_finish",
+            "fixed",
+            "tag",
         ],
     )?;
     let module = voc::text(at, &record.nested, "module")?

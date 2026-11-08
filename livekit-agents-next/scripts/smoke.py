@@ -23,7 +23,7 @@ from typing import Any
 
 from aiohttp import web
 
-from livekit import api, rtc
+from livekit import rtc
 from livekit.agents import (
     Agent,
     APIConnectionError,
@@ -804,14 +804,12 @@ async def toolsets() -> None:
 
 async def cli() -> None:
     """What ``lk agent`` drives, short of a LiveKit server: the command line, the structured JSON log lines, the dev channel to a stand-in
-    CLI keeping a job across a reload, and the exit policy."""
+    CLI, and the exit policy."""
     import struct
     import traceback
 
     from livekit.agents import cli as agents_cli
     from livekit.agents._generated.cli import CliArgsStart
-    from livekit.agents._generated.worker_server import AcceptArguments, JobInfo, RunningJobInfo
-    from livekit.protocol import agent as agent_proto
     from livekit.protocol.agent_pb import agent_dev
 
     print("== cli")
@@ -834,43 +832,6 @@ async def cli() -> None:
     assert "ValueError: boom" in line["exception"], line
     assert traceback  # the record carries a real traceback
 
-    class Server:
-        """The worker's side of the dev channel."""
-
-        reloaded: list[RunningJobInfo] = []
-        _active_jobs = [
-            RunningJobInfo(
-                accept_arguments=AcceptArguments(
-                    name="n", identity="i", metadata="m", attributes=[]
-                ),
-                job=JobInfo(
-                    id="AJ_running",
-                    dispatch_id="",
-                    type=0,
-                    room=None,
-                    room_sid=None,
-                    agent_name="",
-                    metadata="",
-                    deployment="",
-                    enable_recording=False,
-                    enable_redaction=False,
-                    proto=agent_proto.Job(id="AJ_running").SerializeToString(),
-                ),
-                url="wss://x",
-                token="t",
-                worker_id="w",
-                fake_job=True,
-                received_at=0,
-                accepted_at=0,
-                assigned_at=0,
-            )
-        ]
-
-        class _jobs:  # noqa: N801
-            @staticmethod
-            async def launch(info: RunningJobInfo) -> None:
-                Server.reloaded.append(info)
-
     async def read(reader: asyncio.StreamReader) -> agent_dev.AgentDevMessage:
         (length,) = struct.unpack("!I", await reader.readexactly(4))
         return agent_dev.AgentDevMessage.FromString(await reader.readexactly(length))
@@ -880,21 +841,16 @@ async def cli() -> None:
         writer.write(struct.pack("!I", len(data)) + data)
 
     seen: list[str] = []
+    running: list[agent_dev.RunningAgentJobInfo] = []
     done = asyncio.Event()
-    kept_token = (
-        api.AccessToken("key", "secret_of_32_bytes_or_more_ok!!").with_identity("agent").to_jwt()
-    )
 
     async def lk_cli(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         seen.append((await read(reader)).server_info.agent_name)
         assert (await read(reader)).HasField("get_running_jobs_request")
-        kept = agent_dev.RunningAgentJobInfo(
-            job=agent_proto.Job(id="AJ_kept").SerializeToString(), token=kept_token, url="ws://old"
-        )
         write(
             writer,
             agent_dev.AgentDevMessage(
-                get_running_jobs_response=agent_dev.GetRunningAgentJobsResponse(jobs=[kept])
+                get_running_jobs_response=agent_dev.GetRunningAgentJobsResponse(jobs=[])
             ),
         )
         write(
@@ -904,14 +860,18 @@ async def cli() -> None:
             ),
         )
         await writer.drain()
-        running = (await read(reader)).get_running_jobs_response.jobs
-        seen.append(agent_proto.Job.FromString(running[0].job).id)
+        running.extend((await read(reader)).get_running_jobs_response.jobs)
         writer.close()
         done.set()
 
     stand_in = await asyncio.start_server(lk_cli, "127.0.0.1", 0)
     port = stand_in.sockets[0].getsockname()[1]
-    server = Server()
+    # the dev channel reads the server runtime's own job processes: none before it runs
+    from livekit.agents import AgentServer
+
+    server = AgentServer(
+        ws_url="wss://x", api_key="key", api_secret="secret_of_32_bytes_or_more_ok!!"
+    )
     await asyncio.wait_for(
         _core.dev_channel(
             f"127.0.0.1:{port}",
@@ -919,18 +879,15 @@ async def cli() -> None:
             "wss://x",
             "key",
             "secret_of_32_bytes_or_more_ok!!",
-            agents_cli._DevServer(server),
-        ),  # type: ignore[arg-type]
+            server._ensure_runtime(),
+        ),
         10,
     )
     await asyncio.wait_for(done.wait(), 10)
     stand_in.close()
-    print(f"dev channel {seen}, reloaded {[j.job.id for j in server.reloaded]}")
-    assert seen == ["dev-agent", "AJ_running"], seen
-    assert [j.job.id for j in server.reloaded] == ["AJ_kept"], server.reloaded
-    # on this server, with the token extended
-    assert server.reloaded[0].url == "wss://x", server.reloaded
-    assert server.reloaded[0].token not in ("", kept_token), server.reloaded
+    print(f"dev channel {seen}, running {len(running)}")
+    assert seen == ["dev-agent"], seen
+    assert running == [], running
 
     shutdown = _core.Shutdown(1.0, 0.0)
     assert shutdown.begin()

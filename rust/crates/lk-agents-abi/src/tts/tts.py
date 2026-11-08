@@ -26,7 +26,7 @@ from ..types import (
 from ..utils import aio, shortuuid
 from .chat_items import MetricsMetadata
 from .expressive import SpeechSteeringOptions
-from .tts import MarkupInfo, SynthesizedAudio, TTSCapabilities, TTSError
+from .tts import MarkupInfo, SegmentCount, SynthesizedAudio, TTSCapabilities, TTSError
 from .types import ProviderId
 
 TEvent = TypeVar("TEvent", default=Never, contravariant=True)
@@ -494,7 +494,7 @@ class SynthesizeStream(ABC):
         return _core.validate_synthesis(
             self._pushed_text,
             output_emitter.pushed_duration(),
-            (self._num_segments, output_emitter.num_segments),
+            SegmentCount(expected=self._num_segments, actual=output_emitter.num_segments),
         )
 
     def mark_started(self) -> None:

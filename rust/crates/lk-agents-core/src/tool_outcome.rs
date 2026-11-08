@@ -5,9 +5,50 @@
 use lk_agents_abi::agent::FunctionToolInfo;
 use lk_agents_abi::agent::run::RunError;
 use lk_agents_abi::llm::tool_executor::{
-    DELIVERED, INTERNAL_ERROR_OUTPUT, INVALID_OUTPUT, ToolOutcome, WAITING_PREFIX,
+    CompletedReturn, DELIVERED, INTERNAL_ERROR_OUTPUT, INVALID_OUTPUT, InputRequiredReturn,
+    ToolOutcome, ToolReport, ToolResultReturn, ToolReturn, ToolText, WAITING_PREFIX,
 };
 use std::collections::BTreeMap;
+
+/// The host's classification of what a tool's body returned or raised.
+pub struct ToolReports;
+
+impl lk_agents_abi::llm::tool_executor::ToolReports for ToolReports {
+    fn tool_report(value: ToolReturn) -> ToolReport {
+        let outcome = match value {
+            ToolReturn::Report(report) => return report,
+            ToolReturn::ToolError(message) => ToolOutcome::ToolError(message),
+            ToolReturn::ModelRetry(message) => ToolOutcome::ModelRetry(message),
+            ToolReturn::StopResponse => ToolOutcome::StopResponse,
+            ToolReturn::Raised => ToolOutcome::Internal,
+            ToolReturn::Completed(CompletedReturn { value, verbatim }) => match value {
+                ToolText::None => ToolOutcome::Completed { text: "completed".into(), verbatim },
+                ToolText::Text(text) => ToolOutcome::Completed { text, verbatim },
+                ToolText::Invalid => ToolOutcome::Invalid,
+            },
+            ToolReturn::Failed(error) => ToolOutcome::Failed(error),
+            ToolReturn::Rejected(reason) => ToolOutcome::Rejected(reason),
+            ToolReturn::InputRequired(InputRequiredReturn { question, verbatim, tool }) => {
+                ToolOutcome::InputRequired { question, verbatim, tool }
+            }
+            ToolReturn::Working(message) => ToolOutcome::Working(message),
+            ToolReturn::Nothing => ToolOutcome::Nothing,
+            ToolReturn::Result(ToolResultReturn { output, reply_required, verbatim, more }) => {
+                let text = match output {
+                    ToolText::None => String::new(),
+                    ToolText::Text(text) => text,
+                    ToolText::Invalid => return ToolOutcome::Invalid.into(),
+                };
+                ToolOutcome::Value { text, reply_required, verbatim, more }
+            }
+            ToolReturn::Value(ToolText::Text(text)) => {
+                ToolOutcome::Value { text, reply_required: true, verbatim: false, more: None }
+            }
+            ToolReturn::Value(ToolText::None | ToolText::Invalid) => ToolOutcome::Invalid,
+        };
+        outcome.into()
+    }
+}
 
 /// The output a [`ToolOutcome`] records, and whether it asks the model for a reply.
 #[derive(Debug, Clone, PartialEq, Eq)]

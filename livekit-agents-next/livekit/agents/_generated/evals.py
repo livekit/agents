@@ -14,6 +14,8 @@ from inspect import get_annotations
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
+    from builtins import object as _HostJudgeSpec
+
     from .usage import TokenUsage
 
 
@@ -48,12 +50,7 @@ class JudgmentResult:
         return _core._core_judgment_uncertain(self)
 
 
-@dataclass(kw_only=True, slots=True)
-class JudgeSpec:
-    """One judge of an evaluation: an application evaluator, which the evaluation's host runs."""
-
-    name: str
-    evaluator: object
+JudgeSpec: TypeAlias = "_HostJudgeSpec"
 
 
 @dataclass(kw_only=True, slots=True)

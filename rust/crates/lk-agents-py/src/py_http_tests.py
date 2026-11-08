@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import aiohttp
 import pytest
@@ -17,6 +18,9 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response, Strea
 from starlette.websockets import WebSocket
 
 from livekit.agents.http import AgentRoutes
+
+if TYPE_CHECKING:
+    from livekit.agents import AgentServer
 
 pytestmark = pytest.mark.unit
 
@@ -51,6 +55,12 @@ def add_routes(http: AgentRoutes) -> None:
 
         return StreamingResponse(chunks(), media_type="text/plain")
 
+    @http.get("/hang")
+    async def hang(request: Request) -> Response:
+        HANGING.set()
+        await asyncio.Future()
+        raise AssertionError("unreachable")
+
     @http.get("/boom")
     async def boom(request: Request) -> Response:
         raise RuntimeError("before any head")
@@ -79,9 +89,29 @@ def add_routes(http: AgentRoutes) -> None:
     async def refused(websocket: WebSocket) -> None:
         await websocket.close()
 
+    @http.websocket("/malformed/{index:int}")
+    async def malformed(websocket: WebSocket) -> None:
+        await websocket.accept()
+        try:
+            await websocket._send(MALFORMED[websocket.path_params["index"]])
+        except Exception as error:
+            await websocket.send_text(type(error).__name__)
+        else:
+            await websocket.send_text("sent")
+
+
+HANGING = asyncio.Event()
+MALFORMED: list[dict[str, object]] = [
+    {"type": "websocket.send"},
+    {"type": "websocket.send", "bytes": b"a", "text": "a"},
+    {"type": "lifespan.startup.complete"},
+]
+
 
 @pytest.fixture
-async def base_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[str]:
+async def served(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[tuple[AgentServer, str]]:
     from livekit.agents import AgentHandler, AgentServer
     from livekit.agents.a2a import A2ASessionContext
     from livekit.agents.storage import SQLiteStorage
@@ -114,10 +144,15 @@ async def base_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIter
             await asyncio.sleep(0.05)
         if url is None:
             raise TimeoutError("the public listener did not start")
-        yield url
+        yield server, url
     finally:
         await server.aclose()
         await run
+
+
+@pytest.fixture
+def base_url(served: tuple[AgentServer, str]) -> str:
+    return served[1]
 
 
 async def raw_get(base_url: str, path: str) -> bytes:
@@ -201,16 +236,24 @@ def test_the_manifest_carries_methods_kinds_and_public() -> None:
     assert [route.path for route in http._manifest][0] == "/hello/{name}", "order is preserved"
 
 
-@pytest.mark.parametrize(
-    "message",
-    [
-        {"type": "websocket.send"},
-        {"type": "websocket.send", "bytes": b"a", "text": "a"},
-        {"type": "lifespan.startup.complete"},
-    ],
-)
-def test_a_malformed_asgi_message_fails_the_application(message: dict[str, object]) -> None:
-    from livekit.agents.http import _message
+@pytest.mark.parametrize("index", range(len(MALFORMED)))
+async def test_a_malformed_asgi_message_fails_the_application(base_url: str, index: int) -> None:
+    async with aiohttp.ClientSession() as http:
+        async with http.ws_connect(f"{base_url}/malformed/{index}") as ws:
+            assert await ws.receive_str() == "ValueError"
 
-    with pytest.raises(RuntimeError):
-        _message(message)
+
+async def test_a_drain_past_its_deadline_raises_timeout_error(
+    served: tuple[AgentServer, str],
+) -> None:
+    server, base_url = served
+    HANGING.clear()
+    request = asyncio.create_task(raw_get(base_url, "/hang"))
+    try:
+        await asyncio.wait_for(HANGING.wait(), 5)
+        with pytest.raises(TimeoutError, match="drain timed out") as failure:
+            await server._drain(timeout=0.1)
+        assert type(failure.value) is TimeoutError
+    finally:
+        request.cancel()
+        await asyncio.gather(request, return_exceptions=True)

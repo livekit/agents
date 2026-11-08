@@ -132,13 +132,6 @@ pub trait RoomRuntime {
     #[host(function, name = "_core_create_room_session")]
     fn create_room_session(env: &Self::Env, room: Option<Arc<dyn RtcRoom>>) -> Self::Room;
 
-    /// Wait for the supplied room's connection, avatar participant and subscribed video track.
-    #[host(function, name = "wait_avatar_join")]
-    async fn wait_avatar_join(
-        room: Arc<dyn SessionRoom>,
-        identity: String,
-    ) -> std::result::Result<(f64, f64), crate::voice::rtc::RtcError>;
-
     #[host(function)]
     async fn wait_for_participant(
         room: Arc<dyn SessionRoom>,
@@ -160,5 +153,13 @@ pub trait RoomRuntime {
         kinds: Option<Vec<i32>>,
         include_local: bool,
         subscribed: bool,
-    ) -> std::result::Result<(Option<ParticipantIdentity>, TrackSid), RtcError>;
+    ) -> std::result::Result<TrackPublished, RtcError>;
+}
+
+/// A publication found in the room: its participant (`None`, the local one) and its track.
+#[crate::host(record(module = "room_runtime", emit))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackPublished {
+    pub publisher: Option<ParticipantIdentity>,
+    pub sid: TrackSid,
 }

@@ -283,8 +283,8 @@ pub trait DuplexSession: Send + Sync {
         tool_choice: Option<ToolChoice>,
     ) -> crate::BoxFuture<'_, Result<(), HostError>>;
 
-    /// The next frame of output audio; `None` once the output ended.
-    #[host(await, name = "_core_next_audio")]
+    /// The next frame of the plugin's `audio_stream`; `None` once the output ended.
+    #[host(await, iter, getter = "plugin.audio_stream")]
     fn next_audio(
         &self,
         cx: &crate::telemetry::Cx,

@@ -2,7 +2,8 @@
 
 use crate::rtc::events::RpcHandler;
 use crate::telemetry;
-use lk_agents_abi::voice::avatar::AudioReceiverObservation;
+use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::voice::avatar::{AudioReceiverObservation, AvatarAudio};
 use lk_agents_abi::voice::avatar_queue::{QueueClosed, QueueEffects};
 use lk_agents_abi::voice::io::{
     AudioOutput, AvatarPlaybackSegment, IoError, PlaybackFinished, PlaybackSegment,
@@ -12,7 +13,7 @@ use lk_agents_abi::voice::rtc::{
     self, AudioOutputCapabilities, ByteStreamWriter, ParticipantIdentity, RoomEvent, RtcError,
     RtcRoom, StreamBytesOptions,
 };
-use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, Ts};
+use lk_agents_abi::{AudioFrame, BoxFuture, Clock, Closed, Spawner, Ts};
 use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::avatar::machine::output::{
     AfterClear, Finish, OutputState, Reject, after_clear, check_caller, report_routes,
@@ -305,16 +306,20 @@ impl Inner {
                 RPC_CLEAR_BUFFER.to_owned(),
                 String::new(),
             )
-            .await;
+            .await
+            .map(drop)
+            .map_err(|error| match error.rpc() {
+                Some(rpc) => format!("{}: {}", rpc.code, rpc.message),
+                None => error.to_string(),
+            });
         let pending = self.tracker.has_pending_segment(key);
-        let give_up_after =
-            match after_clear(pending, rpc.map_err(|e| e.to_string()), self.clear_buffer_timeout) {
-                AfterClear::Retire => {
-                    self.retire_segment(key);
-                    return;
-                }
-                AfterClear::AwaitFinish { give_up_after } => give_up_after,
-            };
+        let give_up_after = match after_clear(pending, rpc, self.clear_buffer_timeout) {
+            AfterClear::Retire => {
+                self.retire_segment(key);
+                return;
+            }
+            AfterClear::AwaitFinish { give_up_after } => give_up_after,
+        };
         if let Some((timer, _, _)) = self.clear_timer.lock().take() {
             self.tasks.cancel(timer);
         }
@@ -635,9 +640,8 @@ impl lk_agents_abi::voice::avatar_queue::QueueAudio for QueueAudio {
         &self,
         frame: AudioFrame,
         segment: PlaybackSegment,
-        epoch: u64,
     ) -> std::result::Result<QueueEffects, QueueClosed> {
-        let result = self.state.lock().capture(frame, segment, epoch);
+        let result = self.state.lock().capture(frame, segment);
         self.changed.notify_waiters();
         result
     }
@@ -647,7 +651,9 @@ impl lk_agents_abi::voice::avatar_queue::QueueAudio for QueueAudio {
         result
     }
     fn clear(&self) -> QueueEffects {
-        self.state.lock().clear()
+        let effects = self.state.lock().clear();
+        self.changed.notify_waiters();
+        effects
     }
     fn playback_finished(
         &self,
@@ -661,15 +667,7 @@ impl lk_agents_abi::voice::avatar_queue::QueueAudio for QueueAudio {
         self.state.lock().started(segment)
     }
     async fn next_audio(&self) -> AudioReceiverObservation {
-        loop {
-            let changed = self.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            if let Some(observation) = self.state.lock().next_audio() {
-                return observation;
-            }
-            changed.await;
-        }
+        self.wait(Queue::next_audio).await
     }
     fn close(&self) -> QueueEffects {
         let effects = self.state.lock().close();
@@ -678,15 +676,44 @@ impl lk_agents_abi::voice::avatar_queue::QueueAudio for QueueAudio {
     }
 }
 
+impl QueueAudio {
+    /// What `read` finds in the queue, once it finds something.
+    async fn wait<T>(&self, mut read: impl FnMut(&mut Queue) -> Option<T>) -> T {
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if let Some(found) = read(&mut self.state.lock()) {
+                return found;
+            }
+            changed.await;
+        }
+    }
+}
+
+impl AvatarAudio for QueueAudio {
+    fn next_audio(
+        &self,
+    ) -> BoxFuture<'_, std::result::Result<AudioReceiverObservation, ProviderError>> {
+        Box::pin(async move { Ok(self.wait(Queue::next_audio).await) })
+    }
+    fn next_clear(&self, after: u64) -> BoxFuture<'_, Option<u64>> {
+        Box::pin(self.wait(move |queue| match queue.clear_epoch() {
+            Some(epoch) if epoch <= after => None,
+            epoch => Some(epoch),
+        }))
+    }
+}
+
 #[cfg(test)]
 mod queue_tests {
     use super::*;
-    use lk_agents_abi::voice::avatar_queue::QueueAudio as _;
+    use lk_agents_abi::voice::avatar_queue::QueueAudio as QueueAudioClass;
 
     #[tokio::test]
     async fn close_releases_pending_read_and_remains_terminal() {
         let queue = QueueAudio::new(false);
-        let mut pending = Box::pin(queue.next_audio());
+        let mut pending = Box::pin(QueueAudioClass::next_audio(&queue));
         assert!(
             std::future::poll_fn(|cx| std::task::Poll::Ready(
                 pending.as_mut().poll(cx).is_pending()
@@ -695,7 +722,7 @@ mod queue_tests {
         );
         assert!(queue.close().reset);
         assert_eq!(pending.await, AudioReceiverObservation::default());
-        assert_eq!(queue.next_audio().await, AudioReceiverObservation::default());
+        assert_eq!(QueueAudioClass::next_audio(&queue).await, AudioReceiverObservation::default());
         assert!(!queue.close().reset);
     }
 }

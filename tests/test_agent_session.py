@@ -27,7 +27,7 @@ pytestmark = pytest.mark.unit
 
 def test_pre_start_provider_updates_and_views_need_no_event_loop() -> None:
     first, replacement = FakeTTS(), FakeTTS()
-    session = VoiceSession(vad=None, tts=first, turn_detection="manual")
+    session = VoiceSession(vad=None, tts=first, turn_handling={"turn_detection": "manual"})
     session.update_options(tts=replacement, endpointing_opts={"min_delay": 0.4})
     assert session.tts is replacement
     assert session.options["endpointing"]["min_delay"] == 0.4
@@ -64,7 +64,7 @@ async def test_a_provider_update_binds_only_on_a_running_session() -> None:
 async def test_the_interruption_mode_is_set_only_at_construction(
     mode: Literal["vad"] | None,
 ) -> None:
-    async with VoiceSession(vad=None, turn_detection="manual") as session:
+    async with VoiceSession(vad=None, turn_handling={"turn_detection": "manual"}) as session:
         with pytest.raises(ValueError, match="takes no mode"):
             session.update_options(interruption={"mode": mode, "min_duration": 1.5})
         assert session.options["interruption"]["min_duration"] != 1.5, "nothing applies"
@@ -78,7 +78,7 @@ def test_the_detector_gate_reads_the_session_modes_from_the_native_options() -> 
     assert plain._options.turn_detection is None
     assert plain._options.interruption_mode is None
     chosen = VoiceSession(
-        vad=None, turn_detection="manual", turn_handling={"interruption": {"mode": "vad"}}
+        vad=None, turn_handling={"turn_detection": "manual", "interruption": {"mode": "vad"}}
     )
     assert chosen._options.turn_detection == "manual"
     assert chosen._options.interruption_mode == "vad"
@@ -103,8 +103,10 @@ async def test_agent_switch_preserves_the_conversation_history() -> None:
 async def test_agent_switch_preserves_session_listening_options() -> None:
     async with VoiceSession(
         vad=None,
-        turn_detection="manual",
-        endpointing_opts={"min_delay": 0.3, "max_delay": 2.0},
+        turn_handling={
+            "turn_detection": "manual",
+            "endpointing": {"min_delay": 0.3, "max_delay": 2.0},
+        },
     ) as session:
         await session.start(Agent(instructions="Welcome the caller.", name="reception"))
         session.update_agent(Agent(instructions="Help with bookings.", name="bookings"))
@@ -115,7 +117,7 @@ async def test_agent_switch_preserves_session_listening_options() -> None:
 
 async def test_the_session_providers_are_the_native_effective_ones() -> None:
     base, layer, replacement = FakeTTS(), FakeTTS(), FakeTTS()
-    session = VoiceSession(vad=None, tts=base, turn_detection="manual")
+    session = VoiceSession(vad=None, tts=base, turn_handling={"turn_detection": "manual"})
     try:
         async with session.override_options(tts=layer):
             assert session.tts is layer, "a held layer's provider is the session's"
@@ -158,7 +160,7 @@ async def test_live_session_changes_interruption_and_delivery_settings() -> None
             await asyncio.sleep(0.01)
         assert expected.items() <= session.options["interruption"].items()
 
-    async with VoiceSession(vad=None, turn_detection="manual") as session:
+    async with VoiceSession(vad=None, turn_handling={"turn_detection": "manual"}) as session:
         await session.start(Agent(instructions="Welcome the caller.", name="reception"))
         session.update_options(
             interruption={"min_duration": 1.5},
@@ -190,7 +192,11 @@ def _endpointing(session: VoiceSession) -> tuple[float, float]:
 
 async def test_an_override_opened_before_start_is_released_after_it() -> None:
     async with VoiceSession(
-        vad=None, turn_detection="manual", endpointing_opts={"min_delay": 0.3, "max_delay": 2.0}
+        vad=None,
+        turn_handling={
+            "turn_detection": "manual",
+            "endpointing": {"min_delay": 0.3, "max_delay": 2.0},
+        },
     ) as session:
         async with session.override_options(endpointing_opts={"min_delay": 1.2}):
             await session.start(Agent(instructions="Welcome the caller.", name="reception"))
@@ -200,7 +206,11 @@ async def test_an_override_opened_before_start_is_released_after_it() -> None:
 
 async def test_a_base_change_shows_through_the_settings_an_override_leaves_unset() -> None:
     async with VoiceSession(
-        vad=None, turn_detection="manual", endpointing_opts={"min_delay": 0.3, "max_delay": 2.0}
+        vad=None,
+        turn_handling={
+            "turn_detection": "manual",
+            "endpointing": {"min_delay": 0.3, "max_delay": 2.0},
+        },
     ) as session:
         await session.start(Agent(instructions="Welcome the caller.", name="reception"))
         async with session.override_options(endpointing_opts={"min_delay": 1.2}):
@@ -211,7 +221,11 @@ async def test_a_base_change_shows_through_the_settings_an_override_leaves_unset
 
 async def test_overrides_released_out_of_order_leave_the_one_still_held() -> None:
     async with VoiceSession(
-        vad=None, turn_detection="manual", endpointing_opts={"min_delay": 0.3, "max_delay": 2.0}
+        vad=None,
+        turn_handling={
+            "turn_detection": "manual",
+            "endpointing": {"min_delay": 0.3, "max_delay": 2.0},
+        },
     ) as session:
         await session.start(Agent(instructions="Welcome the caller.", name="reception"))
         outer = session.override_options(endpointing_opts={"min_delay": 0.9})
@@ -332,7 +346,7 @@ async def test_override_options_speaks_with_the_layer_then_the_base() -> None:
 
 
 async def test_close_before_start_prevents_opening_a_session() -> None:
-    session = VoiceSession(vad=None, turn_detection="manual")
+    session = VoiceSession(vad=None, turn_handling={"turn_detection": "manual"})
     await session.aclose()
     with pytest.raises(RuntimeError, match="closed"):
         await session.start(Agent(instructions="Welcome the caller.", name="reception"))
@@ -342,7 +356,7 @@ async def test_close_before_start_prevents_opening_a_session() -> None:
 async def test_selecting_an_agent_before_start_keeps_its_callbacks_configurable() -> None:
     agent = Agent(instructions="Welcome the caller.", name="reception")
     entered = asyncio.Event()
-    async with VoiceSession(vad=None, turn_detection="manual") as session:
+    async with VoiceSession(vad=None, turn_handling={"turn_detection": "manual"}) as session:
         session.update_agent(agent)
         assert session.current_agent is agent
 
@@ -356,7 +370,7 @@ async def test_selecting_an_agent_before_start_keeps_its_callbacks_configurable(
 
 
 async def test_driver_close_cleans_up_even_when_a_close_listener_raises() -> None:
-    session = VoiceSession(vad=None, turn_detection="manual")
+    session = VoiceSession(vad=None, turn_handling={"turn_detection": "manual"})
 
     @session.on("close")
     def raising_listener(event: object) -> None:
@@ -394,7 +408,9 @@ async def test_failed_start_releases_acquired_toolsets_and_preserves_the_excepti
         raise failure
 
     monkeypatch.setattr(_AgentHooks, "_core_tool_infos", fail_after_acquiring)
-    session = VoiceSession(vad=None, tools=[Database(id="database")], turn_detection="manual")
+    session = VoiceSession(
+        vad=None, tools=[Database(id="database")], turn_handling={"turn_detection": "manual"}
+    )
     with pytest.raises(ValueError) as caught:
         await session.start(Agent(instructions="Welcome the caller.", name="reception"))
     assert caught.value is failure
@@ -421,7 +437,7 @@ async def test_cancelled_start_waiter_can_rejoin_the_native_startup(
         return await prepare(host)
 
     monkeypatch.setattr(SessionHost, "prepare", gated)
-    session = VoiceSession(vad=None, turn_detection="manual")
+    session = VoiceSession(vad=None, turn_handling={"turn_detection": "manual"})
     agent = Agent(instructions="Welcome the caller.", name="reception")
     first = asyncio.create_task(session.start(agent))
     try:
@@ -555,7 +571,10 @@ async def test_a_reply_asked_from_on_enter_withholds_the_tools_that_ignore_it() 
 
     offered: list[list[str]] = []
     session = VoiceSession(
-        vad=None, llm=FakeLLM(), tts=FakeTTS(fake_audio_duration=0.1), turn_detection="manual"
+        vad=None,
+        llm=FakeLLM(),
+        tts=FakeTTS(fake_audio_duration=0.1),
+        turn_handling={"turn_detection": "manual"},
     )
     session.output.audio = FakeAudioOutput()
 
@@ -587,7 +606,9 @@ async def test_say_speaks_a_str_a_stream_of_words_or_pre_synthesized_audio() -> 
     async def frames() -> AsyncIterable[rtc.AudioFrame]:
         yield rtc.AudioFrame(b"\x00\x00" * 480, 24000, 1, 480)
 
-    session = VoiceSession(vad=None, tts=FakeTTS(fake_audio_duration=0.1), turn_detection="manual")
+    session = VoiceSession(
+        vad=None, tts=FakeTTS(fake_audio_duration=0.1), turn_handling={"turn_detection": "manual"}
+    )
     session.output.audio = FakeAudioOutput()
     async with session:
         await session.start(Agent(instructions="Help.", name="desk"))
@@ -609,7 +630,7 @@ async def test_a_history_given_before_start_opens_the_session_unless_start_names
     at_start = ChatContext.empty()
     at_start.add_message(role="user", content="This is a new call.")
     agent = Agent(instructions="Help with bookings.", name="bookings")
-    async with VoiceSession(vad=None, turn_detection="manual") as session:
+    async with VoiceSession(vad=None, turn_handling={"turn_detection": "manual"}) as session:
         session.update_agent(agent, chat_ctx=before)
         before.add_message(role="user", content="Added after the handoff.")
         await session.start(agent, chat_ctx=at_start if own_history else None)

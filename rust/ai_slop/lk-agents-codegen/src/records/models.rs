@@ -84,7 +84,9 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
         .collect();
     for record in &mut host.records {
         if let RecordBody::Struct(fields) = &record.body {
-            record.body = RecordBody::Struct(flatten_fields(fields, decls)?);
+            let base = record.dataclass.as_ref().and_then(|d| d.base.as_deref());
+            let own = own_fields(record, fields, base, decls)?;
+            record.body = RecordBody::Struct(flatten_fields(&own, decls)?);
         }
         if let RecordBody::Variants(variants) = &mut record.body {
             for variant in variants {
@@ -126,9 +128,11 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
         let own: Vec<String> = records
             .iter()
             .flat_map(|r| match &r.body {
-                RecordBody::Variants(vs) if !r.transparent => std::iter::once(r.name.clone())
-                    .chain(vs.iter().map(|v| v.name.clone()))
-                    .collect::<Vec<_>>(),
+                RecordBody::Variants(vs) if !r.transparent && r.tag.is_none() => {
+                    std::iter::once(r.name.clone())
+                        .chain(vs.iter().map(|v| v.name.clone()))
+                        .collect::<Vec<_>>()
+                }
                 _ => vec![r.name.clone()],
             })
             .collect();
@@ -258,7 +262,7 @@ fn public_paths(records: &[&RecordDecl], runtime: &mut Imports) -> String {
         let classes: Vec<String> = match &r.body {
             RecordBody::Struct(_) if r.kwargs => vec![r.name.clone(), format!("{}Kwargs", r.name)],
             RecordBody::Struct(_) => vec![r.name.clone()],
-            RecordBody::Variants(vs) if !r.transparent => {
+            RecordBody::Variants(vs) if !r.transparent && r.tag.is_none() => {
                 vs.iter().map(|v| v.name.clone()).collect()
             }
             RecordBody::Literals(_) if r.enumeration => vec![r.name.clone()],
@@ -409,8 +413,21 @@ fn model_tree(
         runtime.add(none_module, &format!("{none_class} as _None{}", r.name));
         return format!("\n\n{} = _Some{} | _None{}\n", r.name, r.name, r.name);
     }
+    // A tagged dict union is any mapping of its keys (an ASGI message).
+    if r.tag.is_some() {
+        runtime.add("typing", "TypeAlias");
+        runtime.add("typing", "Any");
+        runtime.add("collections.abc", "MutableMapping");
+        return format!("\n\n{}: TypeAlias = MutableMapping[str, Any]\n", r.name);
+    }
     if let Some(host_type) = &r.host_type {
         let (module, class) = host_type.rsplit_once('.').expect("dotted host type");
+        // A class Rust only reads names a type: its (possibly optional) module loads lazily.
+        if !r.emit {
+            runtime.add("typing", "TypeAlias");
+            typing.add(module, &format!("{class} as _Host{}", r.name));
+            return format!("\n\n{}: TypeAlias = \"_Host{}\"\n", r.name, r.name);
+        }
         runtime.add(module, &format!("{class} as _Host{}", r.name));
         return format!("\n\n{} = _Host{}\n", r.name, r.name);
     }
@@ -1087,6 +1104,27 @@ fn annotation(ty: &Ty, module: &str, own: &[String], any: bool, typing: &mut Imp
         // Refused by the resolver (`check_record_field`).
         other => unreachable!("`{}` is not a record field", other.rust()),
     }
+}
+
+/// A dataclass subclass's model holds its own fields: the flattened base record's are the base
+/// model's. An emitted one holds that base record.
+fn own_fields(
+    record: &RecordDecl,
+    fields: &[Field],
+    base: Option<&str>,
+    decls: &Declarations,
+) -> Result<Vec<Field>, String> {
+    let Some(base) = base else { return Ok(fields.to_vec()) };
+    let is_base = |field: &Field| {
+        field.conversion.flatten
+            && matches!(&field.ty, Ty::Record(held) if decls.records.iter().any(|r| {
+                r.rust == held.rust && r.name == base && r.module == record.module
+            }))
+    };
+    if record.emit && !fields.iter().any(is_base) {
+        return Err(format!("{}: an emitted dataclass subclass flattens its base", record.rust));
+    }
+    Ok(fields.iter().filter(|f| !is_base(f)).cloned().collect())
 }
 
 fn flatten_fields(fields: &[Field], decls: &Declarations) -> Result<Vec<Field>, String> {

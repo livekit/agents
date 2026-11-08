@@ -22,6 +22,7 @@ pub mod cores {
     pub use lk_agents_core::tokenize::{
         BasicSentenceTokenizer, BasicWordTokenizer, BufferedTokenStream, HostTokenizer,
     };
+    pub use lk_agents_core::tool_outcome::ToolReports;
     pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};
     pub use lk_agents_core::tts::markup::{ProviderMarkup, SpeechMarkup, TranscriptMarkupStripper};
     pub use lk_agents_voice::tokenize::SpeechTokenizer;

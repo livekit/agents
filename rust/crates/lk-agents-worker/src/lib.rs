@@ -19,9 +19,7 @@ pub use config::{
 };
 pub use hw::{CpuMonitor, CpuMonitorKind};
 pub use lk_agents_abi::worker::job::{AcceptArguments, RunningJobInfo};
-pub use lk_agents_abi::worker::types::{
-    JobDecision, JobRequest, RegisteredInfo, WorkerPermissions, WorkerStopped,
-};
+pub use lk_agents_abi::worker::types::{JobDecision, JobRequest, RegisteredInfo, WorkerStopped};
 pub use transport::{
     AgentEndpointKind, Connected, EndpointReader, EndpointStream, EndpointWriter,
     HttpStreamResetCode, StreamPreamble, TransportConfig, TransportError, TransportEvent,

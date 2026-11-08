@@ -34,6 +34,14 @@ class DiffOps:
     to_update: list[AnchoredItem]
 
 
+@dataclass
+class MergeInsertion:
+    """`ChatContext.merge`'s insertion: `theirs[item]` goes in at `index`."""
+
+    index: int
+    item: int
+
+
 AnchoredItem.__annotations__ = get_annotations(AnchoredItem, eval_str=True)
 AnchoredItem.__module__ = "livekit.agents.llm.utils"
 DiffOps.__annotations__ = get_annotations(DiffOps, eval_str=True)

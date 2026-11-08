@@ -10,7 +10,7 @@ from typing import Self
 
 from livekit.agents._core import Role
 from livekit.agents.http import AgentRoutes
-from livekit.agents.ipc import JobLauncher, ProcPool as HostProcPool
+from livekit.agents.ipc import JobLauncher
 from livekit.agents.ipc.child import _JobProc
 from livekit.agents.worker import _ServerCallbacks
 
@@ -146,11 +146,12 @@ class IpcClient:
 
 class ProcPool:
     """The warm job processes: the pool keeps `num_idle_processes` ready, hands each job the next one
-    and retries a failed spawn or launch. Each process is a `JobSupervisor` with `options`.
+    and retries a failed spawn or launch. Each process is a `JobSupervisor` with `options` over a
+    launcher from `launchers`. The server runtime owns its own pool.
     """
     def __new__(
         cls,
-        host: HostProcPool,
+        launchers: Callable[[], Awaitable[JobLauncher]],
         *,
         num_idle_processes: int,
         options: JobRunnerOptions,
@@ -158,17 +159,6 @@ class ProcPool:
     @property
     def processes(self) -> list[JobSupervisor]:
         """The processes the pool owns, from their creation until their cleanup."""
-    @property
-    def active_jobs(self) -> list[RunningJobInfo]:
-        """The jobs whose process runs them now (`status` `RUNNING`)."""
-    def get_by_job_id(self, job_id: str) -> JobSupervisor | None:
-        """The pool's process that took the job `job_id`."""
-    @property
-    def jobs_waiting(self) -> int: ...
-    @property
-    def target_idle_processes(self) -> int: ...
-    @target_idle_processes.setter
-    def target_idle_processes(self, n: int) -> None: ...
     async def start(self) -> None: ...
     async def launch_job(self, info: RunningJobInfo) -> None:
         """The job continues the caller's current span."""
@@ -293,6 +283,9 @@ class ServerRuntime:
     def draining(self) -> bool: ...
     @property
     def http_port(self) -> int: ...
+    @property
+    def active_jobs(self) -> list[RunningJobInfo]:
+        """The jobs running now."""
     async def run(
         self,
         *,
@@ -304,18 +297,18 @@ class ServerRuntime:
         has_load_fnc: bool,
         endpoints: AgentRoutes,
         text_doors: Sequence[_core_A2ADoor],
+        asyncio_debug: bool = False,
     ) -> None:
         """Start the job processes and the health listener and, unless `unregistered`, register;
         return once closed. The worker routes `/<name>/...` of each of `text_doors` to that door
         (its card and JSON-RPC methods; private, before `routes`), and serves each `text` route
         with its door, whose handlers run in the context this call captured; `endpoints`
-        receives every other stream for `routes`.
+        receives every other stream for `routes`. `asyncio_debug`: the job runners' loops run in
+        debug mode.
         """
     async def drain(self, timeout: float | None = None) -> None:
         """`None` (or `0`) waits without a deadline; past it raises `TimeoutError`."""
     async def aclose(self) -> None: ...
-    def job_status(self, job_id: str, status: str) -> None:
-        """`"running"`, `"failed"` or `"success"`."""
     async def simulate_job(
         self,
         room: str,

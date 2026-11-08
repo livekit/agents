@@ -512,8 +512,8 @@ impl lk_agents_abi::EotDetector for DetectorStream {
         EotStream::warn(warnings);
     }
 
-    fn thresholds(&self) -> Option<ThresholdOptions> {
-        Some(self.0.lock().session.thresholds())
+    fn thresholds(&self) -> ThresholdOptions {
+        self.0.lock().session.thresholds()
     }
 
     /// Ask for a prediction over the audio so far; supersedes any in flight. The request is

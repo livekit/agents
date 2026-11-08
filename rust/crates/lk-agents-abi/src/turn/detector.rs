@@ -1,4 +1,4 @@
-//! The end-of-turn detector seam: an audio detector (`_StreamingTurnDetector.stream()`) that hears
+//! The end-of-turn detector seam: an audio detector (`inference.TurnDetector.stream()`) that hears
 //! the user and predicts on request. Thresholds come from [`crate::tokenize::language`].
 
 use std::time::Duration;
@@ -31,18 +31,18 @@ pub enum LegEvent<V> {
     Closed,
 }
 
-/// A host `turn_detection` object is this trait through `_bindings.TurnDetector`, which opens the
-/// detector's `stream()` as its `stream`; the calls go to that stream.
-#[crate::host(proxy(host = "livekit.agents._bindings.TurnDetector"))]
+/// The session's end-of-turn detector: an `inference.TurnDetector`'s stream, which hears the user
+/// and predicts on request. Only a native detector crosses: there is no host protocol to proxy.
+#[crate::host(native(
+    refused = "turn_detection must be a turn detection mode or an `inference.TurnDetector`"
+))]
 pub trait EotDetector: Send + Sync + 'static {
     /// The detector's `model`/`provider`, as `EOUMetrics.metadata` names them.
-    #[host(read_once, name = "_core_id")]
     fn id(&self) -> crate::ProviderId {
         crate::types::identity::ProviderId::of_label("turn_detector")
     }
 
     /// One frame of the user's audio. Fire-and-forget, gated as the STT leg is.
-    #[host(notify(lossy), name = "stream.push_audio")]
     fn push_audio(&self, frame: crate::AudioFrame);
 
     /// Pre-connect audio: kept in full where `push_audio` would drop to stay current.
@@ -55,17 +55,14 @@ pub trait EotDetector: Send + Sync + 'static {
 
     /// `cancel_inference(timed_out=..)` (`audio_recognition.py:1592`); the detector reports a
     /// timeout and a superseding speech differently.
-    #[host(notify, name = "stream.cancel_inference")]
-    fn cancel_inference(&self, #[host(kw)] timed_out: bool);
+    fn cancel_inference(&self, timed_out: bool);
 
     /// `flush(reason)`: a segment boundary, not a close.
-    #[host(notify, name = "stream.flush")]
     fn flush(&self, reason: Option<FlushReason>);
     /// Ask for a prediction (`stream.predict()`).
     ///
     /// The countdown already bounds `timeout` itself, so ignoring it cannot hang a turn. An `Err`
     /// is not a turn failure: the countdown proceeds as if no detector were configured.
-    #[host(await, name = "_core_predict")]
     fn predict(
         &self,
         cx: &crate::telemetry::Cx,
@@ -74,16 +71,11 @@ pub trait EotDetector: Send + Sync + 'static {
 
     /// What a prediction is judged against (`unlikely_threshold(language)`,
     /// `backchannel_threshold(language)`, `supports_language(language)`), as it is now: the user's
-    /// overrides over the model's defaults, the gateway's once its session is created. `None`: the
-    /// detector keeps no table, and the mini model's stock one judges it. Native detectors only:
-    /// a host detector answers per language itself, so its proxy keeps this default.
-    fn thresholds(&self) -> Option<crate::tokenize::language::ThresholdOptions> {
-        None
-    }
+    /// overrides over the model's defaults, the gateway's once its session is created.
+    fn thresholds(&self) -> crate::tokenize::language::ThresholdOptions;
 
     /// Close what the detector holds open (a streaming detector's stream) at session close: an
     /// open stream keeps the session alive (`audio_recognition.py:855`). Nothing by default.
-    #[host(await, name = "stream.aclose")]
     fn aclose(&self, _cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, ()> {
         Box::pin(async move {})
     }

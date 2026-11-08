@@ -3,49 +3,63 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from .. import _bindings, _core
 from .._bindings import core_legs
+from ..log import logger
 from ..tokenize import SentenceStream
 from . import tts_availability
 from .tokenizer import TokenData
-from .tts import ChunkedStream, SynthesizeStream
+from .tts import TTS, ChunkedStream, SynthesizeStream
 
 if TYPE_CHECKING:
-    from livekit.agents.tts import TTS, AudioEmitter
+    from collections.abc import Sequence
+
+    from livekit.agents.tts import AudioEmitter
 
     from .. import tts
+    from .chat_items import MetricsMetadata
     from .llm_fallback import AvailabilityChanged
     from .stream_pacer import SentenceStreamPacer
 
 
-class FallbackAdapter:
-    """`tts.FallbackAdapter`'s chain, built once per loop from the adapter's attributes; a failed
-    TTS is skipped until it recovers.
-    """
+class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
+    """`tts.FallbackAdapter`: several TTS behind one; a failed one is skipped until it recovers."""
 
     if TYPE_CHECKING:
         _members: list[TTS[Any]]
-        _max_retry_per_tts: int
-        _attempt_timeout: float | None
-        _sample_rate: int
 
-        def _core_all_unavailable(self) -> None: ...
+    def __init__(
+        self,
+        tts: Sequence[TTS[Any]],
+        *,
+        max_retry_per_tts: int = 2,
+        attempt_timeout: float | None = None,
+        sample_rate: int | None = None,
+    ) -> None:
+        """Several TTS behind one: a failed one is skipped until it recovers.
 
-        def emit(self, event: str, *args: Any) -> None: ...
-
-    @property
-    def _native(self) -> _core.FallbackTts:
-        return _bindings.on_loop(
-            self,
-            lambda: _core.FallbackTts(
-                core_legs(self._members),
-                max_retry_per_tts=self._max_retry_per_tts,
-                attempt_timeout=self._attempt_timeout,
-                sample_rate=self._sample_rate,
-                on_availability=self,
-            ),
+        Args:
+            tts: The TTS, in order of preference.
+            max_retry_per_tts: Retries of each before moving to the next.
+            attempt_timeout: Caps each phase of one attempt; ``None`` keeps the caller's
+                ``conn_options`` limits.
+            sample_rate: The output rate; the highest of the TTS by default, the others
+                resampled.
+        """
+        self._native = _core.FallbackTts(
+            core_legs(tts),
+            max_retry_per_tts=max_retry_per_tts,
+            attempt_timeout=attempt_timeout,
+            sample_rate=sample_rate,
+            on_availability=self,
+        )
+        self._members = list(tts)
+        super().__init__(
+            capabilities=self._native.capabilities,
+            sample_rate=self._native.sample_rate,
+            num_channels=self._native.num_channels,
         )
 
     def _core_leg(self) -> Any:
@@ -58,6 +72,29 @@ class FallbackAdapter:
             "tts_availability_changed",
             tts_availability.AvailabilityChangedEvent(self._members[ev.index], ev.available),
         )
+
+    def _core_all_unavailable(self) -> None:
+        logger.error("all TTSs are unavailable, retrying..")
+
+    @property
+    def _active(self) -> TTS[Any]:
+        return self._members[self._native.active_index]
+
+    @property
+    def model(self) -> str:
+        return self._active.model
+
+    @property
+    def provider(self) -> str:
+        return self._active.provider
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        return self._active.metrics_metadata
+
+    async def aclose(self) -> None:
+        await super().aclose()
+        await self._native.aclose()
 
 
 class FallbackChunkedStream(ChunkedStream):

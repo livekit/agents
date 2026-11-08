@@ -317,7 +317,7 @@ pub trait VideoInput: Send + Sync {
     fn label(&self) -> &str;
 
     /// The next frame as its side-table key, or `None` at end of stream.
-    #[host(await, function = "livekit.agents._bindings.next_video_frame")]
+    #[host(await, iter)]
     fn next_frame(
         &self,
         cx: &crate::telemetry::Cx,

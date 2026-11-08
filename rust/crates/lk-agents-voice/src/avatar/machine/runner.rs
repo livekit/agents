@@ -19,7 +19,9 @@ const NOT_PLAYED: f64 = 0.0;
 
 // ----------------------------------------------------------------------------- the host's side
 
-pub use lk_agents_abi::voice::avatar::{AvatarAudioReceiver, AvatarMedia, AvatarVideoGenerator};
+pub use lk_agents_abi::voice::avatar::{
+    AvatarAudio, AvatarAudioReceiver, AvatarMedia, AvatarVideoGenerator,
+};
 use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackSegment};
 
 // ----------------------------------------------------------------------------- the core

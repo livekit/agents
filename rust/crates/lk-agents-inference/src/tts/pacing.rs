@@ -141,7 +141,7 @@ impl HostSentences {
     pub(crate) fn read(stream: Arc<dyn HostSentenceStream>, cx: &telemetry::Cx) -> Self {
         let (tx, out) = mpsc::unbounded_channel();
         let (host, cx) = (stream.clone(), cx.clone());
-        let reader = tokio::spawn(async move {
+        let reader = tokio::spawn(lk_agents_net::task::inherit(async move {
             loop {
                 let next = host.next(&cx).await.map(|sentence| sentence.map(|s| s.token));
                 let more = matches!(next, Ok(Some(_)));
@@ -149,7 +149,7 @@ impl HostSentences {
                     return;
                 }
             }
-        });
+        }));
         Self { stream, out, reader }
     }
 

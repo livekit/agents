@@ -14,7 +14,7 @@ use lk_agents_abi::FunctionCall;
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::telemetry::decl::{BoolString, GenAiContent, Label, json};
-use lk_agents_abi::telemetry::host::{TelemetryConfigError, TelemetryDiagnostics};
+use lk_agents_abi::telemetry::host::{EndedSpan, TelemetryConfigError, TelemetryDiagnostics};
 use lk_agents_abi::telemetry::instruments::{
     ConnectionAcquireTime, ExecuteToolDuration, InterruptionNumRequests, LlmInputAudioTokens,
     LlmInputCachedTokens, LlmInputTextTokens, LlmInputTokens, LlmOutputAudioTokens,
@@ -33,6 +33,7 @@ use parking_lot::Mutex;
 use serde_json::Value as JsonValue;
 
 // What the runtime's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
+pub(crate) use lk_agents_abi::telemetry::decl::SpanDecl;
 pub(crate) use lk_agents_abi::telemetry::decl::{Content, Json, Measured, Seconds};
 pub(crate) use lk_agents_abi::telemetry::instruments::{AudioConsumer, TurnLlmTtft, TurnTtsTtfb};
 pub(crate) use lk_agents_abi::telemetry::record::JobKey;
@@ -52,8 +53,8 @@ pub(crate) use lk_agents_abi::telemetry::spans::job::{
     WaitForAudioTrack, WaitForAudioTrackEnd, WaitForParticipant,
 };
 pub(crate) use lk_agents_abi::telemetry::spans::session::{
-    AgentSession, Amd, KeytermDetection, SessionStart, SetupToolsets, StartAgentActivity,
-    UpdateAgent,
+    AgentSession, Amd, KeytermDetection, RpcCall, RpcEnd, RpcHandler, SessionStart, SetupToolsets,
+    StartAgentActivity, UpdateAgent,
 };
 pub(crate) use lk_agents_abi::telemetry::spans::text::{
     A2aRequest, AgentRun, AgentRunEnd, RunStatus,
@@ -64,7 +65,7 @@ pub(crate) use lk_agents_inference::telemetry::{
 };
 pub(crate) use lk_agents_telemetry::span::seeded_ids;
 pub(crate) use lk_agents_telemetry::{
-    Cx, ErrorType, Failed, Failure, ScopedSpan, SpanContext, Tracer, end, event, measure,
+    Cx, ErrorType, Failed, Failure, ScopedSpan, SpanContext, SpanEnd, Tracer, end, event, measure,
     random_seed, reserve, start,
 };
 pub(crate) use lk_agents_voice::telemetry::{
@@ -254,6 +255,10 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
 
     fn _core_telemetry_conflict() {
         PROCESS.conflicts.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn _core_telemetry_export(span: EndedSpan, job: Option<String>) {
+        lk_agents_net::export::host::record_ended(PROCESS.tracer.clone(), span, job);
     }
 
     fn _core_set_capture_content(enabled: bool) {

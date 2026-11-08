@@ -1,7 +1,7 @@
 //! `AgentServer` around the worker connection (`worker.py`): its options resolved once against the
 //! environment, the health listener and its `/worker` record, the job `simulate_job` hands the
-//! host, and the lifecycle (start, load, drain, close) the binding runs. The host keeps the job
-//! processes and the user's callbacks.
+//! pool, and the lifecycle (start, load, drain, close) the binding runs, with the job process pool.
+//! The host keeps the processes' launcher and the user's callbacks.
 
 /// A server lifecycle failure, raised to the host as its message (`RuntimeError`): nothing
 /// branches on it.
@@ -196,7 +196,8 @@ pub enum ServerPhase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ServerResource {
     Setup,
-    Host,
+    /// The job process pool.
+    Processes,
     Worker,
     Load,
     Public,
@@ -215,6 +216,10 @@ pub struct ServerStart {
     pub transport: crate::TransportConfig,
     /// Where the endpoints are reached, written once the server knows.
     pub serving: Arc<parking_lot::Mutex<Serving>>,
+    /// The context the job processes' host calls run in.
+    pub context: lk_agents_abi::invoke::CallContext,
+    /// The job runners' loops run in debug mode.
+    pub asyncio_debug: bool,
 }
 
 #[derive(Clone)]
@@ -417,7 +422,7 @@ impl ServerRuntime {
     ) {
         let mut closing = resources.close(self.host.clone());
         let mut remaining: std::collections::BTreeSet<ServerResource> = [
-            ServerResource::Host,
+            ServerResource::Processes,
             ServerResource::Setup,
             ServerResource::Worker,
             ServerResource::Load,
@@ -510,7 +515,14 @@ impl ServerRuntime {
         if settings.multiprocessing_fallback {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "the forkserver is used on Linux only, job processes are spawned");
         }
-        host.start(settings.clone(), start.devmode, start.has_rtc).await?;
+        let snapshot = self.snapshot.clone();
+        let launch = host::PoolLaunch {
+            context: start.context.clone(),
+            asyncio_debug: start.asyncio_debug,
+            observer: Box::new(move |job, status| send_job_status(&snapshot, &job.job.id, status)),
+        };
+        resources.server_settings = Some(lk_agents_net::env::serve_settings(settings.child_env()));
+        host.start(settings.clone(), start.devmode, start.has_rtc, launch).await?;
         if start.unregistered {
             status.registered.store(true, Ordering::Release);
             status.connected.store(true, Ordering::Release);
@@ -665,7 +677,8 @@ impl ServerRuntime {
                 match worker {
                     Some(worker) => worker.drain(timeout).await,
                     None => {
-                        host.proxy.join_jobs(&telemetry::Cx::NONE).await.map_err(DrainError::Host)
+                        host.join_jobs().await;
+                        Ok(())
                     }
                 }
             };
@@ -918,13 +931,33 @@ impl LoadReporter {
             status.set_load(snapshot.worker_load);
             status.connected.store(snapshot.registered, Ordering::Release);
             if let Some(target) = snapshot.target_idle_processes {
-                host.proxy.idle_processes(&telemetry::Cx::NONE, target).await?;
+                host.set_target_idle(target);
             }
         }
         // The host answering is its heartbeat: `/` reads it without waiting on the host.
         host.proxy.heartbeat(&telemetry::Cx::NONE).await?;
         status.heartbeat();
         Ok(())
+    }
+}
+
+/// A job's status to the worker connection, when one is up.
+fn send_job_status(
+    snapshot: &watch::Sender<ServerSnapshot>,
+    job_id: &str,
+    status: lk_agents_abi::worker::ipc::JobStatus,
+) {
+    use lk_agents_abi::worker::ipc::JobStatus;
+    let status = match status {
+        JobStatus::Running => proto::JobStatus::JsRunning,
+        JobStatus::Failed => proto::JobStatus::JsFailed,
+        JobStatus::Success => proto::JobStatus::JsSuccess,
+    };
+    let worker = snapshot.borrow().worker.clone();
+    if let Some(worker) = worker
+        && worker.send(WorkerCommand::JobStatus { job_id: job_id.to_owned(), status }).is_err()
+    {
+        log::error!(target: lk_agents_abi::LOG_TARGET, job_id; "worker job status admission failed");
     }
 }
 
@@ -997,6 +1030,8 @@ struct Resources {
     public: Option<OwnedTask<Result<(), ServerError>>>,
     health: Option<OwnedTask<Result<(), ServerError>>>,
     metrics: Option<OwnedTask<Result<(), ServerError>>>,
+    /// What the job threads read as the server's settings, until the processes are closed.
+    server_settings: Option<lk_agents_net::env::ServerSettings>,
 }
 
 impl Resources {
@@ -1005,12 +1040,12 @@ impl Resources {
         host: ServerCallbacks,
     ) -> FuturesUnordered<BoxFuture<'static, (ServerResource, Result<(), ServerError>)>> {
         let closing = FuturesUnordered::new();
+        let settings = self.server_settings;
         closing.push(
             async move {
-                (
-                    ServerResource::Host,
-                    host.proxy.close(&telemetry::Cx::NONE).await.map_err(ServerError::from),
-                )
+                host.close_pool().await;
+                drop(settings);
+                (ServerResource::Processes, Ok(()))
             }
             .boxed(),
         );

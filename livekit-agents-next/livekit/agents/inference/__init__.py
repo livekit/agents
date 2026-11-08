@@ -15,7 +15,7 @@ from .. import _bindings, _core
 from .._generated import public_inference as _public, vad
 from .._generated.language import LanguageCode
 from .._generated.public_inference import *  # noqa: F403
-from ..job import _server_setting, get_job_context
+from ..job import get_job_context
 from ..log import logger
 from ..metrics import EOTInferenceMetrics
 from ..types import (
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 def get_default_inference_url() -> str:
     """``LIVEKIT_INFERENCE_URL``, else the staging or production gateway by the server's URL."""
-    return _core.inference_url(_server_setting("LIVEKIT_URL"))
+    return _core.inference_url()
 
 
 def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:
@@ -46,18 +46,18 @@ def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:
 def default_api_key(explicit: str | None) -> str:
     """``explicit``, else ``LIVEKIT_INFERENCE_API_KEY``, else the server's key; ``""`` when
     nothing resolves."""
-    return _core.inference_api_key(explicit, _server_setting("LIVEKIT_API_KEY"))
+    return _core.inference_api_key(explicit)
 
 
 def default_api_secret(explicit: str | None) -> str:
     """The same ladder for the secret."""
-    return _core.inference_api_secret(explicit, _server_setting("LIVEKIT_API_SECRET"))
+    return _core.inference_api_secret(explicit)
 
 
 def resolve_credentials(api_key: str | None, api_secret: str | None) -> tuple[str, str]:
     """The inference key and secret (``default_api_key``, ``default_api_secret``); raises
     when either is missing."""
-    creds = _resolve_credentials(None, api_key, api_secret)
+    creds = _core.inference_credentials(None, api_key, api_secret)
     return creds.api_key, creds.api_secret
 
 
@@ -69,8 +69,7 @@ def _resolve_credentials(
     """Each given value, else the ladders and ``get_default_inference_url``; raises when the key
     or the secret is missing."""
     given = [v if is_given(v) else None for v in (base_url, api_key, api_secret)]
-    server = [_server_setting(f"LIVEKIT_{n}") for n in ("URL", "API_KEY", "API_SECRET")]
-    return _core.inference_credentials(*given, *server)
+    return _core.inference_credentials(*given)
 
 
 _USER_AGENT = f"LiveKit Agents/{__version__} (python {platform.python_version()})"
@@ -256,7 +255,7 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         self._base_url = base_url if is_given(base_url) else get_default_inference_url()
         self._api_key = default_api_key(api_key if is_given(api_key) else None)
         self._api_secret = default_api_secret(api_secret if is_given(api_secret) else None)
-        model, _, warnings = _core.eot_select(
+        selected = _core.eot_select(
             version if is_given(version) else None,
             is_hosted(),
             is_dev_mode(),
@@ -265,12 +264,12 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
             self._api_secret,
             local_fallback,
         )
-        for warning in warnings:
+        for warning in selected.warnings:
             logger.warning(warning)
         self._sample_rate = sample_rate
         self._local_fallback = local_fallback
         self._detector = _core.InferenceEot(
-            model,
+            selected.model,
             _overrides(unlikely_threshold),
             _overrides(backchannel_threshold),
             local_fallback=local_fallback,
@@ -331,15 +330,6 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
             self._detector.update_backchannel_overrides(_overrides(backchannel_threshold))
         self._warn_overrides()
 
-    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
-        return self._detector.lookup(language)
-
-    async def backchannel_threshold(self, language: LanguageCode | None) -> float | None:
-        return self._detector.lookup_backchannel(language)
-
-    async def supports_language(self, language: LanguageCode | None) -> bool:
-        return self._detector.supports(language)
-
     def stream(
         self, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN
     ) -> TurnDetectorStream:
@@ -352,28 +342,6 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
 
 def _json(overrides: float | dict[str, float]) -> JsonValue:
     return dict[str, JsonValue](overrides) if isinstance(overrides, dict) else overrides
-
-
-class AdaptiveInterruptionDetector(_core.InterruptionDetector):
-    """The gateway model that tells an interruption from a backchannel while the agent speaks.
-    ``base_url``, ``api_key`` and ``api_secret`` default to the server's settings."""
-
-    def __new__(
-        cls,
-        *,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        api_secret: str | None = None,
-        **options: Any,
-    ) -> AdaptiveInterruptionDetector:
-        credentials = _resolve_credentials(base_url, api_key, api_secret)
-        return super().__new__(
-            cls,
-            base_url=credentials.base_url,
-            api_key=credentials.api_key,
-            api_secret=credentials.api_secret,
-            **options,
-        )
 
 
 # The provider modules build on the gateway helpers and detectors above.
@@ -410,7 +378,6 @@ __all__ = [
     "resolve_credentials",
     "VAD",
     "TurnDetector",
-    "AdaptiveInterruptionDetector",
     "STT",
     "TTS",
     "LLM",

@@ -64,7 +64,7 @@ The frontend holds no business state and never confirms anything the backend did
 | 1.x | 2.0 |
 | --- | --- |
 | `AgentSession(stt=, llm=, tts=, vad=, ...)` | `VoiceSession(stt=, llm=, tts=, vad=, context=, thread=ctx.thread)`; model strings work: `stt="deepgram/nova-3:en"` ([models.md](../../docs/models.md#model-strings)) |
-| `AgentSession(turn_detection=, min_endpointing_delay=, preemptive_generation=, ...)` | `VoiceSession(turn_detection=, endpointing_opts={"min_delay": ..., "max_delay": ...})` or `turn_handling={...}`; `session.update_options(...)` mid-call |
+| `AgentSession(turn_detection=, min_endpointing_delay=, preemptive_generation=, ...)` | `VoiceSession(turn_handling={"turn_detection": ..., "endpointing": {"min_delay": ..., "max_delay": ...}})`; `session.update_options(turn_detection=, endpointing_opts=)` mid-call |
 | `AgentSession[Userdata](userdata=Userdata(...))` | `VoiceSession(context=app)`, a `VoiceSession[AppContext]` |
 | `ctx.userdata`, `RunContext[Userdata]`, `session.userdata` | `ctx.context`, `RunContext[AppContext]`, `session.context` |
 | `class MyAgent(Agent)` + `@function_tool` methods | `my_agent = Agent(context_type=AppContext, instructions=..., llm=...)` + `@my_agent.tool` functions; `@function_tool` stays for reusable tools and `Toolset` methods |

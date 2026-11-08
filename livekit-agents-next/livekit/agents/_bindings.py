@@ -6,10 +6,8 @@ import asyncio
 import contextlib
 import dataclasses
 import time
-import weakref
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Sequence
-from datetime import timedelta
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, Never, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, Never, Protocol, TypeVar, cast
 
 from pydantic import BaseModel
 
@@ -17,19 +15,17 @@ from livekit import rtc
 
 from . import _core
 from ._generated.public__bindings import *  # noqa: F403
-from .log import logger
 
 if TYPE_CHECKING:
     from pydantic import SerializerFunctionWrapHandler
 
     from . import llm
-    from ._generated import duplex, realtime_wire, rtc_wire
+    from ._generated import realtime_wire
     from ._generated.a2a_auth import AgentThreadGrant
     from ._generated.chat_items import (
         ChatMessage,
         FunctionCall,
         FunctionCallOutput,
-        MetricsMetadata,
     )
     from ._generated.llm import ChatChunk
     from ._generated.llm_fallback import AvailabilityChanged
@@ -38,14 +34,11 @@ if TYPE_CHECKING:
     from ._generated.session_events import ErrorEvent, FunctionToolsExecutedEvent
     from ._generated.stt import STT, SpeechData, SpeechEvent
     from ._generated.tool_options import ProviderToolDeclaration, ToolSpec
-    from ._generated.turn_events import EotPrediction
-    from ._generated.types import ProviderId
     from .llm.chat_context import ChatItem
     from .llm.tool_context import Tool, Toolset
     from .types import APIConnectOptions, NotGivenOr
     from .voice import io
     from .voice.agent_session import VoiceSession
-    from .voice.io import _StreamingTurnDetector
     from .voice.room_io import TextInputEvent
     from .voice.run_result import RunAssert
 
@@ -68,44 +61,13 @@ class _MetricsProvider(Protocol):
     def model(self) -> str: ...
     @property
     def provider(self) -> str: ...
-    def emit(self, event: Literal["metrics_collected"], metrics: BaseModel) -> None: ...
-
-
-class _FallbackChain(Protocol):
-    @property
-    def active_index(self) -> int: ...
-    async def aclose(self) -> None: ...
+    def emit(self, event: Literal["metrics_collected"], /, *args: Any) -> None: ...
 
 
 def auth_grant_post_init(grant: AgentThreadGrant) -> None:
     # Frozen records still accept arbitrary sequences at construction, then retain their own
     # list. This is Python authoring normalization, not a second grant schema or policy owner.
     object.__setattr__(grant, "thread_ids", list(grant.thread_ids))
-
-
-def on_loop(owner: object, build: Callable[[], _T]) -> _T:
-    """``build()`` once per running event loop: a core object over host providers calls them on
-    the loop it was built on, so an object shared by two loops (two jobs on threads, per-test
-    loops) gets one each."""
-    built: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _T] = owner.__dict__.setdefault(
-        "_core_by_loop", weakref.WeakKeyDictionary()
-    )
-    loop = asyncio.get_running_loop()
-    if (native := built.get(loop)) is None:
-        native = built[loop] = build()
-    return native
-
-
-def built_on_loop(owner: object) -> list[_FallbackChain]:
-    """What ``on_loop`` built for ``owner``, the running loop's first."""
-    built: dict[asyncio.AbstractEventLoop, _FallbackChain] = dict(
-        owner.__dict__.get("_core_by_loop", {})
-    )
-    try:
-        mine = built.pop(asyncio.get_running_loop(), None)
-    except RuntimeError:
-        mine = None
-    return ([mine] if mine is not None else []) + list(built.values())
 
 
 class _Provider(Protocol):
@@ -536,7 +498,7 @@ class Duplex:
 
 class _DuplexSession:
     """A plugin's ``DuplexSession`` (``plugin``) flattened: the core feeds its input, applies the
-    updates in order and pulls the output audio; the session's callbacks queue one event at a time
+    updates in order and pulls ``plugin.audio_stream``; the session's callbacks queue one event at a time
     into ``events``. The core calls the plugin's own update methods directly; the methods here
     resolve tool names and convert records."""
 
@@ -547,7 +509,6 @@ class _DuplexSession:
 
         self.plugin = session
         self._tools = tools
-        self._audio = aiter(session.audio_stream)
         self.events: asyncio.Queue[Any] = asyncio.Queue()
         put = self.events.put_nowait
         forward_session_events(session, put)
@@ -581,13 +542,6 @@ class _DuplexSession:
             tool_choice=NOT_GIVEN if tool_choice is None else tool_choice,
         )
 
-    async def _core_next_audio(self) -> duplex.DuplexAudioFrame | None:
-        try:
-            item = await anext(self._audio)
-        except StopAsyncIteration:
-            return None
-        return dataclasses.replace(item)
-
     async def _core_aclose(self) -> None:
         await self.plugin.aclose()
         self.events.put_nowait(None)
@@ -600,53 +554,6 @@ def _chat_ctx(items: list[ChatItem] | None) -> NotGivenOr[llm.ChatContext]:
     return NOT_GIVEN if items is None else llm.ChatContext(items)
 
 
-class _Member(Protocol):
-    @property
-    def model(self) -> str: ...
-    @property
-    def provider(self) -> str: ...
-    @property
-    def metrics_metadata(self) -> MetricsMetadata: ...
-
-
-_M = TypeVar("_M", bound=_Member)
-
-
-class FallbackMembers(Generic[_M]):
-    """What the STT, TTS and LLM ``FallbackAdapter`` share over their ``_members``: the member
-    the running loop's chain is serving (``_active``, the first before any chain is built) names
-    the adapter's ``model``, ``provider`` and ``metrics_metadata``; every member unavailable is
-    logged as ``all <_kind>s are unavailable``; ``aclose`` closes the chain of every loop."""
-
-    _kind: ClassVar[str]
-    _members: list[_M]
-
-    @property
-    def _active(self) -> _M:
-        chains = built_on_loop(self)
-        return self._members[chains[0].active_index if chains else 0]
-
-    @property
-    def model(self) -> str:
-        return self._active.model
-
-    @property
-    def provider(self) -> str:
-        return self._active.provider
-
-    @property
-    def metrics_metadata(self) -> MetricsMetadata:
-        return self._active.metrics_metadata
-
-    def _core_all_unavailable(self) -> None:
-        logger.error(f"all {self._kind}s are unavailable, retrying..")
-
-    async def aclose(self) -> None:
-        await super().aclose()  # type: ignore[misc]
-        for chain in built_on_loop(self):
-            await chain.aclose()
-
-
 class FallbackListener(Protocol):
     """A fallback adapter as its chain reports to it: an entry, by its index in the adapter's
     list, went unavailable or recovered; every entry is unavailable."""
@@ -654,39 +561,6 @@ class FallbackListener(Protocol):
     def _core_availability_changed(self, ev: AvailabilityChanged) -> None: ...
 
     def _core_all_unavailable(self) -> None: ...
-
-
-class TurnDetector:
-    """A ``turn_detection`` object as the core's end-of-turn detector: its ``stream()`` (opened
-    here as ``stream``) hears the user's audio and predicts the end of their turn. The core pushes
-    audio, cancels, flushes and closes the stream directly; the methods here report the
-    detector's identity and convert its prediction."""
-
-    def __init__(self, detector: _StreamingTurnDetector) -> None:
-        if not hasattr(detector, "stream"):
-            raise TypeError(
-                f"turn_detection={detector!r} is not an audio turn detector (one with stream()); "
-                "use livekit.agents.inference.TurnDetector"
-            )
-        self._detector = detector
-        self.stream = detector.stream()
-
-    def _core_id(self) -> ProviderId:
-        cls = type(self._detector)
-        label = f"{cls.__module__}.{cls.__name__}"
-        return {"label": label, "model": self._detector.model, "provider": self._detector.provider}
-
-    async def _core_predict(self, timeout: timedelta | None) -> EotPrediction:
-        from ._generated.turn_events import EotPrediction
-
-        ev = await self.stream.predict()
-        return EotPrediction(
-            end_of_turn_probability=ev.end_of_turn_probability,
-            last_speaking_time=ev.last_speaking_time,
-            detection_delay=ev.detection_delay,
-            inference_duration=ev.inference_duration,
-            backchannel_probability=ev.backchannel_probability,
-        )
 
 
 # --- io legs ---------------------------------------------------------------------------------
@@ -698,21 +572,6 @@ async def next_audio_frame(source: io.AudioInput) -> rtc.AudioFrame | None:
         return await source.__anext__()
     except StopAsyncIteration:
         return None
-
-
-async def next_video_frame(source: io.VideoInput) -> rtc_wire.VideoFrameRef | None:
-    """The core's read of an ``io.VideoInput``: its next frame as the core's side-table key,
-    ``None`` once it ends."""
-    from ._generated import rtc_wire
-
-    try:
-        # the source's frame carries its capture time, which ``rtc.VideoFrame`` does not declare
-        frame: Any = await source.__anext__()
-    except StopAsyncIteration:
-        return None
-    return rtc_wire.VideoFrameRef(
-        frame=frame, width=frame.width, height=frame.height, timestamp_us=frame.timestamp_us
-    )
 
 
 def rgba_frame(frame: rtc.VideoFrame) -> rtc.VideoFrame:

@@ -7,6 +7,7 @@ use crate::errors::ProviderError;
 use crate::llm::fallback::ChainObserver;
 use crate::tokenize::language::LanguageCode;
 use crate::utils::stream::{StreamInput, StreamOutput};
+use crate::vad::types::Vad;
 use crate::{ApiConnectOptions, AudioFrame, SpeechEvent, Stt, SttCapabilities};
 
 /// `stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
@@ -21,14 +22,13 @@ pub trait FallbackStt: Send + Sync + Sized + 'static {
     #[host(source(item = SpeechEvent, class = "FallbackRecognizeStream"))]
     type Events: StreamOutput<SpeechEvent> + 'static;
 
-    /// `members` in order, each already streaming (the host wraps a recognize-only entry in its
-    /// `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s, which builds it from its
-    /// attributes, one per loop.
+    /// `stt` in order; a recognize-only one streams over `vad` (`stt.StreamAdapter`).
     #[host(new)]
     fn new(
         env: &Self::Env,
-        members: Vec<Arc<dyn Stt>>,
-        #[host(kw, default = 10.0)] attempt_timeout: f64,
+        stt: Vec<Arc<dyn Stt>>,
+        #[host(kw, default = None)] vad: Option<Arc<dyn Vad>>,
+        #[host(default = 10.0)] attempt_timeout: f64,
         #[host(default = 1)] max_retry_per_stt: u32,
         #[host(default = 5.0)] retry_interval: f64,
         #[host(default = None)] on_availability: Option<Arc<dyn ChainObserver>>,
@@ -60,26 +60,63 @@ pub trait FallbackStt: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn stream(
         &self,
-        #[host(default = None)] language: Option<LanguageCode>,
+        #[host(kw, default = None)] language: Option<LanguageCode>,
         #[host(default = None)] start_time_offset: Option<f64>,
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,
     ) -> Result<crate::DuplexStream<Self::Audio, Self::Events>, ProviderError>;
 }
 
-/// `stt.FallbackAdapter`'s chain, built once per loop from the adapter's attributes; a failed STT
-/// is skipped until it recovers.
+/// `stt.FallbackAdapter`: several STT behind one; a failed one is skipped until it recovers.
 #[crate::host(facade(
     path = "livekit.agents.stt",
     extended,
     name = "FallbackAdapter",
+    base = "stt.STT",
     native = FallbackStt,
-    per_loop,
     legs(stream, recognize, _recognize_impl),
-    resolve(members = ".._bindings.core_legs"),
+    base_args(capabilities),
     availability(
         observer = "on_availability",
+        members = "stt",
+        kind = "STT",
         event = "stt_availability_changed",
         record = ".stt_availability.AvailabilityChangedEvent"
     )
 ))]
-pub trait FallbackSttAdapter {}
+pub trait FallbackSttAdapter {
+    /// Several STT behind one: a failed one is skipped until it recovers.
+    ///
+    /// Args:
+    ///     stt: The STT, in order of preference.
+    ///     vad: Wraps the non-streaming ones in a ``StreamAdapter``; required when any is.
+    ///     attempt_timeout: The timeout of one attempt.
+    ///     max_retry_per_stt: Retries of each before moving to the next.
+    ///     retry_interval: The wait between retries.
+    #[host(new, resolve(stt = ".._bindings.core_legs", vad = ".._bindings.core_leg"))]
+    fn new(
+        stt: Vec<Arc<dyn Stt>>,
+        #[host(kw, default = None)] vad: Option<Arc<dyn Vad>>,
+        #[host(default = 10.0)] attempt_timeout: f64,
+        #[host(default = 1)] max_retry_per_stt: u32,
+        #[host(default = 5.0)] retry_interval: f64,
+    ) -> Self;
+}
+
+/// `stt.FallbackAdapter.stream()`: the chain's recognition, which reconnects and falls back.
+#[crate::host(facade(
+    path = "livekit.agents.stt",
+    base = "stt.RecognizeStream",
+    native = FallbackStt,
+    stream(
+        op = stream,
+        owner = "_stt",
+        native_retries,
+        method = "stream",
+        base_args(conn_options),
+        state(start_time_offset),
+        default(conn_options = "..types.DEFAULT_API_CONNECT_OPTIONS"),
+        annotation(language = "str"),
+        not_given
+    )
+))]
+pub trait FallbackRecognizeStream {}

@@ -10,10 +10,23 @@ pub enum StatusCode {
 pub fn status_code_from_py(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<::lk_agents_abi::telemetry::host::StatusCode> {
-    Ok(match obj.extract::<StatusCode>()? {
-        StatusCode::Unset => ::lk_agents_abi::telemetry::host::StatusCode::Unset,
-        StatusCode::Ok => ::lk_agents_abi::telemetry::host::StatusCode::Ok,
-        StatusCode::Error => ::lk_agents_abi::telemetry::host::StatusCode::Error,
+    if let Ok(native) = obj.extract::<StatusCode>() {
+        return Ok(match native {
+            StatusCode::Unset => ::lk_agents_abi::telemetry::host::StatusCode::Unset,
+            StatusCode::Ok => ::lk_agents_abi::telemetry::host::StatusCode::Ok,
+            StatusCode::Error => ::lk_agents_abi::telemetry::host::StatusCode::Error,
+        });
+    }
+    let member = obj.getattr("name")?.extract::<pyo3::pybacked::PyBackedStr>()?;
+    Ok(match &*member {
+        "UNSET" => ::lk_agents_abi::telemetry::host::StatusCode::Unset,
+        "OK" => ::lk_agents_abi::telemetry::host::StatusCode::Ok,
+        "ERROR" => ::lk_agents_abi::telemetry::host::StatusCode::Error,
+        other => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "{other:?} is not a opentelemetry.trace.StatusCode member"
+            )));
+        }
     })
 }
 pub fn status_code_to_py(
@@ -42,12 +55,27 @@ pub enum SpanKind {
 pub fn span_kind_from_py(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<::lk_agents_abi::telemetry::decl::SpanKind> {
-    Ok(match obj.extract::<SpanKind>()? {
-        SpanKind::Internal => ::lk_agents_abi::telemetry::decl::SpanKind::Internal,
-        SpanKind::Client => ::lk_agents_abi::telemetry::decl::SpanKind::Client,
-        SpanKind::Server => ::lk_agents_abi::telemetry::decl::SpanKind::Server,
-        SpanKind::Producer => ::lk_agents_abi::telemetry::decl::SpanKind::Producer,
-        SpanKind::Consumer => ::lk_agents_abi::telemetry::decl::SpanKind::Consumer,
+    if let Ok(native) = obj.extract::<SpanKind>() {
+        return Ok(match native {
+            SpanKind::Internal => ::lk_agents_abi::telemetry::decl::SpanKind::Internal,
+            SpanKind::Client => ::lk_agents_abi::telemetry::decl::SpanKind::Client,
+            SpanKind::Server => ::lk_agents_abi::telemetry::decl::SpanKind::Server,
+            SpanKind::Producer => ::lk_agents_abi::telemetry::decl::SpanKind::Producer,
+            SpanKind::Consumer => ::lk_agents_abi::telemetry::decl::SpanKind::Consumer,
+        });
+    }
+    let member = obj.getattr("name")?.extract::<pyo3::pybacked::PyBackedStr>()?;
+    Ok(match &*member {
+        "INTERNAL" => ::lk_agents_abi::telemetry::decl::SpanKind::Internal,
+        "CLIENT" => ::lk_agents_abi::telemetry::decl::SpanKind::Client,
+        "SERVER" => ::lk_agents_abi::telemetry::decl::SpanKind::Server,
+        "PRODUCER" => ::lk_agents_abi::telemetry::decl::SpanKind::Producer,
+        "CONSUMER" => ::lk_agents_abi::telemetry::decl::SpanKind::Consumer,
+        other => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "{other:?} is not a opentelemetry.trace.SpanKind member"
+            )));
+        }
     })
 }
 pub fn span_kind_to_py(

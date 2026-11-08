@@ -3,7 +3,7 @@
 
 use lk_agents_abi::agent::Retries;
 use lk_agents_abi::agent::authoring::{
-    AgentConfiguration, AuthoringError, CallbackKind, DEFAULT_AGENT_NAME, ToolOptions,
+    AgentConfiguration, AuthoringError, CallbackKind, DEFAULT_AGENT_NAME, Registered, ToolOptions,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -46,7 +46,7 @@ impl lk_agents_abi::agent::authoring::AgentConfig for AgentConfig {
     fn check_mutable(&self, what: String) -> Result<(), AuthoringError> {
         if self.frozen { Err(AuthoringError::Frozen { what, agent: self.name() }) } else { Ok(()) }
     }
-    fn register(&mut self, kind: CallbackKind) -> Result<(u64, Option<u64>), AuthoringError> {
+    fn register(&mut self, kind: CallbackKind) -> Result<Registered, AuthoringError> {
         let (what, single) = match kind {
             CallbackKind::Tool => ("a tool", false),
             CallbackKind::Instructions => ("an instructions function", false),
@@ -59,7 +59,7 @@ impl lk_agents_abi::agent::authoring::AgentConfig for AgentConfig {
         let ids = self.callbacks.entry(kind).or_default();
         let retired = if single { ids.pop() } else { None };
         ids.push(self.next);
-        Ok((self.next, retired))
+        Ok(Registered { token: self.next, retired })
     }
     fn callbacks(&self, kind: CallbackKind) -> Vec<u64> {
         self.callbacks.get(&kind).cloned().unwrap_or_default()
@@ -162,11 +162,11 @@ mod tests {
         let mut agent = AgentConfig::new("Help".into(), None, None).unwrap();
         assert_eq!(agent.resolve_name(None), DEFAULT_AGENT_NAME);
         assert_eq!(agent.resolve_name(Some("desk".into())), "desk");
-        let (first, _) = agent.register(CallbackKind::Instructions).unwrap();
-        let (second, _) = agent.register(CallbackKind::Instructions).unwrap();
+        let first = agent.register(CallbackKind::Instructions).unwrap().token;
+        let second = agent.register(CallbackKind::Instructions).unwrap().token;
         assert_eq!(agent.callbacks(CallbackKind::Instructions), vec![first, second]);
-        let (old, _) = agent.register(CallbackKind::OnEnter).unwrap();
-        let (new, retired) = agent.register(CallbackKind::OnEnter).unwrap();
+        let old = agent.register(CallbackKind::OnEnter).unwrap().token;
+        let Registered { token: new, retired } = agent.register(CallbackKind::OnEnter).unwrap();
         assert_eq!(retired, Some(old));
         assert_eq!(agent.hook("on_enter".into()), Some(new));
         agent.freeze();

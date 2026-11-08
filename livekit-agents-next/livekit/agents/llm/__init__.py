@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from typing import Literal
 
-from .. import _bindings
 from .._generated import facades_llm as _facades, public_llm as _public
 from .._generated.public_llm import *  # noqa: F403
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -138,42 +136,9 @@ __all__ = [
 __all__ += _public.__all__
 
 
-class FallbackAdapter(
-    _facades.FallbackAdapter,
-    _bindings.FallbackMembers[LLM],
-    LLM[Literal["llm_availability_changed"]],
-):
+class FallbackAdapter(_facades.FallbackAdapter):
     """Several LLMs behind one: a failed one is skipped until it recovers. The chain is the
     core's (``_core.FallbackLlm``)."""
-
-    _kind = "LLM"
-
-    def __init__(
-        self,
-        llm: list[LLM],
-        *,
-        attempt_timeout: float = 5.0,
-        max_retry_per_llm: int = 0,
-        retry_interval: float = 0.5,
-        sticky: bool = False,
-    ) -> None:
-        """
-        Args:
-            llm: The LLMs, in order of preference.
-            attempt_timeout: The timeout of one attempt.
-            max_retry_per_llm: Retries of each before moving to the next.
-            retry_interval: The wait between retries.
-            sticky: Keep the LLM that last served until it fails, even once a preferred one
-                recovers; on failure the rest are tried in order.
-        """
-        if not llm:
-            raise ValueError("at least one LLM instance must be provided.")
-        super().__init__()
-        self._members = llm
-        self._attempt_timeout = attempt_timeout
-        self._max_retry_per_llm = max_retry_per_llm
-        self._retry_interval = retry_interval
-        self._sticky = sticky
 
     def chat(
         self,

@@ -6,10 +6,7 @@ pub mod interfaces {
     #[lk_agents_abi::host(interface(host = "builtins.memoryview", attrs(cast)))]
     pub struct MemoryView;
 
-    #[lk_agents_abi::host(interface(
-        protocol = "streaming turn detector",
-        protocols(streaming(required(model, provider, stream)))
-    ))]
+    #[lk_agents_abi::host(interface(host = "livekit.agents.inference.TurnDetector"))]
     pub struct TurnDetector;
 
     #[lk_agents_abi::host(interface(
@@ -26,6 +23,12 @@ pub mod interfaces {
 
     #[lk_agents_abi::host(interface(module = "time", attrs(time, perf_counter)))]
     pub struct TimeModule;
+
+    #[lk_agents_abi::host(interface(module = "pydantic_core", attrs(to_jsonable_python)))]
+    pub struct PydanticCoreModule;
+
+    #[lk_agents_abi::host(interface(module = "livekit.agents.llm.utils", attrs(_value_text)))]
+    pub struct LlmUtilsModule;
 
     #[lk_agents_abi::host(interface(module = "numpy", attrs(asarray, int16, float32)))]
     pub struct NumpyModule;
@@ -213,6 +216,54 @@ pub fn value_from_py(obj: &Bound<'_, PyAny>, path: &str) -> PyResult<Value> {
          request body, so every value in it has to be JSON-serialisable.",
         type_name(obj)
     )))
+}
+
+/// A host value as JSON the way pydantic dumps it (`to_jsonable_python`): models, dataclasses,
+/// enums and dates included.
+pub fn jsonable(obj: &Bound<'_, PyAny>, path: &str) -> PyResult<Value> {
+    let module = access::PydanticCoreModule::import(obj.py())?;
+    let dump = access::PydanticCoreModule::to_jsonable_python(&module)?;
+    let dumped = crate::py_calls::call(&dump, (obj,), None)?;
+    value_from_py(&dumped, path)
+}
+
+/// An OpenTelemetry attribute value: a scalar, or a sequence of scalars (a tuple too).
+pub fn attribute_value_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+    if !obj.is_instance_of::<PyList>() && !obj.is_instance_of::<PyTuple>() {
+        return value_from_py(obj, "attribute");
+    }
+    let items = obj.try_iter()?.map(|item| value_from_py(&item?, "attribute"));
+    Ok(Value::Array(items.collect::<PyResult<_>>()?))
+}
+
+/// OpenTelemetry attributes: any mapping, the SDK's `BoundedAttributes` included.
+pub fn attributes_from_py(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<std::collections::BTreeMap<String, Value>> {
+    obj.cast::<pyo3::types::PyMapping>()?
+        .items()?
+        .iter()
+        .map(|pair| {
+            let (key, value): (String, Bound<'_, PyAny>) = pair.extract()?;
+            Ok((key, attribute_value_from_py(&value)?))
+        })
+        .collect()
+}
+
+/// A tool value as the model reads it, through the host's `llm.utils._value_text`.
+pub fn tool_text_from_py(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<lk_agents_abi::llm::tool_executor::ToolText> {
+    use lk_agents_abi::llm::tool_executor::ToolText;
+    if obj.is_none() {
+        return Ok(ToolText::None);
+    }
+    let module = access::LlmUtilsModule::import(obj.py())?;
+    let text = crate::py_calls::call(&access::LlmUtilsModule::_value_text(&module)?, (obj,), None)?;
+    Ok(match text.is_none() {
+        true => ToolText::Invalid,
+        false => ToolText::Text(text.extract()?),
+    })
 }
 
 pub fn extra_to_py<'py>(py: Python<'py>, extra: &Extra) -> PyResult<Bound<'py, PyDict>> {
@@ -493,6 +544,11 @@ pub fn exception_message(value: &Bound<'_, PyAny>, _path: &str) -> PyResult<Stri
     Ok(value.to_string())
 }
 
+/// The host object itself, retained (a record read from the object it refers to).
+pub fn host_ref(value: &Bound<'_, PyAny>, _path: &str) -> PyResult<lk_agents_abi::HostRef> {
+    crate::py_objects::object_ref_from_py(value)
+}
+
 /// `AudioInputOptions.auto_gain_control`: as given, else on unless a noise canceller is
 /// configured directly (none, or a selector called per participant, keeps it on).
 pub fn auto_gain_control(options: &Bound<'_, PyAny>, _path: &str) -> PyResult<bool> {
@@ -504,8 +560,7 @@ pub fn auto_gain_control(options: &Bound<'_, PyAny>, _path: &str) -> PyResult<bo
     Ok(noise_cancellation.is_none() || noise_cancellation.is_callable())
 }
 
-/// Of a detector object only whether it streams crosses; the check mirrors `runtime_checkable`:
-/// `model`, `provider` and `stream`.
+/// A mode string, `None`, or an `inference.TurnDetector`, whose stream the session takes.
 pub fn turn_detection_kwarg_from_py(obj: &Bound<'_, PyAny>) -> PyResult<TurnDetectionKwarg> {
     if obj.is_none() {
         return Ok(TurnDetectionKwarg::Null);
@@ -517,8 +572,13 @@ pub fn turn_detection_kwarg_from_py(obj: &Bound<'_, PyAny>) -> PyResult<TurnDete
                 .map_err(|e: UnknownLiteral| PyValueError::new_err(e.to_string()))?,
         ));
     }
-    let streaming = access::TurnDetector::streaming(obj)?;
-    Ok(TurnDetectionKwarg::Detector { streaming })
+    if !obj.is_instance(&access::TurnDetector::import(obj.py())?)? {
+        return Err(PyTypeError::new_err(format!(
+            "turn_detection={} is neither a turn detection mode nor an inference.TurnDetector",
+            obj.repr()?
+        )));
+    }
+    Ok(TurnDetectionKwarg::Detector)
 }
 
 /// `bool | ExpressiveOptions`: `False`/`None` is off, `True` the default options, a dict (even an

@@ -230,10 +230,7 @@ impl AgentCallbacks for FakeTools {
         _cx: &lk_agents_abi::telemetry::Cx,
         invocation: &'a Invocation,
         prepared: &'a lk_agents_abi::HostRef,
-    ) -> lk_agents_abi::BoxFuture<
-        'a,
-        Result<(ToolReport, serde_json::Map<String, serde_json::Value>), HostError>,
-    > {
+    ) -> lk_agents_abi::BoxFuture<'a, Result<lk_agents_abi::agent::ToolCompletion, HostError>> {
         let handle = self
             .prepared
             .lock()
@@ -257,7 +254,8 @@ impl AgentCallbacks for FakeTools {
                 let refs: Arc<dyn lk_agents_abi::RefRegistry> = Arc::new(NoRefs);
                 lk_agents_abi::HostRef::new(completion_value(&call.call_id), &refs)
             });
-            Ok((ToolReport { outcome, transition }, call.extra))
+            let report = ToolReport { outcome, transition };
+            Ok(lk_agents_abi::agent::ToolCompletion { report, extra: call.extra })
         })
     }
 
@@ -527,6 +525,6 @@ mod tests {
             assert!(matches!(detail, Detail::Tool { call_id, .. } if call_id == "second"));
             assert!(answer.send(Body::Answer(ToolOutcome::Nothing)).is_ok());
         });
-        assert!(matches!(report.unwrap().0.outcome, ToolOutcome::Nothing));
+        assert!(matches!(report.unwrap().report.outcome, ToolOutcome::Nothing));
     }
 }

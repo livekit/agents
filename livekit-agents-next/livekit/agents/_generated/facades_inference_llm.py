@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import functools
 from typing import TYPE_CHECKING, Any
 
 from .. import _bindings, _core
@@ -17,38 +16,12 @@ if TYPE_CHECKING:
 
 
 class LLM:
-    """`inference.LLM`'s client, built on first use, after a fork, from the LLM's attributes."""
+    """`inference.LLM`'s client, built by its constructor."""
 
     if TYPE_CHECKING:
-        _model: str
-        _provider: str | None
-        _base_url: str
-        _api_key: str
-        _api_secret: str | None
-        _label: str
-        _inference_class: str | None
-        _strict_tool_schema: bool
-        _gzip_body: bool
-        _msgpack_body: bool
-        _extra_kwargs: dict[str, object]
+        _native: _core.InferenceLlm
 
         def _core_native(self) -> _core.InferenceLlm: ...
-
-    @functools.cached_property
-    def _native(self) -> _core.InferenceLlm:
-        return _core.InferenceLlm(
-            self._model,
-            provider=self._provider,
-            base_url=self._base_url,
-            api_key=self._api_key,
-            api_secret=self._api_secret,
-            label=self._label,
-            inference_class=self._inference_class,
-            strict_tool_schema=self._strict_tool_schema,
-            gzip_body=self._gzip_body,
-            msgpack_body=self._msgpack_body,
-            extra_kwargs=self._extra_kwargs,
-        )
 
     def _core_leg(self) -> Any:
         """This engine, unless a subclass replaces what it would bypass."""

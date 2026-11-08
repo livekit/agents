@@ -47,7 +47,7 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
         items: Vec<ChatItem>,
         role: Role,
         template: &str,
-    ) -> Vec<(usize, Option<ChatItem>)> {
+    ) -> Vec<lk_agents_abi::llm::provider_format::host::ConvertedItem> {
         provider_format::host::convert_mid_conversation_instructions(items, role, template)
     }
     fn to_fnc_ctx(

@@ -70,7 +70,9 @@ async def test_provider_tools_and_nested_functions_reach_the_openai_protocol_rea
     model = realtime.RealtimeModel(
         api_key="test", base_url=url, conn_options=APIConnectOptions(max_retry=0)
     )
-    async with VoiceSession(llm=model, vad=None, turn_detection="manual") as session:
+    async with VoiceSession(
+        llm=model, vad=None, turn_handling={"turn_detection": "manual"}
+    ) as session:
         await session.start(
             Agent(
                 instructions="Help with bookings.",
@@ -109,7 +111,9 @@ async def test_reserved_names_emit_an_error_without_sending_the_invalid_tools(
     model = realtime.RealtimeModel(
         api_key="test", base_url=url, conn_options=APIConnectOptions(max_retry=0)
     )
-    async with VoiceSession(llm=model, vad=None, turn_detection="manual") as session:
+    async with VoiceSession(
+        llm=model, vad=None, turn_handling={"turn_detection": "manual"}
+    ) as session:
         session.on("error", errors.put_nowait)
         await session.start(Agent(instructions="Search records.", tools=[FileSearch(), tool]))
         async with asyncio.timeout(2):
@@ -166,7 +170,9 @@ async def test_realtime_ignores_foreign_and_responses_only_provider_tools(
         model = constructor(
             api_key="test", base_url=url, conn_options=APIConnectOptions(max_retry=0)
         )
-    async with VoiceSession(llm=model, vad=None, turn_detection="manual") as session:
+    async with VoiceSession(
+        llm=model, vad=None, turn_handling={"turn_detection": "manual"}
+    ) as session:
         await session.start(Agent(instructions="Help.", tools=[provider_tool, lookup]))
         async with asyncio.timeout(2):
             tools = await received.get()
@@ -187,7 +193,9 @@ async def test_realtime_refuses_per_reply_tools_without_mutating_its_toolset(
     model = realtime.RealtimeModel(
         api_key="test", base_url=url, conn_options=APIConnectOptions(max_retry=0)
     )
-    async with VoiceSession(llm=model, vad=None, turn_detection="manual") as session:
+    async with VoiceSession(
+        llm=model, vad=None, turn_handling={"turn_detection": "manual"}
+    ) as session:
         await session.start(Agent(instructions="Help.", tools=[provider, lookup]))
         async with asyncio.timeout(2):
             await received.get()

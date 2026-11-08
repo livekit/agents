@@ -13,7 +13,7 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
 
     #[host(class(name = "TtsStream"))]
     type Stream;
-    /// `inference.TTS` builds it on first use, after a fork, from its attributes.
+    /// `inference.TTS` builds it in its constructor.
     #[host(new)]
     #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     fn new(
@@ -62,21 +62,14 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
     ) -> Result<Self::Stream, ProviderError>;
 }
 
-/// `inference.TTS`'s client, built on first use, after a fork, from the TTS's attributes.
+/// `inference.TTS`'s client, built by its constructor.
 #[crate::host(facade(
     path = "livekit.agents.inference.tts",
     extended,
     name = "TTS",
     native = InferenceTts,
-    cached,
     legs(synthesize, stream),
-    leg = "_core_native",
-    annotation(
-        language = ".language.LanguageCode | None",
-        sample_rate = "int",
-        extra_kwargs = "dict[str, Any]",
-        fallback = "list[.inference_tts.FallbackModel]"
-    )
+    leg = "_core_native"
 ))]
 pub trait InferenceTtsFacade {}
 

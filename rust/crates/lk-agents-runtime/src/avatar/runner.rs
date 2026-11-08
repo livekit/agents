@@ -32,12 +32,10 @@ impl AvatarIo {
     /// Run one op; its answer.
     pub async fn perform(&self, op: AvatarIoOperation) -> AvatarEvent {
         match op {
-            AvatarIoOperation::OpenAudio => {
-                AvatarEvent::AudioOpened(self.receiver.open_audio(&telemetry::Cx::NONE).await)
-            }
+            AvatarIoOperation::OpenAudio => AvatarEvent::AudioOpened(Ok(())),
             AvatarIoOperation::NextAudio => AvatarEvent::Audio(
                 self.receiver
-                    .next_audio(&telemetry::Cx::NONE)
+                    .next_audio()
                     .await
                     .map(|o| (o.epoch, o.starts_segment, o.segment, o.frame)),
             ),
@@ -54,19 +52,14 @@ impl AvatarIo {
             AvatarIoOperation::Push(frame) => AvatarEvent::Pushed(self.media.push(frame).await),
             AvatarIoOperation::ReportStarted { segment } => AvatarEvent::Reported {
                 finished: false,
-                result: self.receiver.notify_playback_started(&telemetry::Cx::NONE, segment).await,
+                result: self.receiver.notify_playback_started(segment).await,
             },
             AvatarIoOperation::ReportFinished { segment, position, interrupted } => {
                 AvatarEvent::Reported {
                     finished: true,
                     result: self
                         .receiver
-                        .notify_playback_finished(
-                            &telemetry::Cx::NONE,
-                            position,
-                            interrupted,
-                            segment,
-                        )
+                        .notify_playback_finished(position, interrupted, segment)
                         .await,
                 }
             }
@@ -75,7 +68,7 @@ impl AvatarIo {
                 result: self.generator.clear_buffer(&telemetry::Cx::NONE).await,
             },
             AvatarIoOperation::CloseReceiver => {
-                AvatarEvent::ReceiverClosed(self.receiver.aclose(&telemetry::Cx::NONE).await)
+                AvatarEvent::ReceiverClosed(self.receiver.aclose().await)
             }
             AvatarIoOperation::CloseMedia => AvatarEvent::MediaClosed(self.media.aclose().await),
         }
@@ -174,10 +167,25 @@ async fn forward_connection_changes(
     }
 }
 
+/// Reports the receiver's clears to the loop until it closes.
+async fn forward_clears(
+    receiver: Arc<dyn AvatarAudioReceiver>,
+    events: mpsc::UnboundedSender<AvatarEvent>,
+) {
+    let mut seen = 0;
+    while let Some(epoch) = receiver.next_clear(seen).await {
+        seen = epoch;
+        if events.send(AvatarEvent::ClearBuffer { epoch }).is_err() {
+            return;
+        }
+    }
+}
+
 /// `AvatarRunner`: the queue owner of one [`RunnerCore`]. Host calls and the room become events,
 /// each effect runs as a task whose answer is the next event.
 pub struct Runner {
     room: Arc<dyn RtcRoom>,
+    receiver: Arc<dyn AvatarAudioReceiver>,
     events: mpsc::UnboundedSender<AvatarEvent>,
     answers: Answers,
     next_call: std::sync::atomic::AtomicU64,
@@ -207,6 +215,7 @@ impl Runner {
         let (events, queue) = mpsc::unbounded_channel();
         let answers: Answers = Arc::default();
         let io_tasks: Arc<TaskSet> = Arc::default();
+        let receiver = io.receiver.clone();
         let owner = RunnerLoop {
             core: RunnerCore::new(lazy_publish),
             queue,
@@ -222,6 +231,7 @@ impl Runner {
         let owner = spawner.clone().spawn(owner.run());
         Runner {
             room,
+            receiver,
             events,
             answers,
             next_call: Default::default(),
@@ -288,9 +298,6 @@ impl avatar::AvatarRunner for AvatarRunner {
     async fn wait_for_complete(&self) -> Result<(), RunnerError> {
         self.runner.wait_for_complete().await
     }
-    fn clear_buffer(&self, epoch: u64) {
-        self.runner.clear_buffer(epoch);
-    }
     async fn aclose(&self) -> Result<(), RunnerError> {
         self.runner.aclose().await
     }
@@ -304,17 +311,14 @@ impl Runner {
         let connected = self.room.connection_state()?.is_connected();
         let forward = forward_connection_changes(room_events, self.events.clone());
         self.io_tasks.spawn(&*self.spawner, "avatar room connection", forward);
+        let clears = forward_clears(self.receiver.clone(), self.events.clone());
+        self.io_tasks.spawn(&*self.spawner, "avatar receiver clears", clears);
         self.call(|call| AvatarEvent::Start { call, connected }).await
     }
 
     /// Both loops ran out; the first failure as soon as one fails; `CancelledError` once closed.
     pub async fn wait_for_complete(&self) -> Result<(), RunnerError> {
         self.call(|call| AvatarEvent::WaitForComplete { call }).await
-    }
-
-    /// The receiver's `clear_buffer` event.
-    pub fn clear_buffer(&self, epoch: u64) {
-        let _ = self.events.send(AvatarEvent::ClearBuffer { epoch });
     }
 
     /// `aclose()`: the receiver, then the loops and what is in flight, then the media.

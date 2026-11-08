@@ -244,17 +244,17 @@ pub trait LocalParticipant: Send + Sync {
         Box::pin(async move { Err(RtcError::Unsupported("stream_bytes")) })
     }
 
-    /// `perform_rpc(destination_identity=, method=, payload=)`: `(0, response)` on success, else
-    /// `(rtc.RpcError.code, message)`, since callers branch on the code.
-    #[host(await, name = "_core_perform_rpc")]
+    /// `perform_rpc(destination_identity=, method=, payload=)`: the response; an `rtc.RpcError`
+    /// fails it with its code ([`RtcError::rpc`]), since callers branch on the code.
+    #[host(await, name = "sdk.perform_rpc")]
     fn perform_rpc<'a>(
         &'a self,
         _cx: &crate::telemetry::Cx,
-        destination: ParticipantIdentity,
+        #[host(kw)] destination_identity: ParticipantIdentity,
         method: String,
         payload: String,
-    ) -> crate::BoxFuture<'a, Result<(u32, String), RtcError>> {
-        let _ = (destination, method, payload);
+    ) -> crate::BoxFuture<'a, Result<String, RtcError>> {
+        let _ = (destination_identity, method, payload);
         Box::pin(async move { Err(RtcError::Unsupported("perform_rpc")) })
     }
 
@@ -447,7 +447,7 @@ pub trait TrackPublication: Send + Sync {
 
     /// Whether the track is subscribed and its media can be read. On a remote publication this is
     /// the reference's `publication.track is not None` check.
-    #[host(call, name = "_core_is_subscribed")]
+    #[host(call, getter = "sdk.track", present)]
     fn is_subscribed(&self) -> Result<bool, RtcError>;
 
     /// `TF_PRECONNECT_BUFFER` here is what gates the pre-connect audio path (`_input.py`); the

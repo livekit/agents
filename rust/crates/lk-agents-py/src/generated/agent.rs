@@ -229,7 +229,6 @@ impl RunEvents {
 // Declared in rust/crates/lk-agents-abi/src/agent/authoring.rs.
 type CoreAgentConfigImpl =
     <crate::generated::implementations::Selected as super::Implementations>::AgentConfig;
-type AgentConfigRegisterOutput = (u64, ::std::option::Option<u64>);
 type AgentConfigCallbacksOutput = ::std::vec::Vec<u64>;
 type AgentConfigHookOutput = ::std::option::Option<u64>;
 
@@ -293,12 +292,16 @@ impl CoreAgentConfig {
     }
 
     #[pyo3(signature = (kind))]
-    fn register(&mut self, kind: Bound<'_, PyAny>) -> PyResult<AgentConfigRegisterOutput> {
+    fn register<'py>(
+        &mut self,
+        py: Python<'py>,
+        kind: Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let kind =
             crate::generated::records::agent_authoring::callback_kind_from_py(kind.as_any())?;
         let out = <CoreAgentConfigImpl as ::lk_agents_abi::agent::authoring::AgentConfig>::register(&mut self.0, kind).map_err(|e: ::lk_agents_abi::agent::authoring::AuthoringError| <::lk_agents_abi::agent::authoring::AuthoringError as crate::py_errors::HostException>::to_py_err(&e))?;
-        ::pyo3::PyResult::Ok(out)
+        crate::generated::records::agent_authoring::registered_to_py(py, out)
     }
 
     #[pyo3(signature = (kind))]
@@ -1241,10 +1244,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
         ::std::result::Result<
-            (
-                ::lk_agents_abi::llm::tool_executor::ToolReport,
-                ::serde_json::Map<::std::string::String, ::serde_json::Value>,
-            ),
+            ::lk_agents_abi::agent::ToolCompletion,
             ::lk_agents_abi::errors::HostError,
         >,
     > {
@@ -1279,7 +1279,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "AgentCallbacks.run_tool"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((crate::generated::records::tool_report::tool_report_from_py(item_0.as_any()))?, (match crate::py_values::value_from_py(item_1.as_any(), "AgentCallbacks.run_tool")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("AgentCallbacks.run_tool", ": expected a dict"))) })?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::generated::records::tool_report::tool_completion_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -1493,8 +1493,9 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
 #[derive(Clone)]
 pub struct HostInstructionsProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The host's running loop and a copy of its context, captured when it was taken;
+    /// none when taken with no running loop: each call then runs in its driving operation's.
+    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
 }
 
 impl HostInstructionsProxy {
@@ -1535,8 +1536,8 @@ impl HostInstructionsProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let context = match context {
-            Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::py_calls::capture_context(obj.py())?,
+            Some(context) => Some(::std::clone::Clone::clone(context)),
+            None => crate::py_calls::proxy_context(obj.py()),
         };
         Ok(HostInstructionsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
@@ -1556,7 +1557,7 @@ impl ::lk_agents_abi::agent::HostInstructions for HostInstructionsProxy {
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostInstructions._core_render",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {

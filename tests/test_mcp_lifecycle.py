@@ -173,6 +173,9 @@ async def test_a_changed_token_reconnects_before_the_next_request() -> None:
         async def connect_http(self, url: str, headers: object, auth: str | None) -> None:
             connects.append(auth)
 
+        async def close(self) -> None:
+            pass
+
     call = Holder("first")
     child = per_user().for_run(call_ctx(call))
     assert isinstance(child, MCPToolset)
@@ -183,7 +186,12 @@ async def test_a_changed_token_reconnects_before_the_next_request() -> None:
     await server._refresh()
     call.context.token = "refreshed"
     await server._refresh()
-    assert connects == ["first", "refreshed"]
+    # each request hands the core the run's current credentials; the core decides whether they
+    # are a new connection (lk-agents-runtime mcp::session::target_tests)
+    assert connects == ["first", "first", "refreshed"]
+    await server.aclose()
+    await server._refresh()
+    assert connects == ["first", "first", "refreshed"], "a closed server stays closed"
 
 
 def test_a_filtered_per_run_toolset_filters_each_run() -> None:

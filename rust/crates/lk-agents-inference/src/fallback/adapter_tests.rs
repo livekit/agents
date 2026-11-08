@@ -893,7 +893,8 @@ async fn the_stt_adapter_advertises_the_merged_capabilities_and_refuses_a_batch_
     match err {
         Err(e) => assert_eq!(
             e.to_string(),
-            "STTs do not support streaming: whisper. Wrap them with stt.StreamAdapter first."
+            "STTs do not support streaming: whisper. Provide a VAD to enable stt.StreamAdapter \
+             automatically or wrap them with stt.StreamAdapter before using this adapter."
         ),
         Ok(_) => panic!("a batch-only entry must be refused, not silently wrapped"),
     }

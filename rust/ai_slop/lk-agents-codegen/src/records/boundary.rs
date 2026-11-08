@@ -54,6 +54,12 @@ pub(super) fn record(r: &RecordDecl) -> Result<String, String> {
         text.push_str(&format!("pub fn {name}_from_py(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<{output}> {{ {body} }}\n"));
     }
     if r.emit {
+        let import = |slot: &str, host: &str| -> Result<String, String> {
+            let (module, class) = host.rsplit_once('.').ok_or("host_type needs dotted path")?;
+            Ok(format!(
+                "{{ static {slot}: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> = pyo3::sync::PyOnceLock::new(); {slot}.import(py, {module:?}, {class:?})?.as_any() }}"
+            ))
+        };
         let mut sets = String::new();
         let source_roots: Vec<_> = fields
             .iter()
@@ -63,9 +69,15 @@ pub(super) fn record(r: &RecordDecl) -> Result<String, String> {
             let field = &classes.field;
             sets.push_str(&format!("let selected_some = value.{field}.is_some();\n"));
         }
+        for (key, value) in &r.fixed {
+            sets.push_str(&format!("kwargs.set_item({key:?}, {})?;\n", literal(value)));
+        }
         for field in fields.iter().filter(|f| !f.skip) {
             let name = &field.rust_name;
-            let key = field.host_name();
+            let key = match field.conversion.path.first() {
+                Some(root) => root.as_str().into(),
+                None => field.host_name(),
+            };
             if field.conversion.flatten {
                 return Err(format!("{rust}: flattened emission is not declared"));
             }
@@ -84,10 +96,17 @@ pub(super) fn record(r: &RecordDecl) -> Result<String, String> {
                     },
                 )
             };
-            let emitted = match &field.conversion.emit_with {
+            let mut emitted = match &field.conversion.emit_with {
                 Some(codec) => format!("crate::{codec}(py, {value})?"),
                 None => emit(ty, &value)?,
             };
+            if let Some(class) = &field.conversion.emit_class {
+                let slot = format!("CLASS_{}", name.to_uppercase());
+                emitted = format!(
+                    "crate::py_calls::call({}, ({emitted},), None)?",
+                    import(&slot, class)?
+                );
+            }
             let mut set = if let Some(source) = &field.conversion.source {
                 let mut parent =
                     format!("__emitted_{}", source.attrs.first().ok_or("source needs root")?);
@@ -120,12 +139,6 @@ pub(super) fn record(r: &RecordDecl) -> Result<String, String> {
         }
         let generated_host = format!("livekit.agents._generated.{}.{}", r.module, r.name);
         let host = r.host_type.as_ref().unwrap_or(&generated_host);
-        let import = |slot: &str, host: &str| -> Result<String, String> {
-            let (module, class) = host.rsplit_once('.').ok_or("host_type needs dotted path")?;
-            Ok(format!(
-                "{{ static {slot}: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> = pyo3::sync::PyOnceLock::new(); {slot}.import(py, {module:?}, {class:?})?.as_any() }}"
-            ))
-        };
         let class = match &r.emit_classes {
             Some(classes) => format!(
                 "if selected_some {{ {} }} else {{ {} }}",
@@ -154,7 +167,23 @@ fn field_read(r: &RecordDecl, f: &Field, owner: &str) -> Result<String, String> 
             None => read(&f.ty, value, &path)?,
         })
     };
-    let value = if let Some(source) = &c.source {
+    let value = if !c.path.is_empty() && c.missing_default {
+        // A missing attribute or a `None` along the path reads as the default.
+        let reader = convert("v")?;
+        let member = c.path.iter().fold("Some(obj.clone())".to_owned(), |parent, attr| {
+            format!("{parent}.filter(|m| !m.is_none()).and_then(|m| m.getattr({attr:?}).ok())")
+        });
+        format!(
+            "match {member}.filter(|m| !m.is_none()) {{ Some(member) => {{ let v = &member; ({reader})? }} None => Default::default() }}"
+        )
+    } else if !c.path.is_empty() {
+        let reader = convert("v")?;
+        let member = c
+            .path
+            .iter()
+            .fold("obj.clone()".to_owned(), |parent, attr| format!("{parent}.getattr({attr:?})?"));
+        format!("{{ let member = {member}; let v = &member; ({reader})? }}")
+    } else if let Some(source) = &c.source {
         let parent = source_variable(&source.attrs);
         let (module, key) =
             source.constant.rsplit_once('.').ok_or("source constant needs dotted path")?;
@@ -231,6 +260,18 @@ fn field_read(r: &RecordDecl, f: &Field, owner: &str) -> Result<String, String> 
     })
 }
 
+/// A `fixed` keyword's Rust value.
+fn literal(value: &crate::decl::Literal) -> String {
+    use crate::decl::Literal;
+    match value {
+        Literal::None => "py.None()".into(),
+        Literal::Bool(b) => b.to_string(),
+        Literal::Int(i) => format!("{i}i64"),
+        Literal::Float(f) => format!("{f:?}f64"),
+        Literal::Str(text) => format!("{text:?}"),
+    }
+}
+
 fn source_variable(attrs: &[String]) -> String {
     format!("__source_{}", attrs.join("_"))
 }
@@ -277,6 +318,15 @@ fn validate(record: &RecordDecl, fields: &[Field]) -> Result<(), String> {
     }
     for (index, field) in fields.iter().enumerate() {
         let conversion = &field.conversion;
+        let path = &conversion.path;
+        if (path.len() > 1 && record.emit) != conversion.emit_class.is_some()
+            || (!path.is_empty() && (conversion.source.is_some() || conversion.call.is_some()))
+        {
+            return Err(format!(
+                "{at}.{}: an emitted attribute path builds its root by emit_class, alone",
+                field.rust_name
+            ));
+        }
         if conversion.lenient && !matches!(field.ty, Ty::Optional(_)) {
             return Err(format!("{at}.{}: lenient extraction requires Option", field.rust_name));
         }

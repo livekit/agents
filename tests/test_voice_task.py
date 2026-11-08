@@ -66,7 +66,9 @@ async def test_a_failed_task_raises_its_reason_in_the_awaiting_tool() -> None:
         return "changed"
 
     model = _calls("change my email", "change_email", then="not changed")
-    async with VoiceSession(llm=model, vad=None, turn_detection="manual") as session:
+    async with VoiceSession(
+        llm=model, vad=None, turn_handling={"turn_detection": "manual"}
+    ) as session:
         await session.start(front)
         await asyncio.wait_for(session._run(user_input="change my email"), timeout=5)
         assert failures == [reason]
@@ -109,7 +111,7 @@ async def test_a_task_tool_can_report_progress_then_return_a_validated_completio
     async with VoiceSession(
         llm=_calls("find my booking", "lookup", then="BOOKING-1"),
         vad=None,
-        turn_detection="manual",
+        turn_handling={"turn_detection": "manual"},
     ) as session:
         session.on("tool_execution_updated", progress)
         await session.start(front)
@@ -149,7 +151,9 @@ async def test_a_handoff_refused_inside_a_task_leaves_the_task_agent_speaking() 
         return "not changed"
 
     model = _calls("change my email", "change_email", then="not changed")
-    async with VoiceSession(llm=model, vad=None, turn_detection="manual") as session:
+    async with VoiceSession(
+        llm=model, vad=None, turn_handling={"turn_detection": "manual"}
+    ) as session:
         await session.start(front)
         await asyncio.wait_for(session._run(user_input="change my email"), timeout=5)
         assert speaking == [collector]

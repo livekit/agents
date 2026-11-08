@@ -4,7 +4,8 @@
 //! Each call dispatches through the runtime's HostInvoker (`lk_agents_runtime::host`), entered
 //! by `crate::host` in a copy of a captured host context: the one its `#[host(context)]`
 //! parameter carries (refused when it lacks a scope the call `requires`), else the one the proxy
-//! captured when it was taken from the host. Generation refuses a host call emitted any other way. Every parameter crosses by its declared kind and the result is read by its
+//! captured when it was taken from the host, else (taken with no running loop) the one of the
+//! operation driving the call. Generation refuses a host call emitted any other way. Every parameter crosses by its declared kind and the result is read by its
 //! declared kind; a host failure becomes the declared error. `read_once` values are read when the
 //! proxy is taken; a `bind` method returns a copy whose awaited calls pass the bound value last,
 //! handed out through its declared native wrapper when it names one.
@@ -33,9 +34,9 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
     }
     let context_arg = "context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>";
     if p.captures_context() {
-        reads.push_str("        let context = match context {\n            Some(context) => ::std::clone::Clone::clone(context),\n            None => crate::py_calls::capture_context(obj.py())?,\n        };\n");
+        reads.push_str("        let context = match context {\n            Some(context) => Some(::std::clone::Clone::clone(context)),\n            None => crate::py_calls::proxy_context(obj.py()),\n        };\n");
         fields.push(
-            "    /// The host's running loop and a copy of its context, captured when it was taken.\n    context: ::lk_agents_abi::utils::host_ref::HostRef,\n".into(),
+            "    /// The host's running loop and a copy of its context, captured when it was taken;\n    /// none when taken with no running loop: each call then runs in its driving operation's.\n    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,\n".into(),
         );
         inits.push("context".into());
     } else {
@@ -67,7 +68,9 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
             Target::Function { module, name } => format!(
                 "crate::py_calls::call(&obj.py().import({module:?})?.getattr({name:?})?, (obj,), None)?"
             ),
-            Target::Emit(_) | Target::Iter(_) => unreachable!("read_once reads a value"),
+            Target::Emit(_) | Target::Iter(_) | Target::Present(_) => {
+                unreachable!("read_once reads a value")
+            }
         };
         reads.push_str(&format!(
             "        let {} = {{\n            let v = {value};\n            {read}?\n        }};\n",
@@ -228,7 +231,7 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     // `getattr`, or a module function taking the host object first.
     let callable = match &m.target {
         Target::Method(path) => format!("host.bind(py){}", attributes(path)),
-        Target::Attribute(path) => {
+        Target::Attribute(path) | Target::Present(path) => {
             let (last, along) = path.split_last().expect("a path has a name");
             args.insert(0, format!("::pyo3::types::PyString::new(py, {last:?}).into_any()"));
             // An owned bound object: the host itself when the attribute is its own.
@@ -286,7 +289,7 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     let scope = match m.context {
         Some(i) if m.params[i].by_ref => m.params[i].name.clone(),
         Some(i) => format!("&{}", m.params[i].name),
-        None => "&self.context".to_owned(),
+        None => "&crate::py_calls::calling_context(&self.context)".to_owned(),
     };
     let requires = m
         .requires
@@ -316,6 +319,12 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         let (ret, refused, wrap, err) = result_shape(m, &at)?;
         let binding = if m.ret.ok == Ty::Unit { "()" } else { "out" };
         let read = match sdk_read(p, "o", &m.ret.ok, &at)? {
+            _ if matches!(m.target, Target::Present(_)) => {
+                if m.ret.ok != Ty::Bool {
+                    return Err(format!("{at}: a presence read answers `bool`"));
+                }
+                "::pyo3::PyResult::Ok(!o.is_none())".to_owned()
+            }
             Some(read) => read,
             None if returns_proxy => returned_value("o", &m.ret.ok, &label, &at)?,
             None => from_host("o", &m.ret.ok, &label, &at)?,
@@ -342,7 +351,8 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             "::lk_agents_runtime::host::call(&crate::py_calls::Entry, \"{label}\", {scope}, &[{requires}], {cx}, {host_call})"
         ),
     };
-    let head = format!("{host}{moved}{context}        let started = {dispatch};\n");
+    // Dispatched before `context` is rebound: the call's own context parameter may share its name.
+    let head = format!("{host}{moved}        let started = {dispatch};\n{context}");
     match m.kind {
         ProxyCall::Await if m.ret.err.is_none() => Ok(awaited(
             m,
@@ -674,7 +684,9 @@ mod tests {
         let p = &decls.proxies[0];
         let emitted = super::method(p, &p.methods[0]).expect("emits");
         assert!(emitted.contains("::host::call_cancellable("));
-        assert!(emitted.contains("&self.context, &[], cx, cancel,"));
+        assert!(
+            emitted.contains("&crate::py_calls::calling_context(&self.context), &[], cx, cancel,")
+        );
         assert!(emitted.contains("PyAny>; 0] = []"));
         for invalid in [
             "#[host(call)] fn setup(&self, #[host(cancel)] cancel: std::sync::Arc<dyn crate::invoke::Cancellation>) -> Result<(), HostError>;",
@@ -710,7 +722,9 @@ mod tests {
             let emitted = super::method(p, &p.methods[0]).expect("emits");
             assert_eq!(emitted.matches("CallbacksProxy::in_context").count(), 2);
             assert!(!emitted.contains("CallbacksProxy::from_host"));
-            assert!(emitted.contains("host_context(&self.context).cloned()"));
+            assert!(emitted.contains(
+                "host_context(&crate::py_calls::calling_context(&self.context)).cloned()"
+            ));
         }
     }
 
@@ -741,13 +755,15 @@ mod tests {
             let p = decls.proxies.iter().find(|p| p.rust_name == name).unwrap();
             assert!(p.captures_context(), "{name} must carry the async operation's context");
             let generated = super::proxy(p).expect("factory emits");
-            assert!(generated.contains("context: ::lk_agents_abi::utils::host_ref::HostRef"));
+            assert!(generated.contains(
+                "context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>"
+            ));
         }
         for name in ["Cpu", "PureFactory"] {
             let p = decls.proxies.iter().find(|p| p.rust_name == name).unwrap();
             assert!(!p.captures_context(), "{name} must construct without a running loop");
             let generated = super::proxy(p).expect("pure factory emits");
-            assert!(!generated.contains("host_context(&self.context)"));
+            assert!(!generated.contains("calling_context(&self.context)"));
         }
     }
 

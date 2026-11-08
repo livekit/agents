@@ -26,7 +26,9 @@ from .._generated.voice_session import VoiceCommandOrigin, VoiceCommandOriginToo
 from ..llm import (
     FunctionCall,
 )
-from .io import SpeechHandle
+
+# `SpeechCreatedEvent` annotates its handle under this name.
+from .io import SpeechHandle, SpeechHandle as HostSpeechHandle  # noqa: F401
 
 if TYPE_CHECKING:
     from .._generated.agent_run import Invocation

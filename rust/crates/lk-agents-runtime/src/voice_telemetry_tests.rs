@@ -286,17 +286,8 @@ impl lk_agents_abi::worker::job::SessionJob for Job {
     ) -> Result<(), lk_agents_abi::errors::HostError> {
         unreachable!("only the session owner joins its job")
     }
-    fn on_shutdown(
-        &self,
-        _: lk_agents_abi::HostRef,
-    ) -> Result<(), lk_agents_abi::errors::HostError> {
+    fn run(&self) -> Arc<dyn lk_agents_abi::worker::ipc_host::JobExecution> {
         unreachable!("only the session owner joins its job")
-    }
-    fn on_avatar_shutdown(
-        &self,
-        _: lk_agents_abi::HostRef,
-    ) -> Result<(), lk_agents_abi::errors::HostError> {
-        unreachable!("only an avatar closes on the job's shutdown")
     }
     fn server_env(
         &self,

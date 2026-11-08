@@ -335,20 +335,11 @@ async def test_post_spawn_failure_keeps_native_owner_and_original_cause(
 
 @pytest.mark.parametrize("method", _METHODS)
 async def test_ready_pool_processes_use_native_exit_and_reaping_handles(method: str) -> None:
-    class Host:
-        def __init__(self) -> None:
-            self.ready: list[_core.JobSupervisor] = []
+    async def launcher() -> _Launcher:
+        return _Launcher(method, "normal")
 
-        async def _core_create(self) -> _Launcher:
-            return _Launcher(method, "normal")
-
-        def emit(self, event: str, process: _core.JobSupervisor) -> None:
-            if event == "process_ready":
-                self.ready.append(process)
-
-    host = Host()
     pool = _core.ProcPool(
-        host,
+        launcher,
         num_idle_processes=1,
         options=JobRunnerOptions(
             initialize_timeout=_PROCESS_INITIALIZE_TIMEOUT,
@@ -368,15 +359,16 @@ async def test_ready_pool_processes_use_native_exit_and_reaping_handles(method: 
         time.sleep(1)
         await _assert_reaped(executor, method)
 
+        def replacements() -> list[_core.JobSupervisor]:
+            return [p for p in pool.processes if p.id != executor.id and p.initialized]
+
         async def replacement_ready() -> None:
-            while not any(replacement.id != executor.id for replacement in host.ready):
+            while not replacements():
                 await asyncio.sleep(0.01)
 
         await asyncio.wait_for(replacement_ready(), timeout=_PROCESS_INITIALIZE_TIMEOUT + 5)
         assert executor.id not in {process.id for process in pool.processes}
-        assert any(
-            replacement.pid != pid for replacement in host.ready if replacement.id != executor.id
-        )
+        assert any(replacement.pid != pid for replacement in replacements())
     finally:
         await asyncio.wait_for(pool.aclose(), timeout=5)
 

@@ -89,6 +89,19 @@ class STT(_facades.STT, stt.STT):
         self._base_url, self._api_key, self._api_secret = dataclasses.astuple(credentials)
         self._vad = self._resolve_vad(vad if is_given(vad) else None)
         super().__init__(capabilities=self._fold_capabilities())
+        self._native = _core.InferenceStt(
+            model=self._model,
+            language=self._language,
+            encoding=self._encoding,
+            sample_rate=self._sample_rate,
+            base_url=self._base_url,
+            api_key=self._api_key,
+            api_secret=self._api_secret,
+            extra_kwargs=self._extra_kwargs,
+            fallback=self._fallback,
+            conn_options=self._conn_options,
+            vad=self._vad,
+        )
 
     @classmethod
     def from_model_string(cls, model: str) -> STT:

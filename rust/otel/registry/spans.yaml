@@ -1451,11 +1451,11 @@
         },
         {
           "ref": "lk.pii.rpc.payload",
-          "requirement_level": "required"
+          "requirement_level": "recommended"
         },
         {
           "ref": "lk.rpc.response_timeout",
-          "requirement_level": "required"
+          "requirement_level": "recommended"
         },
         {
           "ref": "lk.rpc.error_code",
@@ -1468,6 +1468,10 @@
         {
           "ref": "lk.pii.rpc.response",
           "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.rpc.handler_registered",
+          "requirement_level": "recommended"
         }
       ],
       "annotations": {
@@ -1478,7 +1482,8 @@
           "end_attributes": [
             "lk.rpc.error_code",
             "lk.rpc.response_size",
-            "lk.pii.rpc.response"
+            "lk.pii.rpc.response",
+            "lk.rpc.handler_registered"
           ]
         }
       }
@@ -1507,16 +1512,12 @@
           "requirement_level": "required"
         },
         {
-          "ref": "lk.rpc.handler_registered",
-          "requirement_level": "required"
-        },
-        {
           "ref": "lk.rpc.payload_size",
           "requirement_level": "required"
         },
         {
           "ref": "lk.pii.rpc.payload",
-          "requirement_level": "required"
+          "requirement_level": "recommended"
         },
         {
           "ref": "lk.rpc.error_code",
@@ -1529,6 +1530,10 @@
         {
           "ref": "lk.pii.rpc.response",
           "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.rpc.handler_registered",
+          "requirement_level": "recommended"
         }
       ],
       "annotations": {
@@ -1539,7 +1544,8 @@
           "end_attributes": [
             "lk.rpc.error_code",
             "lk.rpc.response_size",
-            "lk.pii.rpc.response"
+            "lk.pii.rpc.response",
+            "lk.rpc.handler_registered"
           ]
         }
       }

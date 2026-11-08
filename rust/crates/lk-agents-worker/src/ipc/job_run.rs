@@ -11,7 +11,9 @@ use std::time::Duration;
 use super::telemetry;
 use lk_agents_abi::errors::{HostError, HostErrorKind};
 use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::worker::ipc_host::{JobCall, JobExecution, JobProcess, WorkerError};
+use lk_agents_abi::worker::ipc_host::{
+    FrameworkShutdown, JobCall, JobExecution, JobProcess, WorkerError,
+};
 use lk_agents_abi::worker::job::{ShutdownCause, StartJob};
 use lk_agents_abi::{ATTRIBUTE_SIMULATOR, HostRef};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
@@ -54,12 +56,20 @@ struct State {
     shutdown_callbacks: Vec<ShutdownCallback>,
 }
 
-struct ShutdownCallback {
-    callback: HostRef,
-    takes_reason: bool,
-    /// Registered by livekit-agents: it runs in the shutdown's span, not one of its own.
-    framework: bool,
-    name: String,
+enum ShutdownCallback {
+    /// `ctx.add_shutdown_callback`'s; one livekit-agents registered (`framework`) runs in the
+    /// shutdown's span, any other in a span of its own named `name`.
+    Host { callback: HostRef, takes_reason: bool, framework: bool, name: String },
+    /// A session's or an avatar's close, in the shutdown's span.
+    Framework { name: String, shutdown: FrameworkShutdown },
+}
+
+impl ShutdownCallback {
+    fn name(&self) -> &str {
+        match self {
+            ShutdownCallback::Host { name, .. } | ShutdownCallback::Framework { name, .. } => name,
+        }
+    }
 }
 
 pub struct JobRun {
@@ -96,11 +106,26 @@ struct Inner {
     root: Mutex<Option<telemetry::ScopedSpan<telemetry::JobEntrypoint>>>,
     /// The job the parent handed over; none for a job run outside one.
     job: OnceLock<telemetry::Job>,
+    /// The primary session's `agent_session`, once it started.
+    session: OnceLock<telemetry::Cx>,
 }
 
 impl JobExecution for JobRun {
     fn session_closed(&self, reason: String) {
         self.inner.end(reason, ShutdownCause::SessionClosed);
+    }
+
+    fn add_framework_shutdown(&self, name: String, shutdown: FrameworkShutdown) {
+        let callback = ShutdownCallback::Framework { name, shutdown };
+        self.inner.state.lock().shutdown_callbacks.push(callback);
+    }
+
+    fn session_started(&self, trace: telemetry::Cx) {
+        let _ = self.inner.session.set(trace);
+    }
+
+    fn session_trace(&self) -> Option<telemetry::Cx> {
+        self.inner.session.get().cloned()
     }
 }
 
@@ -217,7 +242,7 @@ impl Inner {
         let (host, cx) = self.host.get().expect("run() sets the host first");
         let job = root.cx();
         let entry = host.start_entrypoint(job, cx).await?;
-        let wait_entry = host.wait(job, cx, entry.clone());
+        let wait_entry = entry.wait(job, cx);
         tokio::pin!(wait_entry);
         let warn_at = tokio::time::sleep(CONNECT_WARNING_DELAY);
         tokio::pin!(warn_at);
@@ -249,7 +274,7 @@ impl Inner {
             && tokio::time::timeout(ENTRYPOINT_EXIT_TIMEOUT, &mut wait_entry).await.is_err()
         {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "entrypoint did not exit in time, cancelling");
-            let _ = host.cancel(shutdown.cx(), cx, entry).await;
+            let _ = entry.cancel(shutdown.cx(), cx).await;
             telemetry::event(root, telemetry::EntrypointCancelled);
         }
         self.close_session(host, cx, shutdown.cx()).await;
@@ -382,15 +407,15 @@ impl Inner {
         let runs: Vec<_> = callbacks
             .into_iter()
             .map(|callback| {
-                let reason = callback.takes_reason.then(|| reason.to_owned());
-                let run =
-                    shutdown_callback(host.clone(), cx.clone(), under.clone(), callback, reason);
-                spawner.spawn(run)
+                let name = callback.name().to_owned();
+                let (host, cx, under, reason) =
+                    (host.clone(), cx.clone(), under.clone(), reason.to_owned());
+                (name, spawner.spawn(shutdown_callback(host, cx, under, callback, reason)))
             })
             .collect();
-        for run in runs {
+        for (name, run) in runs {
             if let Ok(Err(error)) = run.await {
-                log::error!(target: lk_agents_abi::LOG_TARGET, exc_text:% = error.exc_text(); "error while shutting down the job");
+                log::error!(target: lk_agents_abi::LOG_TARGET, callback = name.as_str(), exc_text:% = error.exc_text(); "error while shutting down the job");
             }
         }
     }
@@ -401,12 +426,26 @@ async fn shutdown_callback(
     host: Arc<dyn JobProcess>,
     cx: CallContext,
     parent: telemetry::Cx,
-    ShutdownCallback { callback, framework, name, .. }: ShutdownCallback,
-    reason: Option<String>,
+    callback: ShutdownCallback,
+    reason: String,
 ) -> Result<(), HostError> {
-    if framework {
-        return host.shutdown_callback(&parent, &cx, callback, reason).await;
-    }
+    let (callback, takes_reason, name) = match callback {
+        ShutdownCallback::Framework { shutdown: FrameworkShutdown::Native(close), .. } => {
+            close().await;
+            return Ok(());
+        }
+        ShutdownCallback::Framework { shutdown: FrameworkShutdown::Host(close), .. } => {
+            return host.shutdown_callback(&parent, &cx, close, None).await;
+        }
+        ShutdownCallback::Host { callback, takes_reason, framework: true, .. } => {
+            let reason = takes_reason.then_some(reason);
+            return host.shutdown_callback(&parent, &cx, callback, reason).await;
+        }
+        ShutdownCallback::Host { callback, takes_reason, framework: false, name } => {
+            (callback, takes_reason, name)
+        }
+    };
+    let reason = takes_reason.then_some(reason);
     let span = telemetry::start(&parent, telemetry::ShutdownCallback { callback: name });
     let ran = host.shutdown_callback(span.cx(), &cx, callback, reason).await;
     telemetry::end(span, ran.as_ref());
@@ -456,6 +495,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
                 cloud,
                 root: Mutex::new(None),
                 job: OnceLock::new(),
+                session: OnceLock::new(),
             }),
         })
     }
@@ -467,12 +507,8 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         framework: bool,
         name: String,
     ) {
-        self.inner.state.lock().shutdown_callbacks.push(ShutdownCallback {
-            callback,
-            takes_reason,
-            framework,
-            name,
-        });
+        let callback = ShutdownCallback::Host { callback, takes_reason, framework, name };
+        self.inner.state.lock().shutdown_callbacks.push(callback);
     }
 
     fn start_trace(&self, job: StartJob) {

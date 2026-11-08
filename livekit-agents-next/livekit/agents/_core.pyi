@@ -102,7 +102,6 @@ from ._generated._core_llm import (
     McpSession as McpSession,
     OpenAIRealtimeModel as OpenAIRealtimeModel,
     RealtimeFallbackModel as RealtimeFallbackModel,
-    TtsTokenLog as TtsTokenLog,
     _core_McpToolsetLifecycle as _core_McpToolsetLifecycle,
     _core_realtime_connection_metrics as _core_realtime_connection_metrics,
     _core_ToolsetGroup as _core_ToolsetGroup,
@@ -130,6 +129,7 @@ from ._generated._core_llm import (
     to_openai_response_format as to_openai_response_format,
     to_provider_format as to_provider_format,
     to_strict_json_schema as to_strict_json_schema,
+    tool_report as tool_report,
 )
 from ._generated._core_media import (
     AudioDecoder as AudioDecoder,
@@ -178,6 +178,7 @@ from ._generated._core_telemetry import (
     TelemetrySpan as TelemetrySpan,
     _core_LoopWatch as _core_LoopWatch,
     _core_telemetry_conflict as _core_telemetry_conflict,
+    _core_telemetry_export as _core_telemetry_export,
     _core_telemetry_install as _core_telemetry_install,
     _core_telemetry_shutdown as _core_telemetry_shutdown,
     configure as configure,
@@ -231,8 +232,8 @@ from ._generated._core_tts import (
     validate_synthesis as validate_synthesis,
 )
 from ._generated._core_turn import (
+    AdaptiveInterruptionDetector as AdaptiveInterruptionDetector,
     InferenceEot as InferenceEot,
-    InterruptionDetector as InterruptionDetector,
     TurnDetectorStream as TurnDetectorStream,
     resolve_keyterm_detection as resolve_keyterm_detection,
 )
@@ -263,6 +264,7 @@ from ._generated._core_voice import (
     ConsoleIo as ConsoleIo,
     DataStreamAudioOutput as DataStreamAudioOutput,
     DataStreamAudioReceiver as DataStreamAudioReceiver,
+    HostAudioReceiver as HostAudioReceiver,
     LlmNodeChunks as LlmNodeChunks,
     NodeAudio as NodeAudio,
     NodeText as NodeText,
@@ -306,6 +308,7 @@ from ._generated._core_voice import (
     _core_room_track_unsubscribed as _core_room_track_unsubscribed,
     _core_RoomRpcRouter as _core_RoomRpcRouter,
     _core_RoomSession as _core_RoomSession,
+    _core_RpcTracing as _core_RpcTracing,
     _core_SessionBindings as _core_SessionBindings,
     _core_SessionOwner as _core_SessionOwner,
     _core_SessionState as _core_SessionState,
@@ -333,7 +336,6 @@ from ._generated._core_voice import (
     user_turn_exceeded_reply as user_turn_exceeded_reply,
     validate_card_number as validate_card_number,
     video_queue_frames as video_queue_frames,
-    wait_avatar_join as wait_avatar_join,
     wait_for_agent as wait_for_agent,
     wait_for_participant as wait_for_participant,
     wait_for_track_publication as wait_for_track_publication,

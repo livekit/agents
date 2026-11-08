@@ -25,10 +25,10 @@ from .session_events import (
     ConversationItemAddedEvent as ConversationItemAddedEvent,
     ErrorEvent as ErrorEvent,
     FunctionToolsExecutedEvent as FunctionToolsExecutedEvent,
-    SpeechCreatedEvent as SpeechCreatedEvent,
     ToolCallStarted as ToolCallStarted,
     ToolExecutionUpdatedEvent as ToolExecutionUpdatedEvent,
 )
+from .session_wire import SpeechCreatedEvent as SpeechCreatedEvent
 
 __all__: list[str] = [
     "UserState",

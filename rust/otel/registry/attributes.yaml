@@ -81,6 +81,12 @@
                 "value": "background_audio",
                 "brief": "background_audio",
                 "stability": "development"
+              },
+              {
+                "id": "avatar_receiver",
+                "value": "avatar_receiver",
+                "brief": "avatar_receiver",
+                "stability": "development"
               }
             ]
           },
@@ -1311,7 +1317,7 @@
           "id": "lk.pii.rpc.payload",
           "type": "string",
           "stability": "development",
-          "brief": "The payload's first 1024 characters.",
+          "brief": "The payload's first 1024 characters; absent when empty.",
           "annotations": {
             "livekit": {
               "sensitivity": "pii"
@@ -1368,7 +1374,7 @@
           "id": "lk.rpc.handler_registered",
           "type": "boolean",
           "stability": "development",
-          "brief": "A handler is registered for the method."
+          "brief": "A handler is registered for the method: false once the call failed as unsupported."
         },
         {
           "id": "lk.rpc.payload_size",

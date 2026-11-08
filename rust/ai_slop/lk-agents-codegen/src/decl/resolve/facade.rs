@@ -38,13 +38,11 @@ impl Resolver<'_> {
                 "name",
                 "base",
                 "native",
-                "cached",
-                "per_loop",
                 "legs",
                 "leg",
                 "availability",
-                "resolve",
-                "annotation",
+                "base_args",
+                "keep",
                 "stream",
             ],
         )?;
@@ -63,16 +61,29 @@ impl Resolver<'_> {
             _ => return Err(format!("{at}: `native` names a #[host(class)] trait")),
         };
         let flag = |key| voc::find(nested, key).is_some();
-        let build = match (flag("cached"), flag("per_loop")) {
-            (false, false) => Build::Eager,
-            (true, false) => Build::Cached,
-            (false, true) => Build::PerLoop,
-            (true, true) => return Err(format!("{at}: a facade is `cached` or `per_loop`")),
-        };
         let stream = voc::find(nested, "stream")
             .map(|stream| {
                 let keys = &stream.nested;
-                voc::only(at, keys, &["op", "owner", "native_retries", "resolve"])?;
+                voc::only(
+                    at,
+                    keys,
+                    &[
+                        "op",
+                        "owner",
+                        "native_retries",
+                        "resolve",
+                        "method",
+                        "base_args",
+                        "state",
+                        "default",
+                        "annotation",
+                        "not_given",
+                    ],
+                )?;
+                let names = |key| {
+                    voc::find(keys, key)
+                        .map_or(Vec::new(), |l| l.nested.iter().map(|n| n.key.clone()).collect())
+                };
                 let op = voc::find(keys, "op")
                     .ok_or_else(|| format!("{at}: a stream names the native `op` it opens"))?;
                 Ok::<_, String>(StreamForm {
@@ -81,6 +92,12 @@ impl Resolver<'_> {
                         .ok_or_else(|| format!("{at}: a stream names its `owner` attribute"))?,
                     native_retries: voc::find(keys, "native_retries").is_some(),
                     resolve: per_parameter(at, keys, "resolve")?,
+                    method: voc::text(at, keys, "method")?,
+                    base_args: names("base_args"),
+                    state: names("state"),
+                    defaults: per_parameter(at, keys, "default")?,
+                    annotations: per_parameter(at, keys, "annotation")?,
+                    not_given: voc::find(keys, "not_given").is_some(),
                 })
             })
             .transpose()?;
@@ -120,13 +137,27 @@ impl Resolver<'_> {
             methods.push(self.facade_method(f, &delegates)?);
         }
         let new = methods.iter().any(|m| m.method.kind == MethodKind::New);
-        if build != Build::Eager && stream.is_some() {
-            return Err(format!("{at}: a stream reads its owner's native object"));
-        }
         if stream.is_some() && new {
             return Err(format!("{at}: a stream is built by its base, not a #[host(new)]"));
         }
-        let pairs = |key| per_parameter(at, nested, key);
+        let names = |key| {
+            voc::find(nested, key)
+                .map_or(Vec::new(), |l| l.nested.iter().map(|n| n.key.clone()).collect::<Vec<_>>())
+        };
+        let (base_args, keep) = (names("base_args"), names("keep"));
+        let constructor = methods.iter().find(|m| m.method.kind == MethodKind::New);
+        for n in base_args.iter().chain(&keep) {
+            if !base_args.is_empty() && constructor.is_none() {
+                return Err(format!(
+                    "{at}: base_args read the native object a #[host(new)] builds"
+                ));
+            }
+            if keep.contains(n)
+                && !constructor.is_some_and(|c| c.method.params.iter().any(|p| &p.name == n))
+            {
+                return Err(format!("{at}: keep({n}) names no constructor parameter"));
+            }
+        }
         let name = voc::text(at, nested, "name")?.unwrap_or_else(|| tr.ident.to_string());
         let path = voc::text(at, nested, "path")?
             .ok_or_else(|| format!("{at}: a facade names its public module: `path = \"..\"`"))?;
@@ -140,26 +171,36 @@ impl Resolver<'_> {
             module,
             base: voc::text(at, nested, "base")?,
             native,
-            build,
             legs: voc::find(nested, "legs")
                 .map_or(Vec::new(), |legs| legs.nested.iter().map(|l| l.key.clone()).collect()),
             leg: voc::text(at, nested, "leg")?,
             availability: voc::find(nested, "availability")
                 .map(|a| {
-                    voc::only(at, &a.nested, &["observer", "event", "record"])?;
+                    let keys = ["observer", "members", "kind", "event", "record"];
+                    voc::only(at, &a.nested, &keys)?;
                     let field = |name| {
                         voc::text(at, &a.nested, name)?
                             .ok_or_else(|| format!("{at}: facade availability requires {name}"))
                     };
+                    let members = field("members")?;
+                    if !constructor
+                        .is_some_and(|c| c.method.params.iter().any(|p| p.name == members))
+                    {
+                        return Err(format!(
+                            "{at}: availability members names no constructor parameter"
+                        ));
+                    }
                     Ok::<_, String>(Availability {
                         observer: field("observer")?,
+                        members,
+                        kind: field("kind")?,
                         event: field("event")?,
                         record: field("record")?,
                     })
                 })
                 .transpose()?,
-            resolve: pairs("resolve")?,
-            annotations: pairs("annotation")?,
+            base_args,
+            keep,
             stream,
             delegates,
             source: self.krate.modules[self.module].file.clone(),

@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
+from pydantic import ConfigDict
 from typing_extensions import TypedDict
 
 from .amd import AMDPredictionEvent
@@ -23,11 +25,15 @@ from .events import (
 from .overlap import OverlappingSpeechEvent
 
 if TYPE_CHECKING:
-    from livekit.agents._core import SpeechHandle
+    from typing import Annotated
+
+    from pydantic import Field
+
     from livekit.agents.llm import ChatItem
     from livekit.agents.llm.tool_context import ToolChoice
+    from livekit.agents.voice.io import SpeechHandle as HostSpeechHandle
 
-    from .agent_run import RunInputRequirement, RunSettled
+    from .agent_run import RunFinished, RunInputRequirement
     from .events import CloseReason
     from .metrics import AgentMetrics
     from .rtc_wire import ProcessorFailure
@@ -38,17 +44,6 @@ if TYPE_CHECKING:
 # Record declarations:
 #     rust/crates/lk-agents-abi/src/voice/events.rs
 #     rust/crates/lk-agents-abi/src/voice/room_io.rs
-
-
-@dataclass(kw_only=True, slots=True)
-class SpeechCreatedWire:
-    """`speech_created`'s payload: the host wraps the `_core.SpeechHandle` in its `SpeechHandle` for
-    the public `SpeechCreatedEvent` (`voice/events.py`).
-    """
-
-    user_initiated: bool
-    source: Literal["say", "generate_reply"]
-    speech_handle: SpeechHandle
 
 
 @dataclass(kw_only=True, slots=True)
@@ -157,7 +152,7 @@ class RunFinishedWire:
 
     run: object | None
     """The host's object for the run (the future its `_run()` awaits)."""
-    settled: RunSettled
+    settled: RunFinished
 
 
 @dataclass(kw_only=True, slots=True)
@@ -248,6 +243,20 @@ class HistoryReloadedWire:
     pass
 
 
+@dataclass(frozen=True, kw_only=True, slots=True)
+class SpeechCreatedEvent:
+    __pydantic_config__ = ConfigDict(arbitrary_types_allowed=True)
+
+    user_initiated: bool
+    """True if the speech was created using public methods like `say` or `generate_reply`"""
+    source: Literal["say", "generate_reply"]
+    """Source indicating how the speech handle was created"""
+    speech_handle: Annotated[HostSpeechHandle, Field(exclude=True)] = field(repr=False)
+    """The speech handle that was created"""
+    created_at: float = field(default_factory=time.time)
+    type: Literal["speech_created"] = "speech_created"
+
+
 @dataclass(kw_only=True, slots=True)
 class ParticipantLinked:
     identity: str
@@ -295,7 +304,7 @@ HostWire: TypeAlias = (
     | UserInputTranscribedEvent
     | StartOfSpeechEvent
     | EndOfSpeechEvent
-    | SpeechCreatedWire
+    | SpeechCreatedEvent
     | DiagnosticWire
     | FunctionToolsExecutedWire
     | UserTurnCompletedWire
@@ -335,6 +344,9 @@ dropped, both via `_generated/session_dispatch.py`; the rest have host behaviour
 `#[host(emits = "Model")]` names the public event that behaviour emits, so the generated
 `EventTypes` and `AgentEvent` list every public session event.
 """
+
+
+SpeechCreatedEvent.__module__ = "livekit.agents.voice.events"
 
 
 DEFAULT_HOOK_BOUND: Final = 15.0

@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
-from .._core import TurnDetectorStream as TurnDetectorStream
+from .._core import (
+    AdaptiveInterruptionDetector as AdaptiveInterruptionDetector,
+    TurnDetectorStream as TurnDetectorStream,
+)
 from .inference_credentials import Credentials as Credentials
 from .inference_headers import (
     HEADER_INFERENCE_PRIORITY as HEADER_INFERENCE_PRIORITY,
@@ -31,4 +34,5 @@ __all__: list[str] = [
     "HEADER_INFERENCE_PROVIDER",
     "HEADER_INFERENCE_PRIORITY",
     "TurnDetectorStream",
+    "AdaptiveInterruptionDetector",
 ]

@@ -113,6 +113,7 @@ impl Resolver<'_> {
                 "function",
                 "emit",
                 "iter",
+                "present",
                 "requires",
             ],
         )?;
@@ -548,8 +549,13 @@ fn target(
         None => return Ok((rust_name.to_owned(), Target::Method(vec![rust_name.to_owned()]))),
         Some(one) => one,
     };
+    let present = voc::find(entries, "present").is_some();
+    if present && (key != "getter" || kind != ProxyCall::Call) {
+        return Err(format!("{at}: `present` reads a `call` getter's presence"));
+    }
     let target = match key {
         "name" => Target::Method(path(key, &text)?),
+        "getter" if present => Target::Present(path(key, &text)?),
         "getter" if matches!(kind, ProxyCall::Call | ProxyCall::ReadOnce | ProxyCall::Await) => {
             Target::Attribute(path(key, &text)?)
         }

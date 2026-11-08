@@ -16,13 +16,11 @@ from ..types import NOT_GIVEN
 
 if TYPE_CHECKING:
     from livekit.agents import VAD
-    from livekit.agents._bindings import TurnDetector
     from livekit.agents._core import (
         AgentNodes,
         ConsoleIo,
         DuplexRealtimeModel,
         HostRealtimeModel,
-        InterruptionDetector,
         JobRun,
         OpenAIRealtimeModel,
         RealtimeFallbackModel,
@@ -30,6 +28,7 @@ if TYPE_CHECKING:
         _core_VoiceStore,
     )
     from livekit.agents._generated.expressive import ExpressiveOptions
+    from livekit.agents.inference import AdaptiveInterruptionDetector, TurnDetectorStream
     from livekit.agents.job import JobContext
     from livekit.agents.llm import LLM, Toolset
     from livekit.agents.stt import STT
@@ -163,9 +162,9 @@ class VoiceSessionArgs:
     """
     agent_min_consecutive_speech_delay: float | None = None
     agent_use_tts_aligned_transcript: bool | None = None
-    turn_detector: TurnDetector | None = None
+    turn_detector: TurnDetectorStream | None = None
     """The turn detector over the user's audio (`turn_detection`)."""
-    interruption_detector: InterruptionDetector | None = None
+    interruption_detector: AdaptiveInterruptionDetector | None = None
     """The adaptive-interruption detector: an object means the host's gate said yes."""
     room_io_config: RoomIoConfig
     """`RoomOptions._to_core()`, resolved per leg."""

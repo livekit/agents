@@ -384,66 +384,6 @@ async def test_http_route_kind_is_validated_before_the_host_runs() -> None:
     assert "not one of 'http', 'text'" in str(failure.value.__cause__)
 
 
-@pytest.mark.parametrize("host_failure", [False, True])
-async def test_drain_distinguishes_deadlines_from_identical_host_error_text(
-    host_failure: bool,
-) -> None:
-    import asyncio
-
-    from livekit.agents._generated.worker_options import ProcessOptions, ServerOptions
-
-    class Host:
-        def __init__(self) -> None:
-            self.started = asyncio.Event()
-
-        async def _core_start(self, options: object) -> None:
-            pass
-
-        async def _core_started(self) -> None:
-            self.started.set()
-
-        async def _core_heartbeat(self) -> None:
-            pass
-
-        async def _core_join_jobs(self) -> None:
-            if host_failure:
-                raise RuntimeError("drain timed out")
-            await asyncio.Future()
-
-        async def _core_close(self) -> None:
-            pass
-
-    class Endpoints:
-        async def _core_handle(self, exchange: object, request: object) -> None:
-            raise AssertionError("no request is served")
-
-    host = Host()
-    config = _core.ServerConfig(ServerOptions(), ProcessOptions(), "0.0.0")
-    config.simulation = True
-    runtime = _core.ServerRuntime(config, host)
-    running = asyncio.ensure_future(
-        runtime.run(
-            devmode=True,
-            unregistered=True,
-            has_rtc=False,
-            has_text_doors=True,
-            routes=[],
-            has_load_fnc=False,
-            endpoints=Endpoints(),
-            text_doors=[],
-        )
-    )
-    try:
-        await asyncio.wait_for(host.started.wait(), 5)
-        expected = RuntimeError if host_failure else TimeoutError
-        with pytest.raises(expected, match="drain timed out") as failure:
-            await runtime.drain(timeout=0.1)
-        assert type(failure.value) is expected
-    finally:
-        await asyncio.wait_for(runtime.aclose(), 5)
-        await asyncio.wait_for(running, 5)
-
-
 @pytest.mark.parametrize("name", ["FlushSentinel", "AudioSegmentEnd"])
 def test_generated_markers_keep_public_identity_and_distinct_instances(name: str) -> None:
     from livekit.agents import types
@@ -809,46 +749,6 @@ def test_generated_grant_preserves_sequence_authoring_and_frozen_public_identity
     assert verified.grant.scope == "user:test" and verified.grant.can_create()
     project = credentials.verify(credentials.project_token())
     assert type(project) is Principal and project.grant is None and project.endpoint_call
-
-
-def test_settled_run_preserves_every_correlated_input_requirement() -> None:
-    from livekit.agents._generated.agent_run import (
-        RunInputRequirement,
-        RunOutcomeNoOutput,
-        RunResult,
-        RunSettled,
-    )
-    from livekit.agents._generated.storage_turn import PendingCall
-    from livekit.agents._generated.usage import Usage
-    from livekit.agents.voice.agent_run import settled_result
-
-    requirements = [
-        RunInputRequirement(
-            invocation_id="run-1",
-            call=PendingCall(name=name, call_id=f"call-{name}", answer_tool=f"answer_{name}"),
-            question=f"{name}?",
-            verbatim=True,
-        )
-        for name in ("flight", "hotel")
-    ]
-    native = RunResult(
-        outcome=RunOutcomeNoOutput(),
-        interrupted=False,
-        new_messages=[],
-        all_messages=[],
-        usage=Usage(),
-        verbatim=None,
-        pending_call=None,
-        input_requirements=requirements,
-    )
-    result = settled_result(RunSettled(result=native, output=None), None)
-    assert result.status == "no_output"
-    assert result.input_requirements == requirements
-    assert result.input_requirements is not requirements
-    assert [request.call.call_id for request in result.input_requirements] == [
-        "call-flight",
-        "call-hotel",
-    ]
 
 
 @pytest.mark.parametrize("provider", [False, True])

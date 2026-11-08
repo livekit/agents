@@ -74,7 +74,7 @@ async def entrypoint(ctx: JobContext) -> None:
         llm="openai/gpt-4.1-mini",
         tts="cartesia/sonic-2",
         vad=silero.VAD.load(),
-        turn_detection=inference.TurnDetector(),
+        turn_handling={"turn_detection": inference.TurnDetector()},
     )
     await session.start(agent=front_desk, room=ctx.room)
     await session.generate_reply(instructions="Greet the caller and ask how you can help.")

@@ -251,10 +251,6 @@ class ToolSearchToolset(Toolset):
             await result
 
 
-def _document(item: SearchItem) -> _core.SearchDocument:
-    return _core.SearchDocument(item.name, item.description, list(item.parameters.items()))
-
-
 class KeywordSearchStrategy:
     """Keyword search using regex matching (the core's ``keyword_search``).
 
@@ -263,10 +259,10 @@ class KeywordSearchStrategy:
 
     def build_index(self, items: list[SearchItem]) -> None:
         for item in items:
-            item.index_data = _document(item)
+            item.index_data = _core.SearchDocument(item)
 
     def search(self, query: str, items: list[SearchItem], max_results: int) -> list[SearchItem]:
-        docs = [item.index_data or _document(item) for item in items]
+        docs = [item.index_data or _core.SearchDocument(item) for item in items]
         return [items[i] for i in _core.keyword_search(query, docs, max_results)]
 
     def cleanup(self) -> None:
@@ -295,7 +291,7 @@ class BM25SearchStrategy:
 
     def build_index(self, items: list[SearchItem]) -> None:
         for item in items:
-            item.index_data = _document(item)
+            item.index_data = _core.SearchDocument(item)
         self._index.build([item.index_data for item in items])
 
     def search(self, query: str, items: list[SearchItem], max_results: int) -> list[SearchItem]:

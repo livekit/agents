@@ -38,6 +38,8 @@ pub struct NativeEnum {
     pub name: String,
     pub rust: String,
     pub variants: Vec<String>,
+    /// `host_type`: a foreign enum the host may pass instead, read by member name.
+    pub host_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +215,11 @@ pub struct RecordDecl {
     pub error_owner: Option<String>,
     /// An existing host class: generate structural field conversions and an alias, not a model.
     pub host_type: Option<String>,
+    /// `fixed(key = literal, ..)`: keyword arguments the host class is always built with.
+    pub fixed: Vec<(String, Literal)>,
+    /// `record(.., typed_dict, tag = "type")`: an enum crossing as a plain dict whose `tag` key
+    /// names the variant (each variant's `tag = "a | b"`), as ASGI messages do.
+    pub tag: Option<String>,
     /// `::lk_agents_abi::agent::ValidatedOutput`.
     pub rust: String,
     /// The host name: the model class, the union alias or the literal alias; `Owner.Name` for a
@@ -314,7 +321,7 @@ pub struct Pydantic {
 #[derive(Debug, Clone, Default)]
 pub struct Dataclass {
     /// `base = "Name"`: the dataclass record of the same module this model subclasses, inheriting
-    /// its fields and members. The Rust struct holds only its own fields: a model-only record.
+    /// its fields and members. An emitted subclass holds the base record as a `flatten` field.
     pub base: Option<String>,
     pub frozen: bool,
     /// Keep postponed annotations for Python callbacks whose facade is still initializing.
@@ -360,6 +367,11 @@ pub struct Variant {
     pub route: Option<Route>,
     /// A dispatched record's member: the public event model its host behaviour emits.
     pub emits: Option<String>,
+    /// A tagged dict union's variant: the tag values it is read from, the first emitted.
+    pub tags: Vec<String>,
+    /// `otherwise`: a transparent union's last variant, taking any value no other variant's
+    /// class claims.
+    pub otherwise: bool,
 }
 
 /// `#[host(event)]`: emitted as the public event its model's `type` names; `#[host(ignored)]`:
@@ -445,6 +457,14 @@ pub struct FieldConversion {
     pub flatten: bool,
     pub own_value: bool,
     pub omit_none: bool,
+    /// `path = "a.b"`: read along that attribute path of the host object; emitted as keyword `a`,
+    /// the value built by `emit_class`.
+    pub path: Vec<String>,
+    /// `emit_class = "module.Class"`: the class a path field's value is passed to on emission.
+    pub emit_class: Option<String>,
+    /// `resolve(module = "m", name = "Class.hook")`: the host callable an emitted value is passed
+    /// to, its result the field (the host's own object over a native one).
+    pub resolve: Option<(String, String)>,
 }
 
 impl Field {
@@ -587,6 +607,8 @@ pub enum Target {
     Method(Vec<String>),
     /// `getter = "a.b"`: the attribute found along that path, read and not called.
     Attribute(Vec<String>),
+    /// `getter = "a.b", present`: whether the attribute found along that path is not `None`.
+    Present(Vec<String>),
     /// `function = "module.name"`: that module function, called with the host object first.
     Function { module: String, name: String },
     /// `emit = "event"`: the arguments emitted as that event on the host's event emitter.
@@ -648,6 +670,9 @@ pub struct Class {
     /// Python identity and subclass support declared by the class contract.
     pub host_module: String,
     pub subclass: bool,
+    /// `class(.., implements = "module.Class")`: the host interface the class satisfies; its stub
+    /// subclasses it so type checkers accept it where the host expects one.
+    pub implements: Option<String>,
     /// The host class name (`_core.InferenceLlm`); the trait's for functions.
     pub name: String,
     /// The trait's identifier: the `Implementations` associated type is named after it.
@@ -745,16 +770,16 @@ pub struct FacadeClass {
     pub base: Option<String>,
     /// The native class's host name (`_core.<native>`).
     pub native: String,
-    pub build: Build,
     /// The provider methods whose override keeps the host object as the leg.
     pub legs: Vec<String>,
     /// The host method whose value is the leg, in place of `_native`.
     pub leg: Option<String>,
     pub availability: Option<Availability>,
-    /// A native constructor parameter's host function (`module.fn`), applied when it is built.
-    pub resolve: Vec<(String, String)>,
-    /// A native constructor parameter's host annotation, for its attribute.
-    pub annotations: Vec<(String, String)>,
+    /// `base_args(a, ..)`: the base constructor's arguments, read from the native getters of the
+    /// same name once the native object is built.
+    pub base_args: Vec<String>,
+    /// `keep(a, ..)`: constructor parameters also kept as `self._<a>` for the extending class.
+    pub keep: Vec<String>,
     pub stream: Option<StreamForm>,
     pub delegates: Vec<Delegate>,
     pub source: String,
@@ -770,18 +795,6 @@ pub struct Delegate {
     pub ty: Ty,
 }
 
-/// When a facade builds its native object.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Build {
-    /// In the generated `__init__`, from its parameters.
-    Eager,
-    /// `cached`: once per host object, on first use, from its `self._<param>` attributes.
-    Cached,
-    /// `per_loop`: once per running event loop, from its attributes (a native engine calls the
-    /// host objects it holds on the loop it was built on).
-    PerLoop,
-}
-
 /// `stream(op = m, owner = "_tts", native_retries, resolve(..))`: a provider stream whose `_run`
 /// opens the owner's native `op`, its arguments the stream's `self._<param>` attributes (passed
 /// through a `resolve` function when named), and the base pumps it.
@@ -792,6 +805,16 @@ pub struct StreamForm {
     /// The native operation retries on its own: the base's attempts do not.
     pub native_retries: bool,
     pub resolve: Vec<(String, String)>,
+    /// The owner's provider method taking the per-call parameters (all but `state`, read from
+    /// the base stream); the stream passes `base_args` to its base and keeps the rest.
+    pub method: Option<String>,
+    pub base_args: Vec<String>,
+    pub state: Vec<String>,
+    /// A per-call parameter's host default (`module.NAME`) and annotation in the method.
+    pub defaults: Vec<(String, String)>,
+    pub annotations: Vec<(String, String)>,
+    /// An `Option` parameter defaulting to `None` is `NotGivenOr[T] = NOT_GIVEN` in the method.
+    pub not_given: bool,
 }
 
 /// One method of a facade trait.
@@ -828,12 +851,16 @@ pub struct Adapt {
     pub resolve: Vec<(String, String)>,
 }
 
-/// `availability(observer = "p", event = "..", record = "module.Name")` of a facade: the host
-/// object is the chain observer its native constructor takes as `p`, and emits `event` as
-/// `record(entry of _members, available)`.
+/// `availability(observer = "p", members = "m", kind = "..", event = "..", record = "module.Name")`
+/// of a facade: the host object is the chain observer its native constructor takes as `p`, keeps
+/// its constructor's `m` as `_members` and emits `event` as `record(entry of _members,
+/// available)`; the serving entry names its `model`, `provider` and `metrics_metadata`, and every
+/// entry unavailable is logged as `all <kind>s are unavailable`.
 #[derive(Debug, Clone)]
 pub struct Availability {
     pub observer: String,
+    pub members: String,
+    pub kind: String,
     pub event: String,
     pub record: String,
 }

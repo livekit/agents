@@ -71,12 +71,21 @@ impl From<&str> for Value {
 }
 
 /// A span's W3C identity: what a child, a link, an effect, a host call or a `traceparent`
-/// carries. Ids are never zero; [`SpanContext::valid`] refuses a host's zero ids.
-#[crate::host(record(module = "telemetry", extract, emit))]
+/// carries; the host's OpenTelemetry `SpanContext`. Ids are never zero; [`SpanContext::valid`]
+/// refuses a host's zero ids (its invalid span context).
+#[crate::host(record(
+    module = "telemetry",
+    host_type = "opentelemetry.trace.SpanContext",
+    boundary,
+    extract,
+    emit,
+    fixed(is_remote = false)
+))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SpanContext {
     pub trace_id: u128,
     pub span_id: u64,
+    #[host(path = "trace_flags.sampled", emit_class = "opentelemetry.trace.TraceFlags")]
     pub sampled: bool,
 }
 
@@ -120,7 +129,7 @@ impl SpanContext {
 pub struct JobKey(pub String);
 
 /// OpenTelemetry's `SpanKind`; the host's spans name theirs as `_core.SpanKind`.
-#[crate::host(native_enum(name = "SpanKind"))]
+#[crate::host(native_enum(name = "SpanKind", host_type = "opentelemetry.trace.SpanKind"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SpanKind {
     #[default]

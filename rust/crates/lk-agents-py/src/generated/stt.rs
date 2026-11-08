@@ -52,14 +52,13 @@ pub struct FallbackStt(pub(crate) ::std::sync::Arc<FallbackSttImpl>);
 
 #[pymethods]
 impl FallbackStt {
-    /// `members` in order, each already streaming (the host wraps a recognize-only entry in its
-    /// `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s, which builds it from its
-    /// attributes, one per loop.
+    /// `stt` in order; a recognize-only one streams over `vad` (`stt.StreamAdapter`).
     #[new]
-    #[pyo3(signature = (members, *, attempt_timeout = 10.0, max_retry_per_stt = 1, retry_interval = 5.0, on_availability = None))]
+    #[pyo3(signature = (stt, *, vad = None, attempt_timeout = 10.0, max_retry_per_stt = 1, retry_interval = 5.0, on_availability = None))]
     fn new(
         py: Python<'_>,
-        members: Bound<'_, PyAny>,
+        stt: Bound<'_, PyAny>,
+        vad: Option<Bound<'_, PyAny>>,
         #[pyo3(from_py_with = _extract_fallback_stt_new_attempt_timeout)]
         attempt_timeout: FallbackSttNewAttemptTimeoutInput,
         #[pyo3(from_py_with = _extract_fallback_stt_new_max_retry_per_stt)]
@@ -70,7 +69,7 @@ impl FallbackStt {
     ) -> PyResult<FallbackStt> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let members = members.try_iter().and_then(|items| {
+        let stt = stt.try_iter().and_then(|items| {
             items
                 .map(|item| {
                     let item = item?;
@@ -78,6 +77,8 @@ impl FallbackStt {
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
+        let vad =
+            vad.map(|v| crate::generated::vad::VadProxy::from_host(v.as_any())).transpose()?;
         let on_availability = on_availability
             .map(|v| crate::generated::llm::ChainObserverProxy::from_host(v.as_any()))
             .transpose()?;
@@ -85,7 +86,8 @@ impl FallbackStt {
             .detach(|| {
                 <FallbackSttImpl as ::lk_agents_abi::stt::fallback::FallbackStt>::new(
                     &env,
-                    members,
+                    stt,
+                    vad,
                     attempt_timeout,
                     max_retry_per_stt,
                     retry_interval,
@@ -167,7 +169,7 @@ impl FallbackStt {
     }
 
     /// Audio in, tee'd to the serving stream and every recovery probe; events out.
-    #[pyo3(signature = (language = None, start_time_offset = None, conn_options = None))]
+    #[pyo3(signature = (*, language = None, start_time_offset = None, conn_options = None))]
     fn stream<'py>(
         &self,
         py: Python<'py>,
@@ -294,8 +296,7 @@ pub struct InferenceStt(pub(crate) ::std::sync::Arc<InferenceSttImpl>);
 #[pymethods]
 impl InferenceStt {
     /// A client of `model` on the gateway at `base_url`. Starts nothing. `vad`'s end of speech
-    /// finalizes the transcript (Speechmatics only). `inference.STT` builds it on first use, after
-    /// a fork, from its attributes.
+    /// finalizes the transcript (Speechmatics only). `inference.STT` builds it in its constructor.
     #[new]
     #[pyo3(signature = (*, model, language, encoding, sample_rate, base_url, api_key, api_secret, extra_kwargs, fallback = None, conn_options, vad = None))]
     fn new(
@@ -625,10 +626,9 @@ pub struct SttStreamAdapter(pub(crate) ::std::sync::Arc<SttStreamAdapterImpl>);
 
 #[pymethods]
 impl SttStreamAdapter {
-    /// The wrapped STT and VAD; each stream binds its own recognition policy. `StreamAdapter`
-    /// builds it from its attributes, one per loop.
+    /// The wrapped STT and VAD; each stream binds its own recognition policy.
     #[new]
-    #[pyo3(signature = (stt, vad))]
+    #[pyo3(signature = (*, stt, vad))]
     fn new(
         py: Python<'_>,
         stt: Bound<'_, PyAny>,
@@ -644,6 +644,14 @@ impl SttStreamAdapter {
             )
         });
         ::pyo3::PyResult::Ok(SttStreamAdapter(::std::sync::Arc::new(out)))
+    }
+
+    /// Streaming, with the wrapped STT's keyterms and chat context support.
+    #[getter]
+    fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <SttStreamAdapterImpl as ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter>::capabilities(&self.0));
+        crate::generated::records::stt::stt_capabilities_to_py(py, out)
     }
 
     /// `_recognize_impl`: the wrapped STT's batch path.
@@ -682,7 +690,7 @@ impl SttStreamAdapter {
     }
 
     /// Audio into the VAD, its utterances recognized.
-    #[pyo3(signature = (language = None, start_time_offset = None, conn_options = None))]
+    #[pyo3(signature = (*, language = None, start_time_offset = None, conn_options = None))]
     fn stream<'py>(
         &self,
         py: Python<'py>,
@@ -784,8 +792,9 @@ impl SttAdapterStream {
 #[derive(Clone)]
 pub struct SttProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The host's running loop and a copy of its context, captured when it was taken;
+    /// none when taken with no running loop: each call then runs in its driving operation's.
+    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
     /// The `notify` calls, delivered in order.
     notifier: crate::py_calls::Notifier,
     instance_id: ::std::option::Option<usize>,
@@ -829,8 +838,8 @@ impl SttProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let context = match context {
-            Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::py_calls::capture_context(obj.py())?,
+            Some(context) => Some(::std::clone::Clone::clone(context)),
+            None => crate::py_calls::proxy_context(obj.py()),
         };
         let instance_id = {
             let v = crate::py_calls::read(obj, "_core_instance_id")?;
@@ -898,7 +907,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "Stt._core_prewarm",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
@@ -918,7 +927,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "Stt._core_update_keyterms",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
@@ -940,7 +949,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "Stt._core_push_conversation_item",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
@@ -974,7 +983,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "Stt._core_failed",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
@@ -1021,7 +1030,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "Stt._core_recognize",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -1095,11 +1104,10 @@ impl ::lk_agents_abi::Stt for SttProxy {
         let language_arg = language.map(::std::borrow::ToOwned::to_owned);
         let start_time_offset_arg = start_time_offset;
         let bound = ::std::clone::Clone::clone(&self.conn);
-        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "Stt._core_stream",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -1123,6 +1131,10 @@ impl ::lk_agents_abi::Stt for SttProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {

@@ -27,7 +27,8 @@ pub struct QueueEffects {
 #[error("the audio queue is closed")]
 pub struct QueueClosed;
 
-#[crate::host(class(name = "_core_QueueAudio"))]
+/// `QueueAudioOutput`'s queue. Its clears advance the epoch captured audio is stamped with.
+#[crate::host(class(name = "_core_QueueAudio", native = super::avatar::AvatarAudio))]
 pub trait QueueAudio: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(wait_playback_start: bool) -> Self;
@@ -38,7 +39,6 @@ pub trait QueueAudio: Send + Sync + Sized + 'static {
         &self,
         frame: AudioFrame,
         segment: PlaybackSegment,
-        epoch: u64,
     ) -> Result<QueueEffects, QueueClosed>;
     #[host(call)]
     fn flush(&self) -> Result<(), QueueClosed>;

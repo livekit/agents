@@ -27,9 +27,8 @@ class AudioSegmentEnd:
 
 @dataclass(kw_only=True, slots=True)
 class AudioReceiverObservation:
-    """What the avatar runner reads from its receiver: the receiver's clear epoch, whether this
-    first frame opened a segment, the segment, and the frame (`None` at the end). The receiver
-    stamps it before crossing the async boundary.
+    """What the avatar runner reads from its receiver: the clear epoch the frame was captured in,
+    whether this first frame opened a segment, the segment, and the frame (`None` at the end).
     """
 
     epoch: int

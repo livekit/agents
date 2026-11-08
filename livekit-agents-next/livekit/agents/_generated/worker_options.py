@@ -9,27 +9,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
 from typing_extensions import TypedDict
 
 from ..types import NOT_GIVEN, NotGivenOr
 from .job_records import JobExecutorType
-
-
-@dataclass
-class WorkerPermissions:
-    """`WorkerPermissions`, field-for-field, including the defaults."""
-
-    can_publish: bool = True
-    can_subscribe: bool = True
-    can_publish_data: bool = True
-    can_update_metadata: bool = True
-    can_publish_sources: list[int] = field(default_factory=list)
-    """`models.TrackSource` values, as raw enum numbers."""
-    hidden: bool = False
-
 
 MultiprocessingContext: TypeAlias = Literal["spawn", "forkserver"]
 """How job processes start: `forkserver` (Linux only; elsewhere it falls back to `spawn`) or
@@ -147,8 +133,6 @@ class ProcessOptions:
 
     max_retry: NotGivenOr[int] = NOT_GIVEN
     """Connection attempts to LiveKit before the worker fails; 16."""
-    permissions: NotGivenOr[WorkerPermissions] = NOT_GIVEN
-    """The permissions of the agent's participant in the rooms it joins."""
     http_proxy: NotGivenOr[str | None] = NOT_GIVEN
     """The proxy the job processes' HTTP clients use; default `HTTPS_PROXY`, else `HTTP_PROXY`."""
     job_executor_type: NotGivenOr[JobExecutorType] = NOT_GIVEN
@@ -161,6 +145,8 @@ class ProcessOptions:
     """Seconds a session's end callbacks have to finish; 300."""
     initialize_process_timeout: NotGivenOr[float] = NOT_GIVEN
     """Seconds a job process has to initialize (`prewarm`); 10."""
+    ping_timeout: NotGivenOr[float] = NOT_GIVEN
+    """Seconds a job process may leave a ping unanswered before it is killed; 60."""
 
 
 Listeners.__module__ = "livekit.agents"

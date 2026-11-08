@@ -7,6 +7,7 @@ use lk_agents_abi::voice::rtc::{ConnectionState, ParticipantKind, TrackSource};
 use lk_agents_abi::voice::session::SessionOptions as _;
 use lk_agents_abi::voice::session_options::{SessionKwargs, TurnHandlingKwargs};
 use lk_agents_abi::voice::session_owner::SessionOwner as _;
+use lk_agents_abi::worker::ipc_host::{FrameworkShutdown, JobExecution};
 use lk_agents_abi::worker::job::SessionJob;
 use lk_agents_abi::{ChatItem, ChatMessage, HostRef, Maybe, Role};
 use lk_agents_fuzz::fakes::room::{FakeRoom, FakeRtc};
@@ -42,8 +43,23 @@ impl AvatarHost for Avatar {
 
 #[derive(Default)]
 struct Job {
-    shutdown: Mutex<Vec<u64>>,
+    shutdown: Arc<Mutex<Vec<u64>>>,
     env: BTreeMap<String, String>,
+}
+
+/// The job's run, recording the host closes registered on its shutdown.
+struct Run(Arc<Mutex<Vec<u64>>>);
+
+impl JobExecution for Run {
+    fn session_closed(&self, _: String) {
+        unreachable!("an avatar ends no job")
+    }
+    fn add_framework_shutdown(&self, _: String, shutdown: FrameworkShutdown) {
+        let FrameworkShutdown::Host(close) = shutdown else {
+            panic!("an avatar's close is its host aclose")
+        };
+        self.0.lock().unwrap().push(close.id());
+    }
 }
 
 impl SessionJob for Job {
@@ -65,12 +81,8 @@ impl SessionJob for Job {
     fn init_recording(&self, _: BTreeMap<String, bool>) -> Result<(), HostError> {
         unreachable!("an avatar does not record")
     }
-    fn on_shutdown(&self, _: HostRef) -> Result<(), HostError> {
-        unreachable!("an avatar closes no session")
-    }
-    fn on_avatar_shutdown(&self, close: HostRef) -> Result<(), HostError> {
-        self.shutdown.lock().unwrap().push(close.id());
-        Ok(())
+    fn run(&self) -> Arc<dyn JobExecution> {
+        Arc::new(Run(self.shutdown.clone()))
     }
     fn server_env(&self) -> Result<BTreeMap<String, String>, HostError> {
         Ok(self.env.clone())
@@ -90,9 +102,11 @@ fn owner() -> Arc<SessionOwner> {
         user_away_timeout: None,
         transcription_timeout: None,
         session_close_transcript_timeout: 2.0,
-        conn_options: Default::default(),
     };
-    Arc::new(SessionOwner::new(&ProcessEnv::current_runtime(), SessionOptions::new(kwargs)))
+    Arc::new(SessionOwner::new(
+        &ProcessEnv::current_runtime(),
+        SessionOptions::new(kwargs, Default::default()),
+    ))
 }
 
 struct Started {

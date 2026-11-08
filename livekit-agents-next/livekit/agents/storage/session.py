@@ -11,27 +11,14 @@ from __future__ import annotations
 from collections.abc import AsyncIterable, Awaitable, Callable
 from typing import cast
 
-from pydantic_core import to_jsonable_python
-
 from .. import _core
 from .._generated.a2a_client import Message
+from .._generated.run_result import _Settled
 from .._generated.storage_class import TaskRecord
-from .._generated.storage_handler import (
-    HandlerOutcome,
-    HandlerOutcomeCompleted,
-    HandlerOutcomeFailed,
-    HandlerOutcomeInputRequired,
-    HandlerOutcomeRejected,
-    HandlerOutcomeValue,
-    HandlerOutcomeWorking,
-    HandlerRun,
-)
 from .._generated.storage_turn import HandlerOutput, ToolExecution, TurnContext
-from ..llm import ChatContext, ChatMessage, InputRequired
-from ..llm.tool_context import Completed, Failed, Rejected, Working
+from ..llm import ChatContext, ChatMessage
 from ..log import logger
 from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
-from ..voice.run_result import RunCompleted, RunInputRequired, RunNoOutput, RunResult
 from . import StorageError, Thread
 from .context import ContextStore
 
@@ -118,7 +105,7 @@ class _TurnHost:
             store=ContextStore(activation=activation, scope_id=ctx.context_scope_id),
             thread=thread,
         )
-        results: list[RunResult[object]] = []
+        results: list[_Settled] = []
         hooks = RunHooks(
             checkpoint=reports.checkpoint,
             on_result=results.append,
@@ -158,7 +145,7 @@ class _TurnHost:
         self,
         ctx: A2ASessionContext,
         output: object,
-        results: list[RunResult[object]],
+        results: list[_Settled],
         *,
         interrupted: bool,
         error: str | None = None,
@@ -180,41 +167,9 @@ class _TurnHost:
                 error=error,
                 status=None,
             ),
-            _handler_outcome(output),
-            [
-                HandlerRun(
-                    items=result.new_messages(),
-                    usage=result.usage,
-                    verbatim=result.verbatim,
-                    question=result.question if isinstance(result, RunInputRequired) else None,
-                    pending_call=result._pending_call,
-                )
-                for result in results
-            ],
+            output,
+            results,
         )
-
-
-def _handler_outcome(output: object) -> HandlerOutcome:
-    """Classify Python return types; Rust owns their transport meaning."""
-    if isinstance(output, RunInputRequired):
-        return HandlerOutcomeInputRequired(question=output.question)
-    if isinstance(output, RunCompleted):
-        return HandlerOutcomeValue(value=to_jsonable_python(output.output))
-    if isinstance(output, RunNoOutput):
-        return HandlerOutcomeValue(value=None)
-    if isinstance(output, Completed):
-        return HandlerOutcomeCompleted(
-            value=to_jsonable_python(output.value), verbatim=output.verbatim
-        )
-    if isinstance(output, Failed):
-        return HandlerOutcomeFailed(error=output.error)
-    if isinstance(output, Rejected):
-        return HandlerOutcomeRejected(reason=output.reason)
-    if isinstance(output, Working):
-        return HandlerOutcomeWorking(message=output.message)
-    if isinstance(output, InputRequired):
-        return HandlerOutcomeInputRequired(question=output.question)
-    return HandlerOutcomeValue(value=to_jsonable_python(output))
 
 
 __all__ = [

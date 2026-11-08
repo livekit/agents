@@ -14,7 +14,7 @@ from livekit.agents.tts import TTS, AudioEmitter
 from .connect import APIConnectOptions
 from .expressive import SpeechSteeringOptions
 from .stream_pacer import SentenceStreamPacer
-from .tts import ExpressiveTag, MarkupInfo, SynthesizedAudio
+from .tts import ExpressiveTag, MarkupInfo, SegmentCount, SynthesizedAudio
 
 def chat_message_text_content(parts: Sequence[str], assistant: bool) -> str | None: ...
 
@@ -109,7 +109,7 @@ class TtsStream:
     async def recv(self) -> SynthesizedAudio | None: ...
     async def aclose(self) -> None: ...
 
-def validate_synthesis(text: str, duration: float, segments: tuple[int, int] | None) -> str | None:
+def validate_synthesis(text: str, duration: float, segments: SegmentCount | None) -> str | None:
     """Why a synthesis of ``text`` that pushed ``duration`` seconds of audio (and, streamed,
-    ``segments`` as ``(expected, actual)``) failed, or ``None``.
+    ``segments``) failed, or ``None``.
     """

@@ -1,5 +1,4 @@
 //! The resolved worker configuration and the worker's protocol constants.
-use super::WorkerPermissions;
 
 use lk_agents_abi::worker::ipc_host::WorkerError;
 use std::time::Duration;
@@ -38,7 +37,6 @@ pub struct WorkerConfig {
     pub agent_name: String,
     pub deployment: String,
     pub version: String,
-    pub permissions: WorkerPermissions,
     pub endpoints: Vec<livekit_protocol::agent_http::AgentEndpoint>,
     /// Generated once and reused across reconnects: a new one supersedes the previous epoch and
     /// closes its connections. The server rejects a manifest without one.
@@ -58,7 +56,6 @@ impl Default for WorkerConfig {
             agent_name: String::new(),
             deployment: String::new(),
             version: "0.0.0".into(),
-            permissions: WorkerPermissions::default(),
             endpoints: Vec::new(),
             instance_id: String::new(),
             ws_url: String::new(),

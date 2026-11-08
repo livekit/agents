@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::errors::Invalid;
 use crate::errors::{HostError, ProviderError};
 use crate::metrics::base::EotInferenceMetrics;
-use crate::tokenize::language::{LanguageCode, ThresholdOverride, TurnDetectorModel};
+use crate::tokenize::language::{ThresholdOverride, TurnDetectorModel};
 use crate::{ApiConnectOptions, AudioFrame, EotPrediction};
 
 /// The host's mini model factory (`livekit.local_inference.EOT`), called when a stream mounts the
@@ -73,20 +73,6 @@ pub trait InferenceEot: Send + Sync + Sized + 'static {
 
     #[host(getter)]
     fn backchannel_overrides(&self) -> Option<ThresholdOverride>;
-
-    /// `language=None` scores as English, not the global default.
-    #[host(call)]
-    fn lookup(&self, #[host(default = None)] language: Option<LanguageCode>) -> Option<f64>;
-
-    /// `None` disables backchannel detection; a `0.0` threshold also means off.
-    #[host(call)]
-    fn lookup_backchannel(
-        &self,
-        #[host(default = None)] language: Option<LanguageCode>,
-    ) -> Option<f64>;
-
-    #[host(call)]
-    fn supports(&self, #[host(default = None)] language: Option<LanguageCode>) -> bool;
 
     #[host(call)]
     fn update_overrides(&self, #[host(default = None)] overrides: Option<ThresholdOverride>);
@@ -156,7 +142,8 @@ pub trait EotStream: crate::EotDetector + Sized + 'static {
 /// `inference.AdaptiveInterruptionDetector`: the gateway model that tells an interruption from a
 /// backchannel while the agent speaks. Natively the session's interruption source.
 #[crate::host(class(
-    name = "InterruptionDetector",
+    name = "AdaptiveInterruptionDetector",
+    module = "livekit.agents.inference",
     native = crate::turn::interruption::InterruptionSource,
     subclass
 ))]
@@ -165,8 +152,8 @@ pub trait InterruptionDetector: Send + Sync + Sized + 'static {
     #[host(env)]
     type Env;
 
-    /// `base_url`, `api_key` and `api_secret` are required; the Python class resolves them from
-    /// the server's settings.
+    /// `base_url`, `api_key` and `api_secret` default to the inference ladders over the server's
+    /// settings (`inference_credentials`).
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(

@@ -21,17 +21,15 @@ class FallbackStt:
     """`stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python."""
     def __new__(
         cls,
-        members: Sequence[STT[Any]],
+        stt: Sequence[STT[Any]],
         *,
+        vad: VAD[Any] | None = None,
         attempt_timeout: float = 10.0,
         max_retry_per_stt: int = 1,
         retry_interval: float = 5.0,
         on_availability: FallbackListener | None = None,
     ) -> Self:
-        """`members` in order, each already streaming (the host wraps a recognize-only entry in its
-        `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s, which builds it from its
-        attributes, one per loop.
-        """
+        """`stt` in order; a recognize-only one streams over `vad` (`stt.StreamAdapter`)."""
     @property
     def active_index(self) -> int:
         """Which entry most recently served, as a position in the host's list."""
@@ -51,6 +49,7 @@ class FallbackStt:
         """`_recognize_impl`: the batch path, over whichever entry answers."""
     async def stream(
         self,
+        *,
         language: str | None = None,
         start_time_offset: float | None = None,
         conn_options: APIConnectOptions | None = None,
@@ -85,8 +84,7 @@ class InferenceStt:
         vad: VAD[Any] | None = None,
     ) -> Self:
         """A client of `model` on the gateway at `base_url`. Starts nothing. `vad`'s end of speech
-        finalizes the transcript (Speechmatics only). `inference.STT` builds it on first use, after
-        a fork, from its attributes.
+        finalizes the transcript (Speechmatics only). `inference.STT` builds it in its constructor.
         """
     def set_vad(self, vad: VAD[Any] | None = None) -> None:
         """The model's VAD as the host resolved it on `update_options(model=)`; `None` drops it.
@@ -145,10 +143,11 @@ class InferenceSttStream:
 
 class SttStreamAdapter:
     """`stt.StreamAdapter`'s engine as the host builds it; the public class stays Python."""
-    def __new__(cls, stt: STT[Any], vad: VAD[Any]) -> Self:
-        """The wrapped STT and VAD; each stream binds its own recognition policy. `StreamAdapter`
-        builds it from its attributes, one per loop.
-        """
+    def __new__(cls, *, stt: STT[Any], vad: VAD[Any]) -> Self:
+        """The wrapped STT and VAD; each stream binds its own recognition policy."""
+    @property
+    def capabilities(self) -> STTCapabilities:
+        """Streaming, with the wrapped STT's keyterms and chat context support."""
     async def recognize(
         self,
         frames: Sequence[AudioFrame],
@@ -158,6 +157,7 @@ class SttStreamAdapter:
         """`_recognize_impl`: the wrapped STT's batch path."""
     async def stream(
         self,
+        *,
         language: str | None = None,
         start_time_offset: float | None = None,
         conn_options: APIConnectOptions | None = None,

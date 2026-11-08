@@ -21,6 +21,16 @@ class TokenData:
     token: str = ""
 
 
+@dataclass
+class ReplacedWords:
+    """`replace_words` over a chunk: the text with its replacements, and how much of it is final
+    (`processed`, in characters); the rest may still change with the next chunk.
+    """
+
+    text: str
+    processed: int
+
+
 TokenizerToken: TypeAlias = str | tuple[str, int, int]
 """A tokenizer may supply text or character-indexed spans."""
 

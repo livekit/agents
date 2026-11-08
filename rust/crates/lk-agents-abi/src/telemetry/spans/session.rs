@@ -325,15 +325,12 @@ pub struct RpcHandler {
     /// Seconds the caller waits for the response.
     #[attr("lk.rpc.response_timeout")]
     pub response_timeout: Seconds,
-    /// A handler is registered for the method.
-    #[attr("lk.rpc.handler_registered")]
-    pub handler_registered: bool,
     /// Payload size, in bytes.
     #[attr("lk.rpc.payload_size")]
     pub payload_size: u64,
-    /// The payload's first 1024 characters.
+    /// The payload's first 1024 characters; absent when empty.
     #[attr("lk.pii.rpc.payload")]
-    pub payload: Content<String>,
+    pub payload: Option<Content<String>>,
 }
 
 /// An RPC call to a remote participant, from wherever it is made.
@@ -348,9 +345,10 @@ pub struct RpcCall {
     #[attr("lk.rpc.payload_size")]
     pub payload_size: u64,
     #[attr("lk.pii.rpc.payload")]
-    pub payload: Content<String>,
+    pub payload: Option<Content<String>>,
+    /// Absent for the SDK's default.
     #[attr("lk.rpc.response_timeout")]
-    pub response_timeout: Seconds,
+    pub response_timeout: Option<Seconds>,
 }
 
 #[derive(Attrs)]
@@ -364,6 +362,9 @@ pub struct RpcEnd {
     /// The response's first 1024 characters, on success.
     #[attr("lk.pii.rpc.response")]
     pub response: Option<Content<String>>,
+    /// A handler is registered for the method: false once the call failed as unsupported.
+    #[attr("lk.rpc.handler_registered")]
+    pub handler_registered: Option<bool>,
 }
 
 /// Answering-machine detection, from the detector's attach to its verdict.

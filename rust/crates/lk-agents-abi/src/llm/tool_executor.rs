@@ -111,6 +111,87 @@ pub enum Approval {
     Granted,
 }
 
+/// What a tool's body returned, or the exception it raised, told apart by its class;
+/// [`ToolReports::tool_report`] classifies it into a [`ToolOutcome`].
+#[crate::host(record(module = "tool_report", transparent, extract))]
+pub enum ToolReturn {
+    /// Already classified (a delegate's report).
+    Report(ToolReport),
+    #[host(host_type = "livekit.agents._generated.tool_errors.ToolError", path = "message")]
+    ToolError(String),
+    #[host(host_type = "livekit.agents._generated.tool_errors.ModelRetry", path = "message")]
+    ModelRetry(String),
+    #[host(host_type = "livekit.agents._generated.tool_errors.StopResponse")]
+    StopResponse,
+    /// Any other exception.
+    #[host(host_type = "builtins.BaseException")]
+    Raised,
+    #[host(host_type = "livekit.agents.llm.tool_context.Completed")]
+    Completed(CompletedReturn),
+    #[host(host_type = "livekit.agents._generated.tool_outcomes.Failed", path = "error")]
+    Failed(String),
+    #[host(host_type = "livekit.agents._generated.tool_outcomes.Rejected", path = "reason")]
+    Rejected(String),
+    #[host(host_type = "livekit.agents._generated.function_tools.InputRequired")]
+    InputRequired(InputRequiredReturn),
+    #[host(host_type = "livekit.agents._generated.tool_outcomes.Working", path = "message")]
+    Working(Option<String>),
+    /// `None`.
+    Nothing,
+    #[host(host_type = "livekit.agents._generated.tool_outcomes.ToolResult")]
+    Result(ToolResultReturn),
+    /// Any other value.
+    #[host(otherwise, annotation = "object")]
+    Value(ToolText),
+}
+
+/// A value as the model reads it: a string as written, anything else as its JSON
+/// (`llm.utils._value_text`).
+#[crate::host(codec(extract, host = "object", py = "py_values::tool_text"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolText {
+    /// The value is `None`.
+    None,
+    Text(String),
+    /// A value the model can't be told about.
+    Invalid,
+}
+
+/// `Completed(value, verbatim=)`.
+#[crate::host(record(module = "tool_report", boundary, extract))]
+pub struct CompletedReturn {
+    pub value: ToolText,
+    pub verbatim: bool,
+}
+
+/// `InputRequired(question, tool=, verbatim=)`: `tool` the name of the tool taking the answer.
+#[crate::host(record(module = "tool_report", boundary, extract))]
+pub struct InputRequiredReturn {
+    pub question: String,
+    pub verbatim: bool,
+    #[host(path = "tool.info.name", missing_default)]
+    pub tool: Option<String>,
+}
+
+/// `ToolResult(output, reply_required=, verbatim=)`; `_more` is what a delegate's verbatim
+/// result carries for the model alone.
+#[crate::host(record(module = "tool_report", boundary, extract))]
+pub struct ToolResultReturn {
+    pub output: ToolText,
+    pub reply_required: bool,
+    pub verbatim: bool,
+    #[host(rename = "_more", missing_default)]
+    pub more: Option<String>,
+}
+
+#[crate::host(functions(pid = false))]
+pub trait ToolReports {
+    /// What a tool's body returned or raised, classified for the core, which decides what the
+    /// model reads and whether it replies.
+    #[host(function, path = "livekit.agents.llm.utils")]
+    fn tool_report(value: ToolReturn) -> ToolReport;
+}
+
 /// The host's report of one run: its outcome.
 #[crate::host(record(module = "tool_report", extract, emit))]
 #[derive(Debug, Clone)]

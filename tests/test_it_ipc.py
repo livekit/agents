@@ -232,7 +232,7 @@ def test_crashed_job_process_is_reaped_and_worker_keeps_serving(worker) -> None:
 def test_hung_job_process_is_killed_after_ping_timeout(worker) -> None:
     """Guards a job whose event loop is blocked (sync I/O, a busy loop) living forever: the core
     must stop getting pongs, kill it, and keep serving."""
-    w = worker("hang", jobs=2, it_ping_timeout=3.0)
+    w = worker("hang", jobs=2, ping_timeout=3.0)
     hung = json.loads(w.marker("room-0.started"))
     assert _gone(hung["pid"], 20), "a job blocking its event loop was never killed"
     assert w.logged("process is unresponsive, stopping it"), w.tail()
@@ -381,20 +381,11 @@ async def _drive(server: Any, jobs: int) -> None:
 
 
 def _worker_main() -> None:
-    from livekit.agents import AgentServer, cli, ipc
+    from livekit.agents import AgentServer, cli
     from livekit.agents._generated.worker_options import ProcessOptions
     from livekit.agents.job import JobExecutorType
 
     options = json.loads(os.environ["IT_OPTS"])
-    ping_timeout = options.pop("it_ping_timeout", None)
-    if ping_timeout is not None:
-        init = ipc.ProcPool.__init__
-
-        def patched(self: Any, *args: Any, **kwargs: Any) -> None:
-            kwargs["options"].ping_timeout = ping_timeout
-            init(self, *args, **kwargs)
-
-        ipc.ProcPool.__init__ = patched  # type: ignore[method-assign]
     if "job_executor_type" in options:
         options["job_executor_type"] = JobExecutorType(options["job_executor_type"])
     options.setdefault("num_idle_processes", 1)

@@ -4,7 +4,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import _core
-from livekit.agents.voice.avatar import AudioReceiverObservation
+from livekit.agents._generated.avatar import AudioReceiverObservation
 
 pytestmark = pytest.mark.unit
 

@@ -748,14 +748,13 @@ pub struct DiffOps {
     pub to_update: Vec<AnchoredItem>,
 }
 
-/// `(type, id, role, len(content), name, created_at, call_id)`.
-pub type HostFacts = (String, String, Option<String>, usize, Option<String>, f64, Option<String>);
-
-/// A fact the host reported that names no item kind, role or wall clock.
-#[crate::host(error(kind = "ValueError"))]
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{0}")]
-pub struct ChatFactsError(pub String);
+/// `ChatContext.merge`'s insertion: `theirs[item]` goes in at `index`.
+#[crate::host(record(module = "chat_diff", dataclass, emit))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MergeInsertion {
+    pub index: usize,
+    pub item: usize,
+}
 
 #[crate::host(functions(pid = false))]
 pub trait ChatContextPlans {
@@ -763,31 +762,28 @@ pub trait ChatContextPlans {
     #[host(function, name = "chat_ctx_copy_plan")]
     #[allow(clippy::too_many_arguments)]
     fn copy_plan(
-        facts: Vec<HostFacts>,
+        items: Vec<ChatItem>,
         #[host(kw, default = false)] exclude_function_call: bool,
         #[host(default = false)] exclude_instructions: bool,
         #[host(default = false)] exclude_empty_message: bool,
         #[host(default = false)] exclude_handoff: bool,
         #[host(default = false)] exclude_config_update: bool,
         #[host(default = None)] tools: Option<Vec<String>>,
-    ) -> Result<Vec<usize>, ChatFactsError>;
+    ) -> Vec<usize>;
 
     /// `ChatContext.truncate` as an index plan; `None` when under the limit.
     #[host(function, name = "chat_ctx_truncate_plan")]
-    fn truncate_plan(
-        facts: Vec<HostFacts>,
-        max_items: i64,
-    ) -> Result<Option<Vec<usize>>, ChatFactsError>;
+    fn truncate_plan(items: Vec<ChatItem>, max_items: i64) -> Option<Vec<usize>>;
 
-    /// `ChatContext.merge` as `(index, j)` insertions.
+    /// `ChatContext.merge` as insertions, in order.
     #[host(function, name = "chat_ctx_merge_plan")]
     fn merge_plan(
-        mine: Vec<HostFacts>,
-        theirs: Vec<HostFacts>,
+        mine: Vec<ChatItem>,
+        theirs: Vec<ChatItem>,
         #[host(kw, default = false)] exclude_function_call: bool,
         #[host(default = false)] exclude_instructions: bool,
         #[host(default = false)] exclude_config_update: bool,
-    ) -> Result<Vec<(usize, usize)>, ChatFactsError>;
+    ) -> Vec<MergeInsertion>;
 
     /// `remove_instructions(chat_ctx)` as a plan: the positions of the rendered prompt's items,
     /// ascending, given the items' ids.

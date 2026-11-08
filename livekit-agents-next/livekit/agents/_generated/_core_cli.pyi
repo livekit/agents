@@ -8,8 +8,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Self
 
-from livekit.agents.cli import _DevServer
-
+from .._core import ServerRuntime
 from .cli import CliParseResult, LogLevel, LogRecord
 
 def parse_cli(argv: Sequence[str]) -> CliParseResult: ...
@@ -26,7 +25,7 @@ async def dev_channel(
     url: str,
     api_key: str,
     api_secret: str,
-    server: _DevServer,
+    server: ServerRuntime,
 ) -> None:
     """The development launcher connection."""
 

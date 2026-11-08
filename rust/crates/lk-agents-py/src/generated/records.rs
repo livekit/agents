@@ -1650,6 +1650,33 @@ pub mod agent_authoring {
         )?;
         Ok(dict.into_any())
     }
+
+    // Declared in rust/crates/lk-agents-abi/src/agent/authoring.rs.
+    static REGISTERED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn registered_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::agent::authoring::Registered,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::agent::authoring::Registered { token, retired } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("token", ::pyo3::IntoPyObjectExt::into_bound_py_any(token, py)?)?;
+        kwargs.set_item(
+            "retired",
+            match retired {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        crate::py_calls::call(
+            REGISTERED
+                .import(py, "livekit.agents._generated.agent_authoring", "Registered")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
 }
 
 pub mod agent_nodes {
@@ -2649,231 +2676,6 @@ pub mod agent_run {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
-    static RUN_RESULT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn run_result_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::agent::run::RunResult,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::agent::run::RunResult {
-            outcome,
-            interrupted,
-            new_messages,
-            all_messages,
-            usage,
-            verbatim,
-            pending_call,
-            input_requirements,
-        } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item(
-            "outcome",
-            crate::generated::records::agent_run::run_outcome_to_py(py, outcome)?,
-        )?;
-        kwargs.set_item(
-            "interrupted",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(interrupted, py)?,
-        )?;
-        kwargs.set_item(
-            "new_messages",
-            ::pyo3::types::PyList::new(
-                py,
-                new_messages
-                    .into_iter()
-                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
-                    .collect::<PyResult<Vec<_>>>()?,
-            )?
-            .into_any(),
-        )?;
-        kwargs.set_item(
-            "all_messages",
-            ::pyo3::types::PyList::new(
-                py,
-                all_messages
-                    .into_iter()
-                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
-                    .collect::<PyResult<Vec<_>>>()?,
-            )?
-            .into_any(),
-        )?;
-        kwargs.set_item("usage", crate::generated::records::usage::usage_to_py(py, usage)?)?;
-        kwargs.set_item(
-            "verbatim",
-            match verbatim {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        kwargs.set_item(
-            "pending_call",
-            match pending_call {
-                None => py.None().into_bound(py),
-                Some(x) => crate::generated::records::storage_turn::pending_call_to_py(py, x)?,
-            },
-        )?;
-        kwargs.set_item(
-            "input_requirements",
-            ::pyo3::types::PyList::new(
-                py,
-                input_requirements
-                    .into_iter()
-                    .map(|x| {
-                        crate::generated::records::agent_run::run_input_requirement_to_py(py, x)
-                    })
-                    .collect::<PyResult<Vec<_>>>()?,
-            )?
-            .into_any(),
-        )?;
-        crate::py_calls::call(
-            RUN_RESULT.import(py, "livekit.agents._generated.agent_run", "RunResult")?.as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
-    static RUN_OUTCOME_COMPLETED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static RUN_OUTCOME_INPUT_REQUIRED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static RUN_OUTCOME_NO_OUTPUT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn run_outcome_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::agent::run::RunOutcome,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        match value {
-            ::lk_agents_abi::agent::run::RunOutcome::Completed { output } => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "output",
-                    crate::generated::records::agent_run::output_to_py(py, output)?,
-                )?;
-                crate::py_calls::call(
-                    RUN_OUTCOME_COMPLETED
-                        .import(py, "livekit.agents._generated.agent_run", "RunOutcomeCompleted")?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-            ::lk_agents_abi::agent::run::RunOutcome::InputRequired(question) => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "question",
-                    crate::generated::records::agent_run::run_question_to_py(py, question)?,
-                )?;
-                crate::py_calls::call(
-                    RUN_OUTCOME_INPUT_REQUIRED
-                        .import(
-                            py,
-                            "livekit.agents._generated.agent_run",
-                            "RunOutcomeInputRequired",
-                        )?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-            ::lk_agents_abi::agent::run::RunOutcome::NoOutput => crate::py_calls::call(
-                RUN_OUTCOME_NO_OUTPUT
-                    .import(py, "livekit.agents._generated.agent_run", "RunOutcomeNoOutput")?
-                    .as_any(),
-                (),
-                None,
-            ),
-        }
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
-    static RUN_QUESTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn run_question_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::agent::run::RunQuestion> {
-        let py = obj.py();
-        if !obj.is_instance(RUN_QUESTION.import(
-            py,
-            "livekit.agents._generated.agent_run",
-            "RunQuestion",
-        )?)? {
-            return Err(super::not_a(obj, "RunQuestion"));
-        }
-        Ok(::lk_agents_abi::agent::run::RunQuestion {
-            question: crate::py_values::attr_with(obj, "RunQuestion", "question", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            verbatim: crate::py_values::attr_with(obj, "RunQuestion", "verbatim", |v| {
-                v.extract::<bool>()
-            })?,
-            answer_tool: crate::py_values::attr_with(obj, "RunQuestion", "answer_tool", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (v.extract::<::std::string::String>()).map(Some)
-                }
-            })?,
-        })
-    }
-
-    pub fn run_question_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::agent::run::RunQuestion,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::agent::run::RunQuestion { question, verbatim, answer_tool } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("question", ::pyo3::IntoPyObjectExt::into_bound_py_any(question, py)?)?;
-        kwargs.set_item("verbatim", ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim, py)?)?;
-        kwargs.set_item(
-            "answer_tool",
-            match answer_tool {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        crate::py_calls::call(
-            RUN_QUESTION.import(py, "livekit.agents._generated.agent_run", "RunQuestion")?.as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
-    static OUTPUT_TEXT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static OUTPUT_VALIDATED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn output_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::agent::run::Output,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        match value {
-            ::lk_agents_abi::agent::run::Output::Text(text) => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
-                crate::py_calls::call(
-                    OUTPUT_TEXT
-                        .import(py, "livekit.agents._generated.agent_run", "OutputText")?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
-            }
-            ::lk_agents_abi::agent::run::Output::Validated(_) => crate::py_calls::call(
-                OUTPUT_VALIDATED
-                    .import(py, "livekit.agents._generated.agent_run", "OutputValidated")?
-                    .as_any(),
-                (),
-                None,
-            ),
-        }
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
     static STREAM_EVENT_TEXT_DELTA: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
     static STREAM_EVENT_TEXT_END: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -3093,28 +2895,25 @@ pub mod agent_run {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
-    static RUN_SETTLED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static RUN_FINISHED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn run_settled_to_py<'py>(
+    pub fn run_finished_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::agent::run::RunSettled,
+        value: ::lk_agents_abi::agent::run::RunFinished,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::agent::run::RunSettled { result, output } = value;
+        let ::lk_agents_abi::agent::run::RunFinished { result, interrupted } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item(
             "result",
-            crate::generated::records::agent_run::run_result_to_py(py, result)?,
+            crate::generated::records::run_result::run_result_to_py(py, result)?,
         )?;
         kwargs.set_item(
-            "output",
-            match output {
-                None => py.None().into_bound(py),
-                Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
-            },
+            "interrupted",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(interrupted, py)?,
         )?;
         crate::py_calls::call(
-            RUN_SETTLED.import(py, "livekit.agents._generated.agent_run", "RunSettled")?.as_any(),
+            RUN_FINISHED.import(py, "livekit.agents._generated.agent_run", "RunFinished")?.as_any(),
             (),
             Some(&kwargs),
         )
@@ -3178,7 +2977,10 @@ pub mod agent_run {
                 let kwargs = ::pyo3::types::PyDict::new(py);
                 kwargs.set_item("settled", {
                     let value = *settled;
-                    crate::generated::records::agent_run::run_settled_to_py(py, value)?
+                    {
+                        let scalar: ::lk_agents_abi::agent::run::RunFinished = value.into();
+                        crate::generated::records::agent_run::run_finished_to_py(py, scalar)?
+                    }
                 })?;
                 crate::py_calls::call(
                     RUN_UPDATE_FINISHED
@@ -4111,6 +3913,27 @@ pub mod chat_diff {
         )?;
         crate::py_calls::call(
             DIFF_OPS.import(py, "livekit.agents._generated.chat_diff", "DiffOps")?.as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
+    static MERGE_INSERTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn merge_insertion_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::chat_context::MergeInsertion,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::chat_context::MergeInsertion { index, item } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("index", ::pyo3::IntoPyObjectExt::into_bound_py_any(index, py)?)?;
+        kwargs.set_item("item", ::pyo3::IntoPyObjectExt::into_bound_py_any(item, py)?)?;
+        crate::py_calls::call(
+            MERGE_INSERTION
+                .import(py, "livekit.agents._generated.chat_diff", "MergeInsertion")?
+                .as_any(),
             (),
             Some(&kwargs),
         )
@@ -6312,28 +6135,15 @@ pub mod evals {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/evals.rs.
-    static JUDGE_SPEC: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
     pub fn judge_spec_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::evals::JudgeSpec> {
-        let py = obj.py();
-        if !obj.is_instance(JUDGE_SPEC.import(
-            py,
-            "livekit.agents._generated.evals",
-            "JudgeSpec",
-        )?)? {
-            return Err(super::not_a(obj, "JudgeSpec"));
-        }
-        Ok(::lk_agents_abi::evals::JudgeSpec {
-            name: crate::py_values::attr_with(obj, "JudgeSpec", "name", |v| {
-                v.extract::<::std::string::String>()
-            })?,
-            evaluator: crate::py_values::attr_with(obj, "JudgeSpec", "evaluator", |v| {
-                crate::py_objects::object_ref_from_py(v)
-            })?,
-        })
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::evals::JudgeSpec> {
+        let name = crate::py_values::attr_with(obj, "JudgeSpec", "name", |v| {
+            v.extract::<::std::string::String>()
+        })?;
+        let evaluator = (crate::py_values::host_ref(obj, "JudgeSpec.evaluator"))?;
+        let value = ::lk_agents_abi::evals::JudgeSpec { name, evaluator };
+        Ok(value)
     }
 
     // Declared in rust/crates/lk-agents-abi/src/evals.rs.
@@ -7214,6 +7024,44 @@ pub mod inference_credentials {
         crate::py_calls::call(
             CREDENTIALS
                 .import(py, "livekit.agents._generated.inference_credentials", "Credentials")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+}
+
+pub mod inference_models {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/inference/mod.rs.
+    static EOT_SELECTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn eot_selection_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::inference::EotSelection,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::inference::EotSelection { model, warnings } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "model",
+            crate::generated::records::turn_events::turn_detector_model_to_py(py, model)?,
+        )?;
+        kwargs.set_item(
+            "warnings",
+            ::pyo3::types::PyList::new(
+                py,
+                warnings
+                    .into_iter()
+                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        crate::py_calls::call(
+            EOT_SELECTION
+                .import(py, "livekit.agents._generated.inference_models", "EotSelection")?
                 .as_any(),
             (),
             Some(&kwargs),
@@ -10145,6 +9993,37 @@ pub mod provider_data {
     }
 }
 
+pub mod provider_format {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/provider_format/host.rs.
+    static CONVERTED_ITEM: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn converted_item_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::provider_format::host::ConvertedItem,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::provider_format::host::ConvertedItem { index, rewritten } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("index", ::pyo3::IntoPyObjectExt::into_bound_py_any(index, py)?)?;
+        kwargs.set_item(
+            "rewritten",
+            match rewritten {
+                None => py.None().into_bound(py),
+                Some(x) => crate::generated::records::chat_items::chat_item_to_py(py, x)?,
+            },
+        )?;
+        crate::py_calls::call(
+            CONVERTED_ITEM
+                .import(py, "livekit.agents._generated.provider_format", "ConvertedItem")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+}
+
 pub mod realtime {
     use pyo3::prelude::*;
 
@@ -12323,6 +12202,37 @@ pub mod room_options {
     }
 }
 
+pub mod room_runtime {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/room_owner.rs.
+    static TRACK_PUBLISHED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn track_published_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::voice::room_owner::TrackPublished,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::voice::room_owner::TrackPublished { publisher, sid } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "publisher",
+            match publisher {
+                None => py.None().into_bound(py),
+                Some(x) => crate::py_values::str_to_py(py, &x),
+            },
+        )?;
+        kwargs.set_item("sid", crate::py_values::str_to_py(py, &sid))?;
+        crate::py_calls::call(
+            TRACK_PUBLISHED
+                .import(py, "livekit.agents._generated.room_runtime", "TrackPublished")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+}
+
 pub mod rtc_frames {
     use pyo3::prelude::*;
 
@@ -12419,6 +12329,172 @@ pub mod rtc_frames {
                 static CLASS: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> =
                     pyo3::sync::PyOnceLock::new();
                 CLASS.import(py, "livekit.rtc", "VideoFrame")?.as_any()
+            },
+            (),
+            Some(&kwargs),
+        )
+    }
+}
+
+pub mod rtc_rpc {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/rpc.rs.
+    pub fn rpc_call_info_from_py(
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::voice::rtc::rpc::RpcCallInfo> {
+        let destination_identity =
+            crate::py_values::attr_with(obj, "RpcCallInfo", "destination_identity", |v| {
+                v.extract::<::std::string::String>()
+            })?;
+        let method = crate::py_values::attr_with(obj, "RpcCallInfo", "method", |v| {
+            v.extract::<::std::string::String>()
+        })?;
+        let payload = crate::py_values::attr_with(obj, "RpcCallInfo", "payload", |v| {
+            v.extract::<::std::string::String>()
+        })?;
+        let response_timeout =
+            crate::py_values::attr_with(obj, "RpcCallInfo", "response_timeout", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<f64>(v, "RpcCallInfo.response_timeout"))
+                        .map(Some)
+                }
+            })?;
+        let max_round_trip_latency =
+            crate::py_values::attr_with(obj, "RpcCallInfo", "max_round_trip_latency", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<f64>(
+                        v,
+                        "RpcCallInfo.max_round_trip_latency",
+                    ))
+                    .map(Some)
+                }
+            })?;
+        let value = ::lk_agents_abi::voice::rtc::rpc::RpcCallInfo {
+            destination_identity,
+            method,
+            payload,
+            response_timeout,
+            max_round_trip_latency,
+        };
+        Ok(value)
+    }
+    pub fn rpc_call_info_to_py<'py>(
+        py: pyo3::Python<'py>,
+        value: ::lk_agents_abi::voice::rtc::rpc::RpcCallInfo,
+    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "destination_identity",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.destination_identity, py)?,
+        )?;
+        kwargs.set_item("method", ::pyo3::IntoPyObjectExt::into_bound_py_any(value.method, py)?)?;
+        kwargs
+            .set_item("payload", ::pyo3::IntoPyObjectExt::into_bound_py_any(value.payload, py)?)?;
+        kwargs.set_item(
+            "response_timeout",
+            match value.response_timeout {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item(
+            "max_round_trip_latency",
+            match value.max_round_trip_latency {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+
+        crate::py_calls::call(
+            {
+                static CLASS: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> =
+                    pyo3::sync::PyOnceLock::new();
+                CLASS.import(py, "livekit.rtc", "RpcCallInfo")?.as_any()
+            },
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/rpc.rs.
+    pub fn rpc_invocation_data_from_py(
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::voice::rtc::rpc::RpcInvocationData> {
+        let request_id =
+            crate::py_values::attr_with(obj, "RpcInvocationData", "request_id", |v| {
+                v.extract::<::std::string::String>()
+            })?;
+        let caller_identity =
+            crate::py_values::attr_with(obj, "RpcInvocationData", "caller_identity", |v| {
+                v.extract::<::std::string::String>()
+            })?;
+        let payload = crate::py_values::attr_with(obj, "RpcInvocationData", "payload", |v| {
+            v.extract::<::std::string::String>()
+        })?;
+        let response_timeout =
+            crate::py_values::attr_with(obj, "RpcInvocationData", "response_timeout", |v| {
+                crate::py_values::number_from_py::<f64>(v, "RpcInvocationData.response_timeout")
+            })?;
+        let method = crate::py_values::attr_with(obj, "RpcInvocationData", "method", |v| {
+            v.extract::<::std::string::String>()
+        })?;
+        let cancel_reason =
+            crate::py_values::attr_with(obj, "RpcInvocationData", "cancel_reason", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<u32>(v, "RpcInvocationData.cancel_reason"))
+                        .map(Some)
+                }
+            })?;
+        let value = ::lk_agents_abi::voice::rtc::rpc::RpcInvocationData {
+            request_id,
+            caller_identity,
+            payload,
+            response_timeout,
+            method,
+            cancel_reason,
+        };
+        Ok(value)
+    }
+    pub fn rpc_invocation_data_to_py<'py>(
+        py: pyo3::Python<'py>,
+        value: ::lk_agents_abi::voice::rtc::rpc::RpcInvocationData,
+    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "request_id",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.request_id, py)?,
+        )?;
+        kwargs.set_item(
+            "caller_identity",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.caller_identity, py)?,
+        )?;
+        kwargs
+            .set_item("payload", ::pyo3::IntoPyObjectExt::into_bound_py_any(value.payload, py)?)?;
+        kwargs.set_item(
+            "response_timeout",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.response_timeout, py)?,
+        )?;
+        kwargs.set_item("method", ::pyo3::IntoPyObjectExt::into_bound_py_any(value.method, py)?)?;
+        kwargs.set_item(
+            "cancel_reason",
+            match value.cancel_reason {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+
+        crate::py_calls::call(
+            {
+                static CLASS: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> =
+                    pyo3::sync::PyOnceLock::new();
+                CLASS.import(py, "livekit.rtc", "RpcInvocationData")?.as_any()
             },
             (),
             Some(&kwargs),
@@ -12619,34 +12695,29 @@ pub mod rtc_wire {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/rtc/mod.rs.
-    static VIDEO_FRAME_REF: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
     pub fn video_frame_ref_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::voice::rtc::VideoFrameRef> {
-        let py = obj.py();
-        if !obj.is_instance(VIDEO_FRAME_REF.import(
-            py,
-            "livekit.agents._generated.rtc_wire",
-            "VideoFrameRef",
-        )?)? {
-            return Err(super::not_a(obj, "VideoFrameRef"));
-        }
-        Ok(::lk_agents_abi::voice::rtc::VideoFrameRef {
-            frame: crate::py_values::attr_with(obj, "VideoFrameRef", "frame", |v| {
-                crate::generated::utils::RtcVideoFrameProxy::from_host(v.as_any())
-            })?,
-            width: crate::py_values::attr_with(obj, "VideoFrameRef", "width", |v| {
-                crate::py_values::number_from_py::<u32>(v, "VideoFrameRef.width")
-            })?,
-            height: crate::py_values::attr_with(obj, "VideoFrameRef", "height", |v| {
-                crate::py_values::number_from_py::<u32>(v, "VideoFrameRef.height")
-            })?,
-            timestamp_us: crate::py_values::attr_with(obj, "VideoFrameRef", "timestamp_us", |v| {
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::voice::rtc::VideoFrameRef> {
+        let frame = crate::py_values::attr_with(obj, "VideoFrameRef", "frame", |v| {
+            crate::generated::utils::RtcVideoFrameProxy::from_host(v.as_any())
+        })?;
+        let width = {
+            let member = obj.clone().getattr("frame")?.getattr("width")?;
+            let v = &member;
+            (crate::py_values::number_from_py::<u32>(v, "VideoFrameRef.width"))?
+        };
+        let height = {
+            let member = obj.clone().getattr("frame")?.getattr("height")?;
+            let v = &member;
+            (crate::py_values::number_from_py::<u32>(v, "VideoFrameRef.height"))?
+        };
+        let timestamp_us =
+            crate::py_values::attr_with(obj, "VideoFrameRef", "timestamp_us", |v| {
                 crate::py_values::number_from_py::<i64>(v, "VideoFrameRef.timestamp_us")
-            })?,
-        })
+            })?;
+        let value =
+            ::lk_agents_abi::voice::rtc::VideoFrameRef { frame, width, height, timestamp_us };
+        Ok(value)
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/rtc/mod.rs.
@@ -12878,6 +12949,355 @@ pub mod rtc_wire {
             (),
             Some(&kwargs),
         )
+    }
+}
+
+pub mod run_result {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
+    static SETTLED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn settled_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::agent::run::SettledRun,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::agent::run::SettledRun {
+            new_messages,
+            all_messages,
+            usage,
+            verbatim,
+            pending_call,
+            input_requirements,
+        } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "_new_messages",
+            ::pyo3::types::PyList::new(
+                py,
+                new_messages
+                    .into_iter()
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item(
+            "_all_messages",
+            ::pyo3::types::PyList::new(
+                py,
+                all_messages
+                    .into_iter()
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item("usage", crate::generated::records::usage::usage_to_py(py, usage)?)?;
+        kwargs.set_item(
+            "verbatim",
+            match verbatim {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item(
+            "_pending_call",
+            match pending_call {
+                None => py.None().into_bound(py),
+                Some(x) => crate::generated::records::storage_turn::pending_call_to_py(py, x)?,
+            },
+        )?;
+        kwargs.set_item(
+            "input_requirements",
+            ::pyo3::types::PyList::new(
+                py,
+                input_requirements
+                    .into_iter()
+                    .map(|x| {
+                        crate::generated::records::agent_run::run_input_requirement_to_py(py, x)
+                    })
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        crate::py_calls::call(
+            SETTLED.import(py, "livekit.agents._generated.run_result", "_Settled")?.as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
+    static RUN_COMPLETED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn run_completed_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::agent::run::RunCompleted,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::agent::run::RunCompleted { settled, output } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        let ::lk_agents_abi::agent::run::SettledRun {
+            new_messages,
+            all_messages,
+            usage,
+            verbatim,
+            pending_call,
+            input_requirements,
+        } = settled;
+        kwargs.set_item(
+            "_new_messages",
+            ::pyo3::types::PyList::new(
+                py,
+                new_messages
+                    .into_iter()
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item(
+            "_all_messages",
+            ::pyo3::types::PyList::new(
+                py,
+                all_messages
+                    .into_iter()
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item("usage", crate::generated::records::usage::usage_to_py(py, usage)?)?;
+        kwargs.set_item(
+            "verbatim",
+            match verbatim {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item(
+            "_pending_call",
+            match pending_call {
+                None => py.None().into_bound(py),
+                Some(x) => crate::generated::records::storage_turn::pending_call_to_py(py, x)?,
+            },
+        )?;
+        kwargs.set_item(
+            "input_requirements",
+            ::pyo3::types::PyList::new(
+                py,
+                input_requirements
+                    .into_iter()
+                    .map(|x| {
+                        crate::generated::records::agent_run::run_input_requirement_to_py(py, x)
+                    })
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item(
+            "output",
+            crate::generated::records::run_result::run_output_to_py(py, output)?,
+        )?;
+        crate::py_calls::call(
+            RUN_COMPLETED
+                .import(py, "livekit.agents._generated.run_result", "RunCompleted")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
+
+    pub fn run_output_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::agent::run::RunOutput,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ::lk_agents_abi::agent::run::RunOutput::Text(x) => {
+                ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?
+            }
+            ::lk_agents_abi::agent::run::RunOutput::Validated(x) => {
+                crate::py_objects::object_ref_to_py(py, x)?
+            }
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
+    static RUN_INPUT_REQUIRED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn run_input_required_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::agent::run::RunInputRequired,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::agent::run::RunInputRequired { settled, question } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        let ::lk_agents_abi::agent::run::SettledRun {
+            new_messages,
+            all_messages,
+            usage,
+            verbatim,
+            pending_call,
+            input_requirements,
+        } = settled;
+        kwargs.set_item(
+            "_new_messages",
+            ::pyo3::types::PyList::new(
+                py,
+                new_messages
+                    .into_iter()
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item(
+            "_all_messages",
+            ::pyo3::types::PyList::new(
+                py,
+                all_messages
+                    .into_iter()
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item("usage", crate::generated::records::usage::usage_to_py(py, usage)?)?;
+        kwargs.set_item(
+            "verbatim",
+            match verbatim {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item(
+            "_pending_call",
+            match pending_call {
+                None => py.None().into_bound(py),
+                Some(x) => crate::generated::records::storage_turn::pending_call_to_py(py, x)?,
+            },
+        )?;
+        kwargs.set_item(
+            "input_requirements",
+            ::pyo3::types::PyList::new(
+                py,
+                input_requirements
+                    .into_iter()
+                    .map(|x| {
+                        crate::generated::records::agent_run::run_input_requirement_to_py(py, x)
+                    })
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item("question", ::pyo3::IntoPyObjectExt::into_bound_py_any(question, py)?)?;
+        crate::py_calls::call(
+            RUN_INPUT_REQUIRED
+                .import(py, "livekit.agents._generated.run_result", "RunInputRequired")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
+    static RUN_NO_OUTPUT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn run_no_output_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::agent::run::RunNoOutput,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::agent::run::RunNoOutput { settled } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        let ::lk_agents_abi::agent::run::SettledRun {
+            new_messages,
+            all_messages,
+            usage,
+            verbatim,
+            pending_call,
+            input_requirements,
+        } = settled;
+        kwargs.set_item(
+            "_new_messages",
+            ::pyo3::types::PyList::new(
+                py,
+                new_messages
+                    .into_iter()
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item(
+            "_all_messages",
+            ::pyo3::types::PyList::new(
+                py,
+                all_messages
+                    .into_iter()
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item("usage", crate::generated::records::usage::usage_to_py(py, usage)?)?;
+        kwargs.set_item(
+            "verbatim",
+            match verbatim {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item(
+            "_pending_call",
+            match pending_call {
+                None => py.None().into_bound(py),
+                Some(x) => crate::generated::records::storage_turn::pending_call_to_py(py, x)?,
+            },
+        )?;
+        kwargs.set_item(
+            "input_requirements",
+            ::pyo3::types::PyList::new(
+                py,
+                input_requirements
+                    .into_iter()
+                    .map(|x| {
+                        crate::generated::records::agent_run::run_input_requirement_to_py(py, x)
+                    })
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        crate::py_calls::call(
+            RUN_NO_OUTPUT
+                .import(py, "livekit.agents._generated.run_result", "RunNoOutput")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
+
+    pub fn run_result_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::agent::run::CallerRunResult,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ::lk_agents_abi::agent::run::CallerRunResult::Completed(x) => {
+                crate::generated::records::run_result::run_completed_to_py(py, x)?
+            }
+            ::lk_agents_abi::agent::run::CallerRunResult::InputRequired(x) => {
+                crate::generated::records::run_result::run_input_required_to_py(py, x)?
+            }
+            ::lk_agents_abi::agent::run::CallerRunResult::NoOutput(x) => {
+                crate::generated::records::run_result::run_no_output_to_py(py, x)?
+            }
+        })
     }
 }
 
@@ -13517,12 +13937,6 @@ pub mod session_options {
                     ))?
                 }
                 _ => 2.0,
-            },
-            conn_options: {
-                let v = obj.get_item("conn_options")?.ok_or_else(|| {
-                    ::pyo3::exceptions::PyKeyError::new_err("SessionKwargs.conn_options")
-                })?;
-                (crate::generated::records::connect::session_connect_options_from_py(v.as_any()))?
             },
         })
     }
@@ -14178,33 +14592,6 @@ pub mod session_wire {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
-    static SPEECH_CREATED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn speech_created_wire_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::voice::events::SpeechCreated,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::voice::events::SpeechCreated { user_initiated, source, speech_handle } =
-            value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item(
-            "user_initiated",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(user_initiated, py)?,
-        )?;
-        kwargs
-            .set_item("source", ::pyo3::IntoPyObjectExt::into_bound_py_any(source.as_str(), py)?)?;
-        kwargs.set_item("speech_handle", <dyn ::lk_agents_abi::voice::speech_handle::Speech as crate::generated::NativeToHost>::to_host(py, speech_handle)?)?;
-        crate::py_calls::call(
-            SPEECH_CREATED_WIRE
-                .import(py, "livekit.agents._generated.session_wire", "SpeechCreatedWire")?
-                .as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
     static TOOL_EXECUTION_UPDATED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -14530,10 +14917,10 @@ pub mod session_wire {
                 Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
             },
         )?;
-        kwargs.set_item(
-            "settled",
-            crate::generated::records::agent_run::run_settled_to_py(py, settled)?,
-        )?;
+        kwargs.set_item("settled", {
+            let scalar: ::lk_agents_abi::agent::run::RunFinished = settled.into();
+            crate::generated::records::agent_run::run_finished_to_py(py, scalar)?
+        })?;
         crate::py_calls::call(
             RUN_FINISHED_WIRE
                 .import(py, "livekit.agents._generated.session_wire", "RunFinishedWire")?
@@ -14855,7 +15242,7 @@ pub mod session_wire {
                 crate::generated::records::session_wire::end_of_speech_event_to_py(py, x)?
             }
             ::lk_agents_abi::voice::events::HostWire::SpeechCreated(x) => {
-                crate::generated::records::session_wire::speech_created_wire_to_py(py, x)?
+                crate::generated::records::session_wire::speech_created_event_to_py(py, x)?
             }
             ::lk_agents_abi::voice::events::HostWire::Diagnostic(x) => {
                 crate::generated::records::session_wire::diagnostic_wire_to_py(py, x)?
@@ -14951,6 +15338,37 @@ pub mod session_wire {
                 crate::generated::records::session_wire::delete_room_requested_to_py(py, x)?
             }
         })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static SPEECH_CREATED_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn speech_created_event_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::voice::events::SpeechCreatedEvent,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::voice::events::SpeechCreatedEvent {
+            user_initiated,
+            source,
+            speech_handle,
+            created_at: _,
+        } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "user_initiated",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(user_initiated, py)?,
+        )?;
+        kwargs
+            .set_item("source", ::pyo3::IntoPyObjectExt::into_bound_py_any(source.as_str(), py)?)?;
+        kwargs.set_item("speech_handle", crate::py_calls::call(&py.import("livekit.agents.voice.io")?.getattr("SpeechHandle")?.getattr("_of")?, (<dyn ::lk_agents_abi::voice::speech_handle::Speech as crate::generated::NativeToHost>::to_host(py, speech_handle)?,), None)?)?;
+        crate::py_calls::call(
+            SPEECH_CREATED_EVENT
+                .import(py, "livekit.agents._generated.session_wire", "SpeechCreatedEvent")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/room_io.rs.
@@ -16280,173 +16698,245 @@ pub mod storage_handler {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
-    static HANDLER_OUTCOME_VALUE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static HANDLER_OUTCOME__RUN_COMPLETED: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
         ::pyo3::sync::PyOnceLock::new();
-    static HANDLER_OUTCOME_COMPLETED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static HANDLER_OUTCOME__RUN_INPUT_REQUIRED: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
         ::pyo3::sync::PyOnceLock::new();
-    static HANDLER_OUTCOME_INPUT_REQUIRED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static HANDLER_OUTCOME__RUN_NO_OUTPUT: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
         ::pyo3::sync::PyOnceLock::new();
-    static HANDLER_OUTCOME_FAILED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static HANDLER_OUTCOME__COMPLETED: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
         ::pyo3::sync::PyOnceLock::new();
-    static HANDLER_OUTCOME_REJECTED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static HANDLER_OUTCOME__INPUT_REQUIRED: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
         ::pyo3::sync::PyOnceLock::new();
-    static HANDLER_OUTCOME_WORKING: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static HANDLER_OUTCOME__FAILED: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static HANDLER_OUTCOME__REJECTED: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static HANDLER_OUTCOME__WORKING: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
         ::pyo3::sync::PyOnceLock::new();
 
     pub fn handler_outcome_from_py(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::lk_agents_abi::a2a::turn::HandlerOutcome> {
-        let py = obj.py();
-        if obj.is_instance(HANDLER_OUTCOME_VALUE.import(
-            py,
-            "livekit.agents._generated.storage_handler",
-            "HandlerOutcomeValue",
-        )?)? {
-            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Value {
-                value: crate::py_values::attr_with(obj, "HandlerOutcomeValue", "value", |v| {
-                    crate::py_values::value_from_py(v, "HandlerOutcomeValue.value")
-                })?,
-            });
+        if obj.is_instance(
+            HANDLER_OUTCOME__RUN_COMPLETED
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.run_result")?
+                            .getattr("RunCompleted")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            let member = obj.clone().getattr("output")?;
+            let v = &member;
+            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Answer(
+                crate::py_values::jsonable(v, "HandlerOutcome.Answer")?,
+            ));
         }
-        if obj.is_instance(HANDLER_OUTCOME_COMPLETED.import(
-            py,
-            "livekit.agents._generated.storage_handler",
-            "HandlerOutcomeCompleted",
-        )?)? {
-            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Completed {
-                value: crate::py_values::attr_with(obj, "HandlerOutcomeCompleted", "value", |v| {
-                    crate::py_values::value_from_py(v, "HandlerOutcomeCompleted.value")
-                })?,
-                verbatim: crate::py_values::attr_with(
-                    obj,
-                    "HandlerOutcomeCompleted",
-                    "verbatim",
-                    |v| v.extract::<bool>(),
-                )?,
-            });
+        if obj.is_instance(
+            HANDLER_OUTCOME__RUN_INPUT_REQUIRED
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.run_result")?
+                            .getattr("RunInputRequired")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            let member = obj.clone().getattr("question")?;
+            let v = &member;
+            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Asked(
+                v.extract::<::std::string::String>()?,
+            ));
         }
-        if obj.is_instance(HANDLER_OUTCOME_INPUT_REQUIRED.import(
-            py,
-            "livekit.agents._generated.storage_handler",
-            "HandlerOutcomeInputRequired",
-        )?)? {
-            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::InputRequired {
-                question: crate::py_values::attr_with(
-                    obj,
-                    "HandlerOutcomeInputRequired",
-                    "question",
-                    |v| v.extract::<::std::string::String>(),
-                )?,
-            });
+        if obj.is_instance(
+            HANDLER_OUTCOME__RUN_NO_OUTPUT
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.run_result")?
+                            .getattr("RunNoOutput")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::NoOutput);
         }
-        if obj.is_instance(HANDLER_OUTCOME_FAILED.import(
-            py,
-            "livekit.agents._generated.storage_handler",
-            "HandlerOutcomeFailed",
-        )?)? {
-            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Failed {
-                error: crate::py_values::attr_with(obj, "HandlerOutcomeFailed", "error", |v| {
-                    v.extract::<::std::string::String>()
-                })?,
-            });
+        if obj.is_instance(
+            HANDLER_OUTCOME__COMPLETED
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents.llm.tool_context")?
+                            .getattr("Completed")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Completed(
+                crate::generated::records::storage_handler::handler_completed_from_py(obj)?,
+            ));
         }
-        if obj.is_instance(HANDLER_OUTCOME_REJECTED.import(
-            py,
-            "livekit.agents._generated.storage_handler",
-            "HandlerOutcomeRejected",
-        )?)? {
-            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Rejected {
-                reason: crate::py_values::attr_with(
-                    obj,
-                    "HandlerOutcomeRejected",
-                    "reason",
-                    |v| v.extract::<::std::string::String>(),
-                )?,
-            });
+        if obj.is_instance(
+            HANDLER_OUTCOME__INPUT_REQUIRED
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.function_tools")?
+                            .getattr("InputRequired")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            let member = obj.clone().getattr("question")?;
+            let v = &member;
+            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::InputRequired(
+                v.extract::<::std::string::String>()?,
+            ));
         }
-        if obj.is_instance(HANDLER_OUTCOME_WORKING.import(
-            py,
-            "livekit.agents._generated.storage_handler",
-            "HandlerOutcomeWorking",
-        )?)? {
-            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Working {
-                message: crate::py_values::attr_with(
-                    obj,
-                    "HandlerOutcomeWorking",
-                    "message",
-                    |v| {
-                        if v.is_none() {
-                            Ok(None)
-                        } else {
-                            (v.extract::<::std::string::String>()).map(Some)
-                        }
-                    },
-                )?,
-            });
+        if obj.is_instance(
+            HANDLER_OUTCOME__FAILED
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.tool_outcomes")?
+                            .getattr("Failed")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            let member = obj.clone().getattr("error")?;
+            let v = &member;
+            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Failed(
+                v.extract::<::std::string::String>()?,
+            ));
         }
-        Err(super::not_a(
-            obj,
-            "HandlerOutcomeValue | HandlerOutcomeCompleted | HandlerOutcomeInputRequired | HandlerOutcomeFailed | HandlerOutcomeRejected | HandlerOutcomeWorking",
-        ))
+        if obj.is_instance(
+            HANDLER_OUTCOME__REJECTED
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.tool_outcomes")?
+                            .getattr("Rejected")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            let member = obj.clone().getattr("reason")?;
+            let v = &member;
+            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Rejected(
+                v.extract::<::std::string::String>()?,
+            ));
+        }
+        if obj.is_instance(
+            HANDLER_OUTCOME__WORKING
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.tool_outcomes")?
+                            .getattr("Working")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            let member = obj.clone().getattr("message")?;
+            let v = &member;
+            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Working(if v.is_none() {
+                Ok(None)
+            } else {
+                (v.extract::<::std::string::String>()).map(Some)
+            }?));
+        }
+        let member = obj.clone();
+        let v = &member;
+        Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Value(crate::py_values::jsonable(
+            v,
+            "HandlerOutcome.Value",
+        )?))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
-    static HANDLER_RUN: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
+    pub fn handler_completed_from_py(
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::a2a::turn::HandlerCompleted> {
+        let value = crate::py_values::attr_with(obj, "HandlerCompleted", "value", |v| {
+            crate::py_values::jsonable(v, "HandlerCompleted.value")
+        })?;
+        let verbatim = crate::py_values::attr_with(obj, "HandlerCompleted", "verbatim", |v| {
+            v.extract::<bool>()
+        })?;
+        let value = ::lk_agents_abi::a2a::turn::HandlerCompleted { value, verbatim };
+        Ok(value)
+    }
 
+    // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
     pub fn handler_run_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::a2a::turn::HandlerRun> {
-        let py = obj.py();
-        if !obj.is_instance(HANDLER_RUN.import(
-            py,
-            "livekit.agents._generated.storage_handler",
-            "HandlerRun",
-        )?)? {
-            return Err(super::not_a(obj, "HandlerRun"));
-        }
-        Ok(::lk_agents_abi::a2a::turn::HandlerRun {
-            items: crate::py_values::attr_with(obj, "HandlerRun", "items", |v| {
-                if v.is_instance_of::<::pyo3::types::PyList>()
-                    || v.is_instance_of::<::pyo3::types::PyTuple>()
-                {
-                    v.try_iter()?
-                        .map(|item| {
-                            let item = &item?;
-                            crate::generated::records::chat_items::chat_item_from_py(item)
-                        })
-                        .collect::<PyResult<Vec<_>>>()
-                } else {
-                    Err(::pyo3::exceptions::PyTypeError::new_err(
-                        "HandlerRun.items: expected a list or tuple",
-                    ))
-                }
-            })?,
-            usage: crate::py_values::attr_with(obj, "HandlerRun", "usage", |v| {
-                crate::generated::records::usage::usage_from_py(v)
-            })?,
-            verbatim: crate::py_values::attr_with(obj, "HandlerRun", "verbatim", |v| {
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::a2a::turn::HandlerRun> {
+        let items = {
+            let member = crate::py_calls::call(&obj.getattr("new_messages")?, (), None)?;
+            let v = &member;
+            (if v.is_instance_of::<::pyo3::types::PyList>()
+                || v.is_instance_of::<::pyo3::types::PyTuple>()
+            {
+                v.try_iter()?
+                    .map(|item| {
+                        let item = &item?;
+                        crate::generated::records::chat_items::chat_item_from_py(item)
+                    })
+                    .collect::<PyResult<Vec<_>>>()
+            } else {
+                Err(::pyo3::exceptions::PyTypeError::new_err(
+                    "HandlerRun.items: expected a list or tuple",
+                ))
+            })?
+        };
+        let usage = crate::py_values::attr_with(obj, "HandlerRun", "usage", |v| {
+            crate::generated::records::usage::usage_from_py(v)
+        })?;
+        let verbatim = crate::py_values::attr_with(obj, "HandlerRun", "verbatim", |v| {
+            if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) }
+        })?;
+        let question = obj
+            .getattr("question")
+            .ok()
+            .filter(|v| !v.is_none())
+            .map(|v| -> PyResult<_> {
+                let v = &v;
                 if v.is_none() {
                     Ok(None)
                 } else {
                     (v.extract::<::std::string::String>()).map(Some)
                 }
-            })?,
-            question: crate::py_values::attr_with(obj, "HandlerRun", "question", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (v.extract::<::std::string::String>()).map(Some)
-                }
-            })?,
-            pending_call: crate::py_values::attr_with(obj, "HandlerRun", "pending_call", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (crate::generated::records::storage_turn::pending_call_from_py(v)).map(Some)
-                }
-            })?,
-        })
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let pending_call = crate::py_values::attr_with(obj, "HandlerRun", "_pending_call", |v| {
+            if v.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::storage_turn::pending_call_from_py(v)).map(Some)
+            }
+        })?;
+        let value = ::lk_agents_abi::a2a::turn::HandlerRun {
+            items,
+            usage,
+            verbatim,
+            question,
+            pending_call,
+        };
+        Ok(value)
     }
 }
 
@@ -18189,6 +18679,136 @@ pub mod telemetry {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/host.rs.
+    pub fn ended_span_from_py(
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::telemetry::host::EndedSpan> {
+        let name = crate::py_values::attr_with(obj, "EndedSpan", "name", |v| {
+            v.extract::<::std::string::String>()
+        })?;
+        let scope = match Some(obj.clone())
+            .filter(|m| !m.is_none())
+            .and_then(|m| m.getattr("instrumentation_scope").ok())
+            .filter(|m| !m.is_none())
+            .and_then(|m| m.getattr("name").ok())
+            .filter(|m| !m.is_none())
+        {
+            Some(member) => {
+                let v = &member;
+                (v.extract::<::std::string::String>())?
+            }
+            None => Default::default(),
+        };
+        let context = {
+            let member = crate::py_calls::call(&obj.getattr("get_span_context")?, (), None)?;
+            let v = &member;
+            (if v.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::telemetry::span_context_from_py(v)).map(Some)
+            })?
+        };
+        let parent = crate::py_values::attr_with(obj, "EndedSpan", "parent", |v| {
+            if v.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::telemetry::span_context_from_py(v)).map(Some)
+            }
+        })?;
+        let kind = crate::py_values::attr_with(obj, "EndedSpan", "kind", |v| {
+            crate::generated::native_enums::span_kind_from_py(v)
+        })?;
+        let start_time = crate::py_values::attr_with(obj, "EndedSpan", "start_time", |v| {
+            if v.is_none() {
+                Ok(None)
+            } else {
+                (crate::py_values::number_from_py::<u64>(v, "EndedSpan.start_time")).map(Some)
+            }
+        })?;
+        let end_time = crate::py_values::attr_with(obj, "EndedSpan", "end_time", |v| {
+            if v.is_none() {
+                Ok(None)
+            } else {
+                (crate::py_values::number_from_py::<u64>(v, "EndedSpan.end_time")).map(Some)
+            }
+        })?;
+        let attributes = obj
+            .getattr("attributes")
+            .ok()
+            .filter(|v| !v.is_none())
+            .map(|v| -> PyResult<_> {
+                let v = &v;
+                crate::py_values::attributes_from_py(v)
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let events = crate::py_values::attr_with(obj, "EndedSpan", "events", |v| {
+            if v.is_instance_of::<::pyo3::types::PyList>()
+                || v.is_instance_of::<::pyo3::types::PyTuple>()
+            {
+                v.try_iter()?
+                    .map(|item| {
+                        let item = &item?;
+                        crate::generated::records::telemetry::ended_span_event_from_py(item)
+                    })
+                    .collect::<PyResult<Vec<_>>>()
+            } else {
+                Err(::pyo3::exceptions::PyTypeError::new_err(
+                    "EndedSpan.events: expected a list or tuple",
+                ))
+            }
+        })?;
+        let status = {
+            let member = obj.clone().getattr("status")?.getattr("status_code")?;
+            let v = &member;
+            (crate::generated::native_enums::status_code_from_py(v))?
+        };
+        let description = {
+            let member = obj.clone().getattr("status")?.getattr("description")?;
+            let v = &member;
+            (if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?
+        };
+        let value = ::lk_agents_abi::telemetry::host::EndedSpan {
+            name,
+            scope,
+            context,
+            parent,
+            kind,
+            start_time,
+            end_time,
+            attributes,
+            events,
+            status,
+            description,
+        };
+        Ok(value)
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/host.rs.
+    pub fn ended_span_event_from_py(
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::telemetry::host::EndedSpanEvent> {
+        let name = crate::py_values::attr_with(obj, "EndedSpanEvent", "name", |v| {
+            v.extract::<::std::string::String>()
+        })?;
+        let attributes = obj
+            .getattr("attributes")
+            .ok()
+            .filter(|v| !v.is_none())
+            .map(|v| -> PyResult<_> {
+                let v = &v;
+                crate::py_values::attributes_from_py(v)
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let timestamp = crate::py_values::attr_with(obj, "EndedSpanEvent", "timestamp", |v| {
+            crate::py_values::number_from_py::<u64>(v, "EndedSpanEvent.timestamp")
+        })?;
+        let value =
+            ::lk_agents_abi::telemetry::host::EndedSpanEvent { name, attributes, timestamp };
+        Ok(value)
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/host.rs.
     static TELEMETRY_DIAGNOSTICS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -18230,44 +18850,54 @@ pub mod telemetry {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/record.rs.
-    static SPAN_CONTEXT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
     pub fn span_context_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::telemetry::decl::SpanContext> {
-        let py = obj.py();
-        if !obj.is_instance(SPAN_CONTEXT.import(
-            py,
-            "livekit.agents._generated.telemetry",
-            "SpanContext",
-        )?)? {
-            return Err(super::not_a(obj, "SpanContext"));
-        }
-        Ok(::lk_agents_abi::telemetry::decl::SpanContext {
-            trace_id: crate::py_values::attr_with(obj, "SpanContext", "trace_id", |v| {
-                crate::py_values::number_from_py::<u128>(v, "SpanContext.trace_id")
-            })?,
-            span_id: crate::py_values::attr_with(obj, "SpanContext", "span_id", |v| {
-                crate::py_values::number_from_py::<u64>(v, "SpanContext.span_id")
-            })?,
-            sampled: crate::py_values::attr_with(obj, "SpanContext", "sampled", |v| {
-                v.extract::<bool>()
-            })?,
-        })
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::telemetry::decl::SpanContext> {
+        let trace_id = crate::py_values::attr_with(obj, "SpanContext", "trace_id", |v| {
+            crate::py_values::number_from_py::<u128>(v, "SpanContext.trace_id")
+        })?;
+        let span_id = crate::py_values::attr_with(obj, "SpanContext", "span_id", |v| {
+            crate::py_values::number_from_py::<u64>(v, "SpanContext.span_id")
+        })?;
+        let sampled = {
+            let member = obj.clone().getattr("trace_flags")?.getattr("sampled")?;
+            let v = &member;
+            (v.extract::<bool>())?
+        };
+        let value = ::lk_agents_abi::telemetry::decl::SpanContext { trace_id, span_id, sampled };
+        Ok(value)
     }
-
     pub fn span_context_to_py<'py>(
-        py: Python<'py>,
+        py: pyo3::Python<'py>,
         value: ::lk_agents_abi::telemetry::decl::SpanContext,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::telemetry::decl::SpanContext { trace_id, span_id, sampled } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("trace_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(trace_id, py)?)?;
-        kwargs.set_item("span_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(span_id, py)?)?;
-        kwargs.set_item("sampled", ::pyo3::IntoPyObjectExt::into_bound_py_any(sampled, py)?)?;
+    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs.set_item("is_remote", false)?;
+        kwargs.set_item(
+            "trace_id",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.trace_id, py)?,
+        )?;
+        kwargs
+            .set_item("span_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(value.span_id, py)?)?;
+        kwargs.set_item(
+            "trace_flags",
+            crate::py_calls::call(
+                {
+                    static CLASS_SAMPLED: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> =
+                        pyo3::sync::PyOnceLock::new();
+                    CLASS_SAMPLED.import(py, "opentelemetry.trace", "TraceFlags")?.as_any()
+                },
+                (::pyo3::IntoPyObjectExt::into_bound_py_any(value.sampled, py)?,),
+                None,
+            )?,
+        )?;
+
         crate::py_calls::call(
-            SPAN_CONTEXT.import(py, "livekit.agents._generated.telemetry", "SpanContext")?.as_any(),
+            {
+                static CLASS: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> =
+                    pyo3::sync::PyOnceLock::new();
+                CLASS.import(py, "opentelemetry.trace", "SpanContext")?.as_any()
+            },
             (),
             Some(&kwargs),
         )
@@ -19631,33 +20261,6 @@ pub mod text_session {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
-    static TEXT_SESSION_TURN: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn text_session_turn_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::text_session::TextSessionTurn,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::text_session::TextSessionTurn { result, state } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item(
-            "result",
-            crate::generated::records::agent_run::run_result_to_py(py, result)?,
-        )?;
-        kwargs.set_item(
-            "state",
-            crate::generated::records::text_session::text_session_state_to_py(py, state)?,
-        )?;
-        crate::py_calls::call(
-            TEXT_SESSION_TURN
-                .import(py, "livekit.agents._generated.text_session", "TextSessionTurn")?
-                .as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
     static TEXT_SESSION_AGENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -19806,29 +20409,24 @@ pub mod text_session {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
-    static TEXT_SESSION_SETTLED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static TEXT_SESSION_FINISHED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn text_session_settled_to_py<'py>(
+    pub fn text_session_finished_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::text_session::TextSessionSettled,
+        value: ::lk_agents_abi::text_session::TextSessionFinished,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::text_session::TextSessionSettled { turn, output } = value;
+        let ::lk_agents_abi::text_session::TextSessionFinished { run, state } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs
+            .set_item("run", crate::generated::records::agent_run::run_finished_to_py(py, run)?)?;
         kwargs.set_item(
-            "turn",
-            crate::generated::records::text_session::text_session_turn_to_py(py, turn)?,
-        )?;
-        kwargs.set_item(
-            "output",
-            match output {
-                None => py.None().into_bound(py),
-                Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
-            },
+            "state",
+            crate::generated::records::text_session::text_session_state_to_py(py, state)?,
         )?;
         crate::py_calls::call(
-            TEXT_SESSION_SETTLED
-                .import(py, "livekit.agents._generated.text_session", "TextSessionSettled")?
+            TEXT_SESSION_FINISHED
+                .import(py, "livekit.agents._generated.text_session", "TextSessionFinished")?
                 .as_any(),
             (),
             Some(&kwargs),
@@ -19961,7 +20559,13 @@ pub mod text_session {
                 let kwargs = ::pyo3::types::PyDict::new(py);
                 kwargs.set_item("settled", {
                     let value = *settled;
-                    crate::generated::records::text_session::text_session_settled_to_py(py, value)?
+                    {
+                        let scalar: ::lk_agents_abi::text_session::TextSessionFinished =
+                            value.into();
+                        crate::generated::records::text_session::text_session_finished_to_py(
+                            py, scalar,
+                        )?
+                    }
                 })?;
                 crate::py_calls::call(
                     TEXT_SESSION_UPDATE_FINISHED
@@ -20139,6 +20743,27 @@ pub mod tokenizer {
             ));
         }
         Err(super::not_a(obj, "TokenizerToken"))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
+    static REPLACED_WORDS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn replaced_words_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::tokenize::bindings::ReplacedWords,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::tokenize::bindings::ReplacedWords { text, processed } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+        kwargs.set_item("processed", ::pyo3::IntoPyObjectExt::into_bound_py_any(processed, py)?)?;
+        crate::py_calls::call(
+            REPLACED_WORDS
+                .import(py, "livekit.agents._generated.tokenizer", "ReplacedWords")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
     }
 }
 
@@ -20336,6 +20961,36 @@ pub mod tool_options {
 
 pub mod tool_report {
     use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
+    static TOOL_COMPLETION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn tool_completion_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::agent::ToolCompletion> {
+        let py = obj.py();
+        if !obj.is_instance(TOOL_COMPLETION.import(
+            py,
+            "livekit.agents._generated.tool_report",
+            "ToolCompletion",
+        )?)? {
+            return Err(super::not_a(obj, "ToolCompletion"));
+        }
+        Ok(::lk_agents_abi::agent::ToolCompletion {
+            report: crate::py_values::attr_with(obj, "ToolCompletion", "report", |v| {
+                crate::generated::records::tool_report::tool_report_from_py(v)
+            })?,
+            extra: crate::py_values::attr_with(obj, "ToolCompletion", "extra", |v| {
+                match crate::py_values::value_from_py(v, "ToolCompletion.extra")? {
+                    ::serde_json::Value::Object(map) => Ok(map),
+                    _ => Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "ToolCompletion.extra: expected a dict",
+                    )),
+                }
+            })?,
+        })
+    }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
     static TOOL_OUTCOME_VALUE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -20806,6 +21461,307 @@ pub mod tool_report {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
+    static TOOL_RETURN__TOOL_REPORT: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_RETURN__TOOL_ERROR: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_RETURN__MODEL_RETRY: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_RETURN__STOP_RESPONSE: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_RETURN__BASE_EXCEPTION: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_RETURN__COMPLETED: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_RETURN__FAILED: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_RETURN__REJECTED: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_RETURN__INPUT_REQUIRED: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_RETURN__WORKING: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_RETURN__TOOL_RESULT: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn tool_return_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::tool_executor::ToolReturn> {
+        if obj.is_instance(
+            TOOL_RETURN__TOOL_REPORT
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.tool_report")?
+                            .getattr("ToolReport")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::llm::tool_executor::ToolReturn::Report(
+                crate::generated::records::tool_report::tool_report_from_py(obj)?,
+            ));
+        }
+        if obj.is_instance(
+            TOOL_RETURN__TOOL_ERROR
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.tool_errors")?
+                            .getattr("ToolError")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            let member = obj.clone().getattr("message")?;
+            let v = &member;
+            return Ok(::lk_agents_abi::llm::tool_executor::ToolReturn::ToolError(
+                v.extract::<::std::string::String>()?,
+            ));
+        }
+        if obj.is_instance(
+            TOOL_RETURN__MODEL_RETRY
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.tool_errors")?
+                            .getattr("ModelRetry")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            let member = obj.clone().getattr("message")?;
+            let v = &member;
+            return Ok(::lk_agents_abi::llm::tool_executor::ToolReturn::ModelRetry(
+                v.extract::<::std::string::String>()?,
+            ));
+        }
+        if obj.is_instance(
+            TOOL_RETURN__STOP_RESPONSE
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.tool_errors")?
+                            .getattr("StopResponse")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::llm::tool_executor::ToolReturn::StopResponse);
+        }
+        if obj.is_instance(
+            TOOL_RETURN__BASE_EXCEPTION
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(obj.py().import("builtins")?.getattr("BaseException")?.unbind())
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::llm::tool_executor::ToolReturn::Raised);
+        }
+        if obj.is_instance(
+            TOOL_RETURN__COMPLETED
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents.llm.tool_context")?
+                            .getattr("Completed")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::llm::tool_executor::ToolReturn::Completed(
+                crate::generated::records::tool_report::completed_return_from_py(obj)?,
+            ));
+        }
+        if obj.is_instance(
+            TOOL_RETURN__FAILED
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.tool_outcomes")?
+                            .getattr("Failed")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            let member = obj.clone().getattr("error")?;
+            let v = &member;
+            return Ok(::lk_agents_abi::llm::tool_executor::ToolReturn::Failed(
+                v.extract::<::std::string::String>()?,
+            ));
+        }
+        if obj.is_instance(
+            TOOL_RETURN__REJECTED
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.tool_outcomes")?
+                            .getattr("Rejected")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            let member = obj.clone().getattr("reason")?;
+            let v = &member;
+            return Ok(::lk_agents_abi::llm::tool_executor::ToolReturn::Rejected(
+                v.extract::<::std::string::String>()?,
+            ));
+        }
+        if obj.is_instance(
+            TOOL_RETURN__INPUT_REQUIRED
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.function_tools")?
+                            .getattr("InputRequired")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::llm::tool_executor::ToolReturn::InputRequired(
+                crate::generated::records::tool_report::input_required_return_from_py(obj)?,
+            ));
+        }
+        if obj.is_instance(
+            TOOL_RETURN__WORKING
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.tool_outcomes")?
+                            .getattr("Working")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            let member = obj.clone().getattr("message")?;
+            let v = &member;
+            return Ok(::lk_agents_abi::llm::tool_executor::ToolReturn::Working(if v.is_none() {
+                Ok(None)
+            } else {
+                (v.extract::<::std::string::String>()).map(Some)
+            }?));
+        }
+        if obj.is_none() {
+            return Ok(::lk_agents_abi::llm::tool_executor::ToolReturn::Nothing);
+        }
+        if obj.is_instance(
+            TOOL_RETURN__TOOL_RESULT
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.tool_outcomes")?
+                            .getattr("ToolResult")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::llm::tool_executor::ToolReturn::Result(
+                crate::generated::records::tool_report::tool_result_return_from_py(obj)?,
+            ));
+        }
+        let member = obj.clone();
+        let v = &member;
+        Ok(::lk_agents_abi::llm::tool_executor::ToolReturn::Value(
+            crate::py_values::tool_text_from_py(v)?,
+        ))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
+    pub fn completed_return_from_py(
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::llm::tool_executor::CompletedReturn> {
+        let value = crate::py_values::attr_with(obj, "CompletedReturn", "value", |v| {
+            crate::py_values::tool_text_from_py(v)
+        })?;
+        let verbatim = crate::py_values::attr_with(obj, "CompletedReturn", "verbatim", |v| {
+            v.extract::<bool>()
+        })?;
+        let value = ::lk_agents_abi::llm::tool_executor::CompletedReturn { value, verbatim };
+        Ok(value)
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
+    pub fn input_required_return_from_py(
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::llm::tool_executor::InputRequiredReturn> {
+        let question = crate::py_values::attr_with(obj, "InputRequiredReturn", "question", |v| {
+            v.extract::<::std::string::String>()
+        })?;
+        let verbatim = crate::py_values::attr_with(obj, "InputRequiredReturn", "verbatim", |v| {
+            v.extract::<bool>()
+        })?;
+        let tool = match Some(obj.clone())
+            .filter(|m| !m.is_none())
+            .and_then(|m| m.getattr("tool").ok())
+            .filter(|m| !m.is_none())
+            .and_then(|m| m.getattr("info").ok())
+            .filter(|m| !m.is_none())
+            .and_then(|m| m.getattr("name").ok())
+            .filter(|m| !m.is_none())
+        {
+            Some(member) => {
+                let v = &member;
+                (if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                })?
+            }
+            None => Default::default(),
+        };
+        let value =
+            ::lk_agents_abi::llm::tool_executor::InputRequiredReturn { question, verbatim, tool };
+        Ok(value)
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
+    pub fn tool_result_return_from_py(
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::llm::tool_executor::ToolResultReturn> {
+        let output = crate::py_values::attr_with(obj, "ToolResultReturn", "output", |v| {
+            crate::py_values::tool_text_from_py(v)
+        })?;
+        let reply_required =
+            crate::py_values::attr_with(obj, "ToolResultReturn", "reply_required", |v| {
+                v.extract::<bool>()
+            })?;
+        let verbatim = crate::py_values::attr_with(obj, "ToolResultReturn", "verbatim", |v| {
+            v.extract::<bool>()
+        })?;
+        let more = obj
+            .getattr("_more")
+            .ok()
+            .filter(|v| !v.is_none())
+            .map(|v| -> PyResult<_> {
+                let v = &v;
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let value = ::lk_agents_abi::llm::tool_executor::ToolResultReturn {
+            output,
+            reply_required,
+            verbatim,
+            more,
+        };
+        Ok(value)
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
     static TOOL_REPORT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -20856,6 +21812,37 @@ pub mod tool_report {
             (),
             Some(&kwargs),
         )
+    }
+}
+
+pub mod tool_search {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/tokenize/search.rs.
+    pub fn search_fields_from_py(
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::tokenize::search::SearchFields> {
+        let name = crate::py_values::attr_with(obj, "SearchFields", "name", |v| {
+            v.extract::<::std::string::String>()
+        })?;
+        let description = crate::py_values::attr_with(obj, "SearchFields", "description", |v| {
+            v.extract::<::std::string::String>()
+        })?;
+        let parameters = crate::py_values::attr_with(obj, "SearchFields", "parameters", |v| {
+            v.cast::<::pyo3::types::PyDict>()?
+                .iter()
+                .map(|(key, item)| {
+                    let (key, item) = (&key, &item);
+                    Ok((
+                        key.extract::<::std::string::String>()?,
+                        item.extract::<::std::string::String>()?,
+                    ))
+                })
+                .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
+        })?;
+        let value =
+            ::lk_agents_abi::tokenize::search::SearchFields { name, description, parameters };
+        Ok(value)
     }
 }
 
@@ -21004,6 +21991,31 @@ pub mod tts {
         dict.set_item("type", ::pyo3::IntoPyObjectExt::into_bound_py_any(kind, py)?)?;
         dict.set_item("value", ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)?)?;
         Ok(dict.into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/streams.rs.
+    static SEGMENT_COUNT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn segment_count_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::tts::streams::SegmentCount> {
+        let py = obj.py();
+        if !obj.is_instance(SEGMENT_COUNT.import(
+            py,
+            "livekit.agents._generated.tts",
+            "SegmentCount",
+        )?)? {
+            return Err(super::not_a(obj, "SegmentCount"));
+        }
+        Ok(::lk_agents_abi::tts::streams::SegmentCount {
+            expected: crate::py_values::attr_with(obj, "SegmentCount", "expected", |v| {
+                crate::py_values::number_from_py::<usize>(v, "SegmentCount.expected")
+            })?,
+            actual: crate::py_values::attr_with(obj, "SegmentCount", "actual", |v| {
+                crate::py_values::number_from_py::<usize>(v, "SegmentCount.actual")
+            })?,
+        })
     }
 
     // Declared in rust/crates/lk-agents-abi/src/tts/tts.rs.
@@ -23013,6 +24025,63 @@ pub mod usage {
     }
 }
 
+pub mod user_turn {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session_effects.rs.
+    static COMPLETED_USER_TURN: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn completed_user_turn_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::voice::session_effects::CompletedUserTurn> {
+        let py = obj.py();
+        if !obj.is_instance(COMPLETED_USER_TURN.import(
+            py,
+            "livekit.agents._generated.user_turn",
+            "CompletedUserTurn",
+        )?)? {
+            return Err(super::not_a(obj, "CompletedUserTurn"));
+        }
+        Ok(::lk_agents_abi::voice::session_effects::CompletedUserTurn {
+            user_text: crate::py_values::attr_with(obj, "CompletedUserTurn", "user_text", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+            items: crate::py_values::attr_with(obj, "CompletedUserTurn", "items", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (if v.is_instance_of::<::pyo3::types::PyList>()
+                        || v.is_instance_of::<::pyo3::types::PyTuple>()
+                    {
+                        v.try_iter()?
+                            .map(|item| {
+                                let item = &item?;
+                                crate::generated::records::chat_items::chat_item_from_py(item)
+                            })
+                            .collect::<PyResult<Vec<_>>>()
+                    } else {
+                        Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "CompletedUserTurn.items: expected a list or tuple",
+                        ))
+                    })
+                    .map(Some)
+                }
+            })?,
+            stop_response: crate::py_values::attr_with(
+                obj,
+                "CompletedUserTurn",
+                "stop_response",
+                |v| v.extract::<bool>(),
+            )?,
+        })
+    }
+}
+
 pub mod vad {
     use pyo3::prelude::*;
 
@@ -23931,7 +25000,7 @@ pub mod voice_session {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::turn::EotDetectorProxy::from_host(v.as_any())).map(Some)
+                        (crate::py_objects::native::<dyn ::lk_agents_abi::EotDetector>(v.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.turn_detector", ": turn_detection must be a turn detection mode or an `inference.TurnDetector`")))).map(Some)
                     }
                 },
             )?,
@@ -24378,396 +25447,285 @@ pub mod worker_endpoint {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
-    static EXCHANGE_EVENT_BODY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static EXCHANGE_EVENT_DISCONNECTED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static EXCHANGE_EVENT_TEXT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static EXCHANGE_EVENT_BINARY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static EXCHANGE_EVENT_CLOSED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
     pub fn exchange_event_to_py<'py>(
         py: Python<'py>,
         value: ::lk_agents_abi::worker::http::ExchangeEvent,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let dict = ::pyo3::types::PyDict::new(py);
         match value {
             ::lk_agents_abi::worker::http::ExchangeEvent::Body { data, more } => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item("data", ::pyo3::types::PyBytes::new(py, &data).into_any())?;
-                kwargs.set_item("more", ::pyo3::IntoPyObjectExt::into_bound_py_any(more, py)?)?;
-                crate::py_calls::call(
-                    EXCHANGE_EVENT_BODY
-                        .import(
-                            py,
-                            "livekit.agents._generated.worker_endpoint",
-                            "ExchangeEventBody",
-                        )?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
+                dict.set_item("type", "http.request")?;
+                dict.set_item("body", ::pyo3::types::PyBytes::new(py, &data).into_any())?;
+                dict.set_item("more_body", ::pyo3::IntoPyObjectExt::into_bound_py_any(more, py)?)?;
             }
-            ::lk_agents_abi::worker::http::ExchangeEvent::Disconnected => crate::py_calls::call(
-                EXCHANGE_EVENT_DISCONNECTED
-                    .import(
-                        py,
-                        "livekit.agents._generated.worker_endpoint",
-                        "ExchangeEventDisconnected",
-                    )?
-                    .as_any(),
-                (),
-                None,
-            ),
+            ::lk_agents_abi::worker::http::ExchangeEvent::Disconnected => {
+                dict.set_item("type", "http.disconnect")?;
+            }
             ::lk_agents_abi::worker::http::ExchangeEvent::Text { text } => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
-                crate::py_calls::call(
-                    EXCHANGE_EVENT_TEXT
-                        .import(
-                            py,
-                            "livekit.agents._generated.worker_endpoint",
-                            "ExchangeEventText",
-                        )?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
+                dict.set_item("type", "websocket.receive")?;
+                dict.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
             }
             ::lk_agents_abi::worker::http::ExchangeEvent::Binary { data } => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item("data", ::pyo3::types::PyBytes::new(py, &data).into_any())?;
-                crate::py_calls::call(
-                    EXCHANGE_EVENT_BINARY
-                        .import(
-                            py,
-                            "livekit.agents._generated.worker_endpoint",
-                            "ExchangeEventBinary",
-                        )?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
+                dict.set_item("type", "websocket.receive")?;
+                dict.set_item("bytes", ::pyo3::types::PyBytes::new(py, &data).into_any())?;
             }
             ::lk_agents_abi::worker::http::ExchangeEvent::Closed { code } => {
-                let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item("code", ::pyo3::IntoPyObjectExt::into_bound_py_any(code, py)?)?;
-                crate::py_calls::call(
-                    EXCHANGE_EVENT_CLOSED
-                        .import(
-                            py,
-                            "livekit.agents._generated.worker_endpoint",
-                            "ExchangeEventClosed",
-                        )?
-                        .as_any(),
-                    (),
-                    Some(&kwargs),
-                )
+                dict.set_item("type", "websocket.disconnect")?;
+                dict.set_item("code", ::pyo3::IntoPyObjectExt::into_bound_py_any(code, py)?)?;
             }
         }
+        Ok(dict.into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
-    static EXCHANGE_MESSAGE_START: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static EXCHANGE_MESSAGE_BODY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static EXCHANGE_MESSAGE_ACCEPT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static EXCHANGE_MESSAGE_TEXT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static EXCHANGE_MESSAGE_BINARY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static EXCHANGE_MESSAGE_CLOSE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn exchange_message_from_py(
-        obj: &Bound<'_, PyAny>,
+    pub fn exchange_message_from_py<'py>(
+        obj: &Bound<'py, PyAny>,
     ) -> PyResult<::lk_agents_abi::worker::http::ExchangeMessage> {
-        let py = obj.py();
-        if obj.is_instance(EXCHANGE_MESSAGE_START.import(
-            py,
-            "livekit.agents._generated.worker_endpoint",
-            "ExchangeMessageStart",
-        )?)? {
-            return Ok(::lk_agents_abi::worker::http::ExchangeMessage::Start {
-                status: crate::py_values::attr_with(obj, "ExchangeMessageStart", "status", |v| {
-                    crate::py_values::number_from_py::<u16>(v, "ExchangeMessageStart.status")
-                })?,
-                headers: crate::py_values::attr_with(
-                    obj,
-                    "ExchangeMessageStart",
-                    "headers",
-                    |v| {
-                        if v.is_instance_of::<::pyo3::types::PyList>()
-                            || v.is_instance_of::<::pyo3::types::PyTuple>()
+        let item = |key: &str| -> PyResult<Option<Bound<'py, PyAny>>> {
+            match obj.get_item(key) {
+                Ok(v) => Ok(Some(v)),
+                Err(e) if e.is_instance_of::<::pyo3::exceptions::PyKeyError>(obj.py()) => Ok(None),
+                Err(e) => Err(e),
+            }
+        };
+        let tag = item("type")?
+            .ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("ExchangeMessage.type"))?;
+        let tag = tag.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        Ok(match &*tag {
+            "http.response.body" => ::lk_agents_abi::worker::http::ExchangeMessage::Body {
+                data: match item("body")?.filter(|v| !v.is_none()) {
+                    Some(v) => {
+                        let v = &v;
+                        (if v.is_instance_of::<::pyo3::types::PyBytes>()
+                            || v.is_instance_of::<::pyo3::types::PyByteArray>()
+                            || v.is_instance_of::<::pyo3::types::PyMemoryView>()
                         {
-                            v.try_iter()?
-                                .map(|item| {
-                                    let item = &item?;
-                                    (|| -> ::pyo3::PyResult<_> {
-                                        let tuple = item.cast::<::pyo3::types::PyTuple>()?;
-                                        if tuple.len() != 2 {
-                                            return Err(::pyo3::exceptions::PyTypeError::new_err(
-                                                format!(
-                                                    "{}: expected a tuple of 2 items",
-                                                    "ExchangeMessageStart.headers"
-                                                ),
-                                            ));
-                                        }
-                                        let item_0 = tuple.get_item(0)?;
-                                        let item_1 = tuple.get_item(1)?;
-                                        Ok((
-                                            (if item_0.is_instance_of::<::pyo3::types::PyBytes>()
-                                                || item_0
-                                                    .is_instance_of::<::pyo3::types::PyByteArray>()
-                                                || item_0
-                                                    .is_instance_of::<::pyo3::types::PyMemoryView>()
-                                            {
-                                                crate::py_values::owned_bytes(
-                                                    item_0.as_any(),
-                                                    "ExchangeMessageStart.headers",
-                                                )
-                                            } else {
-                                                item_0.try_iter().and_then(|items| {
-                                                    items
-                                                        .map(|item| {
-                                                            let item = item?;
-                                                            crate::py_values::number_from_py::<u8>(
-                                                                item.as_any(),
-                                                                "ExchangeMessageStart.headers",
-                                                            )
-                                                        })
-                                                        .collect::<PyResult<Vec<_>>>()
-                                                })
-                                            })?,
-                                            (if item_1.is_instance_of::<::pyo3::types::PyBytes>()
-                                                || item_1
-                                                    .is_instance_of::<::pyo3::types::PyByteArray>()
-                                                || item_1
-                                                    .is_instance_of::<::pyo3::types::PyMemoryView>()
-                                            {
-                                                crate::py_values::owned_bytes(
-                                                    item_1.as_any(),
-                                                    "ExchangeMessageStart.headers",
-                                                )
-                                            } else {
-                                                item_1.try_iter().and_then(|items| {
-                                                    items
-                                                        .map(|item| {
-                                                            let item = item?;
-                                                            crate::py_values::number_from_py::<u8>(
-                                                                item.as_any(),
-                                                                "ExchangeMessageStart.headers",
-                                                            )
-                                                        })
-                                                        .collect::<PyResult<Vec<_>>>()
-                                                })
-                                            })?,
-                                        ))
-                                    })()
-                                })
-                                .collect::<PyResult<Vec<_>>>()
+                            crate::py_values::owned_bytes(v.as_any(), "ExchangeMessage.body")
                         } else {
-                            Err(::pyo3::exceptions::PyTypeError::new_err(
-                                "ExchangeMessageStart.headers: expected a list or tuple",
-                            ))
-                        }
-                    },
-                )?,
-            });
-        }
-        if obj.is_instance(EXCHANGE_MESSAGE_BODY.import(
-            py,
-            "livekit.agents._generated.worker_endpoint",
-            "ExchangeMessageBody",
-        )?)? {
-            return Ok(::lk_agents_abi::worker::http::ExchangeMessage::Body {
-                data: crate::py_values::attr_with(obj, "ExchangeMessageBody", "data", |v| {
-                    if v.is_instance_of::<::pyo3::types::PyBytes>()
-                        || v.is_instance_of::<::pyo3::types::PyByteArray>()
-                        || v.is_instance_of::<::pyo3::types::PyMemoryView>()
-                    {
-                        crate::py_values::owned_bytes(v.as_any(), "ExchangeMessageBody.data")
-                    } else {
-                        v.try_iter().and_then(|items| {
-                            items
-                                .map(|item| {
-                                    let item = item?;
-                                    crate::py_values::number_from_py::<u8>(
-                                        item.as_any(),
-                                        "ExchangeMessageBody.data",
-                                    )
-                                })
-                                .collect::<PyResult<Vec<_>>>()
-                        })
+                            v.try_iter().and_then(|items| {
+                                items
+                                    .map(|item| {
+                                        let item = item?;
+                                        crate::py_values::number_from_py::<u8>(
+                                            item.as_any(),
+                                            "ExchangeMessage.body",
+                                        )
+                                    })
+                                    .collect::<PyResult<Vec<_>>>()
+                            })
+                        })?
                     }
-                })?,
-                more: crate::py_values::attr_with(obj, "ExchangeMessageBody", "more", |v| {
-                    v.extract::<bool>()
-                })?,
-            });
-        }
-        if obj.is_instance(EXCHANGE_MESSAGE_ACCEPT.import(
-            py,
-            "livekit.agents._generated.worker_endpoint",
-            "ExchangeMessageAccept",
-        )?)? {
-            return Ok(::lk_agents_abi::worker::http::ExchangeMessage::Accept {
-                subprotocol: crate::py_values::attr_with(
-                    obj,
-                    "ExchangeMessageAccept",
-                    "subprotocol",
-                    |v| {
-                        if v.is_none() {
-                            Ok(None)
-                        } else {
-                            (v.extract::<::std::string::String>()).map(Some)
-                        }
-                    },
-                )?,
-                headers: crate::py_values::attr_with(
-                    obj,
-                    "ExchangeMessageAccept",
-                    "headers",
-                    |v| {
-                        if v.is_instance_of::<::pyo3::types::PyList>()
-                            || v.is_instance_of::<::pyo3::types::PyTuple>()
-                        {
-                            v.try_iter()?
-                                .map(|item| {
-                                    let item = &item?;
-                                    (|| -> ::pyo3::PyResult<_> {
-                                        let tuple = item.cast::<::pyo3::types::PyTuple>()?;
-                                        if tuple.len() != 2 {
-                                            return Err(::pyo3::exceptions::PyTypeError::new_err(
-                                                format!(
-                                                    "{}: expected a tuple of 2 items",
-                                                    "ExchangeMessageAccept.headers"
-                                                ),
-                                            ));
-                                        }
-                                        let item_0 = tuple.get_item(0)?;
-                                        let item_1 = tuple.get_item(1)?;
-                                        Ok((
-                                            (if item_0.is_instance_of::<::pyo3::types::PyBytes>()
-                                                || item_0
-                                                    .is_instance_of::<::pyo3::types::PyByteArray>()
-                                                || item_0
-                                                    .is_instance_of::<::pyo3::types::PyMemoryView>()
-                                            {
-                                                crate::py_values::owned_bytes(
-                                                    item_0.as_any(),
-                                                    "ExchangeMessageAccept.headers",
-                                                )
-                                            } else {
-                                                item_0.try_iter().and_then(|items| {
-                                                    items
-                                                        .map(|item| {
-                                                            let item = item?;
-                                                            crate::py_values::number_from_py::<u8>(
-                                                                item.as_any(),
-                                                                "ExchangeMessageAccept.headers",
-                                                            )
-                                                        })
-                                                        .collect::<PyResult<Vec<_>>>()
-                                                })
-                                            })?,
-                                            (if item_1.is_instance_of::<::pyo3::types::PyBytes>()
-                                                || item_1
-                                                    .is_instance_of::<::pyo3::types::PyByteArray>()
-                                                || item_1
-                                                    .is_instance_of::<::pyo3::types::PyMemoryView>()
-                                            {
-                                                crate::py_values::owned_bytes(
-                                                    item_1.as_any(),
-                                                    "ExchangeMessageAccept.headers",
-                                                )
-                                            } else {
-                                                item_1.try_iter().and_then(|items| {
-                                                    items
-                                                        .map(|item| {
-                                                            let item = item?;
-                                                            crate::py_values::number_from_py::<u8>(
-                                                                item.as_any(),
-                                                                "ExchangeMessageAccept.headers",
-                                                            )
-                                                        })
-                                                        .collect::<PyResult<Vec<_>>>()
-                                                })
-                                            })?,
-                                        ))
-                                    })()
-                                })
-                                .collect::<PyResult<Vec<_>>>()
-                        } else {
-                            Err(::pyo3::exceptions::PyTypeError::new_err(
-                                "ExchangeMessageAccept.headers: expected a list or tuple",
-                            ))
-                        }
-                    },
-                )?,
-            });
-        }
-        if obj.is_instance(EXCHANGE_MESSAGE_TEXT.import(
-            py,
-            "livekit.agents._generated.worker_endpoint",
-            "ExchangeMessageText",
-        )?)? {
-            return Ok(::lk_agents_abi::worker::http::ExchangeMessage::Text {
-                text: crate::py_values::attr_with(obj, "ExchangeMessageText", "text", |v| {
-                    v.extract::<::std::string::String>()
-                })?,
-            });
-        }
-        if obj.is_instance(EXCHANGE_MESSAGE_BINARY.import(
-            py,
-            "livekit.agents._generated.worker_endpoint",
-            "ExchangeMessageBinary",
-        )?)? {
-            return Ok(::lk_agents_abi::worker::http::ExchangeMessage::Binary {
-                data: crate::py_values::attr_with(obj, "ExchangeMessageBinary", "data", |v| {
-                    if v.is_instance_of::<::pyo3::types::PyBytes>()
-                        || v.is_instance_of::<::pyo3::types::PyByteArray>()
-                        || v.is_instance_of::<::pyo3::types::PyMemoryView>()
-                    {
-                        crate::py_values::owned_bytes(v.as_any(), "ExchangeMessageBinary.data")
-                    } else {
-                        v.try_iter().and_then(|items| {
-                            items
-                                .map(|item| {
-                                    let item = item?;
-                                    crate::py_values::number_from_py::<u8>(
-                                        item.as_any(),
-                                        "ExchangeMessageBinary.data",
-                                    )
-                                })
-                                .collect::<PyResult<Vec<_>>>()
-                        })
+                    None => ::std::default::Default::default(),
+                },
+                more: match item("more_body")?.filter(|v| !v.is_none()) {
+                    Some(v) => {
+                        let v = &v;
+                        (v.extract::<bool>())?
                     }
-                })?,
-            });
-        }
-        if obj.is_instance(EXCHANGE_MESSAGE_CLOSE.import(
-            py,
-            "livekit.agents._generated.worker_endpoint",
-            "ExchangeMessageClose",
-        )?)? {
-            return Ok(::lk_agents_abi::worker::http::ExchangeMessage::Close {
-                code: crate::py_values::attr_with(obj, "ExchangeMessageClose", "code", |v| {
-                    crate::py_values::number_from_py::<u16>(v, "ExchangeMessageClose.code")
-                })?,
-                reason: crate::py_values::attr_with(obj, "ExchangeMessageClose", "reason", |v| {
-                    v.extract::<::std::string::String>()
-                })?,
-            });
-        }
-        Err(super::not_a(
-            obj,
-            "ExchangeMessageStart | ExchangeMessageBody | ExchangeMessageAccept | ExchangeMessageText | ExchangeMessageBinary | ExchangeMessageClose",
-        ))
+                    None => ::std::default::Default::default(),
+                },
+            },
+            "http.response.start" => {
+                ::lk_agents_abi::worker::http::ExchangeMessage::Start {
+                    status: match item("status")? {
+                        Some(v) => {
+                            let v = &v;
+                            (crate::py_values::number_from_py::<u16>(v, "ExchangeMessage.status"))?
+                        }
+                        None => {
+                            return Err(::pyo3::exceptions::PyKeyError::new_err(
+                                "ExchangeMessage.status",
+                            ));
+                        }
+                    },
+                    headers: match item("headers")?.filter(|v| !v.is_none()) {
+                        Some(v) => {
+                            let v = &v;
+                            (if v.is_instance_of::<::pyo3::types::PyList>()
+                                || v.is_instance_of::<::pyo3::types::PyTuple>()
+                            {
+                                v.try_iter()?.map(|item| { let item = &item?; (|| -> ::pyo3::PyResult<_> { let tuple = item.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "ExchangeMessage.headers"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((if item_0.is_instance_of::<::pyo3::types::PyBytes>() || item_0.is_instance_of::<::pyo3::types::PyByteArray>() || item_0.is_instance_of::<::pyo3::types::PyMemoryView>() { crate::py_values::owned_bytes(item_0.as_any(), "ExchangeMessage.headers") } else { item_0.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::py_values::number_from_py::<u8>(item.as_any(), "ExchangeMessage.headers") }).collect::<PyResult<Vec<_>>>()) })?, (if item_1.is_instance_of::<::pyo3::types::PyBytes>() || item_1.is_instance_of::<::pyo3::types::PyByteArray>() || item_1.is_instance_of::<::pyo3::types::PyMemoryView>() { crate::py_values::owned_bytes(item_1.as_any(), "ExchangeMessage.headers") } else { item_1.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::py_values::number_from_py::<u8>(item.as_any(), "ExchangeMessage.headers") }).collect::<PyResult<Vec<_>>>()) })?,)) })() }).collect::<PyResult<Vec<_>>>()
+                            } else {
+                                Err(::pyo3::exceptions::PyTypeError::new_err(
+                                    "ExchangeMessage.headers: expected a list or tuple",
+                                ))
+                            })?
+                        }
+                        None => ::std::default::Default::default(),
+                    },
+                }
+            }
+            "http.response.trailers" => ::lk_agents_abi::worker::http::ExchangeMessage::Trailers,
+            "websocket.accept" => {
+                ::lk_agents_abi::worker::http::ExchangeMessage::Accept {
+                    subprotocol: match item("subprotocol")? {
+                        Some(v) => {
+                            let v = &v;
+                            (if v.is_none() {
+                                Ok(None)
+                            } else {
+                                (v.extract::<::std::string::String>()).map(Some)
+                            })?
+                        }
+                        None => ::std::default::Default::default(),
+                    },
+                    headers: match item("headers")?.filter(|v| !v.is_none()) {
+                        Some(v) => {
+                            let v = &v;
+                            (if v.is_instance_of::<::pyo3::types::PyList>()
+                                || v.is_instance_of::<::pyo3::types::PyTuple>()
+                            {
+                                v.try_iter()?.map(|item| { let item = &item?; (|| -> ::pyo3::PyResult<_> { let tuple = item.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "ExchangeMessage.headers"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((if item_0.is_instance_of::<::pyo3::types::PyBytes>() || item_0.is_instance_of::<::pyo3::types::PyByteArray>() || item_0.is_instance_of::<::pyo3::types::PyMemoryView>() { crate::py_values::owned_bytes(item_0.as_any(), "ExchangeMessage.headers") } else { item_0.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::py_values::number_from_py::<u8>(item.as_any(), "ExchangeMessage.headers") }).collect::<PyResult<Vec<_>>>()) })?, (if item_1.is_instance_of::<::pyo3::types::PyBytes>() || item_1.is_instance_of::<::pyo3::types::PyByteArray>() || item_1.is_instance_of::<::pyo3::types::PyMemoryView>() { crate::py_values::owned_bytes(item_1.as_any(), "ExchangeMessage.headers") } else { item_1.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::py_values::number_from_py::<u8>(item.as_any(), "ExchangeMessage.headers") }).collect::<PyResult<Vec<_>>>()) })?,)) })() }).collect::<PyResult<Vec<_>>>()
+                            } else {
+                                Err(::pyo3::exceptions::PyTypeError::new_err(
+                                    "ExchangeMessage.headers: expected a list or tuple",
+                                ))
+                            })?
+                        }
+                        None => ::std::default::Default::default(),
+                    },
+                }
+            }
+            "websocket.close" => ::lk_agents_abi::worker::http::ExchangeMessage::Close {
+                code: match item("code")? {
+                    Some(v) => {
+                        let v = &v;
+                        (crate::py_values::number_from_py::<u16>(v, "ExchangeMessage.code"))?
+                    }
+                    None => 1000,
+                },
+                reason: match item("reason")?.filter(|v| !v.is_none()) {
+                    Some(v) => {
+                        let v = &v;
+                        (v.extract::<::std::string::String>())?
+                    }
+                    None => ::std::default::Default::default(),
+                },
+            },
+            "websocket.http.response.body" => {
+                ::lk_agents_abi::worker::http::ExchangeMessage::Body {
+                    data: match item("body")?.filter(|v| !v.is_none()) {
+                        Some(v) => {
+                            let v = &v;
+                            (if v.is_instance_of::<::pyo3::types::PyBytes>()
+                                || v.is_instance_of::<::pyo3::types::PyByteArray>()
+                                || v.is_instance_of::<::pyo3::types::PyMemoryView>()
+                            {
+                                crate::py_values::owned_bytes(v.as_any(), "ExchangeMessage.body")
+                            } else {
+                                v.try_iter().and_then(|items| {
+                                    items
+                                        .map(|item| {
+                                            let item = item?;
+                                            crate::py_values::number_from_py::<u8>(
+                                                item.as_any(),
+                                                "ExchangeMessage.body",
+                                            )
+                                        })
+                                        .collect::<PyResult<Vec<_>>>()
+                                })
+                            })?
+                        }
+                        None => ::std::default::Default::default(),
+                    },
+                    more: match item("more_body")?.filter(|v| !v.is_none()) {
+                        Some(v) => {
+                            let v = &v;
+                            (v.extract::<bool>())?
+                        }
+                        None => ::std::default::Default::default(),
+                    },
+                }
+            }
+            "websocket.http.response.start" => {
+                ::lk_agents_abi::worker::http::ExchangeMessage::Start {
+                    status: match item("status")? {
+                        Some(v) => {
+                            let v = &v;
+                            (crate::py_values::number_from_py::<u16>(v, "ExchangeMessage.status"))?
+                        }
+                        None => {
+                            return Err(::pyo3::exceptions::PyKeyError::new_err(
+                                "ExchangeMessage.status",
+                            ));
+                        }
+                    },
+                    headers: match item("headers")?.filter(|v| !v.is_none()) {
+                        Some(v) => {
+                            let v = &v;
+                            (if v.is_instance_of::<::pyo3::types::PyList>()
+                                || v.is_instance_of::<::pyo3::types::PyTuple>()
+                            {
+                                v.try_iter()?.map(|item| { let item = &item?; (|| -> ::pyo3::PyResult<_> { let tuple = item.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "ExchangeMessage.headers"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((if item_0.is_instance_of::<::pyo3::types::PyBytes>() || item_0.is_instance_of::<::pyo3::types::PyByteArray>() || item_0.is_instance_of::<::pyo3::types::PyMemoryView>() { crate::py_values::owned_bytes(item_0.as_any(), "ExchangeMessage.headers") } else { item_0.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::py_values::number_from_py::<u8>(item.as_any(), "ExchangeMessage.headers") }).collect::<PyResult<Vec<_>>>()) })?, (if item_1.is_instance_of::<::pyo3::types::PyBytes>() || item_1.is_instance_of::<::pyo3::types::PyByteArray>() || item_1.is_instance_of::<::pyo3::types::PyMemoryView>() { crate::py_values::owned_bytes(item_1.as_any(), "ExchangeMessage.headers") } else { item_1.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::py_values::number_from_py::<u8>(item.as_any(), "ExchangeMessage.headers") }).collect::<PyResult<Vec<_>>>()) })?,)) })() }).collect::<PyResult<Vec<_>>>()
+                            } else {
+                                Err(::pyo3::exceptions::PyTypeError::new_err(
+                                    "ExchangeMessage.headers: expected a list or tuple",
+                                ))
+                            })?
+                        }
+                        None => ::std::default::Default::default(),
+                    },
+                }
+            }
+            "websocket.send" => match (
+                item("text")?.is_some_and(|v| !v.is_none()),
+                item("bytes")?.is_some_and(|v| !v.is_none()),
+            ) {
+                (true, false) => ::lk_agents_abi::worker::http::ExchangeMessage::Text {
+                    text: match item("text")? {
+                        Some(v) => {
+                            let v = &v;
+                            (v.extract::<::std::string::String>())?
+                        }
+                        None => {
+                            return Err(::pyo3::exceptions::PyKeyError::new_err(
+                                "ExchangeMessage.text",
+                            ));
+                        }
+                    },
+                },
+                (false, true) => ::lk_agents_abi::worker::http::ExchangeMessage::Binary {
+                    data: match item("bytes")? {
+                        Some(v) => {
+                            let v = &v;
+                            (if v.is_instance_of::<::pyo3::types::PyBytes>()
+                                || v.is_instance_of::<::pyo3::types::PyByteArray>()
+                                || v.is_instance_of::<::pyo3::types::PyMemoryView>()
+                            {
+                                crate::py_values::owned_bytes(v.as_any(), "ExchangeMessage.bytes")
+                            } else {
+                                v.try_iter().and_then(|items| {
+                                    items
+                                        .map(|item| {
+                                            let item = item?;
+                                            crate::py_values::number_from_py::<u8>(
+                                                item.as_any(),
+                                                "ExchangeMessage.bytes",
+                                            )
+                                        })
+                                        .collect::<PyResult<Vec<_>>>()
+                                })
+                            })?
+                        }
+                        None => {
+                            return Err(::pyo3::exceptions::PyKeyError::new_err(
+                                "ExchangeMessage.bytes",
+                            ));
+                        }
+                    },
+                },
+                _ => {
+                    return Err(::pyo3::exceptions::PyValueError::new_err(
+                        "ExchangeMessage: websocket.send carries exactly one of text, bytes",
+                    ));
+                }
+            },
+            other => {
+                return Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                    "ExchangeMessage: unexpected type {other:?}"
+                )));
+            }
+        })
     }
 
     // Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
@@ -25248,151 +26206,10 @@ pub mod worker_ipc {
             Some(&kwargs),
         )
     }
-
-    // Declared in rust/crates/lk-agents-abi/src/worker/ipc_host.rs.
-
-    pub fn process_event_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::worker::ipc_host::ProcessEvent,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let value = match value {
-            ::lk_agents_abi::worker::ipc_host::ProcessEvent::Created => "process_created",
-            ::lk_agents_abi::worker::ipc_host::ProcessEvent::Started => "process_started",
-            ::lk_agents_abi::worker::ipc_host::ProcessEvent::Ready => "process_ready",
-            ::lk_agents_abi::worker::ipc_host::ProcessEvent::Closed => "process_closed",
-            ::lk_agents_abi::worker::ipc_host::ProcessEvent::JobLaunched => "process_job_launched",
-            ::lk_agents_abi::worker::ipc_host::ProcessEvent::CleanupIncomplete => {
-                "process_cleanup_incomplete"
-            }
-            ::lk_agents_abi::worker::ipc_host::ProcessEvent::JoinFailed => "process_join_failed",
-            ::lk_agents_abi::worker::ipc_host::ProcessEvent::ExitFailed => "process_exit_failed",
-        };
-        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
-    }
 }
 
 pub mod worker_options {
     use pyo3::prelude::*;
-
-    // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
-    static WORKER_PERMISSIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn worker_permissions_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::worker::types::WorkerPermissions> {
-        let py = obj.py();
-        if !obj.is_instance(WORKER_PERMISSIONS.import(
-            py,
-            "livekit.agents._generated.worker_options",
-            "WorkerPermissions",
-        )?)? {
-            return Err(super::not_a(obj, "WorkerPermissions"));
-        }
-        Ok(::lk_agents_abi::worker::types::WorkerPermissions {
-            can_publish: crate::py_values::attr_with(
-                obj,
-                "WorkerPermissions",
-                "can_publish",
-                |v| v.extract::<bool>(),
-            )?,
-            can_subscribe: crate::py_values::attr_with(
-                obj,
-                "WorkerPermissions",
-                "can_subscribe",
-                |v| v.extract::<bool>(),
-            )?,
-            can_publish_data: crate::py_values::attr_with(
-                obj,
-                "WorkerPermissions",
-                "can_publish_data",
-                |v| v.extract::<bool>(),
-            )?,
-            can_update_metadata: crate::py_values::attr_with(
-                obj,
-                "WorkerPermissions",
-                "can_update_metadata",
-                |v| v.extract::<bool>(),
-            )?,
-            can_publish_sources: crate::py_values::attr_with(
-                obj,
-                "WorkerPermissions",
-                "can_publish_sources",
-                |v| {
-                    if v.is_instance_of::<::pyo3::types::PyList>()
-                        || v.is_instance_of::<::pyo3::types::PyTuple>()
-                    {
-                        v.try_iter()?
-                            .map(|item| {
-                                let item = &item?;
-                                crate::py_values::number_from_py::<i32>(
-                                    item,
-                                    "WorkerPermissions.can_publish_sources",
-                                )
-                            })
-                            .collect::<PyResult<Vec<_>>>()
-                    } else {
-                        Err(::pyo3::exceptions::PyTypeError::new_err(
-                            "WorkerPermissions.can_publish_sources: expected a list or tuple",
-                        ))
-                    }
-                },
-            )?,
-            hidden: crate::py_values::attr_with(obj, "WorkerPermissions", "hidden", |v| {
-                v.extract::<bool>()
-            })?,
-        })
-    }
-
-    pub fn worker_permissions_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::worker::types::WorkerPermissions,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::worker::types::WorkerPermissions {
-            can_publish,
-            can_subscribe,
-            can_publish_data,
-            can_update_metadata,
-            can_publish_sources,
-            hidden,
-        } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item(
-            "can_publish",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(can_publish, py)?,
-        )?;
-        kwargs.set_item(
-            "can_subscribe",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(can_subscribe, py)?,
-        )?;
-        kwargs.set_item(
-            "can_publish_data",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(can_publish_data, py)?,
-        )?;
-        kwargs.set_item(
-            "can_update_metadata",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(can_update_metadata, py)?,
-        )?;
-        kwargs.set_item(
-            "can_publish_sources",
-            ::pyo3::types::PyList::new(
-                py,
-                can_publish_sources
-                    .into_iter()
-                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
-                    .collect::<PyResult<Vec<_>>>()?,
-            )?
-            .into_any(),
-        )?;
-        kwargs.set_item("hidden", ::pyo3::IntoPyObjectExt::into_bound_py_any(hidden, py)?)?;
-        crate::py_calls::call(
-            WORKER_PERMISSIONS
-                .import(py, "livekit.agents._generated.worker_options", "WorkerPermissions")?
-                .as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
 
     // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
 
@@ -25858,14 +26675,6 @@ pub mod worker_options {
                         .map(::lk_agents_abi::Maybe::Given)
                 }
             })?,
-            permissions: crate::py_values::attr_with(obj, "ProcessOptions", "permissions", |v| {
-                if crate::py_values::is_not_given(v)? {
-                    Ok(::lk_agents_abi::Maybe::NotGiven)
-                } else {
-                    (crate::generated::records::worker_options::worker_permissions_from_py(v))
-                        .map(::lk_agents_abi::Maybe::Given)
-                }
-            })?,
             http_proxy: crate::py_values::attr_with(obj, "ProcessOptions", "http_proxy", |v| {
                 if crate::py_values::is_not_given(v)? {
                     Ok(::lk_agents_abi::Maybe::NotGiven)
@@ -25954,6 +26763,19 @@ pub mod worker_options {
                     }
                 },
             )?,
+            ping_timeout: crate::py_values::attr_with(
+                obj,
+                "ProcessOptions",
+                "ping_timeout",
+                |v| {
+                    if crate::py_values::is_not_given(v)? {
+                        Ok(::lk_agents_abi::Maybe::NotGiven)
+                    } else {
+                        (crate::py_values::number_from_py::<f64>(v, "ProcessOptions.ping_timeout"))
+                            .map(::lk_agents_abi::Maybe::Given)
+                    }
+                },
+            )?,
         })
     }
 
@@ -25963,13 +26785,13 @@ pub mod worker_options {
     ) -> PyResult<Bound<'py, PyAny>> {
         let ::lk_agents_abi::worker::types::ProcessOptions {
             max_retry,
-            permissions,
             http_proxy,
             job_executor_type,
             multiprocessing_context,
             shutdown_process_timeout,
             session_end_timeout,
             initialize_process_timeout,
+            ping_timeout,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item(
@@ -25978,15 +26800,6 @@ pub mod worker_options {
                 ::lk_agents_abi::Maybe::NotGiven => crate::py_values::not_given(py)?,
                 ::lk_agents_abi::Maybe::Given(x) => {
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?
-                }
-            },
-        )?;
-        kwargs.set_item(
-            "permissions",
-            match permissions {
-                ::lk_agents_abi::Maybe::NotGiven => crate::py_values::not_given(py)?,
-                ::lk_agents_abi::Maybe::Given(x) => {
-                    crate::generated::records::worker_options::worker_permissions_to_py(py, x)?
                 }
             },
         )?;
@@ -26045,6 +26858,15 @@ pub mod worker_options {
                 }
             },
         )?;
+        kwargs.set_item(
+            "ping_timeout",
+            match ping_timeout {
+                ::lk_agents_abi::Maybe::NotGiven => crate::py_values::not_given(py)?,
+                ::lk_agents_abi::Maybe::Given(x) => {
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?
+                }
+            },
+        )?;
         crate::py_calls::call(
             PROCESS_OPTIONS
                 .import(py, "livekit.agents._generated.worker_options", "ProcessOptions")?
@@ -26059,64 +26881,6 @@ pub mod worker_server {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
-    static PROCESS_POOL_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn process_pool_options_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::worker::types::ProcessPoolOptions,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::worker::types::ProcessPoolOptions {
-            num_idle_processes,
-            initialize_timeout,
-            close_timeout,
-            session_end_timeout,
-            memory_warn_mb,
-            memory_limit_mb,
-            http_proxy,
-        } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item(
-            "num_idle_processes",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(num_idle_processes, py)?,
-        )?;
-        kwargs.set_item(
-            "initialize_timeout",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(initialize_timeout, py)?,
-        )?;
-        kwargs.set_item(
-            "close_timeout",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(close_timeout, py)?,
-        )?;
-        kwargs.set_item(
-            "session_end_timeout",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(session_end_timeout, py)?,
-        )?;
-        kwargs.set_item(
-            "memory_warn_mb",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(memory_warn_mb, py)?,
-        )?;
-        kwargs.set_item(
-            "memory_limit_mb",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(memory_limit_mb, py)?,
-        )?;
-        kwargs.set_item(
-            "http_proxy",
-            match http_proxy {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        crate::py_calls::call(
-            PROCESS_POOL_OPTIONS
-                .import(py, "livekit.agents._generated.worker_server", "ProcessPoolOptions")?
-                .as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
     static PROCESS_START_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -26125,15 +26889,12 @@ pub mod worker_server {
         value: ::lk_agents_abi::worker::types::ProcessStartOptions,
     ) -> PyResult<Bound<'py, PyAny>> {
         let ::lk_agents_abi::worker::types::ProcessStartOptions {
-            devmode,
             job_processes,
             env,
-            job_executor_type,
             multiprocessing_context,
-            pool,
+            session_end_timeout,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("devmode", ::pyo3::IntoPyObjectExt::into_bound_py_any(devmode, py)?)?;
         kwargs.set_item(
             "job_processes",
             ::pyo3::IntoPyObjectExt::into_bound_py_any(job_processes, py)?,
@@ -26161,10 +26922,6 @@ pub mod worker_server {
             .into_any(),
         )?;
         kwargs.set_item(
-            "job_executor_type",
-            crate::generated::records::job_records::job_executor_type_to_py(py, job_executor_type)?,
-        )?;
-        kwargs.set_item(
             "multiprocessing_context",
             crate::generated::records::worker_options::multiprocessing_context_to_py(
                 py,
@@ -26172,8 +26929,8 @@ pub mod worker_server {
             )?,
         )?;
         kwargs.set_item(
-            "pool",
-            crate::generated::records::worker_server::process_pool_options_to_py(py, pool)?,
+            "session_end_timeout",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(session_end_timeout, py)?,
         )?;
         crate::py_calls::call(
             PROCESS_START_OPTIONS

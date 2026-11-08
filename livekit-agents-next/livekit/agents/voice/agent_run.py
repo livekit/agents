@@ -11,7 +11,7 @@ import inspect
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, get_type_hints
+from typing import TYPE_CHECKING, Any, Generic, get_type_hints
 
 from pydantic import TypeAdapter, ValidationError
 from pydantic_core import PydanticSerializationError, to_jsonable_python
@@ -28,19 +28,13 @@ from .._generated.agent_run import (
     OutputSpec,
     OutputSpecStructured,
     OutputSpecText,
-    OutputText,
-    OutputValidated,
     PreparedArguments,
     ReadBack,
     ReadBackAnswer,
     ReadBackAnswerInputRequired,
     ReadBackAnswerQuestion,
-    RunOutcomeCompleted,
-    RunOutcomeInputRequired,
-    RunOutcomeNoOutput,
-    RunQuestion,
+    RunFinished,
     RunRequest,
-    RunSettled,
     SerializedOutput,
     ToolTemplate,
     ToolTemplateKey,
@@ -52,6 +46,7 @@ from .._generated.agent_run import (
 from .._generated.run_result import Output_T
 from .._generated.text_session import FrameId
 from .._generated.tool_report import (
+    ToolCompletion,
     ToolOutcomeCancelled,
     ToolOutcomeInternal,
     ToolOutcomeInvalid,
@@ -94,13 +89,7 @@ from ..types import APIConnectOptions
 from . import _BindingContextVar, _VoiceBinding
 from .events import Context_T, RunContext
 from .io import SpeechHandle
-from .run_result import (
-    RunCompleted,
-    RunInputRequired,
-    RunNoOutput,
-    RunResult,
-    _tool_body,
-)
+from .run_result import RunResult, _tool_body
 
 if TYPE_CHECKING:
     from ..llm.tool_context import Tool, ToolHandlingOptions, Toolset
@@ -148,7 +137,6 @@ def door_hooks() -> RunHooks | None:
 
 
 _HooksToken = tuple[contextvars.Token[RunHooks | None], contextvars.Token[Any]]
-_R = TypeVar("_R")
 
 
 def set_run_hooks(hooks: RunHooks | None) -> _HooksToken:
@@ -322,34 +310,12 @@ async def start_run(
     return run
 
 
-def settled_result(settled: RunSettled, hooks: RunHooks | None) -> RunResult[Any]:
-    """The settled invocation as the caller's ``RunResult``, a text run's or a voice run's."""
-
-    result = settled.result
-    if result.interrupted and hooks is not None:
+def settled_result(finished: RunFinished, hooks: RunHooks | None) -> RunResult[Any]:
+    """The caller's ``RunResult``, a text run's or a voice run's; a turn that yielded marks its
+    hooks."""
+    if finished.interrupted and hooks is not None:
         hooks.interrupted = True
-
-    def branch(cls: Callable[..., _R], **own: Any) -> _R:
-        return cls(
-            _new_messages=list(result.new_messages),
-            _all_messages=list(result.all_messages),
-            usage=result.usage,
-            verbatim=result.verbatim,
-            _pending_call=result.pending_call,
-            input_requirements=list(result.input_requirements),
-            **own,
-        )
-
-    match result.outcome:
-        case RunOutcomeInputRequired(question=RunQuestion(question=question)):
-            return branch(RunInputRequired, question=question)
-        case RunOutcomeCompleted(output=OutputText(text=text)):
-            return branch(RunCompleted, output=text)
-        case RunOutcomeCompleted(output=OutputValidated()):
-            return branch(RunCompleted, output=settled.output)
-        case RunOutcomeNoOutput():
-            return branch(RunNoOutput)
-    raise AssertionError(f"unsupported run outcome: {result.outcome!r}")
+    return finished.result
 
 
 def tool_infos(tools: ToolContext) -> list[FunctionToolInfo]:
@@ -498,9 +464,7 @@ class AgentCallbacks:
         async with self._operation(invocation):
             return await render_read_back(prepared)
 
-    async def run_tool(
-        self, invocation: Invocation, prepared: _Prepared
-    ) -> tuple[ToolReport, dict[str, Any]]:
+    async def run_tool(self, invocation: Invocation, prepared: _Prepared) -> ToolCompletion:
         """Runs the body, sync or async, and classifies what it returned or raised."""
         async with self._operation(invocation) as binding:
             prepared.ctx._function_call = _function_call(invocation)
@@ -518,11 +482,11 @@ class AgentCallbacks:
                 if inspect.isawaitable(output):
                     output = await output
             except asyncio.CancelledError:
-                return ToolReport(outcome=ToolOutcomeCancelled()), prepared.ctx.function_call.extra
+                report = ToolReport(outcome=ToolOutcomeCancelled())
+                return ToolCompletion(report=report, extra=prepared.ctx.function_call.extra)
             except Exception as e:
-                return _classified(prepared.ctx.function_call, None, e), (
-                    prepared.ctx.function_call.extra
-                )
+                report = _classified(prepared.ctx.function_call, None, e)
+                return ToolCompletion(report=report, extra=prepared.ctx.function_call.extra)
             finally:
                 self._bodies.pop(key, None)
             report = _classified(prepared.ctx.function_call, output, None)
@@ -530,7 +494,7 @@ class AgentCallbacks:
                 report = dataclasses.replace(report, transition=output.value)
             elif isinstance(output, Failed):
                 report = dataclasses.replace(report, transition=output)
-            return report, prepared.ctx.function_call.extra
+            return ToolCompletion(report=report, extra=prepared.ctx.function_call.extra)
 
     async def validate_tool_completion(
         self, invocation: Invocation, prepared: _Prepared, report: ToolReport
@@ -775,7 +739,7 @@ def _template_tools(agent: Agent[Any, Any], binding: object) -> list[Tool | Tool
 def _classified(call: FunctionCall, output: Any, exc: BaseException | None) -> ToolReport:
     """What the body returned or raised, classified; an internal error or an invalid output is
     logged."""
-    report = tool_report(output, exc)
+    report = tool_report(exc if exc is not None else output)
     if isinstance(report.outcome, ToolOutcomeInternal):
         logger.error(
             "exception occurred while executing a tool",

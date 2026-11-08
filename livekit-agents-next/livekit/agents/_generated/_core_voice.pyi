@@ -5,13 +5,14 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, Mapping, Sequence
+from collections.abc import AsyncIterable, Awaitable, Callable, Mapping, Sequence
 from datetime import date
 from typing import Any, Literal, Self
 
 from livekit.agents import VAD
 from livekit.agents._generated.expressive import ExpressiveOptions
 from livekit.agents.beta.workflows import _TransferHost
+from livekit.agents.inference import TurnDetector
 from livekit.agents.job import JobContext
 from livekit.agents.llm import LLM
 from livekit.agents.llm.tool_context import ToolChoice
@@ -20,17 +21,18 @@ from livekit.agents.tts import TTS
 from livekit.agents.voice._session_bindings import SessionHost
 from livekit.agents.voice.agent_session import _SessionNodes
 from livekit.agents.voice.avatar import AudioReceiver, AvatarSession, VideoGenerator
-from livekit.agents.voice.io import (
-    AudioInput,
-    AudioOutput,
-    TextOutput,
-    VideoInput,
-    _StreamingTurnDetector,
-)
+from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput
 from livekit.agents.voice.room_io import RemoteParticipant, TrackPublication
-from livekit.rtc import Room, VideoFrame
+from livekit.rtc import Room, RpcInterceptor, VideoFrame
 
-from .._core import SessionRecorder, Storage, VoiceAgent, _core_ContextActivation, _core_VoiceStore
+from .._core import (
+    JobRun,
+    SessionRecorder,
+    Storage,
+    VoiceAgent,
+    _core_ContextActivation,
+    _core_VoiceStore,
+)
 from ..types import NotGivenOr
 from .agent_nodes import NodeFrame
 from .amd import AMDConfig, AMDPredictionEvent
@@ -39,13 +41,15 @@ from .avatar_options import AvatarOptions
 from .avatar_queue import QueueEffects
 from .background_audio_wire import Sound
 from .chat_items import ChatContent, ChatItem
-from .connect import APIConnectOptions
+from .connect import APIConnectOptions, SessionConnectOptions
 from .events import AgentState, UserState
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
 from .llm import ChatChunk
 from .metrics import AvatarMetrics
 from .playback_events import PlaybackFinishedEvent
+from .room_runtime import TrackPublished
 from .rtc_frames import AudioFrame
+from .rtc_rpc import RpcCallInfo, RpcInvocationData
 from .rtc_wire import PlaybackInfo
 from .session_options import (
     InterruptionGateVerdict,
@@ -86,6 +90,15 @@ def amd_prediction_is_human(prediction: AMDPredictionEvent) -> bool:
 
 def amd_prediction_is_machine(prediction: AMDPredictionEvent) -> bool:
     """`AMDPredictionEvent.is_machine`."""
+
+class HostAudioReceiver:
+    """The avatar runner's receiver over a host `AudioReceiver`: its audio read from `audio` when
+    given (`QueueAudioOutput`'s native queue), else from the host's iterator into a queue that
+    drops its oldest audio only when far behind (measured) and is flushed by each `clear_buffer`. Playback reports reach the host receiver.
+    """
+    def __new__(cls, receiver: AudioReceiver, *, audio: _core_QueueAudio | None = None) -> Self: ...
+    def clear_buffer(self) -> None:
+        """The host receiver's `clear_buffer` event: the audio queued so far is dropped."""
 
 class DataStreamAudioOutput:
     """The agent's native audio sink, sending one byte stream per avatar speech segment."""
@@ -134,7 +147,7 @@ class AvatarRunner:
         cls,
         room: _core_RoomSession,
         *,
-        receiver: AudioReceiver,
+        receiver: DataStreamAudioReceiver | HostAudioReceiver,
         generator: VideoGenerator,
         options: AvatarOptions,
         queue_size_ms: int,
@@ -144,7 +157,6 @@ class AvatarRunner:
     def av_sync(self) -> AVSynchronizer: ...
     async def start(self) -> None: ...
     async def wait_for_complete(self) -> None: ...
-    def clear_buffer(self, epoch: int) -> None: ...
     async def aclose(self) -> None: ...
 
 class _core_AvatarLifecycle:
@@ -176,9 +188,10 @@ class _core_AvatarLifecycle:
         """
 
 class _core_QueueAudio:
+    """`QueueAudioOutput`'s queue. Its clears advance the epoch captured audio is stamped with."""
     def __new__(cls, wait_playback_start: bool) -> Self: ...
     def check_open(self) -> None: ...
-    def capture(self, frame: AudioFrame, segment: PlaybackSegment, epoch: int) -> QueueEffects: ...
+    def capture(self, frame: AudioFrame, segment: PlaybackSegment) -> QueueEffects: ...
     def flush(self) -> None: ...
     def clear(self) -> QueueEffects: ...
     def playback_finished(
@@ -438,11 +451,29 @@ class _core_RoomRpcRouter:
     """Private room-adapter service; unrelated rooms never share mutable RPC routes."""
     def __new__(cls) -> Self: ...
 
+class _core_RpcTracing(RpcInterceptor):
+    """The job's `rtc.RpcInterceptor`, added to its local participant once the room connected: an
+    `rpc_call` span around each call the participant performs, under the caller's span, and an
+    `rpc_handler` span around each call it handles, under the job's primary session. What the
+    chain returns or raises reaches the caller unchanged.
+    """
+    def __new__(cls, job: JobRun) -> Self: ...
+    async def intercept_outgoing(
+        self,
+        call: RpcCallInfo,
+        next: Callable[[RpcCallInfo], Awaitable[str]],
+    ) -> str: ...
+    async def intercept_incoming(
+        self,
+        invocation: RpcInvocationData,
+        next: Callable[[RpcInvocationData], Awaitable[str | None]],
+    ) -> str | None: ...
+
 class SessionOptions:
     """`AgentSession(**kwargs)`'s options before the session holds them: the raw kwargs, read once,
     and the session layer they became (plus every `update_options` so far).
     """
-    def __new__(cls, kwargs: SessionKwargs) -> Self: ...
+    def __new__(cls, kwargs: SessionKwargs, conn_options: SessionConnectOptions) -> Self: ...
     def update(self, update: UpdateKwargs) -> None:
         """`update_options(..)` before the session runs, on the same `merge` the driver uses."""
     def override_options(self, update: UpdateKwargs) -> int:
@@ -890,7 +921,7 @@ class _core_SessionOwner:
         stt: NotGivenOr[object | None] = ...,
         tts: NotGivenOr[object | None] = ...,
         vad: NotGivenOr[object | None] = ...,
-        turn_detection: NotGivenOr[TurnDetectionMode | _StreamingTurnDetector | None] = ...,
+        turn_detection: NotGivenOr[TurnDetectionMode | TurnDetector | None] = ...,
         endpointing_opts: NotGivenOr[EndpointingOptions] = ...,
         interruption: NotGivenOr[InterruptionOptions] = ...,
         min_consecutive_speech_delay: NotGivenOr[float] = ...,
@@ -910,7 +941,7 @@ class _core_SessionOwner:
         stt: NotGivenOr[object | None] = ...,
         tts: NotGivenOr[object | None] = ...,
         vad: NotGivenOr[object | None] = ...,
-        turn_detection: NotGivenOr[TurnDetectionMode | _StreamingTurnDetector | None] = ...,
+        turn_detection: NotGivenOr[TurnDetectionMode | TurnDetector | None] = ...,
         endpointing_opts: NotGivenOr[EndpointingOptions] = ...,
         interruption: NotGivenOr[InterruptionOptions] = ...,
         min_consecutive_speech_delay: NotGivenOr[float] = ...,
@@ -1171,9 +1202,6 @@ class _core_RoomSession:
 
 def _core_create_room_session(room: Room | None) -> _core_RoomSession: ...
 
-async def wait_avatar_join(room: _core_RoomSession, identity: str) -> tuple[float, float]:
-    """Wait for the supplied room's connection, avatar participant and subscribed video track."""
-
 async def wait_for_participant(
     room: _core_RoomSession,
     identity: str | None,
@@ -1189,7 +1217,7 @@ async def wait_for_track_publication(
     kinds: Sequence[int] | None,
     include_local: bool,
     subscribed: bool,
-) -> tuple[str | None, str]: ...
+) -> TrackPublished: ...
 
 class NodeText:
     async def recv(self) -> str | None: ...

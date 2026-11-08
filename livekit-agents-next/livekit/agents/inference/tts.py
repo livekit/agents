@@ -83,6 +83,19 @@ class TTS(_facades.TTS, tts.TTS):
             sample_rate=sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE,
             num_channels=1,
         )
+        self._native = _core.InferenceTts(
+            self._model,
+            base_url=self._base_url,
+            api_key=self._api_key,
+            api_secret=self._api_secret,
+            conn_options=self._conn_options,
+            voice=self._voice,
+            language=self._language,
+            encoding=self._encoding,
+            sample_rate=self._sample_rate,
+            extra_kwargs=self._extra_kwargs,
+            fallback=self._fallback,
+        )
 
     class Markup(tts.TTS.Markup):
         def _provider_key(self) -> str:

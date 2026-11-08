@@ -100,6 +100,16 @@ class AgentConfiguration(TypedDict):
     retries: Retries
 
 
+@dataclass(kw_only=True, slots=True)
+class Registered:
+    """A callback's registration: its `token`, and the one it replaced (`retired`), an `on_enter` or
+    `on_exit` registered again.
+    """
+
+    token: int
+    retired: int | None
+
+
 AgentRetries.__module__ = "livekit.agents.voice"
 ModelSettings.__annotations__ = get_annotations(ModelSettings, eval_str=True)
 ModelSettings.__module__ = "livekit.agents.voice"

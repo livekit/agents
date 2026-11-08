@@ -2,6 +2,7 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
+#     rust/crates/lk-agents-abi/src/agent/mod.rs
 #     rust/crates/lk-agents-abi/src/llm/tool_executor.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -11,6 +12,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
+
+from pydantic import JsonValue
+
+from livekit.agents._generated.function_tools import InputRequired
+from livekit.agents._generated.tool_errors import ModelRetry, StopResponse, ToolError
+from livekit.agents._generated.tool_outcomes import Failed, Rejected, ToolResult, Working
+from livekit.agents.llm.tool_context import Completed
+
+
+@dataclass
+class ToolCompletion:
+    """What a tool's run reports: its outcome, and the call's `extra` as the body left it."""
+
+    report: ToolReport
+    extra: dict[str, JsonValue]
 
 
 @dataclass(kw_only=True, slots=True)
@@ -135,6 +151,35 @@ or ran on the person's answer. Marked on the call for the next to read.
 
 
 @dataclass(kw_only=True, slots=True)
+class CompletedReturn:
+    """`Completed(value, verbatim=)`."""
+
+    value: object
+    verbatim: bool
+
+
+@dataclass(kw_only=True, slots=True)
+class InputRequiredReturn:
+    """`InputRequired(question, tool=, verbatim=)`: `tool` the name of the tool taking the answer."""
+
+    question: str
+    verbatim: bool
+    tool: str | None
+
+
+@dataclass(kw_only=True, slots=True)
+class ToolResultReturn:
+    """`ToolResult(output, reply_required=, verbatim=)`; `_more` is what a delegate's verbatim
+    result carries for the model alone.
+    """
+
+    output: object
+    reply_required: bool
+    verbatim: bool
+    _more: str | None
+
+
+@dataclass(kw_only=True, slots=True)
 class ToolReport:
     """The host's report of one run: its outcome."""
 
@@ -143,3 +188,23 @@ class ToolReport:
     """For a `Completed` from a VoiceTask's tool, the value the host validated, which ends the
     task.
     """
+
+
+ToolReturn: TypeAlias = (
+    ToolReport
+    | ToolError
+    | ModelRetry
+    | StopResponse
+    | BaseException
+    | Completed
+    | Failed
+    | Rejected
+    | InputRequired
+    | Working
+    | ToolResult
+    | object
+    | None
+)
+"""What a tool's body returned, or the exception it raised, told apart by its class;
+[`ToolReports::tool_report`] classifies it into a [`ToolOutcome`].
+"""

@@ -540,9 +540,9 @@ fn provider_proxies_read_once_bind_and_pull_host_streams() {
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     for want in [
         "let v = crate::py_calls::read(obj, \"_core_label\")?;",
-        "None => crate::py_calls::capture_context(obj.py())?,",
+        "None => crate::py_calls::proxy_context(obj.py()),",
         "fn label(&self) -> ::std::string::String {\n        ::std::clone::Clone::clone(&self.label)",
-        "\"Callbacks.count\", &self.context, &[], cx, ::std::boxed::Box::new(move |py| {",
+        "\"Callbacks.count\", &crate::py_calls::calling_context(&self.context), &[], cx, ::std::boxed::Box::new(move |py| {",
         "Some(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }))",
         "if let Some(bound) = bound {\n                    args.push(",
         "crate::py_streams::HostStream::open(py, o, context, |o| crate::generated::records::llm::chat_chunk_from_py(o.as_any())",
@@ -684,9 +684,9 @@ fn a_returned_proxy_runs_in_the_context_of_the_call_that_returned_it() {
     let out = crate::adapter::emit(&decls).expect("emits");
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     assert!(
-        llm.contains("let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();")
+        llm.contains("let context = ::lk_agents_abi::agent::HostContext::host_context(&crate::py_calls::calling_context(&self.context)).cloned();")
             && llm.contains("super::llm::SessionProxy::in_context(o.as_any(), context)")
-            && llm.contains("Some(context) => ::std::clone::Clone::clone(context),"),
+            && llm.contains("Some(context) => Some(::std::clone::Clone::clone(context)),"),
         "{llm}"
     );
 }
@@ -1015,7 +1015,7 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
     // the context its call ran in: the reply is read off the host loop, where none is running.
     assert!(
         llm.contains("-> ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::llm::class::Callbacks>")
-            && llm.contains("let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();")
+            && llm.contains("let context = ::lk_agents_abi::agent::HostContext::host_context(&crate::py_calls::calling_context(&self.context)).cloned();")
             && llm.contains("super::llm::CallbacksProxy::owned_in_context(o.as_any(), context)")
             && !llm.contains("CallbacksProxy::owned(o.as_any()"),
         "{llm}"
@@ -1191,7 +1191,7 @@ fn a_declared_proxy_is_handed_back_as_its_host_object() {
             && llm.contains(
                 "Some(x) => super::llm::NoiseProxy::to_host(py, ::std::sync::Arc::clone(&x))?"
             )
-            && llm.contains("let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();"),
+            && llm.contains("let context = ::lk_agents_abi::agent::HostContext::host_context(&crate::py_calls::calling_context(&self.context)).cloned();"),
         "{llm}"
     );
     let not_any = read(

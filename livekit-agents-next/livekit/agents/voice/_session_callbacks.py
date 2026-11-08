@@ -29,10 +29,10 @@ from .._generated.session_wire import (
     RunFinishedWire,
     RunRefusedWire,
     SessionErrorWire,
-    SpeechCreatedWire,
     TextInputWire,
     ToolExecutionUpdatedWire,
 )
+from .._generated.user_turn import CompletedUserTurn
 from .._generated.voice_session import VoiceCommandOrigin, VoiceCommandOriginHook
 from ..job import get_job_context
 from ..llm import (
@@ -59,7 +59,6 @@ from .events import (
     EventTypes,
     FunctionToolsExecutedEvent,
     RunContext,
-    SpeechCreatedEvent,
     ToolExecutionUpdatedEvent,
     UserTurnExceededEvent,
     event_dict,
@@ -68,7 +67,7 @@ from .io import SpeechHandle
 from .room_io import AudioProcessingError, TextInputEvent
 
 if TYPE_CHECKING:
-    from .._generated.agent_run import RunSettled
+    from .._generated.agent_run import RunFinished
     from .agent_session import UserTurnExceededHook, VoiceSession
 
 
@@ -170,7 +169,7 @@ class _AgentHooks:
         chat_ctx: list[llm.ChatItem],
         new_transcript: str,
         transcript_confidence: float,
-    ) -> tuple[str | None, list[llm.ChatItem] | None, bool]:
+    ) -> CompletedUserTurn:
         session = self._session
         turn_ctx = ChatContext(list(chat_ctx))
         message = llm.ChatMessage(
@@ -185,7 +184,11 @@ class _AgentHooks:
                 except StopResponse:
                     stop = True
         changed = [i.id for i in turn_ctx.items] != before
-        return message.text_content, turn_ctx.items if changed else None, stop
+        return CompletedUserTurn(
+            user_text=message.text_content,
+            items=turn_ctx.items if changed else None,
+            stop_response=stop,
+        )
 
     async def _core_function_tools_executed(
         self,
@@ -385,18 +388,6 @@ def dispatch(self: VoiceSession[Any], wire: HostWire) -> None:
         handler(self, wire)
 
 
-def _on_speech_created(self: VoiceSession[Any], wire: SpeechCreatedWire) -> None:
-    handle = SpeechHandle._of(cast(_core.SpeechHandle, wire.speech_handle))
-    self.emit(
-        "speech_created",
-        SpeechCreatedEvent(
-            user_initiated=wire.user_initiated,
-            source=wire.source,
-            speech_handle=handle,
-        ),
-    )
-
-
 def _on_item_added(self: VoiceSession[Any], wire: ItemAddedWire) -> None:
     # the history's own object: the event and `session.history` share it
     if (item := wire.host_item) is None:
@@ -521,14 +512,13 @@ _ERROR_RECORDS: dict[str, Any] = {
 }
 
 
-def _wire_run(run: object | None) -> asyncio.Future[RunSettled] | None:
+def _wire_run(run: object | None) -> asyncio.Future[RunFinished] | None:
     """A wire's run: the future `VoiceSession._run()` handed the core."""
-    return cast("asyncio.Future[RunSettled] | None", run)
+    return cast("asyncio.Future[RunFinished] | None", run)
 
 
 # The `HostWire` members with host behaviour, by record class.
 _HANDLERS: dict[type, Callable[[VoiceSession[Any], Any], None]] = {
-    SpeechCreatedWire: _on_speech_created,
     ItemAddedWire: _on_item_added,
     RunRefusedWire: _on_run_refused,
     RunFinishedWire: _on_run_finished,

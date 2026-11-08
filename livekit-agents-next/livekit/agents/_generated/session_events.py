@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from inspect import get_annotations
-from typing import Annotated, Any, Literal, Self, TypeAlias
+from typing import Any, Literal, Self, TypeAlias
 
 from pydantic import (
     BaseModel,
@@ -28,7 +28,6 @@ from livekit.agents.inference import AdaptiveInterruptionDetector, InterruptionD
 from livekit.agents.llm import AgentHandoff, RealtimeModel, RealtimeModelError
 from livekit.agents.stt import STT, STTError
 from livekit.agents.tts import TTS, TTSError
-from livekit.agents.voice.io import SpeechHandle
 from livekit.agents.voice.room_io import AudioProcessingError
 
 from .. import _bindings
@@ -47,20 +46,6 @@ class ToolCallStarted:
 
 ToolUpdate: TypeAlias = ToolCallStarted | ToolCallUpdated | ToolCallEnded | ToolReplyUpdated
 """The public tool updates: validated calls and their typed lifecycle records."""
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class SpeechCreatedEvent:
-    __pydantic_config__ = ConfigDict(arbitrary_types_allowed=True)
-
-    user_initiated: bool
-    """True if the speech was created using public methods like `say` or `generate_reply`"""
-    source: Literal["say", "generate_reply"]
-    """Source indicating how the speech handle was created"""
-    speech_handle: Annotated[SpeechHandle, Field(exclude=True)] = field(repr=False)
-    """The speech handle that was created"""
-    created_at: float = field(default_factory=time.time)
-    type: Literal["speech_created"] = "speech_created"
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -145,8 +130,6 @@ class ErrorEvent(BaseModel):
 
 ToolCallStarted.__annotations__ = get_annotations(ToolCallStarted, eval_str=True)
 ToolCallStarted.__module__ = "livekit.agents.voice.events"
-SpeechCreatedEvent.__annotations__ = get_annotations(SpeechCreatedEvent, eval_str=True)
-SpeechCreatedEvent.__module__ = "livekit.agents.voice.events"
 ToolExecutionUpdatedEvent.__annotations__ = get_annotations(ToolExecutionUpdatedEvent, eval_str=True)
 ToolExecutionUpdatedEvent.__module__ = "livekit.agents.voice.events"
 _TypeDiscriminator.__annotations__ = get_annotations(_TypeDiscriminator, eval_str=True)

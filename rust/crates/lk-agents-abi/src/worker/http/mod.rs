@@ -51,55 +51,74 @@ pub struct RequestHead {
     pub subprotocols: Vec<String>,
 }
 
-/// What `HttpExchange.receive` reports.
+/// What `HttpExchange.receive` reports: an ASGI receive event.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[crate::host(record(module = "worker_endpoint", emit))]
+#[crate::host(record(module = "worker_endpoint", typed_dict, tag = "type", emit))]
 pub enum ExchangeEvent {
     /// A piece of the request body; `more` is false on the last one.
+    #[host(tag = "http.request")]
     Body {
+        #[host(rename = "body")]
         data: Vec<u8>,
+        #[host(rename = "more_body")]
         more: bool,
     },
     /// The HTTP exchange ended: the response completed, or the client is gone.
+    #[host(tag = "http.disconnect")]
     Disconnected,
-    Text {
-        text: String,
-    },
+    #[host(tag = "websocket.receive")]
+    Text { text: String },
+    #[host(tag = "websocket.receive")]
     Binary {
+        #[host(rename = "bytes")]
         data: Vec<u8>,
     },
     /// The WebSocket connection closed, with its close code.
-    Closed {
-        code: u16,
-    },
+    #[host(tag = "websocket.disconnect")]
+    Closed { code: u16 },
 }
 
-/// What `HttpExchange.send` accepts. On a WebSocket exchange, `Start` and `Body` before `Accept`
-/// answer the upgrade with an HTTP response instead.
+/// What `HttpExchange.send` accepts: an ASGI send message. On a WebSocket exchange, `Start` and
+/// `Body` before `Accept` answer the upgrade with an HTTP response instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[crate::host(record(module = "worker_endpoint", extract))]
+#[crate::host(record(module = "worker_endpoint", typed_dict, tag = "type", extract))]
 pub enum ExchangeMessage {
+    #[host(tag = "http.response.start | websocket.http.response.start")]
     Start {
         status: u16,
+        #[host(missing_default)]
         headers: Vec<(Vec<u8>, Vec<u8>)>,
     },
     /// Response body bytes; `more: false` completes the response.
+    #[host(tag = "http.response.body | websocket.http.response.body")]
     Body {
+        #[host(rename = "body", missing_default)]
         data: Vec<u8>,
+        #[host(rename = "more_body", missing_default)]
         more: bool,
     },
+    /// The application's trailers: the worker writes its own completion trailers and drops these.
+    #[host(tag = "http.response.trailers")]
+    Trailers,
+    #[host(tag = "websocket.accept")]
     Accept {
         subprotocol: Option<String>,
+        #[host(missing_default)]
         headers: Vec<(Vec<u8>, Vec<u8>)>,
     },
-    Text {
-        text: String,
-    },
+    /// `websocket.send` carries exactly one of `text` and `bytes`.
+    #[host(tag = "websocket.send")]
+    Text { text: String },
+    #[host(tag = "websocket.send")]
     Binary {
+        #[host(rename = "bytes")]
         data: Vec<u8>,
     },
+    #[host(tag = "websocket.close")]
     Close {
+        #[host(default = 1000)]
         code: u16,
+        #[host(missing_default)]
         reason: String,
     },
 }

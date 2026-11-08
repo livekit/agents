@@ -61,10 +61,11 @@ pub struct Judgment {
 }
 
 /// One judge of an evaluation: an application evaluator, which the evaluation's host runs.
-#[crate::host(record(module = "evals", extract))]
+#[crate::host(record(module = "evals", host_type = "builtins.object", boundary, extract))]
 #[derive(Debug, Clone)]
 pub struct JudgeSpec {
     pub name: String,
+    #[host(own_value, extract_with = "py_values::host_ref")]
     pub evaluator: HostRef,
 }
 

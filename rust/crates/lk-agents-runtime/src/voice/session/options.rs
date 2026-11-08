@@ -66,10 +66,10 @@ impl SessionOptions {
 }
 
 impl lk_agents_abi::voice::session::SessionOptions for SessionOptions {
-    fn new(kwargs: SessionKwargs) -> Self {
+    fn new(kwargs: SessionKwargs, conn_options: SessionConnOptions) -> Self {
         let layers = ConfigStack { session: session_layer(&kwargs), ..Default::default() };
         let state = State {
-            conn: kwargs.conn_options,
+            conn: conn_options,
             expressive: kwargs.expressive.clone().given().unwrap_or_default(),
             layers,
             last_layer: 0,
@@ -224,7 +224,8 @@ mod tests {
             }
         }
 
-        let options = SessionOptions::new(crate::voice::session::tests::option_kwargs());
+        let options =
+            SessionOptions::new(crate::voice::session::tests::option_kwargs(), Default::default());
         let registry =
             Arc::new(Registry { state: Arc::downgrade(&options.0), released: AtomicUsize::new(0) });
         let host_registry: Arc<dyn RefRegistry> = registry.clone();
@@ -248,7 +249,8 @@ mod tests {
     // object passed to `update_options` changing the resolved mode.
     #[test]
     fn options_read_before_start_follow_every_update() {
-        let options = SessionOptions::new(crate::voice::session::tests::option_kwargs());
+        let options =
+            SessionOptions::new(crate::voice::session::tests::option_kwargs(), Default::default());
         let mode = |options: &SessionOptions| options.resolved(legs()).turn_detection_mode;
         options.update(UpdateKwargs {
             turn_detection: Maybe::Given(TurnDetectionKwarg::Mode(TurnDetection::Manual)),
@@ -257,7 +259,7 @@ mod tests {
         });
         assert_eq!(mode(&options), Some(TurnDetection::Manual));
         options.update(UpdateKwargs {
-            turn_detection: Maybe::Given(TurnDetectionKwarg::Detector { streaming: true }),
+            turn_detection: Maybe::Given(TurnDetectionKwarg::Detector),
             ..Default::default()
         });
         assert_eq!(mode(&options), Some(TurnDetection::Manual));

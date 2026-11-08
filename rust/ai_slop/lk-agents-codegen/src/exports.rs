@@ -57,6 +57,7 @@ pub fn placed(
         }
         if let RecordBody::Variants(variants) = &record.body
             && !record.transparent
+            && record.tag.is_none()
         {
             for variant in variants {
                 add(path, generated(&record.module), &variant.name);

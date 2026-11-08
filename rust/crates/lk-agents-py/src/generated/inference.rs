@@ -14,61 +14,52 @@ use pyo3::prelude::*;
 type InferenceCredentialsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::InferenceCredentials;
 
-/// `explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `server`; `""` when nothing resolves. A
-/// set but empty `LIVEKIT_INFERENCE_API_KEY` shadows `server`.
+/// `explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else the server's `LIVEKIT_API_KEY`; `""`
+/// when nothing resolves. A set but empty `LIVEKIT_INFERENCE_API_KEY` shadows the server's.
 #[pyfunction]
-#[pyo3(signature = (explicit = None, server = None))]
+#[pyo3(signature = (explicit = None))]
 pub fn inference_api_key(
     py: Python<'_>,
     explicit: ::std::option::Option<::std::string::String>,
-    server: ::std::option::Option<::std::string::String>,
 ) -> PyResult<::std::string::String> {
     crate::py_calls::check_pid()?;
-    let out = py.detach(|| <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_api_key(explicit, server));
+    let out = py.detach(|| <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_api_key(explicit));
     ::pyo3::PyResult::Ok(out)
 }
 
 /// The same ladder for the secret, over `LIVEKIT_INFERENCE_API_SECRET`.
 #[pyfunction]
-#[pyo3(signature = (explicit = None, server = None))]
+#[pyo3(signature = (explicit = None))]
 pub fn inference_api_secret(
     py: Python<'_>,
     explicit: ::std::option::Option<::std::string::String>,
-    server: ::std::option::Option<::std::string::String>,
 ) -> PyResult<::std::string::String> {
     crate::py_calls::check_pid()?;
-    let out = py.detach(|| <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_api_secret(explicit, server));
+    let out = py.detach(|| <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_api_secret(explicit));
     ::pyo3::PyResult::Ok(out)
 }
 
-/// A nonempty `LIVEKIT_INFERENCE_URL`, then staging if `server_url` names the staging cloud,
-/// then production.
+/// A nonempty `LIVEKIT_INFERENCE_URL`, then staging if the server's `LIVEKIT_URL` names the
+/// staging cloud, then production.
 #[pyfunction]
-#[pyo3(signature = (server_url = None))]
-pub fn inference_url(
-    py: Python<'_>,
-    server_url: ::std::option::Option<::std::string::String>,
-) -> PyResult<::std::string::String> {
+pub fn inference_url(py: Python<'_>) -> PyResult<::std::string::String> {
     crate::py_calls::check_pid()?;
-    let out = py.detach(|| <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_url(server_url));
+    let out = py.detach(<InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_url);
     ::pyo3::PyResult::Ok(out)
 }
 
 /// The gateway's URL (a nonempty `base_url`, else [`Self::inference_url`]) and key pair (the
 /// ladders above); a `ValueError` when the key or the secret does not resolve.
 #[pyfunction]
-#[pyo3(signature = (base_url, api_key, api_secret, server_url, server_api_key, server_api_secret))]
+#[pyo3(signature = (base_url = None, api_key = None, api_secret = None))]
 pub fn inference_credentials<'py>(
     py: Python<'py>,
     base_url: ::std::option::Option<::std::string::String>,
     api_key: ::std::option::Option<::std::string::String>,
     api_secret: ::std::option::Option<::std::string::String>,
-    server_url: ::std::option::Option<::std::string::String>,
-    server_api_key: ::std::option::Option<::std::string::String>,
-    server_api_secret: ::std::option::Option<::std::string::String>,
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
-    let out = py.detach(|| <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_credentials(base_url, api_key, api_secret, server_url, server_api_key, server_api_secret)).map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_credentials(base_url, api_key, api_secret)).map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
     crate::generated::records::inference_credentials::credentials_to_py(py, out)
 }
 
@@ -330,7 +321,7 @@ pub fn llm_unsupported_params(
     ::pyo3::PyResult::Ok(out)
 }
 
-/// The turn detector a host constructs: `(model, cloud, warnings)`.
+/// The turn detector a host constructs.
 #[pyfunction]
 #[pyo3(signature = (version, hosted, dev, url, key, secret, local_fallback))]
 pub fn eot_select<'py>(
@@ -358,24 +349,7 @@ pub fn eot_select<'py>(
         .map_err(|e: ::lk_agents_abi::errors::Invalid| {
             <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
         })?;
-    ::pyo3::PyResult::Ok({
-        let (x0, x1, x2) = out;
-        ::pyo3::types::PyTuple::new(
-            py,
-            [
-                crate::generated::records::turn_events::turn_detector_model_to_py(py, x0)?,
-                ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?,
-                ::pyo3::types::PyList::new(
-                    py,
-                    x2.into_iter()
-                        .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
-                        .collect::<PyResult<Vec<_>>>()?,
-                )?
-                .into_any(),
-            ],
-        )?
-        .into_any()
-    })
+    crate::generated::records::inference_models::eot_selection_to_py(py, out)
 }
 
 /// `_resolve_vad_for_model`: what the host does with the caller's VAD for this model.
@@ -699,7 +673,7 @@ pub struct InferenceTts(pub(crate) ::std::sync::Arc<InferenceTtsImpl>);
 
 #[pymethods]
 impl InferenceTts {
-    /// `inference.TTS` builds it on first use, after a fork, from its attributes.
+    /// `inference.TTS` builds it in its constructor.
     #[new]
     #[pyo3(signature = (model, *, base_url, api_key, api_secret, conn_options, voice = None, language = None, encoding = "pcm_s16le".to_owned(), sample_rate = 24000, extra_kwargs = None, fallback = None))]
     fn new(

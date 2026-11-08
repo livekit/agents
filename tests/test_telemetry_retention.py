@@ -19,8 +19,6 @@ from livekit.agents.job import (
 from livekit.agents.telemetry import set_capture_content
 from livekit.agents.voice.events import (
     AgentStateChangedEvent,
-    CloseEvent,
-    CloseReason,
     UserInputTranscribedEvent,
     event_dict,
 )
@@ -170,9 +168,9 @@ async def test_the_session_snapshot_is_taken_once(
     assert ["recorded message"] in [i["content"] for i in items if i["type"] == "message"]
 
 
-# Catches: a second session of the job taking the job's recording, an audio recording opened
-# outside the job's session directory, or a session of the job left open at its shutdown.
-async def test_the_jobs_first_session_records_what_the_job_records_and_every_one_closes_with_it(
+# Catches: a second session of the job taking the job's recording, or an audio recording opened
+# outside the job's session directory.
+async def test_the_jobs_first_session_records_what_the_job_records(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from livekit.agents import Agent
@@ -185,22 +183,14 @@ async def test_the_jobs_first_session_records_what_the_job_records_and_every_one
     async def connect(self: JobContext) -> None:
         pass
 
-    closing: list[VoiceSession] = []
-    on_shutdown = JobContext._core_on_shutdown
-
-    def register(self: JobContext, session: VoiceSession) -> None:
-        closing.append(session)
-        on_shutdown(self, session)
-
     monkeypatch.setattr(JobContext, "connect", connect)
-    monkeypatch.setattr(JobContext, "_core_on_shutdown", register)
     token = _JobContextVar.set(ctx)
     first = VoiceSession(llm=FakeLLM(), turn_handling={"turn_detection": None})
     second = VoiceSession(llm=FakeLLM(), turn_handling={"turn_detection": None})
     try:
         await first.start(Agent(instructions="desk"))
         await second.start(Agent(instructions="back office"), room=ctx.room)
-        assert ctx._sessions == [first, second] and closing == [first, second]
+        assert ctx._sessions == [first, second]
         assert first._native.recording_options.audio and first._native.started_at is not None
         assert first._native.recording_path == str(ctx.session_directory / "audio.ogg")
         assert not second._native.recording_options.audio
@@ -210,29 +200,3 @@ async def test_the_jobs_first_session_records_what_the_job_records_and_every_one
         _JobContextVar.reset(token)
         await first.aclose()
         await second.aclose()
-
-
-# Catches: the job's shutdown closing its session through a Python wrapper of its own, or with a
-# reason other than the job's shutdown.
-async def test_the_jobs_shutdown_closes_the_session_natively_in_the_shutdowns_span() -> None:
-    from types import SimpleNamespace
-
-    registered: list[tuple[object, bool, bool]] = []
-
-    def add(callback: object, *, takes_reason: bool, framework: bool, name: str) -> None:
-        registered.append((callback, takes_reason, framework))
-
-    from livekit.agents import Agent
-
-    from .fake_llm import FakeLLM
-
-    session = VoiceSession(llm=FakeLLM(), turn_handling={"turn_detection": None})
-    closed: list[CloseEvent] = []
-    session.on("close", closed.append)
-    await session.start(Agent(instructions="desk"))
-    job = SimpleNamespace(_run=SimpleNamespace(add_shutdown_callback=add))
-    JobContext._core_on_shutdown(job, session)  # type: ignore[arg-type]
-    [(callback, takes_reason, framework)] = registered
-    assert (takes_reason, framework) == (False, True)
-    await callback()  # type: ignore[operator]
-    assert [event.reason for event in closed] == [CloseReason.JOB_SHUTDOWN]

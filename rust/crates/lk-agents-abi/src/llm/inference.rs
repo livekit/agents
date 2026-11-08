@@ -23,8 +23,8 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     /// LiveKit Inference gateway; without, `api_key` is an OpenAI-compatible provider's own key,
     /// sent as the bearer with no LiveKit header. `label` is the host class it reports as.
     /// `strict_tool_schema`, `gzip_body` and `msgpack_body` suit a provider that refuses strict
-    /// tool schemas or accepts compressed or msgpack bodies. `inference.LLM`'s mixin builds it on
-    /// first use, after a fork, from the LLM's attributes.
+    /// tool schemas or accepts compressed or msgpack bodies. `inference.LLM` builds it in its
+    /// constructor.
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -84,16 +84,14 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     ) -> Result<Self::Chunks, ApiError>;
 }
 
-/// `inference.LLM`'s client, built on first use, after a fork, from the LLM's attributes.
+/// `inference.LLM`'s client, built by its constructor.
 #[crate::host(facade(
     path = "livekit.agents.inference.llm",
     extended,
     name = "LLM",
     native = InferenceLlm,
-    cached,
     legs(chat),
-    leg = "_core_native",
-    annotation(extra_kwargs = "dict[str, object]")
+    leg = "_core_native"
 ))]
 pub trait InferenceLlmFacade {
     #[host(getter)]

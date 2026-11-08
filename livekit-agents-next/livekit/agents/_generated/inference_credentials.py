@@ -17,8 +17,8 @@ from inspect import get_annotations
 class Credentials:
     """The inference gateway's credentials and identification. The core reads
     `LIVEKIT_INFERENCE_URL`, `LIVEKIT_INFERENCE_API_KEY`, `LIVEKIT_INFERENCE_API_SECRET` and
-    `LIVEKIT_WORKER_TOKEN` from the environment; `server_*` are the server's `LIVEKIT_URL` and key
-    pair as the host resolves them (in a job, its `AgentServer`'s settings).
+    `LIVEKIT_WORKER_TOKEN` from the environment, and the server's `LIVEKIT_URL` and key pair from
+    the running server's settings (in a job, its `AgentServer`'s), else the environment.
     Where a gateway client connects, and with what.
     """
 

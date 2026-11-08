@@ -50,7 +50,9 @@ async def test_a_call_without_storage_has_an_in_memory_thread() -> None:
         seen.append(ctx.thread.id)
         return "checked 0"
 
-    async with VoiceSession(llm=_calls("hello"), vad=None, turn_detection="manual") as session:
+    async with VoiceSession(
+        llm=_calls("hello"), vad=None, turn_handling={"turn_detection": "manual"}
+    ) as session:
         await session.start(agent)
         await session._run(user_input="hello")
     assert len(seen) == 1 and seen[0]
@@ -67,7 +69,7 @@ async def test_a_call_keeps_one_execution_id_across_its_turns() -> None:
         return f"checked {len(seen) - 1}"
 
     async with VoiceSession(
-        llm=_calls("hello", "again"), vad=None, turn_detection="manual"
+        llm=_calls("hello", "again"), vad=None, turn_handling={"turn_detection": "manual"}
     ) as session:
         await session.start(agent)
         await session._run(user_input="hello")
@@ -94,7 +96,7 @@ async def test_a_delegated_run_reports_its_own_usage_apart_from_the_call() -> No
         return "checked"
 
     async with VoiceSession(
-        llm=_calls("hello", "again"), vad=None, turn_detection="manual"
+        llm=_calls("hello", "again"), vad=None, turn_handling={"turn_detection": "manual"}
     ) as session:
         await session.start(agent)
         await session._run(user_input="hello")
@@ -128,7 +130,9 @@ async def test_a_duplicate_call_on_a_call_is_refused_with_the_agents_template() 
             FakeLLMResponse(input="check runs", content="done", ttft=0, duration=0),
         ]
     )
-    async with VoiceSession(llm=model, vad=None, turn_detection="manual") as session:
+    async with VoiceSession(
+        llm=model, vad=None, turn_handling={"turn_detection": "manual"}
+    ) as session:
         await session.start(agent)
         await session._run(user_input="hello")
         outputs = {
@@ -174,7 +178,9 @@ async def test_tools_a_toolset_lists_at_setup_keep_their_policies_on_a_call(
             FakeLLMResponse(input="checked", content="done", ttft=0, duration=0),
         ]
     )
-    async with VoiceSession(llm=model, vad=None, turn_detection="manual") as session:
+    async with VoiceSession(
+        llm=model, vad=None, turn_handling={"turn_detection": "manual"}
+    ) as session:
         if handoff:
             await session.start(Agent(instructions="Greet.", name="greeter"))
             session.update_agent(agent)
@@ -191,7 +197,9 @@ async def test_an_interrupted_model_request_counts_as_unmeasured() -> None:
     llm = FakeLLM(
         fake_responses=[FakeLLMResponse(input="hello", content="hi", ttft=30, duration=30)]
     )
-    async with VoiceSession(llm=llm, vad=None, turn_detection="manual") as session:
+    async with VoiceSession(
+        llm=llm, vad=None, turn_handling={"turn_detection": "manual"}
+    ) as session:
         await session.start(Agent(instructions="Answer.", name="desk"))
         handle = session.generate_reply(user_input="hello")
         await asyncio.sleep(0.2)

@@ -4,16 +4,16 @@ use tokio::io::AsyncWriteExt;
 
 struct Server;
 
-impl DevServer for Server {
-    fn running_jobs(&self) -> Result<Vec<RunningJobInfo>, HostError> {
-        Ok(Vec::new())
+impl ServerJobs for Server {
+    fn running_jobs(&self) -> Vec<RunningJobInfo> {
+        Vec::new()
     }
 
     fn reload_jobs(
         &self,
-        _: &lk_agents_abi::telemetry::Cx,
         _: Vec<RunningJobInfo>,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), lk_agents_abi::worker::ipc_host::WorkerError>>
+    {
         Box::pin(async { Ok(()) })
     }
 }

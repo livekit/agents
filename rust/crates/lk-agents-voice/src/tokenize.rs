@@ -21,8 +21,13 @@ impl lk_agents_abi::tokenize::bindings::TokenizeFunctions for SpeechTokenizer {
         text: String,
         replacements: indexmap::IndexMap<String, String>,
         hold_last_word: bool,
-    ) -> Option<(String, usize)> {
-        lk_agents_core::tokenize::replace_words(&text, replacements, hold_last_word)
+    ) -> Option<lk_agents_abi::tokenize::bindings::ReplacedWords> {
+        lk_agents_core::tokenize::replace_words(&text, replacements, hold_last_word).map(
+            |(text, processed)| lk_agents_abi::tokenize::bindings::ReplacedWords {
+                text,
+                processed,
+            },
+        )
     }
     fn tokenize_paragraphs(text: String) -> Vec<String> {
         lk_agents_core::tokenize::tokenize_paragraphs(&text)

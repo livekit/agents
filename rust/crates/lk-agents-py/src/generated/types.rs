@@ -311,8 +311,9 @@ impl ProviderAttempts {
 #[derive(Clone)]
 pub struct AttemptHostProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The host's running loop and a copy of its context, captured when it was taken;
+    /// none when taken with no running loop: each call then runs in its driving operation's.
+    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
     /// The `notify` calls, delivered in order.
     notifier: crate::py_calls::Notifier,
 }
@@ -355,8 +356,8 @@ impl AttemptHostProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let context = match context {
-            Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::py_calls::capture_context(obj.py())?,
+            Some(context) => Some(::std::clone::Clone::clone(context)),
+            None => crate::py_calls::proxy_context(obj.py()),
         };
         Ok(AttemptHostProxy {
             host: ::std::sync::Arc::new(obj.clone().unbind()),
@@ -461,7 +462,7 @@ impl ::lk_agents_abi::types::provider::AttemptHost for AttemptHostProxy {
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "AttemptHost._core_retrying",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             false,
             ::std::boxed::Box::new(move |py| {

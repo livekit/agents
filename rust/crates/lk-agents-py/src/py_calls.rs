@@ -265,6 +265,17 @@ pub fn capture_context(py: Python<'_>) -> PyResult<HostRef> {
     Ok(crate::py_objects::retain(pair.into_any().unbind()))
 }
 
+/// What a proxy taken from the host calls in: the running loop's context, else (no running loop)
+/// none, so each call takes the context of the operation driving it.
+pub fn proxy_context(py: Python<'_>) -> Option<HostRef> {
+    capture_context(py).ok()
+}
+
+/// The context a proxy's call runs in: the one it captured, else its driving operation's.
+pub fn calling_context(captured: &Option<HostRef>) -> Option<HostRef> {
+    captured.clone().or_else(lk_agents_runtime::net::task::host_context)
+}
+
 /// The `(loop, contextvars.Context)` pair `context` retained at its operation's entry.
 pub(crate) fn captured_pair<'py>(
     py: Python<'py>,
@@ -292,8 +303,8 @@ fn copy_in_span<'py>(
     let ctx = access::Context::copy(ctx)?.call0()?;
     if let Some(span) = span {
         let activate = telemetry_hook(py, &ACTIVATE, access::TelemetryModule::_activate)?;
-        let ids = (span.trace_id, span.span_id, span.sampled);
-        access::Context::run(&ctx)?.call1((activate, ids.0, ids.1, ids.2))?;
+        let span = crate::generated::records::telemetry::span_context_to_py(py, span)?;
+        access::Context::run(&ctx)?.call1((activate, span))?;
     }
     Ok(ctx)
 }
@@ -555,7 +566,8 @@ fn deliver(py: Python<'_>, notices: &Notices) {
 }
 
 /// A Rust future as the awaitable a `_core` coroutine method returns, polled on the process
-/// runtime.
+/// runtime. The future, and every task it spawns, is driven by this entry: the loop and context
+/// it resolves on are the host context a proxy taken with no running loop calls in.
 pub fn future_into_py<F, T>(py: Python<'_>, fut: F) -> PyResult<Bound<'_, PyAny>>
 where
     F: Future<Output = PyResult<T>> + Send + 'static,
@@ -575,7 +587,12 @@ fn boxed_future_into_py<'bound, T>(
 where
     T: for<'py> IntoPyObject<'py> + Send + 'static,
 {
-    pyo3_async_runtimes::generic::future_into_py::<ProcessRuntime, _, _>(py, fut)
+    use pyo3_async_runtimes::generic;
+    let locals = generic::get_current_locals::<ProcessRuntime>(py)?;
+    let pair = PyTuple::new(py, [locals.event_loop(py), locals.context(py)])?;
+    let entered = crate::py_objects::retain(pair.into_any().unbind());
+    let fut = lk_agents_runtime::net::task::in_host_context(entered, fut);
+    generic::future_into_py_with_locals::<ProcessRuntime, _, _>(py, locals, fut)
 }
 
 /// The runtime's fork guard (`lk_agents_runtime::process::check_pid`) as a `RuntimeError`.

@@ -47,7 +47,6 @@ impl super::Implementations for Selected {
     type FallbackTts = ::lk_agents_runtime::inference::fallback::FallbackTts;
     type RealtimeFallbackModel =
         ::lk_agents_runtime::inference::fallback::realtime::RealtimeFallbackModel;
-    type TtsTokenLog = ::lk_agents_runtime::inference::fallback::TokenLog;
     type InferenceLlm = ::lk_agents_runtime::inference::llm::gateway::GatewayLlm;
     type ChoiceParser = ::lk_agents_runtime::inference::llm::parse::ChoiceParser;
     type CompletionWire = ::lk_agents_runtime::inference::llm::parse::CompletionWire;
@@ -59,6 +58,7 @@ impl super::Implementations for Selected {
     type HostRealtimeModel = ::lk_agents_runtime::inference::realtime::host::HostRealtimeModel;
     type OpenAIRealtimeModel = ::lk_agents_runtime::inference::realtime::openai::OpenAIRealtime;
     type ChatContextDict = ::lk_agents_runtime::cores::ChatDict;
+    type ToolReports = ::lk_agents_runtime::cores::ToolReports;
     type ChatRequestView = ::lk_agents_abi::ChatRequest;
     type ToolNameFunctions = ::lk_agents_runtime::cores::ToolNames;
     type ToolsetLifetime = ::lk_agents_runtime::toolsets::lifetime::Lifetime;
@@ -122,6 +122,7 @@ impl super::Implementations for Selected {
     type MovingAverage = ::lk_agents_runtime::media::MovingAverage;
     type InferenceVad = ::lk_agents_runtime::inference::vad::LocalVad;
     type AmdFunctions = ::lk_agents_runtime::voice::AmdRules;
+    type HostAudioReceiver = ::lk_agents_runtime::avatar::host_receiver::HostAudioReceiver;
     type DataStreamAudioOutput = ::lk_agents_runtime::avatar::output::DataStreamAudioOutput;
     type DataStreamAudioReceiver = ::lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
     type AvatarRunner = ::lk_agents_runtime::avatar::runner::AvatarRunner;
@@ -149,6 +150,7 @@ impl super::Implementations for Selected {
     type TextStreamSender = ::lk_agents_runtime::rtc::events::TextStreamSender;
     type RpcHandler = ::lk_agents_runtime::rtc::events::RpcHandler;
     type RoomRpcRouter = ::lk_agents_runtime::rtc::events::RoomRpcRouter;
+    type RpcTracing = ::lk_agents_runtime::rtc::rpc::RpcTracing;
     type SessionOptions = ::lk_agents_runtime::voice::SessionOptions;
     type VoiceSession = ::lk_agents_runtime::voice::VoiceSession;
     type SessionStart = ::lk_agents_runtime::voice::SessionStartPlans;

@@ -9,12 +9,15 @@
 
 from __future__ import annotations
 
-from builtins import (
-    BaseException as _HostProviderErrorMetadata,
-    BaseException as _HostRealtimeErrorMetadata,
-)
+from typing import TYPE_CHECKING, TypeAlias
 
-ProviderErrorMetadata = _HostProviderErrorMetadata
+if TYPE_CHECKING:
+    from builtins import (
+        BaseException as _HostProviderErrorMetadata,
+        BaseException as _HostRealtimeErrorMetadata,
+    )
+
+ProviderErrorMetadata: TypeAlias = "_HostProviderErrorMetadata"
 
 
-RealtimeErrorMetadata = _HostRealtimeErrorMetadata
+RealtimeErrorMetadata: TypeAlias = "_HostRealtimeErrorMetadata"

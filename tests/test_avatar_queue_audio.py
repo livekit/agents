@@ -104,9 +104,15 @@ async def test_clear_accounting_matches_the_real_runner(segments_read, clear_dur
         def __init__(self):
             self.received = asyncio.Queue()
             self.frames = utils.aio.Chan()
+            self.clear_on_delivery: QueueAudioOutput | None = None
 
         async def push_audio(self, item):
             self.received.put_nowait(item)
+            if (audio := self.clear_on_delivery) and isinstance(item, rtc.AudioFrame):
+                self.clear_on_delivery = None
+                # Exactly the race: the runner delivered a frame and the clear reaches the
+                # native queue before the runner reads its next audio.
+                audio.clear_buffer()
 
         def clear_buffer(self):
             pass
@@ -114,21 +120,10 @@ async def test_clear_accounting_matches_the_real_runner(segments_read, clear_dur
         def __aiter__(self):
             return self.frames
 
-    class ClearOnDelivery(QueueAudioOutput):
-        first = True
-
-        async def _core_next_audio(self):
-            observation = await super()._core_next_audio()
-            if self.first and isinstance(observation.frame, rtc.AudioFrame):
-                self.first = False
-                # Exactly the race: the host yielded a tagged frame, then clear reaches
-                # the native owner before this asynchronous result crosses the boundary.
-                self.clear_buffer()
-            return observation
-
-    audio_type = ClearOnDelivery if clear_during_delivery else QueueAudioOutput
-    audio = audio_type(sample_rate=16000)
+    audio = QueueAudioOutput(sample_rate=16000)
     generator = Generator()
+    if clear_during_delivery:
+        generator.clear_on_delivery = audio
     runner = AvatarRunner(
         room=rtc.Room(),
         audio_recv=audio,
@@ -153,7 +148,8 @@ async def test_clear_accounting_matches_the_real_runner(segments_read, clear_dur
         result = await asyncio.wait_for(audio.wait_for_playout(), 1)
         assert result.interrupted
         if clear_during_delivery:
-            assert generator.received.empty(), "the cleared frame reached the generator"
+            assert isinstance(generator.received.get_nowait(), rtc.AudioFrame)
+            assert generator.received.empty(), "the clear reached the generator as audio"
         if not segments_read and not clear_during_delivery:
             await runner.start()
         await audio.capture_frame(frame())

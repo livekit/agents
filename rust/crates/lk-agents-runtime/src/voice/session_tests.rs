@@ -736,8 +736,10 @@ async fn host_arguments_are_checked_before_anything_is_sent() {
 // makes) refused or wrong on a running session.
 #[tokio::test(start_paused = true)]
 async fn rare_host_calls_reach_a_running_session() {
-    let options =
-        <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(option_kwargs());
+    let options = <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(
+        option_kwargs(),
+        Default::default(),
+    );
     let api = running(assembled(no_room(), None, Some(options))).await;
 
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, Some(3.0));
@@ -767,8 +769,10 @@ async fn rare_host_calls_reach_a_running_session() {
 #[tokio::test(start_paused = true)]
 async fn options_view_changes_only_after_core_acceptance() {
     use lk_agents_voice::agent_session::options::aec_warmup_layer;
-    let options =
-        <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(option_kwargs());
+    let options = <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(
+        option_kwargs(),
+        Default::default(),
+    );
     let api = running(assembled(no_room(), None, Some(options))).await;
     api.send(TurnCommand::Configure(Box::new(aec_warmup_layer(None)))).unwrap();
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, Some(3.0));
@@ -790,8 +794,10 @@ async fn an_outbound_sip_call_has_no_aec_warmup_unless_the_application_set_one()
     use lk_agents_abi::voice::room_owner::RoomIoEvent;
     async fn linked(explicit: Maybe<Option<f64>>) -> Option<f64> {
         let kwargs = SessionKwargs { aec_warmup_duration: explicit, ..option_kwargs() };
-        let options =
-            <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(kwargs);
+        let options = <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(
+            kwargs,
+            Default::default(),
+        );
         let api = running(assembled(no_room(), None, Some(options))).await;
         let participant = ParticipantLinked { identity: "callee".into() };
         api.api()
@@ -823,7 +829,6 @@ pub(super) fn option_kwargs() -> lk_agents_abi::voice::session_options::SessionK
         user_away_timeout: Some(15.0),
         transcription_timeout: None,
         session_close_transcript_timeout: 2.0,
-        conn_options: Default::default(),
     }
 }
 
@@ -1007,7 +1012,7 @@ async fn a_finished_speech_leaves_the_sessions_registry() {
 async fn a_failed_build_leaves_the_held_override_for_the_retried_start() {
     use lk_agents_abi::voice::session::SessionOptions as _;
     use lk_agents_abi::voice::session_options::{EndpointingKwargs, SessionLegs, UpdateKwargs};
-    let options = SessionOptions::new(option_kwargs());
+    let options = SessionOptions::new(option_kwargs(), Default::default());
     options.override_options(UpdateKwargs {
         endpointing_opts: Some(EndpointingKwargs { min_delay: Some(0.9), ..Default::default() }),
         ..Default::default()

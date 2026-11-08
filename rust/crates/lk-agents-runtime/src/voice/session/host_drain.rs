@@ -202,8 +202,13 @@ pub(super) async fn answer_hook(
                     transcript_confidence,
                 )
                 .await
-                .map(|(user_text, items, stop)| {
-                    HookOutcome::Turn(turn_edits(user_text, items, stop, &new_transcript))
+                .map(|turn| {
+                    HookOutcome::Turn(turn_edits(
+                        turn.user_text,
+                        turn.items,
+                        turn.stop_response,
+                        &new_transcript,
+                    ))
                 }),
             None => Ok(HookOutcome::Failed),
         },

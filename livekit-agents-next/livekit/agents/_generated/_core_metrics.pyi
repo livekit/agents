@@ -45,8 +45,8 @@ def stt_stream_metrics(
     label: str,
     model: str,
     provider: str,
-) -> tuple[STTMetrics | None, bool]:
-    """`RecognizeStream`'s metrics for one event, and whether it resets the retry count."""
+) -> STTMetrics | None:
+    """`RecognizeStream`'s metrics for one event: a recognition usage event's."""
 
 class LlmMetricState:
     """`LLMStream`'s metric fold as the host drives it."""

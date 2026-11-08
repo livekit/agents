@@ -8,7 +8,7 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-from livekit.agents import APIConnectOptions, APITimeoutError
+from livekit.agents import APIConnectOptions, APITimeoutError, http
 from livekit.plugins.baseten import TTS
 
 pytestmark = pytest.mark.unit
@@ -42,7 +42,7 @@ async def test_read_limit_tracks_pending_synthesis(mode: str) -> None:
     assert site._server is not None
     port = site._server.sockets[0].getsockname()[1]
     try:
-        async with aiohttp.ClientSession() as session:
+        async with http.open() as session:
             tts = TTS(
                 model="qwen3-tts",
                 api_key="test",

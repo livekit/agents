@@ -432,8 +432,9 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
 #[derive(Clone)]
 pub struct VadProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The host's running loop and a copy of its context, captured when it was taken;
+    /// none when taken with no running loop: each call then runs in its driving operation's.
+    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
     /// The `notify` calls, delivered in order.
     notifier: crate::py_calls::Notifier,
     label: ::std::string::String,
@@ -473,8 +474,8 @@ impl VadProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let context = match context {
-            Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::py_calls::capture_context(obj.py())?,
+            Some(context) => Some(::std::clone::Clone::clone(context)),
+            None => crate::py_calls::proxy_context(obj.py()),
         };
         let label = {
             let v = crate::py_calls::read(obj, "_core_label")?;
@@ -517,7 +518,7 @@ impl ::lk_agents_abi::Vad for VadProxy {
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "Vad._core_prewarm",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
@@ -545,11 +546,10 @@ impl ::lk_agents_abi::Vad for VadProxy {
         >,
     > {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "Vad._core_stream",
-            &self.context,
+            &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
@@ -561,6 +561,10 @@ impl ::lk_agents_abi::Vad for VadProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         let wrap_cx = ::std::clone::Clone::clone(cx);
         ::std::boxed::Box::pin(async move {
             let out = started.await;

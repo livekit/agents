@@ -12,6 +12,7 @@
 mod boundary;
 mod emit;
 mod models;
+mod tagged;
 pub(crate) use emit::{as_result, emit};
 pub use models::{merge, python};
 
@@ -140,6 +141,9 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
     if r.boundary {
         return boundary::record(r);
     }
+    if r.tag.is_some() {
+        return tagged::record(r);
+    }
     if r.extract
         && let RecordBody::Struct(fields) = &r.body
         && fields
@@ -207,7 +211,7 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
             };
             // An extract-only record may hold what never returns to the host (a proxy).
             let emit = if r.emit && !r.emit_by_hand {
-                let (pattern, sets) = struct_emits(fields, r.sdk)?;
+                let (pattern, sets) = struct_emits(fields, r.sdk, decls)?;
                 let built = construct(&class_ref(&module, &r.name), "()", "Some(&kwargs)");
                 // A private attribute is set on the built model; `None` keeps its default.
                 let private: String = fields
@@ -475,11 +479,36 @@ fn attr_read(owner: &str, f: &Field, obj: &str) -> Result<String, String> {
     ))
 }
 
-/// The destructuring pattern and the `kwargs.set_item` lines of a struct's fields.
-fn struct_emits(fields: &[Field], sdk: bool) -> Result<(String, String), String> {
+/// The destructuring pattern and the `kwargs.set_item` lines of a struct's fields; a flattened
+/// record's fields are set as the struct's own.
+fn struct_emits(
+    fields: &[Field],
+    sdk: bool,
+    decls: &Declarations,
+) -> Result<(String, String), String> {
     let mut pattern = Vec::new();
     let mut sets = String::new();
     for f in fields {
+        if f.conversion.flatten {
+            let Ty::Record(held) = &f.ty else {
+                return Err(format!("{}: a flattened field is a record", f.rust_name));
+            };
+            let nested = decls
+                .records
+                .iter()
+                .find(|r| r.rust == held.rust)
+                .ok_or_else(|| format!("{}: flattened record is missing", f.rust_name))?;
+            let RecordBody::Struct(inner) = &nested.body else {
+                return Err(format!("{}: a flattened record is a struct", f.rust_name));
+            };
+            let (inner_pattern, inner_sets) = struct_emits(inner, nested.sdk, decls)?;
+            pattern.push(f.rust_name.clone());
+            sets.push_str(&format!(
+                "        let {} {{ {inner_pattern} }} = {};\n{inner_sets}",
+                nested.rust, f.rust_name
+            ));
+            continue;
+        }
         if f.skip {
             pattern.push(format!("{}: _", f.rust_name));
             continue;
@@ -504,7 +533,13 @@ fn struct_emits(fields: &[Field], sdk: bool) -> Result<(String, String), String>
 }
 
 fn set(f: &Field, value: &str, indent: &str) -> Result<String, String> {
-    Ok(format!("{indent}kwargs.set_item({:?}, {})?;\n", f.host_name(), emit(&f.ty, value)?))
+    let mut emitted = emit(&f.ty, value)?;
+    if let Some((module, name)) = &f.conversion.resolve {
+        let hook: String = name.split('.').map(|attr| format!(".getattr({attr:?})?")).collect();
+        emitted =
+            format!("crate::py_calls::call(&py.import({module:?})?{hook}, ({emitted},), None)?");
+    }
+    Ok(format!("{indent}kwargs.set_item({:?}, {emitted})?;\n", f.host_name()))
 }
 
 /// A variant's read suffix (`{ .. }` / `(..)` / nothing), its match-arm pattern and its sets.
@@ -713,8 +748,18 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
             Ty::Record(Record { host: HostForm::Via { via, .. }, .. }) => via.as_ref(),
             ty => ty,
         };
-        let (kind, test) = if let Some((module, name)) = &v.host_type {
+        let (kind, test) = if v.otherwise {
+            if !std::ptr::eq(v, variants.last().expect("a variant")) {
+                return Err(format!("{}::{}: otherwise is the last variant", r.rust, v.rust_name));
+            }
+            ("otherwise", "true".to_owned())
+        } else if let Some((module, name)) = &v.host_type {
             ("", is_a(module, name))
+        } else if !f.conversion.path.is_empty() || f.conversion.extract_with.is_some() {
+            return Err(format!(
+                "{}::{}: a member read through an attribute or codec is told apart by its host_type",
+                r.rust, v.rust_name
+            ));
         } else {
             match shape {
             Ty::Record(Record { rust: held, host: HostForm::Record { .. }, .. })
@@ -787,17 +832,40 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
             return Err(format!("{}::{}: two variants share a class", r.rust, v.rust_name));
         }
         kinds.push(kind);
-        reads.push_str(&format!(
-            "    if {test} {{\n        return Ok({rust}::{}({}?));\n    }}\n",
-            v.rust_name,
-            read(&f.ty, "obj", &format!("{}.{}", r.name, v.rust_name))?
-        ));
+        let path = format!("{}.{}", r.name, v.rust_name);
+        let member =
+            f.conversion.path.iter().fold("obj.clone()".to_owned(), |parent, attr| {
+                format!("{parent}.getattr({attr:?})?")
+            });
+        let value = match &f.conversion.extract_with {
+            Some(codec) => format!("crate::{codec}(v, {path:?})"),
+            None => read(&f.ty, "v", &path)?,
+        };
+        let bind = format!("let member = {member};\n        let v = &member;");
+        let direct = f.conversion.path.is_empty() && f.conversion.extract_with.is_none();
+        reads.push_str(&if direct && !v.otherwise {
+            format!(
+                "    if {test} {{\n        return Ok({rust}::{}({}?));\n    }}\n",
+                v.rust_name,
+                read(&f.ty, "obj", &path)?
+            )
+        } else if v.otherwise {
+            format!("    {bind}\n    Ok({rust}::{}({value}?))\n", v.rust_name)
+        } else {
+            format!(
+                "    if {test} {{\n        {bind}\n        return Ok({rust}::{}({value}?));\n    }}\n",
+                v.rust_name
+            )
+        });
     }
     let mut s = cells;
     if r.extract {
+        let unclaimed = match variants.last().is_some_and(|v| v.otherwise) {
+            true => String::new(),
+            false => format!("    Err(super::not_a(obj, {:?}))\n", r.name),
+        };
         s.push_str(&format!(
-            "\npub fn {snake}_from_py(obj: &Bound<'_, PyAny>) -> PyResult<{rust}> {{\n{reads}    Err(super::not_a(obj, {:?}))\n}}\n",
-            r.name
+            "\npub fn {snake}_from_py(obj: &Bound<'_, PyAny>) -> PyResult<{rust}> {{\n{reads}{unclaimed}}}\n"
         ));
     }
     if r.emit {

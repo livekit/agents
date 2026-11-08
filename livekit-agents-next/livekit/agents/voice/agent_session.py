@@ -16,6 +16,8 @@ from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any, Generic, cast, overload
 
+from typing_extensions import Unpack
+
 from livekit import rtc
 
 from .. import _core, llm, stt, tts
@@ -24,7 +26,7 @@ from .._generated import (
     public_voice_agent_session as _public,
 )
 from .._generated.public_voice_agent_session import *  # noqa: F403
-from .._generated.session_options import TextTransforms as TextTransforms
+from .._generated.session_options import SessionKwargs, TextTransforms as TextTransforms
 from .._generated.session_wire import (
     HostWire,
     SessionErrorWire,
@@ -63,7 +65,6 @@ from ._session_callbacks import (
     _origin as _origin,
     _SessionNodes as _SessionNodes,
 )
-from .agent_run import settled_result
 from .events import (
     AgentEvent,
     AgentState,
@@ -81,7 +82,7 @@ from .run_result import RunResult
 
 if TYPE_CHECKING:
     from .._core import VoiceSession as _NativeSession, _core_SessionState as _SessionState
-    from .._generated.agent_run import RunSettled
+    from .._generated.agent_run import RunFinished
     from ..storage import Thread
     from ..storage.context import ContextStore
     from .amd import AMD
@@ -130,10 +131,8 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         thread: Thread | None = None,
         video_sampler: NotGivenOr[VoiceActivityVideoSampler | None] = NOT_GIVEN,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         stt_context_options: NotGivenOr[STTContextOptions | None] = NOT_GIVEN,
-        **options: Any,
+        **options: Unpack[SessionKwargs],
     ) -> None:
         """A voice session over the Rust core.
 
@@ -144,10 +143,10 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
                 also has is refused with ``ValueError`` when that agent runs.
             context, thread: Read by tools through ``RunContext``.
             video_sampler: How often camera frames reach the model; ``None`` sends every frame.
-            turn_detection, endpointing_opts: The session's turn completion and endpointing
-                policy, as ``update_options`` changes them.
+            conn_options: Each leg's connection policy.
+            stt_context_options: The keyterms and context the STT is biased toward.
             options: The session options the core resolves: ``turn_handling``,
-                ``stt_context_options``, ``max_tool_steps``, ``use_tts_aligned_transcript``,
+                ``max_tool_steps``, ``use_tts_aligned_transcript``,
                 ``tts_text_transforms``, ``min_consecutive_speech_delay``, ``expressive``,
                 ``aec_warmup_duration``, ``ivr_detection``, ``user_away_timeout``,
                 ``transcription_timeout``, ``session_close_transcript_timeout``.
@@ -165,10 +164,8 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
             thread=thread,
             video_sampler=video_sampler,
             conn_options=conn_options,
-            turn_detection=turn_detection,
-            endpointing_opts=endpointing_opts,
             stt_context_options=stt_context_options,
-            **options,
+            options=options,
         )
 
     # --- state ---------------------------------------------------------------------------
@@ -387,11 +384,11 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     def _run(self, *, user_input: str) -> Awaitable[RunResult[Any]]:
         """Reply to typed ``user_input`` now; awaited, the run settles as a text run does (the
         remote session's text input and the voice conformance tests)."""
-        settled: asyncio.Future[RunSettled] = asyncio.get_running_loop().create_future()
+        settled: asyncio.Future[RunFinished] = asyncio.get_running_loop().create_future()
         self._running.run(user_input=user_input, origin=_origin(), host=settled)
 
         async def result() -> RunResult[Any]:
-            return settled_result(await asyncio.shield(settled), None)
+            return (await asyncio.shield(settled)).result
 
         return result()
 

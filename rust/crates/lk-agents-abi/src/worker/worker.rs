@@ -24,38 +24,6 @@ pub struct Snapshot {
     pub finished: Option<String>,
 }
 
-/// `WorkerPermissions`, field-for-field, including the defaults.
-#[crate::host(record(module = "worker_options", dataclass, extract, emit))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkerPermissions {
-    #[host(default = true)]
-    pub can_publish: bool,
-    #[host(default = true)]
-    pub can_subscribe: bool,
-    #[host(default = true)]
-    pub can_publish_data: bool,
-    #[host(default = true)]
-    pub can_update_metadata: bool,
-    /// `models.TrackSource` values, as raw enum numbers.
-    #[host(default_factory = "list")]
-    pub can_publish_sources: Vec<i32>,
-    #[host(default = false)]
-    pub hidden: bool,
-}
-
-impl Default for WorkerPermissions {
-    fn default() -> Self {
-        WorkerPermissions {
-            can_publish: true,
-            can_subscribe: true,
-            can_publish_data: true,
-            can_update_metadata: true,
-            can_publish_sources: Vec::new(),
-            hidden: false,
-        }
-    }
-}
-
 /// A job offered to the worker, which answers it with a [`JobDecision`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct JobRequest {
@@ -103,29 +71,18 @@ pub struct WorkerStopped {
 
 // --- server launch configuration -----------------------------------------------------------
 
-/// Process-pool settings resolved before the host launch callback.
-#[derive(Debug, Clone, PartialEq)]
-#[crate::host(record(module = "worker_server", emit))]
-pub struct ProcessPoolOptions {
-    pub num_idle_processes: u32,
-    pub initialize_timeout: f64,
-    pub close_timeout: f64,
-    pub session_end_timeout: f64,
-    pub memory_warn_mb: f64,
-    pub memory_limit_mb: f64,
-    pub http_proxy: Option<String>,
-}
-
-/// Resolved server settings handed to the process launch adapter.
+/// What the host's process launcher needs, resolved by the server before it starts the job
+/// processes.
 #[derive(Debug, Clone, PartialEq)]
 #[crate::host(record(module = "worker_server", emit))]
 pub struct ProcessStartOptions {
-    pub devmode: bool,
+    /// The server runs jobs: the host returns its launcher factory.
     pub job_processes: bool,
+    /// The job processes' environment, beside this process's.
     pub env: Vec<(String, String)>,
-    pub job_executor_type: crate::worker::job::JobExecutorType,
     pub multiprocessing_context: MultiprocessingContext,
-    pub pool: ProcessPoolOptions,
+    /// Seconds a session's end callbacks have to finish.
+    pub session_end_timeout: f64,
 }
 
 /// How job processes start: `forkserver` (Linux only; elsewhere it falls back to `spawn`) or
@@ -236,8 +193,6 @@ pub struct ServerOptions {
 pub struct ProcessOptions {
     /// Connection attempts to LiveKit before the worker fails; 16.
     pub max_retry: crate::Maybe<u32>,
-    /// The permissions of the agent's participant in the rooms it joins.
-    pub permissions: crate::Maybe<WorkerPermissions>,
     /// The proxy the job processes' HTTP clients use; default `HTTPS_PROXY`, else `HTTP_PROXY`.
     pub http_proxy: crate::Maybe<Option<String>>,
     /// Where jobs run; `"process"`.
@@ -250,6 +205,8 @@ pub struct ProcessOptions {
     pub session_end_timeout: crate::Maybe<f64>,
     /// Seconds a job process has to initialize (`prewarm`); 10.
     pub initialize_process_timeout: crate::Maybe<f64>,
+    /// Seconds a job process may leave a ping unanswered before it is killed; 60.
+    pub ping_timeout: crate::Maybe<f64>,
 }
 
 /// What the agent server reads from where it runs: the CPU count its defaults are sized by.

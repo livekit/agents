@@ -68,15 +68,6 @@ impl room_owner::RoomRuntime for RoomFactory {
     type Room = FixedRoom;
     type Env = ProcessEnv;
 
-    async fn wait_avatar_join(
-        room: Arc<dyn room_owner::SessionRoom>,
-        identity: String,
-    ) -> std::result::Result<(f64, f64), RtcError> {
-        let clock = room.clock();
-        let room = room.rtc().ok_or(RtcError::NotConnected)?;
-        crate::avatar::receiver::wait_avatar_join_room(room, identity, clock).await
-    }
-
     async fn wait_for_participant(
         room: Arc<dyn room_owner::SessionRoom>,
         identity: Option<String>,
@@ -101,15 +92,16 @@ impl room_owner::RoomRuntime for RoomFactory {
         kinds: Option<Vec<i32>>,
         include_local: bool,
         subscribed: bool,
-    ) -> std::result::Result<(Option<ParticipantIdentity>, TrackSid), RtcError> {
+    ) -> std::result::Result<room_owner::TrackPublished, RtcError> {
         let room = room.rtc().ok_or(RtcError::NotConnected)?;
-        wait::track_publication(
+        let (publisher, sid) = wait::track_publication(
             room.as_ref(),
             identity,
             kinds,
             wait::TrackOptions { include_local, subscribed },
         )
-        .await
+        .await?;
+        Ok(room_owner::TrackPublished { publisher, sid })
     }
 
     fn create_room_session(_env: &ProcessEnv, room: Option<Arc<dyn RtcRoom>>) -> FixedRoom {

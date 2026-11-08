@@ -44,8 +44,9 @@ impl std::fmt::Display for Scope {
 
 /// What a framework call runs in: the host context captured at its entry (a `_core` method's
 /// binding captures it before scheduling native work) and the framework scopes it holds. The span
-/// a host call runs under is its `cx`, never part of this. Calls it leads to carry it explicitly; Tokio tasks and threads never inherit
-/// it.
+/// a host call runs under is its `cx`, never part of this. Calls it leads to carry it explicitly.
+/// Its host context is also the task-local the binding sets for the entry's native future, which
+/// tasks spawned on the process spawner inherit: a proxy taken with no running loop calls in it.
 #[derive(Debug, Clone, Default)]
 pub struct CallContext {
     pub host_context: Option<HostRef>,

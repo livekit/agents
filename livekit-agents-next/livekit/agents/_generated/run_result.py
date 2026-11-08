@@ -12,7 +12,7 @@ from __future__ import annotations
 import functools
 from dataclasses import dataclass, field
 from inspect import get_annotations
-from typing import TYPE_CHECKING, Any, Generic, Literal
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias
 
 from typing_extensions import TypeAliasType, TypeVar
 
@@ -92,6 +92,10 @@ class RunNoOutput(_Settled):
     """
 
     status: Literal["no_output"] = "no_output"
+
+
+RunOutput: TypeAlias = str | object
+"""A completed invocation's output: its text, or the value the host validated."""
 
 
 RunResult = TypeAliasType(

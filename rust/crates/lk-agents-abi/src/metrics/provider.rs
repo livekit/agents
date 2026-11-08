@@ -32,7 +32,7 @@ pub trait ProviderMetrics {
         provider: String,
     ) -> SttMetrics;
 
-    /// `RecognizeStream`'s metrics for one event, and whether it resets the retry count.
+    /// `RecognizeStream`'s metrics for one event: a recognition usage event's.
     #[host(function)]
     fn stt_stream_metrics(
         event: SpeechEvent,
@@ -40,7 +40,7 @@ pub trait ProviderMetrics {
         label: String,
         model: String,
         provider: String,
-    ) -> Result<(Option<SttMetrics>, bool), RecognitionUsageMissing>;
+    ) -> Result<Option<SttMetrics>, RecognitionUsageMissing>;
 }
 
 /// `LLMStream`'s metric fold as the host drives it.

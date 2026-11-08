@@ -56,6 +56,17 @@ pub trait JobLauncher: Send + Sync {
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
 }
 
+/// The factory of the job runners' launchers: one per process the pool starts, made on the host's
+/// loop.
+#[crate::host(proxy(host = "collections.abc.Callable"))]
+pub trait JobLaunchers: Send + Sync {
+    #[host(await, name = "__call__")]
+    fn create(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<Arc<dyn JobLauncher>, HostError>>;
+}
+
 /// A native process or thread launch, as the supervisor hands it to its launcher.
 #[crate::host(native(refused = "expected a native process or thread launch"))]
 pub trait LaunchReport: Any + Send + Sync {}
@@ -178,6 +189,24 @@ pub trait ChildInitialize: Send + Sync {
     fn initialize(&self, http_proxy: Option<String>) -> Result<(), HostError>;
 }
 
+/// The entrypoint's `asyncio.Task`, awaited and cancelled in the context the job's run captured.
+#[crate::host(proxy(host = "asyncio.Task"))]
+pub trait JobTask: Send + Sync {
+    /// Until it settles; stopping the wait leaves it running.
+    #[host(await, function = "asyncio.shield")]
+    fn wait<'a>(
+        &'a self,
+        cx: &crate::telemetry::Cx,
+        #[host(context)] context: &'a CallContext,
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
+    #[host(await, function = "livekit.agents.utils.aio.cancel_and_wait")]
+    fn cancel<'a>(
+        &'a self,
+        cx: &crate::telemetry::Cx,
+        #[host(context)] context: &'a CallContext,
+    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
+}
+
 /// The job process's runner (`ipc.child._JobProc`): it starts the job the parent hands over and
 /// runs each step of the job's run, in the context the run captured.
 #[crate::host(proxy(host = "livekit.agents.ipc.child._JobProc"))]
@@ -198,21 +227,7 @@ pub trait JobProcess: Send + Sync {
         &'a self,
         cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
-    ) -> crate::BoxFuture<'a, Result<HostRef, HostError>>;
-    #[host(await, name = "_core_wait")]
-    fn wait<'a>(
-        &'a self,
-        cx: &crate::telemetry::Cx,
-        #[host(context)] context: &'a CallContext,
-        task: HostRef,
-    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
-    #[host(await, name = "_core_cancel")]
-    fn cancel<'a>(
-        &'a self,
-        cx: &crate::telemetry::Cx,
-        #[host(context)] context: &'a CallContext,
-        task: HostRef,
-    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
+    ) -> crate::BoxFuture<'a, Result<Arc<dyn JobTask>, HostError>>;
     #[host(await, name = "_core_close_session")]
     fn close_session<'a>(
         &'a self,
@@ -287,44 +302,9 @@ pub trait IpcClient: Send + Sync + Sized + 'static {
     async fn aclose(&self);
 }
 
-/// A process's step in the pool, the event `ProcPool.emit` names.
-#[crate::host(record(module = "worker_ipc", emit))]
-#[crate::host(wire_strs)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProcessEvent {
-    #[host(rename = "process_created")]
-    Created,
-    #[host(rename = "process_started")]
-    Started,
-    #[host(rename = "process_ready")]
-    Ready,
-    #[host(rename = "process_closed")]
-    Closed,
-    #[host(rename = "process_job_launched")]
-    JobLaunched,
-    #[host(rename = "process_cleanup_incomplete")]
-    CleanupIncomplete,
-    #[host(rename = "process_join_failed")]
-    JoinFailed,
-    #[host(rename = "process_exit_failed")]
-    ExitFailed,
-}
-
-#[crate::host(proxy(host = "livekit.agents.ipc.ProcPool"))]
-pub trait PoolCallbacks: Send + Sync {
-    /// The launcher of a new process, made on the host's loop.
-    #[host(await, name = "_core_create")]
-    fn create(
-        &self,
-        cx: &crate::telemetry::Cx,
-    ) -> crate::BoxFuture<'_, Result<Arc<dyn JobLauncher>, HostError>>;
-    /// The pool's one notification of a process's step.
-    #[host(notify, name = "emit")]
-    fn emit(&self, event: ProcessEvent, process: Arc<dyn SupervisedJob>);
-}
-
 /// The warm job processes: the pool keeps `num_idle_processes` ready, hands each job the next one
-/// and retries a failed spawn or launch. Each process is a `JobSupervisor` with `options`.
+/// and retries a failed spawn or launch. Each process is a `JobSupervisor` with `options` over a
+/// launcher from `launchers`. The server runtime owns its own pool.
 #[crate::host(class(name = "ProcPool"))]
 pub trait ProcessPool: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
@@ -334,7 +314,7 @@ pub trait ProcessPool: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(
         env: &Self::Env,
-        host: Arc<dyn PoolCallbacks>,
+        launchers: Arc<dyn JobLaunchers>,
         #[host(kw)] num_idle_processes: usize,
         options: JobRunnerOptions,
         #[host(context)] context: CallContext,
@@ -342,18 +322,6 @@ pub trait ProcessPool: Send + Sync + Sized + 'static {
     /// The processes the pool owns, from their creation until their cleanup.
     #[host(getter)]
     fn processes(&self) -> Vec<Arc<dyn SupervisedJob>>;
-    /// The jobs whose process runs them now (`status` `RUNNING`).
-    #[host(getter)]
-    fn active_jobs(&self) -> Vec<RunningJobInfo>;
-    /// The pool's process that took the job `job_id`.
-    #[host(call)]
-    fn get_by_job_id(&self, job_id: String) -> Option<Arc<dyn SupervisedJob>>;
-    #[host(getter)]
-    fn jobs_waiting(&self) -> usize;
-    #[host(getter)]
-    fn target_idle_processes(&self) -> usize;
-    #[host(setter, name = "target_idle_processes")]
-    fn set_target_idle_processes(&self, n: usize);
     #[host(await)]
     async fn start(&self) -> Result<(), WorkerError>;
     /// The job continues the caller's current span.
@@ -371,12 +339,31 @@ pub trait ProcessPool: Send + Sync + Sized + 'static {
     async fn aclose(&self);
 }
 
-/// A native `JobRun`, as the runner hands it back when its job starts and as the job's primary
-/// session holds it.
+/// What the framework closes as the job shuts down: a native close (a session's), or a host
+/// coroutine function called with no argument (an avatar's `aclose`).
+pub enum FrameworkShutdown {
+    Native(Box<dyn FnOnce() -> crate::BoxFuture<'static, ()> + Send>),
+    Host(HostRef),
+}
+
+/// A native `JobRun`, as the runner hands it back when its job starts and as the job's sessions
+/// and avatars reach it.
 #[crate::host(native(refused = "expected a native JobRun"))]
 pub trait JobExecution: Any + Send + Sync {
     /// The job's primary session closed with `reason`: the job ends.
     fn session_closed(&self, reason: String);
+    /// `shutdown` runs as the job shuts down, with the application's callbacks and in the
+    /// shutdown's span; a failure is logged under `name`.
+    fn add_framework_shutdown(&self, name: String, shutdown: FrameworkShutdown);
+    /// The job's primary session started under `trace` (its `agent_session`), where the RPCs
+    /// the job handles are recorded.
+    fn session_started(&self, trace: crate::telemetry::Cx) {
+        let _ = trace;
+    }
+    /// The primary session's trace, once it started.
+    fn session_trace(&self) -> Option<crate::telemetry::Cx> {
+        None
+    }
 }
 
 /// A job's run: what ends the job (the first reason wins), the entrypoint's supervision, the

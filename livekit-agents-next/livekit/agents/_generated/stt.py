@@ -8,11 +8,11 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
 from inspect import get_annotations
 from types import TracebackType
-from typing import Annotated, Generic, Literal, Never, Self
+from typing import Annotated, ClassVar, Generic, Literal, Never, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from typing_extensions import TypeVar
@@ -165,6 +165,16 @@ TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 
 # Events the reader may leave unread before the core's input waits for it.
 _EVENT_BACKLOG = 64
+
+
+class _NativeRecognition(Protocol):
+    """A native recognition ``RecognizeStream._core_open`` opens."""
+
+    def push(self, frame: rtc.AudioFrame, /) -> None: ...
+    def flush(self) -> None: ...
+    def end_input(self) -> None: ...
+    async def recv(self) -> SpeechEvent | None: ...
+    async def aclose(self) -> None: ...
 
 
 class STT(
@@ -392,8 +402,12 @@ class RecognizeStream(ABC):
         self._needed_sr = sample_rate if is_given(sample_rate) else None
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
+        # a native recognition that retries on its own is attempted once
+        attempted = conn_options
+        if self._core_native_retries:
+            attempted = replace(conn_options, max_retry=0)
         self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts(
-            "stt_stream", conn_options, self
+            "stt_stream", attempted, self
         )
         self._core_attempt_task: asyncio.Task[None] | None = None
         self._core_cancelled = False
@@ -443,6 +457,23 @@ class RecognizeStream(ABC):
         to fail the attempt. Cancellation means a deadline passed or the stream was closed:
         clean up and let it propagate.
         """
+
+    _core_native_retries: ClassVar[bool] = False
+    """The native recognition ``_core_open`` opens retries on its own: no attempt is repeated."""
+
+    async def _core_open(self) -> _NativeRecognition:
+        """A native recognition, which ``_core_run_native`` pumps."""
+        raise NotImplementedError
+
+    async def _core_run_native(self) -> None:
+        """A ``_run`` over ``_core_open``: ``input`` into it, its events to ``send``."""
+        native = await self._core_open()
+        await _bindings.pump(
+            native,
+            self.input,
+            lambda item: native.flush() if isinstance(item, self.Flush) else native.push(item),
+            self.send,
+        )
 
     def _input_received(self, item: rtc.AudioFrame | RecognizeStream.Flush) -> None:
         if isinstance(item, self.Flush):
@@ -533,7 +564,7 @@ class RecognizeStream(ABC):
         """Hand ``event`` to the reader."""
         self._core_attempts.observe(event)
         stt = self._stt
-        record, _ = _core.stt_stream_metrics(event, time.time(), stt.label, stt.model, stt.provider)
+        record = _core.stt_stream_metrics(event, time.time(), stt.label, stt.model, stt.provider)
         _bindings.emit_metrics(self._stt, record)
         self._event_ch.send_nowait(event)
 

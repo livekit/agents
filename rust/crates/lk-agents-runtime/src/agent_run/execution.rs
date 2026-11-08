@@ -489,13 +489,16 @@ impl ToolRun {
         let Self { host, span, args, function_call, call, started } = self;
         let ran = host.run_tool(span.cx(), &inv, &args).await;
         match &ran {
-            Ok((report, _)) => {
-                crate::telemetry::end_function_tool(span, &function_call, started, &report.outcome)
-            }
+            Ok(ran) => crate::telemetry::end_function_tool(
+                span,
+                &function_call,
+                started,
+                &ran.report.outcome,
+            ),
             Err(error) => telemetry::end(span, error),
         }
         let event = match ran {
-            Ok((report, extra)) => {
+            Ok(lk_agents_abi::agent::ToolCompletion { report, extra }) => {
                 let _ =
                     events.send(Report::Core(AgentRunEvent::ToolCallUpdated { call, extra })).await;
                 AgentRunEvent::ToolSettled { call, outcome: report.outcome }

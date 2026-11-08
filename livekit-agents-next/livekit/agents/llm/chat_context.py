@@ -63,25 +63,6 @@ def _essential_fields(item: ChatItem) -> tuple[object, ...]:
     return ()
 
 
-def _facts(
-    items: list[ChatItem],
-) -> list[tuple[str, str, str | None, int, str | None, float, str | None]]:
-    """What the core's plans read of each item: ``(type, id, role, len(content), name,
-    created_at, call_id)``."""
-    return [
-        (
-            item.type,
-            item.id,
-            item.role if isinstance(item, ChatMessage) else None,
-            len(item.content) if item.type == "message" else 0,
-            item.name if isinstance(item, (FunctionCall, FunctionCallOutput)) else None,
-            item.created_at,
-            item.call_id if isinstance(item, (FunctionCall, FunctionCallOutput)) else None,
-        )
-        for item in items
-    ]
-
-
 class ChatContext:
     def __init__(self, items: NotGivenOr[list[ChatItem]] = NOT_GIVEN):
         self._items: list[ChatItem] = items if is_given(items) else []
@@ -180,7 +161,7 @@ class ChatContext:
                     yield from get_tool_names(tool.tools)
 
         plan = _core.chat_ctx_copy_plan(
-            _facts(self.items),
+            self.items,
             exclude_function_call=exclude_function_call,
             exclude_instructions=exclude_instructions,
             exclude_empty_message=exclude_empty_message,
@@ -202,7 +183,7 @@ class ChatContext:
         """
         if max_items < 0:
             raise ValueError("max_items must be non-negative")
-        plan = _core.chat_ctx_truncate_plan(_facts(self._items), max_items)
+        plan = _core.chat_ctx_truncate_plan(self._items, max_items)
         if plan is not None:
             self._items[:] = [self._items[i] for i in plan]
         return self
@@ -217,14 +198,14 @@ class ChatContext:
     ) -> ChatContext:
         """Add messages from `other_chat_ctx` into this one, avoiding duplicates, and keep items sorted by created_at."""
         plan = _core.chat_ctx_merge_plan(
-            _facts(self._items),
-            _facts(other_chat_ctx.items),
+            self._items,
+            other_chat_ctx.items,
             exclude_function_call=exclude_function_call,
             exclude_instructions=exclude_instructions,
             exclude_config_update=exclude_config_update,
         )
-        for idx, j in plan:
-            self._items.insert(idx, other_chat_ctx.items[j])
+        for insertion in plan:
+            self._items.insert(insertion.index, other_chat_ctx.items[insertion.item])
         return self
 
     def to_dict(

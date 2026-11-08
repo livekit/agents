@@ -16,7 +16,8 @@ impl CapturedError {
 }
 
 /// What a caller branches on in a host failure. The adapter classifies the exception once, by
-/// class: cancellation, and the storage failures a handler raises, one per `StorageError` variant.
+/// class: cancellation, the storage failures a handler raises, one per `StorageError` variant,
+/// and an RPC error with its code (`rtc.RpcError`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum HostErrorKind {
     #[default]
@@ -28,6 +29,9 @@ pub enum HostErrorKind {
     VersionConflict,
     NotSerializable,
     TooLarge,
+    Rpc {
+        code: u32,
+    },
 }
 
 /// An error crossing a host boundary. Recovery policy belongs to the operation receiving it.

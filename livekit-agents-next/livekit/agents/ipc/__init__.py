@@ -1,4 +1,4 @@
-"""The worker's job processes, as the core (``_core.JobSupervisor``, ``_core.ProcPool``)
+"""The worker's job processes, as the core (``_core.JobSupervisor``, the server runtime's pool)
 supervises and pools them: this module starts them (``multiprocessing``, the forkserver's
 preloads, a job thread), finishes the start method's bookkeeping and hands the core the user's
 callbacks. What runs inside a process is ``ipc.child``."""
@@ -18,11 +18,10 @@ from multiprocessing.process import BaseProcess
 from types import ModuleType
 from typing import Any, Protocol, cast
 
-from .. import _core, utils
+from .. import _core
 from .._generated import public_ipc as _public
-from .._generated.job_records import RunningJobInfo
 from .._generated.public_ipc import *  # noqa: F403
-from .._generated.worker_ipc import JobCompletion, ProcessEvent
+from .._generated.worker_ipc import JobCompletion
 from ..job import JobContext
 from ..log import logger
 from . import child
@@ -133,78 +132,6 @@ class JobLauncher:
                 target=child.job_main, args=(self._args,), name="job_proc"
             ),
         )
-
-
-class ProcPool(utils.EventEmitter[ProcessEvent]):
-    """The warm job processes. The core keeps ``num_idle_processes`` warm, hands a job the next
-    one, retries a failed spawn or launch and owns each process's state
-    (``_core.ProcPool``, ``_core.JobSupervisor``); this class makes the launchers and turns the
-    core's notifications into events."""
-
-    def __init__(
-        self,
-        *,
-        job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
-        session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
-        simulation_end_fnc: Callable[[Any], Any] | None,
-        num_idle_processes: int,
-        options: JobRunnerOptions,
-        session_end_timeout: float,
-        preload_modules: Sequence[str] = (),
-        mp_ctx: BaseContext,
-        env: Sequence[tuple[str, str]] = (),
-        loop: asyncio.AbstractEventLoop,
-    ) -> None:
-        super().__init__()
-        self._launcher_args: dict[str, Any] = {
-            "job_entrypoint_fnc": job_entrypoint_fnc,
-            "session_end_fnc": session_end_fnc,
-            "simulation_end_fnc": simulation_end_fnc,
-            "session_end_timeout": session_end_timeout,
-            "preload_modules": tuple(preload_modules),
-            "env": env,
-            "mp_ctx": mp_ctx,
-            "loop": loop,
-        }
-        self._pool = _core.ProcPool(self, num_idle_processes=num_idle_processes, options=options)
-
-    @property
-    def processes(self) -> list[_core.JobSupervisor]:
-        return self._pool.processes
-
-    @property
-    def active_jobs(self) -> list[RunningJobInfo]:
-        return self._pool.active_jobs
-
-    @property
-    def _jobs_waiting_for_process(self) -> int:
-        return self._pool.jobs_waiting
-
-    def get_by_job_id(self, job_id: str) -> _core.JobSupervisor | None:
-        return self._pool.get_by_job_id(job_id)
-
-    async def start(self) -> None:
-        await self._pool.start()
-
-    async def aclose(self) -> None:
-        await self._pool.aclose()
-
-    async def join_jobs(self) -> None:
-        """Waits until every process a job was launched on exited (the drain)."""
-        await self._pool.join_jobs()
-
-    async def launch_job(self, info: RunningJobInfo) -> None:
-        await self._pool.launch_job(info)
-
-    def set_target_idle_processes(self, num_idle_processes: int) -> None:
-        self._pool.target_idle_processes = num_idle_processes
-
-    @property
-    def target_idle_processes(self) -> int:
-        return self._pool.target_idle_processes
-
-    async def _core_create(self) -> JobLauncher:
-        return JobLauncher(**self._launcher_args)
 
 
 _FORKSERVER_PRELOAD_MODULES = "LIVEKIT_AGENTS_FORKSERVER_PRELOAD_MODULES"
@@ -331,6 +258,5 @@ def start_process(
 
 __all__ = [
     "JobLauncher",
-    "ProcPool",
 ]
 __all__ += _public.__all__

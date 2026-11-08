@@ -1,9 +1,10 @@
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-import aiohttp
 import pytest
 
+from livekit.agents import APIConnectionError
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
 from livekit.plugins.simli import AvatarSession, SimliConfig
 
@@ -18,16 +19,26 @@ async def test_start_propagates_provider_failure(monkeypatch, failed_request):
         "livekit.plugins.simli.avatar.get_job_context",
         lambda: SimpleNamespace(local_participant_identity="agent"),
     )
-    failure = aiohttp.ClientConnectionError("provider disconnected")
-    first = SimpleNamespace(text=AsyncMock(return_value='{"session_token": "token"}'))
-    first.raise_for_status = Mock()
-    http = SimpleNamespace(post=AsyncMock(side_effect=[first, first]))
-    http.post.side_effect = [failure] if failed_request == 0 else [first, failure]
+    failure = APIConnectionError("provider disconnected")
+    first = SimpleNamespace(
+        text=AsyncMock(return_value='{"session_token": "token"}'),
+        raise_for_status=AsyncMock(),
+    )
+    responses = [failure] if failed_request == 0 else [first, failure]
+
+    @asynccontextmanager
+    async def post(*_args, **_kwargs):
+        response = responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        yield response
+
+    http = SimpleNamespace(post=post)
     monkeypatch.setattr(AvatarSession, "_ensure_http_session", lambda _: http)
     avatar = AvatarSession(simli_config=SimliConfig(api_key="key", face_id="face"))
     agent = SimpleNamespace(output=SimpleNamespace(replace_audio_tail=Mock()))
 
-    with pytest.raises(aiohttp.ClientConnectionError, match="provider disconnected"):
+    with pytest.raises(APIConnectionError, match="provider disconnected"):
         await avatar.start(
             agent,
             SimpleNamespace(name="room"),

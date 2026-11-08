@@ -225,16 +225,6 @@ pub enum SpeechSource {
     GenerateReply,
 }
 
-/// `speech_created`'s payload: the host wraps the `_core.SpeechHandle` in its `SpeechHandle` for
-/// the public `SpeechCreatedEvent` (`voice/events.py`).
-#[crate::host(record(module = "session_wire", name = "SpeechCreatedWire", emit))]
-#[derive(Clone)]
-pub struct SpeechCreated {
-    pub user_initiated: bool,
-    pub source: SpeechSource,
-    pub speech_handle: std::sync::Arc<dyn crate::voice::speech_handle::Speech>,
-}
-
 // --- the tool lifecycle ---------------------------------------------------------------------------
 //
 // `ToolExecutionUpdatedEvent.update`'s members, each crossing as its public record.
@@ -792,8 +782,8 @@ pub enum HostWire {
     UserTranscript(UserInputTranscribed),
     StartOfSpeech(StartOfSpeechEvent),
     EndOfSpeech(EndOfSpeechEvent),
-    #[host(emits = "SpeechCreatedEvent")]
-    SpeechCreated(SpeechCreated),
+    #[host(event)]
+    SpeechCreated(SpeechCreatedEvent),
     Diagnostic(DiagnosticWire),
     // The host emits its event from the `function_tools_executed` callback.
     #[host(ignored, emits = "FunctionToolsExecutedEvent")]
@@ -852,15 +842,18 @@ pub enum HostWire {
 // Public data contracts. Python behavior remains in its adapters.
 
 #[crate::host(record(
-    module = "session_events",
+    module = "session_wire",
     path = "livekit.agents.voice.events",
+    emit,
     dataclass,
+    deferred,
     frozen,
     kw_only,
     slots,
     arbitrary_types,
     constant(type = "speech_created")
 ))]
+#[derive(Clone)]
 pub struct SpeechCreatedEvent {
     /// True if the speech was created using public methods like `say` or `generate_reply`
     pub user_initiated: bool,
@@ -869,10 +862,12 @@ pub struct SpeechCreatedEvent {
     /// The speech handle that was created
     #[host(
         hide_repr,
-        annotation = "typing.Annotated[livekit.agents.voice.io.SpeechHandle, pydantic.Field(exclude=True)]"
+        annotation = "typing.Annotated[livekit.agents.voice.io.SpeechHandle, pydantic.Field(exclude=True)]",
+        resolve(module = "livekit.agents.voice.io", name = "SpeechHandle._of")
     )]
-    pub speech_handle: crate::HostRef,
-    #[host(default_factory = "time.time")]
+    pub speech_handle: std::sync::Arc<dyn crate::voice::speech_handle::Speech>,
+    // The host stamps this; the core has no wall clock.
+    #[host(skip, default_factory = "time.time")]
     pub created_at: f64,
 }
 

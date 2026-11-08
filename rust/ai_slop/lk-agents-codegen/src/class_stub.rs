@@ -65,6 +65,7 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
                 let control = Class {
                     name: sink.class.clone(),
                     methods: sink.methods.clone(),
+                    implements: None,
                     ..(*c).clone()
                 };
                 body.push_str(&format!(
@@ -330,7 +331,14 @@ fn class(c: &Class, imports: &mut Imports) -> String {
     if c.form == Form::Functions {
         return c.methods.iter().map(|m| format!("\n{}", method(c, m, imports))).collect();
     }
-    let mut s = format!("\nclass {}:\n", c.name);
+    let base = match c.implements.as_deref().and_then(|dotted| dotted.rsplit_once('.')) {
+        Some((module, name)) => {
+            imports.add(module, name);
+            format!("({name})")
+        }
+        None => String::new(),
+    };
+    let mut s = format!("\nclass {}{base}:\n", c.name);
     s.push_str(&docstring(&c.doc, "    "));
     for m in &c.methods {
         s.push_str(&method(c, m, imports));

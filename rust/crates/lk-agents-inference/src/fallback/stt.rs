@@ -16,7 +16,7 @@ use lk_agents_abi::{
 };
 use lk_agents_abi::{ApiConnectOptions, SpeechEvent, SpeechEventType};
 use lk_agents_abi::{BoxFuture, Spawner};
-use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
+use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT, Vad};
 use parking_lot::Mutex;
 
 use lk_agents_abi::errors::Invalid;
@@ -444,7 +444,8 @@ impl FallbackStt {
             .collect();
         if !not_streaming.is_empty() {
             return Err(Invalid(format!(
-                "STTs do not support streaming: {}. Wrap them with stt.StreamAdapter first.",
+                "STTs do not support streaming: {}. Provide a VAD to enable stt.StreamAdapter \
+                 automatically or wrap them with stt.StreamAdapter before using this adapter.",
                 not_streaming.join(", ")
             )));
         }
@@ -482,11 +483,35 @@ impl lk_agents_abi::stt::fallback::FallbackStt for FallbackStt {
     fn new(
         env: &ProcessEnv,
         stts: Vec<Arc<dyn Stt>>,
+        vad: Option<Arc<dyn Vad>>,
         attempt_timeout: f64,
         max_retry_per_stt: u32,
         retry_interval: f64,
         on_availability: Option<Arc<dyn ChainObserver>>,
     ) -> Result<Self, Invalid> {
+        // A repeated STT is adapted once, so its entries keep one health.
+        let mut adapted: Vec<(usize, Arc<dyn Stt>)> = Vec::new();
+        let stts = match vad {
+            Some(vad) => stts
+                .into_iter()
+                .map(|stt| {
+                    let key = stt
+                        .instance_id()
+                        .unwrap_or_else(|| Arc::as_ptr(&stt).cast::<()>() as usize);
+                    if let Some((_, done)) = adapted.iter().find(|(k, _)| *k == key) {
+                        return Arc::clone(done);
+                    }
+                    let done = crate::stt::stream_adapter::StreamAdapter::adapted(
+                        stt,
+                        Some(Arc::clone(&vad)),
+                        env.clock.clone(),
+                    );
+                    adapted.push((key, Arc::clone(&done)));
+                    done
+                })
+                .collect(),
+            None => stts,
+        };
         let policy = ChainPolicy {
             max_retry_per_backend: max_retry_per_stt,
             attempt_timeout: Some(attempt_timeout),

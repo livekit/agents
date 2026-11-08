@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from .._core import tool_report as tool_report
 from .chat_diff import AnchoredItem as AnchoredItem, DiffOps as DiffOps
 from .llm import SerializedImage as SerializedImage
 from .provider_data import (
@@ -20,4 +21,5 @@ __all__: list[str] = [
     "GoogleFormatData",
     "MistralFormatData",
     "SerializedImage",
+    "tool_report",
 ]

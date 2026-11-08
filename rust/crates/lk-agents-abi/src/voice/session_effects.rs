@@ -1,8 +1,6 @@
 //! What `start()` decides. The decision is in `lk-agents-voice/src/agent_session/`.
 
 /// A user-turn hook result: updated text, history and whether it stopped the response.
-pub type CompletedUserTurn = (Option<String>, Option<Vec<crate::ChatItem>>, bool);
-
 use crate::voice::session_options::RecordingOptions;
 use std::sync::Arc;
 
@@ -72,6 +70,16 @@ pub enum FillerReply {
     Spoke,
 }
 
+/// What `on_user_turn_completed` left: the message's text as the hook left it, the turn's items
+/// when it changed them, and whether it raised `StopResponse`.
+#[crate::host(record(module = "user_turn", dataclass, extract))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompletedUserTurn {
+    pub user_text: Option<String>,
+    pub items: Option<Vec<crate::ChatItem>>,
+    pub stop_response: bool,
+}
+
 /// The agent's hooks, run by the host and awaited by the core: each hook call is answered with
 /// what its method returns, or `Failed` when it raises (after `hook_failed`). A hook still running
 /// when the loop has returned is cancelled.
@@ -113,8 +121,7 @@ pub trait SessionHooks: Send + Sync {
         cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
     /// `agent.on_user_turn_completed(turn_ctx, new_message)`, `turn_ctx` built from `chat_ctx`
-    /// (a copy of the agent's own context): the message's text as the hook left it, the turn's
-    /// items when it changed them, and whether it raised `StopResponse`. Its span is current.
+    /// (a copy of the agent's own context). Its span is current.
     #[host(await, name = "_core_on_user_turn_completed")]
     fn on_user_turn_completed<'a>(
         &'a self,

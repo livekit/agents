@@ -7,6 +7,7 @@ use lk_agents_abi::errors::RefRegistry;
 use lk_agents_abi::telemetry::policy::UPLOAD_TIMEOUT_SECONDS;
 use lk_agents_abi::telemetry::record::{Record, RecordSink, SpanContext, SpanRecord, Status};
 use lk_agents_abi::worker::ipc_host::JobRun as _;
+use lk_agents_abi::worker::ipc_host::JobTask;
 use lk_agents_abi::worker::job::{ShutdownCause, StartJob};
 use lk_agents_telemetry::Tracer;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -57,6 +58,26 @@ impl Drop for ReportCleanup {
         }
     }
 }
+/// An entrypoint that returns at once.
+struct Entrypoint;
+
+impl JobTask for Entrypoint {
+    fn wait<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: &'a CallContext,
+    ) -> BoxFuture<'a, Result<(), HostError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn cancel<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: &'a CallContext,
+    ) -> BoxFuture<'a, Result<(), HostError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 impl JobProcess for Host {
     fn ping(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
         Box::pin(async { Ok(()) })
@@ -72,24 +93,8 @@ impl JobProcess for Host {
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a CallContext,
-    ) -> BoxFuture<'a, Result<HostRef, HostError>> {
-        Box::pin(async { Ok(self.objects.insert("entrypoint".into())) })
-    }
-    fn wait<'a>(
-        &'a self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-        _: &'a CallContext,
-        _: HostRef,
-    ) -> BoxFuture<'a, Result<(), HostError>> {
-        Box::pin(async { Ok(()) })
-    }
-    fn cancel<'a>(
-        &'a self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-        _: &'a CallContext,
-        _: HostRef,
-    ) -> BoxFuture<'a, Result<(), HostError>> {
-        Box::pin(async { Ok(()) })
+    ) -> BoxFuture<'a, Result<Arc<dyn JobTask>, HostError>> {
+        Box::pin(async { Ok(Arc::new(Entrypoint) as Arc<dyn JobTask>) })
     }
     fn close_session<'a>(
         &'a self,
@@ -188,6 +193,18 @@ async fn report_preparation_and_upload_share_one_budget_and_shutdown_always_cont
             false,
             "done".into(),
         );
+        let closed = Arc::new(AtomicBool::new(false));
+        let close = {
+            let closed = closed.clone();
+            move || -> BoxFuture<'static, ()> {
+                Box::pin(async move { closed.store(true, Ordering::Release) })
+            }
+        };
+        JobExecution::add_framework_shutdown(
+            &run,
+            "VoiceSession.aclose".into(),
+            FrameworkShutdown::Native(Box::new(close)),
+        );
         run.shutdown("test".into());
         let running = tokio::spawn({
             let host = host.clone();
@@ -200,6 +217,7 @@ async fn report_preparation_and_upload_share_one_budget_and_shutdown_always_cont
             .unwrap()
             .unwrap();
         assert_eq!(host.cancelled.load(Ordering::Acquire), late);
+        assert!(closed.load(Ordering::Acquire), "the shutdown runs the framework's native close");
         let events = host.events.lock().clone();
         assert_eq!(
             events,

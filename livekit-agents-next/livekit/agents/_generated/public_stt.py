@@ -3,6 +3,10 @@
 
 from __future__ import annotations
 
+from .facades_stt import (
+    FallbackRecognizeStream as FallbackRecognizeStream,
+    StreamAdapterWrapper as StreamAdapterWrapper,
+)
 from .stt import (
     RecognitionUsage as RecognitionUsage,
     RecognizeStream as RecognizeStream,
@@ -25,4 +29,6 @@ __all__: list[str] = [
     "STTError",
     "STT",
     "RecognizeStream",
+    "FallbackRecognizeStream",
+    "StreamAdapterWrapper",
 ]

@@ -19,15 +19,23 @@ pub trait TtsStream: Send + Sync + Sized + 'static {
     async fn aclose(&self);
 }
 
+/// A streamed synthesis's segments: the flushes asked for (`expected`) and the segments pushed.
+#[crate::host(record(module = "tts", dataclass, extract))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SegmentCount {
+    pub expected: usize,
+    pub actual: usize,
+}
+
 /// The checks a host synthesis's end applies.
 #[crate::host(functions(pid = false))]
 pub trait SynthesisChecks {
     /// Why a synthesis of ``text`` that pushed ``duration`` seconds of audio (and, streamed,
-    /// ``segments`` as ``(expected, actual)``) failed, or ``None``.
+    /// ``segments``) failed, or ``None``.
     #[host(function)]
     fn validate_synthesis(
         text: &str,
         duration: f64,
-        segments: Option<(usize, usize)>,
+        segments: Option<SegmentCount>,
     ) -> Option<String>;
 }

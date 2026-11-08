@@ -4,7 +4,7 @@ use lk_agents_abi::ChatItem;
 use lk_agents_abi::a2a::{
     metadata::VERBATIM_KEY,
     turn::HandlerOutput,
-    turn::{HandlerOutcome, HandlerRun},
+    turn::{HandlerCompleted, HandlerOutcome, HandlerRun},
 };
 use lk_agents_abi::storage::{
     StorageError, TaskState,
@@ -21,26 +21,29 @@ impl lk_agents_abi::a2a::turn::HandlerOutcomes for HandlerOutcomes {
         runs: Vec<HandlerRun>,
     ) -> Result<HandlerOutput, StorageError> {
         match outcome {
-            HandlerOutcome::Value { value } => output.output = Some(value),
-            HandlerOutcome::Completed { value, verbatim } => {
+            HandlerOutcome::Answer(value) | HandlerOutcome::Value(value) => {
+                output.output = Some(value)
+            }
+            HandlerOutcome::NoOutput => output.output = Some(Value::Null),
+            HandlerOutcome::Completed(HandlerCompleted { value, verbatim }) => {
                 if verbatim && value.is_string() {
                     output.metadata.insert(VERBATIM_KEY.into(), value.clone());
                 }
                 output.output = Some(value);
             }
-            HandlerOutcome::InputRequired { question } => {
+            HandlerOutcome::Asked(question) | HandlerOutcome::InputRequired(question) => {
                 output.output = Some(Value::String(question.clone()));
                 output.input_required = Some(question);
             }
-            HandlerOutcome::Failed { error } => {
+            HandlerOutcome::Failed(error) => {
                 output.error = Some(error);
                 output.output = None;
             }
-            HandlerOutcome::Rejected { reason } => {
+            HandlerOutcome::Rejected(reason) => {
                 output.status = Some(TaskState::Rejected);
                 output.output = Some(Value::String(reason));
             }
-            HandlerOutcome::Working { message } => {
+            HandlerOutcome::Working(message) => {
                 output.status = Some(TaskState::Working);
                 output.output = message.map(Value::String);
             }

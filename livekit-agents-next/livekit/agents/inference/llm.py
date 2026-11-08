@@ -112,7 +112,6 @@ class LLM(_facades.LLM, llm.LLM):
         self._provider = provider
         self._inference_class = inference_class
         self._extra_kwargs: dict[str, object] = dict(extra_kwargs or {})
-        # the client is built from these on first use, after a fork
         if _endpoint is None:
             credentials = _resolve_credentials(base_url, api_key, api_secret)
             self._base_url, self._api_key, self._api_secret = dataclasses.astuple(credentials)
@@ -125,6 +124,23 @@ class LLM(_facades.LLM, llm.LLM):
             )
             self._strict_tool_schema = _endpoint.strict_tool_schema
             self._gzip_body, self._msgpack_body = _endpoint.gzip_body, _endpoint.msgpack_body
+        self._native = self._new_native()
+
+    def _new_native(self) -> _core.InferenceLlm:
+        """The client over the current model and endpoint attributes."""
+        return _core.InferenceLlm(
+            self._model,
+            provider=self._provider,
+            base_url=self._base_url,
+            api_key=self._api_key,
+            api_secret=self._api_secret,
+            label=self._label,
+            inference_class=self._inference_class,
+            strict_tool_schema=self._strict_tool_schema,
+            gzip_body=self._gzip_body,
+            msgpack_body=self._msgpack_body,
+            extra_kwargs=self._extra_kwargs,
+        )
 
     @classmethod
     def from_model_string(cls, model: str) -> LLM:

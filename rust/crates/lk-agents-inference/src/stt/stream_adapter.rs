@@ -66,6 +66,10 @@ impl lk_agents_abi::stt::stream_adapter::SttStreamAdapter for StreamAdapter {
         StreamAdapter::new(stt, vad, env.clock.clone())
     }
 
+    fn capabilities(&self) -> SttCapabilities {
+        Stt::capabilities(self)
+    }
+
     async fn recognize(
         &self,
         frames: Vec<AudioFrame>,
