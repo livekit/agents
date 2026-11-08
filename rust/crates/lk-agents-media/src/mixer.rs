@@ -1,12 +1,6 @@
-//! `rtc.AudioMixer` (`livekit/rtc/audio_mixer.py`), sans-IO: live N-stream summing, not the
-//! recorder's timeline mixer. The host owns the async pull, per-stream timeout and output queue.
-//! Reference rules: a short buffer is zero-padded and then discarded; `blocksize = 0` means
-//! `sample_rate / 10`; a round where no stream had data emits nothing; a stream is removed only
-//! when exhausted and empty. Sums stay in `f32` and clip.
-
 use std::collections::BTreeMap;
 
-/// The reference keys on the iterator object, a host object; the host keeps the source.
+/// Identifies a stream; the host keeps the source it pulls from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StreamId(pub u64);
 
@@ -182,9 +176,8 @@ mod tests {
         Mixer::new(48_000, 1, blocksize)
     }
 
-    // Catches: emitting a block of silence when nothing arrived. The reference sleeps 1 ms and
-    // continues; emitting instead would publish a continuous silent track at the block rate,
-    // which is not the same as publishing nothing and holds the source open forever.
+    // The reference sleeps and continues: a silent block per round would publish a continuous
+    // silent track and hold the source open forever.
     #[test]
     fn a_round_in_which_no_stream_had_data_emits_nothing() {
         let mut m = mixer(4);
@@ -197,10 +190,7 @@ mod tests {
         assert_eq!(m.mix(), None);
     }
 
-    // Catches: summing in `i16` (or `f32 -> i32 -> i16`), which wraps. A mix of two loud sources
-    // becomes noise instead of a clipped peak -- reported as "the audio is corrupted", not as
-    // "the mix is too loud". Note `f32 as i16` itself saturates in Rust, so dropping the `clamp`
-    // is an equivalent mutation this test cannot and need not see.
+    // Summing in an integer type wraps two loud sources into noise instead of a clipped peak.
     #[test]
     fn a_loud_mix_clips_rather_than_wrapping() {
         let mut m = mixer(2);
@@ -211,9 +201,8 @@ mod tests {
         assert_eq!(m.mix(), Some(vec![32_767, -32_768]));
     }
 
-    // Catches: retaining a short buffer for the next round. It is the obvious "improvement" and
-    // it desynchronises that stream from every other one for the rest of the call, because it
-    // then runs a fixed offset behind the block clock.
+    // A short buffer retained for the next round would run that stream a fixed offset behind
+    // the block clock for the rest of the call.
     #[test]
     fn a_short_buffer_is_padded_and_then_discarded() {
         let mut m = mixer(4);
@@ -227,9 +216,8 @@ mod tests {
         assert_eq!(m.mix(), Some(vec![300, 0, 0, 0]));
     }
 
-    // Catches: `had_data` being read as "a frame arrived this round". A stream that was pushed
-    // more than a block last round still has data to emit, and reading it the other way drops
-    // the tail of every sound whose length is not a multiple of the block.
+    // `had_data` means non-empty on entry, not "a frame arrived this round"; otherwise the tail
+    // of every sound whose length is not a multiple of the block is dropped.
     #[test]
     fn a_buffer_left_over_from_last_round_counts_as_data() {
         let mut m = mixer(2);
@@ -241,8 +229,8 @@ mod tests {
         assert_eq!(m.mix(), None, "and now it really is empty");
     }
 
-    // Catches: removing an exhausted stream before it has emitted what it holds. That drops the
-    // last partial block of every sound -- up to 100 ms of the end of every clip.
+    // An exhausted stream must emit what it holds before removal, or up to 100 ms of every clip
+    // is lost.
     #[test]
     fn an_exhausted_stream_with_a_partial_buffer_gets_one_more_padded_round() {
         let mut m = mixer(4);
@@ -285,8 +273,7 @@ mod tests {
         assert_eq!(m.mix(), Some(vec![1, 2, 3, 4]));
     }
 
-    // Catches: a timeout being logged instead of counted. A source that times out every round is
-    // a sound that silently never plays, and a log line is not observable from a test or a metric.
+    // A source that times out every round is a sound that silently never plays.
     #[test]
     fn a_timeout_is_a_counter_and_does_not_stop_the_round() {
         let mut m = mixer(2);

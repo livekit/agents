@@ -1,10 +1,9 @@
-//! The process's own instruments (the worker's load, jobs and process pool): the current value of
-//! each, read whole by a pull exporter. Unlike [`crate::measure`], nothing here belongs to a job
-//! or leaves through a sink.
-
 use lk_agents_abi::telemetry::decl::{Instrument, MetricDecl};
 use lk_agents_abi::telemetry::record::InstrumentKind;
 use parking_lot::Mutex;
+
+// Unlike `crate::measure`, these values belong to no job and never reach a sink: a pull exporter
+// reads them whole.
 
 /// An instrument's current value.
 #[derive(Clone, Debug, PartialEq)]

@@ -1,7 +1,3 @@
-//! Image preparation bounds: pixel and byte caps, resize validation and encoding of one frame or
-//! data URL, as the admitted image worker runs it. The provider resolver uses the same bounds
-//! and reads a host frame's pixels from the frame itself.
-
 use super::{EncodeOptions, ImageFormat, MediaError, ResizeOptions, RgbaFrame};
 use lk_agents_abi::llm::provider_format::{FormatError, ImageResolver, SerializedImage};
 use lk_agents_abi::media::images::{ImageEncodeOptions, ImageInput, PreparedImage, ResizeStrategy};

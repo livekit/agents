@@ -1,5 +1,3 @@
-//! Process shutdown: one signal owner and one deadline for draining and final host cleanup.
-
 use lk_agents_abi::cli::{CliError, CliShutdown};
 use lk_agents_worker::config::DrainOptions;
 use parking_lot::{Condvar, Mutex};

@@ -1,6 +1,3 @@
-//! The WAV fast path, `_WavInlineDecoder` (`utils/codecs/decoder.py:145-335`). A push that begins
-//! with `RIFF` while streaming starts a new segment: providers stream several files down one connection.
-
 use crate::AudioFormat;
 use crate::error::{CodecError, Result};
 
@@ -22,7 +19,7 @@ enum State {
 
 const RIFF_MAGIC: &[u8; 4] = b"RIFF";
 
-/// A canonical 16-bit PCM WAV file around interleaved little-endian `pcm` (`to_wav_bytes()`).
+/// A canonical 16-bit PCM WAV file around interleaved little-endian `pcm`.
 pub fn encode(sample_rate: u32, num_channels: u16, pcm: &[u8]) -> Vec<u8> {
     let data_len = u32::try_from(pcm.len()).unwrap_or(u32::MAX);
     let block_align = num_channels * 2;
@@ -77,8 +74,8 @@ impl WavDecoder {
     pub fn push(&mut self, data: &[u8]) -> Result<Vec<WavSegment>> {
         let mut out: Vec<WavSegment> = Vec::new();
 
-        // The restart check is at the start of a push only, as in the reference: scanning for
-        // `RIFF` mid-stream would eventually corrupt 16-bit PCM containing those bytes.
+        // Only a push that begins with `RIFF` restarts a segment: providers stream several files
+        // down one connection, and 16-bit PCM eventually contains the bytes `RIFF`.
         if self.state == State::Streaming && data.len() >= 4 && &data[..4] == RIFF_MAGIC {
             self.reset_state();
         }

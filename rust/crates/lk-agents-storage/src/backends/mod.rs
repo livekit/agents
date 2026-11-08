@@ -1,5 +1,3 @@
-//! Storage contracts, implemented by Cloud AgentDB and local SQLite.
-
 pub mod agentdb;
 pub mod sqlite;
 
@@ -77,3 +75,7 @@ pub async fn with_thread<T, E: From<StorageError>>(
     thread.close().await;
     result
 }
+
+#[cfg(test)]
+#[path = "backends_tests.rs"]
+mod tests;

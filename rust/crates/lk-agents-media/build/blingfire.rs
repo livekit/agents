@@ -1,7 +1,3 @@
-//! Compiles the vendored BlingFire client library, tokeniser (models compiled in as C arrays), our
-//! C++ wrapper and the C shim with `cc`: no CMake, no network. The defines are upstream's
-//! `CMakeLists.txt` ones for the target: UNIX, or Windows (no `BLING_FIRE_NOWINDOWS`).
-
 use std::path::{Path, PathBuf};
 
 use super::{cache, settings};

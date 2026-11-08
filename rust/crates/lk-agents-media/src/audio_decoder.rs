@@ -1,7 +1,3 @@
-//! The WAV half of `AudioStreamDecoder` (`utils/codecs/decoder.py:337-515`) as one synchronous
-//! calculator: `push` returns the PCM its bytes produced; the channel, executor and framing are the
-//! runtime's.
-
 use crate::AudioFormat;
 use crate::error::{CodecError, Result};
 use crate::resample::AudioResampler;
@@ -209,9 +205,7 @@ mod tests {
         (0..n).map(|i| ((i % 200) as i16 - 100) * 100).collect()
     }
 
-    // Catches: routing `audio/wav` through the ffmpeg path (slow, and unavailable in the default
-    // build) or failing it outright. This is the case that unblocks `AudioEmitter` today, so it
-    // has to work with no features enabled at all.
+    // `audio/wav` must decode with no features enabled, never through the ffmpeg path.
     #[test]
     fn a_wav_mime_type_decodes_with_no_features_enabled() {
         let want: Vec<i16> = vec![3, -3, 300, -300];
@@ -222,10 +216,8 @@ mod tests {
         assert!(d.flush().unwrap().is_empty());
     }
 
-    // Catches: a rate mismatch refused (before PLAN.md F1 it was `ResampleRequired`) or emitted
-    // at the source rate -- a pitch shift nothing downstream can detect; the resampler built with
-    // its rates swapped (upsampling must lengthen); and the channel count not reaching soxr
-    // (interleaved stereo resampled as mono runs both channels through one filter).
+    // A rate mismatch is resampled, in the right direction and with the right channel count,
+    // rather than refused or emitted at the source rate.
     #[test]
     fn a_rate_mismatch_is_resampled_to_the_requested_rate() {
         // (requested rate, file rate, channels, input samples, expected output frames)
@@ -252,9 +244,7 @@ mod tests {
         assert_eq!(d.output_format(), Some(AudioFormat::new(16_000, 1)));
     }
 
-    // Catches: dropping the resampler's tail at end of stream. soxr always holds a filter delay;
-    // losing it clips the last milliseconds of every utterance, which gets reported as "the agent
-    // cuts itself off".
+    // soxr always holds a filter delay; dropping it at end of stream clips every utterance.
     #[test]
     fn flush_releases_the_resamplers_tail() {
         let mut d = AudioDecoder::wav(Some(48_000), 1, limits()).unwrap();
@@ -267,13 +257,9 @@ mod tests {
         );
     }
 
-    // Catches: reusing the first file's resampler for a second, differently-rated file, and
-    // losing the first one's tail when the format changes. Concatenated WAVs from one provider
-    // can change rate mid-connection; a stale resampler plays the rest at the wrong speed.
-    //
-    // Duration conservation is the observation, because with a real resampler there is no call
-    // count to check: 4800 samples at 48 kHz plus 1600 at 16 kHz is 0.2 s, and 0.2 s at 24 kHz is
-    // 4800 samples. A dropped tail or a stale resampler both make that number wrong.
+    // Concatenated WAVs can change rate mid-connection. Duration is conserved only if each file
+    // gets a fresh resampler and every tail is kept: 0.1 s at 48 kHz plus 0.1 s at 16 kHz is
+    // 4800 samples at 24 kHz.
     #[test]
     fn a_format_change_drains_the_old_resampler_before_building_a_new_one() {
         let mut d = AudioDecoder::wav(Some(24_000), 1, limits()).unwrap();
@@ -286,9 +272,8 @@ mod tests {
         );
     }
 
-    // Catches: throwing away the previous resampler's tail when the NEXT file happens to match
-    // the target rate and so takes the straight-through path. That branch is easy to write as an
-    // early return, and then the join between the two files is a click.
+    // A next file at the target rate takes the straight-through path, which must still flush the
+    // previous resampler's tail.
     #[test]
     fn a_change_to_a_matching_rate_still_drains_the_old_resampler_first() {
         let mut d = AudioDecoder::wav(Some(48_000), 1, limits()).unwrap();
@@ -308,9 +293,7 @@ mod tests {
         assert!((5000..=5100).contains(&(first.len() + second.len())));
     }
 
-    // Catches: a stereo WAV framed as the emitter's mono (every other sample a channel: twice the
-    // length, half the pitch) or a mono one as stereo. The WAV path converts the file's channels
-    // to the requested count, as the container path does.
+    // The WAV path converts the file's channels to the requested count, as the container path does.
     #[test]
     fn the_wav_path_converts_the_files_channels_to_the_requested_count() {
         let mut d = AudioDecoder::wav(Some(24_000), 1, limits()).unwrap();
@@ -323,8 +306,7 @@ mod tests {
         assert_eq!(d.output_format(), Some(AudioFormat::new(24_000, 2)));
     }
 
-    // Catches: a header-only push being reported as an error or as silence-with-a-format. It is
-    // neither: it is simply no audio yet, and the caller must be able to push again.
+    // A header-only push is no audio yet: neither an error nor silence.
     #[test]
     fn a_push_that_only_carries_a_header_decodes_to_nothing_without_failing() {
         let file = wav_file(24_000, 1, &[9, 8, 7]);

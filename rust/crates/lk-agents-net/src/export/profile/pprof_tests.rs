@@ -1,14 +1,10 @@
-//! Regenerates `pprof.rs`, the pprof message types a job profile encodes, from the
-//! `perftools.profiles` `pprof/profile.proto` backend-common vendors (and Cloud reads profiles
-//! with), at the pinned commit [`COMMIT`]. Needs `protoc`:
-//!
-//! ```text
-//! git -C ~/livekit/backend-common checkout 'a9bfd4360b6b69afbbe3bba221b0e542548f2e30'
-//! BACKEND_COMMON_DIR=~/livekit/backend-common \
-//!     cargo test -p lk-agents-net --lib export::profile::pprof_tests -- --ignored
-//! ```
-
 use std::path::PathBuf;
+
+// Regenerates `pprof.rs` from backend-common's `pprof/profile.proto` at the pinned `COMMIT` (needs
+// `protoc`):
+//   git -C ~/livekit/backend-common checkout 'a9bfd4360b6b69afbbe3bba221b0e542548f2e30'
+//   BACKEND_COMMON_DIR=~/livekit/backend-common \
+//       cargo test -p lk-agents-net --lib export::profile::pprof_tests -- --ignored
 
 const COMMIT: &str = "a9bfd4360b6b69afbbe3bba221b0e542548f2e30";
 const SOURCE: &str = "pprof/profile.proto";

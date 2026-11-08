@@ -1,10 +1,9 @@
-//! Local authority to disclose a caller's thread. A card is never an authorization source;
-//! this verifier is used only by delegation, independently of ordinary endpoint authentication.
-
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use livekit_token::TokenVerifier;
 use lk_agents_core::a2a::delegation::VerifiedAuthority;
+
+// A card is never an authorization source.
 
 /// Explicit application trust in one destination for one caller's thread.
 #[derive(Debug, Clone, Copy)]

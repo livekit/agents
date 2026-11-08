@@ -1,12 +1,12 @@
-//! `voice/recorder_io/`: both sides of a call in one stereo ogg/opus file. Both channels sit on one
-//! absolute timeline and silence is whatever nothing was written over (#6921).
-
 use std::collections::VecDeque;
 
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::recorder::RecordingFailure;
 
 use crate::{AudioResampler, OnChange, Quality, ResampleError};
+
+// Both channels of the stereo file sit on one absolute timeline; silence is whatever nothing
+// was written over.
 
 mod file;
 pub use file::{BetweenBlocks, FileLimits, RecordingCommand, RecordingFile, RecordingLimits};
@@ -368,7 +368,7 @@ impl SegmentPlacer {
         }
     }
 
-    /// A jump in `offset` is audio the sink discarded, so it is honoured (#6728).
+    /// A jump in `offset` is audio the sink discarded, so it is honoured.
     pub fn on_playback_progressed(
         &mut self,
         started_at: f64,
@@ -446,7 +446,7 @@ impl SegmentPlacer {
         duration: f64,
         max_duration: Option<f64>,
     ) -> Option<Placed> {
-        // A report covering no time places nothing (#5279).
+        // A report covering no time places nothing.
         if self.pcm.is_empty() || duration <= 0.0 {
             return None;
         }
@@ -571,5 +571,5 @@ impl PcmFrame {
 }
 
 #[cfg(test)]
-#[path = "../recorder_tests.rs"]
+#[path = "recorder_tests.rs"]
 mod tests;

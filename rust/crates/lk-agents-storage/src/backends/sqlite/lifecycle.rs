@@ -1,6 +1,3 @@
-//! Coordinate local thread operations and deletion across processes. The lock file is
-//! permanent: replacing its inode would let two processes lock different files.
-
 use std::fs::{File, OpenOptions};
 use std::path::Path;
 
@@ -10,6 +7,8 @@ use crate::sql::{Bind, SqlValue, first_cell};
 
 use super::connection::{batch, connect, query};
 use super::{DeleteRegistryThread, RegistryThreadIsLive};
+
+// The lock file is permanent: replacing its inode would let two processes lock different files.
 
 pub(super) struct Lock<'a>(&'a File);
 

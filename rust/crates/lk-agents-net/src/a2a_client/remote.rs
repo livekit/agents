@@ -1,6 +1,3 @@
-//! A tool call's delegation to a remote agent: A2A owns every decision; this runs it over the
-//! endpoint client and the host's progress and ask-the-person callbacks.
-
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -456,8 +453,7 @@ impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
         let Some(project) = project.serving(&endpoint)? else { return Ok(None) };
         let credentials = crate::a2a_auth::Credentials::new(project.api_key, project.api_secret);
         match thread_id.filter(|id| !id.is_empty()) {
-            // the caller's thread, shared with the endpoint (docs/internals/storage.md "Two
-            // brains, one thread"): an endpoint call alone grants no thread access
+            // An endpoint call alone grants no thread access.
             Some(thread_id) => credentials.thread_grant_token(
                 AuthGrant {
                     thread_ids: vec![thread_id],
@@ -468,7 +464,7 @@ impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
                 DELEGATE.into(),
                 3600,
             ),
-            // no thread to share: enough to read the card
+            // No thread to share: enough to read the card.
             None => credentials.project_token(DELEGATE.into(), 3600),
         }
         .map(Some)

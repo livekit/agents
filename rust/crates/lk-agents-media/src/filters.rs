@@ -1,5 +1,3 @@
-//! Numeric filters for media and endpointing.
-
 use lk_agents_abi::Maybe;
 pub use lk_agents_abi::utils::filters::FilterError;
 
@@ -277,8 +275,7 @@ mod tests {
         );
     }
 
-    // Catches: `update_base` doing nothing (`utils/exp_filter.py:63`). Unvalidated, as in the
-    // reference.
+    // `update_base` must change alpha; unvalidated, as in the reference.
     #[test]
     fn update_base_replaces_the_alpha_and_skips_the_validation_reset_applies() {
         let mut f =

@@ -1,8 +1,5 @@
-//! Every media format the agent speaks: container decode to PCM, ogg/opus encode, image encode,
-//! filters and resampling, shared by the subject cores and runtime.
-//! Resampling uses libsoxr; `blingfire`, `images` and `ffmpeg` add optional media support.
-//! On the decode path a drift flush must not tear the [`AudioDecoder`] down: the watchdog fires
-//! mid-container (`tts/tts.py:1300-1310`).
+//! Media formats for the agent: container decode to PCM, ogg/opus encode, image encode, filters
+//! and libsoxr resampling. `blingfire`, `images` and `ffmpeg` are optional features.
 
 pub mod audio_byte_stream;
 pub mod audio_decoder;

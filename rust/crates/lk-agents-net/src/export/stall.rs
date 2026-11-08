@@ -1,7 +1,3 @@
-//! Event-loop stalls (docs/internals/telemetry.md "Event-loop stalls"): each one's measurement,
-//! and its `event_loop_blocked` span (with the loop's stack) and warning line, within a rate limit
-//! that a loop still stuck is exempt from.
-
 use lk_agents_abi::telemetry::decl::Seconds;
 use lk_agents_abi::telemetry::errors::{ErrorType, Failure};
 use lk_agents_abi::telemetry::instruments::EventLoopBlockedDuration;

@@ -1,6 +1,3 @@
-//! Native A2A client execution. Protocol decisions stay in `lk-agents-a2a::client`; discovery,
-//! HTTP/SSE and owned cancellation run here through the shared HTTP pool and task/source owners.
-
 pub mod authority;
 pub mod host;
 pub mod remote;
@@ -802,3 +799,7 @@ fn checked_url(url: &str) -> Result<url::Url, ClientError> {
     }
     Ok(url)
 }
+
+#[cfg(test)]
+#[path = "a2a_client_tests.rs"]
+mod tests;

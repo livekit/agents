@@ -6,10 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# The shared async transport (decision 77): owned tasks, server-sent events, HTTPS with phase
-# deadlines, the WebSocket seam and its tungstenite implementation, LiveKit token signing, the
-# delegation A2A client (decision 85) and telemetry's export (`export`). Used by inference,
-# storage backends, the worker and runtime.
+# The shared async transport: owned tasks, server-sent events, HTTPS with phase deadlines, the
+# WebSocket seam, LiveKit token signing, the delegation A2A client and telemetry's export.
 [lib]
 doctest = false
 
@@ -61,7 +59,3 @@ sysinfo.workspace = true
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util", "net", "io-util"] }
 # Regenerates `export/otlp/proto.rs` (an ignored test); already in the lock through livekit-protocol.
 prost-build = "0.14"
-
-[[test]]
-name = "a2a_client"
-path = "src/a2a_client_tests.rs"

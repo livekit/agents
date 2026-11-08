@@ -1,11 +1,3 @@
-//! The LiveKit Cloud session report at job end (docs/internals/telemetry.md "Session report"):
-//! the report's records go to the exporter with the job's final flush, then the recording upload.
-//! Not user telemetry: Cloud only.
-//!
-//! - [`events`]: a session's retained event snapshots.
-//! - [`recording`]: the multipart recording upload.
-//! - [`tagger`]: the session's tags, stamped by the process clock.
-
 pub mod events;
 pub mod recording;
 pub mod tagger;
@@ -23,6 +15,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use crate::export::otlp::cloud::PostError;
 use crate::export::otlp::{CloudEndpoint, Exporter};
 pub use events::EventRetention;
+
+// Cloud only, not user telemetry: the records go with the job's final flush, then the recording.
 
 /// Whether the recording upload carries the job's profile: on once Cloud ingest accepts the
 /// `profile` part (an unknown part fails the whole upload).
@@ -173,5 +167,5 @@ struct RetainedEvents {
 }
 
 #[cfg(test)]
-#[path = "../session_report_tests.rs"]
+#[path = "session_report_tests.rs"]
 mod tests;

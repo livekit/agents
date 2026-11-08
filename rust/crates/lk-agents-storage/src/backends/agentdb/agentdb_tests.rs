@@ -1,12 +1,63 @@
-//! Task summaries through the real SDK HTTP adapter and the generated Storage contract.
-
-use lk_agents_abi::storage::{Storage, StorageError, TaskState};
-use lk_agents_net::env::ProcessEnv;
-use lk_agents_storage::storage::Namespace;
+use lk_agents_abi::storage::{Storage as _, TaskState};
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+
+use super::*;
+use crate::storage::Namespace;
+
+#[tokio::test]
+async fn unavailable_after_sending_a_commit_is_uncertain_and_is_not_resent() {
+    use connection::tests::{dial, hello_ok, reply, serve};
+    use connection::wire as pb;
+    fn dying(message: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        match &message.message {
+            Some(pb::client_message::Message::Hello(_)) => vec![hello_ok()],
+            Some(pb::client_message::Message::Batch(_)) => {
+                vec![reply(pb::server_message::Message::Error(pb::Error {
+                    code: "unavailable".into(),
+                    message: "database is shutting down".into(),
+                }))]
+            }
+            _ => Vec::new(),
+        }
+    }
+    let (url, seen) = serve(dying, false).await;
+    let conn = dial(&url, "DB_1").await.unwrap();
+    let pooled = Pooled {
+        conn,
+        schema: SchemaCell::default(),
+        pool: Arc::default(),
+        closed: AtomicBool::new(false),
+    };
+    let result = pooled.batch(vec![Statement::raw("UPDATE lanes SET version = version + 1")]).await;
+    assert!(
+        matches!(result, Err(StorageError::Uncertain(ref message)) if message.contains("database is shutting down")),
+        "{result:?}"
+    );
+    let batches = seen
+        .lock()
+        .iter()
+        .filter(|message| matches!(message.message, Some(pb::client_message::Message::Batch(_))))
+        .count();
+    assert_eq!(batches, 1, "a commit with an unknown outcome must not be resent");
+    pooled.conn.aclose().await;
+}
+
+#[tokio::test]
+async fn the_data_plane_sits_under_the_project_public_api() {
+    let minter = || TokenMinter::new("devkey", "secret").unwrap();
+    let storage = |url: &str| {
+        AgentDbStorage::new(AgentDbOptions::new(url), minter(), &ProcessEnv::current_runtime())
+    };
+    let staging = storage("wss://my-app.staging.livekit.cloud").unwrap();
+    assert_eq!(staging.opts.url, "https://beta-api.staging.livekit.cloud");
+    assert_eq!(staging.data_plane, "wss://beta-api.staging.livekit.cloud/v0/agentstore/db");
+    let local = storage("ws://localhost:9000/").unwrap();
+    assert_eq!(local.data_plane, "ws://localhost:9000/v0/agentstore/db");
+    assert!(storage("ftp://x").is_err());
+}
 
 struct Peer {
     url: String,

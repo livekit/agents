@@ -1,6 +1,3 @@
-//! Every credential the framework signs, with LiveKit's token crate: the gateway's, observability's,
-//! the agent database's, the worker's registration and the room join tokens.
-
 use std::time::Duration;
 
 use livekit_token::{

@@ -1,8 +1,3 @@
-//! What the hosting process lends the async crates' clients: its Tokio runtime,
-//! the executor its host awaits on, the host's clock and its connection pool, as one
-//! [`ProcessEnv`] value. Internal constructors take the handles they need;
-//! a class the host constructs receives the runtime's value from the generated bindings.
-
 use std::sync::Arc;
 
 use lk_agents_abi::{Clock, Spawner};

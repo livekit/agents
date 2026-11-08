@@ -1,7 +1,3 @@
-//! HTTPS exchanges: each attempt sends its request and reports what the transport observed
-//! (connection, request handed over, response bytes, decoded answer, end or failure) and decides
-//! nothing. The request's core owns every deadline and retry.
-
 pub mod exchange;
 
 /// The HTTP vocabulary of [`GatewayHttp`]'s callers.

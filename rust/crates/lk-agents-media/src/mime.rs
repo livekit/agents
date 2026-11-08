@@ -1,8 +1,6 @@
-//! `_mime_to_av_format` (`utils/codecs/decoder.py:35-62`).
-
 use lk_agents_abi::media::codecs::Container;
 
-/// `None` means "let ffmpeg probe". Divergence: media-type parameters are stripped first, so
+/// `None` means "let ffmpeg probe". Media-type parameters are stripped first, so
 /// `audio/webm;codecs=opus` (what the JS SDK sends) is not left to a too-small probe.
 pub fn mime_container(mime: &str) -> Option<Container> {
     let base = mime.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
@@ -60,9 +58,7 @@ pub fn audio_decoding(mime_type: &str) -> Result<AudioDecoding, UnknownMime> {
 mod tests {
     use super::*;
 
-    // Catches: building a decoder for the majority path, or refusing it. `audio/pcm` is what
-    // nearly every plugin emits; a decoder there puts a copy and a resampler in front of every
-    // frame of every session, and a refusal breaks every plugin at once.
+    // `audio/pcm`, which nearly every plugin emits, builds no decoder and is not refused.
     #[test]
     fn pcm_and_raw_are_passed_through_whatever_their_parameters_or_case() {
         for mime in
@@ -72,8 +68,7 @@ mod tests {
         }
     }
 
-    // Catches: accepting a mime type nothing can decode, which is the obvious over-correction to
-    // "we decode containers now" -- and the sentence, which a plugin author reads in a traceback.
+    // A mime type nothing can decode is refused, with a sentence a plugin author can act on.
     #[test]
     fn a_known_container_is_decoded_and_an_unknown_one_is_refused() {
         assert_eq!(audio_decoding(" Audio/MPEG "), Ok(AudioDecoding::Decode(Container::Mp3)));
@@ -90,12 +85,8 @@ mod tests {
         assert!(audio_decoding("").is_err(), "an empty declaration is not PCM");
     }
 
-    // Catches: a typo or dropped row in the alias table (`audio/x-wav` taking the ffmpeg path
-    // instead of the WAV fast path is silent), a media-type parameter defeating the lookup
-    // (`audio/webm;codecs=opus` is what the JS SDK sends for pre-connect audio, and falling
-    // through to probing at `probesize=32` fails), or a guess for an unknown type -- `None` means
-    // "probe", and guessing mp3 is how an ID3 tag gets framed as audio. The reference lower-cases
-    // first, so every row is also checked upper-cased.
+    // Every alias row, also upper-cased, with media-type parameters stripped; an unknown type
+    // means "probe" rather than a guess, since guessing mp3 frames an ID3 tag as audio.
     #[test]
     fn a_mime_type_maps_to_the_reference_container_or_asks_for_probing() {
         let table = [

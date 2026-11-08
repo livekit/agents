@@ -6,14 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 build = "build/mod.rs"
 
-# §10: audio decode for playout, ogg/opus encode for `RecorderIO`, and (in `images`) the image
-# encoder `to_provider_format` needs.
-#
-# Synchronous CPU work, including libsoxr sample-rate conversion. Optional FFmpeg and
-# BlingFire support require additional native builds.
-#
-# Voice and inference compose these synchronous data-plane algorithms. Runtime owns their
-# scheduling, admission, I/O and asynchronous delivery.
+# Synchronous CPU work; the runtime owns scheduling, admission, I/O and asynchronous delivery.
 [features]
 default = []
 # Vendored sentence and word tokenization, including the C++ wrapper and models.
@@ -31,14 +24,9 @@ log.workspace = true
 # The same resampling library as `rtc.AudioResampler`, for every build and caller.
 soxr-sys = "0.1.3"
 
-# `images/` only -- see that module's docs. `image` runs with default-features off: no rayon, no
-# HDR/TIFF/WebP/AVIF decoders, no `ImageReader` probing. JPEG and PNG are the only two formats
-# `EncodeOptions.format` admits, and both are encode-only -- nothing here decodes an image.
-#
-# Provider image records live in ABI; this crate produces them without putting encoders in ABI.
 lk-agents-abi = { path = "../lk-agents-abi" }
-# `media_queue`'s own metrics: an audio queue measures its drops and head drain.
 lk-agents-telemetry = { path = "../lk-agents-telemetry" }
+# Default features off: JPEG and PNG encode only, no decoders and no rayon.
 image = { workspace = true, optional = true }
 
 [build-dependencies]
@@ -56,5 +44,5 @@ tempfile = "3"
 
 # The native artifact cache is build-script code; its test sits beside it.
 [[test]]
-name = "native_cache"
-path = "build/native_cache_tests.rs"
+name = "cache"
+path = "build/cache_tests.rs"

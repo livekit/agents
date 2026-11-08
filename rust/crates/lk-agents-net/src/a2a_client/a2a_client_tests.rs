@@ -1,6 +1,3 @@
-//! The native A2A client against a local HTTP/SSE peer, including chunked request bodies and
-//! fragmented response bytes. The peer owns every accepted socket and settles them on shutdown.
-
 use lk_agents_telemetry::Cx;
 use std::collections::BTreeMap;
 use std::io;
@@ -8,6 +5,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use crate::a2a_client::{AgentClient, CleanupObservation, Reply};
+use crate::clock::RealClock;
+use crate::env::ProcessEnv;
+use crate::source::Pulled;
 use a2a::{JsonRpcRequest, JsonRpcResponse, Message, Part, PartContent, Role};
 use lk_agents_abi::a2a::metadata::REASON_KEY;
 use lk_agents_abi::errors::{ApiErrorKind, ProviderError, TimeoutPhase};
@@ -15,10 +16,6 @@ use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed};
 use lk_agents_core::a2a::client::{ClientError, TaskUpdate};
 use lk_agents_core::a2a::rpc::TaskRef;
-use lk_agents_net::a2a_client::{AgentClient, CleanupObservation, Reply};
-use lk_agents_net::clock::RealClock;
-use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::source::Pulled;
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -337,7 +334,6 @@ fn message(id: &str, text: &str) -> Message {
     }
 }
 
-/// The test's runtime on `clock`.
 fn env(clock: Arc<dyn Clock>) -> ProcessEnv {
     ProcessEnv { clock, ..ProcessEnv::current_runtime() }
 }
@@ -560,7 +556,7 @@ async fn malformed_messages_fail_without_discovery_or_remote_side_effects() {
 #[test]
 fn an_unusable_process_runtime_is_a_final_error_not_a_retryable_connection_failure() {
     let env = ProcessEnv {
-        runtime: || Err(lk_agents_net::env::ProcessError::Inherited),
+        runtime: || Err(crate::env::ProcessError::Inherited),
         ..ProcessEnv::current_runtime()
     };
     let options = ApiConnectOptions::default();

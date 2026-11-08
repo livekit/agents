@@ -1,5 +1,3 @@
-//! Local ThreadService: generated wire contract over the shared storage engine.
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -444,3 +442,7 @@ async fn tasks(
     let next = if more { Cursor::encode(listing, last) } else { String::new() };
     Ok(GetThreadTasksResponse { items, page_info: page_info(next) })
 }
+
+#[cfg(test)]
+#[path = "http_tests.rs"]
+mod tests;

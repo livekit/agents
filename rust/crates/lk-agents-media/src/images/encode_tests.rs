@@ -16,10 +16,7 @@ fn resize(source: (u32, u32), target: (u32, u32), strategy: ResizeStrategy) -> R
         .unwrap()
 }
 
-// Catches: compositing alpha instead of discarding it. PIL's `convert("RGB")` on an RGBA image
-// drops the channel -- a fully transparent red pixel stays (255, 0, 0). Anything that blends
-// against the black canvas turns every screenshot the anthropic and browser plugins send
-// darker, and does it silently.
+// PIL's `convert("RGB")` drops alpha: a fully transparent red pixel stays (255, 0, 0).
 #[test]
 fn alpha_is_discarded_not_composited() {
     let data = [255, 0, 0, 0, 0, 255, 0, 128];
@@ -28,10 +25,7 @@ fn alpha_is_discarded_not_composited() {
     assert_eq!(image.get_pixel(1, 0).0, [0, 255, 0]);
 }
 
-// Catches: accepting a buffer whose length does not match the dimensions -- a strided frame,
-// or an RGB buffer passed where RGBA was meant. `chunks_exact` would silently drop the
-// remainder and `from_raw` would then fail an assertion deep inside the image crate; the frame
-// has to be rejected at the door with both numbers named.
+// A buffer whose length does not match the dimensions is rejected with both numbers named.
 #[test]
 fn a_buffer_that_is_not_exactly_width_times_height_times_four_is_rejected() {
     let short = vec![0u8; 15];
@@ -43,10 +37,7 @@ fn a_buffer_that_is_not_exactly_width_times_height_times_four_is_rejected() {
     assert!(rgb_from_frame(frame(2, 2, &long)).is_err(), "a strided buffer is not tightened");
 }
 
-// Catches: letting a zero-dimension frame through to the encoder. The reference dies inside
-// PIL with a `ZeroDivisionError` or a `SystemError` depending on which branch it reaches
-// first; either way there is nothing to encode, and `f64` division would hand us `inf` here
-// rather than a diagnosis.
+// A zero-dimension frame has nothing to encode and must not reach the encoder.
 #[test]
 fn a_zero_sized_frame_is_refused_before_any_division() {
     let empty: Vec<u8> = Vec::new();
@@ -56,11 +47,8 @@ fn a_zero_sized_frame_is_refused_before_any_division() {
     );
 }
 
-// Catches: the `scale_*` aspect comparison done in integer arithmetic or with its branches
-// swapped -- `fit` must land inside the box from either orientation (an oversized image is
-// billed), `cover` outside it, and `<` vs `>` is the only difference between them; `skew`
-// respecting the aspect ratio (it is the one strategy that must not); and a comparison
-// loosened to `>=`: at an exact tie `int()` truncation makes the losing branch come out square.
+// `fit` lands inside the box from either orientation, `cover` outside it, and `skew` ignores
+// the aspect ratio; at an exact tie `int()` truncation makes the losing branch come out square.
 #[test]
 fn the_scale_strategies_land_inside_outside_or_exactly_on_the_box() {
     use ResizeStrategy::*;
@@ -81,10 +69,8 @@ fn the_scale_strategies_land_inside_outside_or_exactly_on_the_box() {
     }
 }
 
-// Catches: the two halves of the degenerate-scale rule conflated, or guarded in one
-// orientation only. A 192x1 frame fitted into 51x51 scales to 51x0 (and 1x192 to 0x51): for
-// `scale_aspect_fit` that is an empty image and an error; for `center_aspect_fit` the
-// reference pastes nothing onto the black canvas and succeeds.
+// A 192x1 frame fitted into 51x51 scales to 51x0: an error for `scale_aspect_fit`, an empty
+// paste onto the black canvas for `center_aspect_fit`.
 #[test]
 fn a_scale_that_rounds_a_dimension_to_zero_errors_but_a_centered_one_stays_black() {
     for (w, h, scaled) in [(192, 1, (51, 0)), (1, 192, (0, 51))] {
@@ -110,9 +96,7 @@ fn a_scale_that_rounds_a_dimension_to_zero_errors_but_a_centered_one_stays_black
     }
 }
 
-// Catches: returning the scaled image instead of the canvas for the `center_*` strategies.
-// Both must come out exactly the requested size -- that is the entire difference from the
-// `scale_*` pair -- and `fit` must letterbox the leftover with black rather than stretching.
+// The `center_*` strategies return the canvas at exactly the requested size, letterboxed black.
 #[test]
 fn center_aspect_fit_letterboxes_onto_a_black_canvas_of_the_requested_size() {
     let out = resize((200, 100), (50, 50), ResizeStrategy::CenterAspectFit);
@@ -125,8 +109,7 @@ fn center_aspect_fit_letterboxes_onto_a_black_canvas_of_the_requested_size() {
     assert_eq!(out.get_pixel(25, 37).0, [0, 0, 0]);
 }
 
-// Catches: `center_aspect_cover` leaving a letterbox. It scales up so the canvas is fully
-// covered and the overhang is cropped by the paste, so no pixel may stay black.
+// `center_aspect_cover` covers the canvas and crops the overhang, so no pixel stays black.
 #[test]
 fn center_aspect_cover_leaves_no_black_canvas_showing() {
     let out = resize((200, 100), (50, 50), ResizeStrategy::CenterAspectCover);
@@ -137,10 +120,7 @@ fn center_aspect_cover_leaves_no_black_canvas_showing() {
     );
 }
 
-// Catches: `(target - actual) / 2` instead of `// 2`. Rust truncates towards zero and Python
-// floors, so every *odd* overhang -- the normal case for a cover crop -- is placed one pixel
-// to the right and down of where the reference puts it. Even overhangs agree, which is why a
-// test with round numbers would miss this entirely.
+// Python floors where Rust truncates, so odd negative overhangs differ by a pixel.
 #[test]
 fn the_paste_offset_floors_rather_than_truncating_when_the_overhang_is_odd() {
     assert_eq!(centered_offset(51, 100), -25, "Python: (51 - 100) // 2 == -25, not -24");
@@ -148,9 +128,7 @@ fn the_paste_offset_floors_rather_than_truncating_when_the_overhang_is_odd() {
     assert_eq!(centered_offset(100, 50), 25, "an even gap is unambiguous");
 }
 
-// Catches: treating a zero target as "no resize", or dividing by it. Every strategy needs a
-// non-empty box: three of the five divide by one of the two dimensions, and the other two hand
-// PIL an empty image that fails at save time.
+// Every strategy needs a non-empty box.
 #[test]
 fn a_zero_sized_target_is_refused_for_every_strategy() {
     for strategy in [
@@ -170,10 +148,7 @@ fn a_zero_sized_target_is_refused_for_every_strategy() {
     }
 }
 
-// Catches: the two ways this line is normally "cleaned up". `value * num / den` in integers
-// gives 61 where the reference's `int(7 * (61 / 7))` gives 60, because the double nearest to
-// 61/7 is below it; and `round()` gives 67 where the reference gives 66. Both are off-by-one
-// pixel errors on every resize that hits them, and neither shows up on round numbers.
+// The reference's `int(7 * (61 / 7))` is 60; integer math gives 61 and `round()` gives 67 vs 66.
 #[test]
 fn scaled_dimensions_truncate_a_float_product_rather_than_rounding_an_integer_one() {
     assert_eq!(scaled(7, 61, 7), 60, "integer arithmetic would say 61");
@@ -181,10 +156,7 @@ fn scaled_dimensions_truncate_a_float_product_rather_than_rounding_an_integer_on
     assert_eq!(scaled(10, 1, 100), 0, "a dimension really can round away to nothing");
 }
 
-// Catches: any of the four aspect comparisons being loosened to `>=` or `<=`. Equal ratios are
-// not a tie: `int()` truncation makes the two branches disagree by a pixel even when the
-// ratios match exactly -- a 7x7 frame into a 61x61 box is 61x60 one way and 60x61 the other --
-// so which side of the comparison wins is observable, and round numbers never show it.
+// Equal ratios are not a tie: a 7x7 frame into a 61x61 box is 61x60 one way and 60x61 the other.
 #[test]
 fn the_aspect_comparisons_are_strict_so_an_exact_tie_takes_the_second_branch() {
     for strategy in [ResizeStrategy::CenterAspectFit, ResizeStrategy::CenterAspectCover] {
@@ -203,8 +175,7 @@ fn the_aspect_comparisons_are_strict_so_an_exact_tie_takes_the_second_branch() {
     }
 }
 
-// Catches: writing PNG when JPEG was asked for, or ignoring `EncodeOptions.format` entirely.
-// The two are told apart by their magic bytes, which is also what every provider sniffs.
+// JPEG and PNG are told apart by their magic bytes, which is what every provider sniffs.
 #[test]
 fn the_format_option_selects_the_container() {
     let data = solid(8, 8, [10, 200, 30, 255]);
@@ -219,9 +190,7 @@ fn the_format_option_selects_the_container() {
     assert_eq!(&png[..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A], "PNG signature");
 }
 
-// Catches: dropping the `quality` option on the floor, and picking a default other than 75.
-// `quality=None` means "do not pass the kwarg", and PIL's own default is 75 -- so `None` and
-// `Some(75)` have to produce the same bytes, while a different quality must not.
+// `quality=None` lands on PIL's default 75, so `None` and `Some(75)` produce the same bytes.
 #[test]
 fn jpeg_quality_is_honoured_and_none_means_seventy_five() {
     let data: Vec<u8> = (0..64 * 64 * 4).map(|i| (i % 251) as u8).collect();

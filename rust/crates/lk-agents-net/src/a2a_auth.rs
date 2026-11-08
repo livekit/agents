@@ -1,6 +1,3 @@
-//! Credential cryptography at the runtime boundary, using the LiveKit token SDK. The A2A
-//! core receives verified typed facts and makes the permission and carrier-selection decisions.
-
 use std::collections::BTreeMap;
 use std::time::Duration;
 

@@ -1,5 +1,3 @@
-//! Structured process logs; presentation belongs to the remote CLI.
-
 pub use lk_agents_abi::cli::LogRecord;
 use serde_json::Value;
 

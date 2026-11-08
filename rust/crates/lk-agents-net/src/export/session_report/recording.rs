@@ -1,8 +1,3 @@
-//! The recording upload: one multipart request per attempt to `/observability/recordings/v0`, as
-//! Cloud ingest reads it (docs/internals/telemetry-reference.md "Cloud ingest and redaction"): the
-//! `header` part first, each part with its own `Content-Length`, text parts uncompressed, the
-//! audio streamed from its file.
-
 use std::time::Duration;
 
 use futures_util::{StreamExt as _, stream};
@@ -17,6 +12,9 @@ use prost::Message;
 use super::ReportAdmission;
 use crate::export::otlp::CloudEndpoint;
 use crate::export::otlp::cloud::PostError;
+
+// Cloud ingest reads the `header` part first, each part with its own `Content-Length`, and text
+// parts uncompressed.
 
 const CHUNK_BYTES: usize = 64 * 1024;
 /// Four attempts, bounded together by the caller's limit; a `RetryInfo` delay overrides the

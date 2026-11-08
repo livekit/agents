@@ -1,5 +1,3 @@
-//! Typed launcher arguments. Clap owns syntax, help, aliases and diagnostics.
-
 use clap::builder::{PossibleValue, PossibleValuesParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
 use lk_agents_abi::Maybe;
@@ -63,7 +61,7 @@ struct StartArgs {
     /// Seconds a session's end callbacks have to finish.
     #[arg(long, value_parser = seconds)]
     session_end_timeout: Option<f64>,
-    // Older Go launchers pass this flag. Presentation now belongs to that launcher.
+    // Accepted and ignored: older Go launchers still pass it.
     #[arg(long = "log-format", hide = true, value_enum)]
     _legacy_log_format: Option<LegacyLogFormat>,
 }

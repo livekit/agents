@@ -1,6 +1,3 @@
-//! One registered agent's part of a thread ([`Lane`]): its reads, its task intake and
-//! [`Lane::open`], which takes it for one [`Run`].
-
 use crate::sql::{SqlValue, Table};
 use crate::thread::db::{Acquire, Acquired, EventWrite, Receive};
 use crate::thread::lease::LanePoll;

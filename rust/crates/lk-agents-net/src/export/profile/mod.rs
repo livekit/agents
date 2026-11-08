@@ -1,14 +1,12 @@
-//! Job profiles (docs/internals/telemetry.md "Job profiles"): a job's wall-clock samples of its
-//! Python threads, kept in time order and encoded as a gzipped pprof `profile.proto` that Cloud
-//! stores beside the session's audio recording. Each sample carries its thread and its time
-//! (`end_timestamp_ns`), so a viewer can line it up with the recording's start.
-
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 use lk_agents_abi::telemetry::record::JobKey;
 use parking_lot::Mutex;
 use prost::Message as _;
+
+// Each sample carries its thread and time (`end_timestamp_ns`) so a viewer can line it up with
+// the recording's start.
 
 /// The sampler's period, and the longest wall time one sample stands for.
 pub const PERIOD_NANOS: i64 = 100_000_000;

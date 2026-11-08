@@ -1,9 +1,3 @@
-//! The shared engine over one thread database, whichever backend: [`Thread`] is the handle a
-//! worker opens, executing the core's plans on a [`ThreadDbConnection`], [`Lane`] one agent's part
-//! of it, and [`Lane::open`] takes it for one [`Run`], which ends with
-//! [`Run::commit`] (one fenced write) or [`Run::abandon`] (`run_ended` and the release).
-//! [`LaneAccess::Concurrent`] is the `concurrent` policy: no lease, append-only.
-
 pub mod db;
 mod lane;
 pub mod lease;
@@ -237,3 +231,7 @@ impl Thread {
         crate::context::scopes_from_rows(result.at(1)?.rows())
     }
 }
+
+#[cfg(test)]
+#[path = "thread_tests.rs"]
+pub(crate) mod tests;

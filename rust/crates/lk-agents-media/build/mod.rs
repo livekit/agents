@@ -1,7 +1,5 @@
-//! Builds (or finds) the trimmed static ffmpeg and compiles `csrc/lk_agents_media.c` against it,
-//! only under the `ffmpeg`/`blingfire` features. Sources, in order: `LK_CODECS_FFMPEG_PREFIX`
-//! (prebuilt; the route for CI and Windows, where ffmpeg must be `--toolchain=msvc`), the pinned
-//! `vendor/ffmpeg-<pin>/`, else `vendor/fetch.sh` unless `LK_CODECS_NO_FETCH=1`.
+//! Builds (or finds) the trimmed static ffmpeg and the C shims for the `ffmpeg` and `blingfire`
+//! features, from `LK_CODECS_FFMPEG_PREFIX`, `vendor/ffmpeg-<pin>/` or `vendor/fetch.sh`.
 //! The configure line is LGPL-only: never add `--enable-gpl` or `--enable-nonfree`.
 
 #![allow(
@@ -98,8 +96,7 @@ const CONFIGURE: &[&str] = &[
     "--enable-static",
     "--disable-shared",
     "--enable-pic",
-    // Stops configure picking up whatever the build machine has installed; needs the explicit
-    // `--enable-libopus` above.
+    // Stops configure picking up installed libraries; needs the explicit `--enable-libopus`.
     "--disable-autodetect",
 ];
 
@@ -193,8 +190,8 @@ fn compile_ffmpeg(src: &std::path::Path, entry: &std::path::Path, prefix: &std::
     );
     let jobs = std::thread::available_parallelism().map_or(4, |n| n.get());
     run(std::process::Command::new("make").arg(format!("-j{jobs}")).current_dir(&build), "make");
-    // DESTDIR isolates an interrupted installer from the final cache entry while
-    // keeping the final prefix embedded in FFmpeg's pkg-config files.
+    // DESTDIR isolates an interrupted install from the cache entry while keeping the final
+    // prefix embedded in FFmpeg's pkg-config files.
     let destination = entry.join("install");
     run(
         std::process::Command::new("make")

@@ -1,10 +1,3 @@
-//! Spans of async work (docs/internals/telemetry.md "Span API"): the process [`Tracer`], the
-//! context [`Cx`] work runs in, and [`ScopedSpan`], ended when its scope exits.
-//! Callers spell every touchpoint `telemetry::`: [`start`], [`end`], [`event`], [`measure`],
-//! [`reserve`] and `#[telemetry::span]`.
-//! Ended spans and measurements reach the tracer's `RecordSink`: in a process, the exporter
-//! `lk_agents_net::export` installs.
-
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::marker::PhantomData;
@@ -47,8 +40,6 @@ struct Inner {
     capture_content: AtomicBool,
 }
 
-/// Where a tracer's records go: its sink (the process's exporter slot, a test's, the DST's), or
-/// nowhere.
 enum Sink {
     To(Arc<dyn RecordSink>),
     Discard,
@@ -242,7 +233,7 @@ struct Open {
     events: Vec<EventRecord>,
 }
 
-/// A span ended when dropped, as cancelled, unless ended before (docs "ScopedSpan").
+/// A span ended when dropped, as cancelled, unless ended before.
 #[must_use = "a span is ended when dropped"]
 pub struct ScopedSpan<D: SpanDecl> {
     cx: Cx,

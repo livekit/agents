@@ -1,16 +1,12 @@
-//! Regenerates `proto.rs`, the OTLP message types the exporter encodes, from the official
-//! `open-telemetry/opentelemetry-proto` files at the pinned tag [`TAG`]. Needs `protoc`:
-//!
-//! ```text
-//! curl -sSL \
-//!     https://github.com/open-telemetry/opentelemetry-proto/archive/refs/tags/v1.5.0.tar.gz \
-//!     | tar xz -C /tmp
-//! OTLP_PROTO_DIR=/tmp/opentelemetry-proto-1.5.0 \
-//!     cargo test -p lk-agents-net --lib export::otlp::proto_tests -- --ignored
-//! ```
-
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+
+// Regenerates `proto.rs` from opentelemetry-proto at the pinned `TAG` (needs `protoc`):
+//   curl -sSL \
+//       https://github.com/open-telemetry/opentelemetry-proto/archive/refs/tags/v1.5.0.tar.gz \
+//       | tar xz -C /tmp
+//   OTLP_PROTO_DIR=/tmp/opentelemetry-proto-1.5.0 \
+//       cargo test -p lk-agents-net --lib export::otlp::proto_tests -- --ignored
 
 const TAG: &str = "v1.5.0";
 

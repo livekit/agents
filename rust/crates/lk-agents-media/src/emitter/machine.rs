@@ -1,14 +1,3 @@
-//! The synchronous PCM-framing half of TTS `AudioEmitter`.
-//!
-//! Provider bytes become progressively sized audio frames. A short tail is retained for the
-//! final-segment marker; if generation falls behind, a scheduled flush releases it before the
-//! consumer runs dry. Transcript alignment and provider usage ride on emitted audio.
-//!
-//! This owner performs no decoding, I/O, host call, spawn, or clock read. Its caller supplies
-//! time and performs `AudioEmitterEffect` requests in order. The inference crate owns decoding,
-//! delivery, and the flush timer; `on_flush_deadline` is the actual timer input, not a generic
-//! progress callback. It produces synthesized audio, not playback/room delivery decisions.
-
 use std::time::Duration;
 
 use super::effects::AudioEmitterEffect;
@@ -19,13 +8,17 @@ use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{AudioEncoding, AudioFrame, SynthesizedAudio};
 use lk_agents_abi::{TranscriptChunk, Ts};
 
-/// Below this much audio sent, the drift check is skipped (`tts/tts.py:1063`).
+// No decoding, I/O, host call, spawn or clock read: the caller supplies time and performs the
+// effects in order. A short tail is held back for the final-segment marker, and a scheduled
+// flush releases it before the consumer runs dry.
+
+/// Below this much audio sent, the drift check is skipped.
 const MIN_DRIFT_AUDIO: f64 = 0.15;
-/// Margin so the drift flush lands before the buffer runs dry (`tts/tts.py:1065`).
+/// Margin so the drift flush lands before the buffer runs dry.
 const DRIFT_MARGIN: f64 = 0.02;
-/// Held back so the last audio of a segment can be tagged `is_final` (`tts/tts.py:1072`).
+/// Held back so the last audio of a segment can be tagged `is_final`.
 const TAIL_MS: u32 = 10;
-/// The end-of-segment marker is 10 ms of silence: `sample_rate // 100` (`tts/tts.py:1155`).
+/// The end-of-segment marker is 10 ms of silence: `sample_rate / 100`.
 const MARKER_DIVISOR: u32 = 100;
 
 #[derive(Debug, Clone)]
@@ -84,7 +77,6 @@ pub struct AudioEmitter {
     last_frame: Option<Frame>,
     timed_transcripts: Vec<TranscriptChunk>,
 
-    // --- the drift watchdog ---
     sent_start: Option<Ts>,
     sent_duration: f64,
     flush_scheduled: bool,
@@ -94,8 +86,6 @@ pub struct AudioEmitter {
 }
 
 impl AudioEmitter {
-    // ----------------------------------------------------------------- lifecycle
-
     /// PCM only. An empty `request_id` becomes `"unknown"`.
     pub fn initialize(
         &mut self,
@@ -118,7 +108,7 @@ impl AudioEmitter {
         self.tail_samples = sample_rate * TAIL_MS / 1000;
 
         if !self.streaming {
-            // "always start a segment with stream=False" (`tts/tts.py:917`).
+            // Non-streaming emitters always run inside one segment.
             self.begin_segment("")?;
         }
         Ok(())
@@ -160,8 +150,6 @@ impl AudioEmitter {
         }
     }
 
-    // ----------------------------------------------------------------- segments
-
     /// Streaming only. `true` when `segment_id` was new (the binding then writes the span attr).
     pub fn start_segment(&mut self, segment_id: &str) -> Result<bool, EmitterError> {
         if !self.streaming {
@@ -172,7 +160,7 @@ impl AudioEmitter {
         Ok(noted)
     }
 
-    /// A plugin may learn the id after `start_segment` (`tts/tts.py:947`).
+    /// A plugin may learn the id after `start_segment`.
     pub fn note_provider_request_id(&mut self, context_id: &str) -> bool {
         if context_id.is_empty() || self.provider_request_ids.iter().any(|id| id == context_id) {
             return false;
@@ -223,8 +211,6 @@ impl AudioEmitter {
         }
         Ok(!self.closed)
     }
-
-    // ----------------------------------------------------------------- input
 
     /// Bytes, not `&[i16]`: providers routinely push half a sample.
     pub fn push(
@@ -340,8 +326,7 @@ impl AudioEmitter {
         self.closed = true;
     }
 
-    /// The scheduled flush deadline (`tts/tts.py:1057`): releases the held-back tail before the
-    /// consumer runs dry.
+    /// The scheduled flush deadline: releases the held-back tail before the consumer runs dry.
     pub fn on_flush_deadline(
         &mut self,
         now: Ts,
@@ -356,19 +341,17 @@ impl AudioEmitter {
         std::mem::replace(&mut self.dropped_bytes, 0)
     }
 
-    // ----------------------------------------------------------------- the loop body
-
     fn handle_flush(
         &mut self,
         now: Ts,
         eff: &mut Vec<AudioEmitterEffect>,
     ) -> Result<(), EmitterError> {
         if self.seg.is_none() {
-            // Streaming: an empty segment, ignored (`tts/tts.py:1259`).
+            // Streaming: an empty segment, ignored.
             return if self.streaming { Ok(()) } else { Err(EmitterError::NoSegment) };
         }
         if self.abs.is_none() {
-            // `elif audio_byte_stream:`: a flush before the first byte does nothing.
+            // A flush before the first byte does nothing.
             return Ok(());
         }
         let abs = self.abs.as_mut().expect("checked");
@@ -407,8 +390,6 @@ impl AudioEmitter {
         self.last_frame = None;
         Ok(())
     }
-
-    // ----------------------------------------------------------------- framing
 
     fn emit_frame(
         &mut self,
@@ -536,7 +517,6 @@ impl AudioEmitter {
             let start = self.sent_start.unwrap_or(now);
             let elapsed = now.saturating_duration_since(start).as_secs_f64();
             let delay = self.sent_duration - elapsed - DRIFT_MARGIN;
-            // `delay == 0.0` is unreachable in doubles here; `>` kept as the reference writes it.
             if delay > 0.0 {
                 // Relative, so the host's clock need not agree with `now`.
                 eff.push(AudioEmitterEffect::ScheduleFlushAfter(Duration::from_secs_f64(delay)));
@@ -566,7 +546,7 @@ impl AudioEmitter {
             usage: usage.map(Box::new),
             characters_count,
             provider_request_ids: std::mem::take(&mut self.pending_ids),
-            // Stamped by `ChunkedStream`/`SynthesizeStream` on the way out (`tts.py:502`).
+            // Stamped by `ChunkedStream`/`SynthesizeStream` on the way out.
             started_time: None,
             // Consumed, not copied, or the synchroniser speaks the words twice.
             timed_transcript: std::mem::take(&mut self.timed_transcripts),
@@ -598,5 +578,5 @@ fn combine(mut a: Frame, b: Frame) -> Frame {
 }
 
 #[cfg(test)]
-#[path = "../emitter_tests.rs"]
+#[path = "machine_tests.rs"]
 mod tests;

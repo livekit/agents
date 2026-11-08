@@ -1,5 +1,3 @@
-//! ogg/opus encode for `RecorderIO` (`voice/recorder_io/`).
-
 use super::*;
 
 /// libopus through ffmpeg's ogg muxer. Interleaved `i16` in, ogg pages out.
@@ -128,3 +126,7 @@ impl Drop for OggOpusEncoder {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "audio_encoder_tests.rs"]
+mod tests;

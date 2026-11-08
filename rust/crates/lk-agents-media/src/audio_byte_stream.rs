@@ -1,5 +1,3 @@
-//! Chunking byte input into fixed-size audio frames (`utils.media.AudioByteStream`).
-
 use lk_agents_abi::AudioFrame;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,16 +56,14 @@ impl AudioByteStream {
         self.buf.extend_from_slice(data);
 
         let mut frames = Vec::new();
-        // `> 0` is a termination guard: a zero frame size (reachable from Python) would loop
-        // forever. Its `>= 0` mutant is untested on purpose: under it the test would hang.
+        // `> 0` guards a zero frame size (reachable from Python), which would loop forever.
         while self.buf.len() >= self.current_bytes_per_frame && self.current_bytes_per_frame > 0 {
             let rest = self.buf.split_off(self.current_bytes_per_frame);
             let data = std::mem::replace(&mut self.buf, rest);
             let samples_per_channel = (data.len() / self.bytes_per_sample) as u32;
             frames.push(Frame { data, samples_per_channel });
 
-            // Double after emitting, so the first frame is the small one. `<` is equivalent to
-            // `<=` here (`current` never exceeds `target`).
+            // Double after emitting, so the first frame is the small one.
             if self.current_bytes_per_frame < self.target_bytes_per_frame {
                 self.current_bytes_per_frame =
                     (self.current_bytes_per_frame * 2).min(self.target_bytes_per_frame);
@@ -77,8 +73,7 @@ impl AudioByteStream {
     }
 
     /// Emit the buffered whole samples, short of a frame or not. A trailing partial sample stays
-    /// for the next push: a flush can land mid-stream, inside a sample, and dropping its bytes
-    /// would misalign every later sample. Progressive sizing is not reset.
+    /// for the next push so later samples stay aligned. Progressive sizing is not reset.
     pub fn flush(&mut self) -> Vec<Frame> {
         let complete = self.buf.len() - self.buf.len() % self.bytes_per_sample;
         if complete == 0 {

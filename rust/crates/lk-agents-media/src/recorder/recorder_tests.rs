@@ -1,18 +1,11 @@
 use super::*;
 
-// `HalvingResampler`, `Factory` and `Counting` are gone with the trait pair (PLAN.md F1).
-// Most of the tests below never touched them: they run at the recording rate, where
-// `Track::resample` short-circuits before the resampler exists. The two that DID are
-// re-derived over real soxr below, and the properties they pin are unchanged -- the tail
-// belongs to the run that ended, and a rate change starts a new resampler.
-
 fn mono(samples: &[i16], rate: u32) -> PcmFrame {
     PcmFrame::new(samples.to_vec(), rate, 1)
 }
 
-/// The whole point of the timeline: a gap between two placements is *silence*, not the second
-/// placement moved earlier. Concatenating instead is what #6921 replaced, and the symptom was
-/// a recording where the agent answers before the user finishes.
+/// A gap between two placements is silence, not the second placement moved earlier;
+/// concatenating makes the agent answer before the user finishes.
 #[test]
 fn a_gap_between_runs_is_written_as_silence() {
     let mut t = Track::new(10, 100.0);
@@ -57,14 +50,9 @@ fn small_jitter_does_not_re_anchor_the_run() {
     assert_eq!(block[200], 0.0, "and did not re-anchor to sample 200");
 }
 
-/// A resampler's tail belongs to the run that just ended, not to the one about to start.
-/// Flushing it after the re-anchor would place the old audio at the new timestamp -- a
-/// millisecond of the previous utterance teleported into the next one.
-///
-/// Real soxr now, at rates it will actually accept. The double emitted one sample per pair
-/// and held the odd one, so the old assertions counted its samples; what is asserted here is
-/// the *property* -- the second run starts five seconds later, so nothing the first run owed
-/// may appear there.
+/// A resampler's tail belongs to the run that just ended: flushed after the re-anchor, the old
+/// audio would land at the new timestamp. The second run starts five seconds later, so nothing
+/// the first run owed may appear there.
 #[test]
 fn the_resampler_tail_is_flushed_into_the_run_that_ended() {
     let mut t = Track::new(16_000, 0.0);
@@ -217,13 +205,8 @@ fn dropped_audio_is_reported_up_to_the_recorder() {
     assert_eq!(r.dropped_samples(), [0, 3]);
 }
 
-/// A source that changes sample rate mid-call gets a new resampler. Keeping the old one feeds
-/// it audio at a rate it was not built for, and the channel drifts for the rest of the call.
-///
-/// The old version counted calls to a `Counting` factory. There is no factory (PLAN.md F1),
-/// so the observation is the state the count stood in for: the format the resampler was built
-/// for, which is what `resample` compares to decide whether to rebuild. That is strictly closer to the thing that goes wrong -- a factory called the
-/// right number of times with the wrong rates would have passed the old test.
+/// A source that changes sample rate mid-call gets a new resampler; the observation is the
+/// format the resampler was built for, which `resample` compares to decide whether to rebuild.
 #[test]
 fn a_source_rate_change_rebuilds_the_resampler() {
     let mut t = Track::new(16_000, 0.0);
@@ -284,8 +267,8 @@ fn the_slice_bounds_scale_by_the_channel_count() {
     assert_eq!(placed.frame.num_channels, 2);
 }
 
-/// The offset is honoured, because a jump in it is audio the sink *discarded* on a pause
-/// (#6728). Assuming the reports are contiguous writes discarded audio into the file.
+/// The offset is honoured, because a jump in it is audio the sink discarded on a pause.
+/// Assuming the reports are contiguous writes discarded audio into the file.
 #[test]
 fn a_jump_in_the_offset_skips_the_audio_the_sink_discarded() {
     let mut p = SegmentPlacer::new();
@@ -295,8 +278,8 @@ fn a_jump_in_the_offset_skips_the_audio_the_sink_discarded() {
 }
 
 /// Three ways a report describes no audio, all of which must place nothing rather than an
-/// empty or reversed slice: a zero duration, a report before any frame was captured (#5279),
-/// and a report starting past the end of what was captured.
+/// empty or reversed slice: a zero duration, a report before any frame was captured, and a
+/// report starting past the end of what was captured.
 #[test]
 fn a_report_covering_no_audio_places_nothing() {
     let mut p = SegmentPlacer::new();

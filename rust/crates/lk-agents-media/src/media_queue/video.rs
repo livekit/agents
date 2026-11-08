@@ -1,5 +1,3 @@
-//! Video: bounded by frame count, keeping the newest. It never merges and never reports a gap.
-
 use super::core::{Consumer, Core, Producer, channel};
 use super::{Item, Stuck};
 use lk_agents_abi::voice::rtc::VideoFrameRef;

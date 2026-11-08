@@ -1,5 +1,3 @@
-//! Opaque pagination positions bound to the exact listing that issued them.
-
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 

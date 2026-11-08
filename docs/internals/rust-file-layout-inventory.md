@@ -610,7 +610,7 @@ are proposed here.
 | `build/blingfire.rs` | 117 | Keep | Separate native toolchain/build feature from FFmpeg and cache utilities. |
 | `build/cache.rs` | 133 | Conditional | `build/cache.rs`. Destination of optional settings merge; preserve shared cache ownership and process lock responsibilities. |
 | `build/libraries.rs` | 10 | Merge | `build/mod.rs`. One 10-line archive lookup is used by this build entry/tests; inline beside FFmpeg linking (244+10≈254). |
-| `build/native_cache_tests.rs` | 146 | Keep | Sibling behavioral suite or explicit Cargo integration target; retain separate tests/process isolation. |
+| `build/cache_tests.rs` | 146 | Keep | Sibling behavioral suite or explicit Cargo integration target; retain separate tests/process isolation. |
 | `build/settings.rs` | 99 | Conditional | `build/cache.rs`. Native compiler/cache key setup may join native cache utilities (133+99≈232); keep compiler identity and cache artifact code clearly named. |
 | `src/emitter/effects.rs` | 16 | Keep | Explicit effects declaration/category boundary: deliberate exception to consolidation. |
 | `src/emitter/mod.rs` | 8 | Keep | Domain/component module facade with real children; retain the navigation and public export boundary. |

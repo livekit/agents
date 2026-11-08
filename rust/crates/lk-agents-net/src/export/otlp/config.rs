@@ -1,6 +1,3 @@
-//! What the exporter is told: the process and job identity, the Cloud endpoint and a job's
-//! recording decision, and the application endpoint (`OTEL_EXPORTER_OTLP_*` or explicit).
-
 use lk_agents_abi::telemetry::record::{FRAMEWORK, KeyValues};
 use lk_agents_abi::telemetry::semconv::otel::SERVICE_NAME;
 use lk_agents_abi::worker::job::Simulation;

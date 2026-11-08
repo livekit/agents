@@ -1,7 +1,3 @@
-//! A run's records and decisions: the task states and their transitions ([`merge_write`]), the
-//! run's outcome and usage, and what a run commits ([`run_commit`]): the changed and deleted
-//! items, the journal entries, the task rows, the snapshot that changed and `run_ended`.
-
 use std::time::Duration;
 
 use crate::thread::db::{Commit, Committed, EventWrite, Fenced, Resolution};
@@ -669,83 +665,5 @@ impl Tasks {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use livekit_protocol::agent::chat_context::chat_item;
-    use serde_json::json;
-
-    #[test]
-    fn item_changes_skip_instructions_and_unchanged_items_and_list_deletions() {
-        use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
-        use livekit_protocol::agent::{AgentConfigUpdate, ChatMessage, ChatRole, FunctionCall};
-        let msg = |id: &str, role: ChatRole, text: &str| {
-            ItemRow::new(chat_item::Item::Message(ChatMessage {
-                id: id.into(),
-                role: role as i32,
-                content: vec![ChatContent { payload: Some(Payload::Text(text.into())) }],
-                ..Default::default()
-            }))
-        };
-        let call = ItemRow::new(chat_item::Item::FunctionCall(FunctionCall {
-            id: "i3".into(),
-            name: "f".into(),
-            ..Default::default()
-        }));
-        let loaded: Vec<(String, ChatItem)> =
-            [msg("i1", ChatRole::User, "hi"), msg("i2", ChatRole::Assistant, "hello"), call]
-                .into_iter()
-                .map(|i| (i.id, i.payload))
-                .collect();
-        let mut history = vec![
-            msg("sys", ChatRole::System, "be nice"),
-            msg("dev", ChatRole::Developer, "x"),
-            ItemRow::new(chat_item::Item::AgentConfigUpdate(AgentConfigUpdate {
-                id: "cfg".into(),
-                ..Default::default()
-            })),
-            msg("i1", ChatRole::User, "hi"),
-            // edited
-            msg("i2", ChatRole::Assistant, "hey"),
-            // i3 removed; i4 new
-            ItemRow { message_id: Some("m4".into()), ..msg("i4", ChatRole::User, "bye") },
-        ];
-        let (changed, deleted) = item_changes(&history, &loaded);
-        assert_eq!(
-            changed.iter().map(|w| (w.id.as_str(), w.message_id.as_deref())).collect::<Vec<_>>(),
-            vec![("i2", None), ("i4", Some("m4"))]
-        );
-        assert_eq!(deleted, vec!["i3".to_owned()]);
-        history.clear();
-        let (changed, deleted) = item_changes(&history, &loaded);
-        assert!(changed.is_empty());
-        assert_eq!(deleted, vec!["i1", "i2", "i3"]);
-    }
-
-    #[test]
-    fn run_summaries_follow_run_started_and_run_ended() {
-        let ev = |id: i64, run_id: &str, ty: &str, payload: Value| EventRow {
-            id,
-            ts_ms: id * 10,
-            lane: "front-desk".into(),
-            run_id: run_id.into(),
-            r#type: ty.into(),
-            payload,
-        };
-        let events = vec![
-            ev(1, "r1", "run_started", json!({"task_id": "AST_1", "channel": "a2a"})),
-            ev(2, "r1", "run_ended", json!({"outcome": "completed", "reason": null})),
-            ev(3, "r2", "run_started", json!({"task_id": "AST_2", "channel": null})),
-            ev(4, "r9", "run_ended", json!({"outcome": "failed"})),
-        ];
-        let runs = RunSummary::from_events(&events).unwrap();
-        assert_eq!(runs.len(), 2);
-        assert_eq!(runs[0].outcome, Some(RunOutcome::Completed));
-        assert_eq!(runs[0].ended_at_ms, Some(20));
-        assert!(!runs[0].interrupted());
-        assert_eq!(runs[1].channel, None);
-        assert!(runs[1].interrupted());
-        // docs/internals/storage.md#journal: a malformed entry is refused, not skipped
-        let corrupt = [ev(5, "r3", "run_ended", json!({"outcome": "maybe"}))];
-        assert!(matches!(RunSummary::from_events(&corrupt), Err(StorageError::Invalid(_))));
-    }
-}
+#[path = "run_tests.rs"]
+mod tests;

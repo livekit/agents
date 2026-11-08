@@ -99,8 +99,8 @@ statement! {
 
 statement! {
     /// Takes the lane when nobody holds it, its lease lapsed, or this holder already has it,
-    /// unless an older message is still waiting for it: waiters go in arrival order
-    /// (docs/internals/storage.md#lanes). A waiting message stops counting once its row is older than `wait_ms`
+    /// unless an older message is still waiting for it: waiters go in arrival order. A waiting
+    /// message stops counting once its row is older than `wait_ms`
     /// (its waiter died) or once it is queued in the inbox (drained as one batch). A run with no
     /// task row (a voice turn) is not ordered. Answers the lane's version when taken.
     TakeLease<'a> {

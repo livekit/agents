@@ -1,11 +1,10 @@
-//! The process's own instruments ([`lk_agents_telemetry::process`]) in the Prometheus text
-//! exposition format, version 0.0.4. An instrument's name is its OpenTelemetry name with `.` as
-//! `_`, and a seconds or ratio unit as the `_seconds` or `_ratio` suffix.
-
 use std::fmt::Write as _;
 
 use lk_agents_abi::telemetry::decl::Instrument;
 use lk_agents_telemetry::process::{Instruments, Value};
+
+// An instrument's name is its OpenTelemetry name with `.` as `_`, plus a `_seconds` or `_ratio`
+// suffix for those units.
 
 pub const CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 

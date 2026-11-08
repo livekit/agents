@@ -1,6 +1,3 @@
-//! Measurement aggregation per destination: counter sums, gauges' last values and explicit-bucket
-//! histograms, read out with delta or cumulative temporality.
-
 use super::proto::common::v1::KeyValue;
 use super::proto::metrics::v1 as proto;
 use lk_agents_abi::telemetry::record::{InstrumentKind, KeyValues, Measurement, Number};

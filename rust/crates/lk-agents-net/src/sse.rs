@@ -1,9 +1,5 @@
-//! Server-sent events framing over a response body as it arrives: bytes in, events out. Network
-//! chunks are not events: a chunk may end inside a UTF-8 sequence, a CRLF pair or a field, and an
-//! event is complete only at its blank line (WHATWG HTML, "Parsing an event stream").
-//!
-//! The decoder is the one SSE reader of the runtime; it fails explicitly instead of decoding
-//! lossily or dropping a half-received event.
+// A network chunk may end inside a UTF-8 sequence, a CRLF pair or a field; an event completes
+// only at its blank line. The decoder fails rather than decoding lossily.
 
 /// One dispatched event.
 #[derive(Debug, Clone, PartialEq, Eq)]

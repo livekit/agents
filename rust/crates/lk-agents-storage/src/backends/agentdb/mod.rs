@@ -1,7 +1,3 @@
-//! [`AgentDbStorage`]: threads on LiveKit Cloud's agentstore. The threads service owns thread
-//! metadata, agent-db holds each thread's database, reached over the `wsdb` WebSocket
-//! ([`connection`]).
-
 pub mod connection;
 
 use std::sync::Arc;
@@ -26,6 +22,8 @@ use lk_agents_net::env::ProcessEnv;
 use crate::thread::{LeaseTiming, SchemaCell, Thread};
 use crate::{Storage, ThreadDbConnection};
 pub use connection::{Conn, Options as ConnOptions, TokenMinter, WsdbError};
+
+// The threads service owns thread metadata; agent-db holds each thread's database, over `wsdb`.
 
 /// Read failures may be retried when the database is unavailable or backpressured. Batch
 /// failures with an unknown outcome are classified separately by [`Pooled`].
@@ -385,61 +383,5 @@ impl DbPool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn unavailable_after_sending_a_commit_is_uncertain_and_is_not_resent() {
-        use connection::tests::{dial, hello_ok, reply, serve};
-        use connection::wire as pb;
-        fn dying(message: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
-            match &message.message {
-                Some(pb::client_message::Message::Hello(_)) => vec![hello_ok()],
-                Some(pb::client_message::Message::Batch(_)) => {
-                    vec![reply(pb::server_message::Message::Error(pb::Error {
-                        code: "unavailable".into(),
-                        message: "database is shutting down".into(),
-                    }))]
-                }
-                _ => Vec::new(),
-            }
-        }
-        let (url, seen) = serve(dying, false).await;
-        let conn = dial(&url, "DB_1").await.unwrap();
-        let pooled = Pooled {
-            conn,
-            schema: SchemaCell::default(),
-            pool: Arc::default(),
-            closed: AtomicBool::new(false),
-        };
-        let result =
-            pooled.batch(vec![Statement::raw("UPDATE lanes SET version = version + 1")]).await;
-        assert!(
-            matches!(result, Err(StorageError::Uncertain(ref message)) if message.contains("database is shutting down")),
-            "{result:?}"
-        );
-        let batches = seen
-            .lock()
-            .iter()
-            .filter(|message| {
-                matches!(message.message, Some(pb::client_message::Message::Batch(_)))
-            })
-            .count();
-        assert_eq!(batches, 1, "a commit with an unknown outcome must not be resent");
-        pooled.conn.aclose().await;
-    }
-
-    #[tokio::test]
-    async fn the_data_plane_sits_under_the_project_public_api() {
-        let minter = || TokenMinter::new("devkey", "secret").unwrap();
-        let storage = |url: &str| {
-            AgentDbStorage::new(AgentDbOptions::new(url), minter(), &ProcessEnv::current_runtime())
-        };
-        let staging = storage("wss://my-app.staging.livekit.cloud").unwrap();
-        assert_eq!(staging.opts.url, "https://beta-api.staging.livekit.cloud");
-        assert_eq!(staging.data_plane, "wss://beta-api.staging.livekit.cloud/v0/agentstore/db");
-        let local = storage("ws://localhost:9000/").unwrap();
-        assert_eq!(local.data_plane, "ws://localhost:9000/v0/agentstore/db");
-        assert!(storage("ftp://x").is_err());
-    }
-}
+#[path = "agentdb_tests.rs"]
+mod tests;

@@ -1,11 +1,11 @@
-//! What both kinds share: the queued items with their events, and the lock and waker between the
-//! producer and the consumer.
-
 use super::{Item, MAX_EVENTS, Stuck};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Poll, Waker};
 use std::time::Duration;
+
+// One producer that never blocks and one async consumer share the lock, held only for the
+// queue's own short work; the consumer's waker is registered under it and woken after release.
 
 /// The queued items. The bound drops only the media past the floor; the kind measures it.
 pub(super) struct Core<M, E> {

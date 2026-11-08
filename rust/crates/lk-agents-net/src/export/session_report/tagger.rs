@@ -1,6 +1,3 @@
-//! The `Tagger` the host constructs: the session's tags, judgments and outcome, stamped by the
-//! process clock.
-
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::SystemTime;

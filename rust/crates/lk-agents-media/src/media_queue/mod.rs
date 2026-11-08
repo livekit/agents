@@ -1,18 +1,3 @@
-//! Live media from a producer that never blocks to a consumer that may fall behind, after
-//! GStreamer's leaky queue and its serialized events.
-//!
-//! - [`audio`] is bounded by its queued duration under a [`Policy`]; past it the oldest frames are
-//!   dropped as one [`Item::Gap`]. A backlog is merged into frames of up to [`MERGED_FRAME`].
-//! - [`video`] is bounded by frame count and keeps the newest; it never merges and never reports a
-//!   gap.
-//! - Events travel in the media at the point they apply to and are never dropped. The bound drops
-//!   only media queued after the last event; `flush` is the one way to discard media on purpose.
-//!
-//! One producer that never blocks and one async consumer share the queue: the lock is held only
-//! for the queue's own short work, the receiver's waker is registered under it and woken after it
-//! is released, and a merged frame is built outside it. No thread, no spawn, no ambient clock: an
-//! audio queue measures its own drops and head drain (`metrics`) on the clock it is given.
-
 mod audio;
 mod core;
 mod metrics;
@@ -22,6 +7,9 @@ pub use audio::{AudioReceiver, AudioSender, audio};
 pub use video::{VideoReceiver, VideoSender, video};
 
 use std::time::Duration;
+
+// Events travel in the media at the point they apply to and are never dropped: the bound drops
+// only media queued after the last event, and `flush` is the one way to discard media.
 
 /// The longest frame merging builds: the frame size every consumer is tested against.
 pub const MERGED_FRAME: Duration = Duration::from_millis(50);

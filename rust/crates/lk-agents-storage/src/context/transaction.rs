@@ -1,8 +1,3 @@
-//! Application SQL (docs/context.md#application-records-and-transactions). Both data planes
-//! execute reads and atomic batches, never an interactive transaction: reads observe committed
-//! records, writes are staged and applied together when the transaction ends, so a read after a
-//! write in the same transaction is refused rather than answered without that write.
-
 use parking_lot::Mutex;
 
 use lk_agents_abi::storage::context::{AppStatement, AppTransaction};
@@ -11,6 +6,9 @@ use serde_json::{Number, Value};
 use super::store::{ContextStore, Database};
 use crate::StorageError;
 use crate::sql::{SqlValue, Statement};
+
+// Both data planes execute reads and atomic batches, never an interactive transaction: writes are
+// staged and applied together at the end, so a read after a write in the same transaction is refused.
 
 /// One application transaction: independent, or joining the managed turn it began in.
 pub struct Transaction {

@@ -271,8 +271,6 @@ fn a_consumer_that_stops_draining_events_is_stuck() {
     assert_eq!(drain(&mut rx).len(), MAX_EVENTS, "the flushed frame is gone");
 }
 
-// ------------------------------------------------------------------- waking and closing
-
 /// Real-time guard: a lost wakeup fails instead of hanging.
 const GUARD: Duration = Duration::from_secs(2);
 

@@ -1,6 +1,3 @@
-//! Shared access to a native stream: one read at a time, retained pending reads, and one owned
-//! cleanup outcome. A cancelled waiter never loses the source or repeats an in-flight read.
-
 use futures_util::{FutureExt, future::Shared};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{BoxFuture, Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamOutput, Ts};
@@ -10,6 +7,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use tokio_util::sync::CancellationToken;
+
+// A cancelled waiter never loses the source or repeats an in-flight read.
 
 #[derive(Debug, PartialEq)]
 pub enum Pulled<T> {

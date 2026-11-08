@@ -1,7 +1,3 @@
-//! Task ownership's implementation: [`launch`] turns a [`Launch`] into the future an executor
-//! runs and the [`OwnedTask`] its owner holds, the same on every executor (Tokio here, the host
-//! loop's virtual time, the DST's scheduler); [`TaskSet`] groups owned tasks by name.
-
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -327,7 +323,7 @@ impl TaskSet {
         names
     }
 
-    /// `_drain(tasks, deadline)`: wait until `deadline`, then cancel the stragglers and name them.
+    /// Waits until `deadline`, then cancels the stragglers and names them.
     pub async fn drain(&self, clock: &dyn Clock, deadline: Ts) -> Vec<String> {
         if self.wait_empty(clock, Some(deadline)).await {
             return Vec::new();

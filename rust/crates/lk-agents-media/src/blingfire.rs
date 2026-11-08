@@ -1,7 +1,3 @@
-//! Sentence boundaries from `microsoft/BlingFire`, the same pinned upstream and C++
-//! wrapper as the Python wheel and Node addon, so boundaries (where the TTS breathes) agree.
-//! Offsets are codepoints, not bytes; the empty string is guarded before the C call.
-
 use std::ffi::{CStr, CString, c_char, c_int};
 
 #[repr(C)]
@@ -91,31 +87,18 @@ pub fn text_to_sentences_with_offsets(text: &str, offsets: Offsets) -> Result<To
     }
 }
 
-// ==================================================================================================
-// The shape the host wants
-// ==================================================================================================
-
 /// `(text, start, end)`, with a **character** span.
 pub type Sentence = (String, usize, usize);
 
-/// `tokenize/blingfire.py::_split_sentences`, exactly.
+/// Sentences with character spans, matching `tokenize/blingfire.py::_split_sentences`:
 ///
-/// Not a convenience wrapper -- it is the contract. Four behaviours here are load-bearing and
-/// every one of them is a line in the Python this replaces:
-///
-/// * **blank input short-circuits**, before the C call. Upstream sizes its output buffer at
-///   `len * 2`, so an empty input hands the C API a zero-length buffer; the Python binding raises
-///   `ValueError: basic_string` on it and this one does not, which is undefined behaviour
-///   resolving two ways rather than a difference of opinion.
-/// * **spans run start-to-start.** Each sentence's `start` is the previous one's `end`, not the
-///   span BlingFire reported -- so the inter-sentence whitespace belongs to the sentence that
-///   follows it and no character of the input is unaccounted for. `BufferedTokenStream` advances
-///   its input buffer by `tok[2]`, so a gap here would silently drop text.
-/// * **`min_sentence_len` merges forward by *skipping*.** A sentence shorter than the floor is not
-///   emitted and `start` is not advanced, so it is absorbed into the next one. Emitting it instead
-///   makes the synthesiser breathe after "Sure."
-/// * **`retain_format` keeps the raw slice**; otherwise newlines collapse to single spaces and the
-///   result is trimmed. A TTS reading `"...end.\n\nNext..."` aloud must not pause twice.
+/// * blank input short-circuits before the C call, which mishandles a zero-length buffer;
+/// * spans run start-to-start, so inter-sentence whitespace belongs to the following sentence
+///   and no input is dropped;
+/// * a sentence shorter than `min_sentence_len` is skipped without advancing `start`, merging it
+///   into the next one;
+/// * `retain_format` keeps the raw slice; otherwise newlines collapse to single spaces and the
+///   result is trimmed.
 pub fn split_sentences(
     text: &str,
     min_sentence_len: usize,
@@ -194,16 +177,8 @@ fn collapse_newlines(s: &str) -> String {
 mod tests {
     use super::*;
 
-    // **The reason this crate exists rather than a hand-rolled splitter**, pinned as data.
-    //
-    // These are the exact spans `livekit.blingfire.text_to_sentences_with_offsets` returns for the
-    // same inputs -- read off the installed Python wheel, not derived. If this crate and that
-    // wheel ever disagree, one of the two hosts breathes in a different place from the other and
-    // nothing else in either tree would notice.
-    //
-    // Note the third case: BlingFire does **not** split `"Héllo thère. Ça va?"`, and the Python
-    // binding does not either. An expectation that it "should" is the test being wrong about
-    // English orthography, which is exactly the class of disagreement a shared model removes.
+    // Spans read off the `livekit.blingfire` Python wheel for the same inputs; both hosts must
+    // agree on where the TTS breathes. BlingFire does not split `"Héllo thère. Ça va?"`.
     #[test]
     fn the_spans_match_the_python_binding_exactly() {
         for (text, expected) in [
@@ -218,17 +193,10 @@ mod tests {
         }
     }
 
-    // **The equivalence check that decides whether this crate may replace the Python.**
-    //
-    // Every expectation here is `tokenize/blingfire.py::_split_sentences`'s actual output for the
-    // same input, read off the installed `livekit-blingfire` wheel rather than derived. Four of
-    // the eight cases pin a behaviour that a tidier implementation gets wrong:
-    //
-    //   * `min_sentence_len=20` MERGES FORWARD BY SKIPPING -- "Hello there." is under the floor,
-    //     so it is absorbed and the emitted span runs 0..25, not 12..25;
-    //   * `"One.   Two."` KEEPS ITS THREE SPACES in the span (4..11) even though the text is
-    //     trimmed, because the span is start-to-start;
-    //   * `retain_format=True` returns `"\n\n   Second line."` -- leading whitespace and all;
+    // `_split_sentences`'s output from the installed wheel. Pinned edge cases:
+    //   * `min_sentence_len=20` merges "Hello there." forward: the span runs 0..25, not 12..25;
+    //   * `"One.   Two."` keeps its three spaces in the span (4..11) though the text is trimmed;
+    //   * `retain_format=True` keeps leading whitespace;
     //   * a trailing fragment with no terminator is still a sentence.
     #[test]
     fn split_sentences_matches_the_python_implementation() {
@@ -288,17 +256,14 @@ mod tests {
         }
     }
 
-    // Catches: passing the empty string through. Upstream sizes its buffer at `len * 2`, so this
-    // hands the C API a zero-length buffer -- undefined, and the Python binding raises
-    // `ValueError: basic_string` where this one does not.
+    // Upstream sizes its buffer at `len * 2`, so empty input must not reach the C API.
     #[test]
     fn blank_input_short_circuits_before_the_c_call() {
         assert_eq!(split_sentences("", 1, false).unwrap(), Vec::<Sentence>::new());
         assert_eq!(split_sentences("   \n\t ", 1, false).unwrap(), Vec::<Sentence>::new());
     }
 
-    // Catches: panicking on host-supplied text (§1.6 #6). A NUL cannot cross the C boundary and
-    // the answer is an error, not an abort.
+    // A NUL cannot cross the C boundary; host-supplied text gets an error, not an abort.
     #[test]
     fn an_interior_nul_is_an_error_and_not_a_panic() {
         assert_eq!(
@@ -308,9 +273,7 @@ mod tests {
         assert_eq!(split_sentences("a\0b", 1, false).unwrap_err(), Error::InteriorNul);
     }
 
-    // Catches: the codepoint/UTF-16 distinction collapsing. An emoji is one codepoint and two
-    // UTF-16 code units, so the two units disagree after it -- which is the whole reason the enum
-    // exists, and the Node binding is the caller that needs the other one.
+    // An emoji is one codepoint and two UTF-16 units, so the two offset units diverge after it.
     #[test]
     fn codepoint_and_utf16_offsets_differ_past_astral_text() {
         let text = "🙂 alpha beta. Gamma delta.";

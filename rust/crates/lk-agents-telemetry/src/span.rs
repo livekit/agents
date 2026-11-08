@@ -1,10 +1,3 @@
-//! Spans owned by sans-I/O state machines (`telemetry.md`, "Sans-I/O: the entity owns its span").
-//! The entity a span describes holds it in a field named `span` ([`ManualSpan`]) and the machine's
-//! [`Trace`] (`self.telemetry`) opens and ends it: [`Trace::step`] sets the step's instant once,
-//! [`Trace::open`] / [`Trace::open_in`] open, [`Trace::end`] ends, failed or not. A declaration's `#[at]` field
-//! dates a start, an end or an event before the step that records it. Ended spans leave as
-//! [`Record`]s the caller drains each step.
-
 use lk_agents_abi::Ts;
 use lk_agents_abi::telemetry::decl::{
     Attrs, Current, EventDecl, HasEvent, MetricDecl, ParentOf, SpanDecl, SpanEnd, finish_span,
@@ -19,6 +12,8 @@ use lk_agents_abi::telemetry::spans::session::AgentSession;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::time::{Duration, SystemTime};
+
+// A declaration's `#[at]` field dates a start, end or event before the step that records it.
 
 /// Where span and trace ids come from: random in production, seeded in the DST.
 pub type IdSource = Box<dyn FnMut() -> u64 + Send>;
@@ -71,7 +66,6 @@ impl<D: SpanDecl> PartialEq for Reserved<D> {
     }
 }
 
-/// What an open span recorded so far.
 struct Open {
     context: SpanContext,
     parent: Option<u64>,
@@ -442,7 +436,7 @@ impl Trace {
     }
 }
 
-/// A span ended only by the entity that owns it (`telemetry.md`, "Two span handles").
+/// A span ended only by the entity that owns it, through its machine's [`Trace`].
 #[must_use = "a ManualSpan is ended by its owner"]
 pub struct ManualSpan<D: SpanDecl> {
     context: SpanContext,

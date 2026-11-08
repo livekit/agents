@@ -1,6 +1,6 @@
-//! `utils.ConnectionPool`'s bookkeeping: which connection is reused, retired, or closed. The host
-//! owns the handles (by id) and performs the I/O: the handshakes and the closes this queues.
 use std::collections::{BTreeMap, BTreeSet};
+
+// The host owns the connections (by id) and performs the handshakes and closes this queues.
 
 pub struct ConnectionPool {
     maximum_age: Option<f64>,

@@ -1,11 +1,3 @@
-//! Test tooling (feature `testing`): the backends every storage and A2A contract case runs
-//! against, and a connection with injected faults. Each case is written once,
-//! `async fn case(backend: Backend)`, and [`contract!`](crate::contract) registers it per
-//! backend: local SQLite in a fresh directory always runs; AgentDB needs a LiveKit project
-//! (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`) and is `#[ignore]`d, so a plain run
-//! reports it skipped. The credentialed job runs `--ignored`, where missing credentials fail.
-//! A deterministic simulation runs a thread's database in memory instead ([`MemoryConnection`]).
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,6 +13,9 @@ use crate::sql::{BatchResult, Row, Statement};
 use crate::storage::Namespace;
 use crate::thread::{LeaseTiming, SchemaCell};
 use crate::{Storage, Thread, ThreadDbConnection, shortuuid};
+
+// AgentDB cases need a LiveKit project (LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET) and are
+// #[ignore]d; run them with --ignored, where missing credentials fail.
 
 #[derive(Debug, Clone, Copy)]
 pub enum Backend {

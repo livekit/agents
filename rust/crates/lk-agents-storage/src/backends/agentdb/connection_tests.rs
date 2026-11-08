@@ -1,5 +1,3 @@
-//! WebSocket database protocol conformance.
-
 use super::*;
 use std::sync::atomic::AtomicBool;
 use tokio::net::TcpListener;

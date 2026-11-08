@@ -1,6 +1,3 @@
-//! LiveKit's RoomService, SIP and connector services, for what the framework does in a job's
-//! room on its own behalf, and the form POST its Twilio dial makes.
-
 use std::collections::BTreeMap;
 use std::time::Duration;
 

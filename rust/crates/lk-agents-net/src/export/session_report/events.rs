@@ -1,6 +1,3 @@
-//! The session report's event retention: every event a session accepts is kept until the report
-//! is built. A session, or the process, retaining an unusual number of them logs one warning.
-
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 

@@ -1,17 +1,3 @@
-//! The OTLP exporter: every span, report record and measurement reaches LiveKit Cloud and the
-//! application's endpoint from here (docs/internals/telemetry.md "Destinations").
-//!
-//! Producers hand records to [`Exporter`] through `RecordSink`, which never blocks: each
-//! destination copies the record into a bounded queue, or drops and counts it. An owned task
-//! exports full batches as they fill, everything queued each second and metrics every 30 s.
-//!
-//! - [`config`]: identities, the Cloud endpoint and recording decision, the application endpoint.
-//! - `cloud`: the process's telemetry HTTP client and the Cloud endpoint's requests.
-//! - `destination`: the job registry, queues, holding and batch selection.
-//! - `encode`: content policy, identity stamps and the OTLP request bodies.
-//! - `metrics`: per-destination aggregation, delta or cumulative.
-//! - [`proto`]: the OTLP messages, generated from opentelemetry-proto (`proto_tests.rs`).
-
 pub(crate) mod cloud;
 pub mod config;
 mod destination;
@@ -37,6 +23,9 @@ pub use config::{
 pub use destination::Limits;
 use destination::{App, AppSpan, Batch, Cloud, State, Take};
 use lk_agents_core::telemetry::policy::ContentPolicy;
+
+// Producers never block: each destination copies a record into a bounded queue, or drops and counts
+// it.
 
 const SPAN_INTERVAL: Duration = Duration::from_secs(1);
 const METRIC_INTERVAL: Duration = Duration::from_secs(30);
@@ -438,7 +427,7 @@ fn stamp_app_spans(
 }
 
 #[cfg(test)]
-#[path = "exporter_tests.rs"]
+#[path = "otlp_tests.rs"]
 mod tests;
 
 #[cfg(test)]

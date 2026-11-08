@@ -29,11 +29,8 @@ fn rgba(width: u32, height: u32) -> Vec<u8> {
     [4, 5, 6, 255].repeat((width * height) as usize)
 }
 
-// Catches: the mime type parsed off the wrong side of the header (`image/png`, not
-// `image/png;base64` or `data`), the header winning over a declared `mime_type` (the reference
-// warns, then uses the declared one; the reported mismatch is what the binding logs), a
-// mismatch reported when the two agree (a warning on every careful caller's image), and `""`
-// read as a declaration -- it is falsy in Python, so it defers to the header.
+// The mime type comes off the header's `image/png` part, a declared `mime_type` wins (reported
+// as a mismatch only when they differ), and `""` is falsy in Python, so it defers to the header.
 #[test]
 fn a_declared_mime_type_wins_over_the_data_url_header_and_a_disagreement_is_reported() {
     let mismatch = |declared: &str| {
@@ -55,11 +52,8 @@ fn a_declared_mime_type_wins_over_the_data_url_header_and_a_disagreement_is_repo
     }
 }
 
-// Catches: a payload decoder that is not CPython's non-strict `b64decode`. It discards
-// characters outside the alphabet (a line-wrapped URL works) but keeps `+` and `/` (two of the
-// 64 digits -- stripping them corrupts silently), stops at the `=` that completes a quantum,
-// refuses bad padding and non-ASCII rather than handing a provider a corrupt image, and the
-// header is split off at the first comma, which must exist.
+// CPython's non-strict `b64decode`: skips characters outside the alphabet, keeps `+` and `/`,
+// stops at a completing `=`, refuses bad padding and non-ASCII; the header ends at the first comma.
 #[test]
 fn a_data_url_payload_decodes_the_way_binascii_decodes_it() {
     for (url, want) in [
@@ -83,9 +77,7 @@ fn a_data_url_payload_decodes_the_way_binascii_decodes_it() {
     }
 }
 
-// Catches: treating every string as a data URL (a plain URL is passed through for the provider
-// to fetch, with no bytes and no mime sniffed off the extension), including gating on
-// `starts_with("data")` -- `https://data.example.com/..` is an ordinary URL.
+// A plain URL is passed through for the provider to fetch, including `https://data.example...`.
 #[test]
 fn a_plain_url_is_passed_through_with_no_bytes_and_no_mime_inference() {
     for url in ["https://example.com/cat.jpg", "https://data.example.com/x.png"] {
@@ -97,9 +89,7 @@ fn a_plain_url_is_passed_through_with_no_bytes_and_no_mime_inference() {
     }
 }
 
-// Catches: dropping the supported-types gate, or applying it to the header when the declared
-// type is the one that wins. `image/bmp` reaches a provider as an unsupported inline image and
-// comes back as an opaque API error; the reference refuses it locally.
+// Unsupported declared types such as `image/bmp` are refused locally, not by the provider.
 #[test]
 fn an_unsupported_data_url_mime_type_is_refused() {
     let image = url_image("data:image/bmp;base64,aGVsbG8=", None);
@@ -116,9 +106,7 @@ fn an_unsupported_data_url_mime_type_is_refused() {
     );
 }
 
-// Catches: forgetting that the frame arm always produces JPEG. The reference hardcodes both
-// the encode format and the mime type, and they have to agree -- a PNG labelled `image/jpeg`
-// is rejected by Bedrock and mis-decoded by Anthropic.
+// The frame arm always encodes JPEG; a PNG labelled `image/jpeg` is rejected by some providers.
 #[test]
 fn a_frame_is_encoded_as_jpeg_and_labelled_as_jpeg() {
     let data = rgba(8, 8);
@@ -132,9 +120,7 @@ fn a_frame_is_encoded_as_jpeg_and_labelled_as_jpeg() {
     assert_eq!(out.inference_detail, InferenceDetail::Low);
 }
 
-// Catches: translating `if image.inference_width and image.inference_height` into
-// `if both.is_some()`. A zero is falsy in Python, so it means "no resize" -- read as
-// `Some(0)` it becomes a zero-sized target and turns a working call into an error.
+// A zero inference dimension is falsy in Python, so it means "no resize", not a zero target.
 #[test]
 fn a_zero_inference_dimension_means_no_resize_not_a_zero_sized_one() {
     let data = rgba(8, 8);
@@ -154,9 +140,7 @@ fn a_zero_inference_dimension_means_no_resize_not_a_zero_sized_one() {
     assert_ne!(resized.data_bytes, unresized.data_bytes, "both hints present must resize");
 }
 
-// Catches: silently encoding an empty image when the driver forgot to resolve the `MediaRef`.
-// §1.11 gives the pure tier `release` and never `resolve`, so this crate cannot go and get the
-// buffer itself; the only correct response is to say so.
+// This crate cannot resolve a `MediaRef`, so a frame image without pixels is an error.
 #[test]
 fn a_frame_reference_without_its_resolved_buffer_is_an_error() {
     assert_eq!(serialize_image(&frame_image(None, None), None), Err(MediaError::UnresolvedFrame));

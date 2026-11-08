@@ -1,7 +1,3 @@
-//! `utils/images/image.py`: RGBA frame in, JPEG or PNG out. Kept from PIL: `convert("RGB")` drops
-//! alpha rather than compositing, and resize dimensions are float-computed and truncated. Output
-//! bytes differ (Catmull-Rom for BICUBIC, the `image` crate's JPEG writer); geometry does not.
-
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::imageops::{self, FilterType};
@@ -87,7 +83,7 @@ pub struct ResizeOptions {
     pub strategy: ResizeStrategy,
 }
 
-/// A frame the host already converted to packed RGBA (`image.py:90` does it inline).
+/// A frame the host already converted to packed RGBA.
 #[derive(Debug, Clone, Copy)]
 pub struct RgbaFrame<'a> {
     pub width: u32,
@@ -96,7 +92,7 @@ pub struct RgbaFrame<'a> {
     pub data: &'a [u8],
 }
 
-/// `encode` (`image.py:73`).
+/// Encode an RGBA frame as JPEG or PNG, resizing first when asked.
 pub fn encode(frame: RgbaFrame<'_>, options: &EncodeOptions) -> Result<Vec<u8>, MediaError> {
     let mut buffer = Vec::new();
     encode_into(frame, options, &mut buffer)?;
@@ -114,7 +110,7 @@ pub fn encode_into(
     encode_buffer(&resized, options, output)
 }
 
-/// `_image_from_frame` (`image.py:89`). Alpha is dropped, not composited.
+/// Alpha is dropped, not composited, as PIL's `convert("RGB")` does.
 fn rgb_from_frame(frame: RgbaFrame<'_>) -> Result<RgbImage, MediaError> {
     let RgbaFrame { width, height, data } = frame;
     if width == 0 || height == 0 {
@@ -139,7 +135,6 @@ fn rgb_from_frame(frame: RgbaFrame<'_>) -> Result<RgbImage, MediaError> {
     Ok(RgbImage::from_raw(width, height, rgb).expect("rgb buffer is width * height * 3"))
 }
 
-/// `_resize_image` (`image.py:99`).
 fn resize_image(image: RgbImage, options: Option<ResizeOptions>) -> Result<RgbImage, MediaError> {
     let Some(opts) = options else { return Ok(image) };
 

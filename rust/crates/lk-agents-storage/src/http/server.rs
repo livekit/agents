@@ -1,5 +1,3 @@
-//! A loopback listener owned by the worker; closing waits for its connections to settle.
-
 use std::convert::Infallible;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;

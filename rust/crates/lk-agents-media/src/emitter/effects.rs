@@ -1,5 +1,3 @@
-//! TTS PCM emission requests from `machine::AudioEmitter` to the inference emitter executor.
-
 use lk_agents_abi::SynthesizedAudio;
 use std::time::Duration;
 

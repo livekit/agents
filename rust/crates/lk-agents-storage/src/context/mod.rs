@@ -1,5 +1,3 @@
-//! Scope identity, schema compatibility and revision-checked context staging.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use lk_agents_abi::storage::context::{

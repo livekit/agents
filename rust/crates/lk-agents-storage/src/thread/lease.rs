@@ -1,7 +1,3 @@
-//! A held lease: its fence, the renewal task that keeps it, and its observed loss. The renewal
-//! task holds only the database and the fence, never the lease itself, so dropping the last
-//! [`Lease`] handle stops it. A waiter paces its acquire attempts with [`LanePoll`].
-
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -20,6 +16,9 @@ use crate::thread::{LeaseTiming, Thread};
 use crate::{Fence, StorageError};
 
 pub use lk_agents_abi::storage::thread::LanePoll;
+
+// The renewal task holds only the database and the fence, never the lease, so dropping the last
+// `Lease` handle stops it.
 
 /// A canceled acquire must withdraw its mark even when its future is dropped.
 pub(crate) struct Waiter {
@@ -275,22 +274,5 @@ fn extend(fence: &Fence, lease_secs: i64) -> ExtendLease<'_> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use super::*;
-
-    #[test]
-    fn the_poll_backs_off_to_a_second_and_stops_at_its_deadline() {
-        let t0 = Duration::from_secs(100);
-        let ms = Duration::from_millis;
-        let mut p = LanePoll::new(t0, ms(2000));
-        assert_eq!(p.next(t0), Some(t0 + ms(100)));
-        assert_eq!(p.next(t0 + ms(100)), Some(t0 + ms(300)));
-        assert_eq!(p.next(t0 + ms(300)), Some(t0 + ms(700)));
-        assert_eq!(p.next(t0 + ms(700)), Some(t0 + ms(1500)));
-        assert_eq!(p.next(t0 + ms(1500)), Some(t0 + ms(2500)));
-        assert_eq!(p.next(t0 + ms(2500)), None);
-        assert_eq!(LeaseTiming::new(ms(1500), ms(1)).unwrap().secs(), 2);
-    }
-}
+#[path = "lease_tests.rs"]
+mod tests;

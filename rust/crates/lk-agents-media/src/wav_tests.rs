@@ -1,8 +1,6 @@
 use super::*;
 
-/// Builds a WAV file byte-for-byte. Fixtures are generated, not committed: a checked-in
-/// binary is a fixture nobody can read a diff of, and every property these tests care about
-/// (rate, depth, chunk order, chunk parity) is a parameter here.
+/// Builds a WAV file byte-for-byte, with rate, depth, chunk order and chunk parity as parameters.
 fn wav(
     rate: u32,
     channels: u16,
@@ -92,9 +90,7 @@ fn odd_fmt_extensions_and_their_pad_are_skipped_before_pcm() {
     assert_eq!(pcm, samples);
 }
 
-// Catches: the generator and the decoder agreeing with each other and disagreeing with every
-// real WAV. Every other test trusts `wav()`, so the canonical 44-byte header is written out by
-// hand once, decoded, and the generator is required to reproduce it byte for byte.
+// Every other test trusts `wav()`, so the canonical 44-byte header is written out by hand once.
 #[test]
 fn a_hand_written_canonical_header_decodes_and_the_generator_reproduces_it() {
     let mut file = Vec::new();
@@ -121,9 +117,7 @@ fn a_hand_written_canonical_header_decodes_and_the_generator_reproduces_it() {
     assert_eq!(simple(&[1, -1]), file, "the generator drifted from the canonical layout");
 }
 
-// Catches: the header accumulator being reset by a push that does not complete it -- the
-// classic form of this bug reads `RIFF` from the second chunk and rejects the file. Also
-// catches losing the odd carry byte, since a 1-byte cadence splits every single sample.
+// A header split across pushes must accumulate, and a 1-byte cadence must keep the odd carry byte.
 #[test]
 fn feeding_the_same_file_one_byte_at_a_time_gives_the_same_samples() {
     let want: Vec<i16> = (0..64).map(|i| (i * 517 - 16000) as i16).collect();
@@ -142,9 +136,7 @@ fn feeding_the_same_file_one_byte_at_a_time_gives_the_same_samples() {
     assert_eq!(got, one_shot);
 }
 
-// Catches: a split placed inside each individual header field. A `fill` that mis-tracked
-// `need` would accept a short `fmt ` and read the rate out of the wrong four bytes -- audio
-// at the wrong speed, no error.
+// A split inside each header field; a mis-tracked `need` reads the rate from the wrong bytes.
 #[test]
 fn every_split_point_in_the_file_yields_the_same_samples() {
     let want: Vec<i16> = vec![7, -7, 1000, -1000, 32000, -32000];
@@ -155,9 +147,7 @@ fn every_split_point_in_the_file_yields_the_same_samples() {
     }
 }
 
-// Catches: emitting samples from a header that never arrived. A stream that dies after the
-// first few bytes must produce nothing and must not panic -- an index-out-of-bounds here
-// takes down the whole worker, which is strictly worse than a silent utterance.
+// A stream that dies mid-header produces nothing and must not panic.
 #[test]
 fn a_truncated_header_yields_no_audio_and_no_panic() {
     for n in 0..44usize {
@@ -168,10 +158,8 @@ fn a_truncated_header_yields_no_audio_and_no_panic() {
     }
 }
 
-// Catches: guessing instead of refusing. Not RIFF/WAVE (an mp3's ID3 tag, or an AVI's `RIFF`
-// header) framed as PCM is noise nobody traces to the mime type; a non-16-bit file read as
-// 16-bit is static at the wrong speed -- the reference checks the depth BEFORE the format tag,
-// so 32-bit float reports its depth; a `data` chunk before `fmt ` would play at a guessed rate.
+// Refuse rather than guess: non-RIFF/WAVE input, a non-16-bit file (depth is checked before the
+// format tag, as the reference does) and a `data` chunk before `fmt `.
 #[test]
 fn a_file_we_cannot_decode_is_refused_by_name() {
     let mut avi = b"RIFF".to_vec();
@@ -201,9 +189,7 @@ fn a_file_we_cannot_decode_is_refused_by_name() {
     }
 }
 
-// Catches: treating an unknown chunk's payload as audio. `LIST`/`INFO` metadata ahead of the
-// data chunk is what most encoders write, and playing it is a burst of noise at the start of
-// every file.
+// `LIST`/`INFO` metadata ahead of the data chunk is skipped, not played.
 #[test]
 fn chunks_between_the_header_and_the_data_are_skipped() {
     let want: Vec<i16> = vec![10, 20, 30, 40];
@@ -220,17 +206,9 @@ fn chunks_between_the_header_and_the_data_are_skipped() {
     assert_eq!(segs[0].samples, want);
 }
 
-// Catches: the reference's own bug, and it is reachable with ordinary files.
-//
-// RIFF pads every chunk to an even length and does NOT count the pad byte in the declared
-// size. `_consume_skip` skips exactly `chunk_size`, so after an odd-sized chunk it is one
-// byte behind: the next 8-byte "chunk header" is the pad plus seven real bytes, so the id
-// reads as b"\0fmt" and the size as garbage, and the garbage skip swallows the rest of the
-// file. Verified against the reference itself, not inferred -- a 19-byte LIST payload makes
-// `_WavInlineDecoder` emit ZERO samples for a perfectly valid file, while the same file with
-// a 20-byte payload decodes fine. `LIST`/`INFO` strings are odd-length routinely, and
-// ffmpeg's own wav demuxer consumes the pad, so the reference's slow path and its fast path
-// disagree on the same bytes -- which is what makes this a bug rather than a choice.
+// RIFF pads odd chunks to an even length without counting the pad. The reference fast path
+// skips exactly `chunk_size` and loses the rest of a file with a 19-byte LIST payload; ffmpeg
+// consumes the pad.
 #[test]
 fn an_odd_sized_chunk_pad_byte_does_not_desynchronise_the_parser() {
     let want: Vec<i16> = vec![-5, 5, -6, 6, -7, 7];
@@ -248,9 +226,7 @@ fn an_odd_sized_chunk_pad_byte_does_not_desynchronise_the_parser() {
     }
 }
 
-// Catches: trusting the declared `data` size. A live writer does not know the length yet and
-// writes 0 (or 0xFFFFFFFF); a decoder that stopped at the declared size would emit silence
-// for every streaming WAV, which is the single most common way a TTS sends WAV.
+// A live writer declares a `data` size of 0 or 0xFFFFFFFF, so the declared size is ignored.
 #[test]
 fn a_data_chunk_whose_declared_size_is_a_placeholder_still_streams() {
     let want: Vec<i16> = vec![100, -100, 200, -200];
@@ -263,9 +239,7 @@ fn a_data_chunk_whose_declared_size_is_a_placeholder_still_streams() {
     }
 }
 
-// Catches: playing the second file's 44-byte header as audio when a provider concatenates
-// whole WAV files down one connection, and catches keeping the first file's sample rate for
-// the second. Both are silent -- a click then wrong-speed audio.
+// Concatenated WAV files: the second header is not audio, and its sample rate applies.
 #[test]
 fn a_new_riff_header_at_a_push_boundary_starts_a_new_segment() {
     let a: Vec<i16> = vec![1, 2, 3, 4];
@@ -281,10 +255,7 @@ fn a_new_riff_header_at_a_push_boundary_starts_a_new_segment() {
     assert_eq!(segs[1].samples, b);
 }
 
-// Catches: scanning for `RIFF` anywhere in the buffer instead of only at a push boundary.
-// 16-bit PCM contains the bytes `RIFF` (0x52 0x49, 0x46 0x46 -> samples 18770 and 17990)
-// eventually, and a mid-buffer scan would cut the stream there and then reject the "header".
-// The reference checks the start of a push only; this pins that.
+// `RIFF` is recognised only at a push boundary; 16-bit PCM eventually contains those bytes.
 #[test]
 fn pcm_that_happens_to_contain_the_riff_bytes_is_not_mistaken_for_a_header() {
     let want: Vec<i16> = vec![0, 18770, 17990, 0, 5];

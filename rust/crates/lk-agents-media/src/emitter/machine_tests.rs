@@ -1,15 +1,11 @@
-//! Tests for [`AudioEmitter`](super::AudioEmitter) (`tts/tts.py:835-1344`), from
-//! `agents/tests/test_tts.py:799-1110` on a virtual clock.
-//!
-//! The fixture is the reference's: 1 kHz mono, `frame_size_ms=100`, so a 100 ms frame is 100
-//! samples and the tail is 10. `AudioByteStream` is progressive: a 100-sample push comes out as
-//! 20 + 40 + (40 held).
-
 use crate::Frame;
 use lk_agents_abi::media::emitter::EmitterError;
 use lk_agents_abi::{SynthesizedAudio, TranscriptChunk, Ts};
 
 use super::{AudioEmitter, AudioEmitterEffect};
+
+// The reference fixture: 1 kHz mono, `frame_size_ms=100`, so a 100 ms frame is 100 samples and
+// the tail is 10. Progressive framing turns a 100-sample push into 20 + 40 + (40 held).
 
 const SR: u32 = 1000;
 const CH: u16 = 1;
@@ -109,8 +105,6 @@ impl Fx {
     }
 }
 
-// --------------------------------------------------------------------- the drift watchdog
-
 // Catches: the drift timer not firing, or firing without releasing the held tail (audio stalls
 // for a provider slower than realtime).
 #[test]
@@ -182,8 +176,6 @@ fn flushing_restarts_the_drift_measurement() {
     );
 }
 
-// --------------------------------------------------------------------- tail splitting
-
 // Catches: computing the split index in samples instead of bytes.
 #[test]
 fn splitting_the_tail_moves_no_bytes_and_loses_none() {
@@ -202,8 +194,7 @@ fn a_frame_no_bigger_than_the_tail_is_held_whole() {
     assert_eq!(fx.finals(), vec![true]);
 }
 
-// Catches: "fixing" the reference: a segment that never received a byte is never closed, so the
-// next `start_segment()` raises.
+// A segment that never received a byte is never closed, so the next `start_segment()` raises.
 #[test]
 fn ending_a_segment_that_never_got_a_byte_does_not_close_it() {
     let mut fx = Fx::streaming("e1");
@@ -214,8 +205,6 @@ fn ending_a_segment_that_never_got_a_byte_does_not_close_it() {
         "reference quirk, pinned deliberately"
     );
 }
-
-// --------------------------------------------------------------------- segment accounting
 
 // Catches: `pushed_duration` losing Python's indexing, especially a default of `0` instead of `-1`
 // (a late failure would replay the whole utterance).
@@ -264,7 +253,7 @@ fn misuse_of_the_lifecycle_is_refused() {
 #[test]
 fn a_provider_id_is_recorded_even_when_its_segment_is_rejected() {
     let mut fx = Fx::streaming("p1");
-    // No byte was pushed, so "p1" is still open (see the quirk above) and this is rejected.
+    // No byte was pushed, so "p1" is still open and this is rejected.
     assert!(fx.em.start_segment("p2").is_err());
     assert_eq!(fx.em.provider_request_ids(), ["p1", "p2"], "noted before the segment was refused");
 }
@@ -279,8 +268,6 @@ fn a_frame_carries_the_provider_ids_learnt_since_the_previous_one() {
     assert_eq!(ids.first().map(Vec::as_slice), Some(["p1".to_string()].as_slice()), "{ids:?}");
     assert!(ids.iter().skip(1).all(Vec::is_empty), "{ids:?}");
 }
-
-// --------------------------------------------------------------------- identity and ids
 
 // Catches: `started()` and `request_id()` answering constants, and `initialize("")` not becoming
 // `"unknown"`.
@@ -314,8 +301,6 @@ fn provider_ids_accumulate_in_order_without_blanks_or_repeats() {
     assert_eq!(fx.em.provider_request_ids(), ["p1", "p2"], "in the order they were learnt");
 }
 
-// --------------------------------------------------------------------- the empty-segment guards
-
 // Catches: a silence marker for a segment that opened its byte stream (a zero-byte push) but
 // produced no audio.
 #[test]
@@ -345,8 +330,6 @@ fn a_segment_whose_only_audio_was_the_flushed_tail_still_closes() {
     assert_eq!(fx.finals(), vec![false, true]);
 }
 
-// --------------------------------------------------------------------- torn samples
-
 // Catches: a flush dropping a partial sample more bytes complete, or an ended segment's torn
 // tail not counted; `take_dropped_bytes` answering a constant.
 #[test]
@@ -359,8 +342,6 @@ fn a_flush_keeps_a_partial_sample_and_an_ended_segment_drops_it() {
     assert_eq!(fx.em.take_dropped_bytes(), 1, "the segment ended inside a sample");
     assert_eq!(fx.em.take_dropped_bytes(), 0, "reading it is destructive");
 }
-
-// --------------------------------------------------------------------- the 150 ms floor
 
 // Catches: the drift floor written as `>=`; 20 ms frames land exactly on 0.150 s.
 #[test]
@@ -382,8 +363,6 @@ fn exactly_150ms_of_sent_audio_is_not_yet_past_the_floor() {
     assert_eq!(flush_deadline(&eff), Some(secs(0.15)), "0.17 is, and delay is 0.17 - 0 - 0.02");
 }
 
-// --------------------------------------------------------------------- timed transcripts
-
 // Catches: copying the buffered words onto every frame instead of consuming them.
 #[test]
 fn buffered_words_ride_exactly_one_frame() {
@@ -401,8 +380,6 @@ fn buffered_words_ride_exactly_one_frame() {
     assert_eq!(carrying, vec![0], "the first frame out, and only that one");
     assert_eq!(sent[0].timed_transcript[0].text, "hello");
 }
-
-// --------------------------------------------------------------------- lifecycle
 
 // Catches: raising after `end_input()` instead of returning silently.
 #[test]
@@ -445,8 +422,6 @@ fn a_pushed_frame_goes_out_as_framed_with_only_the_tail_held() {
     let frame = Frame { data: vec![0u8; 4], samples_per_channel: 2 };
     assert_eq!(idle.em.push_frame(idle.now, frame, &mut idle.eff), Err(EmitterError::NoSegment));
 }
-
-// --------------------------------------------------------------------- segments
 
 // Catches: one byte stream (or its progressive size) carried across segments or a flush, so every
 // sentence after the first starts a whole frame late instead of with the 20 ms first frame.
@@ -527,8 +502,6 @@ fn words_pushed_after_the_last_audio_go_out_with_the_segments_end() {
     }
 }
 
-// --------------------------------------------------------------------- timing
-
 // Catches: the 10 ms silence marker counted as pushed audio, so a retry resumes past real speech
 // and the TTS metrics overstate the audio produced.
 #[test]
@@ -538,8 +511,6 @@ fn pushed_duration_counts_the_providers_audio_but_not_the_silence_marker() {
     assert_eq!(fx.sizes().iter().sum::<u32>(), 50 + SR / 100, "the premise: the marker went out");
     assert!((fx.em.pushed_duration(0) - 0.05).abs() < 1e-9);
 }
-
-// --------------------------------------------------------------------- channels
 
 // Catches: the tail split or the marker sized without the channel count: a stereo frame torn
 // between left and right swaps the channels for the rest of the segment.
@@ -564,8 +535,6 @@ fn stereo_frames_hold_whole_sample_frames_and_keep_every_byte_in_order() {
     assert_eq!(*marker[0].frame.data, [0u8; (SR / 100) as usize * 4], "10 ms of stereo silence");
 }
 
-// --------------------------------------------------------------------- interruption
-
 // Catches: stopping (an interruption) releasing the held tail or sending a final marker, so the
 // agent keeps talking after the user barged in.
 #[test]
@@ -580,8 +549,8 @@ fn after_stop_mid_segment_nothing_more_is_sent() {
     assert!(fx.finals().iter().all(|f| !f), "and no final marker follows an interruption");
 }
 
-// Catches (review21): a streaming report made while no segment is open raising `NoSegment`, or
-// lost. It rides on the next segment's final frame, added to that segment's own report.
+// A streaming report made while no segment is open is neither an error nor lost: it rides on
+// the next segment's final frame, added to that segment's own report.
 #[test]
 fn usage_reported_between_segments_rides_on_the_next_one() {
     let mut fx = Fx::new(true);

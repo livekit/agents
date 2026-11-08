@@ -1,12 +1,8 @@
-//! One trust store for every framework HTTP, WebSocket and WebTransport client.
-//!
-//! The first use snapshots the system roots, or only `SSL_CERT_FILE`/`SSL_CERT_DIR`
-//! when configured. Immutable TLS configuration can be inherited by a forkserver's
-//! children; sockets and connection pools remain process-local.
-
 use std::sync::{Arc, OnceLock};
 
 use rustls::{ClientConfig, RootCertStore};
+
+// Immutable TLS configuration may be inherited by forked children; sockets and pools may not.
 
 /// The trust configuration could not be built: no usable root, or a client the TLS backend refused.
 #[derive(Debug, Clone, thiserror::Error)]

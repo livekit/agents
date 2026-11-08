@@ -1,6 +1,3 @@
-//! `_core.TelemetrySpan`: a span the host's OpenTelemetry API starts, recorded like a framework
-//! span. Names and keys are the application's own.
-
 use std::collections::BTreeMap;
 
 use lk_agents_abi::telemetry::decl::json;

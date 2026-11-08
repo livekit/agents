@@ -1,7 +1,3 @@
-//! An audio queue's own metrics: what its bound dropped, measured as `lk.agents.audio.dropped`
-//! under the observed job and warned about once, and how fast its consumer drained the pre-connect
-//! head, measured as `lk.agents.audio.catch_up_time` and logged.
-
 use super::{Head, Policy};
 use lk_agents_abi::{Clock, Ts};
 use lk_agents_telemetry as telemetry;

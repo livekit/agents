@@ -1,7 +1,3 @@
-//! One decode job's synchronous work: what it reads (a file, a finite buffer, raw PCM or bytes
-//! streamed in), the codec, channel remixing and resampling to the requested format, and the
-//! shaping of its PCM into frames. The caller runs it on a thread that may block in its reader.
-
 use std::io::Read;
 
 use lk_agents_abi::AudioFrame;
@@ -9,6 +5,8 @@ use lk_agents_abi::AudioFrame;
 use crate::audio_decoder::{DecodeLimits, remix};
 use crate::error::CodecError;
 use crate::{AudioDecoder, AudioFormat, Container};
+
+// A decode job runs on the caller's thread, which may block in its reader.
 
 /// Encoded or raw input of one decode job.
 pub enum Source {

@@ -1,5 +1,3 @@
-//! One call's native lane lease, transport reload and fenced history/context commit.
-
 use lk_agents_net::clock::RealClock;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::collections::{BTreeMap, BTreeSet};
@@ -399,3 +397,7 @@ impl HostVoiceStore for VoiceStore {
         result
     }
 }
+
+#[cfg(test)]
+#[path = "voice_tests.rs"]
+mod tests;

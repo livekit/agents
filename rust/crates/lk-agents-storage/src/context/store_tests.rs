@@ -1,9 +1,7 @@
-//! Persisted context scopes through the real storage on both backends.
-
+use crate::context::store::ContextStore;
+use crate::testing::Backend;
+use crate::{CommitOptions, RunOptions, StorageError};
 use lk_agents_abi::storage::context::{AppTransaction as _, ContextActivation as _, ContextField};
-use lk_agents_storage::context::store::ContextStore;
-use lk_agents_storage::testing::Backend;
-use lk_agents_storage::{CommitOptions, RunOptions, StorageError};
 use serde_json::{Value, json};
 
 fn field(name: &str, value: Value) -> ContextField {
@@ -85,8 +83,8 @@ async fn notes(store: &ContextStore) -> Vec<Vec<Value>> {
     rows
 }
 
-/// docs/context.md#application-records-and-transactions: an independent transaction (and a
-/// joining one outside a managed turn) commits when it ends; a managed turn's joins its commit.
+/// An independent transaction (and a joining one outside a managed turn) commits when it ends; a
+/// managed turn's joins its commit.
 async fn application_transactions_commit_on_exit_or_with_the_turn(backend: Backend) {
     let fixture = backend.fixture(None).await;
     let (storage, thread_id) = (fixture.storage.clone(), fixture.thread_id.clone());
@@ -155,7 +153,7 @@ async fn a_turns_application_writes_never_apply_after_a_takeover(backend: Backen
     fixture.cleanup(&[&s1, &s2]).await;
 }
 
-lk_agents_storage::contract!(
+crate::contract!(
     direct_context_saves_survive_reload_and_refuse_stale_activations,
     several_context_declarations_share_one_direct_scope,
     application_transactions_commit_on_exit_or_with_the_turn,

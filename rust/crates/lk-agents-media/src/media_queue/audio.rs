@@ -1,6 +1,3 @@
-//! Audio: bounded by its queued duration under a [`Policy`], what the bound drops reported as one
-//! gap and measured, a backlog merged into frames of up to [`MERGED_FRAME`].
-
 use super::core::{Consumer, Core, Producer, channel};
 use super::metrics::Meter;
 use super::{Head, Item, MERGED_FRAME, Policy, Stuck};

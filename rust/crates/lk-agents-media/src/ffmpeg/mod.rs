@@ -1,11 +1,10 @@
-//! The ffmpeg half, over `csrc/lk_agents_media.c`'s `extern "C"` shim (hand-written ffmpeg struct
-//! layouts read wrong memory instead of failing to link). The demuxer needs a blocking read: the
-//! caller runs [`decode_stream`] on a thread that may block in its reader.
-
 use std::ffi::{CString, c_char, c_int, c_uint, c_void};
 
 use crate::AudioFormat;
 use crate::error::{CodecError, Result};
+
+// ffmpeg is reached only through the C shim: hand-written struct layouts would read wrong
+// memory instead of failing to link.
 
 mod audio_decoder;
 mod audio_encoder;
@@ -103,16 +102,11 @@ pub fn avformat_version() -> (u32, u32, u32) {
 }
 
 #[cfg(test)]
-mod fixtures_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
-    // Catches: linking against a system ffmpeg instead of the pinned one. §10 vendors precisely
-    // so behaviour is identical everywhere; an LK_CODECS_FFMPEG_PREFIX pointing at, say, brew's
-    // ffmpeg 8 would link, run, and decode *slightly* differently -- which is the failure mode
-    // vendoring exists to prevent, and the only one nobody would notice.
+    // A system ffmpeg via LK_CODECS_FFMPEG_PREFIX would link and run but decode slightly
+    // differently from the pinned one, unnoticed.
     #[test]
     fn the_linked_ffmpeg_is_the_major_version_the_shim_was_written_against() {
         // 7.1 ships libavcodec 61 and libavformat 61.

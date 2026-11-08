@@ -1,8 +1,3 @@
-//! The backend-neutral SQL vocabulary: bound values ([`SqlValue`]), executable [`Statement`]s and
-//! their results, typed row reads ([`FromCell`], [`Cells`]), the [`Bind`] trait with its
-//! `statement!` macro, and the compile-time checks of statements and records. Both backends
-//! execute these as they are; neither's wire or driver types appear here.
-
 use std::borrow::Cow;
 
 use serde::Serialize;

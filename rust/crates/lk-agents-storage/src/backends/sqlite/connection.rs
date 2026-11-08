@@ -1,7 +1,3 @@
-//! One SQLite database file served by its own worker thread ([`FileConnection`]), so no query
-//! blocks the executor, and the synchronous execution of backend-neutral statements on a
-//! connection.
-
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,6 +10,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::sql::{BatchResult, Row, SqlValue, Statement, StatementResult};
 use crate::{StorageError, ThreadDbConnection};
+
+// Each database file is served by its own worker thread, so no query blocks the executor.
 
 /// How long a statement waits for another process's write lock before failing retryably.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -168,9 +166,6 @@ pub(super) fn connect(path: &Path, create: bool) -> Result<rusqlite::Connection,
     conn.pragma_update(None, "synchronous", "NORMAL").map_err(sqlite_error)?;
     Ok(conn)
 }
-
-// Execution: the backend-neutral statements on a synchronous connection, which the local backend
-// runs on its files and the storage simulation on an in-memory database.
 
 /// Transient database failures (a busy lock, I/O, a full disk or memory) are retryable.
 /// Corruption, permissions and what the caller asked wrongly (a

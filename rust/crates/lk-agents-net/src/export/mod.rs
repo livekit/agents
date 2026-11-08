@@ -1,14 +1,3 @@
-//! Telemetry's export: what the process's spans, metrics and report records become
-//! (docs/internals/telemetry.md "Destinations"). Spans are declared in `lk-agents-abi` and recorded
-//! through `lk-agents-telemetry`; the process tracer records to this module's exporter.
-//!
-//! - [`otlp`]: the OTLP exporter to LiveKit Cloud and the application's endpoint.
-//! - [`session_report`]: the LiveKit Cloud session report's records and recording upload.
-//! - [`host`]: `_core.TelemetrySpan`, a span the host's OpenTelemetry API starts.
-//! - [`stall`]: event-loop stalls, measured and spanned within a rate limit.
-//! - [`prometheus`]: the process's own instruments as the worker's `/metrics` serves them.
-//! - [`ExporterSlot`], [`exporter`]: the process's exporter once the host installs telemetry.
-
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod host;

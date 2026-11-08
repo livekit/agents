@@ -1,9 +1,7 @@
-//! Name resolution: the system resolver (`getaddrinfo`, so hosts files and the platform's resolver
-//! configuration apply) on the blocking I/O pool, never on Tokio's blocking pool. Every HTTP
-//! client and socket connect of the framework resolves here.
-
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
+
+// The system resolver (getaddrinfo), so hosts files and the platform's resolver config apply.
 
 /// The addresses `addr` (`(host, port)` or `"host:port"`) resolves to.
 pub async fn lookup(addr: impl ToSocketAddrs + Send + 'static) -> io::Result<Vec<SocketAddr>> {

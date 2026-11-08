@@ -1,29 +1,26 @@
-//! `serialize_image` (`llm/utils.py:148`): the producer half of the media seam. The type lives in
-//! the format crate, which must not reach an encoder.
-
 use lk_agents_abi::llm::provider_format::SerializedImage;
 use lk_agents_abi::media::images::PreparedImage;
 use lk_agents_abi::{ImageContent, ImageSource};
 
 use super::encode::{EncodeOptions, MediaError, ResizeOptions, ResizeStrategy, RgbaFrame, encode};
 
-/// The four types the reference admits from a `data:` URL (`utils.py:165`); plain URLs are never checked.
+/// The four types admitted from a `data:` URL; plain URLs are never checked.
 pub const SUPPORTED_DATA_URL_MIME_TYPES: [&str; 4] =
     ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
 /// The encode never consults `EncodeOptions.format`; the reference hardcodes the label to match.
 pub const FRAME_MIME_TYPE: &str = "image/jpeg";
 
-/// A declared `mime_type` that disagrees with the `data:` header; the declared one wins
-/// (`utils.py:157`) and the binding logs the reference's warning.
+/// A declared `mime_type` that disagrees with the `data:` header; the declared one wins and the
+/// binding logs a warning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MimeMismatch {
     pub declared: String,
     pub header: String,
 }
 
-/// `serialize_image` (`llm/utils.py:148`), minus the `_cache` lookup. `frame` is ignored for a
-/// URL image, as the reference ignores the inference size there.
+/// Serialize an image for a provider. `frame` is ignored for a URL image, as the reference
+/// ignores the inference size there.
 pub fn serialize_image(
     image: &ImageContent,
     frame: Option<RgbaFrame<'_>>,

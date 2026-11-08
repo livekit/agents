@@ -1,5 +1,3 @@
-//! Transport URL classification and ids in the protocol's `guid` format.
-
 /// Is this a LiveKit Cloud URL? Hostname suffix only, so a path or query cannot fake it.
 pub fn is_cloud_url(url: &str) -> bool {
     let Some(host) = host_of(url) else { return false };
@@ -65,8 +63,8 @@ impl lk_agents_abi::types::ids::Ids for Ids {
     }
 }
 
-/// `_observability_url(livekit_url)` (`job.py:58`). The env override wins unvalidated; otherwise
-/// only LiveKit Cloud URLs get one, at `https://` + the ws url's hostname.
+/// The env override wins unvalidated; otherwise only LiveKit Cloud URLs get one, at `https://`
+/// plus the ws url's hostname.
 pub fn observability_url(livekit_url: &str, env_override: Option<&str>) -> Option<String> {
     if let Some(u) = env_override.filter(|u| !u.is_empty()) {
         return Some(u.to_string());

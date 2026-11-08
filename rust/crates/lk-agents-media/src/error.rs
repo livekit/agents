@@ -1,5 +1,3 @@
-//! One error type for both halves, `Clone + PartialEq` so tests assert on values.
-
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum CodecError {

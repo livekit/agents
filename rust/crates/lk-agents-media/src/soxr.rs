@@ -1,6 +1,3 @@
-//! Sample-rate conversion through libsoxr, also used by `rtc.AudioResampler`.
-//! Quality recipes retain the SDK's ordinal mapping, including High and VeryHigh.
-
 #[allow(
     clippy::disallowed_types,
     reason = "guards libsoxr's process-global FFT cache across pool and host threads"
@@ -20,7 +17,7 @@ use std::{
 /// takes this for writing and `push`/`flush` (`soxr_clear`) for reading.
 static FFT_CACHE: RwLock<()> = RwLock::new(());
 
-/// `Quality`'s discriminants are protobuf ordinals, not soxr recipes (see module docs).
+/// `Quality`'s discriminants are protobuf ordinals, mapped to soxr recipes as the SDK maps them.
 use lk_agents_abi::{Quality, ResampleError};
 
 /// Not `Sync`; distinct handles on distinct threads are safe only because of `FFT_CACHE`.

@@ -1,9 +1,117 @@
-//! A cloned thread handle cannot replace an active run's lease.
+use std::time::Duration;
 
-use lk_agents_storage::{CommitOptions, LaneAccess, LeaseAfterCommit, RunOptions, WhenHeld};
-use lk_agents_storage::{RunOutcome, StorageError};
+use livekit_protocol::agent::ChatRole;
+use serde_json::json;
 
-use lk_agents_storage::testing::Backend;
+use super::*;
+use crate::testing::Backend;
+use crate::thread::tests::{LANE, message, submitted};
+use crate::{CommitOptions, LaneAccess, LeaseAfterCommit, RunOptions, RunOutcome, StorageError};
+use crate::{TaskPickup, Thread, WhenHeld};
+
+#[test]
+fn the_poll_backs_off_to_a_second_and_stops_at_its_deadline() {
+    let t0 = Duration::from_secs(100);
+    let ms = Duration::from_millis;
+    let mut p = LanePoll::new(t0, ms(2000));
+    assert_eq!(p.next(t0), Some(t0 + ms(100)));
+    assert_eq!(p.next(t0 + ms(100)), Some(t0 + ms(300)));
+    assert_eq!(p.next(t0 + ms(300)), Some(t0 + ms(700)));
+    assert_eq!(p.next(t0 + ms(700)), Some(t0 + ms(1500)));
+    assert_eq!(p.next(t0 + ms(1500)), Some(t0 + ms(2500)));
+    assert_eq!(p.next(t0 + ms(2500)), None);
+    assert_eq!(LeaseTiming::new(ms(1500), ms(1)).unwrap().secs(), 2);
+}
+
+/// A run dropped without commit or abandon stops renewing: its lease lapses within the TTL
+/// and another holder takes the lane.
+async fn a_dropped_run_stops_renewing_and_its_lease_lapses(backend: Backend) {
+    let fx = backend.fixture(Some((Duration::from_secs(1), Duration::from_millis(300)))).await;
+    let s1 = fx.thread("w1").await;
+    let s2 = fx.thread("w2").await;
+    let run = s1.lane(LANE).open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    drop(run);
+    tokio::time::sleep(Duration::from_millis(2600)).await;
+    let lane2 = s2.lane(LANE);
+    let next = lane2
+        .open(RunOptions {
+            access: LaneAccess::Exclusive(WhenHeld::Reject),
+            ..RunOptions::new("r2", "AST_2")
+        })
+        .await;
+    let next = next.expect("the dropped run's lease lapsed");
+    drop(next);
+    fx.cleanup(&[&s1, &s2]).await;
+}
+
+/// Waiters run in the order their messages' rows were submitted: a later message cannot take a
+/// free lane while an older one still waits for it.
+async fn waiters_take_the_lane_in_the_order_their_rows_were_submitted(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s = fx.thread("w1").await;
+    let lane = s.lane(LANE);
+    lane.open(RunOptions::new("r0", ""))
+        .await
+        .unwrap()
+        .commit(CommitOptions::default())
+        .await
+        .unwrap();
+    for task_id in ["AST_first", "AST_second"] {
+        assert!(lane.submit(&submitted(task_id)).await.unwrap());
+    }
+    let second = || RunOptions {
+        access: LaneAccess::Exclusive(WhenHeld::Reject),
+        pickup: TaskPickup::Claim,
+        ..RunOptions::new("r2", "AST_second")
+    };
+    let refused = lane.open(second()).await.err().expect("the older waiter goes first");
+    assert!(matches!(refused, StorageError::Rejected { .. }), "{refused}");
+    let first = RunOptions {
+        access: LaneAccess::Exclusive(WhenHeld::Reject),
+        pickup: TaskPickup::Claim,
+        ..RunOptions::new("r1", "AST_first")
+    };
+    let mut run = lane.open(first).await.unwrap();
+    assert!(run.picked_up());
+    run.commit(CommitOptions::default()).await.unwrap();
+    // the first row is working now: the second is the oldest waiter and takes the lane
+    lane.open(second()).await.unwrap().commit(CommitOptions::default()).await.unwrap();
+    fx.cleanup(&[&s]).await;
+}
+
+/// A lost handle cannot restart renewal. Takeover replaces its token even before the new
+/// owner commits, so the old owner's unchanged version is not enough to authorize a write.
+async fn an_expired_owner_cannot_restart_or_commit_after_takeover(backend: Backend) {
+    let fx = backend.fixture(Some((Duration::from_secs(1), Duration::from_millis(200)))).await;
+    let first = fx.thread("w1").await;
+    let second = fx.thread("w2").await;
+    let mut stale = first.lane(LANE).open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    let old_lease = stale.lease().unwrap().clone();
+    old_lease.stop();
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    assert!(old_lease.is_lost());
+    old_lease.keep_alive();
+    assert!(old_lease.is_lost(), "restarting renewal cannot revive an expired handle");
+
+    let owner = second.lane(LANE).open(RunOptions::new("r2", "AST_2")).await.unwrap();
+    assert_eq!(stale.version(), owner.version(), "takeover alone does not change the version");
+    assert_ne!(old_lease.fence().token, owner.lease().unwrap().fence().token);
+    stale.set_state(json!({"stale": true}));
+    stale.history_mut().push(message("stale", ChatRole::Assistant, "old owner's answer"));
+    let error = stale.commit(CommitOptions::default()).await.unwrap_err();
+    assert!(matches!(error, StorageError::VersionConflict { .. }), "{error}");
+    assert!(second.lane(LANE).history().await.unwrap().is_empty());
+    assert!(second.lane(LANE).info().await.unwrap().unwrap().state.is_none());
+
+    owner.lease().unwrap().stop();
+    owner.lease().unwrap().release(None).await.unwrap();
+    owner.lease().unwrap().keep_alive();
+    let lost = tokio::time::timeout(Duration::from_secs(2), owner.lease().unwrap().lost()).await;
+    assert!(matches!(lost, Ok(StorageError::LeaseLost(_))));
+    // The deliberately released owner has no work to commit or abandon.
+    drop(owner);
+    fx.cleanup(&[&first, &second]).await;
+}
 
 async fn cloned_handles_do_not_replace_an_active_runs_lease(backend: Backend) {
     let fixture = backend.fixture(None).await;
@@ -113,7 +221,10 @@ async fn a_resumed_drain_keeps_another_waiters_mark(backend: Backend) {
     fixture.cleanup(&[&thread]).await;
 }
 
-lk_agents_storage::contract!(
+crate::contract!(
+    waiters_take_the_lane_in_the_order_their_rows_were_submitted,
+    an_expired_owner_cannot_restart_or_commit_after_takeover,
+    a_dropped_run_stops_renewing_and_its_lease_lapses,
     cloned_handles_do_not_replace_an_active_runs_lease,
     a_dead_waiter_does_not_interrupt_a_new_owner,
     canceled_and_timed_out_acquires_withdraw_their_marks,
@@ -122,7 +233,7 @@ lk_agents_storage::contract!(
 
 #[test]
 fn renewal_timing_reserves_a_full_request_interval_before_expiry() {
-    use lk_agents_storage::thread::LeaseTiming;
+    use crate::thread::LeaseTiming;
     use std::time::Duration;
 
     let ttl = Duration::from_secs(10);
@@ -135,7 +246,7 @@ fn renewal_timing_reserves_a_full_request_interval_before_expiry() {
 /// Applies a database request immediately, but can delay its acknowledgment or stall renewals.
 /// This models the difference between a durable write and knowing it succeeded.
 struct SlowReplies {
-    database: lk_agents_storage::testing::MemoryConnection,
+    database: crate::testing::MemoryConnection,
     acquire_delay: std::time::Duration,
     renewal_delay: std::time::Duration,
     stall_after_first: bool,
@@ -143,18 +254,18 @@ struct SlowReplies {
 }
 
 #[async_trait::async_trait]
-impl lk_agents_storage::ThreadDbConnection for SlowReplies {
+impl crate::ThreadDbConnection for SlowReplies {
     async fn query(
         &self,
-        statement: lk_agents_storage::sql::Statement,
-    ) -> Result<Vec<lk_agents_storage::sql::Row>, StorageError> {
+        statement: crate::sql::Statement,
+    ) -> Result<Vec<crate::sql::Row>, StorageError> {
         self.database.query(statement).await
     }
 
     async fn batch(
         &self,
-        statements: Vec<lk_agents_storage::sql::Statement>,
-    ) -> Result<lk_agents_storage::sql::BatchResult, StorageError> {
+        statements: Vec<crate::sql::Statement>,
+    ) -> Result<crate::sql::BatchResult, StorageError> {
         let renewal =
             statements.iter().any(|s| s.sql().contains("SET lease_until = unixepoch() +"));
         let acquire = statements.iter().any(|s| s.sql().contains("RETURNING version"));
@@ -191,7 +302,7 @@ fn slow_replies(
     stall_after_first: bool,
 ) -> std::sync::Arc<SlowReplies> {
     std::sync::Arc::new(SlowReplies {
-        database: lk_agents_storage::testing::MemoryConnection::new(std::sync::Arc::new(
+        database: crate::testing::MemoryConnection::new(std::sync::Arc::new(
             lk_agents_net::clock::RealClock::new(),
         ))
         .unwrap(),
@@ -202,16 +313,10 @@ fn slow_replies(
     })
 }
 
-async fn slow_thread(connection: std::sync::Arc<SlowReplies>) -> lk_agents_storage::Thread {
-    lk_agents_storage::Thread::new(
-        connection,
-        "AT_timing",
-        Default::default(),
-        Default::default(),
-        "worker",
-    )
-    .await
-    .unwrap()
+async fn slow_thread(connection: std::sync::Arc<SlowReplies>) -> crate::Thread {
+    crate::Thread::new(connection, "AT_timing", Default::default(), Default::default(), "worker")
+        .await
+        .unwrap()
 }
 
 #[tokio::test(start_paused = true)]
@@ -267,15 +372,13 @@ async fn an_inbox_claim_keeps_renewing_while_acceptance_or_debounce_waits() {
         "messageId": "first", "role": "ROLE_USER", "parts": [{"text": "hello"}]
     }))
     .unwrap();
-    let data = lk_agents_storage::thread::schema::TaskData {
-        history: vec![message.clone()],
-        ..Default::default()
-    };
+    let data =
+        crate::thread::schema::TaskData { history: vec![message.clone()], ..Default::default() };
     let (_, lease) = thread
         .lane("desk")
         .receive(
             "worker",
-            lk_agents_storage::thread::db::ReceiveInput {
+            crate::thread::db::ReceiveInput {
                 task_id: "task",
                 message: &message,
                 data: &data,
@@ -288,4 +391,35 @@ async fn an_inbox_claim_keeps_renewing_while_acceptance_or_debounce_waits() {
     tokio::time::sleep(Duration::from_millis(12500)).await;
     assert!(!lease.is_lost());
     assert_eq!(connection.attempts.lock().len(), 4);
+}
+
+/// Failed renewals retry within the confirmed ownership deadline, then stop exactly at it.
+#[tokio::test(start_paused = true)]
+async fn a_failing_renewal_retries_within_the_lease_and_is_lost_after_it() {
+    use crate::testing::{Faulty, MemoryConnection};
+    use crate::thread::{LeaseTiming, SchemaCell};
+    use std::sync::Arc;
+
+    let clock = Arc::new(lk_agents_net::clock::RealClock::new());
+    let faulty = Arc::new(Faulty::new(Box::new(MemoryConnection::new(clock).unwrap())));
+    let timing = LeaseTiming::new(Duration::from_secs(10), Duration::from_secs(3)).unwrap();
+    let thread = Thread::new(faulty.clone(), "AT_renewal", timing, SchemaCell::default(), "w1")
+        .await
+        .unwrap();
+    let run = thread.lane(LANE).open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    let lease = run.lease().unwrap().clone();
+    let start = tokio::time::Instant::now();
+
+    // The extend at 3 s fails; those at 6 s and 9 s confirm ownership.
+    faulty.unreachable_for(Duration::from_secs(5));
+    tokio::time::sleep(Duration::from_millis(9500)).await;
+    assert!(!lease.is_lost(), "a failure within the window is retried");
+
+    // Extends at 12 s, 15 s and 18 s fail; the last confirmation expires at 19 s.
+    faulty.unreachable_for(Duration::from_secs(20));
+    tokio::time::sleep(Duration::from_millis(8000)).await;
+    assert!(!lease.is_lost(), "still within the deadline at 17.5 s");
+    let lost = tokio::time::timeout(Duration::from_secs(5), lease.lost()).await;
+    assert!(matches!(lost, Ok(StorageError::LeaseLost(_))), "{lost:?}");
+    assert_eq!(start.elapsed().as_secs(), 19);
 }

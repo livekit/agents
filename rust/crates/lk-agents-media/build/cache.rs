@@ -1,5 +1,3 @@
-//! Content-addressed native artifacts, shared across Cargo targets and worktrees.
-
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io;

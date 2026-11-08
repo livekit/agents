@@ -1,8 +1,3 @@
-//! SQLite threads in an explicit local directory. `registry.sqlite` holds metadata,
-//! `threads/<AT_id>.sqlite` each thread. Processes sharing
-//! a directory coordinate through database leases and fences. Each connection has its own
-//! worker ([`FileConnection`]), so no query blocks the executor.
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,6 +20,9 @@ mod lifecycle;
 
 use connection::Request;
 pub use connection::{FileConnection, batch, query, sqlite_error};
+
+// `registry.sqlite` holds metadata and `threads/<AT_id>.sqlite` each thread; processes sharing a
+// directory coordinate through database leases and fences.
 
 /// The largest `ListThreads` page.
 const MAX_THREAD_PAGE: i32 = 200;

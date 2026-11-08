@@ -1,5 +1,3 @@
-//! Demux and decode to s16 at the source rate, then resample through the shared soxr path.
-
 use std::ffi::CStr;
 
 use super::*;
@@ -7,9 +5,8 @@ use crate::Container;
 use crate::audio_decoder::DecodeLimits;
 use crate::resample::AudioResampler;
 
-/// Decode one container (`None` probes it) through caller-owned I/O. This function creates no thread or queue.
-/// The runtime calls it on an admitted blocking worker because FFmpeg's AVIO calls `Read`.
-/// Native handles and callback pointers remain local to this invocation.
+/// Decode one container (`None` probes it) through caller-owned I/O on the calling thread.
+/// FFmpeg's AVIO blocks in `Read`, so callers run this on a blocking worker.
 pub fn decode_stream<R, F>(
     container: Option<Container>,
     out_rate: u32,
@@ -199,3 +196,7 @@ impl Drop for Handle {
         unsafe { lk_dec_free(self.0) };
     }
 }
+
+#[cfg(test)]
+#[path = "audio_decoder_tests.rs"]
+pub(crate) mod tests;

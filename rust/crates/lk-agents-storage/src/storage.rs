@@ -1,8 +1,3 @@
-//! The host's `Storage` class (`lk_agents_abi::storage::Storage`): one backend, chosen by its
-//! configuration and opened on first use, its records converted to the ABI's; and the
-//! storage-owned thread rows as the host reads them; and `ctx.thread` ([`ThreadHandle`]), a thread
-//! of the namespace whose database is opened for each read and released after.
-
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;

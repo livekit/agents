@@ -1,6 +1,3 @@
-//! Records to OTLP messages: each destination's content policy and identity stamp, then the
-//! request body (protobuf, optionally gzip).
-
 use std::borrow::Cow;
 
 use super::proto::collector::logs::v1::ExportLogsServiceRequest;

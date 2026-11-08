@@ -1,12 +1,3 @@
-//! One authenticated WebSocket to one database (`wsdb`): one protobuf per frame, correlated by
-//! `request_id`. The Go client in agents-private/agent-db (`pkg/agentdb/client`) is the reference.
-//!
-//! * `Hello` first, with a token minted for this dial.
-//! * `Exec` answers one `ExecResult`; `Query` streams `Columns`, `ColumnBatch`* and `Done`, paced
-//!   by `Credit`; `Batch` applies its statements atomically, one result per statement, then `Done`.
-//! * A dropped socket is redialed within a budget; a request issued meanwhile waits, and requests
-//!   in flight fail [`WsdbError::Disconnected`] (outcome unknown).
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -26,6 +17,11 @@ use wire as pb;
 use crate::StorageError;
 use crate::sql::{BatchResult, Row, SqlValue, Statement, StatementResult};
 use lk_agents_abi::storage::wsdb::WsdbCode;
+
+// Wire protocol: `Hello` first, with a token minted for this dial. `Exec` answers one `ExecResult`;
+// `Query` streams `Columns`, `ColumnBatch`* and `Done`, paced by `Credit`; `Batch` applies its
+// statements atomically, one result per statement, then `Done`. A dropped socket is redialed within
+// a budget; requests issued meanwhile wait, and those in flight fail `Disconnected` (outcome unknown).
 
 /// A bound value as the wire carries it.
 fn to_wire(v: &SqlValue) -> wire::Value {

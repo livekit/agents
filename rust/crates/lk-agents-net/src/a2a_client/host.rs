@@ -1,5 +1,3 @@
-//! Generated host classes forward here; protocol records are converted once at the boundary.
-
 use lk_agents_abi::a2a::client::{
     self as port, AgentClientError, Artifact, MessageInput, MessageMetadata, TaskUpdate,
 };

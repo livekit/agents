@@ -1,6 +1,3 @@
-//! One recording file: a call's commands placed on its timeline, encoded and written in bounded
-//! blocks to the supplied writer. The caller owns the queue, admission and the writer's lifetime.
-
 use std::io::Write;
 
 use lk_agents_abi::AudioFrame;

@@ -1,6 +1,3 @@
-//! A lane's context field store as the host uses it: snapshot staging in a turn, fenced direct
-//! saves outside one, and the application transactions over the same database.
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -278,3 +275,7 @@ impl HostContextActivation for ContextStore {
         self.activation.lock().close();
     }
 }
+
+#[cfg(test)]
+#[path = "store_tests.rs"]
+mod tests;

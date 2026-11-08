@@ -1,9 +1,7 @@
-//! The process's blocking I/O: name resolution, file access and process sampling run on these
-//! threads, never on an async worker or Tokio's blocking pool. Separate from the media pool, so
-//! saturated payload work never blocks a lookup or a health sample.
-
 pub use lk_agents_media::pool::{Job, JobPanicked};
 use lk_agents_media::pool::{PerProcess, Pool};
+
+// Separate from the media pool, so saturated payload work never blocks a lookup or a sample.
 
 /// A single-class pool: `()` is its class.
 pub type BlockingIo = Pool<()>;

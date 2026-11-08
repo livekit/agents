@@ -1,5 +1,3 @@
-//! The real WebSocket transport, over `tokio-tungstenite`.
-
 use crate::transport::{Headers, TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};

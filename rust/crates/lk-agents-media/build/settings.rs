@@ -1,5 +1,3 @@
-//! Native toolchain identity and the user-controlled persistent cache location.
-
 use std::path::PathBuf;
 
 use super::cache::Key;

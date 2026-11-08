@@ -1,5 +1,3 @@
-//! Connection to the external `lk` launcher for server discovery and job reloads.
-
 use lk_agents_abi::errors::HostError;
 use prost::Message as _;
 use std::sync::Arc;
@@ -67,11 +65,9 @@ async fn recv(
     Ok(decoded.message)
 }
 
-/// The dev channel to `lk agent dev` at `cli_addr` (`host:port`), length-prefixed
-/// `AgentDevMessage`s: the server's name and URL first, then the jobs kept from before the reload
-/// asked for and resumed (on `url`, each with its token extended by the server's API key and
-/// secret), then every running-jobs request answered, until the CLI closes it. A failure is
-/// logged: the worker runs on without the channel.
+/// Serves the dev channel to `lk agent dev` at `cli_addr` (`host:port`): announces the server,
+/// resumes the jobs kept across a reload and answers running-jobs requests until the CLI closes
+/// it. A failure is logged; the worker runs on without the channel.
 pub async fn dev_channel(
     cli_addr: String,
     agent_name: String,
@@ -130,7 +126,7 @@ async fn serve_dev_channel(
         }
         server.reload_jobs(jobs).await.map_err(|e| HostError::new(e.to_string()))?;
     }
-    // Asked before the CLI restarts this process: what runs now, to resume after the reload.
+    // The CLI asks before restarting this process, to resume these jobs after the reload.
     loop {
         let message = recv(&mut stream).await.map_err(io)?;
         if let Some(Message::GetRunningJobsRequest(_)) = message {

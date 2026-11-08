@@ -1,7 +1,3 @@
-//! The process's telemetry HTTP: one client for every OTLP destination and the recording upload,
-//! and the Cloud observability endpoint's requests, signed with the job's bearer, their answer
-//! read within a bound and the project owner's recording refusal recognized.
-
 use std::sync::Arc;
 use std::time::Duration;
 

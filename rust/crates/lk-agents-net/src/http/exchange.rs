@@ -1,6 +1,3 @@
-//! A demand-driven HTTP response over the shared request-attempt lifecycle. Dropping an
-//! attempt releases its reqwest exchange directly; no detached attempt task owns I/O.
-
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -14,6 +11,8 @@ use lk_agents_core::request::{AttemptFailure, Policy, Request, Step};
 use tokio::sync::mpsc;
 
 use super::{GatewayHttp, Reporter, Sent, Stamped, error_chain};
+
+// Dropping an attempt releases its reqwest exchange directly; no detached task owns I/O.
 
 type Sending = Pin<Box<dyn Future<Output = Result<reqwest::Response, AttemptFailure>> + Send>>;
 type Body = Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>;

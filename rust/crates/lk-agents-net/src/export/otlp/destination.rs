@@ -1,6 +1,3 @@
-//! The destinations' state behind the exporter's lock: the job registry, Cloud's per-job queues
-//! and held spans, the application queue, and the batches taken from them for export.
-
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
@@ -10,7 +7,7 @@ use lk_agents_abi::telemetry::record::{JobKey, LogRecord, Record, SpanRecord};
 use super::config::{AppConfig, CloudEndpoint, CloudRecording, ProcessIdentity, SessionIdentity};
 use super::metrics::Aggregator;
 
-/// Spans one undecided job holds in the exporter before its recording decision (as 1.8.10).
+/// Spans one undecided job holds in the exporter before its recording decision.
 pub(super) const HELD_SPANS: usize = 1024;
 
 /// What the Cloud destination does with one of a job's records.

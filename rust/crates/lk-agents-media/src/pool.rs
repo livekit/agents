@@ -1,12 +1,3 @@
-//! Admitted worker threads: a bounded pool of plain threads, no async runtime. Callers that must
-//! not block their loop hand work here and await its [`Job`]. Admission refuses overload
-//! synchronously; a running job keeps its capacity until it settles, so a caller dropping its
-//! receipt never frees capacity early.
-//!
-//! A process has two pools: the media pool ([`media_pool`]: codec, recording, image and model
-//! work) and the blocking I/O pool (`lk_agents_net::blocking_io`: name resolution, files and
-//! process sampling). Tokio's blocking pool is not used.
-
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::future::Future;

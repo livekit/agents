@@ -1,5 +1,3 @@
-//! Audio-frame and decoded-PCM conversion over one owned libsoxr stream.
-
 pub use crate::soxr::Resampler;
 use crate::{AudioFormat, CodecError, Quality, ResampleError};
 use lk_agents_abi::AudioFrame;
@@ -301,8 +299,7 @@ mod tests {
         (out, r.flush().unwrap().len())
     }
 
-    // Catches: a rate change that drops the old stream's tail (the end of a sentence goes missing
-    // at every TTS rate switch), or a passthrough frame emitted ahead of that tail.
+    // A rate change drains the old stream's tail before any passthrough frame.
     #[test]
     fn drain_puts_the_old_streams_tail_ahead_of_a_frame_at_the_output_rate() {
         let mut r = AudioResampler::new(16_000, Quality::Medium, OnChange::Drain);
@@ -317,8 +314,7 @@ mod tests {
         assert_eq!(r.input_format(), None, "and the drained stream is over");
     }
 
-    // Catches: `Discard` flushing or rebuilding across a frame at the output rate -- the
-    // converted input leg would restart soxr's filter (and its delay) at every such frame.
+    // `Discard` must not restart soxr's filter (and its delay) at every frame at the output rate.
     #[test]
     fn discard_keeps_the_stream_across_a_frame_at_the_output_rate() {
         let mut r = AudioResampler::new(16_000, Quality::Medium, OnChange::Discard);
@@ -347,8 +343,7 @@ mod tests {
         assert_eq!(r.input_format(), Some(AudioFormat::new(24_000, 1)));
     }
 
-    // Catches: a failed rebuild that leaves the stream half-replaced (the converted input leg
-    // skips the frame and must carry on with the stream it had).
+    // A failed rebuild leaves the previous stream in place.
     #[test]
     fn a_failed_build_keeps_the_stream_it_would_have_replaced() {
         let mut r = AudioResampler::new(16_000, Quality::Medium, OnChange::Discard);
@@ -357,8 +352,7 @@ mod tests {
         assert_eq!(r.input_format(), Some(AudioFormat::new(48_000, 1)));
     }
 
-    // Catches: a fixed resampler that follows the header -- the VAD reads every frame as mono
-    // and the fallback TTS as its entry's declared rate, whatever the frame claims.
+    // A fixed resampler ignores frame headers: the declared format wins.
     #[test]
     fn fixed_reads_every_frame_as_the_declared_format() {
         let mut r =
@@ -375,8 +369,7 @@ mod tests {
         assert_eq!(r.input_format(), Some(AudioFormat::new(48_000, 1)));
     }
 
-    // Catches: building with the header's 0 channels (soxr would refuse every push), or rewriting
-    // the header the frame came with.
+    // A zero-channel header converts as mono and is returned unchanged.
     #[test]
     fn a_zero_channel_header_is_resampled_as_mono_and_keeps_its_header() {
         let mut r = AudioResampler::new(16_000, Quality::Medium, OnChange::Drain);

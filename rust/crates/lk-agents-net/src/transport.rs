@@ -1,10 +1,9 @@
-//! The socket seam. [`WsTransport::connect`] returns a `Sync` sender and a receiver so neither half
-//! blocks the other. No timeouts here: the client bounds every wait on the session clock.
-
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, Ts};
 use std::sync::Arc;
+
+// No timeouts here: callers bound every wait on the session clock.
 
 pub use lk_agents_abi::Headers;
 
@@ -104,9 +103,9 @@ pub struct HttpRequest {
 pub enum WsMessage {
     Text(String),
     Binary(Vec<u8>),
-    /// `WSMsgType.{CLOSED, CLOSE, CLOSING}` collapsed into one, as the reference's tuple test does.
+    /// `WSMsgType.{CLOSED, CLOSE, CLOSING}` collapsed into one.
     Closed,
-    /// Ping, pong — skipped.
+    /// Ping or pong, skipped.
     Other,
 }
 
@@ -187,7 +186,7 @@ mod tests {
         assert_eq!(to_ws_url("wss://gw/v1"), "wss://gw/v1");
     }
 
-    // Catches: `close_code == 0` passed through as a status (R2b).
+    // Catches: `close_code == 0` passed through as a status.
     #[test]
     fn a_zero_or_absent_close_code_becomes_minus_one() {
         assert_eq!(close_status(Some(0)), -1);

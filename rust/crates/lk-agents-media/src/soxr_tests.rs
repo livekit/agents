@@ -14,8 +14,7 @@ fn sine(hz: f64, rate: u32, ms: usize, nch: u32) -> Vec<i16> {
     v
 }
 
-/// Zero crossings -> frequency. Crude, but it is the property that matters: if the filter or
-/// the rate ratio is wrong the tone moves or aliases, and that is exactly what this catches.
+/// Zero crossings -> frequency: a wrong filter or rate ratio moves or aliases the tone.
 fn dominant_hz(pcm: &[i16], rate: u32) -> f64 {
     let crossings = pcm.windows(2).filter(|w| (w[0] < 0) != (w[1] < 0)).count();
     crossings as f64 / 2.0 * f64::from(rate) / pcm.len() as f64
@@ -30,9 +29,8 @@ fn zero_rates_and_channels_are_rejected() {
 
 #[test]
 fn a_1khz_tone_survives_48k_to_16k_at_the_same_pitch() {
-    // The reason this crate exists: the VAD and EOT models were tuned on audio that went
-    // through soxr. A wrong ratio or a broken filter shows up here as a shifted or aliased
-    // tone, which no length assertion would notice.
+    // The VAD and EOT models were tuned on soxr output; a wrong ratio or broken filter shows as a
+    // shifted or aliased tone, which no length assertion would notice.
     let mut r = Resampler::new(48_000, 16_000, 1, Quality::Medium).unwrap();
     let mut out = Vec::new();
     for _ in 0..10 {
@@ -55,26 +53,12 @@ fn flush_drains_the_tail_and_then_has_nothing_left() {
 
 #[test]
 fn concurrent_sessions_neither_crash_nor_corrupt_each_others_audio() {
-    // The B25 shape, run as a stress test with **no test-side lock**: libsoxr's FFT cache is
-    // grown by whichever thread first constructs a resampler needing a longer DFT, while other
-    // threads are mid-`soxr_process` reading it. Without `FFT_CACHE` that is a SIGSEGV or an
-    // `assert()` inside libsoxr (measured 4 runs in 12 for the whole suite), or -- the worse
-    // failure -- a 1 kHz tone silently coming out at 1.0-1.7 kHz (1 run in 30). With it, 0 in
-    // 100 consecutive runs of this binary.
-    //
-    // Shape matters more than volume, and the obvious strengthenings backfire:
-    //   - batching (each thread builds several) made it *less* likely, because after round
-    //     one the coefficient cache is warm and later creates skip the racy grow entirely;
-    //   - without the barrier, spawn overhead serialises the threads and the test passes
-    //     even with the lock removed (verified: 0 failures in 6 runs).
-    // So: many threads, one construction each, a distinct output rate per thread so the
-    // filters differ, all released at one instant -- and one *victim* already pushing before
-    // they are released, which is the reader whose table moves. Every thread checks the pitch
-    // of its own output, since corruption is a value error and not a crash. Probabilistic by
-    // nature: treat a single green run as weak evidence and loop it.
-    //
-    // `cargo nextest` gives every test its own process and cannot see any of this; the threads
-    // are spawned here so it reproduces under both runners.
+    // libsoxr's FFT cache is grown by the first thread to need a longer DFT while others read it
+    // mid-`soxr_process`; without `FFT_CACHE` that crashes or silently shifts a tone's pitch.
+    // Shape matters: many threads, one construction each, a distinct rate per thread, all
+    // released at one barrier, plus a victim already pushing. Batching warms the cache and hides
+    // the race; without the barrier spawn overhead serialises the threads. Probabilistic: loop it.
+    // Threads are spawned here so it reproduces under `cargo nextest` too.
     const N: usize = 24;
     let media_pool = crate::pool::MediaPool::new(Default::default()).unwrap();
     let gate = std::sync::Arc::new(std::sync::Barrier::new(N + 1));
@@ -132,12 +116,8 @@ fn concurrent_sessions_neither_crash_nor_corrupt_each_others_audio() {
 
 #[test]
 fn stereo_sizing_is_per_frame_not_per_sample() {
-    // Every other test in this file is mono, which makes `* nch` and `/ nch` invisible --
-    // multiplying by one. That is why the buffer arithmetic went unpinned: the tests could
-    // not distinguish the correct expression from four mutations of it.
-    //
-    // Catches: sizing `out` in samples where it should be frames (or the reverse). Too small
-    // and soxr silently emits less than it had ready -- a slow drift, never an error.
+    // Stereo, because mono makes `* nch` and `/ nch` invisible. Sizing `out` in samples instead
+    // of frames (or the reverse) makes soxr silently emit less than it had ready.
     let mut r = Resampler::new(48_000, 16_000, 2, Quality::Medium).unwrap();
     let mut total = 0usize;
     for _ in 0..50 {
@@ -160,12 +140,8 @@ fn stereo_sizing_is_per_frame_not_per_sample() {
 
 #[test]
 fn a_long_stream_does_not_drift_once_the_filter_is_holding_history() {
-    // Catches the `soxr_delay` term in `push`'s sizing. `soxr_delay` only becomes non-zero
-    // once the filter has history, so a short run cannot see it -- 100 pushes was not enough
-    // to pin it, which is why four mutations of this expression survived.
-    //
-    // Under-allocate and soxr emits less than it has ready on each call; the shortfall
-    // accumulates and never errors.
+    // `soxr_delay` only becomes non-zero once the filter has history, so this runs long enough
+    // to pin it; under-allocation accumulates a shortfall that never errors.
     let mut r = Resampler::new(44_100, 16_000, 1, Quality::High).unwrap();
     let mut total = 0usize;
     for _ in 0..500 {
@@ -173,8 +149,8 @@ fn a_long_stream_does_not_drift_once_the_filter_is_holding_history() {
     }
     total += r.flush().unwrap().len();
 
-    // 10 s in -> 160 000 out. A ratio that is not a round fraction is the point: it keeps the
-    // filter's residual non-zero for the whole run.
+    // 10 s in -> 160 000 out. A ratio that is not a round fraction keeps the filter's residual
+    // non-zero for the whole run.
     let expected = 500 * 16_000 * 20 / 1000;
     let drift = (total as i64 - expected as i64).abs();
     assert!(drift <= 8, "produced {total} over 10 s, expected ~{expected} (drift {drift})");
@@ -182,20 +158,15 @@ fn a_long_stream_does_not_drift_once_the_filter_is_holding_history() {
 
 #[test]
 fn flushing_a_long_stereo_tail_stays_inside_the_buffer() {
-    // `flush` tells soxr how many FRAMES the output buffer holds: `self.out.len() / nch`.
-    // Get that wrong upward and soxr writes past the end of a `Vec<i16>` -- heap corruption,
-    // not an error return. The other stereo test does not reach it because its tail is a few
-    // samples; a long filter (VeryHigh) holds a large residual, which is what fills the tail.
-    //
-    // Catches: `/ nch` becoming `* nch` in `flush`, which is a 4x over-report at stereo.
+    // `flush` tells soxr how many frames the output holds: `self.out.len() / nch`. Over-reporting
+    // lets soxr write past the end of the `Vec<i16>`; a long VeryHigh filter fills the tail.
     let mut r = Resampler::new(48_000, 44_100, 2, Quality::VeryHigh).unwrap();
     for _ in 0..100 {
         r.push(&sine(440.0, 48_000, 20, 2)).unwrap();
     }
     let tail = r.flush().unwrap();
     assert!(tail.len().is_multiple_of(2), "tail is not whole stereo frames");
-    // A residual, not a whole second of audio: if `cap` were over-reported soxr would happily
-    // hand back far more than the filter actually held.
+    // A residual, not a whole second: an over-reported `cap` would hand back far more.
     assert!(tail.len() < 44_100, "flush returned {} samples, which is not a tail", tail.len());
 }
 
@@ -219,8 +190,7 @@ fn independent_resamplers_produce_identical_pcm() {
 
 #[test]
 fn the_quality_ordinals_are_the_host_sdks_and_not_soxrs_own_recipes() {
-    // Pins the deliberate bug-for-bug mapping documented at the top of this file. If someone
-    // "fixes" High to SOXR_HQ (4) our audio silently stops matching `rtc.AudioResampler`.
+    // High is SOXR_16_BITQ, not SOXR_HQ, so the audio matches `rtc.AudioResampler`.
     assert_eq!(Quality::Quick as u32, 0);
     assert_eq!(Quality::Low as u32, 1);
     assert_eq!(Quality::Medium as u32, 2);

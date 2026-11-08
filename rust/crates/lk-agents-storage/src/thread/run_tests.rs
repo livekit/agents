@@ -1,36 +1,93 @@
-//! The run, the shared engine's unit of work, against both storage backends (`storage_common`):
-//! lane leases and waiters, the one fenced commit, abandon, closed runs, version conflicts and the
-//! append-only concurrent runs.
-
 use std::time::{Duration, Instant};
 
-use lk_agents_abi::storage::journal::JournalEvent;
-use lk_agents_storage::TaskWrite;
-use lk_agents_storage::testing::{Backend, Fixture};
-use lk_agents_storage::thread::run::{ItemRow, RunOutcome, TaskPatch, TaskState};
-use lk_agents_storage::thread::schema::TaskData;
-use lk_agents_storage::{CommitOptions, LaneAccess, RunOptions, TaskPickup, Thread, WhenHeld};
-
+use livekit_protocol::agent::ChatRole;
 use livekit_protocol::agent::chat_context::chat_item;
-use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
-use livekit_protocol::agent::{ChatMessage, ChatRole};
-use lk_agents_storage::StorageError;
+use lk_agents_abi::storage::journal::JournalEvent;
 use serde_json::json;
+
+use super::*;
+use crate::testing::{Backend, Fixture};
+use crate::thread::tests::{LANE, message, submitted};
+use crate::{CommitOptions, LaneAccess, RunOptions, StorageError, TaskPickup, Thread, WhenHeld};
 
 async fn waiter(s: &Thread) -> Option<String> {
     s.lane(LANE).info().await.unwrap().expect("a lane row").waiter
 }
 
-fn message(id: &str, role: ChatRole, text: &str) -> ItemRow {
-    ItemRow::new(chat_item::Item::Message(ChatMessage {
-        id: id.into(),
-        role: role as i32,
-        content: vec![ChatContent { payload: Some(Payload::Text(text.into())) }],
+#[test]
+fn item_changes_skip_instructions_and_unchanged_items_and_list_deletions() {
+    use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
+    use livekit_protocol::agent::{AgentConfigUpdate, ChatMessage, ChatRole, FunctionCall};
+    let msg = |id: &str, role: ChatRole, text: &str| {
+        ItemRow::new(chat_item::Item::Message(ChatMessage {
+            id: id.into(),
+            role: role as i32,
+            content: vec![ChatContent { payload: Some(Payload::Text(text.into())) }],
+            ..Default::default()
+        }))
+    };
+    let call = ItemRow::new(chat_item::Item::FunctionCall(FunctionCall {
+        id: "i3".into(),
+        name: "f".into(),
         ..Default::default()
-    }))
+    }));
+    let loaded: Vec<(String, ChatItem)> =
+        [msg("i1", ChatRole::User, "hi"), msg("i2", ChatRole::Assistant, "hello"), call]
+            .into_iter()
+            .map(|i| (i.id, i.payload))
+            .collect();
+    let mut history = vec![
+        msg("sys", ChatRole::System, "be nice"),
+        msg("dev", ChatRole::Developer, "x"),
+        ItemRow::new(chat_item::Item::AgentConfigUpdate(AgentConfigUpdate {
+            id: "cfg".into(),
+            ..Default::default()
+        })),
+        msg("i1", ChatRole::User, "hi"),
+        // edited
+        msg("i2", ChatRole::Assistant, "hey"),
+        // i3 removed; i4 new
+        ItemRow { message_id: Some("m4".into()), ..msg("i4", ChatRole::User, "bye") },
+    ];
+    let (changed, deleted) = item_changes(&history, &loaded);
+    assert_eq!(
+        changed.iter().map(|w| (w.id.as_str(), w.message_id.as_deref())).collect::<Vec<_>>(),
+        vec![("i2", None), ("i4", Some("m4"))]
+    );
+    assert_eq!(deleted, vec!["i3".to_owned()]);
+    history.clear();
+    let (changed, deleted) = item_changes(&history, &loaded);
+    assert!(changed.is_empty());
+    assert_eq!(deleted, vec!["i1", "i2", "i3"]);
 }
 
-const LANE: &str = "front-desk";
+#[test]
+fn run_summaries_follow_run_started_and_run_ended() {
+    let ev = |id: i64, run_id: &str, ty: &str, payload: Value| EventRow {
+        id,
+        ts_ms: id * 10,
+        lane: "front-desk".into(),
+        run_id: run_id.into(),
+        r#type: ty.into(),
+        payload,
+    };
+    let events = vec![
+        ev(1, "r1", "run_started", json!({"task_id": "AST_1", "channel": "a2a"})),
+        ev(2, "r1", "run_ended", json!({"outcome": "completed", "reason": null})),
+        ev(3, "r2", "run_started", json!({"task_id": "AST_2", "channel": null})),
+        ev(4, "r9", "run_ended", json!({"outcome": "failed"})),
+    ];
+    let runs = RunSummary::from_events(&events).unwrap();
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[0].outcome, Some(RunOutcome::Completed));
+    assert_eq!(runs[0].ended_at_ms, Some(20));
+    assert!(!runs[0].interrupted());
+    assert_eq!(runs[1].channel, None);
+    assert!(runs[1].interrupted());
+    // A malformed entry is refused, not skipped.
+    let corrupt = [ev(5, "r3", "run_ended", json!({"outcome": "maybe"}))];
+    assert!(matches!(RunSummary::from_events(&corrupt), Err(StorageError::Invalid(_))));
+}
 
 async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commit(
     backend: Backend,
@@ -317,22 +374,11 @@ async fn concurrent_runs_take_no_lease_and_append(backend: Backend) {
     fx.cleanup(&[&s1, &s2]).await;
 }
 
-fn submitted(task_id: &str) -> TaskWrite {
-    TaskWrite {
-        task_id: task_id.into(),
-        status: TaskState::Submitted,
-        message_id: Some(format!("m_{task_id}")),
-        name: None,
-        data: TaskData::default(),
-        internal: None,
-    }
-}
-
 fn metadata(key: &str) -> serde_json::Map<String, serde_json::Value> {
     json!({ key: true }).as_object().cloned().unwrap()
 }
 
-/// I-6: a terminal row is immutable. A cancel arriving after the commit leaves the completed
+/// A terminal row is immutable. A cancel arriving after the commit leaves the completed
 /// task as it was.
 async fn a_cancel_never_overwrites_a_terminal_task(backend: Backend) {
     let fx = backend.fixture(None).await;
@@ -349,7 +395,7 @@ async fn a_cancel_never_overwrites_a_terminal_task(backend: Backend) {
     fx.cleanup(&[&s]).await;
 }
 
-/// I-6: a client's cancel during the run wins: the run's commit lands its history but cannot
+/// A client's cancel during the run wins: the run's commit lands its history but cannot
 /// move the canceled row, in either race order.
 async fn a_commit_never_overwrites_a_canceled_task(backend: Backend) {
     let fx = backend.fixture(None).await;
@@ -374,9 +420,8 @@ async fn a_commit_never_overwrites_a_canceled_task(backend: Backend) {
     fx.cleanup(&[&s1, &s2]).await;
 }
 
-/// A2A_SEED=3497 (no_failure_nobody_observed, Working): a row a turn answered `working` (its
-/// handler's `Working` outcome) is no run's; a later pickup took it as a dead holder's and the
-/// framework failed it `worker-lost`. A pickup leaves it as the turn answered it.
+/// A row a turn answered `working` (its handler's `Working` outcome) is no run's: a pickup leaves
+/// it as the turn answered it rather than failing it as a dead holder's.
 async fn a_pickup_leaves_a_row_answered_working(backend: Backend) {
     let fx = backend.fixture(None).await;
     let s = fx.thread("w1").await;
@@ -394,9 +439,8 @@ async fn a_pickup_leaves_a_row_answered_working(backend: Backend) {
     fx.cleanup(&[&s]).await;
 }
 
-/// A2A_SEED=50 60 267 (answer_is_an_outcome, Concurrent): a concurrent run reads its rows live, so
-/// a client's cancel mid-turn is the base of its write. The write keeps the client's row, as the
-/// commit would, instead of refusing the whole turn.
+/// A concurrent run reads its rows live, so a client's cancel mid-turn is the base of its write.
+/// The write keeps the client's row, as the commit would, instead of refusing the whole turn.
 async fn a_concurrent_write_keeps_a_row_canceled_mid_turn(backend: Backend) {
     let fx = backend.fixture(None).await;
     let s1 = fx.thread("w1").await;
@@ -429,96 +473,6 @@ async fn a_concurrent_write_keeps_a_row_canceled_mid_turn(backend: Backend) {
     fx.cleanup(&[&s1, &s2]).await;
 }
 
-/// I-5: a run dropped without commit or abandon stops renewing: its lease lapses within the TTL
-/// and another holder takes the lane.
-async fn a_dropped_run_stops_renewing_and_its_lease_lapses(backend: Backend) {
-    let fx = backend.fixture(Some((Duration::from_secs(1), Duration::from_millis(300)))).await;
-    let s1 = fx.thread("w1").await;
-    let s2 = fx.thread("w2").await;
-    let run = s1.lane(LANE).open(RunOptions::new("r1", "AST_1")).await.unwrap();
-    drop(run);
-    tokio::time::sleep(Duration::from_millis(2600)).await;
-    let lane2 = s2.lane(LANE);
-    let next = lane2
-        .open(RunOptions {
-            access: LaneAccess::Exclusive(WhenHeld::Reject),
-            ..RunOptions::new("r2", "AST_2")
-        })
-        .await;
-    let next = next.expect("the dropped run's lease lapsed");
-    drop(next);
-    fx.cleanup(&[&s1, &s2]).await;
-}
-
-/// Waiters run in the order their messages' rows were submitted: a later message cannot take a
-/// free lane while an older one still waits for it.
-async fn waiters_take_the_lane_in_the_order_their_rows_were_submitted(backend: Backend) {
-    let fx = backend.fixture(None).await;
-    let s = fx.thread("w1").await;
-    let lane = s.lane(LANE);
-    lane.open(RunOptions::new("r0", ""))
-        .await
-        .unwrap()
-        .commit(CommitOptions::default())
-        .await
-        .unwrap();
-    for task_id in ["AST_first", "AST_second"] {
-        assert!(lane.submit(&submitted(task_id)).await.unwrap());
-    }
-    let second = || RunOptions {
-        access: LaneAccess::Exclusive(WhenHeld::Reject),
-        pickup: TaskPickup::Claim,
-        ..RunOptions::new("r2", "AST_second")
-    };
-    let refused = lane.open(second()).await.err().expect("the older waiter goes first");
-    assert!(matches!(refused, StorageError::Rejected { .. }), "{refused}");
-    let first = RunOptions {
-        access: LaneAccess::Exclusive(WhenHeld::Reject),
-        pickup: TaskPickup::Claim,
-        ..RunOptions::new("r1", "AST_first")
-    };
-    let mut run = lane.open(first).await.unwrap();
-    assert!(run.picked_up());
-    run.commit(CommitOptions::default()).await.unwrap();
-    // the first row is working now: the second is the oldest waiter and takes the lane
-    lane.open(second()).await.unwrap().commit(CommitOptions::default()).await.unwrap();
-    fx.cleanup(&[&s]).await;
-}
-
-/// A lost handle cannot restart renewal. Takeover replaces its token even before the new
-/// owner commits, so the old owner's unchanged version is not enough to authorize a write.
-async fn an_expired_owner_cannot_restart_or_commit_after_takeover(backend: Backend) {
-    let fx = backend.fixture(Some((Duration::from_secs(1), Duration::from_millis(200)))).await;
-    let first = fx.thread("w1").await;
-    let second = fx.thread("w2").await;
-    let mut stale = first.lane(LANE).open(RunOptions::new("r1", "AST_1")).await.unwrap();
-    let old_lease = stale.lease().unwrap().clone();
-    old_lease.stop();
-    tokio::time::sleep(Duration::from_millis(2100)).await;
-    assert!(old_lease.is_lost());
-    old_lease.keep_alive();
-    assert!(old_lease.is_lost(), "restarting renewal cannot revive an expired handle");
-
-    let owner = second.lane(LANE).open(RunOptions::new("r2", "AST_2")).await.unwrap();
-    assert_eq!(stale.version(), owner.version(), "takeover alone does not change the version");
-    assert_ne!(old_lease.fence().token, owner.lease().unwrap().fence().token);
-    stale.set_state(json!({"stale": true}));
-    stale.history_mut().push(message("stale", ChatRole::Assistant, "old owner's answer"));
-    let error = stale.commit(CommitOptions::default()).await.unwrap_err();
-    assert!(matches!(error, StorageError::VersionConflict { .. }), "{error}");
-    assert!(second.lane(LANE).history().await.unwrap().is_empty());
-    assert!(second.lane(LANE).info().await.unwrap().unwrap().state.is_none());
-
-    owner.lease().unwrap().stop();
-    owner.lease().unwrap().release(None).await.unwrap();
-    owner.lease().unwrap().keep_alive();
-    let lost = tokio::time::timeout(Duration::from_secs(2), owner.lease().unwrap().lost()).await;
-    assert!(matches!(lost, Ok(StorageError::LeaseLost(_))));
-    // The deliberately released owner has no work to commit or abandon.
-    drop(owner);
-    fx.cleanup(&[&first, &second]).await;
-}
-
 async fn an_item_id_of_another_lane_fails_the_commit_without_mutation(backend: Backend) {
     let fx = backend.fixture(None).await;
     let s = fx.thread("w1").await;
@@ -536,7 +490,7 @@ async fn an_item_id_of_another_lane_fails_the_commit_without_mutation(backend: B
     fx.cleanup(&[&s]).await;
 }
 
-/// I-18: a `concurrent` run appends only: editing or deleting a loaded item is refused and
+/// A `concurrent` run appends only: editing or deleting a loaded item is refused and
 /// nothing is written.
 async fn a_concurrent_run_refuses_to_edit_or_delete_loaded_history(backend: Backend) {
     let fx = backend.fixture(None).await;
@@ -567,7 +521,7 @@ async fn a_concurrent_run_refuses_to_edit_or_delete_loaded_history(backend: Back
     fx.cleanup(&[&s]).await;
 }
 
-/// I-19: the acquire loads the whole history in the lease's own batch, past any page size.
+/// The acquire loads the whole history in the lease's own batch, past any page size.
 async fn a_run_loads_its_whole_history_in_its_acquire(backend: Backend) {
     let fx = backend.fixture(None).await;
     let s = fx.thread("w1").await;
@@ -584,122 +538,10 @@ async fn a_run_loads_its_whole_history_in_its_acquire(backend: Backend) {
     fx.cleanup(&[&s]).await;
 }
 
-/// I-24: items page by insertion position with an optional lane filter; the cursor is opaque,
-/// bound to its filter, and pages neither skip nor repeat.
-async fn items_page_by_position_with_a_filter_bound_cursor(backend: Backend) {
-    let fx = backend.fixture(None).await;
-    let s = fx.thread("w1").await;
-    for (lane, n) in [("lane-a", 0), ("lane-b", 1), ("lane-a", 2)] {
-        let mut run = s.lane(lane).open(RunOptions::new(format!("r{n}"), "")).await.unwrap();
-        run.history_mut().push(message(&format!("i{n}"), ChatRole::User, "hi"));
-        run.commit(CommitOptions::default()).await.unwrap();
-    }
-    let ids = |p: &lk_agents_storage::thread::db::ItemPage| -> Vec<String> {
-        p.items.iter().map(|i| format!("{}/{}", i.lane, i.item.id)).collect()
-    };
-    let first = s.list_items(None, None, 2).await.unwrap();
-    assert_eq!(ids(&first), vec!["lane-a/i0", "lane-b/i1"]);
-    let rest = s.list_items(None, first.next.as_deref(), 2).await.unwrap();
-    assert_eq!((ids(&rest), rest.next), (vec!["lane-a/i2".to_owned()], None));
-    let a = s.list_items(Some("lane-a"), None, 10).await.unwrap();
-    assert_eq!(ids(&a), vec!["lane-a/i0", "lane-a/i2"]);
-    let crossed = s.list_items(Some("lane-a"), first.next.as_deref(), 2).await;
-    assert!(matches!(crossed, Err(StorageError::Invalid(_))), "a cursor of another filter");
-    fx.cleanup(&[&s]).await;
-}
-
-/// I-22/I-24: A2A ListTasks pages by last update (ties by task id) without skipping or
-/// repeating, filters by status, and refuses a page token made under other filters.
-async fn tasks_page_by_last_update_with_a_filter_bound_token(backend: Backend) {
-    let fx = backend.fixture(None).await;
-    let s = fx.thread("w1").await;
-    let lane = s.lane(LANE);
-    for id in ["AST_1", "AST_2", "AST_3", "AST_4", "AST_5"] {
-        assert!(lane.submit(&submitted(id)).await.unwrap());
-    }
-    tokio::time::sleep(Duration::from_millis(5)).await;
-    lane.cancel_task("AST_2", Default::default()).await.unwrap();
-    let query = |status, page_token| lk_agents_storage::thread::db::TaskQuery {
-        status,
-        page_size: 2,
-        page_token,
-        ..Default::default()
-    };
-    let (mut seen, mut token) = (Vec::new(), None);
-    loop {
-        let page = s.list_tasks(&query(None, token)).await.unwrap();
-        assert_eq!(page.total_size, 5);
-        seen.extend(page.tasks.iter().map(|t| (t.updated_at, t.task_id.clone())));
-        if page.next_page_token.is_empty() {
-            break;
-        }
-        token = Some(page.next_page_token);
-    }
-    let mut ordered = seen.clone();
-    ordered.sort_by(|a, b| b.cmp(a));
-    ordered.dedup();
-    assert_eq!(seen, ordered, "last update first, ties by id, nothing repeated");
-    assert_eq!(seen.len(), 5);
-    assert_eq!(seen[0].1, "AST_2", "the canceled task was updated last");
-
-    let canceled = s.list_tasks(&query(Some(TaskState::Canceled), None)).await.unwrap();
-    assert_eq!(canceled.tasks.iter().map(|t| t.task_id.as_str()).collect::<Vec<_>>(), ["AST_2"]);
-    let submitted = s.list_tasks(&query(Some(TaskState::Submitted), None)).await.unwrap();
-    assert_eq!(submitted.total_size, 4);
-    let crossed = s.list_tasks(&query(None, Some(submitted.next_page_token))).await;
-    assert!(matches!(crossed, Err(StorageError::Invalid(_))), "a token of another filter");
-    fx.cleanup(&[&s]).await;
-}
-
-/// A thread's tasks browse in insertion order, of one lane when asked, whatever was updated
-/// since; the token is bound to that order and lane.
-async fn tasks_browse_in_insertion_order_by_lane(backend: Backend) {
-    let fx = backend.fixture(None).await;
-    let s = fx.thread("w1").await;
-    for (lane, id) in [(LANE, "AST_1"), ("expert", "AST_2"), (LANE, "AST_3"), (LANE, "AST_4")] {
-        assert!(s.lane(lane).submit(&submitted(id)).await.unwrap());
-    }
-    tokio::time::sleep(Duration::from_millis(5)).await;
-    s.lane(LANE).cancel_task("AST_1", Default::default()).await.unwrap();
-    let query = |page_token| lk_agents_storage::thread::db::TaskQuery {
-        lane: Some(LANE.into()),
-        order: lk_agents_storage::thread::db::TaskOrder::Inserted,
-        page_size: 2,
-        page_token,
-        ..Default::default()
-    };
-    let (mut seen, mut token) = (Vec::new(), None);
-    loop {
-        let page = s.list_tasks(&query(token)).await.unwrap();
-        assert_eq!(page.total_size, 3);
-        seen.extend(page.tasks.into_iter().map(|t| t.task_id));
-        if page.next_page_token.is_empty() {
-            break;
-        }
-        token = Some(page.next_page_token);
-    }
-    assert_eq!(seen, ["AST_1", "AST_3", "AST_4"], "oldest first, the lane's only");
-    let first = s.list_tasks(&query(None)).await.unwrap();
-    let crossed = s
-        .list_tasks(&lk_agents_storage::thread::db::TaskQuery {
-            page_token: Some(first.next_page_token),
-            ..Default::default()
-        })
-        .await;
-    assert!(matches!(crossed, Err(StorageError::Invalid(_))), "a token of another listing");
-    fx.cleanup(&[&s]).await;
-}
-
-lk_agents_storage::contract!(
-    tasks_page_by_last_update_with_a_filter_bound_token,
-    tasks_browse_in_insertion_order_by_lane,
-    items_page_by_position_with_a_filter_bound_cursor,
+crate::contract!(
     a_run_loads_its_whole_history_in_its_acquire,
     a_concurrent_run_refuses_to_edit_or_delete_loaded_history,
     an_item_id_of_another_lane_fails_the_commit_without_mutation,
-    waiters_take_the_lane_in_the_order_their_rows_were_submitted,
-    an_expired_owner_cannot_restart_or_commit_after_takeover,
-    a_dropped_run_stops_renewing_and_its_lease_lapses,
     a_cancel_never_overwrites_a_terminal_task,
     a_pickup_leaves_a_row_answered_working,
     a_commit_never_overwrites_a_canceled_task,
@@ -711,11 +553,11 @@ lk_agents_storage::contract!(
     concurrent_runs_take_no_lease_and_append,
 );
 
-// -- I-7: a lost commit acknowledgment resolves to the original run (SQLite, injected faults) --
+// A lost commit acknowledgment resolves to the original run (SQLite, injected faults).
 
 /// A run that writes one item and completes `AST_1`, committed over a faulty connection.
 async fn commit_through(
-    fault: lk_agents_storage::testing::CommitFault,
+    fault: crate::testing::CommitFault,
 ) -> (Fixture, Thread, Result<i64, StorageError>) {
     let fx = Backend::Sqlite.fixture(None).await;
     let (s, faults) = fx.faulty_thread("w1").await;
@@ -734,8 +576,7 @@ async fn run_ended_count(s: &Thread) -> usize {
 
 #[tokio::test]
 async fn a_commit_whose_ack_was_lost_after_it_applied_resolves_to_that_commit() {
-    let (fx, s, committed) =
-        commit_through(lk_agents_storage::testing::CommitFault::LoseAckAfter).await;
+    let (fx, s, committed) = commit_through(crate::testing::CommitFault::LoseAckAfter).await;
     assert_eq!(committed.unwrap(), 1, "the original run's commit, not a failure");
     assert_eq!(s.lane(LANE).history().await.unwrap().len(), 1);
     assert_eq!(s.lane(LANE).task("AST_1").await.unwrap().unwrap().status, TaskState::Completed);
@@ -745,8 +586,7 @@ async fn a_commit_whose_ack_was_lost_after_it_applied_resolves_to_that_commit() 
 
 #[tokio::test]
 async fn a_commit_whose_ack_was_lost_before_it_applied_is_sent_again_under_its_fence() {
-    let (fx, s, committed) =
-        commit_through(lk_agents_storage::testing::CommitFault::LoseAckBefore).await;
+    let (fx, s, committed) = commit_through(crate::testing::CommitFault::LoseAckBefore).await;
     assert_eq!(committed.unwrap(), 1);
     assert_eq!(s.lane(LANE).history().await.unwrap().len(), 1);
     assert_eq!(run_ended_count(&s).await, 1);
@@ -764,40 +604,9 @@ async fn a_lost_ack_after_the_lane_moved_on_is_a_rejection_with_nothing_written(
     fresh.commit(CommitOptions::default()).await.unwrap();
 
     stale.history_mut().push(message("i9", ChatRole::Assistant, "late"));
-    faults.fail_next_commit(lk_agents_storage::testing::CommitFault::LoseAckBefore);
+    faults.fail_next_commit(crate::testing::CommitFault::LoseAckBefore);
     let err = stale.commit(CommitOptions::default()).await.expect_err("rejected");
     assert!(matches!(err, StorageError::VersionConflict { .. }), "{err}");
     assert!(s1.lane(LANE).history().await.unwrap().is_empty());
     fx.cleanup(&[&s1, &s2]).await;
-}
-
-/// Failed renewals retry within the confirmed ownership deadline, then stop exactly at it.
-#[tokio::test(start_paused = true)]
-async fn a_failing_renewal_retries_within_the_lease_and_is_lost_after_it() {
-    use lk_agents_storage::testing::{Faulty, MemoryConnection};
-    use lk_agents_storage::thread::{LeaseTiming, SchemaCell};
-    use std::sync::Arc;
-
-    let clock = Arc::new(lk_agents_net::clock::RealClock::new());
-    let faulty = Arc::new(Faulty::new(Box::new(MemoryConnection::new(clock).unwrap())));
-    let timing = LeaseTiming::new(Duration::from_secs(10), Duration::from_secs(3)).unwrap();
-    let thread = Thread::new(faulty.clone(), "AT_renewal", timing, SchemaCell::default(), "w1")
-        .await
-        .unwrap();
-    let run = thread.lane(LANE).open(RunOptions::new("r1", "AST_1")).await.unwrap();
-    let lease = run.lease().unwrap().clone();
-    let start = tokio::time::Instant::now();
-
-    // The extend at 3 s fails; those at 6 s and 9 s confirm ownership.
-    faulty.unreachable_for(Duration::from_secs(5));
-    tokio::time::sleep(Duration::from_millis(9500)).await;
-    assert!(!lease.is_lost(), "a failure within the window is retried");
-
-    // Extends at 12 s, 15 s and 18 s fail; the last confirmation expires at 19 s.
-    faulty.unreachable_for(Duration::from_secs(20));
-    tokio::time::sleep(Duration::from_millis(8000)).await;
-    assert!(!lease.is_lost(), "still within the deadline at 17.5 s");
-    let lost = tokio::time::timeout(Duration::from_secs(5), lease.lost()).await;
-    assert!(matches!(lost, Ok(StorageError::LeaseLost(_))), "{lost:?}");
-    assert_eq!(start.elapsed().as_secs(), 19);
 }

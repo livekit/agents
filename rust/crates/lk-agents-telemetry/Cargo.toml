@@ -5,9 +5,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# Telemetry's recording (docs/internals/telemetry.md "Span API"): the spans sans-I/O machines own
-# through their `Trace`, and the spans, events and measurements of async work under the process
-# `Tracer`. Spans are declared in lk-agents-abi; lk-agents-net's `export` sends what they record.
 # No executor or transport: the sans-I/O crates depend on it.
 [lib]
 doctest = false

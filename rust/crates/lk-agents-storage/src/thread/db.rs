@@ -1,6 +1,3 @@
-//! The thread database's batched operations: each sends the statements of one atomic batch on a
-//! connection and decodes its answer. Lease tokens, timestamps and run ids are supplied.
-
 use lk_agents_abi::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
 use lk_agents_abi::storage::journal::JournalEvent;
 pub use lk_agents_abi::storage::thread::TaskOrder;
@@ -787,14 +784,13 @@ mod tests {
         resolution(fence, committed, Some(&lane), None).unwrap()
     }
 
-    // Decision 39: a lost acknowledgment is decided by the run's own record, never guessed.
+    // A lost acknowledgment is decided by the run's own record, never guessed.
     #[test]
     fn a_lost_commit_resolves_by_its_run_ended_and_the_fence() {
         let f = fence();
         let committed = Resolution::Committed(Box::new(Committed { version: 4, task: None }));
         assert_eq!(resolve(Some(&f), true, lane(4, None)), committed);
-        // found by the storage DST: the lane moved on after the lost commit; the run still
-        // reports the version its own commit made
+        // The lane moved on after the lost commit; the run still reports its own commit's version.
         assert_eq!(resolve(Some(&f), true, lane(9, Some("lease_c"))), committed);
         assert_eq!(resolve(Some(&f), false, lane(3, Some("lease_a"))), Resolution::NotApplied);
         assert_eq!(resolve(Some(&f), false, lane(3, Some("lease_b"))), Resolution::Rejected);
