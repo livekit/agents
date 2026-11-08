@@ -163,6 +163,7 @@ impl Realtime for FakeRealtime {
         &self,
         _: lk_agents_abi::telemetry::Cx,
         disabled: bool,
+        _: Option<lk_agents_abi::HostRef>,
     ) -> BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(async move {
             let nth = self.sessions.fetch_add(1, Ordering::SeqCst);

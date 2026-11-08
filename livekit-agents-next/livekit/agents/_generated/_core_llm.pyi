@@ -22,7 +22,8 @@ from .chat_items import ChatItem, ChatRole
 from .connect import APIConnectOptions
 from .duplex import DuplexCapabilities, DuplexInputItem
 from .llm import ChatChunk, SerializedImage
-from .llm_fallback import RealtimeFallbackMember
+from .llm_fallback import HostTools, RealtimeLeg
+from .llm_provider_options import ProviderEndpoint
 from .mcp import MCPToolOptions, ResolvedToolOptions
 from .metrics import RealtimeModelMetrics
 from .provider_data import TOOL_BEHAVIOR, ProviderFormat, ToolSchema
@@ -140,15 +141,17 @@ class FallbackLlm:
     async def aclose(self) -> None: ...
     async def chat(
         self,
-        chat_ctx_host: object,
         *,
-        tools: Sequence[ToolSpec],
-        tools_host: object | None = None,
+        chat_ctx: object,
+        tools: HostTools | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: object | None = None,
         extra_kwargs: dict[str, object] | None = None,
         conn_options: APIConnectOptions | None = None,
-    ) -> FallbackLlmChunks: ...
+    ) -> FallbackLlmChunks:
+        """A completion of the host `chat_ctx`, offering `tools`; the chain picks an entry on the
+        first pull.
+        """
 
 class FallbackLlmChunks:
     async def recv(self) -> ChatChunk | None: ...
@@ -178,10 +181,12 @@ class FallbackTts:
     async def synthesize(
         self,
         input_text: str,
+        *,
         conn_options: APIConnectOptions | None = None,
     ) -> TtsStream: ...
     async def stream(
         self,
+        *,
         conn_options: APIConnectOptions | None = None,
         expressive: bool = False,
     ) -> TtsStream: ...
@@ -192,7 +197,7 @@ class RealtimeFallbackModel:
     """
     def __new__(
         cls,
-        models: Sequence[RealtimeFallbackMember],
+        models: Sequence[RealtimeLeg],
         *,
         cooldown: float = 10.0,
         attempt_timeout: float | None = None,
@@ -213,22 +218,17 @@ class InferenceLlm:
         model: str,
         *,
         provider: str | None = None,
-        base_url: str,
-        api_key: str,
-        api_secret: str | None,
-        label: str,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
         inference_class: str | None = None,
-        strict_tool_schema: bool = True,
-        gzip_body: bool = False,
-        msgpack_body: bool = False,
         extra_kwargs: dict[str, object] | None = None,
+        endpoint: ProviderEndpoint | None = None,
     ) -> Self:
-        """A client of `model` at `base_url`. Starts nothing. With `api_secret`, `base_url` is the
-        LiveKit Inference gateway; without, `api_key` is an OpenAI-compatible provider's own key,
-        sent as the bearer with no LiveKit header. `label` is the host class it reports as.
-        `strict_tool_schema`, `gzip_body` and `msgpack_body` suit a provider that refuses strict
-        tool schemas or accepts compressed or msgpack bodies. `inference.LLM` builds it in its
-        constructor.
+        """A client of `model`. Starts nothing. On the LiveKit Inference gateway by default, its
+        URL and key pair resolved from the given values, the environment and the server's
+        settings; with `endpoint`, an OpenAI-compatible provider called with its own key and no
+        LiveKit header.
         """
     def identified(
         self,
@@ -244,13 +244,19 @@ class InferenceLlm:
     @property
     def extra_kwargs(self) -> dict[str, object]:
         """The persistent request options, a copy."""
+    @property
+    def inference_class(self) -> str | None:
+        """The scheduling class of its requests."""
     def update_options(
         self,
         *,
         model: str | None = None,
         extra_kwargs: dict[str, object] | None = None,
+        endpoint: ProviderEndpoint | None = None,
     ) -> None:
-        """Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs."""
+        """Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs, and
+        ``endpoint`` the provider endpoint.
+        """
     def chat(
         self,
         items: Sequence[ChatItem],

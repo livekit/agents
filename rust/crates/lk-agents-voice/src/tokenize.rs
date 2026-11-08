@@ -9,7 +9,7 @@ impl lk_agents_abi::tokenize::bindings::TokenizeFunctions for SpeechTokenizer {
         ignore_punctuation: bool,
         split_character: bool,
         retain_format: bool,
-    ) -> Vec<(String, usize, usize)> {
+    ) -> Vec<lk_agents_abi::tokenize::TokenSpan> {
         lk_agents_core::tokenize::split_words_of(
             &text,
             ignore_punctuation,

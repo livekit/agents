@@ -38,7 +38,6 @@ __all__ = [
     "AudioReceiver",
     "QueueAudioOutput",
     "DataStreamAudioReceiver",
-    "DataStreamAudioOutput",
 ]
 __all__ += _public.__all__
 
@@ -187,31 +186,6 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
                 self._lifecycle = None
                 self._agent_session = None
                 self._room = None
-
-
-# The agent's side: the session's audio sink, streaming to the avatar and paced by its reports.
-class DataStreamAudioOutput(_core.DataStreamAudioOutput):
-    """Audio sink sending speech to a remote avatar worker."""
-
-    def __new__(
-        cls,
-        room: rtc.Room,
-        *,
-        destination_identity: str,
-        sample_rate: int | None = None,
-        wait_remote_track: int | None = None,
-        clear_buffer_timeout: float | None = 2.0,
-        wait_playback_start: bool = False,
-    ) -> DataStreamAudioOutput:
-        return super().__new__(
-            cls,
-            room,
-            destination_identity=destination_identity,
-            sample_rate=sample_rate,
-            wait_remote_track=wait_remote_track,
-            clear_buffer_timeout=clear_buffer_timeout,
-            wait_playback_start=wait_playback_start,
-        )
 
 
 class DataStreamAudioReceiver(AudioReceiver):

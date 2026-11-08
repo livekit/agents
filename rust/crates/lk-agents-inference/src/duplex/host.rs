@@ -347,7 +347,7 @@ impl abi::DuplexRealtimeModel for DuplexAdapterModel {
             audio_timeout: Duration::from_secs_f64(audio_timeout.max(0.0)),
             clock: env.clock.clone(),
             anchor: WallAnchor::of(&*env.clock),
-            spawner: (env.spawner)().map_err(|e| HostError::new(e.to_string()))?,
+            spawner: env.spawner,
         })
     }
 

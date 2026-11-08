@@ -225,11 +225,12 @@ pub trait DuplexHost: Send + Sync {
     #[host(call, name = "_core_gate")]
     fn gate(&self) -> Result<Option<Arc<dyn AudioGate>>, HostError>;
 
-    /// A new plugin session.
+    /// A new plugin session, offering the tools the voice session's `tools` callable answers.
     #[host(await, name = "_core_session")]
     fn session(
         &self,
         cx: &crate::telemetry::Cx,
+        tools: Option<crate::HostRef>,
     ) -> crate::BoxFuture<'_, Result<Arc<dyn DuplexSession>, HostError>>;
 }
 

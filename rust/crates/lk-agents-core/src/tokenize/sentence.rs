@@ -7,6 +7,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::tokenize::py_strip;
+use lk_agents_abi::tokenize::TokenSpan;
 
 const STARTERS: &str = r"(Mr|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever)";
 const SUFFIXES: &str = "(Inc|Ltd|Jr|Sr|Co)";
@@ -210,12 +211,18 @@ impl lk_agents_abi::tokenize::bindings::SentenceTokenizer for BasicSentenceToken
 
     /// The sentences of `text`; `language` is accepted and unused.
     fn tokenize(&self, text: String, _language: Option<String>) -> Vec<String> {
-        self.split(text).into_iter().map(|(sentence, _, _)| sentence).collect()
+        basic_split_sentences(&text, self.min_sentence_len, self.retain_format)
+            .into_iter()
+            .map(|(sentence, _, _)| sentence)
+            .collect()
     }
 
-    /// `(sentence, start, end)` per sentence: what a stream batches.
-    fn split(&self, text: String) -> Vec<(String, usize, usize)> {
+    /// Each sentence and its offsets: what a stream batches.
+    fn split(&self, text: String) -> Vec<TokenSpan> {
         basic_split_sentences(&text, self.min_sentence_len, self.retain_format)
+            .into_iter()
+            .map(|(token, start, end)| TokenSpan { token, start, end })
+            .collect()
     }
 
     /// The shortest token a stream emits.

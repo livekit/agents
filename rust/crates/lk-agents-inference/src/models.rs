@@ -2,29 +2,13 @@
 //! and local model registry, answered by the modules that own them.
 
 use lk_agents_abi::errors::Invalid;
-use lk_agents_abi::inference::fallback::{SttFallbackModel, TtsFallbackModel};
-use lk_agents_abi::inference::{InferenceModels, VadResolution};
+use lk_agents_abi::inference::InferenceModels;
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 use lk_agents_abi::{SttCapabilities, TtsCapabilities};
-use serde_json::{Map, Value};
 
 pub struct Models;
 
 impl InferenceModels for Models {
-    fn stt_capabilities(
-        model: Option<String>,
-        fallback: Option<Vec<String>>,
-        extra_kwargs: Option<Map<String, Value>>,
-    ) -> SttCapabilities {
-        // Only each fallback entry's model is read.
-        let fallback: Vec<crate::stt::options::FallbackModel> = fallback
-            .unwrap_or_default()
-            .into_iter()
-            .map(|model| crate::stt::options::FallbackModel { model, extra_kwargs: None })
-            .collect();
-        crate::stt::options::capabilities(model.as_deref(), &fallback, extra_kwargs.as_ref())
-    }
-
     fn stt_fallback_capabilities(entries: Vec<SttCapabilities>) -> SttCapabilities {
         crate::fallback::merge_stt_capabilities(&entries)
     }
@@ -51,22 +35,8 @@ impl InferenceModels for Models {
         crate::local_models::init(vad, eot)
     }
 
-    fn tts_parse_model_string(model: String) -> (String, Option<String>) {
-        let (model, voice) = crate::tts::wire::parse_model_string(&model);
-        (model.to_owned(), voice.map(str::to_owned))
-    }
-
-    fn tts_has_aligned_transcript(model: String, extra_kwargs: Map<String, Value>) -> bool {
-        crate::tts::wire::has_aligned_transcript(&model, &extra_kwargs)
-    }
-
     fn tts_markup_provider_key(model: String) -> String {
         crate::tts::wire::markup_provider(&model).map_or("", |p| p.as_str()).to_owned()
-    }
-
-    fn stt_parse_model_string(model: String) -> (String, Option<String>) {
-        let (model, language) = crate::stt::options::parse_model_string(&model);
-        (model.to_owned(), language.map(str::to_owned))
     }
 
     fn min_reasoning_effort(model: String) -> Option<String> {
@@ -108,17 +78,5 @@ impl InferenceModels for Models {
         local_fallback: bool,
     ) -> Result<lk_agents_abi::inference::EotSelection, Invalid> {
         crate::eot::select(version.as_deref(), hosted, dev, &url, &key, &secret, local_fallback)
-    }
-
-    fn stt_resolve_vad_for_model(model: Option<String>, has_vad: bool) -> VadResolution {
-        crate::stt::options::resolve_vad_for_model(model.as_deref(), has_vad)
-    }
-
-    fn stt_normalize_fallback_str(model: String) -> SttFallbackModel {
-        crate::stt::options::normalize_fallback_str(&model)
-    }
-
-    fn tts_normalize_fallback_str(model: String) -> TtsFallbackModel {
-        crate::tts::wire::normalize_fallback_str(&model)
     }
 }

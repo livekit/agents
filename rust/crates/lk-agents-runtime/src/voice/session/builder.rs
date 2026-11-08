@@ -97,13 +97,14 @@ pub trait SessionExecutor: Send {
         cx: telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>>;
 
-    /// Opens the model under `cx` with the core's turn-detection choice and registers its audio
-    /// sink.
+    /// Opens the model under `cx` with the core's turn-detection choice, offering the host's
+    /// `tools` callable, and registers its audio sink.
     fn open_realtime<'a>(
         &'a mut self,
         resources: &'a Resources,
         model: Arc<dyn lk_agents_abi::Realtime>,
         disabled: bool,
+        tools: Option<lk_agents_abi::HostRef>,
         cx: telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'a, Result<RealtimeLeg, DriverError>>;
 
@@ -183,6 +184,9 @@ pub struct DriverBuilder {
     pub video_sampler: Option<lk_agents_voice::agent_session::video_sampler::VideoSampler>,
     /// Instead of an LLM+TTS pair: `llm`/`tts` are ignored while it is set.
     pub realtime: Option<Arc<dyn lk_agents_abi::Realtime>>,
+    /// The host callable answering the current agent's tools, which a host realtime session
+    /// offers.
+    pub realtime_tools: Option<lk_agents_abi::HostRef>,
     pub toolset: lk_agents_voice::tool_executor::Toolset,
     /// Prefixes every chat item id the session mints, so items from two calls never collide.
     /// `None` mints one at start.
@@ -258,6 +262,7 @@ impl DriverBuilder {
             interruption: None,
             video_sampler: None,
             realtime: None,
+            realtime_tools: None,
             toolset: Default::default(),
             session_id: None,
             storage: None,
@@ -573,9 +578,10 @@ impl DriverBuilder {
         sinks: &mut Sinks,
         cx: telemetry::Cx,
     ) -> Result<Option<RealtimeStart>, DriverError> {
-        let Some(model) = &self.realtime else {
+        let Some(model) = self.realtime.clone() else {
             return Ok(None);
         };
+        let tools = self.realtime_tools.clone();
         // Who ends the turn, decided once from the model's capabilities and the session's
         // inputs (`_resolve_rt_turn_detection_enabled`).
         let caps = model.capabilities();
@@ -599,7 +605,7 @@ impl DriverBuilder {
         );
         self.config.refine_turn_detection(owner);
         let (session, sink) =
-            executor.open_realtime(&self.resources, Arc::clone(model), disabled, cx).await?;
+            executor.open_realtime(&self.resources, model, disabled, tools, cx).await?;
         sinks.insert(AudioChannel::Realtime, sink);
         Ok(Some(RealtimeStart { session, caps, disabled, resolved: side.turn_detection_mode }))
     }

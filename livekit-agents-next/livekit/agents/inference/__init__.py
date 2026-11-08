@@ -11,8 +11,8 @@ from pydantic import JsonValue
 
 from livekit import rtc
 
-from .. import _bindings, _core
-from .._generated import public_inference as _public, vad
+from .. import _core
+from .._generated import facades_inference as _facades, public_inference as _public
 from .._generated.language import LanguageCode
 from .._generated.public_inference import *  # noqa: F403
 from ..job import get_job_context
@@ -94,112 +94,13 @@ def get_inference_headers(*, inference_class: str | None = None) -> dict[str, st
     )
 
 
-def _silero_model() -> Any:
-    # the host's model, which the core asks for only when the build links no native one
-    from livekit.local_inference import VAD
-
-    return VAD()
-
-
-class VAD(vad.VAD):
+class VAD(_facades.VAD):
     """Silero voice activity detection, the detection machine in the core (``_core.InferenceVad``)
     and the model native to the core when the build links it, else ``livekit-local-inference``'s."""
-
-    def __init__(
-        self,
-        *,
-        model: VADModels = "silero",
-        min_speech_duration: float = 0.05,
-        min_silence_duration: float = 0.25,
-        prefix_padding_duration: float = 0.5,
-        max_buffered_speech: float = 60.0,
-        activation_threshold: float = 0.5,
-        deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
-    ) -> None:
-        """
-        Args:
-            model: The VAD model; only ``"silero"``.
-            min_speech_duration: Speech needed before a start of speech.
-            min_silence_duration: Silence needed before an end of speech.
-            prefix_padding_duration: Audio kept before the start of speech.
-            max_buffered_speech: The longest speech kept for the end-of-speech event.
-            activation_threshold: The probability above which a window is speech.
-            deactivation_threshold: The probability below which speech ends;
-                ``activation_threshold - 0.15`` by default.
-        """
-        super().__init__(capabilities=vad.VADCapabilities(update_interval=0.032))
-        if model != "silero":
-            raise ValueError(f"Unknown VAD model: {model!r}. Supported: 'silero'.")
-        if is_given(deactivation_threshold) and deactivation_threshold <= 0:
-            raise ValueError("deactivation_threshold must be greater than 0")
-        self._model = model
-        self._native = _core.InferenceVad(
-            _silero_model,
-            min_speech_duration=min_speech_duration,
-            min_silence_duration=min_silence_duration,
-            prefix_padding_duration=prefix_padding_duration,
-            max_buffered_speech=max_buffered_speech,
-            activation_threshold=activation_threshold,
-            deactivation_threshold=deactivation_threshold
-            if is_given(deactivation_threshold)
-            else None,
-        )
-
-    def _core_leg(self) -> Any:
-        """The core's own detector, unless a subclass replaces its stream."""
-        return self if type(self).stream is not VAD.stream else self._native
-
-    @property
-    def model(self) -> str:
-        return self._model
 
     @property
     def provider(self) -> str:
         return "livekit-local-inference"
-
-    @property
-    def min_silence_duration(self) -> float:
-        return self._native.min_silence_duration
-
-    def stream(self) -> vad.VADStream:
-        return _VADStream(self)
-
-    def update_options(
-        self,
-        *,
-        min_speech_duration: NotGivenOr[float] = NOT_GIVEN,
-        min_silence_duration: NotGivenOr[float] = NOT_GIVEN,
-        prefix_padding_duration: NotGivenOr[float] = NOT_GIVEN,
-        max_buffered_speech: NotGivenOr[float] = NOT_GIVEN,
-        activation_threshold: NotGivenOr[float] = NOT_GIVEN,
-        deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
-    ) -> None:
-        """Update the options; running streams apply them before their next frame."""
-        self._native.update_options(
-            min_speech_duration=min_speech_duration,
-            min_silence_duration=min_silence_duration,
-            prefix_padding_duration=prefix_padding_duration,
-            max_buffered_speech=max_buffered_speech,
-            activation_threshold=activation_threshold,
-            deactivation_threshold=deactivation_threshold,
-        )
-
-
-class _VADStream(vad.VADStream):
-    """The native VAD's stream: frames and flushes in, its events out, through ``pump``."""
-
-    def __init__(self, parent: VAD) -> None:
-        self._native = parent._native.stream()
-        super().__init__(parent)
-
-    async def _main_task(self) -> None:
-        await _bindings.pump(self._native, self.input, self._feed, self.send)
-
-    def _feed(self, item: rtc.AudioFrame | vad.VADStream.Flush) -> None:
-        if isinstance(item, self.Flush):
-            self._native.flush()
-        else:
-            self._native.push(item)
 
 
 DEFAULT_SAMPLE_RATE = 16000

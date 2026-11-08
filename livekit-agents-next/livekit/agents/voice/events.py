@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
 
 # The generated event models take this module's path, so their string annotations resolve
 # here: `Annotated`, `Literal`, `Field` and `timedelta` stay bound.
 from datetime import timedelta as timedelta
-from typing import TYPE_CHECKING, Annotated as Annotated, Any, Generic, Literal as Literal
+from typing import TYPE_CHECKING, Annotated as Annotated, Any, Literal as Literal
 
 from pydantic import Field as Field, TypeAdapter
 from typing_extensions import TypeVar
@@ -18,7 +16,7 @@ from livekit.agents._generated.session_events import (
     _TypeDiscriminator as _TypeDiscriminator,
 )
 
-from .._generated import public_voice_events as _public
+from .._generated import facades_voice_events as _facades, public_voice_events as _public
 from .._generated.public_voice_events import *  # noqa: F403
 from .._generated.session_dispatch import AgentEvent as AgentEvent, EventTypes as EventTypes
 from .._generated.tool_report import ToolOutcomeUpdate, ToolReport
@@ -59,7 +57,7 @@ def event_dict(event: AgentEvent, *, json: bool = False) -> dict[str, Any]:
 Context_T = TypeVar("Context_T", default=Any)
 
 
-class RunContext(Generic[Context_T]):
+class RunContext(_facades.RunContext[Context_T]):
     """What a tool, an instructions function or an output function receives (agents.md
     "RunContext").
 
@@ -82,7 +80,8 @@ class RunContext(Generic[Context_T]):
         self._run = run
         # Captured at the body's entry, for both direct runs and live-session updates.
         self._invocation: Invocation | None = None
-        self._initial_step_idx = speech_handle.num_steps - 1 if speech_handle is not None else 0
+        steps = speech_handle.num_steps if speech_handle is not None else 1
+        self._initial_step_idx = steps - 1 if steps else None
         # on a call: the person's reply to the question this delegated call's expert asked
         self._expert_answer: asyncio.Future[str] | None = None
 
@@ -184,51 +183,7 @@ class RunContext(Generic[Context_T]):
 
     async def wait_for_playout(self) -> None:
         """Wait for the speech spoken before this tool ran, not the whole turn."""
-        await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
-
-    @asynccontextmanager
-    async def with_filler(
-        self,
-        source: str | Callable[[int], SpeechHandle | str | None],
-        *,
-        delay: float = 0,
-        interval: float | None = None,
-        max_steps: int | None = None,
-    ) -> AsyncIterator[None]:
-        """Schedule filler speech while a long-running step blocks the tool.
-
-        After ``delay`` seconds of continuous idle, ``source`` is spoken (a string) or asked
-        (a callable taking the step count, returning text, a handle it spoke itself, or
-        ``None`` to skip this fire); with ``interval`` set it repeats, up to ``max_steps``.
-        """
-        text = source if isinstance(source, str) else None
-        core = self._call()._core
-        filler = core.filler_start(
-            self.function_call.call_id,
-            self.speech_handle.id,
-            delay=delay,
-            interval=interval,
-            max_steps=max_steps,
-            text=text,
-            source=None if text is not None else source,
-            origin=self._origin,
-        )
-        try:
-            yield
-        finally:
-            core.filler_stop(filler)
-
-    @asynccontextmanager
-    async def foreground(self) -> AsyncIterator[VoiceSession[Context_T]]:
-        """Wait for idle, then hold the floor while interactive work runs (
-        a ``say``), so no other speech or deferred tool reply lands in between."""
-        session = self._call()
-        core = session._core
-        hold = await core.wait_for_idle_and_hold(origin=self._origin)
-        try:
-            yield session
-        finally:
-            core.release_idle_hold(hold)
+        await self.speech_handle._wait_for_generation(self._initial_step_idx)
 
     @property
     def _origin(self) -> VoiceCommandOrigin | None:

@@ -29,3 +29,18 @@ pub trait ConnectionPoolState: Send + Sized + 'static {
     #[host(call)]
     fn closed(&mut self, id: u64);
 }
+
+/// `utils.ConnectionPool`'s reads of its native bookkeeping.
+#[crate::host(facade(
+    path = "livekit.agents.utils.aio",
+    name = "ConnectionPool",
+    native = ConnectionPoolState,
+    extended
+))]
+pub trait ConnectionPoolFacade {
+    /// Seconds the last `get()` spent connecting; 0 when it reused a connection.
+    #[host(getter)]
+    fn last_acquire_time(&self) -> f64;
+    #[host(getter)]
+    fn last_connection_reused(&self) -> bool;
+}

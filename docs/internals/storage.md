@@ -40,6 +40,9 @@ standard A2A: every message still gets an A2A task id, and `ctx.thread` is
 an in-memory thread with the same API that nothing persists, so it ends
 with the process.
 
+How each text request and call names its thread is specified in
+[threads.md](../threads.md#how-a-thread-is-found).
+
 ## Rust interface
 
 Storage follows the [Rust plan](rust-core.md#storage-and-a2a).

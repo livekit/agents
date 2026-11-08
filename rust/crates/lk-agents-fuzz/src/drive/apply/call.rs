@@ -1,6 +1,7 @@
 //! Host calls grouped by the input family and the resources each call returns.
 use super::Pending as AnswerWait;
 use super::*;
+use lk_agents_abi::voice::session::FillerSource;
 
 #[derive(Default)]
 enum Pending {
@@ -261,16 +262,15 @@ impl Run {
                 api.filler_start(
                     self.tool_call_id(*tool)?,
                     self.speech_id(*speech)?.to_string(),
+                    text.clone().map_or(FillerSource::None, |AgentText(t)| FillerSource::Text(t)),
                     secs(*delay),
                     interval.map(secs),
-                    None,
-                    text.clone().map(|AgentText(t)| t),
                     None,
                     self.tool_origin(*tool),
                 )
                 .ok()?;
             }
-            Input::FillerStop { filler } => api.filler_stop(self.filler_id(*filler)?.0).ok()?,
+            Input::FillerStop { filler } => api.filler_stop(self.filler_id(*filler)?.0),
             Input::VoiceTask { tool, agent, reply } => {
                 let call_id = self.tool_call_id(*tool)?;
                 let args = frame(

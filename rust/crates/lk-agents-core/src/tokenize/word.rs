@@ -1,6 +1,7 @@
 //! `tokenize/_basic_word.py::split_words`. `retain_format` (#3334) makes the tokens concatenate
 //! back to the source for the transcript synchroniser.
 
+use lk_agents_abi::tokenize::TokenSpan;
 use std::borrow::Cow;
 
 /// `tokenize/tokenizer.py:10`. `str.translate` deletes these anywhere in the token.
@@ -48,6 +49,12 @@ pub struct Word<'a> {
     pub end: usize,
 }
 
+impl Word<'_> {
+    fn into_span(self) -> TokenSpan {
+        TokenSpan { token: self.text.into_owned(), start: self.start, end: self.end }
+    }
+}
+
 /// Characters (`ch`, reported) and bytes (`by`, for slicing), kept together.
 #[derive(Debug, Clone, Copy)]
 struct Pos {
@@ -62,9 +69,9 @@ pub fn split_words_of(
     ignore_punctuation: bool,
     split_character: bool,
     retain_format: bool,
-) -> Vec<(String, usize, usize)> {
+) -> Vec<TokenSpan> {
     let opts = WordTokenizerOptions { ignore_punctuation, split_character, retain_format };
-    split_words(text, opts).into_iter().map(|w| (w.text.into_owned(), w.start, w.end)).collect()
+    split_words(text, opts).into_iter().map(Word::into_span).collect()
 }
 
 /// The public `basic.split_words` is this with `retain_format: false`.
@@ -157,12 +164,9 @@ impl lk_agents_abi::tokenize::bindings::WordTokenizer for BasicWordTokenizer {
         split_words(&text, self.opts).into_iter().map(|w| w.text.into_owned()).collect()
     }
 
-    /// `(word, start, end)` per word: what a stream batches.
-    fn split(&self, text: String) -> Vec<(String, usize, usize)> {
-        split_words(&text, self.opts)
-            .into_iter()
-            .map(|w| (w.text.into_owned(), w.start, w.end))
-            .collect()
+    /// Each word and its offsets: what a stream batches.
+    fn split(&self, text: String) -> Vec<TokenSpan> {
+        split_words(&text, self.opts).into_iter().map(Word::into_span).collect()
     }
 
     /// The shortest token a stream emits: each word once the next proves it whole.

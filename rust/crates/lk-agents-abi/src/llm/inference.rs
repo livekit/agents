@@ -19,28 +19,23 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     #[host(source(item = LlmChunk, class = "InferenceLlmChunks"))]
     type Chunks: StreamOutput<LlmChunk> + 'static;
 
-    /// A client of `model` at `base_url`. Starts nothing. With `api_secret`, `base_url` is the
-    /// LiveKit Inference gateway; without, `api_key` is an OpenAI-compatible provider's own key,
-    /// sent as the bearer with no LiveKit header. `label` is the host class it reports as.
-    /// `strict_tool_schema`, `gzip_body` and `msgpack_body` suit a provider that refuses strict
-    /// tool schemas or accepts compressed or msgpack bodies. `inference.LLM` builds it in its
-    /// constructor.
+    /// A client of `model`. Starts nothing. On the LiveKit Inference gateway by default, its
+    /// URL and key pair resolved from the given values, the environment and the server's
+    /// settings; with `endpoint`, an OpenAI-compatible provider called with its own key and no
+    /// LiveKit header.
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(
         env: &Self::Env,
         model: String,
         #[host(kw, default = None)] provider: Option<String>,
-        base_url: String,
-        api_key: String,
-        api_secret: Option<String>,
-        label: String,
+        #[host(default = None)] base_url: Option<String>,
+        #[host(default = None)] api_key: Option<String>,
+        #[host(default = None)] api_secret: Option<String>,
         #[host(default = None)] inference_class: Option<String>,
-        #[host(kw, default = true)] strict_tool_schema: bool,
-        #[host(kw, default = false)] gzip_body: bool,
-        #[host(kw, default = false)] msgpack_body: bool,
         #[host(default = None)] extra_kwargs: Option<Extra>,
-    ) -> Result<Self, ApiError>;
+        #[host(default = None)] endpoint: Option<ProviderEndpoint>,
+    ) -> Result<Self, Invalid>;
 
     /// This client as a session of the job `headers` (`get_inference_headers()`) identifies
     /// holds it: the same options, its requests carrying that job. `reporter` is the host
@@ -59,12 +54,18 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn extra_kwargs(&self) -> Extra;
 
-    /// Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs.
+    /// The scheduling class of its requests.
+    #[host(getter)]
+    fn inference_class(&self) -> Option<String>;
+
+    /// Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs, and
+    /// ``endpoint`` the provider endpoint.
     #[host(call)]
     fn update_options(
         &self,
         #[host(kw, default = None)] model: Option<String>,
         #[host(default = None)] extra_kwargs: Option<Extra>,
+        #[host(default = None)] endpoint: Option<ProviderEndpoint>,
     );
 
     /// Opens a completion of `items`; no I/O until the first pull. `headers` identify the
@@ -84,16 +85,74 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     ) -> Result<Self::Chunks, ApiError>;
 }
 
-/// `inference.LLM`'s client, built by its constructor.
+/// An OpenAI-compatible provider the client calls directly with the provider's own key, in place
+/// of the LiveKit Inference gateway; no LiveKit header is sent.
+#[crate::host(record(
+    module = "llm_provider_options",
+    path = "livekit.agents.inference.llm",
+    dataclass,
+    frozen,
+    extract
+))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderEndpoint {
+    pub base_url: String,
+    pub api_key: String,
+    /// Tool schemas in OpenAI's strict form; some OpenAI-compatible providers refuse it.
+    #[host(default = true)]
+    pub strict_tool_schema: bool,
+    /// Gzip-compressed request bodies, for a provider that accepts them.
+    #[host(default = false)]
+    pub gzip_body: bool,
+    /// Msgpack request bodies, for a provider that accepts them.
+    #[host(default = false)]
+    pub msgpack_body: bool,
+}
+
+/// `inference.LLM`: the LiveKit Inference gateway's LLM, or an OpenAI-compatible provider's.
 #[crate::host(facade(
     path = "livekit.agents.inference.llm",
     extended,
     name = "LLM",
+    base = "llm.LLM",
     native = InferenceLlm,
     legs(chat),
     leg = "_core_native"
 ))]
 pub trait InferenceLlmFacade {
+    /// A LiveKit Inference LLM.
+    ///
+    /// Args:
+    ///     model: The model, ``"provider/model"``.
+    ///     provider: The provider the gateway routes to; the gateway picks by default.
+    ///     base_url: The gateway URL; ``LIVEKIT_INFERENCE_URL`` or the cloud gateway by default.
+    ///     api_key: ``LIVEKIT_INFERENCE_API_KEY`` or ``LIVEKIT_API_KEY`` by default.
+    ///     api_secret: ``LIVEKIT_INFERENCE_API_SECRET`` or ``LIVEKIT_API_SECRET`` by default.
+    ///     inference_class: The scheduling class of its requests.
+    ///     extra_kwargs: Request options sent with every completion.
+    ///     endpoint: A provider plugin's own endpoint in place of the gateway.
+    #[host(
+        new,
+        not_given,
+        annotation(
+            model = ".inference_llm.LLMModels | str",
+            inference_class = ".inference_models.InferenceClass",
+            extra_kwargs = ".llm_provider_options.ChatCompletionOptions | dict[str, Any]"
+        ),
+        resolve(extra_kwargs = "builtins.dict")
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        model: String,
+        #[host(kw, default = None)] provider: Option<String>,
+        #[host(default = None)] base_url: Option<String>,
+        #[host(default = None)] api_key: Option<String>,
+        #[host(default = None)] api_secret: Option<String>,
+        #[host(default = None)] inference_class: Option<String>,
+        #[host(default = None)] extra_kwargs: Option<Extra>,
+        #[host(default = None)] endpoint: Option<ProviderEndpoint>,
+    ) -> Self;
+
     #[host(getter)]
     fn model(&self) -> String;
 

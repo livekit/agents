@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::errors::{HostError, ProviderError};
+use lk_agents_abi::media::emitter::EmitterError;
 use lk_agents_abi::tts::stream_pacer::{HostSentenceStream, PushedAudio};
 use parking_lot::Mutex;
 use tokio::sync::Notify;
@@ -81,6 +82,25 @@ struct Audio(Mutex<f64>);
 impl PushedAudio for Audio {
     fn pushed_duration(&self) -> f64 {
         *self.0.lock()
+    }
+    fn start_segment(&self, _: String) -> Result<(), EmitterError> {
+        Ok(())
+    }
+    fn push_frame(&self, _: lk_agents_abi::AudioFrame) -> Result<(), EmitterError> {
+        Ok(())
+    }
+    fn push_timed_transcript(
+        &self,
+        _: Vec<lk_agents_abi::TranscriptChunk>,
+    ) -> Result<(), EmitterError> {
+        Ok(())
+    }
+    fn report_usage(
+        &self,
+        _: Option<lk_agents_abi::usage::TokenUsage>,
+        _: Option<u64>,
+    ) -> Result<(), EmitterError> {
+        Ok(())
     }
 }
 

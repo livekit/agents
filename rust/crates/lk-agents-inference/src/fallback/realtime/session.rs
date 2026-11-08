@@ -64,6 +64,8 @@ pub struct FallbackSession {
     pub(super) anchor: WallAnchor,
     pub(super) clock: Arc<dyn lk_agents_abi::Clock>,
     pub(super) turn_detection_disabled: bool,
+    /// What every child session offers: the voice session's tools callable.
+    pub(super) tools: Option<lk_agents_abi::HostRef>,
     pub(super) model_active: Arc<std::sync::atomic::AtomicUsize>,
     pub(super) state: Mutex<SessionState>,
     pub(super) restart_tx: tokio::sync::watch::Sender<bool>,
@@ -198,6 +200,7 @@ impl FallbackSession {
         let open = child.open(
             self.cx.clone(),
             self.turn_detection_disabled,
+            self.tools.clone(),
             self.anchor,
             &*self.clock,
             self.attempt_timeout,

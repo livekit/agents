@@ -1,6 +1,6 @@
 //! The native gateway synthesis resource. Runtime owns its connections and secrets.
 
-use super::fallback::TtsFallbackModel;
+use super::fallback::TtsFallbacks;
 use crate::errors::ProviderError;
 use crate::{ApiConnectOptions, Tts};
 
@@ -13,29 +13,38 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
 
     #[host(class(name = "TtsStream"))]
     type Stream;
-    /// `inference.TTS` builds it in its constructor.
+    /// A client of `model` (``"provider/model[:voice]"``) on the gateway. Starts nothing. The
+    /// gateway's URL and key pair resolve from the given values, the environment and the server's
+    /// settings.
     #[host(new)]
     #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     fn new(
         env: &Self::Env,
         model: String,
-        #[host(kw)] base_url: String,
-        api_key: String,
-        api_secret: String,
-        conn_options: ApiConnectOptions,
-        #[host(default = None)] voice: Option<String>,
+        #[host(kw, default = None)] voice: Option<String>,
         #[host(default = None)] language: Option<String>,
-        #[host(default = "pcm_s16le")] encoding: String,
-        #[host(default = 24_000)] sample_rate: u32,
+        #[host(default = None)] encoding: Option<String>,
+        #[host(default = None)] sample_rate: Option<u32>,
+        #[host(default = None)] base_url: Option<String>,
+        #[host(default = None)] api_key: Option<String>,
+        #[host(default = None)] api_secret: Option<String>,
         #[host(default = None, shape_error(kind = "ValueError", message = "expected a dict of extra kwargs, got {value}"))]
         extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
-        #[host(default = None, shape_error(items, kind = "ValueError", message = "each fallback entry must be a dict"))]
-        fallback: Option<Vec<TtsFallbackModel>>,
+        #[host(default = None)] fallback: Option<TtsFallbacks>,
+        #[host(default = None)] conn_options: Option<ApiConnectOptions>,
     ) -> Result<Self, crate::errors::Invalid>;
     #[host(getter)]
-    fn sample_rate(&self) -> u32;
+    fn model(&self) -> String;
+    /// Streaming, its alignment read from the live model and extra kwargs.
     #[host(getter)]
-    fn aligned_transcript(&self) -> bool;
+    fn capabilities(&self) -> crate::TtsCapabilities;
+    #[host(getter)]
+    fn num_channels(&self) -> u16;
+    /// The policy this client was given, which a session or run that supplies none keeps.
+    #[host(getter)]
+    fn conn_options(&self) -> ApiConnectOptions;
+    #[host(getter)]
+    fn sample_rate(&self) -> u32;
     #[host(call)]
     fn prewarm(&self, #[host(kw, default = None)] headers: Option<crate::Headers>);
     #[host(call)]
@@ -44,34 +53,107 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
         headers: crate::Headers,
         #[host(default = None)] reporter: Option<std::sync::Arc<dyn Tts>>,
     ) -> Self;
+    /// Read by the next synthesis; ``extra_kwargs`` merges into the persistent kwargs.
     #[host(call)]
     fn update_options(
         &self,
-        #[host(kw, default = None)] model: Option<String>,
-        #[host(default = None)] voice: Option<String>,
+        #[host(kw, default = None)] voice: Option<String>,
+        #[host(default = None)] model: Option<String>,
         #[host(default = None)] language: Option<String>,
         #[host(default = None, shape_error(kind = "ValueError", message = "expected a dict of extra kwargs, got {value}"))]
-        extra: Option<serde_json::Map<String, serde_json::Value>>,
+        extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
     );
+    /// A synthesis of the text pushed; its connection carries this view's job.
     #[host(await)]
     async fn stream(
         &self,
-        #[host(kw, default = None)] headers: Option<crate::Headers>,
-        #[host(default = None)] conn_options: Option<ApiConnectOptions>,
+        #[host(kw, default = None)] conn_options: Option<ApiConnectOptions>,
         #[host(default = false)] expressive: bool,
     ) -> Result<Self::Stream, ProviderError>;
 }
 
-/// `inference.TTS`'s client, built by its constructor.
+/// `inference.TTS`: the LiveKit Inference gateway's TTS.
 #[crate::host(facade(
     path = "livekit.agents.inference.tts",
     extended,
     name = "TTS",
+    base = "tts.TTS",
     native = InferenceTts,
     legs(synthesize, stream),
-    leg = "_core_native"
+    leg = "_core_native",
+    base_args(capabilities, sample_rate, num_channels)
 ))]
-pub trait InferenceTtsFacade {}
+pub trait InferenceTtsFacade {
+    /// LiveKit Inference TTS.
+    ///
+    /// Args:
+    ///     model: ``"provider/model[:voice]"``.
+    ///     voice: The voice; overrides the model string's.
+    ///     language: The language to synthesize.
+    ///     encoding: The audio encoding asked of the gateway.
+    ///     sample_rate: The sample rate asked of the gateway.
+    ///     base_url: The gateway URL; ``LIVEKIT_INFERENCE_URL`` or the cloud gateway by default.
+    ///     api_key: ``LIVEKIT_INFERENCE_API_KEY`` or ``LIVEKIT_API_KEY`` by default.
+    ///     api_secret: ``LIVEKIT_INFERENCE_API_SECRET`` or ``LIVEKIT_API_SECRET`` by default.
+    ///     extra_kwargs: Provider options passed through to the gateway.
+    ///     fallback: Fallback models, names or ``FallbackModel`` entries, run by the gateway.
+    ///     conn_options: The connection timeout, and the retries the gateway runs server-side.
+    #[host(
+        new,
+        not_given,
+        annotation(
+            model = ".inference_tts.TTSModels | str",
+            encoding = ".inference_tts.TTSEncoding"
+        )
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        model: String,
+        #[host(kw, default = None)] voice: Option<String>,
+        #[host(default = None)] language: Option<String>,
+        #[host(default = None)] encoding: Option<String>,
+        #[host(default = None)] sample_rate: Option<u32>,
+        #[host(default = None)] base_url: Option<String>,
+        #[host(default = None)] api_key: Option<String>,
+        #[host(default = None)] api_secret: Option<String>,
+        #[host(default = None)] extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
+        #[host(default = None)] fallback: Option<TtsFallbacks>,
+        #[host(default = None)] conn_options: Option<ApiConnectOptions>,
+    ) -> Self;
+
+    #[host(getter)]
+    fn model(&self) -> String;
+
+    #[host(getter)]
+    fn capabilities(&self) -> crate::TtsCapabilities;
+
+    /// Update the options the next synthesis uses.
+    #[host(not_given, annotation(model = ".inference_tts.TTSModels | str"))]
+    fn update_options(
+        &self,
+        #[host(kw, default = None)] voice: Option<String>,
+        #[host(default = None)] model: Option<String>,
+        #[host(default = None)] language: Option<String>,
+        #[host(default = None)] extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
+    );
+}
+
+/// `inference.TTS.stream()`: one gateway synthesis, text in, audio and alignment out; the client
+/// splits the sentences and converts the markup.
+#[crate::host(facade(
+    path = "livekit.agents.inference.tts",
+    base = "tts.SynthesizeStream",
+    native = InferenceTts,
+    stream(
+        op = stream,
+        owner = "_tts",
+        method = "stream",
+        base_args(conn_options),
+        state(expressive),
+        provider_default(conn_options)
+    )
+))]
+pub trait SynthesizeStream {}
 
 // Public data contracts. Python behavior remains in its adapters.
 

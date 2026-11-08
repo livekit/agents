@@ -26,7 +26,9 @@ pub use lk_agents_voice::background_audio::{
     TRACK_NAME, ThinkingSound, apply_gain, plan_play, select_sound, thinking_sound,
 };
 
-pub use lk_agents_abi::voice::background_audio::{FrameStream, PlaybackError, Sound, SoundSource};
+pub use lk_agents_abi::voice::background_audio::{
+    FrameStream, PlaybackError, Sound, SoundSource, Sounds,
+};
 
 /// Completion and stop notification owned by voice, shared with the caller's handle
 /// (`PlayHandle`'s two write-once futures).
@@ -204,7 +206,7 @@ impl BackgroundAudioPlayer {
         let playback = Playback::new(&sound);
         let input = match sound.source {
             SoundSource::Stream(stream) => Input::Stream(stream),
-            SoundSource::File(path) => {
+            SoundSource::Clip(path) | SoundSource::File(path) => {
                 Input::File(FileInput { path, looping, clock: self.clock.clone(), decoder: None })
             }
         };
@@ -740,15 +742,14 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
     }
 
     /// `start(room)`: publishes the track on the room's local participant, starts the `ambient`
-    /// sound (drawn by probability with `choose`; a file loops), and returns the track's sid,
+    /// sound (drawn by probability from a list; a file loops), and returns the track's sid,
     /// which the host resolves to its own `rtc.LocalTrackPublication`. A second start returns the
     /// same sid. `source` is `track_publish_options.source`.
     async fn start(
         &self,
         room: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
         draw: f64,
-        ambient: Vec<Sound>,
-        choose: bool,
+        ambient: Option<Sounds>,
         source: Option<TrackSource>,
     ) -> Result<lk_agents_abi::voice::rtc::TrackSid, RtcError> {
         let participant = room.rtc().ok_or(RtcError::NotConnected)?.local().clone();
@@ -792,9 +793,10 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
                 pump,
             });
             this.started.store(true, Ordering::Release);
-            if !ambient.is_empty() {
+            let (sounds, choose) = ambient.map_or((Vec::new(), false), Sounds::candidates);
+            if !sounds.is_empty() {
                 // Open and started: `play` cannot refuse.
-                let _ = this.play(ambient, choose, false, true, draw);
+                let _ = this.play(sounds, choose, false, true, draw);
             }
             Ok(publication.sid().clone())
         })
@@ -804,22 +806,22 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
 
     fn play(
         &self,
-        sounds: Vec<Sound>,
+        sounds: Sounds,
         draw: f64,
         looping: bool,
         ambient: bool,
-        choose: bool,
     ) -> Result<Self::State, PlaybackError> {
+        let (sounds, choose) = sounds.candidates();
         self.0.play(sounds, choose, looping, ambient, draw).map(PlayState)
     }
 
     fn on_agent_state(
         &self,
-        sounds: Vec<Sound>,
+        sounds: Option<Sounds>,
         draw: f64,
         thinking: bool,
-        choose: bool,
     ) -> Result<(), PlaybackError> {
+        let (sounds, choose) = sounds.map_or((Vec::new(), false), Sounds::candidates);
         let mut handle = self.0.thinking.lock();
         let last_done = handle.as_ref().map(|h| h.done());
         match thinking_sound(self.0.phase(), !sounds.is_empty(), thinking, last_done) {

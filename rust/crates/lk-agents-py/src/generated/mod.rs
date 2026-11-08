@@ -150,7 +150,7 @@ pub trait Implementations: 'static {
     type MarkupFunctions: ::lk_agents_abi::tts::markup::MarkupFunctions;
     type MarkupClass: ::lk_agents_abi::tts::markup::MarkupClass;
     type TranscriptStripper: ::lk_agents_abi::tts::markup::TranscriptStripper;
-    type StreamAdapterFunctions: ::lk_agents_abi::StreamAdapterFunctions<Stream = Self::TtsStream>;
+    type TtsStreamAdapter: ::lk_agents_abi::tts::stream_adapter::TtsStreamAdapter<Stream = Self::TtsStream>;
     type PacedSentences: ::lk_agents_abi::tts::stream_pacer::PacedSentences;
     type TtsStream: ::lk_agents_abi::tts::streams::TtsStream;
     type SynthesisChecks: ::lk_agents_abi::tts::streams::SynthesisChecks;
@@ -159,6 +159,7 @@ pub trait Implementations: 'static {
     type InterruptionDetector: ::lk_agents_abi::turn::inference::InterruptionDetector;
     type KeytermFunctions: ::lk_agents_abi::turn::keyterms::KeytermFunctions;
     type ConnectOptionsFunctions: ::lk_agents_abi::types::connect::ConnectOptionsFunctions;
+    type Ids: ::lk_agents_abi::types::ids::Ids;
     type ProviderAttempts: ::lk_agents_abi::types::provider::ProviderAttempts;
     type AudioByteStream: ::lk_agents_abi::utils::byte_stream::AudioByteStream;
     type ConnectionPoolState: ::lk_agents_abi::utils::connection_pool::ConnectionPoolState;
@@ -292,19 +293,12 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(inference::inference_identity_headers, m)?)?;
     m.add_function(wrap_pyfunction!(inference::inference_quota_usage, m)?)?;
     m.add_function(wrap_pyfunction!(inference::local_models_init, m)?)?;
-    m.add_function(wrap_pyfunction!(inference::tts_parse_model_string, m)?)?;
-    m.add_function(wrap_pyfunction!(inference::tts_has_aligned_transcript, m)?)?;
     m.add_function(wrap_pyfunction!(inference::tts_markup_provider_key, m)?)?;
-    m.add_function(wrap_pyfunction!(inference::stt_parse_model_string, m)?)?;
     m.add_function(wrap_pyfunction!(inference::min_reasoning_effort, m)?)?;
     m.add_function(wrap_pyfunction!(inference::amd_auto_select_models, m)?)?;
     m.add_function(wrap_pyfunction!(inference::amd_is_evaluated_model, m)?)?;
     m.add_function(wrap_pyfunction!(inference::llm_unsupported_params, m)?)?;
     m.add_function(wrap_pyfunction!(inference::eot_select, m)?)?;
-    m.add_function(wrap_pyfunction!(inference::stt_resolve_vad_for_model, m)?)?;
-    m.add_function(wrap_pyfunction!(inference::stt_normalize_fallback_str, m)?)?;
-    m.add_function(wrap_pyfunction!(inference::tts_normalize_fallback_str, m)?)?;
-    m.add_function(wrap_pyfunction!(inference::stt_capabilities, m)?)?;
     m.add_function(wrap_pyfunction!(inference::stt_fallback_capabilities, m)?)?;
     m.add_function(wrap_pyfunction!(inference::tts_fallback_capabilities, m)?)?;
     m.add_function(wrap_pyfunction!(inference::merge_realtime_capabilities, m)?)?;
@@ -425,7 +419,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tts::to_xml, m)?)?;
     m.add_class::<tts::Markup>()?;
     m.add_class::<tts::TranscriptMarkupStripper>()?;
-    m.add_function(wrap_pyfunction!(tts::tts_adapter_stream, m)?)?;
+    m.add_class::<tts::TtsStreamAdapter>()?;
     m.add_class::<tts::CorePacedSentences>()?;
     m.add_class::<tts::TtsStream>()?;
     m.add_function(wrap_pyfunction!(tts::validate_synthesis, m)?)?;
@@ -435,6 +429,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(turn::resolve_keyterm_detection, m)?)?;
     m.add_function(wrap_pyfunction!(types::api_connect_options_check, m)?)?;
     m.add_function(wrap_pyfunction!(types::api_retry_interval, m)?)?;
+    m.add_function(wrap_pyfunction!(types::shortuuid, m)?)?;
     m.add_class::<types::ProviderAttempts>()?;
     m.add_class::<utils::AudioByteStream>()?;
     m.add_class::<utils::ConnectionPoolState>()?;

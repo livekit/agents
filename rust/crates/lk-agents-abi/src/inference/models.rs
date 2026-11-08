@@ -582,9 +582,13 @@ pub enum RealtimeModel {
 #[crate::host(record(
     module = "inference_models",
     path = "livekit.agents.inference",
-    name = "VADModels"
+    name = "VADModels",
+    emit,
+    extract
 ))]
-pub enum VadModel {
+#[crate::host(wire_strs(msg = format!("Unknown VAD model: {s:?}. Supported: 'silero'.")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VadModelName {
     #[host(rename = "silero")]
     Silero,
 }

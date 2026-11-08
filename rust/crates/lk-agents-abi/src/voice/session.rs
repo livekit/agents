@@ -100,6 +100,25 @@ pub struct UnknownCloseReason(pub String);
 )]
 pub struct NotAnImage;
 
+/// What a filler says at each fire: its text, or the host's callable asked with the step count
+/// (text, a handle it spoke itself, or `None` to skip the fire); `None`, every fire declined.
+#[crate::host(record(
+    module = "voice_session",
+    path = "livekit.agents.voice.events",
+    transparent,
+    extract
+))]
+#[derive(Debug, Clone, PartialEq)]
+pub enum FillerSource {
+    Text(String),
+    #[host(
+        host_type = "collections.abc.Callable",
+        annotation = "collections.abc.Callable[[int], livekit.agents.voice.io.SpeechHandle | str | None]"
+    )]
+    Callable(HostRef),
+    None,
+}
+
 #[crate::host(record(module = "voice_session", emit, transparent))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum VoiceTaskValue {
@@ -248,7 +267,11 @@ pub struct VoiceSessionArgs {
     #[host(default = None)]
     pub llm: Option<Arc<dyn Llm>>,
     #[host(default = None)]
-    pub realtime: Option<Arc<dyn crate::Realtime>>,
+    pub realtime: Option<crate::llm::fallback::RealtimeLeg>,
+    /// The host callable answering the current agent's tools, which a host realtime provider's
+    /// session offers.
+    #[host(default = None)]
+    pub realtime_tools: Option<HostRef>,
     #[host(default = None)]
     pub tts: Option<Arc<dyn Tts>>,
     /// Receives each session event, on the calling loop.
@@ -682,24 +705,23 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     ) -> BoxFuture<'static, crate::voice::io::Result<()>>;
 
     /// `RunContext.with_filler(..)` entered for tool `call_id` of `speech_id`: after `delay` s
-    /// idle say `text` (or ask `source`), then repeat every `interval`. Returns the scope's number.
+    /// idle say or ask `source`, then repeat every `interval`. Returns the scope's number.
     #[host(call)]
     #[allow(clippy::too_many_arguments)]
     fn filler_start(
         &self,
         call_id: String,
         speech_id: String,
+        source: FillerSource,
         #[host(kw)] delay: f64,
         #[host(default = None)] interval: Option<f64>,
         #[host(default = None)] max_steps: Option<u32>,
-        #[host(default = None)] text: Option<String>,
-        #[host(default = None)] source: Option<HostRef>,
         #[host(default = None)] origin: Option<VoiceCommandOrigin>,
     ) -> Result<u64, CommandRefused>;
 
-    /// `with_filler`'s exit.
+    /// `with_filler`'s exit; a no-op once the session closed.
     #[host(call)]
-    fn filler_stop(&self, id: u64) -> Result<(), SessionRefused>;
+    fn filler_stop(&self, id: u64);
 
     /// `AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it.
     #[host(call)]
@@ -836,3 +858,51 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     ))
 ))]
 const _: () = ();
+
+/// `RunContext`'s hold of the call's floor.
+#[crate::host(facade(
+    path = "livekit.agents.voice.events",
+    name = "RunContext",
+    extended,
+    generic = "Context_T"
+))]
+pub trait RunContextFacade {
+    /// The call's session, read at each use; refused outside a call.
+    #[host(delegate = "_call()._core")]
+    type Call: VoiceSession;
+
+    /// Wait for idle, then hold the floor while interactive work runs (a `say`), so no other
+    /// speech or deferred tool reply lands in between.
+    #[host(
+        via = Call,
+        native = wait_for_idle_and_hold,
+        exit = release_idle_hold,
+        bind(origin = "_origin"),
+        yields = "_call()",
+        annotation(ret = "..voice.agent_session.VoiceSession[Context_T]")
+    )]
+    async fn foreground(&self) -> Result<(), IdleRefused>;
+
+    /// Schedule filler speech while a long-running step blocks the tool.
+    ///
+    /// After `delay` seconds of continuous idle, `source` is spoken (a string) or asked (a
+    /// callable taking the step count, returning text, a handle it spoke itself, or `None` to
+    /// skip this fire); with `interval` set it repeats, up to `max_steps`.
+    #[host(
+        via = Call,
+        native = filler_start,
+        exit = filler_stop,
+        bind(
+            call_id = "function_call.call_id",
+            speech_id = "speech_handle.id",
+            origin = "_origin"
+        )
+    )]
+    async fn with_filler(
+        &self,
+        source: FillerSource,
+        #[host(kw, default = 0.0)] delay: f64,
+        #[host(default = None)] interval: Option<f64>,
+        #[host(default = None)] max_steps: Option<u32>,
+    ) -> Result<(), CommandRefused>;
+}

@@ -246,6 +246,41 @@ fn an_options_record_emits_its_keyword_arguments() {
     assert!(typed.err().is_some_and(|e| e.contains("kwargs follows an options struct")));
 }
 
+// Catches: a `one_or_many` list refusing one item (`content="hello"`), its kwargs annotation
+// refusing it, a field without a default optional in the kwargs, or an enum class's method hook
+// dropped.
+#[test]
+fn a_model_takes_one_item_for_its_list_and_an_enum_class_has_hook_methods() {
+    let decls = read(
+        r#"#[crate::host(record(module = "chat", pydantic, extract, kwargs))]
+        pub struct Message {
+            #[host(one_or_many)]
+            pub content: Vec<String>,
+            #[host(default = false)]
+            pub interrupted: bool,
+        }
+        #[crate::host(record(module = "chat", enum))]
+        #[python(method(name = "path", ret = "str", hook = "clip_path"))]
+        pub enum Clip { #[host(rename = "a.ogg")] A }"#,
+    )
+    .expect("resolves");
+    let models = crate::records::python(&decls).expect("models");
+    let chat = &models.iter().find(|o| o.path == "chat.py").expect("chat.py").text;
+    assert!(
+        chat.contains(
+            "content: Annotated[list[str], BeforeValidator(lambda v: v if isinstance(v, list) else [v])]\n"
+        ) && chat.contains("    content: Required[str | list[str]]\n    interrupted: bool\n")
+            && chat.contains("    def path(self) -> str:\n")
+            && chat.contains("return _bindings.clip_path(self)"),
+        "{chat}"
+    );
+    let dataclass = read(
+        r#"#[crate::host(record(module = "chat", dataclass, extract))]
+        pub struct Message { #[host(one_or_many)] pub content: Vec<String> }"#,
+    );
+    assert!(dataclass.err().is_some_and(|e| e.contains("pydantic model's list field")));
+}
+
 // Catches: a nested model (`RealtimeModelMetrics.InputTokenDetails`) emitted at module level,
 // named without its owner where it is used, read off the module rather than its owner, or nested
 // in what is no record struct.

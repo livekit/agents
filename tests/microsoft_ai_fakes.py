@@ -194,7 +194,7 @@ class ScriptedVADStream(vad.VADStream):
 
         await asyncio.wait_for(wait(), 2.0)
 
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         samples = 0
         pending = bytearray()
         prefix = bytearray()

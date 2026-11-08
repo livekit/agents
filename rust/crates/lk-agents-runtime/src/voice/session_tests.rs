@@ -97,7 +97,7 @@ use crate::voice::{Executor, remote_session};
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::voice::events::CloseReason;
-use lk_agents_abi::voice::session::VoiceSession as _;
+use lk_agents_abi::voice::session::{FillerSource, VoiceSession as _};
 use lk_agents_abi::{Maybe, OneOrStream};
 use lk_agents_voice::agent_session::HandoffRefused;
 use lk_agents_voice::agent_session::commands::{ActivityCommand, HookId, HookOutcome, TurnCommand};
@@ -306,6 +306,7 @@ impl SessionExecutor for Observing {
         resources: &'a crate::voice::resources::Resources,
         model: Arc<dyn lk_agents_abi::Realtime>,
         disabled: bool,
+        tools: Option<lk_agents_abi::HostRef>,
         cx: lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         'a,
@@ -314,7 +315,7 @@ impl SessionExecutor for Observing {
             DriverError,
         >,
     > {
-        self.0.open_realtime(resources, model, disabled, cx)
+        self.0.open_realtime(resources, model, disabled, tools, cx)
     }
 
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner> {
@@ -710,10 +711,9 @@ async fn host_arguments_are_checked_before_anything_is_sent() {
         api.filler_start(
             "call".into(),
             speech.into(),
+            FillerSource::Text("hm".into()),
             delay,
             interval,
-            None,
-            Some("hm".into()),
             None,
             None,
         )

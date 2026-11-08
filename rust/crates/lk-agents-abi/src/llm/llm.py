@@ -7,8 +7,9 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
+from dataclasses import replace
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Generic, Literal, Never, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, Never, Protocol, Self
 
 from typing_extensions import TypeVar
 
@@ -195,6 +196,13 @@ class LLM(
         return out
 
 
+class _NativeCompletion(Protocol):
+    """A native completion ``LLMStream._core_open`` opens."""
+
+    async def recv(self) -> ChatChunk | None: ...
+    async def aclose(self) -> None: ...
+
+
 class _LLMEventChannel(aio.Chan[ChatChunk]):
     def __init__(self) -> None:
         super().__init__()
@@ -222,18 +230,20 @@ class LLMStream(ABC):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        tools: list[Tool],
+        tools: list[Tool] | None,
         conn_options: APIConnectOptions,
     ) -> None:
         self._llm = llm
         self._chat_ctx = chat_ctx
-        self._tools = tools
+        self._tools = tools or []
         self._conn_options = conn_options
         self._event_ch = _LLMEventChannel()
         self._metrics = self._new_metrics()
-        self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts(
-            "llm", conn_options, self
-        )
+        # a native completion that retries on its own is attempted once
+        attempted = conn_options
+        if self._core_native_retries:
+            attempted = replace(conn_options, max_retry=0)
+        self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts("llm", attempted, self)
         self._core_attempt_task: asyncio.Task[None] | None = None
         self._core_cancelled = False
         self._task = asyncio.create_task(self._main_task(), name="LLM._main_task")
@@ -248,6 +258,21 @@ class LLMStream(ABC):
         failures) to fail the attempt. Cancellation means a deadline passed or the stream was
         closed: clean up and let it propagate.
         """
+
+    _core_native_retries: ClassVar[bool] = False
+    """The native completion ``_core_open`` opens retries on its own: no attempt is repeated."""
+
+    async def _core_open(self) -> _NativeCompletion:
+        """A native completion, which ``_core_run_native`` drains."""
+        raise NotImplementedError
+
+    async def _core_run_native(self) -> None:
+        """A ``_run`` over ``_core_open``: its chunks to ``send``."""
+        native = await self._core_open()
+        try:
+            await _bindings.drain(native, self.send)
+        finally:
+            await native.aclose()
 
     def _new_metrics(self) -> _core.LlmMetricState:
         llm = self._llm

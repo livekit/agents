@@ -418,12 +418,7 @@ pub struct FillerStart {
     pub source: FillerSource,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FillerSource {
-    Text(String),
-    /// Asked at every fire: the host's callable, handed back on its `filler_source` hook.
-    Host(Option<lk_agents_abi::HostRef>),
-}
+pub use lk_agents_abi::voice::session::FillerSource;
 
 #[derive(Debug, Clone)]
 pub enum ToolUpdate {

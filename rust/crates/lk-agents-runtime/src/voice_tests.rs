@@ -660,6 +660,7 @@ impl lk_agents_abi::Realtime for RealtimeModelProbe {
         &self,
         _: lk_agents_abi::telemetry::Cx,
         _: bool,
+        _: Option<lk_agents_abi::HostRef>,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Arc<dyn lk_agents_abi::RealtimeSession>, lk_agents_abi::errors::ProviderError>,
@@ -678,6 +679,7 @@ async fn realtime_open_is_owned_before_cores_or_runtime_exist() {
             &builder.resources,
             Arc::new(RealtimeModelProbe(probe.clone())),
             false,
+            None,
             lk_agents_abi::telemetry::Cx::NONE,
         )
         .await

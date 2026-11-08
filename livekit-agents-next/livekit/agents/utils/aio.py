@@ -13,6 +13,7 @@ from typing import Generic, Protocol, TypeVar, overload
 
 from .. import _core
 from .._bindings import APITimeoutError
+from .._generated import facades_utils_aio as _facades
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
@@ -336,7 +337,7 @@ async def cancel_and_wait(
         waiter.cancel()
 
 
-class ConnectionPool(Generic[T]):
+class ConnectionPool(_facades.ConnectionPool, Generic[T]):
     """Helper class to manage persistent connections like websockets.
 
     Handles connection pooling and reconnection after max duration.
@@ -367,19 +368,10 @@ class ConnectionPool(Generic[T]):
         self._connect_cb = connect_cb
         self._close_cb = close_cb
         self._conn_options = conn_options
-        self._state = _core.ConnectionPoolState(max_session_duration, mark_refreshed_on_get)
+        self._native = _core.ConnectionPoolState(max_session_duration, mark_refreshed_on_get)
         self._conns: dict[int, T] = {}  # every connection the state knows, by id()
         self._connect_lock = asyncio.Lock()
         self._prewarm_task: weakref.ref[asyncio.Task[None]] | None = None
-
-    @property
-    def last_acquire_time(self) -> float:
-        """Seconds the last ``get()`` spent connecting; 0 when it reused a connection."""
-        return self._state.last_acquire_time
-
-    @property
-    def last_connection_reused(self) -> bool:
-        return self._state.last_connection_reused
 
     async def _connect(
         self, conn_options: APIConnectOptions, *, started_at: float | None = None
@@ -387,25 +379,25 @@ class ConnectionPool(Generic[T]):
         if self._connect_cb is None:
             raise NotImplementedError("Must provide connect_cb or implement connect()")
         while True:
-            generation = self._state.generation
+            generation = self._native.generation
             conn = await self._connect_cb(conn_options)
             self._conns[id(conn)] = conn
             elapsed = None if started_at is None else time.perf_counter() - started_at
-            if self._state.connected(id(conn), time.time(), generation, elapsed):
+            if self._native.connected(id(conn), time.time(), generation, elapsed):
                 return conn
             # options changed during the handshake: the state queued this socket for closing
             await self._drain_to_close()
 
     async def _drain_to_close(self) -> None:
         """Close the connections queued for closing."""
-        while (cid := self._state.next_closing()) is not None:
+        while (cid := self._native.next_closing()) is not None:
             conn = self._conns[cid]
             try:
                 if self._close_cb is not None:
                     await self._close_cb(conn)
             except Exception as e:
                 logger.warning("error closing connection %s: %s", conn, e)
-            self._state.closed(cid)
+            self._native.closed(cid)
             del self._conns[cid]
 
     @asynccontextmanager
@@ -442,7 +434,7 @@ class ConnectionPool(Generic[T]):
             ) from exc
         try:
             await self._drain_to_close()
-            if (cid := self._state.get(time.time())) is not None:
+            if (cid := self._native.get(time.time())) is not None:
                 return self._conns[cid]
             try:
                 return await self._connect(conn_options, started_at=time.perf_counter())
@@ -464,7 +456,7 @@ class ConnectionPool(Generic[T]):
         Args:
             conn: The connection to make available
         """
-        self._state.put(id(conn))
+        self._native.put(id(conn))
 
     def remove(self, conn: T) -> None:
         """Remove a specific connection from the pool.
@@ -474,7 +466,7 @@ class ConnectionPool(Generic[T]):
         Args:
             conn: The connection to reset
         """
-        self._state.remove(id(conn))
+        self._native.remove(id(conn))
 
     def invalidate(self) -> None:
         """Stop reusing every existing connection.
@@ -488,7 +480,7 @@ class ConnectionPool(Generic[T]):
         and retried, since the socket it produced carries the old settings and no
         caller has been handed it yet.
         """
-        self._state.invalidate()
+        self._native.invalidate()
 
     def prewarm(self) -> None:
         """Initiate prewarming of the connection pool without blocking.
@@ -497,13 +489,13 @@ class ConnectionPool(Generic[T]):
         The task automatically cleans itself up when the connection pool is closed.
         """
         task = self._prewarm_task() if self._prewarm_task is not None else None
-        if (task is not None and not task.done()) or not self._state.empty():
+        if (task is not None and not task.done()) or not self._native.empty():
             return
 
         async def _prewarm_impl() -> None:
             try:
                 async with self._connect_lock:
-                    if self._state.empty():
+                    if self._native.empty():
                         self.put(await self._connect(self._conn_options))
             except Exception as e:
                 # exception details can contain request headers or URL credentials.
@@ -519,7 +511,7 @@ class ConnectionPool(Generic[T]):
         if self._prewarm_task is not None and (task := self._prewarm_task()) is not None:
             await cancel_and_wait(task)
         # the retired connections too, rather than waiting for holders that may never return them
-        self._state.close_all()
+        self._native.close_all()
         await self._drain_to_close()
 
 

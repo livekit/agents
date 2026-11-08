@@ -23,7 +23,7 @@ class StalledVAD(VAD):
 
 
 class StalledStream(VADStream):
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         assert isinstance(self._vad, StalledVAD)
         await self._vad.reading.wait()
         async for item in self.input:
@@ -137,7 +137,7 @@ class EchoVAD(VAD):
 class EchoStream(VADStream):
     """One event per frame, several frames' worth from one large frame."""
 
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         async for item in self.input:
             if isinstance(item, rtc.AudioFrame):
                 for _ in range(item.samples_per_channel // 160):

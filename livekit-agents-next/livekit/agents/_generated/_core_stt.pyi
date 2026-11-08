@@ -5,15 +5,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, Self
 
 from livekit.agents import VAD
 from livekit.agents._bindings import FallbackListener
 from livekit.agents.stt import STT
+from livekit.local_inference import VAD as HostVAD
 
 from .connect import APIConnectOptions
-from .inference_stt import FallbackModel
+from .inference_stt import FallbackModels
 from .rtc_frames import AudioFrame
 from .stt import SpeechEvent, STTCapabilities
 
@@ -70,26 +71,35 @@ class InferenceStt:
     """
     def __new__(
         cls,
+        vad_models: Callable[[], HostVAD],
+        model: str | None = None,
         *,
-        model: str | None,
-        language: str | None,
-        encoding: str,
-        sample_rate: int,
-        base_url: str,
-        api_key: str,
-        api_secret: str,
-        extra_kwargs: dict[str, object],
-        fallback: list[FallbackModel] | None = None,
-        conn_options: APIConnectOptions,
+        language: str | None = None,
+        base_url: str | None = None,
+        encoding: str | None = None,
+        sample_rate: int | None = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
+        extra_kwargs: dict[str, object] | None = None,
+        fallback: FallbackModels | None = None,
+        conn_options: APIConnectOptions | None = None,
         vad: VAD[Any] | None = None,
     ) -> Self:
-        """A client of `model` on the gateway at `base_url`. Starts nothing. `vad`'s end of speech
-        finalizes the transcript (Speechmatics only). `inference.STT` builds it in its constructor.
+        """A client of `model` (``"provider/model[:language]"``) on the gateway. Starts nothing. The
+        gateway's URL and key pair resolve from the given values, the environment and the
+        server's settings. `vad`'s end of speech finalizes the transcript of a model that
+        endpoints client-side (Speechmatics, OpenAI), which gets a default one from
+        `vad_models` when none is given; a model that endpoints server-side ignores it.
         """
-    def set_vad(self, vad: VAD[Any] | None = None) -> None:
-        """The model's VAD as the host resolved it on `update_options(model=)`; `None` drops it.
-        Later streams use it.
-        """
+    @property
+    def model(self) -> str:
+        """`"unknown"` without a model."""
+    @property
+    def capabilities(self) -> STTCapabilities:
+        """Recomputed from the model, its fallbacks and the extra kwargs."""
+    @property
+    def conn_options(self) -> APIConnectOptions:
+        """The policy this client was given, which a session or run that supplies none keeps."""
     def identified(
         self,
         headers: list[tuple[str, str]],
@@ -106,7 +116,9 @@ class InferenceStt:
         language: str | None = None,
         extra: dict[str, object] | None = None,
     ) -> None:
-        """Read by later streams, and sent to the open ones as a mid-stream `session.update`."""
+        """Read by later streams, and sent to the open ones as a mid-stream `session.update`. A new
+        model resolves its VAD again.
+        """
     def update_keyterms(self, keyterms: Sequence[str]) -> None:
         """The session's keyterms: a warning once for a model without keyterm prompting, else every
         open stream applies them (now if the user is silent, at end of speech if not).
@@ -130,14 +142,6 @@ class InferenceSttStream:
     def push(self, item: AudioFrame) -> None: ...
     def flush(self) -> None: ...
     def end_input(self) -> None: ...
-    def update_options(
-        self,
-        *,
-        model: str | None = None,
-        language: str | None = None,
-        extra: dict[str, object] | None = None,
-    ) -> None:
-        """A mid-stream `session.update`, for the providers that take one (AssemblyAI, Deepgram Flux)."""
     async def recv(self) -> SpeechEvent | None: ...
     async def aclose(self) -> None: ...
 

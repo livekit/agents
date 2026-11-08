@@ -25,6 +25,7 @@ from pydantic import JsonValue as JsonValue
 from .. import _core, llm
 from .._generated import (
     agent_run as records,
+    facades_voice_run_result as _facades,
     public_voice_run_result as _public,
     text_session as session_records,
 )
@@ -36,7 +37,6 @@ from .._generated.agent_run import (
     EventType,
 )
 from .._generated.public_voice_run_result import *  # noqa: F403
-from .._generated.usage import Usage
 
 if TYPE_CHECKING:
     from . import Agent
@@ -371,31 +371,26 @@ ItemT = TypeVar("ItemT")
 StreamEvent = TextDeltaEvent | TextEndEvent | ToolCallEvent | ToolResultEvent | ProgressEvent
 
 
-class RunStream(Generic[ResultT]):
+class RunStream(_facades.RunStream, Generic[ResultT]):
     """The handle ``async with agent.run_stream(...)`` returns; applications do not build it."""
 
     def __init__(
         self, start: Callable[[_core._core_RunStream], Awaitable[_Started[ResultT]]]
     ) -> None:
-        self._core = _core._core_RunStream()
+        super().__init__()
         self._start: Callable[[_core._core_RunStream], Awaitable[_Started[ResultT]]] | None = start
         self._started: _Started[ResultT] | None = None
         self._settled: ResultT | None = None
         self._error: BaseException | None = None
 
-    @property
-    def usage(self) -> Usage:
-        """Latest immutable usage; reading it never advances the run."""
-        return self._core.usage
-
     async def __aenter__(self) -> RunStream[ResultT]:
-        self._core.enter()
+        self._native.enter()
         start, self._start = self._start, None
         assert start is not None
         try:
-            self._started = await start(self._core)
+            self._started = await start(self._native)
         except BaseException:
-            await self._core.rollback()
+            await self._native.rollback()
             raise
         return self
 
@@ -406,9 +401,9 @@ class RunStream(Generic[ResultT]):
         tb: TracebackType | None,
     ) -> None:
         try:
-            if not self._core.done:
-                await self._core.aclose()
-            if self._core.cancelled:
+            if not self._native.done:
+                await self._native.aclose()
+            if self._native.cancelled:
                 self._error = self._error or asyncio.CancelledError()
                 self._started = None
         except BaseException as error:
@@ -418,11 +413,11 @@ class RunStream(Generic[ResultT]):
 
     def stream_text(self, *, delta: bool = False) -> AsyncIterator[str]:
         """User-visible assistant text, as fragments or snapshots of the current message."""
-        return _Iterator(self, self._core.text(delta))
+        return _Iterator(self, self._native.text(delta))
 
     def stream_events(self) -> AsyncIterator[StreamEvent]:
         """Typed semantic events from this run's single presentation view."""
-        return _Iterator(self, self._core.events())
+        return _Iterator(self, self._native.events())
 
     async def result(self) -> ResultT:
         """Finish unconsumed work and hydrate the settled result once."""
@@ -430,13 +425,13 @@ class RunStream(Generic[ResultT]):
             raise self._error
         if self._settled is not None:
             return self._settled
-        consumer = self._core.begin_result()
+        consumer = self._native.begin_result()
         try:
             if self._error is not None:
                 raise self._error
             if self._settled is None:
                 try:
-                    outcome = await self._core.result(consumer)
+                    outcome = await self._native.result(consumer)
                     assert self._started is not None
                     if isinstance(
                         outcome,
@@ -462,16 +457,12 @@ class RunStream(Generic[ResultT]):
             assert self._settled is not None
             return self._settled
         finally:
-            self._core.end_result(consumer, self._settled is not None or self._error is not None)
-
-    def cancel(self) -> None:
-        """Request cancellation; the native owner retains cleanup through settlement."""
-        self._core.cancel()
+            self._native.end_result(consumer, self._settled is not None or self._error is not None)
 
     def _capture(self, error: BaseException) -> None:
         # A cancelled Python waiter is distinct from cancellation of native execution.
-        if self._core.done and (
-            not isinstance(error, asyncio.CancelledError) or self._core.cancelled
+        if self._native.done and (
+            not isinstance(error, asyncio.CancelledError) or self._native.cancelled
         ):
             self._error = error
             self._started = None
@@ -502,7 +493,7 @@ class _Iterator(Generic[ItemT]):
             raise
         self._cursor.end_read(item is not None)
         if item is None:
-            if self._owner._core.done:
+            if self._owner._native.done:
                 await self._owner.result()
             raise StopAsyncIteration
         return cast(ItemT, item)

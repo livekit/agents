@@ -124,6 +124,12 @@ impl lk_agents_abi::telemetry::host::HostSpan for HostSpan {
         }
     }
 
+    fn set_attributes(&self, attributes: BTreeMap<String, Value>) {
+        for (key, value) in attributes {
+            self.set_attribute(key, value);
+        }
+    }
+
     fn add_event(
         &self,
         name: String,

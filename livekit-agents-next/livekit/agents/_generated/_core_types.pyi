@@ -28,6 +28,9 @@ def api_retry_interval(retry_interval: float, num_retries: int) -> float:
     affects the answer.
     """
 
+def shortuuid(prefix: str = "") -> str:
+    """A new id: `prefix` then twelve random characters."""
+
 class ProviderAttempts:
     """The attempts of one host provider request (`livekit.agents.ProviderAttempts`).
 

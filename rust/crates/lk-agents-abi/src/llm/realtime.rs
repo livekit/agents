@@ -465,11 +465,14 @@ pub trait Realtime: Send + Sync + 'static {
     fn capabilities(&self) -> RealtimeCapabilities;
 
     /// `session(turn_detection_disabled=..)`: the session's choice, not the model's. The session
-    /// works under `cx` for its life: its host calls, and the input audio it drops.
+    /// works under `cx` for its life: its host calls, and the input audio it drops. `tools` is the
+    /// voice session's host callable answering its current tools, which a host provider's session
+    /// offers by name; a native model ignores it.
     fn session(
         &self,
         cx: crate::telemetry::Cx,
         turn_detection_disabled: bool,
+        tools: Option<crate::HostRef>,
     ) -> crate::BoxFuture<
         '_,
         Result<std::sync::Arc<dyn RealtimeSession>, crate::errors::ProviderError>,
@@ -670,13 +673,15 @@ pub trait HostRealtime: Send + Sync {
     /// Args:
     /// - turn_detection_disabled: Hand turn-taking to the framework; honored only by plugins
     ///   reporting `can_disable_turn_detection`.
-    // Open the plugin session with the driver's `turn_detection_disabled`. The session's events and
-    // commands cross through `HostRealtimeSession`, which the session class answers.
+    // Open the plugin session with the driver's `turn_detection_disabled`, offering the tools the
+    // voice session's `tools` callable answers. The session's events and commands cross through
+    // `HostRealtimeSession`, which the session class answers.
     #[host(await, name = "_core_session")]
     fn session(
         &self,
         cx: &crate::telemetry::Cx,
         turn_detection_disabled: bool,
+        tools: Option<crate::HostRef>,
     ) -> crate::BoxFuture<
         '_,
         Result<std::sync::Arc<dyn HostRealtimeSession>, crate::errors::ProviderError>,

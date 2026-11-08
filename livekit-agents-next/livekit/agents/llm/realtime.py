@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 from livekit import rtc
 
@@ -59,10 +59,13 @@ class RealtimeModelFallbackAdapter(
         RealtimeModel.__init__(self, capabilities=_merge_capabilities(models))
         rtc.EventEmitter.__init__(self)
         self._models = models
-        self._cooldown = cooldown
-        self._regenerate_on_swap = regenerate_on_swap
-        self._attempt_timeout = attempt_timeout
-        self._native: _core.RealtimeFallbackModel | None = None
+        self._native = _core.RealtimeFallbackModel(
+            [m._core_leg() for m in models],
+            cooldown=cooldown,
+            attempt_timeout=attempt_timeout,
+            regenerate_on_swap=regenerate_on_swap,
+            on_availability=self,
+        )
 
     @property
     def model(self) -> str:
@@ -75,23 +78,17 @@ class RealtimeModelFallbackAdapter(
     @property
     def metrics_metadata(self) -> MetricsMetadata:
         """Metadata of the model currently serving sessions (the primary until a swap)."""
-        index = self._native.active_index if self._native is not None else 0
-        return self._models[index].metrics_metadata
+        return self._models[self._native.active_index].metrics_metadata
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         raise NotImplementedError(
             "RealtimeModelFallbackAdapter sessions run inside a VoiceSession (the core swaps them)"
         )
 
-    def _core_native(self, children: list[Any]) -> _core.RealtimeFallbackModel:
-        """The core's engine over ``children`` (each model as the core takes it)."""
-        self._native = _core.RealtimeFallbackModel(
-            children,
-            cooldown=self._cooldown,
-            attempt_timeout=self._attempt_timeout,
-            regenerate_on_swap=self._regenerate_on_swap,
-            on_availability=self,
-        )
+    def _core_leg(self) -> _core.RealtimeFallbackModel:
+        # each member's leg is taken again: an inference member identifies itself as the job's
+        for model in self._models:
+            model._core_leg()
         return self._native
 
     def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
@@ -112,8 +109,7 @@ class RealtimeModelFallbackAdapter(
             switch_model: Bring the new session up on the next available model instead of the
                 current one.
         """
-        if self._native is not None:
-            await self._native.restart(switch_model=switch_model)
+        await self._native.restart(switch_model=switch_model)
 
     async def aclose(self) -> None:
         for model in self._models:

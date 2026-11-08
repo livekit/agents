@@ -17,6 +17,7 @@ from .a2a_client import (
 )
 from .a2a_errors import AuthError as AuthError, Forbidden as Forbidden, Unauthorized as Unauthorized
 from .a2a_metadata import AGENT_CARD_PATH as AGENT_CARD_PATH, EXTENSION_URI as EXTENSION_URI
+from .facades_a2a import Credentials as Credentials
 
 __all__: list[str] = [
     "AgentThreadGrant",
@@ -34,6 +35,7 @@ __all__: list[str] = [
     "Forbidden",
     "EXTENSION_URI",
     "AGENT_CARD_PATH",
+    "Credentials",
     "Reply",
     "AgentClient",
 ]

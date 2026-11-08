@@ -39,7 +39,7 @@ class FakeVADStream(VADStream):
     def __init__(self, vad: FakeVAD) -> None:
         super().__init__(vad)
 
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         assert isinstance(self._vad, FakeVAD)
 
         if not self._vad._fake_user_speeches:

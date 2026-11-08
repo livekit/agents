@@ -5,12 +5,16 @@
 //! - [`vocabulary`]: the attribute vocabulary, the one reader of `#[host(..)]`.
 //! - [`resolve`]: declarations into the IR below; a type means what its declaration says, never
 //!   what its last path segment spells. An unsupported or ambiguous declaration is an error naming it.
+//! - [`facade`]: the facade classes' part of the IR.
 //!
 //! The IR holds no `syn` types and no maps: generated output must be byte-stable.
 
+mod facade;
 pub mod resolve;
 pub mod tree;
 pub mod vocabulary;
+
+pub use facade::*;
 
 #[cfg(test)]
 #[path = "../decl_tests.rs"]
@@ -72,17 +76,6 @@ pub struct Member {
     /// `cached`: a property computed once per instance (`functools.cached_property`), for a view
     /// that keeps state across reads (a cursor); its record is an unslotted dataclass.
     pub cached: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct Wrapper {
-    pub name: String,
-    pub module: String,
-    pub path: Option<String>,
-    pub source: String,
-    pub doc: Vec<String>,
-    pub base: String,
-    pub core: String,
 }
 
 #[derive(Debug, Clone)]
@@ -423,6 +416,8 @@ pub struct Field {
     pub annotation: Option<String>,
     /// `rename = "type"`: the Python attribute, when the Rust name cannot be it.
     pub rename: Option<String>,
+    /// `one_or_many` on a pydantic model's list: the model also takes one item, as a list of it.
+    pub one_or_many: bool,
     pub doc: Vec<String>,
 }
 
@@ -658,13 +653,9 @@ pub struct Refusal {
 /// `#[host(class(..))] trait X`: a host class implemented natively; or `#[host(functions)] trait
 /// X`: module functions. The runtime or a core
 /// implements the trait; the generated adapter calls it through the selected implementation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Class {
     pub form: Form,
-    /// A Python authoring class whose constructor retains this native implementation.
-    pub wrapper: Option<Wrapper>,
-    /// Functions re-exported by generated authoring modules.
-    pub forwards: Vec<(String, String, String)>,
     /// Whether this class or function group checks for fork inheritance by default.
     pub pid: bool,
     /// Python identity and subclass support declared by the class contract.
@@ -709,9 +700,10 @@ pub struct Sink {
     pub methods: Vec<Method>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Form {
     /// Shared by the host: `&self` methods only, any of them awaitable.
+    #[default]
     Class,
     /// Owned by one host object: some method takes `&mut self` (pyo3's borrow flag guards it).
     MutableClass,
@@ -751,118 +743,6 @@ pub struct Method {
     /// A host-owned future returned as HostRef, with its declared completion type.
     pub future: Option<Ty>,
     pub doc: Vec<String>,
-}
-
-/// `#[host(facade(..))] trait X`: the public Python class over a native class, one method per
-/// Python method, in order (docs/internals/rust-core.md "Facades").
-#[derive(Debug, Clone)]
-pub struct FacadeClass {
-    /// The Python class name: the trait's, or `name = ".."`.
-    pub name: String,
-    /// `path = "livekit.agents.x"`: the public module re-exporting it.
-    pub path: String,
-    /// `extended`: the base of the handwritten subclass of its name in `path`, which is the
-    /// public class; it is not re-exported.
-    pub extended: bool,
-    /// The generated module under `_generated/` (`facades_<x>` for `livekit.agents.x`).
-    pub module: String,
-    /// `base = "module.Name"`, relative to `livekit.agents`.
-    pub base: Option<String>,
-    /// The native class's host name (`_core.<native>`).
-    pub native: String,
-    /// The provider methods whose override keeps the host object as the leg.
-    pub legs: Vec<String>,
-    /// The host method whose value is the leg, in place of `_native`.
-    pub leg: Option<String>,
-    pub availability: Option<Availability>,
-    /// `base_args(a, ..)`: the base constructor's arguments, read from the native getters of the
-    /// same name once the native object is built.
-    pub base_args: Vec<String>,
-    /// `keep(a, ..)`: constructor parameters also kept as `self._<a>` for the extending class.
-    pub keep: Vec<String>,
-    pub stream: Option<StreamForm>,
-    pub delegates: Vec<Delegate>,
-    pub source: String,
-    pub doc: Vec<String>,
-    pub methods: Vec<FacadeMethod>,
-}
-
-/// `#[host(delegate)] type X: Trait`: an object the class holds as `self._x` and forwards to.
-#[derive(Debug, Clone)]
-pub struct Delegate {
-    pub assoc: String,
-    pub attribute: String,
-    pub ty: Ty,
-}
-
-/// `stream(op = m, owner = "_tts", native_retries, resolve(..))`: a provider stream whose `_run`
-/// opens the owner's native `op`, its arguments the stream's `self._<param>` attributes (passed
-/// through a `resolve` function when named), and the base pumps it.
-#[derive(Debug, Clone)]
-pub struct StreamForm {
-    pub op: String,
-    pub owner: String,
-    /// The native operation retries on its own: the base's attempts do not.
-    pub native_retries: bool,
-    pub resolve: Vec<(String, String)>,
-    /// The owner's provider method taking the per-call parameters (all but `state`, read from
-    /// the base stream); the stream passes `base_args` to its base and keeps the rest.
-    pub method: Option<String>,
-    pub base_args: Vec<String>,
-    pub state: Vec<String>,
-    /// A per-call parameter's host default (`module.NAME`) and annotation in the method.
-    pub defaults: Vec<(String, String)>,
-    pub annotations: Vec<(String, String)>,
-    /// An `Option` parameter defaulting to `None` is `NotGivenOr[T] = NOT_GIVEN` in the method.
-    pub not_given: bool,
-}
-
-/// One method of a facade trait.
-#[derive(Debug, Clone)]
-pub struct FacadeMethod {
-    /// The Python signature, resolved like a class method's.
-    pub method: Method,
-    /// The native method it calls: the same name unless `native = m`.
-    pub native: String,
-    /// `via = Assoc`: the delegate it forwards to, not the native object.
-    pub via: Option<Delegate>,
-    /// `(parameter, attribute)`: the parameters declared as a delegate (`Self::X`).
-    pub delegated: Vec<(String, String)>,
-    /// A native `None` raises `StopAsyncIteration`.
-    pub none_ends_iteration: bool,
-    /// `wrap = Record::field`: the native value becomes that record's field, `(module, name,
-    /// field)`.
-    pub wrap: Option<(String, String, String)>,
-    /// `exit = m`: an `async with` whose entry is the native method and whose exit is `m`, passed
-    /// the entry's value when it takes one.
-    pub exit: Option<String>,
-    pub adapt: Adapt,
-}
-
-/// The per-method adaptations of a facade forward.
-#[derive(Debug, Clone, Default)]
-pub struct Adapt {
-    pub future: bool,
-    pub discard: bool,
-    pub not_given: bool,
-    pub origin: Option<String>,
-    pub returns: Option<String>,
-    pub annotations: Vec<(String, String)>,
-    pub resolve: Vec<(String, String)>,
-}
-
-/// `availability(observer = "p", members = "m", kind = "..", event = "..", record = "module.Name")`
-/// of a facade: the host object is the chain observer its native constructor takes as `p`, keeps
-/// its constructor's `m` as `_members` and emits `event` as `record(entry of _members,
-/// available)`; the serving entry names its `model`, `provider` and `metrics_metadata`, and every
-/// entry unavailable is logged as `all <kind>s are unavailable`.
-#[derive(Debug, Clone)]
-pub struct Availability {
-    pub observer: String,
-    pub members: String,
-    pub kind: String,
-    pub event: String,
-    pub record: String,
 }
 
 /// How the host calls a method: declared, then checked against the signature.

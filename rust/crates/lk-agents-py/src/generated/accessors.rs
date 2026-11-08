@@ -548,6 +548,17 @@ impl LlmUtilsModule {
     }
 }
 
+/// Python interface: `livekit.agents._bindings`.
+pub use crate::py_values::interfaces::BindingsModule;
+impl BindingsModule {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyModule>> {
+        py.import("livekit.agents._bindings")
+    }
+    pub fn tool_specs<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("tool_specs")
+    }
+}
+
 /// Python interface: `numpy`.
 pub use crate::py_values::interfaces::NumpyModule;
 impl NumpyModule {
@@ -562,6 +573,22 @@ impl NumpyModule {
     }
     pub fn float32<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
         obj.as_any().getattr("float32")
+    }
+}
+
+/// Python interface: `livekit.agents.voice.background_audio.BuiltinAudioClip`.
+pub use crate::py_values::interfaces::BuiltinAudioClip;
+impl BuiltinAudioClip {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
+            pyo3::sync::PyOnceLock::new();
+        Ok(CLASS
+            .import(py, "livekit.agents.voice.background_audio", "BuiltinAudioClip")?
+            .as_any()
+            .clone())
+    }
+    pub fn path<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("path")
     }
 }
 

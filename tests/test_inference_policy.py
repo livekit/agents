@@ -249,7 +249,7 @@ async def test_vad_adapter_preserves_the_utterances_recognition_retry_budget() -
             return Utterance(self)
 
     class Utterance(VADStream):
-        async def _main_task(self):
+        async def _run(self):
             from livekit import rtc
 
             frames = [item async for item in self.input if isinstance(item, rtc.AudioFrame)]

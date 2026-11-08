@@ -15,7 +15,7 @@ from typing_extensions import TypeVar
 from livekit import rtc
 
 from .. import _bindings, _core, inference, llm, stt, tts
-from .._bindings import realtime_model, tool_specs
+from .._bindings import tool_specs
 from .._generated.connect import SessionConnectOptions as SessionConnectOptions
 from .._generated.keyterms import STTContextOptions
 from .._generated.remote_session import (
@@ -409,13 +409,8 @@ class SessionHost:
         hooks = _AgentHooks(session)
         frame = session._frame(agent)
         model = frame.llm if is_given(frame.llm) else session._llm
-        # an OpenAI-protocol model or a fallback chain runs in the core; any other one is a host
-        # realtime model
-        realtime = (
-            realtime_model(model, lambda: session._adapter._pool(session.current_agent))
-            if isinstance(model, llm.RealtimeModel)
-            else None
-        )
+        # the core's own model (OpenAI-protocol, fallback, duplex) or a host realtime provider
+        realtime = model._core_leg() if isinstance(model, llm.RealtimeModel) else None
         keyterm_llm = _detection_llm(session._stt_context)
         session._room = room
         args = VoiceSessionArgs(
@@ -429,6 +424,7 @@ class SessionHost:
             vad=_bindings.core_leg(session.vad),
             llm=None if isinstance(model, llm.RealtimeModel) else model,
             realtime=realtime,
+            realtime_tools=lambda: session._adapter._pool(session.current_agent),
             tts=frame.tts if is_given(frame.tts) else None,
             host_audio_input=session._input.audio,
             host_video_input=session._input.video,

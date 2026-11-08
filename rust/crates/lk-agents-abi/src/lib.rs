@@ -66,8 +66,7 @@ pub use llm::realtime::{
 pub use llm::realtime::{Realtime, RealtimeCommand, RealtimeCommandKind, RealtimeSession};
 pub use llm::types::{ChatRequest, Llm, LlmStream, ToolChoice, ToolFlags, ToolSpec};
 pub use tts::stream_adapter::{
-    SentenceSplitter, SentenceTextProcessor, SplitterFactory, StreamAdapterFunctions,
-    TextProcessorFactory,
+    SentenceSplitter, SentenceTextProcessor, SplitterFactory, TextProcessorFactory,
 };
 pub use turn::detector::{EotDetector, LegEvent, ReqId};
 pub use types::headers::Headers;

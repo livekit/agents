@@ -146,10 +146,6 @@ type InferenceModelsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::InferenceModels;
 type InferenceModelsInferenceQuotaUsageOutput =
     ::std::vec::Vec<(::std::string::String, ::std::string::String)>;
-type InferenceModelsTtsParseModelStringOutput =
-    (::std::string::String, ::std::option::Option<::std::string::String>);
-type InferenceModelsSttParseModelStringOutput =
-    (::std::string::String, ::std::option::Option<::std::string::String>);
 type InferenceModelsMinReasoningEffortOutput = ::std::option::Option<::std::string::String>;
 type InferenceModelsLlmUnsupportedParamsOutput = ::std::vec::Vec<::std::string::String>;
 
@@ -212,37 +208,6 @@ pub fn local_models_init(py: Python<'_>, vad: bool, eot: bool) -> PyResult<bool>
     ::pyo3::PyResult::Ok(out)
 }
 
-/// `"provider/model:voice"` split into the model and its voice.
-#[pyfunction]
-#[pyo3(signature = (model))]
-pub fn tts_parse_model_string(
-    py: Python<'_>,
-    model: ::std::string::String,
-) -> PyResult<InferenceModelsTtsParseModelStringOutput> {
-    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::tts_parse_model_string(model));
-    ::pyo3::PyResult::Ok(out)
-}
-
-/// Whether the model streams word timings for its audio under these options.
-#[pyfunction]
-#[pyo3(signature = (model, extra_kwargs))]
-pub fn tts_has_aligned_transcript(
-    py: Python<'_>,
-    model: ::std::string::String,
-    extra_kwargs: Bound<'_, PyAny>,
-) -> PyResult<bool> {
-    let extra_kwargs = match crate::py_values::value_from_py(extra_kwargs.as_any(), "extra_kwargs")?
-    {
-        ::serde_json::Value::Object(map) => Ok(map),
-        _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!(
-            "extra_kwargs",
-            ": expected a dict"
-        ))),
-    }?;
-    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::tts_has_aligned_transcript(model, extra_kwargs));
-    ::pyo3::PyResult::Ok(out)
-}
-
 /// The speech-markup dialect the model's provider reads.
 #[pyfunction]
 #[pyo3(signature = (model))]
@@ -251,17 +216,6 @@ pub fn tts_markup_provider_key(
     model: ::std::string::String,
 ) -> PyResult<::std::string::String> {
     let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::tts_markup_provider_key(model));
-    ::pyo3::PyResult::Ok(out)
-}
-
-/// `"provider/model:language"` split into the model and its language.
-#[pyfunction]
-#[pyo3(signature = (model))]
-pub fn stt_parse_model_string(
-    py: Python<'_>,
-    model: ::std::string::String,
-) -> PyResult<InferenceModelsSttParseModelStringOutput> {
-    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_parse_model_string(model));
     ::pyo3::PyResult::Ok(out)
 }
 
@@ -350,70 +304,6 @@ pub fn eot_select<'py>(
             <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
         })?;
     crate::generated::records::inference_models::eot_selection_to_py(py, out)
-}
-
-/// `_resolve_vad_for_model`: what the host does with the caller's VAD for this model.
-#[pyfunction]
-#[pyo3(signature = (model = None, *, has_vad = false))]
-pub fn stt_resolve_vad_for_model<'py>(
-    py: Python<'py>,
-    model: ::std::option::Option<::std::string::String>,
-    has_vad: bool,
-) -> PyResult<Bound<'py, PyAny>> {
-    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_resolve_vad_for_model(model, has_vad));
-    ::pyo3::PyResult::Ok(crate::py_values::str_to_py(py, &out))
-}
-
-/// `_normalize_fallback`'s string arm for an STT chain.
-#[pyfunction]
-#[pyo3(signature = (model))]
-pub fn stt_normalize_fallback_str<'py>(
-    py: Python<'py>,
-    model: ::std::string::String,
-) -> PyResult<Bound<'py, PyAny>> {
-    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_normalize_fallback_str(model));
-    crate::generated::records::inference_stt::fallback_model_to_py(py, out)
-}
-
-/// `_normalize_fallback`'s string arm for a TTS chain.
-#[pyfunction]
-#[pyo3(signature = (model))]
-pub fn tts_normalize_fallback_str<'py>(
-    py: Python<'py>,
-    model: ::std::string::String,
-) -> PyResult<Bound<'py, PyAny>> {
-    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::tts_normalize_fallback_str(model));
-    crate::generated::records::inference_tts::fallback_model_to_py(py, out)
-}
-
-/// `inference.STT`'s capabilities. Word alignment holds only when the model and every
-/// `fallback` model align: any turn may be served by a fallback, and a false claim disables
-/// the fast VAD interruption path.
-#[pyfunction]
-#[pyo3(signature = (model = None, *, fallback = None, extra_kwargs = None))]
-pub fn stt_capabilities<'py>(
-    py: Python<'py>,
-    model: ::std::option::Option<::std::string::String>,
-    fallback: ::std::option::Option<::std::vec::Vec<::std::string::String>>,
-    extra_kwargs: Option<Bound<'_, PyAny>>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let extra_kwargs = extra_kwargs
-        .map(|v| match crate::py_values::value_from_py(v.as_any(), "extra_kwargs")? {
-            ::serde_json::Value::Object(map) => Ok(map),
-            _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "extra_kwargs",
-                ": expected a dict"
-            ))),
-        })
-        .transpose()?;
-    let out = py.detach(|| {
-        <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_capabilities(
-            model,
-            fallback,
-            extra_kwargs,
-        )
-    });
-    crate::generated::records::stt::stt_capabilities_to_py(py, out)
 }
 
 /// `stt.FallbackAdapter`'s capabilities, merged from its members' before any chain is built.
@@ -663,9 +553,13 @@ type InferenceTtsImpl =
 fn _extract_inference_tts_new_sample_rate(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<InferenceTtsNewSampleRateInput> {
-    crate::py_values::number_from_py::<u32>(obj.as_any(), "sample_rate")
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<u32>(obj.as_any(), "sample_rate")).map(Some)
+    }
 }
-type InferenceTtsNewSampleRateInput = u32;
+type InferenceTtsNewSampleRateInput = ::std::option::Option<u32>;
 
 /// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::GatewayTts`.
 #[pyclass(frozen, name = "InferenceTts", module = "livekit.agents._core")]
@@ -673,28 +567,28 @@ pub struct InferenceTts(pub(crate) ::std::sync::Arc<InferenceTtsImpl>);
 
 #[pymethods]
 impl InferenceTts {
-    /// `inference.TTS` builds it in its constructor.
+    /// A client of `model` (``"provider/model[:voice]"``) on the gateway. Starts nothing. The
+    /// gateway's URL and key pair resolve from the given values, the environment and the server's
+    /// settings.
     #[new]
-    #[pyo3(signature = (model, *, base_url, api_key, api_secret, conn_options, voice = None, language = None, encoding = "pcm_s16le".to_owned(), sample_rate = 24000, extra_kwargs = None, fallback = None))]
+    #[pyo3(signature = (model, *, voice = None, language = None, encoding = None, sample_rate = None, base_url = None, api_key = None, api_secret = None, extra_kwargs = None, fallback = None, conn_options = None))]
     fn new(
         py: Python<'_>,
         model: ::std::string::String,
-        base_url: ::std::string::String,
-        api_key: ::std::string::String,
-        api_secret: ::std::string::String,
-        conn_options: Bound<'_, PyAny>,
         voice: ::std::option::Option<::std::string::String>,
         language: ::std::option::Option<::std::string::String>,
-        encoding: ::std::string::String,
+        encoding: ::std::option::Option<::std::string::String>,
         #[pyo3(from_py_with = _extract_inference_tts_new_sample_rate)]
         sample_rate: InferenceTtsNewSampleRateInput,
+        base_url: ::std::option::Option<::std::string::String>,
+        api_key: ::std::option::Option<::std::string::String>,
+        api_secret: ::std::option::Option<::std::string::String>,
         extra_kwargs: Option<Bound<'_, PyAny>>,
         fallback: Option<Bound<'_, PyAny>>,
+        conn_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<InferenceTts> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let conn_options =
-            crate::generated::records::connect::api_connect_options_from_py(conn_options.as_any())?;
         let extra_kwargs = extra_kwargs
             .map(|v| match crate::py_values::value_from_py(v.as_any(), "extra_kwargs")? {
                 ::serde_json::Value::Object(map) => Ok(map),
@@ -704,45 +598,66 @@ impl InferenceTts {
             })
             .transpose()?;
         let fallback = fallback
-            .map(|v| {
-                v.cast::<::pyo3::types::PyList>().map_err(::pyo3::PyErr::from).and_then(|items| {
-                    items
-                        .iter()
-                        .map(|item| {
-                            if !item.is_instance_of::<::pyo3::types::PyDict>() {
-                                return Err(::pyo3::exceptions::PyValueError::new_err(
-                                    "each fallback entry must be a dict",
-                                ));
-                            }
-                            crate::generated::records::inference_tts::fallback_model_from_py(
-                                item.as_any(),
-                            )
-                        })
-                        .collect::<PyResult<Vec<_>>>()
-                })
-            })
+            .map(|v| crate::generated::records::inference_tts::fallback_models_from_py(v.as_any()))
+            .transpose()?;
+        let conn_options = conn_options
+            .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
             .transpose()?;
         let out = py
             .detach(|| {
                 <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::new(
                     &env,
                     model,
-                    base_url,
-                    api_key,
-                    api_secret,
-                    conn_options,
                     voice,
                     language,
                     encoding,
                     sample_rate,
+                    base_url,
+                    api_key,
+                    api_secret,
                     extra_kwargs,
                     fallback,
+                    conn_options,
                 )
             })
             .map_err(|e: ::lk_agents_abi::errors::Invalid| {
                 <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
             })?;
         ::pyo3::PyResult::Ok(InferenceTts(::std::sync::Arc::new(out)))
+    }
+
+    #[getter]
+    fn model(&self, py: Python<'_>) -> PyResult<::std::string::String> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::model(
+                &self.0,
+            )
+        });
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// Streaming, its alignment read from the live model and extra kwargs.
+    #[getter]
+    fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::capabilities(&self.0));
+        crate::generated::records::tts::tts_capabilities_to_py(py, out)
+    }
+
+    #[getter]
+    fn num_channels(&self, py: Python<'_>) -> PyResult<u16> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::num_channels(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// The policy this client was given, which a session or run that supplies none keeps.
+    #[getter]
+    fn conn_options<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::conn_options(&self.0));
+        crate::generated::records::connect::api_connect_options_to_py(py, out)
     }
 
     #[getter]
@@ -753,13 +668,6 @@ impl InferenceTts {
                 &self.0,
             )
         });
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[getter]
-    fn aligned_transcript(&self, py: Python<'_>) -> PyResult<bool> {
-        crate::py_calls::check_pid()?;
-        let out = py.detach(|| <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::aligned_transcript(&self.0));
         ::pyo3::PyResult::Ok(out)
     }
 
@@ -859,79 +767,44 @@ impl InferenceTts {
         ::pyo3::PyResult::Ok(InferenceTts(::std::sync::Arc::new(out)))
     }
 
-    #[pyo3(signature = (*, model = None, voice = None, language = None, extra = None))]
+    /// Read by the next synthesis; ``extra_kwargs`` merges into the persistent kwargs.
+    #[pyo3(signature = (*, voice = None, model = None, language = None, extra_kwargs = None))]
     fn update_options(
         &self,
         py: Python<'_>,
-        model: ::std::option::Option<::std::string::String>,
         voice: ::std::option::Option<::std::string::String>,
+        model: ::std::option::Option<::std::string::String>,
         language: ::std::option::Option<::std::string::String>,
-        extra: Option<Bound<'_, PyAny>>,
+        extra_kwargs: Option<Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        let extra = extra
-            .map(|v| match crate::py_values::value_from_py(v.as_any(), "extra")? {
+        let extra_kwargs = extra_kwargs
+            .map(|v| match crate::py_values::value_from_py(v.as_any(), "extra_kwargs")? {
                 ::serde_json::Value::Object(map) => Ok(map),
                 value => Err(::pyo3::exceptions::PyValueError::new_err(format!(
                     "expected a dict of extra kwargs, got {value}"
                 ))),
             })
             .transpose()?;
-        py.detach(|| <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::update_options(&self.0, model, voice, language, extra));
+        py.detach(|| <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::update_options(&self.0, voice, model, language, extra_kwargs));
         Ok(())
     }
 
-    #[pyo3(signature = (*, headers = None, conn_options = None, expressive = false))]
+    /// A synthesis of the text pushed; its connection carries this view's job.
+    #[pyo3(signature = (*, conn_options = None, expressive = false))]
     fn stream<'py>(
         &self,
         py: Python<'py>,
-        headers: Option<Bound<'_, PyAny>>,
         conn_options: Option<Bound<'_, PyAny>>,
         expressive: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let headers = headers
-            .map(|v| {
-                crate::generated::records::from_representation::<
-                    ::lk_agents_abi::Headers,
-                    ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
-                >(if v.as_any().is_instance_of::<::pyo3::types::PyList>()
-                    || v.as_any().is_instance_of::<::pyo3::types::PyTuple>()
-                {
-                    v.as_any()
-                        .try_iter()?
-                        .map(|item| {
-                            let item = &item?;
-                            (|| -> ::pyo3::PyResult<_> {
-                                let tuple = item.cast::<::pyo3::types::PyTuple>()?;
-                                if tuple.len() != 2 {
-                                    return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "{}: expected a tuple of 2 items",
-                                        "headers"
-                                    )));
-                                }
-                                let item_0 = tuple.get_item(0)?;
-                                let item_1 = tuple.get_item(1)?;
-                                Ok((
-                                    (item_0.extract::<::std::string::String>())?,
-                                    (item_1.extract::<::std::string::String>())?,
-                                ))
-                            })()
-                        })
-                        .collect::<PyResult<Vec<_>>>()
-                } else {
-                    Err(::pyo3::exceptions::PyTypeError::new_err(
-                        "headers: expected a list or tuple",
-                    ))
-                }?)
-            })
-            .transpose()?;
         let conn_options = conn_options
             .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::stream(&this, headers, conn_options, expressive)
+            let out = <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::stream(&this, conn_options, expressive)
                 .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(

@@ -61,9 +61,9 @@ fn caller(headers: &Headers, serving: &TextServing) -> Result<AuthPrincipal, Aut
         return Ok(lk_agents_core::a2a::auth::unauthenticated());
     }
     match &serving.credentials {
-        Some((key, secret)) => Credentials::new(key.clone(), secret.clone()).principal(
-            header(headers, "authorization"),
-            header(headers, GRANT_HEADER),
+        Some((key, secret)) => Credentials::new(key.clone(), secret.clone()).authenticate(
+            header(headers, "authorization").as_deref(),
+            header(headers, GRANT_HEADER).as_deref(),
             request.authorized,
             serving.agent_name.clone(),
             serving.deployment.clone(),

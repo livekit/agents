@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use crate::errors::{HostError, ProviderError};
+use crate::media::emitter::EmitterError;
 
 /// A host `tokenize.SentenceStream`: text in, sentences out. The native pacer and sentence
 /// adapter read it; its calls run on the host loop, in order.
@@ -25,11 +26,21 @@ pub trait HostSentenceStream: Send + Sync {
     fn aclose(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
 }
 
-/// How much audio a synthesis has pushed so far: a `tts.AudioEmitter`.
+/// A `tts.AudioEmitter` as native code pushes a synthesis into it and reads how much it pushed.
 #[crate::host(native(refused = "expected a tts.AudioEmitter"))]
 pub trait PushedAudio: Send + Sync {
     /// Seconds of audio pushed, every segment included.
     fn pushed_duration(&self) -> f64;
+    fn start_segment(&self, segment_id: String) -> Result<(), EmitterError>;
+    fn push_frame(&self, frame: crate::AudioFrame) -> Result<(), EmitterError>;
+    /// The words the next frames cover; none is a no-op.
+    fn push_timed_transcript(&self, words: Vec<crate::TranscriptChunk>)
+    -> Result<(), EmitterError>;
+    fn report_usage(
+        &self,
+        usage: Option<crate::usage::TokenUsage>,
+        characters_count: Option<u64>,
+    ) -> Result<(), EmitterError>;
 }
 
 /// `tts.SentenceStreamPacer`: the first sentence goes at once; the next batch once the audio
@@ -45,6 +56,13 @@ pub trait PushedAudio: Send + Sync {
 pub struct SentenceStreamPacer {
     pub min_remaining_audio: f64,
     pub max_text_length: usize,
+}
+
+/// `SentenceStreamPacer()`'s defaults, the pacer `text_pacing=True` asks for.
+impl Default for SentenceStreamPacer {
+    fn default() -> Self {
+        SentenceStreamPacer { min_remaining_audio: 5.0, max_text_length: 300 }
+    }
 }
 
 /// `SentenceStreamPacer.wrap()`: a host sentence stream's sentences, paced by the audio its

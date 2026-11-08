@@ -76,10 +76,10 @@ fn split_header(text: &str) -> (&str, &str) {
 pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
     // Flattening describes the actual host dictionary, not a nested native implementation field.
     let mut host = decls.clone();
+    // A variant's host class that is a declared record is that record's generated class.
     let markers: Vec<_> = decls
         .records
         .iter()
-        .filter(|record| record.marker)
         .map(|record| (record.path.clone(), record.name.clone(), record.module.clone()))
         .collect();
     for record in &mut host.records {
@@ -276,8 +276,8 @@ fn public_paths(records: &[&RecordDecl], runtime: &mut Imports) -> String {
     }
 }
 
-/// `<Name>Kwargs`: an options record's fields as optional keyword arguments, each annotated
-/// with the value it takes when given.
+/// `<Name>Kwargs`: a record's fields as keyword arguments, each annotated with the value it takes
+/// when given; a field with no default is `Required`, a `one_or_many` list also takes one item.
 fn kwargs(
     r: &RecordDecl,
     module: &str,
@@ -294,7 +294,21 @@ fn kwargs(
         let ann = match (&f.annotation, &f.ty) {
             (Some(text), _) => typing.annotation(text, &r.rust),
             (None, Ty::Maybe(inner)) => annotation(inner, module, own, false, typing),
+            (None, Ty::List(item)) if f.one_or_many => {
+                let item = annotation(item, module, own, false, typing);
+                format!("{item} | list[{item}]")
+            }
             (None, ty) => annotation(ty, module, own, false, typing),
+        };
+        let required = f.default.is_none()
+            && f.factory.is_none()
+            && f.omitted.is_none()
+            && !matches!(f.ty, Ty::Maybe(_));
+        let ann = if required {
+            runtime.add("typing_extensions", "Required");
+            format!("Required[{ann}]")
+        } else {
+            ann
         };
         s.push_str(&format!("    {}: {ann}\n", f.host_name()));
         s.push_str(&docstring(&f.doc, "    "));
@@ -648,6 +662,15 @@ fn model(
                 }
                 None => annotation(&f.ty, module, own, json_value, imports),
             };
+            let ann = if f.one_or_many {
+                imports.add("typing", "Annotated");
+                imports.add("pydantic", "BeforeValidator");
+                format!(
+                    "Annotated[{ann}, BeforeValidator(lambda v: v if isinstance(v, list) else [v])]"
+                )
+            } else {
+                ann
+            };
             s.push_str(&format!("    {}: {ann}{default}\n", f.host_name()));
             s.push_str(&docstring(&f.doc, "    "));
             if after == Some(&*f.host_name()) {
@@ -845,15 +868,17 @@ fn model(
             let members: Vec<String> = variants
                 .iter()
                 .filter_map(|v| match &v.shape {
+                    // An annotation names the member more precisely than the class it is
+                    // told apart by (`Callable[[int], str]`, not `Callable`).
+                    VariantShape::Tuple(Some(f)) if let Some(text) = &f.annotation => {
+                        Some(runtime.annotation(text, &r.rust))
+                    }
                     VariantShape::Tuple(_) if v.host_type.is_some() => {
                         let (host_module, name) = v.host_type.as_ref().expect("declared class");
-                        if host_module != "builtins" {
+                        if host_module != "builtins" && host_module != &format!(".{module}") {
                             runtime.add(host_module, name);
                         }
                         Some(name.clone())
-                    }
-                    VariantShape::Tuple(Some(f)) if let Some(text) = &f.annotation => {
-                        Some(runtime.annotation(text, &r.rust))
                     }
                     VariantShape::Tuple(Some(f)) => {
                         Some(annotation(&f.ty, module, own, false, runtime))
@@ -936,6 +961,7 @@ fn model(
                 ));
                 s.push_str(&docstring(doc, "    "));
             }
+            s.push_str(&properties(r, runtime, typing));
             s
         }
         RecordBody::Literals(values) => {
@@ -1003,7 +1029,7 @@ fn properties(r: &RecordDecl, runtime: &mut Imports, typing: &mut Imports) -> St
                 runtime.add("..", "_bindings");
                 s.push_str(&format!("        return _bindings.{}(self{arguments})\n", member.hook));
             }
-            (_, Some(_), _) => s.push_str(&format!("        from .. import _bindings\n\n        return _bindings.{}(self{arguments})\n", member.hook)),
+            _ if r.dataclass.is_some() || r.enumeration => s.push_str(&format!("        from .. import _bindings\n\n        return _bindings.{}(self{arguments})\n", member.hook)),
             _ => s.push_str(&format!(
                 "        from .. import _core\n\n        return _core.{}(self)\n",
                 member.hook

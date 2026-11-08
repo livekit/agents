@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-from .tokenizer import TokenData as TokenData
+from .tokenizer import TokenData as TokenData, TokenSpan as TokenSpan
 
 __all__: list[str] = [
     "TokenData",
+    "TokenSpan",
 ]

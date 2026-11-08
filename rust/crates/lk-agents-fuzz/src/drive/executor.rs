@@ -53,6 +53,7 @@ impl SessionExecutor for Handover {
         resources: &'a lk_agents_runtime::voice::resources::Resources,
         model: Arc<dyn lk_agents_abi::Realtime>,
         disabled: bool,
+        tools: Option<lk_agents_abi::HostRef>,
         cx: lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         'a,
@@ -61,7 +62,7 @@ impl SessionExecutor for Handover {
             DriverError,
         >,
     > {
-        self.factory.open_realtime(resources, model, disabled, cx)
+        self.factory.open_realtime(resources, model, disabled, tools, cx)
     }
 
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner> {

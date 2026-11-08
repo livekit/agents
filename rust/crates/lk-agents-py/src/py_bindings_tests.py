@@ -690,37 +690,6 @@ async def test_refused_amd_handle_cannot_replace_or_close_the_attached_detector(
             await second.aclose()
 
 
-def test_realtime_bridge_wraps_the_declared_host_contract_without_member_probes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from livekit.agents import _bindings as _core_view
-    from livekit.agents.llm._realtime import RealtimeModel as NativeRealtimeModel
-
-    def tools():
-        return []
-
-    host, native = object(), object()
-    wrapped = []
-
-    def wrap(value):
-        wrapped.append(value)
-        return native
-
-    class Plugin(RealtimeModel):
-        def session(self, **kwargs):
-            raise AssertionError("resolving a model must not open its session")
-
-    monkeypatch.setattr(_core, "HostRealtimeModel", wrap)
-    monkeypatch.setattr(RealtimeModel, "_core_with_tools", lambda self, supplied: host)
-    plugin = object.__new__(Plugin)
-    assert _core_view.realtime_model(plugin, tools) is native
-    assert wrapped == [host]
-
-    monkeypatch.setattr(NativeRealtimeModel, "_core_native", lambda self: native)
-    assert _core_view.realtime_model(object.__new__(NativeRealtimeModel), tools) is native
-    assert wrapped == [host]
-
-
 def test_generated_grant_preserves_sequence_authoring_and_frozen_public_identity() -> None:
     from dataclasses import FrozenInstanceError
 

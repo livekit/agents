@@ -929,7 +929,7 @@ async def test_handler_transactions_join_the_turn_or_commit_on_exit(
         async with ctx.store.independent_transaction() as tx:
             assert await tx.fetch_one("SELECT body FROM notes WHERE body = 'none'") is None
             rows = await tx.fetch("SELECT body FROM notes")
-            staged_unseen = rows.count(("with the turn",)) == rows.count(("prepared",)) - 1
+            staged_unseen = rows.count(["with the turn"]) == rows.count(["prepared"]) - 1
             assert staged_unseen, "the turn's own write is staged until it commits"
         if ctx.message.text_content == "fail":
             raise RuntimeError("the turn failed")

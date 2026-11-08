@@ -147,7 +147,7 @@ class LLM(inference.LLM):
         super().__init__(
             model,
             extra_kwargs=options,
-            _endpoint=ProviderEndpoint(
+            endpoint=ProviderEndpoint(
                 base_url=self._base_url,
                 api_key=key,
                 strict_tool_schema=_strict_tool_schema,

@@ -9,9 +9,6 @@
 
 from __future__ import annotations
 
-from livekit.rtc import RpcCallInfo as _HostRpcCallInfo, RpcInvocationData as _HostRpcInvocationData
+from livekit.rtc import RpcCallInfo as _HostRpcCallInfo
 
 RpcCallInfo = _HostRpcCallInfo
-
-
-RpcInvocationData = _HostRpcInvocationData

@@ -62,18 +62,20 @@ impl CoreCredentials {
         crate::generated::records::a2a_auth::principal_to_py(py, out)
     }
 
-    #[pyo3(signature = (authorization, thread_grant, node_authorized, agent_name, deployment))]
+    /// The caller of a request with these headers: its `Authorization` bearer token, else its
+    /// thread grant header (names compared case-insensitively); with neither, the project when
+    /// the LiveKit node authorized the call.
+    #[pyo3(signature = (headers, *, agent_name, deployment = "".to_owned(), node_authorized = false))]
     fn principal<'py>(
         &self,
         py: Python<'py>,
-        authorization: ::std::option::Option<::std::string::String>,
-        thread_grant: ::std::option::Option<::std::string::String>,
-        node_authorized: bool,
+        headers: ::std::collections::BTreeMap<::std::string::String, ::std::string::String>,
         agent_name: ::std::string::String,
         deployment: ::std::string::String,
+        node_authorized: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| <CoreCredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::principal(&self.0, authorization, thread_grant, node_authorized, agent_name, deployment)).map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| <::lk_agents_abi::a2a::auth::AuthError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreCredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::principal(&self.0, headers, agent_name, deployment, node_authorized)).map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| <::lk_agents_abi::a2a::auth::AuthError as crate::py_errors::HostException>::to_py_err(&e))?;
         crate::generated::records::a2a_auth::principal_to_py(py, out)
     }
 

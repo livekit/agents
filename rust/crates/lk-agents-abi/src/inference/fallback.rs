@@ -46,3 +46,71 @@ pub struct TtsFallbackModel {
     #[host(default = None)]
     pub extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
 }
+
+/// One server-side fallback of `inference.STT`: a `FallbackModel` or a model name.
+#[crate::host(record(
+    module = "inference_stt",
+    path = "livekit.agents.inference.stt",
+    name = "FallbackModelType",
+    extract,
+    transparent
+))]
+#[derive(Debug, Clone)]
+pub enum SttFallbackEntry {
+    Model(SttFallbackModel),
+    Name(String),
+}
+
+/// `inference.STT(fallback=)`: one entry or a list of them.
+#[crate::host(record(module = "inference_stt", name = "FallbackModels", extract, transparent))]
+#[derive(Debug, Clone)]
+pub enum SttFallbacks {
+    Many(Vec<SttFallbackEntry>),
+    Model(SttFallbackModel),
+    Name(String),
+}
+
+impl SttFallbacks {
+    /// The entries, in order.
+    pub fn entries(self) -> Vec<SttFallbackEntry> {
+        match self {
+            SttFallbacks::Many(entries) => entries,
+            SttFallbacks::Model(model) => vec![SttFallbackEntry::Model(model)],
+            SttFallbacks::Name(name) => vec![SttFallbackEntry::Name(name)],
+        }
+    }
+}
+
+/// One server-side fallback of `inference.TTS`: a `FallbackModel` or a model name.
+#[crate::host(record(
+    module = "inference_tts",
+    path = "livekit.agents.inference.tts",
+    name = "FallbackModelType",
+    extract,
+    transparent
+))]
+#[derive(Debug, Clone)]
+pub enum TtsFallbackEntry {
+    Model(TtsFallbackModel),
+    Name(String),
+}
+
+/// `inference.TTS(fallback=)`: one entry or a list of them.
+#[crate::host(record(module = "inference_tts", name = "FallbackModels", extract, transparent))]
+#[derive(Debug, Clone)]
+pub enum TtsFallbacks {
+    Many(Vec<TtsFallbackEntry>),
+    Model(TtsFallbackModel),
+    Name(String),
+}
+
+impl TtsFallbacks {
+    /// The entries, in order.
+    pub fn entries(self) -> Vec<TtsFallbackEntry> {
+        match self {
+            TtsFallbacks::Many(entries) => entries,
+            TtsFallbacks::Model(model) => vec![TtsFallbackEntry::Model(model)],
+            TtsFallbacks::Name(name) => vec![TtsFallbackEntry::Name(name)],
+        }
+    }
+}

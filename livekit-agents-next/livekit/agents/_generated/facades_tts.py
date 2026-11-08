@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .. import _bindings, _core
-from .._bindings import core_legs
+from .._bindings import core_leg, core_legs
 from ..log import logger
 from ..tokenize import SentenceStream
+from ..types import DEFAULT_API_CONNECT_OPTIONS
 from . import tts_availability
 from .tokenizer import TokenData
 from .tts import TTS, ChunkedStream, SynthesizeStream
@@ -16,12 +17,14 @@ from .tts import TTS, ChunkedStream, SynthesizeStream
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from livekit.agents.tokenize import SentenceTokenizer
     from livekit.agents.tts import AudioEmitter
 
     from .. import tts
     from .chat_items import MetricsMetadata
+    from .connect import APIConnectOptions
     from .llm_fallback import AvailabilityChanged
-    from .stream_pacer import SentenceStreamPacer
+    from .stream_pacer import SentenceStreamPacer, TextPacing
 
 
 class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
@@ -96,6 +99,28 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
         await super().aclose()
         await self._native.aclose()
 
+    def synthesize(
+        self,
+        text: str,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> FallbackChunkedStream:
+        return FallbackChunkedStream(
+            tts=cast("tts.FallbackAdapter", self),
+            input_text=text,
+            conn_options=conn_options,
+        )
+
+    def stream(
+        self,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> FallbackSynthesizeStream:
+        return FallbackSynthesizeStream(
+            tts=cast("tts.FallbackAdapter", self),
+            conn_options=conn_options,
+        )
+
 
 class FallbackChunkedStream(ChunkedStream):
     """`tts.FallbackAdapter.synthesize()`: the chain's synthesis, which retries and falls back."""
@@ -103,8 +128,17 @@ class FallbackChunkedStream(ChunkedStream):
     _core_native_retries = True
     _tts: tts.FallbackAdapter
 
+    def __init__(
+        self,
+        *,
+        tts: tts.FallbackAdapter,
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
+
     async def _core_open(self) -> _core.TtsStream:
-        return await self._tts._native.synthesize(self._input_text, self._conn_options)
+        return await self._tts._native.synthesize(self._input_text, conn_options=self._conn_options)
 
     _run = ChunkedStream._core_run_native
 
@@ -115,8 +149,79 @@ class FallbackSynthesizeStream(SynthesizeStream):
     _core_native_retries = True
     _tts: tts.FallbackAdapter
 
+    def __init__(self, *, tts: tts.FallbackAdapter, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+
     async def _core_open(self) -> _core.TtsStream:
-        return await self._tts._native.stream(self._conn_options, self._expressive)
+        return await self._tts._native.stream(
+            conn_options=self._conn_options,
+            expressive=self._expressive,
+        )
+
+    _run = SynthesizeStream._core_run_native
+
+
+class StreamAdapter(TTS):
+    """`tts.StreamAdapter`: a non-streaming TTS as a streaming one."""
+
+    def __init__(
+        self,
+        *,
+        tts: TTS[Any],
+        sentence_tokenizer: SentenceTokenizer | None = None,
+        text_pacing: TextPacing | None = None,
+    ) -> None:
+        """A non-streaming TTS as a streaming one: the text is split into sentences, each
+        synthesized on its own.
+
+        Args:
+            tts: The non-streaming TTS.
+            sentence_tokenizer: What splits the text; blingfire's sentences by default.
+            text_pacing: Batches sentences as the audio plays out; ``True`` for the default
+                ``SentenceStreamPacer``.
+        """
+        self._native = _core.TtsStreamAdapter(
+            tts=core_leg(tts),
+            sentence_tokenizer=sentence_tokenizer,
+            text_pacing=text_pacing,
+        )
+        self._tts = tts
+        super().__init__(
+            capabilities=self._native.capabilities,
+            sample_rate=self._native.sample_rate,
+            num_channels=self._native.num_channels,
+        )
+
+    def _core_leg(self) -> Any:
+        """This engine, unless a subclass replaces what it would bypass."""
+        replaced = _bindings.overrides(self, StreamAdapter, "stream")
+        return self if replaced else self._native
+
+    def stream(
+        self,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> StreamAdapterWrapper:
+        return StreamAdapterWrapper(tts=cast("tts.StreamAdapter", self), conn_options=conn_options)
+
+
+class StreamAdapterWrapper(SynthesizeStream):
+    """`tts.StreamAdapter.stream()`: the text split into sentences, paced when ``text_pacing`` is
+    on, each sentence synthesized by the wrapped TTS and retried on its own within
+    ``conn_options``. Its time to first audio is measured from the first text pushed.
+    """
+
+    _core_native_retries = True
+    _tts: tts.StreamAdapter
+
+    def __init__(self, *, tts: tts.StreamAdapter, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+
+    async def _core_open(self) -> _core.TtsStream:
+        return await self._tts._native.stream(
+            conn_options=self._conn_options,
+            expressive=self._expressive,
+        )
 
     _run = SynthesizeStream._core_run_native
 
@@ -155,4 +260,5 @@ class StreamPacerWrapper(SentenceStream):
 
 FallbackChunkedStream.__module__ = "livekit.agents.tts"
 FallbackSynthesizeStream.__module__ = "livekit.agents.tts"
+StreamAdapterWrapper.__module__ = "livekit.agents.tts"
 StreamPacerWrapper.__module__ = "livekit.agents.tts"

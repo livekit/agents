@@ -200,8 +200,8 @@ assert os.waitstatus_to_exitcode(status) == 0
     [
         ("new", {"extra_kwargs": []}, ValueError, "expected a dict of extra kwargs, got []"),
         ("new", {"extra_kwargs": 7}, ValueError, "expected a dict of extra kwargs, got 7"),
-        ("update", {"extra": []}, ValueError, "expected a dict of extra kwargs, got []"),
-        ("new", {"fallback": [7]}, ValueError, "each fallback entry must be a dict"),
+        ("update", {"extra_kwargs": []}, ValueError, "expected a dict of extra kwargs, got []"),
+        ("new", {"fallback": [7]}, TypeError, None),
         ("new", {"fallback": [{"model": 7, "voice": ""}]}, TypeError, None),
         ("new", {"fallback": 7}, TypeError, None),
     ],

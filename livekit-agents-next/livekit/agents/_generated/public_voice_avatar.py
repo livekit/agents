@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+from .._core import DataStreamAudioOutput as DataStreamAudioOutput
 from .avatar import AudioSegmentEnd as AudioSegmentEnd
 from .avatar_options import AvatarOptions as AvatarOptions
 
 __all__: list[str] = [
     "AudioSegmentEnd",
     "AvatarOptions",
+    "DataStreamAudioOutput",
 ]

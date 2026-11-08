@@ -30,8 +30,17 @@ pub mod interfaces {
     #[lk_agents_abi::host(interface(module = "livekit.agents.llm.utils", attrs(_value_text)))]
     pub struct LlmUtilsModule;
 
+    #[lk_agents_abi::host(interface(module = "livekit.agents._bindings", attrs(tool_specs)))]
+    pub struct BindingsModule;
+
     #[lk_agents_abi::host(interface(module = "numpy", attrs(asarray, int16, float32)))]
     pub struct NumpyModule;
+
+    #[lk_agents_abi::host(interface(
+        host = "livekit.agents.voice.background_audio.BuiltinAudioClip",
+        attrs(path)
+    ))]
+    pub struct BuiltinAudioClip;
 
     #[lk_agents_abi::host(interface(
         host = "livekit.protocol.agent.Job",
@@ -544,6 +553,17 @@ pub fn exception_message(value: &Bound<'_, PyAny>, _path: &str) -> PyResult<Stri
     Ok(value.to_string())
 }
 
+/// A host tool list's specs, as the host's `_bindings.tool_specs` projects them.
+pub fn tool_specs(tools: &Bound<'_, PyAny>, _path: &str) -> PyResult<Vec<lk_agents_abi::ToolSpec>> {
+    let module = access::BindingsModule::import(tools.py())?;
+    let specs =
+        crate::py_calls::call(&access::BindingsModule::tool_specs(&module)?, (tools,), None)?;
+    specs
+        .try_iter()?
+        .map(|spec| crate::generated::records::tool_options::tool_spec_from_py(&spec?))
+        .collect()
+}
+
 /// The host object itself, retained (a record read from the object it refers to).
 pub fn host_ref(value: &Bound<'_, PyAny>, _path: &str) -> PyResult<lk_agents_abi::HostRef> {
     crate::py_objects::object_ref_from_py(value)
@@ -746,6 +766,13 @@ pub fn pcm_snapshot(obj: &Bound<'_, PyAny>, path: &str) -> PyResult<bytes::Bytes
 
 pub fn video_bytes(obj: &Bound<'_, PyAny>, path: &str) -> PyResult<bytes::Bytes> {
     retained_bytes(obj, path, None)
+}
+
+/// A `BuiltinAudioClip` as the path of the packaged file it names.
+pub fn builtin_clip_path(obj: &Bound<'_, PyAny>, path: &str) -> PyResult<String> {
+    crate::py_calls::call(&access::BuiltinAudioClip::path(obj)?, (), None)?
+        .extract()
+        .map_err(|_| pyo3::exceptions::PyTypeError::new_err(format!("{path}: expected a str path")))
 }
 
 /// NumPy layout is a host representation primitive; callers supply the value, never a field key.

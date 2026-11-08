@@ -47,6 +47,8 @@ class TelemetrySpan:
         """Whether the span has not ended."""
     def set_attribute(self, key: str, value: AttributeValue) -> None:
         """`None` removes nothing and is ignored."""
+    def set_attributes(self, attributes: Mapping[str, AttributeValue]) -> None:
+        """Each attribute, as `set_attribute` sets it."""
     def add_event(
         self,
         name: str,

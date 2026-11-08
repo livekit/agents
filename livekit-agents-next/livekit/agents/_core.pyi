@@ -72,16 +72,9 @@ from ._generated._core_inference import (
     local_models_init as local_models_init,
     merge_realtime_capabilities as merge_realtime_capabilities,
     min_reasoning_effort as min_reasoning_effort,
-    stt_capabilities as stt_capabilities,
     stt_fallback_capabilities as stt_fallback_capabilities,
-    stt_normalize_fallback_str as stt_normalize_fallback_str,
-    stt_parse_model_string as stt_parse_model_string,
-    stt_resolve_vad_for_model as stt_resolve_vad_for_model,
     tts_fallback_capabilities as tts_fallback_capabilities,
-    tts_has_aligned_transcript as tts_has_aligned_transcript,
     tts_markup_provider_key as tts_markup_provider_key,
-    tts_normalize_fallback_str as tts_normalize_fallback_str,
-    tts_parse_model_string as tts_parse_model_string,
 )
 from ._generated._core_invoke import (
     flush_logs as flush_logs,
@@ -220,6 +213,7 @@ from ._generated._core_tts import (
     Markup as Markup,
     TranscriptMarkupStripper as TranscriptMarkupStripper,
     TtsStream as TtsStream,
+    TtsStreamAdapter as TtsStreamAdapter,
     _core_PacedSentences as _core_PacedSentences,
     chat_message_text_content as chat_message_text_content,
     split_all_markup as split_all_markup,
@@ -228,7 +222,6 @@ from ._generated._core_tts import (
     strip_expr_markup as strip_expr_markup,
     supported_nonverbals as supported_nonverbals,
     to_xml as to_xml,
-    tts_adapter_stream as tts_adapter_stream,
     validate_synthesis as validate_synthesis,
 )
 from ._generated._core_turn import (
@@ -241,6 +234,7 @@ from ._generated._core_types import (
     ProviderAttempts as ProviderAttempts,
     api_connect_options_check as api_connect_options_check,
     api_retry_interval as api_retry_interval,
+    shortuuid as shortuuid,
 )
 from ._generated._core_utils import (
     AudioByteStream as AudioByteStream,

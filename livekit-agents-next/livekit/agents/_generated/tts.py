@@ -394,9 +394,7 @@ class ChunkedStream(ABC):
         _initialize(output_emitter, self._tts, stream=False)
         native = await self._core_open()
         try:
-            out = _into(output_emitter, stream=False)
-            while (audio := await native.recv()) is not None:
-                out(audio)
+            await native.drain_into(output_emitter, stream=False)
         finally:
             await native.aclose()
 
@@ -543,7 +541,9 @@ class SynthesizeStream(ABC):
                 self.mark_started()
                 native.push_text(text)
 
-        await _bindings.pump(native, self.input, feed, _into(output_emitter, stream=True))
+        await _bindings.pump(
+            native, self.input, feed, native.drain_into(output_emitter, stream=True)
+        )
 
     async def _main_task(self) -> None:
         # run() starts from the task, after the framework set ``core``
@@ -709,24 +709,6 @@ def _initialize(output_emitter: _core.AudioEmitter, tts: TTS[Any], *, stream: bo
         mime_type="audio/pcm",
         stream=stream,
     )
-
-
-def _into(output_emitter: _core.AudioEmitter, *, stream: bool) -> Any:
-    """What forwards a native synthesis's audio into ``output_emitter``, one segment if streamed."""
-    started = not stream
-
-    def out(audio: SynthesizedAudio) -> None:
-        nonlocal started
-        if not started:
-            started = True
-            output_emitter.start_segment(segment_id=audio.segment_id or shortuuid())
-        if words := audio.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
-            output_emitter.push_timed_transcript(words)
-        output_emitter.push_frame(audio.frame)
-        if audio.usage is not None or audio.characters_count is not None:
-            output_emitter.report_usage(audio.usage, characters_count=audio.characters_count)
-
-    return out
 
 
 

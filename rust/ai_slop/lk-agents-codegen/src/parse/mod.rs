@@ -1,5 +1,5 @@
 //! Presentation metadata uses the same attribute reader and resolved module tree as contracts.
-use crate::decl::{ConstValue, Constant, Member, StrClass, Wrapper};
+use crate::decl::{ConstValue, Constant, Member, StrClass};
 use crate::decl::{
     tree::{Crate, Module},
     vocabulary::{self as voc, Entry},
@@ -20,39 +20,6 @@ fn named(attrs: &[syn::Attribute], outer: &str) -> Result<Vec<Entry>, String> {
 
 fn required(at: &str, entries: &[Entry], key: &str) -> Result<String, String> {
     voc::text(at, entries, key)?.ok_or_else(|| format!("{at}: missing {key}"))
-}
-
-pub fn wrapper(
-    label: &str,
-    attrs: &[syn::Attribute],
-    core: &str,
-) -> Result<Option<Wrapper>, String> {
-    let entries = named(attrs, "python")?;
-    let Some(wrapper) = voc::find(&entries, "wrapper") else {
-        return Ok(None);
-    };
-    voc::only(label, &entries, &["wrapper"])?;
-    let keys = &wrapper.nested;
-    voc::only(label, keys, &["module", "path", "name", "base"])?;
-    Ok(Some(Wrapper {
-        name: required(label, keys, "name")?,
-        module: required(label, keys, "module")?,
-        path: voc::text(label, keys, "path")?,
-        source: label.into(),
-        doc: lk_agents_bindgen::doc(attrs),
-        base: required(label, keys, "base")?,
-        core: core.into(),
-    }))
-}
-
-pub fn forward_module(label: &str, attrs: &[syn::Attribute]) -> Result<Option<String>, String> {
-    let entries = named(attrs, "python")?;
-    let Some(forward) = voc::find(&entries, "forward") else {
-        return Ok(None);
-    };
-    voc::only(label, &entries, &["forward"])?;
-    voc::only(label, &forward.nested, &["module"])?;
-    Ok(Some(required(label, &forward.nested, "module")?))
 }
 
 pub fn members(attrs: &[syn::Attribute], outer: &str, owner: &str) -> Result<Vec<Member>, String> {

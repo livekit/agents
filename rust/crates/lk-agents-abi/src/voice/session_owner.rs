@@ -200,16 +200,18 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
         &self,
         legs: super::session_options::SessionLegs,
     ) -> super::session_options::ResolvedSessionOptions;
+    /// Close the session for `reason`, the user's when `None`; `drain` lets queued speech finish.
     #[host(await)]
     fn aclose(
         &self,
-        reason: String,
+        #[host(default = None)] reason: Option<crate::voice::events::CloseReason>,
         #[host(default = false)] drain: bool,
     ) -> Result<BoxFuture<'static, ()>, super::session::UnknownCloseReason>;
+    /// `aclose` without waiting for it.
     #[host(call)]
     fn shutdown(
         &self,
-        reason: String,
+        #[host(default = None)] reason: Option<crate::voice::events::CloseReason>,
         #[host(default = false)] drain: bool,
     ) -> Result<(), super::session::UnknownCloseReason>;
     /// The recording's final result remains available to the job reporter.
@@ -277,12 +279,27 @@ pub trait VoiceSessionFacade {
     #[host(delegate)]
     type Running: super::session::VoiceSession;
 
+    /// Close the session and wait for it.
+    async fn aclose(&self) -> Result<(), super::session::UnknownCloseReason>;
+    /// `aclose()` without waiting for it; `drain` lets queued speech finish first.
+    fn shutdown(
+        &self,
+        #[host(kw, default = true)] drain: bool,
+    ) -> Result<(), super::session::UnknownCloseReason>;
+    /// A programmatic user turn: the user state is pinned to `speaking` and `wait_for_idle`
+    /// held while inside.
+    #[host(via = Running, native = claim_user_turn, exit = release_user_turn)]
+    async fn _claim_user_turn(&self) -> Result<(), super::session::SessionRefused>;
+
     /// Empty before startup; the final snapshot remains readable after close.
     #[host(getter)]
     fn usage(&self) -> crate::usage::Usage;
     /// No keyterms are applied before a voice driver exists.
     #[host(getter)]
     fn keyterms(&self) -> Vec<String>;
+    /// The configuration the core runs on, current the instant a change is sent.
+    #[host(getter, native = resolved_options, bind(legs = "_adapter._legs()"))]
+    fn options(&self) -> super::session_options::ResolvedSessionOptions;
     /// `update_options(..)`: change only the supplied settings. A replaced `stt`, `tts` or `vad`
     /// is installed in place on a running session, without restarting the call or interrupting
     /// speech; a setting an `override_options` layer holds takes the new value once the layer is

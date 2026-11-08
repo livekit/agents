@@ -66,12 +66,15 @@ pub struct InferenceVad(pub(crate) ::std::sync::Arc<InferenceVadImpl>);
 
 #[pymethods]
 impl InferenceVad {
-    /// `deactivation_threshold` is `max(activation_threshold - 0.15, 0.01)` when `None`.
+    /// `model_factory` builds the host's model when the build links no native one;
+    /// `deactivation_threshold` is `max(activation_threshold - 0.15, 0.01)` when `None`. Only the
+    /// `"silero"` model exists.
     #[new]
-    #[pyo3(signature = (model_factory, *, min_speech_duration = 0.05, min_silence_duration = 0.25, prefix_padding_duration = 0.5, max_buffered_speech = 60.0, activation_threshold = 0.5, deactivation_threshold = None))]
+    #[pyo3(signature = (model_factory, *, model = None, min_speech_duration = 0.05, min_silence_duration = 0.25, prefix_padding_duration = 0.5, max_buffered_speech = 60.0, activation_threshold = 0.5, deactivation_threshold = None))]
     fn new(
         py: Python<'_>,
         model_factory: Bound<'_, PyAny>,
+        model: Option<Bound<'_, PyAny>>,
         #[pyo3(from_py_with = _extract_inference_vad_new_min_speech_duration)] min_speech_duration: InferenceVadNewMinSpeechDurationInput,
         #[pyo3(from_py_with = _extract_inference_vad_new_min_silence_duration)]
         min_silence_duration: InferenceVadNewMinSilenceDurationInput,
@@ -87,19 +90,54 @@ impl InferenceVad {
         let env = crate::process::env();
         let model_factory =
             crate::generated::vad::VadModelsProxy::from_host(model_factory.as_any())?;
+        let model = match model {
+            Some(v) => crate::generated::records::inference_models::vad_models_from_py(v.as_any())?,
+            None => "silero".parse::<::lk_agents_abi::inference::models::VadModelName>().map_err(
+                |e| {
+                    ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(
+                        &e,
+                    ))
+                },
+            )?,
+        };
+        let out = py
+            .detach(|| {
+                <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::new(
+                    &env,
+                    model_factory,
+                    model,
+                    min_speech_duration,
+                    min_silence_duration,
+                    prefix_padding_duration,
+                    max_buffered_speech,
+                    activation_threshold,
+                    deactivation_threshold,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+            })?;
+        ::pyo3::PyResult::Ok(InferenceVad(::std::sync::Arc::new(out)))
+    }
+
+    #[getter]
+    fn model<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
         let out = py.detach(|| {
-            <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::new(
-                &env,
-                model_factory,
-                min_speech_duration,
-                min_silence_duration,
-                prefix_padding_duration,
-                max_buffered_speech,
-                activation_threshold,
-                deactivation_threshold,
+            <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::model(&self.0)
+        });
+        crate::generated::records::inference_models::vad_models_to_py(py, out)
+    }
+
+    #[getter]
+    fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::capabilities(
+                &self.0,
             )
         });
-        ::pyo3::PyResult::Ok(InferenceVad(::std::sync::Arc::new(out)))
+        crate::generated::records::vad::vad_capabilities_to_py(py, out)
     }
 
     /// The given options, applied by each running stream before its next frame.

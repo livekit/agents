@@ -55,7 +55,7 @@ set when the platform creates it and never changed.
 
 A SIP call's dispatch names the thread the platform resolved by the
 caller's `phone:` key, so a call continues the texts and calls before it.
-See [voice-session.md](voice-session.md) for dispatch metadata.
+See [how a call gets its thread](threads.md#calls).
 
 ### Routing an unknown sender
 

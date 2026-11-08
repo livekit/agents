@@ -104,8 +104,7 @@ impl super::Implementations for Selected {
     type MarkupFunctions = ::lk_agents_runtime::cores::SpeechMarkup;
     type MarkupClass = ::lk_agents_runtime::cores::ProviderMarkup;
     type TranscriptStripper = ::lk_agents_runtime::cores::TranscriptMarkupStripper;
-    type StreamAdapterFunctions =
-        ::lk_agents_runtime::inference::tts::sentence_adapter::AdapterStreams;
+    type TtsStreamAdapter = ::lk_agents_runtime::inference::tts::sentence_adapter::StreamAdapter;
     type PacedSentences = ::lk_agents_runtime::inference::tts::pacing::PacedSentences;
     type TtsStream = ::lk_agents_runtime::inference::tts::stream::TtsStream;
     type SynthesisChecks = ::lk_agents_runtime::inference::tts::stream::SynthesisChecks;
@@ -115,6 +114,7 @@ impl super::Implementations for Selected {
         ::lk_agents_runtime::inference::interruption::NativeInterruptionDetector;
     type KeytermFunctions = ::lk_agents_runtime::voice::KeytermRules;
     type ConnectOptionsFunctions = ::lk_agents_runtime::cores::ConnectOptionsRules;
+    type Ids = ::lk_agents_runtime::net::strings::Ids;
     type ProviderAttempts = ::lk_agents_runtime::inference::provider::ProviderAttempts;
     type AudioByteStream = ::lk_agents_runtime::media::AudioByteStream;
     type ConnectionPoolState = ::lk_agents_runtime::net::connection_pool::ConnectionPool;

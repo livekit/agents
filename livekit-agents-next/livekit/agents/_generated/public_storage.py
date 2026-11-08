@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from .facades_storage import Lane as Lane, Transaction as Transaction
 from .storage_errors import (
     LeaseLost as LeaseLost,
     NotSerializable as NotSerializable,
@@ -23,4 +24,6 @@ __all__: list[str] = [
     "StorageUnavailable",
     "LeaseLost",
     "RunRejected",
+    "Transaction",
+    "Lane",
 ]

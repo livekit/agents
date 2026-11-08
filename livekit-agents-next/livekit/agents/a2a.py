@@ -5,18 +5,18 @@ from __future__ import annotations
 import asyncio
 import json
 import weakref
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from typing import cast
 
 from pydantic import JsonValue
 from typing_extensions import Unpack
 
 from . import _core
-from ._core import ServerConfig, _core_a2a_agent_card, _core_Credentials
+from ._core import ServerConfig, _core_a2a_agent_card
 from ._generated import public_a2a as _public
 from ._generated.a2a_card import EndpointDescriptor
 from ._generated.a2a_door import DoorConfig
-from ._generated.a2a_metadata import GRANT_HEADER, RPC_PATH
+from ._generated.a2a_metadata import RPC_PATH
 from ._generated.a2a_remote import RemoteEventInputRequired, RemoteEventOutcome
 from ._generated.public_a2a import *  # noqa: F403
 from ._generated.storage_options import TurnOptions, TurnOptionsKwargs
@@ -27,41 +27,6 @@ from .storage import Storage, Thread
 from .storage.session import A2ASessionContext, _Handler, _TurnHost
 from .types import APIConnectOptions
 from .voice.events import RunContext
-
-
-class Credentials:
-    """The worker's project key pair; signing and verification use the LiveKit SDK."""
-
-    def __init__(self, api_key: str, api_secret: str) -> None:
-        self._native = _core_Credentials(api_key, api_secret)
-
-    def verify(self, token: str, *, agent_name: str = "", deployment: str = "") -> Principal:
-        return self._native.verify(token, agent_name=agent_name, deployment=deployment)
-
-    def _principal(
-        self,
-        headers: Mapping[str, str] | None,
-        *,
-        agent_name: str,
-        deployment: str = "",
-        node_authorized: bool = False,
-    ) -> Principal:
-        headers = headers or {}
-        return self._native.principal(
-            headers.get("authorization", headers.get("Authorization")),
-            headers.get(GRANT_HEADER.lower(), headers.get(GRANT_HEADER)),
-            node_authorized,
-            agent_name,
-            deployment,
-        )
-
-    def project_token(self, *, identity: str = "worker", ttl_seconds: int = 3600) -> str:
-        return self._native.project_token(identity=identity, ttl_seconds=ttl_seconds)
-
-    def thread_grant_token(
-        self, grant: AgentThreadGrant, *, identity: str = "", ttl_seconds: int = 3600
-    ) -> str:
-        return self._native.thread_grant_token(grant, identity=identity, ttl_seconds=ttl_seconds)
 
 
 class A2AService:
@@ -381,7 +346,6 @@ __all__ = [
     "a2a_session",
     "A2ASessionContext",
     "RemoteAgent",
-    "Credentials",
     "A2AEndpoint",
 ]
 __all__ += _public.__all__

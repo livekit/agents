@@ -956,10 +956,12 @@ impl lk_agents_abi::Realtime for OpenAIRealtime {
         OpenAIRealtime::capabilities(self)
     }
 
+    /// Its tools are the specs the driver sends; the host's tools callable is not needed.
     fn session(
         &self,
         cx: telemetry::Cx,
         turn_detection_disabled: bool,
+        _tools: Option<lk_agents_abi::HostRef>,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Arc<dyn lk_agents_abi::RealtimeSession>, lk_agents_abi::errors::ProviderError>,

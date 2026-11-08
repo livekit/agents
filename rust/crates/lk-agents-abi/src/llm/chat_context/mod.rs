@@ -297,6 +297,7 @@ pub struct MetricsReport {
     extract,
     emit,
     model_dump,
+    kwargs,
 ))]
 #[python(
     property(
@@ -318,7 +319,8 @@ pub struct ChatMessage {
     #[host(default_factory = "..utils.shortuuid(\"item_\")")]
     pub id: String,
     pub role: Role,
-    #[host(dump_with = crate::llm::to_dict::content_dump)]
+    /// One item is taken as a list of it (`content="hello"`).
+    #[host(dump_with = crate::llm::to_dict::content_dump, one_or_many)]
     pub content: Vec<ChatContent>,
     #[host(default = false)]
     pub interrupted: bool,

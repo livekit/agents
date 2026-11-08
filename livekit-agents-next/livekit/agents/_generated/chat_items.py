@@ -12,8 +12,8 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Annotated, Literal, TypeAlias
 
-from pydantic import BaseModel, Field, JsonValue, PrivateAttr
-from typing_extensions import TypedDict
+from pydantic import BaseModel, BeforeValidator, Field, JsonValue, PrivateAttr
+from typing_extensions import Required, TypedDict
 
 from livekit import rtc
 from livekit.rtc import VideoFrame
@@ -171,7 +171,8 @@ class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["message"] = "message"
     role: ChatRole
-    content: list[ChatContent]
+    content: Annotated[list[ChatContent], BeforeValidator(lambda v: v if isinstance(v, list) else [v])]
+    """One item is taken as a list of it (`content="hello"`)."""
     interrupted: bool = False
     transcript_confidence: float | None = None
     extra: dict[str, JsonValue] = Field(default_factory=dict)
@@ -196,6 +197,20 @@ class ChatMessage(BaseModel):
         Multiple text content items will be joined by a newline.
         """
         return _bindings.chat_message_raw_text_content(self)
+
+
+class ChatMessageKwargs(TypedDict, total=False):
+    """`ChatMessage`'s fields as keyword arguments."""
+
+    id: str
+    role: Required[ChatRole]
+    content: Required[ChatContent | list[ChatContent]]
+    """One item is taken as a list of it (`content="hello"`)."""
+    interrupted: bool
+    transcript_confidence: float | None
+    extra: dict[str, object]
+    metrics: MetricsReport
+    created_at: float
 
 
 class FunctionCall(BaseModel):
@@ -262,6 +277,7 @@ AudioContent.__module__ = "livekit.agents.llm.chat_context"
 MetricsMetadata.__module__ = "livekit.agents.llm.chat_context"
 MetricsReport.__module__ = "livekit.agents.llm.chat_context"
 ChatMessage.__module__ = "livekit.agents.llm.chat_context"
+ChatMessageKwargs.__module__ = "livekit.agents.llm.chat_context"
 FunctionCall.__module__ = "livekit.agents.llm.chat_context"
 FunctionCallOutput.__module__ = "livekit.agents.llm.chat_context"
 AgentHandoff.__module__ = "livekit.agents.llm.chat_context"

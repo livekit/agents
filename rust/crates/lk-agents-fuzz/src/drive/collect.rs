@@ -40,10 +40,9 @@ impl Run {
                 let thinking = *new == lk_agents_abi::voice::events::AgentState::Thinking;
                 let sound = fakes::FakeSoundStream::sound(5);
                 let error = player.on_agent_state(super::background::StateOptions {
-                    sounds: vec![sound],
+                    sounds: lk_agents_abi::voice::background_audio::Sounds::Choice(vec![sound]),
                     draw: fakes::HALF,
                     thinking,
-                    choose: true,
                 });
                 self.record.record_boundary(
                     self.stamps.next(),

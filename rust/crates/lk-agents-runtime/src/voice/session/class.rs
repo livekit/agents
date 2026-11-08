@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::telemetry;
+use lk_agents_abi::llm::fallback::RealtimeLeg;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput, VideoInput};
 use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::voice::session::{
@@ -181,7 +182,18 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         };
         builder.eot = args.turn_detector.clone();
         builder.llm = llm;
-        builder.realtime = args.realtime;
+        // A host provider is driven through the core's own model over it.
+        builder.realtime = args.realtime.map(|leg| match leg {
+            RealtimeLeg::Native(model) => model,
+            RealtimeLeg::Host(host) => {
+                Arc::new(lk_agents_inference::realtime::host::HostRealtimeModel::new(
+                    host,
+                    anchor,
+                    spawner.clone(),
+                ))
+            }
+        });
+        builder.realtime_tools = args.realtime_tools;
         builder.tts = args.tts;
         builder.stt = args.stt;
         builder.forward_chat_context =
@@ -624,11 +636,10 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         &self,
         call_id: String,
         speech_id: String,
+        source: FillerSource,
         delay: f64,
         interval: Option<f64>,
         max_steps: Option<u32>,
-        text: Option<String>,
-        source: Option<HostRef>,
         origin: Option<VoiceCommandOrigin>,
     ) -> Result<u64, CommandRefused> {
         use lk_agents_voice::filler_scheduler::FillerError;
@@ -641,10 +652,6 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         }
         let speech =
             speech_id.parse::<SpeechId>().map_err(|e| CommandRefused::Invalid(e.to_string()))?;
-        let source = match text {
-            Some(text) => FillerSource::Text(text),
-            None => FillerSource::Host(source),
-        };
         let id = self.last_filler.fetch_add(1, Ordering::Relaxed) + 1;
         let origin = origin_of(origin);
         let cmd = SpeechCommand::FillerStart(FillerStart {
@@ -660,8 +667,9 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         Ok(id)
     }
 
-    fn filler_stop(&self, id: u64) -> Result<(), SessionRefused> {
-        self.send(SpeechCommand::FillerStop { id: FillerId(id) })
+    fn filler_stop(&self, id: u64) {
+        // A closed loop has stopped every filler already.
+        let _ = self.send(SpeechCommand::FillerStop { id: FillerId(id) });
     }
 
     fn clear_user_turn(&self) -> Result<(), SessionRefused> {

@@ -194,6 +194,23 @@ pub trait RunStream: Send + Sync + Sized + 'static {
     fn usage(&self) -> crate::usage::Usage;
 }
 
+/// The handle `async with agent.run_stream(...)` returns; applications do not build it.
+#[crate::host(facade(
+    path = "livekit.agents.voice.run_result",
+    name = "RunStream",
+    native = RunStream,
+    extended
+))]
+pub trait RunStreamFacade {
+    #[host(new)]
+    fn new() -> Self;
+    /// Latest immutable usage; reading it never advances the run.
+    #[host(getter)]
+    fn usage(&self) -> crate::usage::Usage;
+    /// Request cancellation; the native owner retains cleanup through settlement.
+    fn cancel(&self);
+}
+
 #[crate::host(class(name = "_core_StreamEvents"))]
 pub trait StreamEvents: Send + Sync + Sized + 'static {
     #[host(call)]

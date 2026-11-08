@@ -13,7 +13,7 @@ mod background_audio {
     use lk_agents_runtime::rtc::events::RoomEventBus;
     use lk_agents_runtime::voice::background_audio::{
         BackgroundAudio, BackgroundAudioPlayer, FrameStream, LoopingStreamError, PlaybackError,
-        Sound, SoundSource,
+        Sound, SoundSource, Sounds,
     };
     use lk_agents_runtime::voice::session::Timebase;
     use std::future::Future as _;
@@ -49,7 +49,7 @@ mod background_audio {
         let fixed =
             FixedRoom { rtc: Some(room.clone()), time: Timebase::from_virtual(clock), pool: None };
         let player = player(&fixed.time);
-        player.start(Arc::new(fixed), 0.5, ambient, true, None).await.unwrap();
+        player.start(Arc::new(fixed), 0.5, Some(Sounds::Choice(ambient)), None).await.unwrap();
         (player, room)
     }
 

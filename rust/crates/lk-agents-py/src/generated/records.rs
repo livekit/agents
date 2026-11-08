@@ -3769,72 +3769,135 @@ pub mod background_audio_wire {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/voice/background_audio.rs.
-    static SOUND_SOURCE_FILE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static AUDIO_SOURCE__BUILTIN_AUDIO_CLIP: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
         ::pyo3::sync::PyOnceLock::new();
-    static SOUND_SOURCE_STREAM: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static AUDIO_SOURCE__ASYNC_ITERATOR: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn sound_source_from_py(
+    pub fn audio_source_from_py(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::lk_agents_abi::voice::background_audio::SoundSource> {
-        let py = obj.py();
-        if obj.is_instance(SOUND_SOURCE_FILE.import(
-            py,
-            "livekit.agents._generated.background_audio_wire",
-            "SoundSourceFile",
-        )?)? {
+        if obj.is_instance(
+            AUDIO_SOURCE__BUILTIN_AUDIO_CLIP
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents.voice.background_audio")?
+                            .getattr("BuiltinAudioClip")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            let member = obj.clone();
+            let v = &member;
+            return Ok(::lk_agents_abi::voice::background_audio::SoundSource::Clip(
+                crate::py_values::builtin_clip_path(v, "AudioSource.Clip")?,
+            ));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyString>() {
             return Ok(::lk_agents_abi::voice::background_audio::SoundSource::File(
-                crate::py_values::attr_with(obj, "SoundSourceFile", "path", |v| {
-                    v.extract::<::std::string::String>()
-                })?,
+                obj.extract::<::std::string::String>()?,
             ));
         }
-        if obj.is_instance(SOUND_SOURCE_STREAM.import(
-            py,
-            "livekit.agents._generated.background_audio_wire",
-            "SoundSourceStream",
-        )?)? {
+        if obj.is_instance(
+            AUDIO_SOURCE__ASYNC_ITERATOR
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py().import("collections.abc")?.getattr("AsyncIterator")?.unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
             return Ok(::lk_agents_abi::voice::background_audio::SoundSource::Stream(
-                crate::py_values::attr_with(obj, "SoundSourceStream", "stream", |v| {
-                    crate::generated::voice::FrameStreamProxy::from_host(v.as_any())
-                })?,
+                crate::generated::voice::FrameStreamProxy::from_host(obj.as_any())?,
             ));
         }
-        Err(super::not_a(obj, "SoundSourceFile | SoundSourceStream"))
+        Err(super::not_a(obj, "AudioSource"))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/background_audio.rs.
-    static SOUND: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static AUDIO_CONFIG: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn sound_from_py(
+    pub fn audio_config_from_py(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::lk_agents_abi::voice::background_audio::Sound> {
         let py = obj.py();
-        if !obj.is_instance(SOUND.import(
+        if !obj.is_instance(AUDIO_CONFIG.import(
             py,
             "livekit.agents._generated.background_audio_wire",
-            "Sound",
+            "AudioConfig",
         )?)? {
-            return Err(super::not_a(obj, "Sound"));
+            return Err(super::not_a(obj, "AudioConfig"));
         }
         Ok(::lk_agents_abi::voice::background_audio::Sound {
-            source: crate::py_values::attr_with(obj, "Sound", "source", |v| {
-                crate::generated::records::background_audio_wire::sound_source_from_py(v)
+            source: crate::py_values::attr_with(obj, "AudioConfig", "source", |v| {
+                crate::generated::records::background_audio_wire::audio_source_from_py(v)
             })?,
-            volume: crate::py_values::attr_with(obj, "Sound", "volume", |v| {
-                crate::py_values::number_from_py::<f64>(v, "Sound.volume")
+            volume: crate::py_values::attr_with(obj, "AudioConfig", "volume", |v| {
+                crate::py_values::number_from_py::<f64>(v, "AudioConfig.volume")
             })?,
-            probability: crate::py_values::attr_with(obj, "Sound", "probability", |v| {
-                crate::py_values::number_from_py::<f64>(v, "Sound.probability")
+            probability: crate::py_values::attr_with(obj, "AudioConfig", "probability", |v| {
+                crate::py_values::number_from_py::<f64>(v, "AudioConfig.probability")
             })?,
-            fade_in: crate::py_values::attr_with(obj, "Sound", "fade_in", |v| {
-                crate::py_values::number_from_py::<f64>(v, "Sound.fade_in")
+            fade_in: crate::py_values::attr_with(obj, "AudioConfig", "fade_in", |v| {
+                crate::py_values::number_from_py::<f64>(v, "AudioConfig.fade_in")
             })?,
-            fade_out: crate::py_values::attr_with(obj, "Sound", "fade_out", |v| {
-                crate::py_values::number_from_py::<f64>(v, "Sound.fade_out")
+            fade_out: crate::py_values::attr_with(obj, "AudioConfig", "fade_out", |v| {
+                crate::py_values::number_from_py::<f64>(v, "AudioConfig.fade_out")
             })?,
         })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/background_audio.rs.
+    static SOUNDS__AUDIO_CONFIG: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn sounds_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::voice::background_audio::Sounds> {
+        if obj.is_instance_of::<::pyo3::types::PyList>() {
+            return Ok(::lk_agents_abi::voice::background_audio::Sounds::Choice(
+                if obj.is_instance_of::<::pyo3::types::PyList>()
+                    || obj.is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    obj.try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            crate::generated::records::background_audio_wire::audio_config_from_py(
+                                item,
+                            )
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "Sounds.Choice: expected a list or tuple",
+                    ))
+                }?,
+            ));
+        }
+        if obj.is_instance(
+            SOUNDS__AUDIO_CONFIG
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.background_audio_wire")?
+                            .getattr("AudioConfig")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::voice::background_audio::Sounds::One(
+                crate::generated::records::background_audio_wire::audio_config_from_py(obj)?,
+            ));
+        }
+        let member = obj.clone();
+        let v = &member;
+        Ok(::lk_agents_abi::voice::background_audio::Sounds::Source(
+            crate::generated::records::background_audio_wire::audio_source_from_py(v)?,
+        ))
     }
 }
 
@@ -7067,6 +7130,30 @@ pub mod inference_models {
             Some(&kwargs),
         )
     }
+
+    // Declared in rust/crates/lk-agents-abi/src/inference/models.rs.
+
+    pub fn vad_models_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::inference::models::VadModelName> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "silero" => Ok(::lk_agents_abi::inference::models::VadModelName::Silero),
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "VADModels: {other:?} is not one of 'silero'"
+            ))),
+        }
+    }
+
+    pub fn vad_models_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::inference::models::VadModelName,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::inference::models::VadModelName::Silero => "silero",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
 }
 
 pub mod inference_stt {
@@ -7113,6 +7200,62 @@ pub mod inference_stt {
             dict.set_item("extra_kwargs", crate::py_values::extra_to_py(py, &x)?.into_any())?;
         }
         Ok(dict.into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/inference/fallback.rs.
+
+    pub fn fallback_model_type_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::inference::fallback::SttFallbackEntry> {
+        if obj.is_instance_of::<::pyo3::types::PyDict>() {
+            return Ok(::lk_agents_abi::inference::fallback::SttFallbackEntry::Model(
+                crate::generated::records::inference_stt::fallback_model_from_py(obj)?,
+            ));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyString>() {
+            return Ok(::lk_agents_abi::inference::fallback::SttFallbackEntry::Name(
+                obj.extract::<::std::string::String>()?,
+            ));
+        }
+        Err(super::not_a(obj, "FallbackModelType"))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/inference/fallback.rs.
+
+    pub fn fallback_models_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::inference::fallback::SttFallbacks> {
+        if obj.is_instance_of::<::pyo3::types::PyList>() {
+            return Ok(::lk_agents_abi::inference::fallback::SttFallbacks::Many(
+                if obj.is_instance_of::<::pyo3::types::PyList>()
+                    || obj.is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    obj.try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            crate::generated::records::inference_stt::fallback_model_type_from_py(
+                                item,
+                            )
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "FallbackModels.Many: expected a list or tuple",
+                    ))
+                }?,
+            ));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyDict>() {
+            return Ok(::lk_agents_abi::inference::fallback::SttFallbacks::Model(
+                crate::generated::records::inference_stt::fallback_model_from_py(obj)?,
+            ));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyString>() {
+            return Ok(::lk_agents_abi::inference::fallback::SttFallbacks::Name(
+                obj.extract::<::std::string::String>()?,
+            ));
+        }
+        Err(super::not_a(obj, "FallbackModels"))
     }
 }
 
@@ -7168,6 +7311,62 @@ pub mod inference_tts {
             dict.set_item("extra_kwargs", crate::py_values::extra_to_py(py, &x)?.into_any())?;
         }
         Ok(dict.into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/inference/fallback.rs.
+
+    pub fn fallback_model_type_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::inference::fallback::TtsFallbackEntry> {
+        if obj.is_instance_of::<::pyo3::types::PyDict>() {
+            return Ok(::lk_agents_abi::inference::fallback::TtsFallbackEntry::Model(
+                crate::generated::records::inference_tts::fallback_model_from_py(obj)?,
+            ));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyString>() {
+            return Ok(::lk_agents_abi::inference::fallback::TtsFallbackEntry::Name(
+                obj.extract::<::std::string::String>()?,
+            ));
+        }
+        Err(super::not_a(obj, "FallbackModelType"))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/inference/fallback.rs.
+
+    pub fn fallback_models_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::inference::fallback::TtsFallbacks> {
+        if obj.is_instance_of::<::pyo3::types::PyList>() {
+            return Ok(::lk_agents_abi::inference::fallback::TtsFallbacks::Many(
+                if obj.is_instance_of::<::pyo3::types::PyList>()
+                    || obj.is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    obj.try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            crate::generated::records::inference_tts::fallback_model_type_from_py(
+                                item,
+                            )
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "FallbackModels.Many: expected a list or tuple",
+                    ))
+                }?,
+            ));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyDict>() {
+            return Ok(::lk_agents_abi::inference::fallback::TtsFallbacks::Model(
+                crate::generated::records::inference_tts::fallback_model_from_py(obj)?,
+            ));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyString>() {
+            return Ok(::lk_agents_abi::inference::fallback::TtsFallbacks::Name(
+                obj.extract::<::std::string::String>()?,
+            ));
+        }
+        Err(super::not_a(obj, "FallbackModels"))
     }
 }
 
@@ -8083,25 +8282,35 @@ pub mod llm_fallback {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
-    static REALTIME_FALLBACK_MEMBER__REALTIME_MODEL: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+    pub fn host_tools_from_py(
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::llm::fallback::HostTools> {
+        let specs = (crate::py_values::tool_specs(obj, "HostTools.specs"))?;
+        let host = (crate::py_values::host_ref(obj, "HostTools.host"))?;
+        let value = ::lk_agents_abi::llm::fallback::HostTools { specs, host };
+        Ok(value)
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
+    static REALTIME_LEG__REALTIME_MODEL: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn realtime_fallback_member_from_py(
+    pub fn realtime_leg_from_py(
         obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::llm::fallback::RealtimeFallbackMember> {
+    ) -> PyResult<::lk_agents_abi::llm::fallback::RealtimeLeg> {
         if crate::py_objects::native::<dyn ::lk_agents_abi::Realtime>(obj).is_some() {
-            return Ok(::lk_agents_abi::llm::fallback::RealtimeFallbackMember::Native(
+            return Ok(::lk_agents_abi::llm::fallback::RealtimeLeg::Native(
                 crate::py_objects::native::<dyn ::lk_agents_abi::Realtime>(obj.as_any())
                     .ok_or_else(|| {
                         ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "RealtimeFallbackMember.Native",
+                            "RealtimeLeg.Native",
                             ": expected OpenAIRealtimeModel"
                         ))
                     })?,
             ));
         }
         if obj.is_instance(
-            REALTIME_FALLBACK_MEMBER__REALTIME_MODEL
+            REALTIME_LEG__REALTIME_MODEL
                 .get_or_try_init(obj.py(), || {
                     PyResult::Ok(
                         obj.py()
@@ -8112,11 +8321,55 @@ pub mod llm_fallback {
                 })?
                 .bind(obj.py()),
         )? {
-            return Ok(::lk_agents_abi::llm::fallback::RealtimeFallbackMember::Host(
+            return Ok(::lk_agents_abi::llm::fallback::RealtimeLeg::Host(
                 crate::generated::llm::HostRealtimeProxy::from_host(obj.as_any())?,
             ));
         }
-        Err(super::not_a(obj, "RealtimeFallbackMember"))
+        Err(super::not_a(obj, "RealtimeLeg"))
+    }
+}
+
+pub mod llm_provider_options {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/inference.rs.
+    static PROVIDER_ENDPOINT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn provider_endpoint_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::inference::ProviderEndpoint> {
+        let py = obj.py();
+        if !obj.is_instance(PROVIDER_ENDPOINT.import(
+            py,
+            "livekit.agents._generated.llm_provider_options",
+            "ProviderEndpoint",
+        )?)? {
+            return Err(super::not_a(obj, "ProviderEndpoint"));
+        }
+        Ok(::lk_agents_abi::llm::inference::ProviderEndpoint {
+            base_url: crate::py_values::attr_with(obj, "ProviderEndpoint", "base_url", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            api_key: crate::py_values::attr_with(obj, "ProviderEndpoint", "api_key", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            strict_tool_schema: crate::py_values::attr_with(
+                obj,
+                "ProviderEndpoint",
+                "strict_tool_schema",
+                |v| v.extract::<bool>(),
+            )?,
+            gzip_body: crate::py_values::attr_with(obj, "ProviderEndpoint", "gzip_body", |v| {
+                v.extract::<bool>()
+            })?,
+            msgpack_body: crate::py_values::attr_with(
+                obj,
+                "ProviderEndpoint",
+                "msgpack_body",
+                |v| v.extract::<bool>(),
+            )?,
+        })
     }
 }
 
@@ -12415,86 +12668,6 @@ pub mod rtc_rpc {
                 static CLASS: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> =
                     pyo3::sync::PyOnceLock::new();
                 CLASS.import(py, "livekit.rtc", "RpcCallInfo")?.as_any()
-            },
-            (),
-            Some(&kwargs),
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/rpc.rs.
-    pub fn rpc_invocation_data_from_py(
-        obj: &pyo3::Bound<'_, pyo3::PyAny>,
-    ) -> pyo3::PyResult<::lk_agents_abi::voice::rtc::rpc::RpcInvocationData> {
-        let request_id =
-            crate::py_values::attr_with(obj, "RpcInvocationData", "request_id", |v| {
-                v.extract::<::std::string::String>()
-            })?;
-        let caller_identity =
-            crate::py_values::attr_with(obj, "RpcInvocationData", "caller_identity", |v| {
-                v.extract::<::std::string::String>()
-            })?;
-        let payload = crate::py_values::attr_with(obj, "RpcInvocationData", "payload", |v| {
-            v.extract::<::std::string::String>()
-        })?;
-        let response_timeout =
-            crate::py_values::attr_with(obj, "RpcInvocationData", "response_timeout", |v| {
-                crate::py_values::number_from_py::<f64>(v, "RpcInvocationData.response_timeout")
-            })?;
-        let method = crate::py_values::attr_with(obj, "RpcInvocationData", "method", |v| {
-            v.extract::<::std::string::String>()
-        })?;
-        let cancel_reason =
-            crate::py_values::attr_with(obj, "RpcInvocationData", "cancel_reason", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (crate::py_values::number_from_py::<u32>(v, "RpcInvocationData.cancel_reason"))
-                        .map(Some)
-                }
-            })?;
-        let value = ::lk_agents_abi::voice::rtc::rpc::RpcInvocationData {
-            request_id,
-            caller_identity,
-            payload,
-            response_timeout,
-            method,
-            cancel_reason,
-        };
-        Ok(value)
-    }
-    pub fn rpc_invocation_data_to_py<'py>(
-        py: pyo3::Python<'py>,
-        value: ::lk_agents_abi::voice::rtc::rpc::RpcInvocationData,
-    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        let kwargs = pyo3::types::PyDict::new(py);
-        kwargs.set_item(
-            "request_id",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.request_id, py)?,
-        )?;
-        kwargs.set_item(
-            "caller_identity",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.caller_identity, py)?,
-        )?;
-        kwargs
-            .set_item("payload", ::pyo3::IntoPyObjectExt::into_bound_py_any(value.payload, py)?)?;
-        kwargs.set_item(
-            "response_timeout",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.response_timeout, py)?,
-        )?;
-        kwargs.set_item("method", ::pyo3::IntoPyObjectExt::into_bound_py_any(value.method, py)?)?;
-        kwargs.set_item(
-            "cancel_reason",
-            match value.cancel_reason {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-
-        crate::py_calls::call(
-            {
-                static CLASS: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> =
-                    pyo3::sync::PyOnceLock::new();
-                CLASS.import(py, "livekit.rtc", "RpcInvocationData")?.as_any()
             },
             (),
             Some(&kwargs),
@@ -17966,6 +18139,37 @@ pub mod stream_info {
 pub mod stream_pacer {
     use pyo3::prelude::*;
 
+    // Declared in rust/crates/lk-agents-abi/src/tts/stream_adapter.rs.
+    static TEXT_PACING__SENTENCE_STREAM_PACER: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn text_pacing_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::tts::stream_adapter::TextPacing> {
+        if obj.is_instance(
+            TEXT_PACING__SENTENCE_STREAM_PACER
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.stream_pacer")?
+                            .getattr("SentenceStreamPacer")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::tts::stream_adapter::TextPacing::Pacer(
+                crate::generated::records::stream_pacer::sentence_stream_pacer_from_py(obj)?,
+            ));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyBool>() {
+            return Ok(::lk_agents_abi::tts::stream_adapter::TextPacing::On(
+                obj.extract::<bool>()?,
+            ));
+        }
+        Err(super::not_a(obj, "TextPacing"))
+    }
+
     // Declared in rust/crates/lk-agents-abi/src/tts/stream_pacer.rs.
     static SENTENCE_STREAM_PACER: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
@@ -20705,7 +20909,53 @@ pub mod tokenizer {
         )
     }
 
+    // Declared in rust/crates/lk-agents-abi/src/tokenize/mod.rs.
+    static TOKEN_SPAN: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn token_span_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::tokenize::TokenSpan> {
+        let py = obj.py();
+        if !obj.is_instance(TOKEN_SPAN.import(
+            py,
+            "livekit.agents._generated.tokenizer",
+            "TokenSpan",
+        )?)? {
+            return Err(super::not_a(obj, "TokenSpan"));
+        }
+        Ok(::lk_agents_abi::tokenize::TokenSpan {
+            token: crate::py_values::attr_with(obj, "TokenSpan", "token", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            start: crate::py_values::attr_with(obj, "TokenSpan", "start", |v| {
+                crate::py_values::number_from_py::<usize>(v, "TokenSpan.start")
+            })?,
+            end: crate::py_values::attr_with(obj, "TokenSpan", "end", |v| {
+                crate::py_values::number_from_py::<usize>(v, "TokenSpan.end")
+            })?,
+        })
+    }
+
+    pub fn token_span_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::tokenize::TokenSpan,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::tokenize::TokenSpan { token, start, end } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("token", ::pyo3::IntoPyObjectExt::into_bound_py_any(token, py)?)?;
+        kwargs.set_item("start", ::pyo3::IntoPyObjectExt::into_bound_py_any(start, py)?)?;
+        kwargs.set_item("end", ::pyo3::IntoPyObjectExt::into_bound_py_any(end, py)?)?;
+        crate::py_calls::call(
+            TOKEN_SPAN.import(py, "livekit.agents._generated.tokenizer", "TokenSpan")?.as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
     // Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
+    static TOKENIZER_TOKEN__TOKEN_SPAN: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn tokenizer_token_from_py(
         obj: &Bound<'_, PyAny>,
@@ -20715,31 +20965,20 @@ pub mod tokenizer {
                 obj.extract::<::std::string::String>()?,
             ));
         }
-        if obj.is_instance_of::<::pyo3::types::PyTuple>() {
+        if obj.is_instance(
+            TOKENIZER_TOKEN__TOKEN_SPAN
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.tokenizer")?
+                            .getattr("TokenSpan")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
             return Ok(::lk_agents_abi::tokenize::bindings::TokenizerToken::Span(
-                (|| -> ::pyo3::PyResult<_> {
-                    let tuple = obj.cast::<::pyo3::types::PyTuple>()?;
-                    if tuple.len() != 3 {
-                        return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                            "{}: expected a tuple of 3 items",
-                            "TokenizerToken.Span"
-                        )));
-                    }
-                    let item_0 = tuple.get_item(0)?;
-                    let item_1 = tuple.get_item(1)?;
-                    let item_2 = tuple.get_item(2)?;
-                    Ok((
-                        (item_0.extract::<::std::string::String>())?,
-                        (crate::py_values::number_from_py::<usize>(
-                            item_1.as_any(),
-                            "TokenizerToken.Span",
-                        ))?,
-                        (crate::py_values::number_from_py::<usize>(
-                            item_2.as_any(),
-                            "TokenizerToken.Span",
-                        ))?,
-                    ))
-                })()?,
+                crate::generated::records::tokenizer::token_span_from_py(obj)?,
             ));
         }
         Err(super::not_a(obj, "TokenizerToken"))
@@ -24303,6 +24542,25 @@ pub mod vad {
             )?,
         })
     }
+
+    pub fn vad_capabilities_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::VadCapabilities,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::VadCapabilities { update_interval } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "update_interval",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(update_interval, py)?,
+        )?;
+        crate::py_calls::call(
+            VAD_CAPABILITIES
+                .import(py, "livekit.agents._generated.vad", "VADCapabilities")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
 }
 
 pub mod video_sampler {
@@ -24514,6 +24772,35 @@ pub mod voice_session {
                 None,
             ),
         }
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session.rs.
+    static FILLER_SOURCE__CALLABLE: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn filler_source_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::voice::session::FillerSource> {
+        if obj.is_instance_of::<::pyo3::types::PyString>() {
+            return Ok(::lk_agents_abi::voice::session::FillerSource::Text(
+                obj.extract::<::std::string::String>()?,
+            ));
+        }
+        if obj.is_instance(
+            FILLER_SOURCE__CALLABLE
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(obj.py().import("collections.abc")?.getattr("Callable")?.unbind())
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::voice::session::FillerSource::Callable(
+                crate::py_objects::object_ref_from_py(obj)?,
+            ));
+        }
+        if obj.is_none() {
+            return Ok(::lk_agents_abi::voice::session::FillerSource::None);
+        }
+        Err(super::not_a(obj, "FillerSource"))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/session.rs.
@@ -24926,16 +25213,21 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::py_objects::native::<dyn ::lk_agents_abi::Realtime>(v.as_any())
-                        .ok_or_else(|| {
-                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                                "VoiceSessionArgs.realtime",
-                                ": expected OpenAIRealtimeModel"
-                            ))
-                        }))
-                    .map(Some)
+                    (crate::generated::records::llm_fallback::realtime_leg_from_py(v)).map(Some)
                 }
             })?,
+            realtime_tools: crate::py_values::attr_with(
+                obj,
+                "VoiceSessionArgs",
+                "realtime_tools",
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (crate::py_objects::object_ref_from_py(v)).map(Some)
+                    }
+                },
+            )?,
             tts: crate::py_values::attr_with(obj, "VoiceSessionArgs", "tts", |v| {
                 if v.is_none() {
                     Ok(None)

@@ -190,38 +190,6 @@ fn input_maps_accept_covariant_mapping_values_while_results_remain_dicts() {
 }
 
 #[test]
-fn authoring_wrappers_preserve_native_constructor_defaults_and_keyword_arguments() {
-    let declarations = read(r#"
-        #[crate::host(class(name = "BasicTokenizer"))]
-        #[python(wrapper(module = "tokenize_basic", path = "livekit.agents.tokenize.basic", name = "Tokenizer", base = "..tokenize:TokenizerBase"))]
-        pub trait BasicTokenizer: Sized {
-            #[host(new)]
-            fn new(#[host(kw, default = "english")] language: String, #[host(default = false)] retain_format: bool) -> Self;
-        }
-        #[crate::host(functions)]
-        pub trait Tokenization {
-            #[host(function)]
-            #[python(forward(module = "tokenize_basic"))]
-            fn split_words(text: String) -> Vec<String>;
-        }
-    "#).unwrap();
-    let modules = crate::forward::emit(&declarations).unwrap();
-    let module = &modules.iter().find(|out| out.path == "tokenize_basic.py").unwrap().text;
-    assert!(module.contains("class Tokenizer(TokenizerBase):"), "{module}");
-    assert!(module.contains("language: str = \"english\""), "{module}");
-    assert!(module.contains("retain_format: bool = False"), "{module}");
-    assert!(
-        module.contains("_core.BasicTokenizer(language=language, retain_format=retain_format)"),
-        "{module}"
-    );
-    assert!(module.contains("from .._core import split_words"), "{module}");
-    assert!(
-        module.contains("Tokenizer.__module__ = \"livekit.agents.tokenize.basic\""),
-        "{module}"
-    );
-}
-
-#[test]
 fn declared_class_instances_are_accepted_by_batch_operations() {
     let declarations = read(
         r#"

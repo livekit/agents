@@ -16,7 +16,6 @@ from ..utils import is_given
 from . import (
     HEADER_INFERENCE_PROVIDER,
     InferenceClass,
-    _resolve_credentials,
     extract_quota_usage,
     get_inference_headers,
 )
@@ -30,7 +29,6 @@ if TYPE_CHECKING:
 __all__ = [
     "LLM",
     "LLMStream",
-    "ProviderEndpoint",
 ]
 __all__ += _public.__all__
 
@@ -76,71 +74,8 @@ def min_reasoning_effort(model: str) -> ReasoningEffort | None:
     return cast("ReasoningEffort | None", _core.min_reasoning_effort(model))
 
 
-@dataclasses.dataclass(frozen=True)
-class ProviderEndpoint:
-    """An OpenAI-compatible provider the core's client calls directly with the provider's own
-    key, in place of the LiveKit Inference gateway; no LiveKit header is sent."""
-
-    base_url: str
-    api_key: str
-    strict_tool_schema: bool = True
-    """Tool schemas in OpenAI's strict form; some OpenAI-compatible providers refuse it."""
-    gzip_body: bool = False
-    """Gzip-compressed request bodies, for a provider that accepts them."""
-    msgpack_body: bool = False
-    """Msgpack request bodies, for a provider that accepts them."""
-
-
-class LLM(_facades.LLM, llm.LLM):
+class LLM(_facades.LLM):
     """LiveKit Inference LLM over the core's gateway client (``_core.InferenceLlm``)."""
-
-    def __init__(
-        self,
-        model: LLMModels | str,
-        *,
-        provider: str | None = None,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        api_secret: str | None = None,
-        inference_class: InferenceClass | None = None,
-        extra_kwargs: ChatCompletionOptions | dict[str, Any] | None = None,
-        _endpoint: ProviderEndpoint | None = None,
-    ) -> None:
-        """``_endpoint``: a provider plugin's own endpoint in place of the gateway."""
-        super().__init__()
-        self._model = model
-        self._provider = provider
-        self._inference_class = inference_class
-        self._extra_kwargs: dict[str, object] = dict(extra_kwargs or {})
-        if _endpoint is None:
-            credentials = _resolve_credentials(base_url, api_key, api_secret)
-            self._base_url, self._api_key, self._api_secret = dataclasses.astuple(credentials)
-            self._strict_tool_schema, self._gzip_body, self._msgpack_body = True, False, False
-        else:
-            self._base_url, self._api_key, self._api_secret = (
-                _endpoint.base_url,
-                _endpoint.api_key,
-                None,
-            )
-            self._strict_tool_schema = _endpoint.strict_tool_schema
-            self._gzip_body, self._msgpack_body = _endpoint.gzip_body, _endpoint.msgpack_body
-        self._native = self._new_native()
-
-    def _new_native(self) -> _core.InferenceLlm:
-        """The client over the current model and endpoint attributes."""
-        return _core.InferenceLlm(
-            self._model,
-            provider=self._provider,
-            base_url=self._base_url,
-            api_key=self._api_key,
-            api_secret=self._api_secret,
-            label=self._label,
-            inference_class=self._inference_class,
-            strict_tool_schema=self._strict_tool_schema,
-            gzip_body=self._gzip_body,
-            msgpack_body=self._msgpack_body,
-            extra_kwargs=self._extra_kwargs,
-        )
 
     @classmethod
     def from_model_string(cls, model: str) -> LLM:
@@ -148,7 +83,7 @@ class LLM(_facades.LLM, llm.LLM):
 
     def _core_native(self) -> _core.InferenceLlm:
         """The client as a session of the current job holds it: its requests carry that job."""
-        headers = get_inference_headers(inference_class=self._inference_class)
+        headers = get_inference_headers(inference_class=self._native.inference_class)
         return self._native.identified(list(headers.items()), self)
 
     @property
@@ -167,7 +102,7 @@ class LLM(_facades.LLM, llm.LLM):
         inference_class: NotGivenOr[InferenceClass] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> llm.LLMStream:
-        cls = inference_class if is_given(inference_class) else self._inference_class
+        cls = inference_class if is_given(inference_class) else self._native.inference_class
         return _GatewayStream(
             self,
             chat_ctx=chat_ctx,

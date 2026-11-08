@@ -952,7 +952,10 @@ impl VoiceDriver {
         let spoke = false;
         match self.activity.tools.fillers.get(&id).map(|r| r.source.clone()) {
             Some(FillerSource::Text(text)) => self.fire_filler(now, id, step, Some(text), spoke),
-            Some(FillerSource::Host(source)) => self.ask_filler_source(now, id, step, source),
+            Some(FillerSource::Callable(source)) => {
+                self.ask_filler_source(now, id, step, Some(source))
+            }
+            Some(FillerSource::None) => self.ask_filler_source(now, id, step, None),
             None => {}
         }
     }

@@ -121,24 +121,6 @@ impl Resolver<'_> {
         };
         Ok(Class {
             form,
-            wrapper: crate::parse::wrapper(&module.file, &tr.attrs, &name)?,
-            forwards: tr
-                .items
-                .iter()
-                .filter_map(|item| {
-                    let syn::TraitItem::Fn(method) = item else { return None };
-                    Some(crate::parse::forward_module(&module.file, &method.attrs).and_then(
-                        |target| {
-                            let method_name = voc::text(at, &voc::read(&method.attrs)?, "name")?
-                                .unwrap_or_else(|| method.sig.ident.to_string());
-                            Ok(target.map(|target| (target, method_name, module.file.clone())))
-                        },
-                    ))
-                })
-                .collect::<Result<Vec<_>, String>>()?
-                .into_iter()
-                .flatten()
-                .collect(),
             pid,
             host_module,
             subclass,

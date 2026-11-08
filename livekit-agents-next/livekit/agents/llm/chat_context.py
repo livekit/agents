@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Sequence
-from typing import TYPE_CHECKING, Literal, overload
+from typing import TYPE_CHECKING, Literal, Unpack, overload
 
 from pydantic import TypeAdapter
 
@@ -83,35 +83,14 @@ class ChatContext:
         """Return only chat messages, ignoring function calls, outputs, and other events."""
         return [item for item in self._items if isinstance(item, ChatMessage)]
 
-    def add_message(
-        self,
-        *,
-        role: ChatRole,
-        content: list[ChatContent] | str,
-        id: NotGivenOr[str] = NOT_GIVEN,
-        interrupted: NotGivenOr[bool] = NOT_GIVEN,
-        created_at: NotGivenOr[float] = NOT_GIVEN,
-        metrics: NotGivenOr[MetricsReport] = NOT_GIVEN,
-        extra: NotGivenOr[dict[str, object]] = NOT_GIVEN,
-    ) -> ChatMessage:
-        given = {
-            "id": id,
-            "interrupted": interrupted,
-            "created_at": created_at,
-            "metrics": metrics,
-            "extra": extra,
-        }
-        fields: dict[str, object] = {
-            "role": role,
-            "content": [content] if isinstance(content, str) else content,
-            **{key: value for key, value in given.items() if is_given(value)},
-        }
-        message = ChatMessage.model_validate(fields)
-        if is_given(created_at):
-            self._items.insert(self.find_insertion_index(created_at=created_at), message)
+    def add_message(self, **message: Unpack[ChatMessageKwargs]) -> ChatMessage:
+        """Add a message, placed by its ``created_at`` when given, else at the end."""
+        item = ChatMessage.model_validate(message)
+        if "created_at" in message:
+            self._items.insert(self.find_insertion_index(created_at=item.created_at), item)
         else:
-            self._items.append(message)
-        return message
+            self._items.append(item)
+        return item
 
     def insert(self, item: ChatItem | Sequence[ChatItem]) -> None:
         """Insert an item or list of items into the chat context by creation time."""

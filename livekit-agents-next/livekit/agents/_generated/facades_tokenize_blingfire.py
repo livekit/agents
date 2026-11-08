@@ -1,19 +1,12 @@
 # GENERATED FILE -- DO NOT EDIT.
-#
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the declarations in:
-#     rust/crates/lk-agents-abi/src/tokenize/bindings.rs
-#
-# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
-# non-empty diff, so a hand edit here is reverted rather than merged.
+# From #[host(facade)] traits in lk-agents-abi.
 
 from __future__ import annotations
 
-from .. import _core
-from ..tokenize import _CoreSentenceTokenizer
+from typing import TYPE_CHECKING, Any
 
-__all__ = [
-    "SentenceTokenizer",
-]
+from .. import _bindings, _core
+from ..tokenize import _CoreSentenceTokenizer
 
 
 class SentenceTokenizer(_CoreSentenceTokenizer):
@@ -44,7 +37,8 @@ class SentenceTokenizer(_CoreSentenceTokenizer):
         min_token_len: int | None = None,
         xml_aware: bool = False,
     ) -> None:
-        self._core = _core.BlingfireSentenceTokenizer(
+        super().__init__()
+        self._native = _core.BlingfireSentenceTokenizer(
             min_sentence_len=min_sentence_len,
             stream_context_len=stream_context_len,
             retain_format=retain_format,
@@ -52,6 +46,10 @@ class SentenceTokenizer(_CoreSentenceTokenizer):
             min_token_len=min_token_len,
             xml_aware=xml_aware,
         )
+
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
+        """The sentences of `text`, markup kept whole when `xml_aware`."""
+        return self._native.tokenize(text, language=language)
 
 
 SentenceTokenizer.__module__ = "livekit.agents.tokenize.blingfire"

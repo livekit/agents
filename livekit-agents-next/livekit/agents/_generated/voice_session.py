@@ -9,24 +9,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias
+
+from livekit.agents.voice.io import SpeechHandle
 
 from ..types import NOT_GIVEN
 
 if TYPE_CHECKING:
     from livekit.agents import VAD
-    from livekit.agents._core import (
-        AgentNodes,
-        ConsoleIo,
-        DuplexRealtimeModel,
-        HostRealtimeModel,
-        JobRun,
-        OpenAIRealtimeModel,
-        RealtimeFallbackModel,
-        VoiceAgent,
-        _core_VoiceStore,
-    )
+    from livekit.agents._core import AgentNodes, ConsoleIo, JobRun, VoiceAgent, _core_VoiceStore
     from livekit.agents._generated.expressive import ExpressiveOptions
     from livekit.agents.inference import AdaptiveInterruptionDetector, TurnDetectorStream
     from livekit.agents.job import JobContext
@@ -41,6 +34,7 @@ if TYPE_CHECKING:
     from .agent_run import FunctionToolInfo
     from .chat_items import ChatItem
     from .keyterms import STTContextOptions
+    from .llm_fallback import RealtimeLeg
     from .room_options import RoomIoConfig
     from .tool_options import ToolSpec
     from .turn import TurnHandlingOptions
@@ -151,7 +145,11 @@ class VoiceSessionArgs:
     stt: STT | None = None
     vad: VAD | None = None
     llm: LLM | None = None
-    realtime: DuplexRealtimeModel | HostRealtimeModel | OpenAIRealtimeModel | RealtimeFallbackModel | None = None
+    realtime: RealtimeLeg | None = None
+    realtime_tools: object | None = None
+    """The host callable answering the current agent's tools, which a host realtime provider's
+    session offers.
+    """
     tts: TTS | None = None
     on_event: VoiceSession | None = None
     """Receives each session event, on the calling loop."""
@@ -211,6 +209,12 @@ class VoiceSessionArgs:
     """The job whose room this is: `start()` connects it beside the opening."""
     job_run: JobRun | None = None
     """The job's run, when this is the job's primary session: the job ends once it closes."""
+
+
+FillerSource: TypeAlias = str | Callable[[int], SpeechHandle | str | None] | None
+"""What a filler says at each fire: its text, or the host's callable asked with the step count
+(text, a handle it spoke itself, or `None` to skip the fire); `None`, every fire declined.
+"""
 
 
 VoiceTaskValue: TypeAlias = object | str

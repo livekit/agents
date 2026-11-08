@@ -16,7 +16,10 @@ from .inference_llm import (
     XAIRealtimeModels as XAIRealtimeModels,
     ZAIModels as ZAIModels,
 )
-from .llm_provider_options import ChatCompletionOptions as ChatCompletionOptions
+from .llm_provider_options import (
+    ChatCompletionOptions as ChatCompletionOptions,
+    ProviderEndpoint as ProviderEndpoint,
+)
 
 __all__: list[str] = [
     "ReasoningEffort",
@@ -30,5 +33,6 @@ __all__: list[str] = [
     "OpenAIRealtimeModels",
     "XAIRealtimeModels",
     "RealtimeModels",
+    "ProviderEndpoint",
     "ChatCompletionOptions",
 ]

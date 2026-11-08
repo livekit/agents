@@ -135,6 +135,18 @@ pub fn api_retry_interval(
     ::pyo3::PyResult::Ok(out)
 }
 
+// Declared in rust/crates/lk-agents-abi/src/types/ids.rs.
+type IdsImpl = <crate::generated::implementations::Selected as super::Implementations>::Ids;
+
+/// A new id: `prefix` then twelve random characters.
+#[pyfunction]
+#[pyo3(signature = (prefix = "".to_owned()))]
+pub fn shortuuid(py: Python<'_>, prefix: ::std::string::String) -> PyResult<::std::string::String> {
+    crate::py_calls::check_pid()?;
+    let out = py.detach(|| <IdsImpl as ::lk_agents_abi::types::ids::Ids>::shortuuid(prefix));
+    ::pyo3::PyResult::Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/types/provider.rs.
 type ProviderAttemptsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ProviderAttempts;

@@ -108,6 +108,8 @@ struct Inner {
     job: OnceLock<telemetry::Job>,
     /// The primary session's `agent_session`, once it started.
     session: OnceLock<telemetry::Cx>,
+    /// The job's `job_entrypoint`, once it runs.
+    entry: OnceLock<telemetry::Cx>,
 }
 
 impl JobExecution for JobRun {
@@ -124,8 +126,8 @@ impl JobExecution for JobRun {
         let _ = self.inner.session.set(trace);
     }
 
-    fn session_trace(&self) -> Option<telemetry::Cx> {
-        self.inner.session.get().cloned()
+    fn rpc_trace(&self) -> Option<telemetry::Cx> {
+        self.inner.session.get().or(self.inner.entry.get()).cloned()
     }
 }
 
@@ -217,6 +219,7 @@ impl Inner {
         let span = root.unwrap_or_else(|| {
             telemetry::start(&self.tracer.root(), telemetry::JobEntrypoint::default())
         });
+        let _ = self.entry.set(span.cx().clone());
         let result = self.clone().run_traced(&span).await;
         let failure = match &result {
             Ok(crash) => crash.clone(),
@@ -496,6 +499,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
                 root: Mutex::new(None),
                 job: OnceLock::new(),
                 session: OnceLock::new(),
+                entry: OnceLock::new(),
             }),
         })
     }

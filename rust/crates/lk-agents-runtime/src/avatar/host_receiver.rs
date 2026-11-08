@@ -22,6 +22,8 @@ const HOST_AUDIO_POLICY: Policy = Policy::CatchUp(Duration::from_secs(30));
 pub struct HostAudioReceiver {
     host: Arc<dyn AudioReceiverHost>,
     audio: Audio,
+    /// The span the receiver was made in, which its host calls run under.
+    cx: telemetry::Cx,
 }
 
 enum Audio {
@@ -56,6 +58,7 @@ impl avatar::HostAudioReceiver for HostAudioReceiver {
         env: &ProcessEnv,
         receiver: Arc<dyn AudioReceiverHost>,
         audio: Option<Arc<dyn AvatarAudio>>,
+        cx: telemetry::Cx,
     ) -> Result<Self, ProviderError> {
         let audio = match audio {
             Some(audio) => Audio::Native(audio),
@@ -75,7 +78,7 @@ impl avatar::HostAudioReceiver for HostAudioReceiver {
                 })
             }
         };
-        Ok(Self { host: receiver, audio })
+        Ok(Self { host: receiver, audio, cx })
     }
 
     fn clear_buffer(&self) {
@@ -88,9 +91,13 @@ impl avatar::HostAudioReceiver for HostAudioReceiver {
     }
 }
 
-async fn pump(host: Arc<dyn AudioReceiverHost>, sender: Arc<AudioSender<Event>>) {
+async fn pump(
+    host: Arc<dyn AudioReceiverHost>,
+    sender: Arc<AudioSender<Event>>,
+    cx: telemetry::Cx,
+) {
     let end = loop {
-        break match host.next_frame(&telemetry::Cx::NONE).await {
+        break match host.next_frame(&cx).await {
             Ok(Some(AudioReceiverFrame::Audio(frame))) => {
                 sender.push(frame);
                 continue;
@@ -112,8 +119,11 @@ impl Pumped {
     async fn next_audio(
         &self,
         host: &Arc<dyn AudioReceiverHost>,
+        cx: &telemetry::Cx,
     ) -> Result<AudioReceiverObservation, ProviderError> {
-        self.pump.get_or_init(|| self.spawner.spawn(pump(host.clone(), self.sender.clone())));
+        self.pump.get_or_init(|| {
+            self.spawner.spawn(pump(host.clone(), self.sender.clone(), cx.clone()))
+        });
         let mut queue = self.receiver.lock().await;
         let (receiver, epoch, ended) = &mut *queue;
         let observation =
@@ -144,7 +154,7 @@ impl AvatarAudio for HostAudioReceiver {
     fn next_audio(&self) -> BoxFuture<'_, Result<AudioReceiverObservation, ProviderError>> {
         match &self.audio {
             Audio::Native(audio) => audio.next_audio(),
-            Audio::Pumped(pumped) => Box::pin(pumped.next_audio(&self.host)),
+            Audio::Pumped(pumped) => Box::pin(pumped.next_audio(&self.host, &self.cx)),
         }
     }
 
@@ -164,7 +174,7 @@ impl AvatarAudioReceiver for HostAudioReceiver {
         &self,
         segment: AvatarPlaybackSegment,
     ) -> BoxFuture<'_, Result<(), ProviderError>> {
-        self.host.notify_playback_started(&telemetry::Cx::NONE, segment)
+        self.host.notify_playback_started(&self.cx, segment)
     }
 
     fn notify_playback_finished(
@@ -173,15 +183,10 @@ impl AvatarAudioReceiver for HostAudioReceiver {
         interrupted: bool,
         segment: AvatarPlaybackSegment,
     ) -> BoxFuture<'_, Result<(), ProviderError>> {
-        self.host.notify_playback_finished(
-            &telemetry::Cx::NONE,
-            playback_position,
-            interrupted,
-            segment,
-        )
+        self.host.notify_playback_finished(&self.cx, playback_position, interrupted, segment)
     }
 
     fn aclose(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
-        self.host.aclose(&telemetry::Cx::NONE)
+        self.host.aclose(&self.cx)
     }
 }

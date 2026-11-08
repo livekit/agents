@@ -360,8 +360,9 @@ pub trait JobExecution: Any + Send + Sync {
     fn session_started(&self, trace: crate::telemetry::Cx) {
         let _ = trace;
     }
-    /// The primary session's trace, once it started.
-    fn session_trace(&self) -> Option<crate::telemetry::Cx> {
+    /// Where the RPCs the job handles are recorded: the primary session's trace once it started,
+    /// else the job's.
+    fn rpc_trace(&self) -> Option<crate::telemetry::Cx> {
         None
     }
 }

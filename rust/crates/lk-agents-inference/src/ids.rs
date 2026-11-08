@@ -43,16 +43,12 @@ pub fn create_inference_request_id(
 mod tests {
     use super::*;
 
-    // Catches: a 12-char id that is not 12 hex chars, or a constant or counter behind `shortuuid`.
+    // Catches: an id outside the protocol's `guid` format, or a constant or counter behind
+    // `shortuuid`.
     #[test]
-    fn a_shortuuid_is_twelve_random_lowercase_hex_characters_after_the_prefix() {
+    fn a_shortuuid_is_the_prefix_then_a_random_protocol_id() {
         let id = shortuuid("stt_request_");
-        let suffix = id.strip_prefix("stt_request_").expect("prefix is kept verbatim");
-        assert_eq!(suffix.len(), 12);
-        assert!(
-            suffix.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
-            "not lowercase hex: {suffix}"
-        );
+        assert!(lk_agents_net::strings::is_valid_id("stt_request_", &id), "not a guid: {id}");
         assert_ne!(shortuuid(""), shortuuid(""));
     }
 

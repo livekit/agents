@@ -373,6 +373,7 @@ fn expand_host(
         (I::Struct(st), Some("string" | "record")) => {
             st.attrs.retain(|a| !a.path().is_ident("python"))
         }
+        (I::Enum(en), Some("record")) => en.attrs.retain(|a| !a.path().is_ident("python")),
         (I::Fn(f), Some("export")) => f.attrs.retain(|a| !a.path().is_ident("python")),
         _ => {}
     }
@@ -420,13 +421,15 @@ fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
     }
 }
 
-/// `record(.., default)`: `Default` from the fields' declared `default`s (a `Maybe` field: not
-/// given), so the host's defaults and Rust's are one list.
+/// `record(.., default)`: the record from its fields' declared `default`s (a `Maybe` field: not
+/// given), so the host's defaults and Rust's are one list. `Default` when every field declares
+/// one; else `new(..)`, taking the fields that declare none, in order.
 fn declared_default(st: &syn::ItemStruct) -> syn::Result<proc_macro2::TokenStream> {
     let syn::Fields::Named(named) = &st.fields else { return Ok(proc_macro2::TokenStream::new()) };
-    let mut inits = Vec::new();
+    let (mut inits, mut params) = (Vec::new(), Vec::new());
     for f in &named.named {
         let m = lk_agents_bindgen::Metas::of(&f.attrs)?;
+        let name = &f.ident;
         let value = match m.0.iter().rev().find(|x| x.key == "default").map(|x| &x.value) {
             Some(lk_agents_bindgen::Value::Text(s)) => quote::quote!(#s.into()),
             Some(lk_agents_bindgen::Value::Rust(r)) => r.parse::<proc_macro2::TokenStream>()?,
@@ -435,16 +438,22 @@ fn declared_default(st: &syn::ItemStruct) -> syn::Result<proc_macro2::TokenStrea
                 quote::quote!(::core::default::Default::default())
             }
             _ => {
-                return Err(syn::Error::new_spanned(
-                    f,
-                    "`record(.., default)`: every field declares its `default`",
-                ));
+                let ty = &f.ty;
+                params.push(quote::quote!(#name: #ty));
+                quote::quote!(#name)
             }
         };
-        let name = &f.ident;
         inits.push(quote::quote!(#name: #value));
     }
     let (name, (imp, ty, wh)) = (&st.ident, st.generics.split_for_impl());
+    if !params.is_empty() {
+        return Ok(quote::quote! {
+            impl #imp #name #ty #wh {
+                /// The record with its declared defaults.
+                pub fn new(#(#params),*) -> Self { #name { #(#inits),* } }
+            }
+        });
+    }
     Ok(quote::quote! {
         impl #imp ::core::default::Default for #name #ty #wh {
             fn default() -> Self { #name { #(#inits),* } }

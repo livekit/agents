@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
 
 from .._generated import facades_llm as _facades, public_llm as _public
 from .._generated.public_llm import *  # noqa: F403
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from ..utils import is_given
 from . import utils
 from .chat_context import (
     AgentConfigUpdate,
@@ -140,64 +137,5 @@ class FallbackAdapter(_facades.FallbackAdapter):
     """Several LLMs behind one: a failed one is skipped until it recovers. The chain is the
     core's (``_core.FallbackLlm``)."""
 
-    def chat(
-        self,
-        *,
-        chat_ctx: ChatContext,
-        tools: list[Tool] | None = None,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[dict[str, object]] = NOT_GIVEN,
-    ) -> LLMStream:
-        return FallbackLLMStream(
-            self,
-            chat_ctx=chat_ctx,
-            tools=tools or [],
-            # the core's chain retries and falls back: the stream does not retry on top of it
-            conn_options=replace(conn_options, max_retry=0),
-            parallel_tool_calls=parallel_tool_calls if is_given(parallel_tool_calls) else None,
-            tool_choice=tool_choice if is_given(tool_choice) else None,
-            extra_kwargs=extra_kwargs if is_given(extra_kwargs) else None,
-        )
-
     def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
         self._members[0].prewarm(loop=loop)
-
-
-class FallbackLLMStream(LLMStream):
-    _llm: FallbackAdapter
-
-    def __init__(
-        self,
-        llm: FallbackAdapter,
-        *,
-        chat_ctx: ChatContext,
-        tools: list[Tool],
-        conn_options: APIConnectOptions,
-        parallel_tool_calls: bool | None,
-        tool_choice: ToolChoice | None,
-        extra_kwargs: dict[str, object] | None,
-    ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
-        self._parallel_tool_calls = parallel_tool_calls
-        self._tool_choice = tool_choice
-        self._extra_kwargs = extra_kwargs
-
-    async def _run(self) -> None:
-        from .._bindings import tool_specs
-
-        native = await self._llm._native.chat(
-            self._chat_ctx,
-            tools=tool_specs(self._tools),
-            tools_host=self._tools,
-            conn_options=self._conn_options,
-            parallel_tool_calls=self._parallel_tool_calls,
-            tool_choice=self._tool_choice,
-            extra_kwargs=self._extra_kwargs,
-        )
-        try:
-            while (chunk := await native.recv()) is not None:
-                self.send(chunk)
-        finally:
-            await native.aclose()

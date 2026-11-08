@@ -103,21 +103,7 @@ fn player() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_abi::VirtualClock>) {
 }
 
 fn play(player: &BackgroundAudioPlayer, stream: Arc<Frames>) -> Arc<PlaybackDone> {
-    player
-        .play(
-            vec![Sound {
-                source: SoundSource::Stream(stream),
-                volume: 1.0,
-                probability: 1.0,
-                fade_in: 0.0,
-                fade_out: 0.0,
-            }],
-            false,
-            false,
-            false,
-            0.0,
-        )
-        .unwrap()
+    player.play(vec![Sound::new(SoundSource::Stream(stream))], false, false, false, 0.0).unwrap()
 }
 
 fn frame(samples: &[i16]) -> AudioFrame {

@@ -15,8 +15,28 @@ pub trait TtsStream: Send + Sync + Sized + 'static {
     fn end_input(&self) -> Result<(), ProviderError>;
     #[host(await)]
     async fn recv(&self) -> Result<Option<SynthesizedAudio>, PullError>;
+    /// Every audio it synthesizes into `emitter`, until it ends: its frames, the words they
+    /// cover and the usage reported, in one segment when `stream`.
+    #[host(await)]
+    async fn drain_into(
+        &self,
+        emitter: std::sync::Arc<dyn crate::tts::stream_pacer::PushedAudio>,
+        #[host(kw)] stream: bool,
+    ) -> Result<(), DrainError>;
     #[host(await)]
     async fn aclose(&self);
+}
+
+/// Why a synthesis stopped draining into its emitter: its own failure, or the emitter's.
+#[derive(Debug, thiserror::Error)]
+#[crate::host(error(kind = "RuntimeError"))]
+pub enum DrainError {
+    #[error(transparent)]
+    #[host(delegate)]
+    Pull(#[from] PullError),
+    #[error(transparent)]
+    #[host(delegate)]
+    Emitter(#[from] crate::media::emitter::EmitterError),
 }
 
 /// A streamed synthesis's segments: the flushes asked for (`expected`) and the segments pushed.

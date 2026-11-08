@@ -20,8 +20,8 @@ use lk_agents_abi::{
     ChatContext, ChatItem, Clock, Realtime, RealtimeCommand, RealtimeSession, Spawner, WallAnchor,
 };
 
-/// `DuplexRealtimeAdapter`'s engine: the session's realtime model, its sessions on the clock
-/// and executor it was built with.
+/// `DuplexRealtimeAdapter`'s engine: the session's realtime model, its sessions on the clock it
+/// was built with and the executor resolved when one opens (building it starts nothing).
 pub struct DuplexAdapterModel {
     pub(super) host: Arc<dyn DuplexHost>,
     pub(super) label: String,
@@ -29,7 +29,7 @@ pub struct DuplexAdapterModel {
     pub(super) audio_timeout: Duration,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) anchor: WallAnchor,
-    pub(super) spawner: Arc<dyn Spawner>,
+    pub(super) spawner: fn() -> Result<Arc<dyn Spawner>, lk_agents_net::env::ProcessError>,
 }
 
 impl Realtime for DuplexAdapterModel {
@@ -46,11 +46,13 @@ impl Realtime for DuplexAdapterModel {
         &self,
         cx: telemetry::Cx,
         _turn_detection_disabled: bool,
+        tools: Option<lk_agents_abi::HostRef>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(async move {
             let gate = SessionGate::new(self.host.gate().map_err(ProviderError::from)?);
-            let view = self.host.session(&cx).await.map_err(ProviderError::from)?;
-            let host = HostSession::open(view, self.label.clone(), &self.spawner);
+            let view = self.host.session(&cx, tools).await.map_err(ProviderError::from)?;
+            let spawner = (self.spawner)().map_err(lk_agents_abi::errors::ApiError::from)?;
+            let host = HostSession::open(view, self.label.clone(), &spawner);
             host.observe(cx);
             let segmenter = Segmenter::new(
                 self.label.clone(),

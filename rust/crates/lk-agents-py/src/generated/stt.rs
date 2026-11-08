@@ -272,9 +272,13 @@ type InferenceSttImpl =
 fn _extract_inference_stt_new_sample_rate(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<InferenceSttNewSampleRateInput> {
-    crate::py_values::number_from_py::<u32>(obj.as_any(), "sample_rate")
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<u32>(obj.as_any(), "sample_rate")).map(Some)
+    }
 }
-type InferenceSttNewSampleRateInput = u32;
+type InferenceSttNewSampleRateInput = ::std::option::Option<u32>;
 
 fn _extract_inference_stt_stream_start_time_offset(
     obj: &Bound<'_, PyAny>,
@@ -295,66 +299,58 @@ pub struct InferenceStt(pub(crate) ::std::sync::Arc<InferenceSttImpl>);
 
 #[pymethods]
 impl InferenceStt {
-    /// A client of `model` on the gateway at `base_url`. Starts nothing. `vad`'s end of speech
-    /// finalizes the transcript (Speechmatics only). `inference.STT` builds it in its constructor.
+    /// A client of `model` (``"provider/model[:language]"``) on the gateway. Starts nothing. The
+    /// gateway's URL and key pair resolve from the given values, the environment and the
+    /// server's settings. `vad`'s end of speech finalizes the transcript of a model that
+    /// endpoints client-side (Speechmatics, OpenAI), which gets a default one from
+    /// `vad_models` when none is given; a model that endpoints server-side ignores it.
     #[new]
-    #[pyo3(signature = (*, model, language, encoding, sample_rate, base_url, api_key, api_secret, extra_kwargs, fallback = None, conn_options, vad = None))]
+    #[pyo3(signature = (vad_models, model = None, *, language = None, base_url = None, encoding = None, sample_rate = None, api_key = None, api_secret = None, extra_kwargs = None, fallback = None, conn_options = None, vad = None))]
     fn new(
         py: Python<'_>,
+        vad_models: Bound<'_, PyAny>,
         model: ::std::option::Option<::std::string::String>,
         language: ::std::option::Option<::std::string::String>,
-        encoding: ::std::string::String,
+        base_url: ::std::option::Option<::std::string::String>,
+        encoding: ::std::option::Option<::std::string::String>,
         #[pyo3(from_py_with = _extract_inference_stt_new_sample_rate)]
         sample_rate: InferenceSttNewSampleRateInput,
-        base_url: ::std::string::String,
-        api_key: ::std::string::String,
-        api_secret: ::std::string::String,
-        extra_kwargs: Bound<'_, PyAny>,
+        api_key: ::std::option::Option<::std::string::String>,
+        api_secret: ::std::option::Option<::std::string::String>,
+        extra_kwargs: Option<Bound<'_, PyAny>>,
         fallback: Option<Bound<'_, PyAny>>,
-        conn_options: Bound<'_, PyAny>,
+        conn_options: Option<Bound<'_, PyAny>>,
         vad: Option<Bound<'_, PyAny>>,
     ) -> PyResult<InferenceStt> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let extra_kwargs =
-            match crate::py_values::value_from_py(extra_kwargs.as_any(), "extra_kwargs")? {
+        let vad_models = crate::generated::vad::VadModelsProxy::from_host(vad_models.as_any())?;
+        let extra_kwargs = extra_kwargs
+            .map(|v| match crate::py_values::value_from_py(v.as_any(), "extra_kwargs")? {
                 ::serde_json::Value::Object(map) => Ok(map),
                 value => Err(::pyo3::exceptions::PyValueError::new_err(format!(
                     "expected a dict of extra kwargs, got {value}"
                 ))),
-            }?;
-        let fallback = fallback
-            .map(|v| {
-                v.cast::<::pyo3::types::PyList>().map_err(::pyo3::PyErr::from).and_then(|items| {
-                    items
-                        .iter()
-                        .map(|item| {
-                            if !item.is_instance_of::<::pyo3::types::PyDict>() {
-                                return Err(::pyo3::exceptions::PyValueError::new_err(
-                                    "each fallback entry must be a dict",
-                                ));
-                            }
-                            crate::generated::records::inference_stt::fallback_model_from_py(
-                                item.as_any(),
-                            )
-                        })
-                        .collect::<PyResult<Vec<_>>>()
-                })
             })
             .transpose()?;
-        let conn_options =
-            crate::generated::records::connect::api_connect_options_from_py(conn_options.as_any())?;
+        let fallback = fallback
+            .map(|v| crate::generated::records::inference_stt::fallback_models_from_py(v.as_any()))
+            .transpose()?;
+        let conn_options = conn_options
+            .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
+            .transpose()?;
         let vad =
             vad.map(|v| crate::generated::vad::VadProxy::from_host(v.as_any())).transpose()?;
         let out = py
             .detach(|| {
                 <InferenceSttImpl as ::lk_agents_abi::stt::inference::InferenceStt>::new(
                     &env,
+                    vad_models,
                     model,
                     language,
+                    base_url,
                     encoding,
                     sample_rate,
-                    base_url,
                     api_key,
                     api_secret,
                     extra_kwargs,
@@ -363,27 +359,44 @@ impl InferenceStt {
                     vad,
                 )
             })
-            .map_err(|e: ::lk_agents_abi::errors::ApiError| {
-                <::lk_agents_abi::errors::ApiError as crate::py_errors::HostException>::to_py_err(
-                    &e,
-                )
+            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
             })?;
         ::pyo3::PyResult::Ok(InferenceStt(::std::sync::Arc::new(out)))
     }
 
-    /// The model's VAD as the host resolved it on `update_options(model=)`; `None` drops it.
-    /// Later streams use it.
-    #[pyo3(signature = (vad = None))]
-    fn set_vad(&self, py: Python<'_>, vad: Option<Bound<'_, PyAny>>) -> PyResult<()> {
+    /// `"unknown"` without a model.
+    #[getter]
+    fn model(&self, py: Python<'_>) -> PyResult<::std::string::String> {
         crate::py_calls::check_pid()?;
-        let vad =
-            vad.map(|v| crate::generated::vad::VadProxy::from_host(v.as_any())).transpose()?;
-        py.detach(|| {
-            <InferenceSttImpl as ::lk_agents_abi::stt::inference::InferenceStt>::set_vad(
-                &self.0, vad,
+        let out = py.detach(|| {
+            <InferenceSttImpl as ::lk_agents_abi::stt::inference::InferenceStt>::model(&self.0)
+        });
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// Recomputed from the model, its fallbacks and the extra kwargs.
+    #[getter]
+    fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <InferenceSttImpl as ::lk_agents_abi::stt::inference::InferenceStt>::capabilities(
+                &self.0,
             )
         });
-        Ok(())
+        crate::generated::records::stt::stt_capabilities_to_py(py, out)
+    }
+
+    /// The policy this client was given, which a session or run that supplies none keeps.
+    #[getter]
+    fn conn_options<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <InferenceSttImpl as ::lk_agents_abi::stt::inference::InferenceStt>::conn_options(
+                &self.0,
+            )
+        });
+        crate::generated::records::connect::api_connect_options_to_py(py, out)
     }
 
     /// This client as a session of the job `headers` (`get_inference_headers()`) identifies holds
@@ -438,7 +451,8 @@ impl InferenceStt {
         ::pyo3::PyResult::Ok(InferenceStt(::std::sync::Arc::new(out)))
     }
 
-    /// Read by later streams, and sent to the open ones as a mid-stream `session.update`.
+    /// Read by later streams, and sent to the open ones as a mid-stream `session.update`. A new
+    /// model resolves its VAD again.
     #[pyo3(signature = (*, model = None, language = None, extra = None))]
     fn update_options(
         &self,
@@ -536,7 +550,7 @@ inventory::submit! {
     }
 }
 
-type InferenceSttStreamImpl = dyn ::lk_agents_abi::stt::inference::InferenceSttAudio;
+type InferenceSttStreamImpl = dyn ::lk_agents_abi::StreamInput<::lk_agents_abi::AudioFrame>;
 
 /// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.
 #[pyclass(frozen, name = "InferenceSttStream", module = "livekit.agents._core")]
@@ -580,28 +594,6 @@ impl InferenceSttStream {
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         crate::py_streams::close_native(&self.1, py)
-    }
-
-    /// A mid-stream `session.update`, for the providers that take one (AssemblyAI, Deepgram Flux).
-    #[pyo3(signature = (*, model = None, language = None, extra = None))]
-    fn update_options(
-        &self,
-        py: Python<'_>,
-        model: ::std::option::Option<::std::string::String>,
-        language: ::std::option::Option<::std::string::String>,
-        extra: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        let extra = extra
-            .map(|v| match crate::py_values::value_from_py(v.as_any(), "extra")? {
-                ::serde_json::Value::Object(map) => Ok(map),
-                value => Err(::pyo3::exceptions::PyValueError::new_err(format!(
-                    "expected a dict of extra kwargs, got {value}"
-                ))),
-            })
-            .transpose()?;
-        py.detach(|| <InferenceSttStreamImpl as ::lk_agents_abi::stt::inference::InferenceSttAudio>::update_options(&*self.0, model, language, extra));
-        Ok(())
     }
 }
 

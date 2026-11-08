@@ -1,24 +1,12 @@
 # GENERATED FILE -- DO NOT EDIT.
-#
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the declarations in:
-#     rust/crates/lk-agents-abi/src/tokenize/bindings.rs
-#
-# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
-# non-empty diff, so a hand edit here is reverted rather than merged.
+# From #[host(facade)] traits in lk-agents-abi.
 
 from __future__ import annotations
 
-from .. import _core
-from .._core import hyphenate_word, split_words, tokenize_paragraphs
-from ..tokenize import _CoreSentenceTokenizer, _CoreWordTokenizer
+from typing import TYPE_CHECKING, Any
 
-__all__ = [
-    "WordTokenizer",
-    "SentenceTokenizer",
-    "hyphenate_word",
-    "split_words",
-    "tokenize_paragraphs",
-]
+from .. import _bindings, _core
+from ..tokenize import _CoreSentenceTokenizer, _CoreWordTokenizer
 
 
 class WordTokenizer(_CoreWordTokenizer):
@@ -33,11 +21,15 @@ class WordTokenizer(_CoreWordTokenizer):
         split_character: bool = False,
         retain_format: bool = False,
     ) -> None:
-        self._core = _core.BasicWordTokenizer(
+        super().__init__()
+        self._native = _core.BasicWordTokenizer(
             ignore_punctuation=ignore_punctuation,
             split_character=split_character,
             retain_format=retain_format,
         )
+
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
+        return self._native.tokenize(text, language=language)
 
 
 class SentenceTokenizer(_CoreSentenceTokenizer):
@@ -53,12 +45,16 @@ class SentenceTokenizer(_CoreSentenceTokenizer):
         stream_context_len: int = 10,
         retain_format: bool = False,
     ) -> None:
-        self._core = _core.BasicSentenceTokenizer(
+        super().__init__()
+        self._native = _core.BasicSentenceTokenizer(
             language=language,
             min_sentence_len=min_sentence_len,
             stream_context_len=stream_context_len,
             retain_format=retain_format,
         )
+
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
+        return self._native.tokenize(text, language=language)
 
 
 WordTokenizer.__module__ = "livekit.agents.tokenize.basic"

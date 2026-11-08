@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from .facades_llm import FallbackLLMStream as FallbackLLMStream
 from .llm import (
     ChatChunk as ChatChunk,
     ChoiceDelta as ChoiceDelta,
@@ -25,4 +26,5 @@ __all__: list[str] = [
     "RealtimeModelError",
     "LLM",
     "LLMStream",
+    "FallbackLLMStream",
 ]

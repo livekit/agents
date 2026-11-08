@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Self
 
 from livekit.agents.a2a import _Delegation
@@ -29,12 +29,16 @@ class _core_Credentials:
     def verify(self, token: str, *, agent_name: str = "", deployment: str = "") -> Principal: ...
     def principal(
         self,
-        authorization: str | None,
-        thread_grant: str | None,
-        node_authorized: bool,
+        headers: Mapping[str, str],
+        *,
         agent_name: str,
-        deployment: str,
-    ) -> Principal: ...
+        deployment: str = "",
+        node_authorized: bool = False,
+    ) -> Principal:
+        """The caller of a request with these headers: its `Authorization` bearer token, else its
+        thread grant header (names compared case-insensitively); with neither, the project when
+        the LiveKit node authorized the call.
+        """
     def project_token(self, *, identity: str = "worker", ttl_seconds: int = 3600) -> str: ...
     def thread_grant_token(
         self,

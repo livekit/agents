@@ -10,7 +10,7 @@ from typing_extensions import TypeVar
 
 from livekit import rtc
 
-from .. import _core
+from .. import _bindings, _core
 from .._generated.public_llm_duplex import *  # noqa: F403
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
@@ -236,7 +236,12 @@ class DuplexRealtimeAdapter(RealtimeModel):
         super().__init__(capabilities=caps)
         self._duplex_model = duplex_model
         self._gate = gate
-        self._audio_timeout = audio_timeout
+        self._native = _core.DuplexRealtimeModel(
+            _bindings.Duplex(self), audio_timeout=audio_timeout
+        )
+
+    def _core_leg(self) -> _core.DuplexRealtimeModel:
+        return self._native
 
     @property
     def duplex_model(self) -> DuplexModel:

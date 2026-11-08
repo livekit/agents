@@ -29,13 +29,17 @@ use base64::Engine as _;
 use executor::SttStreamExecutor;
 use input::{AudioInput, Flush};
 use lk_agents_abi::Spawner;
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, Invalid, ProviderError};
+use lk_agents_abi::inference::fallback::{SttFallbackEntry, SttFallbacks};
+use lk_agents_abi::inference::models::InferenceProvider;
+use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::types::provider::NativeLabel;
+use lk_agents_abi::vad::inference::VadModels;
 use lk_agents_abi::{ApiConnectOptions, Clock, SpeechEvent};
 use lk_agents_media::AudioByteStream;
 use lk_agents_media::{AudioResampler, OnChange, Quality};
 use machine::{SttStream, SttStreamEvent};
-use options::FallbackModel;
+use options::{FallbackModel, VadResolution};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 use stream::{DeferredExtra, StreamControl};
@@ -56,6 +60,9 @@ pub(super) const FINALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// `_MAX_AGENT_CONTEXT_CHARS`: AssemblyAI caps `agent_context`, so the tail is kept.
 const MAX_AGENT_CONTEXT_CHARS: usize = 1750;
+
+/// Builds the default VAD of a model that endpoints client-side.
+type DefaultVad = Arc<dyn Fn() -> Arc<dyn crate::abi::Vad> + Send + Sync>;
 
 /// `STTOptions`, plus the credentials.
 #[derive(Debug, Clone)]
@@ -127,6 +134,8 @@ pub struct SttClient {
     clock: Arc<dyn Clock>,
     /// The Speechmatics path: a client-side VAD whose end-of-speech sends `session.finalize`.
     vad: Mutex<Option<Arc<dyn crate::abi::Vad>>>,
+    /// The VAD of a model that endpoints client-side when the host gave none.
+    default_vad: std::sync::OnceLock<DefaultVad>,
     /// Every open stream, which `update_options` and keyterm changes reach mid-stream.
     live: Mutex<Vec<Weak<StreamControl>>>,
 }
@@ -154,6 +163,7 @@ impl GatewayStt {
             tasks: Arc::default(),
             clock,
             vad: Mutex::new(None),
+            default_vad: std::sync::OnceLock::new(),
             live: Mutex::new(Vec::new()),
         };
         GatewayStt {
@@ -205,6 +215,33 @@ impl GatewayStt {
     /// The model's VAD as the host resolved it (`_resolve_vad_for_model`); later streams use it.
     pub fn set_vad(&self, vad: Option<Arc<dyn crate::abi::Vad>>) {
         *self.shared.vad.lock() = vad;
+    }
+
+    /// `vad` as the model and its fallbacks need it (`_resolve_vad_for_model`): a model that
+    /// endpoints client-side keeps it, or gets a default one; a model that endpoints server-side
+    /// drops it, with a warning. Later streams use it.
+    fn resolve_vad(&self, vad: Option<Arc<dyn crate::abi::Vad>>) {
+        let opts = self.shared.opts.lock().clone();
+        let candidates = opts.model.iter().map(String::as_str);
+        let mut candidates = candidates.chain(opts.fallback.iter().map(|f| f.model.as_str()));
+        let model = candidates
+            .find(|m| {
+                options::resolve_vad_for_model(Some(m), false) == VadResolution::CreateDefault
+            })
+            .or(opts.model.as_deref());
+        let vad = match options::resolve_vad_for_model(model, vad.is_some()) {
+            VadResolution::DropAndWarn => {
+                log::warn!(
+                    target: lk_agents_abi::LOG_TARGET,
+                    "`vad` will be ignored: model {:?} handles endpointing server-side.",
+                    opts.model.as_deref().unwrap_or_default()
+                );
+                None
+            }
+            VadResolution::CreateDefault => self.shared.default_vad.get().map(|create| create()),
+            VadResolution::Keep | VadResolution::None => vad,
+        };
+        self.set_vad(vad);
     }
 
     /// The open streams; a dropped one is pruned on the way.
@@ -328,7 +365,7 @@ impl GatewayStt {
                 lk_agents_abi::inference::models::InferenceProvider::of_model(model)
                     == Some(lk_agents_abi::inference::models::InferenceProvider::Openai)
             })
-            && opts.sample_rate != 24_000
+            && opts.sample_rate != options::OPENAI_SAMPLE_RATE
         {
             return Err(ApiError::new("OpenAI STT requires a sample rate of 24000 Hz")
                 .with_retryable(false)
@@ -404,41 +441,82 @@ impl lk_agents_abi::stt::inference::InferenceStt for GatewayStt {
 
     fn new(
         env: &ProcessEnv,
+        vad_models: Arc<dyn VadModels>,
         model: Option<String>,
         language: Option<String>,
-        encoding: String,
-        sample_rate: u32,
-        base_url: String,
-        api_key: String,
-        api_secret: String,
-        extra_kwargs: serde_json::Map<String, serde_json::Value>,
-        fallback: Option<Vec<lk_agents_abi::inference::fallback::SttFallbackModel>>,
-        conn_options: ApiConnectOptions,
+        base_url: Option<String>,
+        encoding: Option<String>,
+        sample_rate: Option<u32>,
+        api_key: Option<String>,
+        api_secret: Option<String>,
+        extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
+        fallback: Option<SttFallbacks>,
+        conn_options: Option<ApiConnectOptions>,
         vad: Option<Arc<dyn crate::abi::Vad>>,
-    ) -> Result<Self, ApiError> {
-        let spawner = (env.spawner)().map_err(ApiError::from)?;
-        // Not `parse_model_into`: the host already parsed `provider/model:language`; a second
-        // parse would strip a legitimate `:` from the model name.
+    ) -> Result<Self, Invalid> {
+        use lk_agents_abi::inference::InferenceCredentials as _;
+        let credentials =
+            crate::credentials::Credentials::inference_credentials(base_url, api_key, api_secret)?;
+        let spawner = (env.spawner)().map_err(|e| Invalid(e.to_string()))?;
+        let (model, parsed_language) = match &model {
+            Some(model) => {
+                let (name, language) = options::parse_model_string(model);
+                (Some(name.to_owned()), language.map(str::to_owned))
+            }
+            None => (None, None),
+        };
+        let entries = fallback.map_or_else(Vec::new, SttFallbacks::entries);
+        let fallback: Vec<FallbackModel> = entries
+            .into_iter()
+            .map(|entry| match entry {
+                SttFallbackEntry::Model(model) => model,
+                SttFallbackEntry::Name(name) => options::normalize_fallback_str(&name),
+            })
+            .collect();
+        let openai = model
+            .iter()
+            .map(String::as_str)
+            .chain(fallback.iter().map(|f| f.model.as_str()))
+            .any(|m| InferenceProvider::of_model(m) == Some(InferenceProvider::Openai));
         let opts = SttOptions {
             model,
-            language,
-            encoding,
-            sample_rate,
-            base_url,
-            api_key,
-            api_secret,
-            extra_kwargs,
-            fallback: fallback.unwrap_or_default(),
-            conn_options,
+            language: language
+                .or(parsed_language)
+                .map(|l| LanguageCode::new(&l).as_str().to_owned()),
+            encoding: encoding.unwrap_or_else(|| options::DEFAULT_ENCODING.to_owned()),
+            sample_rate: sample_rate.unwrap_or(match openai {
+                true => options::OPENAI_SAMPLE_RATE,
+                false => options::DEFAULT_SAMPLE_RATE,
+            }),
+            base_url: credentials.base_url,
+            api_key: credentials.api_key,
+            api_secret: credentials.api_secret,
+            extra_kwargs: extra_kwargs.unwrap_or_default(),
+            fallback,
+            conn_options: conn_options.unwrap_or(lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS),
         };
         let ws = Arc::new(lk_agents_net::websocket::TungsteniteTransport);
         let stt = GatewayStt::new(opts, ws, spawner, env.clock.clone());
-        stt.set_vad(vad);
+        let env = env.clone();
+        let default_vad: DefaultVad = Arc::new(move || {
+            let opts = crate::vad::machine::VadOptions::default();
+            Arc::new(crate::vad::LocalVad::with_host_models(opts, vad_models.clone(), &env))
+        });
+        let _ = stt.shared.default_vad.set(default_vad);
+        stt.resolve_vad(vad);
         Ok(stt)
     }
 
-    fn set_vad(&self, vad: Option<Arc<dyn crate::abi::Vad>>) {
-        GatewayStt::set_vad(self, vad);
+    fn model(&self) -> String {
+        GatewayStt::model(self)
+    }
+
+    fn capabilities(&self) -> SttCapabilities {
+        self.shared.capabilities.lock().clone()
+    }
+
+    fn conn_options(&self) -> ApiConnectOptions {
+        self.shared.opts.lock().conn_options
     }
 
     fn identified(&self, headers: Headers, reporter: Option<Arc<dyn Stt>>) -> Self {
@@ -452,6 +530,10 @@ impl lk_agents_abi::stt::inference::InferenceStt for GatewayStt {
         extra: Option<serde_json::Map<String, serde_json::Value>>,
     ) {
         GatewayStt::update_options(self, model.as_deref(), language.as_deref(), extra.as_ref());
+        if model.is_some() {
+            let vad = self.shared.vad.lock().clone();
+            self.resolve_vad(vad);
+        }
     }
 
     fn stream(

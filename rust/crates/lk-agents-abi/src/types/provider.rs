@@ -27,6 +27,8 @@ pub enum ResponseObservation {
 #[crate::host(wire_strs)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeLabel {
+    #[host(rename = "livekit.agents.inference.llm.LLM")]
+    InferenceLlm,
     #[host(rename = "livekit.agents.inference.stt.STT")]
     InferenceStt,
     #[host(rename = "livekit.agents.inference.tts.TTS")]

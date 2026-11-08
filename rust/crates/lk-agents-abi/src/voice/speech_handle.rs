@@ -16,6 +16,18 @@ pub trait Speech: Any + Send + Sync + std::fmt::Debug {}
 #[error("{0}")]
 pub struct SpeechRefused(pub String);
 
+/// Why `exception()` has no answer yet.
+#[crate::host(error(kind = "RuntimeError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ExceptionRefused {
+    #[error("SpeechHandle is not done yet")]
+    #[host(kind = "asyncio.InvalidStateError")]
+    NotDone,
+    #[error(transparent)]
+    #[host(delegate)]
+    Refused(#[from] SpeechRefused),
+}
+
 #[crate::host(class(name = "SpeechHandle", native = Speech))]
 pub trait SpeechHandle: Send + Sync + Sized + 'static {
     /// A handle constructed directly (`SpeechHandle.create()`): no loop will create a speech
@@ -67,9 +79,10 @@ pub trait SpeechHandle: Send + Sync + Sized + 'static {
     #[host(setter, name = "allow_interruptions")]
     fn set_allow_interruptions(&self, value: bool) -> Result<(), SpeechRefused>;
 
-    /// The exception the speech failed with: the host's own object when a provider raised one.
+    /// The exception the speech failed with, or `None`: the host's own object when a provider
+    /// raised one. Refused until the speech is done.
     #[host(call)]
-    fn exception(&self) -> Result<Option<ProviderError>, SpeechRefused>;
+    fn exception(&self) -> Result<Option<ProviderError>, ExceptionRefused>;
 
     /// `interrupt(force=)`, in the reference's order. If the speech does not exist yet, the
     /// command is sent when the loop creates it.
@@ -145,6 +158,22 @@ pub trait SpeechHandleFacade {
     #[host(getter)]
     fn interrupted(&self) -> bool;
     fn done(&self) -> bool;
+    #[host(getter)]
+    fn allow_interruptions(&self) -> bool;
+    #[host(setter = allow_interruptions)]
+    fn set_allow_interruptions(&self, value: bool) -> Result<(), SpeechRefused>;
+    /// The error the speech failed with, or `None`; raises `asyncio.InvalidStateError` before it
+    /// is done.
+    fn exception(&self) -> Result<Option<ProviderError>, ExceptionRefused>;
+    /// Interrupt the speech.
+    #[host(chain)]
+    fn interrupt(&self, #[host(kw, default = false)] force: bool) -> Result<(), SpeechRefused>;
+    /// One step of the turn, not the whole thing; `None` is the latest.
+    #[host(native = wait_for_generation)]
+    async fn _wait_for_generation(
+        &self,
+        #[host(default = None)] step: Option<usize>,
+    ) -> Result<(), SpeechRefused>;
 }
 
 #[crate::host(file(module = "speech_defaults"))]

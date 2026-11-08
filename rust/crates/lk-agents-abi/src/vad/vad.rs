@@ -13,6 +13,7 @@ use crate::utils::stream::{ProviderStream, StreamInput};
     name = "VADCapabilities",
     dataclass,
     extract,
+    emit,
 ))]
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct VadCapabilities {

@@ -675,22 +675,26 @@ pub struct CoreAppTransaction(pub(crate) ::std::sync::Arc<CoreAppTransactionImpl
 #[pymethods]
 impl CoreAppTransaction {
     /// Stages one statement; `params` are JSON scalars.
-    #[pyo3(signature = (sql, params))]
+    #[pyo3(signature = (sql, params = None))]
     fn execute<'py>(
         &self,
         py: Python<'py>,
         sql: ::std::string::String,
-        params: Bound<'_, PyAny>,
+        params: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let params = params.try_iter().and_then(|items| {
-            items
-                .map(|item| {
-                    let item = item?;
-                    crate::py_values::value_from_py(item.as_any(), "params")
+        let params = params
+            .map(|v| {
+                v.try_iter().and_then(|items| {
+                    items
+                        .map(|item| {
+                            let item = item?;
+                            crate::py_values::value_from_py(item.as_any(), "params")
+                        })
+                        .collect::<PyResult<Vec<_>>>()
                 })
-                .collect::<PyResult<Vec<_>>>()
-        })?;
+            })
+            .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let () = <CoreAppTransactionImpl as ::lk_agents_abi::storage::context::AppTransaction>::execute(&this, sql, params)
@@ -700,22 +704,26 @@ impl CoreAppTransaction {
     }
 
     /// One read's rows, each a list of column values in select order.
-    #[pyo3(signature = (sql, params))]
+    #[pyo3(signature = (sql, params = None))]
     fn fetch<'py>(
         &self,
         py: Python<'py>,
         sql: ::std::string::String,
-        params: Bound<'_, PyAny>,
+        params: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let params = params.try_iter().and_then(|items| {
-            items
-                .map(|item| {
-                    let item = item?;
-                    crate::py_values::value_from_py(item.as_any(), "params")
+        let params = params
+            .map(|v| {
+                v.try_iter().and_then(|items| {
+                    items
+                        .map(|item| {
+                            let item = item?;
+                            crate::py_values::value_from_py(item.as_any(), "params")
+                        })
+                        .collect::<PyResult<Vec<_>>>()
                 })
-                .collect::<PyResult<Vec<_>>>()
-        })?;
+            })
+            .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let out = <CoreAppTransactionImpl as ::lk_agents_abi::storage::context::AppTransaction>::fetch(&this, sql, params)
@@ -739,6 +747,52 @@ impl CoreAppTransaction {
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
                     .into_any(),
+                    py,
+                )
+            })
+        })
+    }
+
+    /// The first row of one read, `None` when it has none.
+    #[pyo3(signature = (sql, params = None))]
+    fn fetch_one<'py>(
+        &self,
+        py: Python<'py>,
+        sql: ::std::string::String,
+        params: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let params = params
+            .map(|v| {
+                v.try_iter().and_then(|items| {
+                    items
+                        .map(|item| {
+                            let item = item?;
+                            crate::py_values::value_from_py(item.as_any(), "params")
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                })
+            })
+            .transpose()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let out = <CoreAppTransactionImpl as ::lk_agents_abi::storage::context::AppTransaction>::fetch_one(&this, sql, params)
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    out.map(|value| {
+                        ::pyo3::PyResult::Ok(
+                            ::pyo3::types::PyList::new(
+                                py,
+                                value
+                                    .into_iter()
+                                    .map(|x| crate::py_values::value_to_py(py, &x))
+                                    .collect::<PyResult<Vec<_>>>()?,
+                            )?
+                            .into_any(),
+                        )
+                    })
+                    .transpose()?,
                     py,
                 )
             })

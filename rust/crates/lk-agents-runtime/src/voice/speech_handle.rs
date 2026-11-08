@@ -565,6 +565,7 @@ fn refused(error: impl Into<SpeechRefused>) -> HostRefused {
 }
 
 type HostRefused = lk_agents_abi::voice::speech_handle::SpeechRefused;
+use lk_agents_abi::voice::speech_handle::ExceptionRefused;
 
 impl lk_agents_abi::voice::speech_handle::Speech for SpeechHandle {}
 
@@ -639,11 +640,14 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
         Ok(())
     }
 
-    fn exception(&self) -> Result<Option<ProviderError>, HostRefused> {
+    fn exception(&self) -> Result<Option<ProviderError>, ExceptionRefused> {
+        if !SpeechHandle::done(self) {
+            return Err(ExceptionRefused::NotDone);
+        }
         if self.created().is_none() {
             return Ok(None);
         }
-        SpeechHandle::exception(self).map_err(refused)
+        Ok(SpeechHandle::exception(self).map_err(refused)?)
     }
 
     /// Synchronous and in the reference's order (`speech_handle.py:185`).

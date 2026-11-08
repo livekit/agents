@@ -69,8 +69,8 @@ impl lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer for Blingfire
         plan.finish(spans).into_iter().map(|s| s.text).collect()
     }
 
-    fn split(&self, text: String) -> Vec<(String, usize, usize)> {
-        self.blingfire.tokenize(&text).into_iter().map(|s| (s.text, s.start, s.end)).collect()
+    fn split(&self, text: String) -> Vec<lk_agents_abi::tokenize::TokenSpan> {
+        self.blingfire.tokenize(&text).into_iter().map(Into::into).collect()
     }
 
     fn min_token_len(&self) -> usize {

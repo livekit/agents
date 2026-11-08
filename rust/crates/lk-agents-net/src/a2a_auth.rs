@@ -1,6 +1,7 @@
 //! Credential cryptography at the runtime boundary, using the LiveKit token SDK. The A2A
 //! core receives verified typed facts and makes the permission and carrier-selection decisions.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use livekit_token::{AccessToken, AgentEndpointGrants, AgentThreadGrants, TokenVerifier};
@@ -8,6 +9,7 @@ use lk_agents_abi::a2a::auth::{
     AuthError, AuthGrant, AuthOperation, AuthPermissions, AuthPrincipal,
     Credentials as CredentialsApi, PrincipalKind,
 };
+use lk_agents_abi::a2a::metadata::GRANT_HEADER;
 use lk_agents_core::a2a::auth::{allows, has_subject, selected_token};
 
 pub struct Credentials {
@@ -55,6 +57,31 @@ impl Credentials {
         Ok(AccessToken::with_api_key(&self.api_key, &self.api_secret)
             .with_identity(identity)
             .with_ttl(Duration::from_secs(ttl_seconds)))
+    }
+
+    /// The caller of a request carrying these headers: its bearer token, else its thread grant;
+    /// with neither, the project when the LiveKit node authorized the call.
+    pub fn authenticate(
+        &self,
+        authorization: Option<&str>,
+        thread_grant: Option<&str>,
+        node_authorized: bool,
+        agent_name: String,
+        deployment: String,
+    ) -> Result<AuthPrincipal, AuthError> {
+        if let Some(token) = selected_token(authorization, thread_grant)? {
+            return self.verify(token.to_owned(), agent_name, deployment);
+        }
+        if node_authorized {
+            return Ok(AuthPrincipal {
+                kind: PrincipalKind::Project,
+                grant: None,
+                identity: String::new(),
+                claims: Default::default(),
+                endpoint_call: true,
+            });
+        }
+        Err(AuthError::Unauthorized("a LiveKit bearer token is required".into()))
     }
 }
 
@@ -109,25 +136,16 @@ impl CredentialsApi for Credentials {
 
     fn principal(
         &self,
-        authorization: Option<String>,
-        thread_grant: Option<String>,
-        node_authorized: bool,
+        headers: BTreeMap<String, String>,
         agent_name: String,
         deployment: String,
+        node_authorized: bool,
     ) -> Result<AuthPrincipal, AuthError> {
-        if let Some(token) = selected_token(authorization.as_deref(), thread_grant.as_deref())? {
-            return self.verify(token.to_owned(), agent_name, deployment);
-        }
-        if node_authorized {
-            return Ok(AuthPrincipal {
-                kind: PrincipalKind::Project,
-                grant: None,
-                identity: String::new(),
-                claims: Default::default(),
-                endpoint_call: true,
-            });
-        }
-        Err(AuthError::Unauthorized("a LiveKit bearer token is required".into()))
+        let header = |name: &str| {
+            headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+        };
+        let (authorization, grant) = (header("authorization"), header(GRANT_HEADER));
+        self.authenticate(authorization, grant, node_authorized, agent_name, deployment)
     }
 
     fn project_token(&self, identity: String, ttl_seconds: u64) -> Result<String, AuthError> {
@@ -200,7 +218,7 @@ mod tests {
             Err(AuthError::Forbidden(_))
         ));
         assert!(matches!(
-            credentials.principal(None, None, false, "agent".into(), "prod".into()),
+            credentials.authenticate(None, None, false, "agent".into(), "prod".into()),
             Err(AuthError::Unauthorized(_))
         ));
     }

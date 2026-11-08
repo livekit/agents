@@ -409,6 +409,22 @@ impl lk_agents_abi::tts::stream_pacer::PushedAudio for AudioEmitter {
     fn pushed_duration(&self) -> f64 {
         locked(&self.0.machine).pushed_duration(-1)
     }
+    fn start_segment(&self, segment_id: String) -> Result<(), EmitterError> {
+        lk_agents_abi::media::emitter::AudioEmitter::start_segment(self, segment_id)
+    }
+    fn push_frame(&self, frame: AudioFrame) -> Result<(), EmitterError> {
+        lk_agents_abi::media::emitter::AudioEmitter::push_frame(self, frame)
+    }
+    fn push_timed_transcript(&self, words: Vec<TranscriptChunk>) -> Result<(), EmitterError> {
+        lk_agents_abi::media::emitter::AudioEmitter::push_timed_transcript(self, words)
+    }
+    fn report_usage(
+        &self,
+        usage: Option<TokenUsage>,
+        characters_count: Option<u64>,
+    ) -> Result<(), EmitterError> {
+        lk_agents_abi::media::emitter::AudioEmitter::report_usage(self, usage, characters_count)
+    }
 }
 
 impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {

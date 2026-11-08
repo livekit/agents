@@ -2,7 +2,8 @@
 //! `chat()` returns at once and the chain runs as a task feeding an `mpsc`
 //! (`FallbackLLMStream._run`), so its failure surfaces on the first `next()`.
 
-use lk_agents_abi::{Extra, HostRef, ToolSpec};
+use lk_agents_abi::llm::fallback::HostTools;
+use lk_agents_abi::{Extra, HostRef};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -213,19 +214,21 @@ impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
 
     /// A completion over the caller's own `ChatContext` and tools (the host objects every entry
     /// is handed, §1.11); the chain picks an entry on the first `recv()`.
-    #[allow(clippy::too_many_arguments, reason = "Preserve the public host operation signature")]
     async fn chat(
         &self,
-        chat_ctx_host: HostRef,
-        tools: Vec<ToolSpec>,
-        tools_host: Option<HostRef>,
+        chat_ctx: HostRef,
+        tools: Option<HostTools>,
         parallel_tool_calls: Option<bool>,
         tool_choice: Option<serde_json::Value>,
         extra_kwargs: Option<Extra>,
         conn_options: Option<lk_agents_abi::ApiConnectOptions>,
     ) -> Result<Self::Chunks, ProviderError> {
+        let (tools, tools_host) = match tools {
+            Some(tools) => (tools.specs, Some(tools.host)),
+            None => (Vec::new(), None),
+        };
         let req = ChatRequest {
-            chat_ctx_host: Some(chat_ctx_host),
+            chat_ctx_host: Some(chat_ctx),
             tools,
             tools_host,
             conn_options: conn_options.unwrap_or_else(crate::fallback::caller_default),

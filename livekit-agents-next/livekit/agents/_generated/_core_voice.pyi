@@ -23,7 +23,7 @@ from livekit.agents.voice.agent_session import _SessionNodes
 from livekit.agents.voice.avatar import AudioReceiver, AvatarSession, VideoGenerator
 from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput
 from livekit.agents.voice.room_io import RemoteParticipant, TrackPublication
-from livekit.rtc import Room, RpcInterceptor, VideoFrame
+from livekit.rtc import Room, RpcInterceptor, RpcInvocationData, VideoFrame
 
 from .._core import (
     JobRun,
@@ -39,17 +39,17 @@ from .amd import AMDConfig, AMDPredictionEvent
 from .avatar import AudioReceiverObservation, MediaFrame
 from .avatar_options import AvatarOptions
 from .avatar_queue import QueueEffects
-from .background_audio_wire import Sound
+from .background_audio_wire import Sounds
 from .chat_items import ChatContent, ChatItem
 from .connect import APIConnectOptions, SessionConnectOptions
-from .events import AgentState, UserState
+from .events import AgentState, CloseReason, UserState
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
 from .llm import ChatChunk
 from .metrics import AvatarMetrics
 from .playback_events import PlaybackFinishedEvent
 from .room_runtime import TrackPublished
 from .rtc_frames import AudioFrame
-from .rtc_rpc import RpcCallInfo, RpcInvocationData
+from .rtc_rpc import RpcCallInfo
 from .rtc_wire import PlaybackInfo
 from .session_options import (
     InterruptionGateVerdict,
@@ -72,6 +72,7 @@ from .turn import EndpointingOptions, InterruptionMode, InterruptionOptions
 from .usage import Usage
 from .voice_session import (
     DtmfTaskOptions,
+    FillerSource,
     UpdateAgentArgs,
     VoiceCommandOrigin,
     VoiceSessionArgs,
@@ -94,7 +95,8 @@ def amd_prediction_is_machine(prediction: AMDPredictionEvent) -> bool:
 class HostAudioReceiver:
     """The avatar runner's receiver over a host `AudioReceiver`: its audio read from `audio` when
     given (`QueueAudioOutput`'s native queue), else from the host's iterator into a queue that
-    drops its oldest audio only when far behind (measured) and is flushed by each `clear_buffer`. Playback reports reach the host receiver.
+    drops its oldest audio only when far behind (measured) and is flushed by each `clear_buffer`.
+    Playback reports reach the host receiver. Its host calls run under the span it was made in.
     """
     def __new__(cls, receiver: AudioReceiver, *, audio: _core_QueueAudio | None = None) -> Self: ...
     def clear_buffer(self) -> None:
@@ -230,27 +232,18 @@ class BackgroundAudioPlayer:
         room: _core_RoomSession,
         draw: float,
         *,
-        ambient: Sequence[Sound],
-        choose: bool,
+        ambient: Sounds | None,
         source: int | None = None,
     ) -> str: ...
     def play(
         self,
-        sounds: Sequence[Sound],
+        sounds: Sounds,
         draw: float,
         *,
         looping: bool = False,
         ambient: bool = False,
-        choose: bool = True,
     ) -> PlayState: ...
-    def on_agent_state(
-        self,
-        sounds: Sequence[Sound],
-        draw: float,
-        thinking: bool,
-        *,
-        choose: bool = True,
-    ) -> None: ...
+    def on_agent_state(self, sounds: Sounds | None, draw: float, thinking: bool) -> None: ...
     @property
     def closed(self) -> bool: ...
     async def aclose(self) -> None: ...
@@ -454,8 +447,9 @@ class _core_RoomRpcRouter:
 class _core_RpcTracing(RpcInterceptor):
     """The job's `rtc.RpcInterceptor`, added to its local participant once the room connected: an
     `rpc_call` span around each call the participant performs, under the caller's span, and an
-    `rpc_handler` span around each call it handles, under the job's primary session. What the
-    chain returns or raises reaches the caller unchanged.
+    `rpc_handler` span around each call it handles, under the job's primary session, else the job,
+    with the SDK's cancel reason when it cancelled the handler. What the chain returns or raises
+    reaches the caller unchanged.
     """
     def __new__(cls, job: JobRun) -> Self: ...
     async def intercept_outgoing(
@@ -700,19 +694,18 @@ class VoiceSession:
         self,
         call_id: str,
         speech_id: str,
+        source: FillerSource,
         *,
         delay: float,
         interval: float | None = None,
         max_steps: int | None = None,
-        text: str | None = None,
-        source: object | None = None,
         origin: VoiceCommandOrigin | None = None,
     ) -> int:
         """`RunContext.with_filler(..)` entered for tool `call_id` of `speech_id`: after `delay` s
-        idle say `text` (or ask `source`), then repeat every `interval`. Returns the scope's number.
+        idle say or ask `source`, then repeat every `interval`. Returns the scope's number.
         """
     def filler_stop(self, id: int) -> None:
-        """`with_filler`'s exit."""
+        """`with_filler`'s exit; a no-op once the session closed."""
     def clear_user_turn(self) -> None:
         """`AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it."""
     def update_instructions(self, instructions: str) -> None:
@@ -957,8 +950,10 @@ class _core_SessionOwner:
         restore is refused (`SessionClosing`); there is nothing left to restore.
         """
     def resolved_options(self, legs: SessionLegs) -> ResolvedSessionOptions: ...
-    async def aclose(self, reason: str, drain: bool = False) -> None: ...
-    def shutdown(self, reason: str, drain: bool = False) -> None: ...
+    async def aclose(self, reason: CloseReason | None = None, drain: bool = False) -> None:
+        """Close the session for `reason`, the user's when `None`; `drain` lets queued speech finish."""
+    def shutdown(self, reason: CloseReason | None = None, drain: bool = False) -> None:
+        """`aclose` without waiting for it."""
     async def finish_recording(self) -> None:
         """The recording's final result remains available to the job reporter."""
     @property
@@ -1070,7 +1065,9 @@ class SpeechHandle:
     def allow_interruptions(self, value: bool) -> None:
         """Enqueues the change; the accepted view changes when the loop applies it."""
     def exception(self) -> BaseException | None:
-        """The exception the speech failed with: the host's own object when a provider raised one."""
+        """The exception the speech failed with, or `None`: the host's own object when a provider
+        raised one. Refused until the speech is done.
+        """
     def interrupt(self, *, force: bool = False) -> None:
         """`interrupt(force=)`, in the reference's order. If the speech does not exist yet, the
         command is sent when the loop creates it.

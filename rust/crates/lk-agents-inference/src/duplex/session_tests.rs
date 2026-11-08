@@ -24,6 +24,7 @@ impl DuplexHost for FakeHost {
     fn session(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
+        _: Option<lk_agents_abi::HostRef>,
     ) -> BoxFuture<'_, Result<Arc<dyn abi::DuplexSession>, HostError>> {
         Box::pin(async { Ok(self.0.clone() as Arc<dyn abi::DuplexSession>) })
     }
@@ -121,9 +122,9 @@ async fn session_on(
         audio_timeout: crate::duplex::AUDIO_TIMEOUT,
         anchor: WallAnchor::of(&*clock),
         clock,
-        spawner: Arc::new(lk_agents_net::task::TokioSpawner::current()),
+        spawner: || Ok(Arc::new(lk_agents_net::task::TokioSpawner::current())),
     };
-    model.session(lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap()
+    model.session(lk_agents_abi::telemetry::Cx::NONE, false, None).await.unwrap()
 }
 
 fn reply(req_id: &str) -> RealtimeCommand {

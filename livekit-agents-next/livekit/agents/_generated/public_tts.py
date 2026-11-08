@@ -12,6 +12,7 @@ from .._core import (
 from .facades_tts import (
     FallbackChunkedStream as FallbackChunkedStream,
     FallbackSynthesizeStream as FallbackSynthesizeStream,
+    StreamAdapterWrapper as StreamAdapterWrapper,
     StreamPacerWrapper as StreamPacerWrapper,
 )
 from .tts import (
@@ -38,6 +39,7 @@ __all__: list[str] = [
     "SynthesizeStream",
     "FallbackChunkedStream",
     "FallbackSynthesizeStream",
+    "StreamAdapterWrapper",
     "StreamPacerWrapper",
     "AudioEmitter",
     "split_all_markup",

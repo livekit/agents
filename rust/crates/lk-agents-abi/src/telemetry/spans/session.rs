@@ -310,8 +310,9 @@ pub enum BlockingSeverity {
     Error,
 }
 
-/// An RPC method handled for a remote participant.
-#[span(name = "rpc_handler", parent = AgentSession, kind = Server, end = RpcEnd)]
+/// An RPC method handled for a remote participant, under the job's primary session, else the job
+/// before the session started.
+#[span(name = "rpc_handler", parent = AgentSession | JobEntrypoint, kind = Server, end = RpcEnd)]
 #[derive(Attrs)]
 pub struct RpcHandler {
     #[attr(otel::RPC_METHOD)]
@@ -353,7 +354,8 @@ pub struct RpcCall {
 
 #[derive(Attrs)]
 pub struct RpcEnd {
-    /// The RPC error code, on error.
+    /// The RPC error code, on error; for a handler the SDK cancelled, its reason
+    /// (`RESPONSE_TIMEOUT` or `RECIPIENT_DISCONNECTED`).
     #[attr("lk.rpc.error_code")]
     pub error_code: Option<i64>,
     /// Response size, in bytes, on success.

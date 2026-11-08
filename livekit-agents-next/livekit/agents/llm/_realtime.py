@@ -7,7 +7,7 @@ class keeps the plugin's constructor and hands its arguments over as given.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel
 
@@ -28,16 +28,14 @@ RealtimeModels = Literal[
 ]
 
 
-# the metrics label direct OpenAI sessions had before the client moved into the core
-_PLUGIN_LABEL = "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
-
-
 # sessions run in the core; the name stays for the plugins that subclass it
 RealtimeSession = llm_realtime.RealtimeSession
 
 
 class RealtimeModel(llm_realtime.RealtimeModel):
-    _dialect: str | None = None
+    _dialect: ClassVar[str | None] = None
+    # the name logs and metrics give the model; each provider subclass sets its own
+    _provider_label: ClassVar[str] = "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
 
     def __init__(
         self,
@@ -87,11 +85,6 @@ class RealtimeModel(llm_realtime.RealtimeModel):
         Raises:
             ValueError: If OPENAI_API_KEY is missing in non-Azure mode, or if Azure endpoint cannot be determined when in Azure mode.
         """
-        label = (
-            _PLUGIN_LABEL
-            if type(self) is RealtimeModel
-            else f"{type(self).__module__}.{type(self).__name__}"
-        )
         self._native = _core.OpenAIRealtimeModel(
             OpenAIRealtimeConfig(
                 dialect=self._dialect,
@@ -105,7 +98,7 @@ class RealtimeModel(llm_realtime.RealtimeModel):
                 entra_token=entra_token,
                 azure_defaults=_azure_defaults,
                 conn_options=conn_options,
-                label=label,
+                label=self._provider_label,
                 options=realtime_options(
                     input_audio_transcription=input_audio_transcription,
                     input_audio_noise_reduction=input_audio_noise_reduction,
@@ -120,7 +113,7 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             )
         )
         super().__init__(capabilities=self.capabilities)
-        self._label = label
+        self._label = self._native.label
 
     @property
     def model(self) -> str:
@@ -228,8 +221,7 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             f"{type(self).__name__} sessions run in the core; give the model to a VoiceSession"
         )
 
-    def _core_native(self) -> _core.OpenAIRealtimeModel:
-        """The model as a ``VoiceSession`` drives it."""
+    def _core_leg(self) -> _core.OpenAIRealtimeModel:
         return self._native
 
     async def aclose(self) -> None:

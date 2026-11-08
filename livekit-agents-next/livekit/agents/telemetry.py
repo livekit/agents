@@ -16,7 +16,7 @@ from opentelemetry.trace import NonRecordingSpan, SpanContext, SpanKind, Status
 from opentelemetry.util._decorator import _agnosticcontextmanager
 
 from . import _core
-from ._generated import public_telemetry as _public, semconv
+from ._generated import facades_telemetry as _facades, public_telemetry as _public, semconv
 from ._generated.public_telemetry import *  # noqa: F403
 
 __all__: list[str] = []
@@ -106,40 +106,12 @@ def _job_id() -> str | None:
     return job.job.id if job is not None else None
 
 
-class _Span(trace.Span):
-    def __init__(self, core: _core.TelemetrySpan) -> None:
-        self._core = core
-        self._context = core.context
-
-    def get_span_context(self) -> SpanContext:
-        return self._context
-
-    def end(self, end_time: int | None = None) -> None:
-        self._core.end(end_time)
-
-    def set_attributes(self, attributes: Mapping[str, Any]) -> None:
-        for key, value in attributes.items():
-            self._core.set_attribute(key, value)
-
-    def set_attribute(self, key: str, value: Any) -> None:
-        self._core.set_attribute(key, value)
-
-    def add_event(
-        self, name: str, attributes: Mapping[str, Any] | None = None, timestamp: int | None = None
-    ) -> None:
-        self._core.add_event(name, attributes, timestamp)
-
-    def update_name(self, name: str) -> None:
-        self._core.update_name(name)
-
-    def is_recording(self) -> bool:
-        return self._core.is_recording()
-
+class _Span(_facades._Span):
     def set_status(self, status: Status | trace.StatusCode, description: str | None = None) -> None:
         if isinstance(status, Status):
-            self._core.set_status(status.status_code, status.description)
+            self._native.set_status(status.status_code, status.description)
         else:
-            self._core.set_status(status, description)
+            self._native.set_status(status, description)
 
     def record_exception(
         self,

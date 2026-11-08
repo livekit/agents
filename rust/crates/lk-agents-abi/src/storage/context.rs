@@ -125,12 +125,27 @@ pub trait ContextActivation: Send + Sync + Sized + 'static {
 pub trait AppTransaction: Send + Sync + Sized + 'static {
     /// Stages one statement; `params` are JSON scalars.
     #[host(await)]
-    async fn execute(&self, sql: String, params: Vec<Value>) -> Result<(), StorageError>;
+    async fn execute(
+        &self,
+        sql: String,
+        #[host(default = None)] params: Option<Vec<Value>>,
+    ) -> Result<(), StorageError>;
 
     /// One read's rows, each a list of column values in select order.
     #[host(await)]
-    async fn fetch(&self, sql: String, params: Vec<Value>)
-    -> Result<Vec<Vec<Value>>, StorageError>;
+    async fn fetch(
+        &self,
+        sql: String,
+        #[host(default = None)] params: Option<Vec<Value>>,
+    ) -> Result<Vec<Vec<Value>>, StorageError>;
+
+    /// The first row of one read, `None` when it has none.
+    #[host(await)]
+    async fn fetch_one(
+        &self,
+        sql: String,
+        #[host(default = None)] params: Option<Vec<Value>>,
+    ) -> Result<Option<Vec<Value>>, StorageError>;
 
     /// Ends the transaction: its writes commit (independent) or join the turn's commit.
     #[host(await)]
@@ -139,4 +154,65 @@ pub trait AppTransaction: Send + Sync + Sized + 'static {
     /// Ends the transaction, discarding its writes.
     #[host(call)]
     fn rollback(&self);
+}
+
+/// `storage.Transaction`: application SQL in one transaction
+/// (docs/context.md#application-records-and-transactions).
+///
+/// Reads observe committed records. Writes are staged and applied together when the
+/// transaction ends, so read before the first write: a read after one is refused.
+#[crate::host(facade(
+    path = "livekit.agents.storage",
+    name = "Transaction",
+    native = AppTransaction,
+    from_native
+))]
+pub trait TransactionFacade {
+    /// Runs one statement when the transaction commits.
+    #[host(annotation(params = "collections.abc.Sequence[..storage.context.SqlValue] | None"))]
+    async fn execute(
+        &self,
+        sql: String,
+        #[host(default = None)] params: Option<Vec<Value>>,
+    ) -> Result<(), StorageError>;
+
+    /// The rows of one read.
+    #[host(annotation(
+        params = "collections.abc.Sequence[..storage.context.SqlValue] | None",
+        ret = "list[..storage.context.Row]"
+    ))]
+    async fn fetch(
+        &self,
+        sql: String,
+        #[host(default = None)] params: Option<Vec<Value>>,
+    ) -> Result<Vec<Vec<Value>>, StorageError>;
+
+    /// The first row of one read, `None` when it has none.
+    #[host(annotation(
+        params = "collections.abc.Sequence[..storage.context.SqlValue] | None",
+        ret = "..storage.context.Row | None"
+    ))]
+    async fn fetch_one(
+        &self,
+        sql: String,
+        #[host(default = None)] params: Option<Vec<Value>>,
+    ) -> Result<Option<Vec<Value>>, StorageError>;
+}
+
+/// `storage.ContextStore`'s transactions, through its activation.
+#[crate::host(facade(path = "livekit.agents.storage.context", name = "ContextStore", extended))]
+pub trait ContextStoreFacade {
+    /// The store's activation, which the store sets.
+    #[host(delegate = "_activation")]
+    type Activation: ContextActivation;
+
+    /// A transaction, committed as the block ends and rolled back when it raises.
+    #[host(
+        via = Activation,
+        native = transaction,
+        exit = AppTransaction::commit,
+        abort = AppTransaction::rollback,
+        returns = "..storage.Transaction"
+    )]
+    async fn _transaction(&self, #[host(kw)] independent: bool) -> Result<(), StorageError>;
 }

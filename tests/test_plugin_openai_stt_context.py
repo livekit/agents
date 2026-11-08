@@ -513,7 +513,7 @@ class _OneShotVAD(vad.VAD):
 
 
 class _OneShotVADStream(vad.VADStream):
-    async def _main_task(self) -> None:
+    async def _run(self) -> None:
         done = False
         # the input has to be drained until it ends, or the stream closes under its consumer
         async for frame in self.input:

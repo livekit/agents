@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import contextlib
 import dataclasses
+import importlib.resources
 import time
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Sequence
+from collections.abc import (
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Sequence,
+)
 from typing import TYPE_CHECKING, Any, Literal, Never, Protocol, TypeVar, cast
 
 from pydantic import BaseModel
@@ -22,6 +31,7 @@ if TYPE_CHECKING:
     from . import llm
     from ._generated import realtime_wire
     from ._generated.a2a_auth import AgentThreadGrant
+    from ._generated.background_audio_wire import BuiltinAudioClip
     from ._generated.chat_items import (
         ChatMessage,
         FunctionCall,
@@ -48,10 +58,13 @@ _InputT = TypeVar("_InputT")
 _OutputT = TypeVar("_OutputT", covariant=True)
 
 
-class _PumpStream(Protocol[_OutputT]):
+class _PumpStream(Protocol):
     def end_input(self) -> None: ...
-    async def recv(self) -> _OutputT | None: ...
     async def aclose(self) -> None: ...
+
+
+class _Source(Protocol[_OutputT]):
+    async def recv(self) -> _OutputT | None: ...
 
 
 class _MetricsProvider(Protocol):
@@ -82,6 +95,14 @@ def core_leg(provider: _Provider | None) -> Any:
 def core_legs(providers: Sequence[_Provider]) -> list[Any]:
     """``core_leg`` of each provider, in order."""
     return [provider._core_leg() for provider in providers]
+
+
+def silero_model() -> Any:
+    """``livekit-local-inference``'s Silero model, which the core asks for only when the build
+    links no native one."""
+    from livekit.local_inference import VAD
+
+    return VAD()
 
 
 def overrides(provider: object, host: type, *names: str) -> bool:
@@ -119,12 +140,12 @@ class AttemptHost(Protocol):
 
 
 async def pump(
-    native: _PumpStream[_OutputT],
+    native: _PumpStream,
     items: AsyncIterable[_InputT],
     feed: Callable[[_InputT], None],
-    out: Callable[[_OutputT], None],
+    drain: Awaitable[None],
 ) -> None:
-    """A core stream fed ``items`` (each through ``feed``, then its end of input) while ``out``
+    """A core stream fed ``items`` (each through ``feed``, then its end of input) while ``drain``
     takes what it yields, until it ends. A feed that fails ends the stream with its error rather
     than leaving it waiting for an end of input; the stream is closed either way."""
     from .utils import aio
@@ -134,14 +155,10 @@ async def pump(
             feed(item)
         native.end_input()
 
-    async def _drain() -> None:
-        while (item := await native.recv()) is not None:
-            out(item)
-
     async def _close() -> None:
         await native.aclose()
 
-    feeding, draining = asyncio.create_task(_feed()), asyncio.create_task(_drain())
+    feeding, draining = asyncio.create_task(_feed()), asyncio.ensure_future(drain)
     try:
         await asyncio.wait({feeding, draining}, return_when=asyncio.FIRST_COMPLETED)
         if feeding.done():
@@ -151,6 +168,12 @@ async def pump(
         # Native close must start even if an authored input's finally block stalls. A cancelled
         # close waiter leaves both cleanup branches running, under their original owners.
         await aio.await_cleanup(asyncio.gather(aio.cancel_and_wait(feeding, draining), _close()))
+
+
+async def drain(native: _Source[_OutputT], out: Callable[[_OutputT], None]) -> None:
+    """Each item ``native`` yields into ``out``, until it ends."""
+    while (item := await native.recv()) is not None:
+        out(item)
 
 
 def emit_metrics(provider: _MetricsProvider, record: BaseModel | None) -> None:
@@ -266,6 +289,15 @@ def chat_message_raw_text_content(message: ChatMessage) -> str | None:
 
 def chat_message_text_content(message: ChatMessage) -> str | None:
     return _core.chat_message_text_content(_text_parts(message), message.role == "assistant")
+
+
+_resources = contextlib.ExitStack()
+atexit.register(_resources.close)
+
+
+def builtin_audio_clip_path(clip: BuiltinAudioClip) -> str:
+    file = importlib.resources.files("livekit.agents").joinpath("resources", clip.value)
+    return str(_resources.enter_context(importlib.resources.as_file(file)))
 
 
 def run_new_messages(result: _Settled) -> list[ChatItem]:
@@ -424,22 +456,6 @@ def _refuse_native_tool_call(*args: object, **kwargs: object) -> Never:
     raise RuntimeError("this tool is executed by the native agent and cannot be called directly")
 
 
-def realtime_model(model: llm.RealtimeModel, tools: Callable[[], Sequence[Tool | Toolset]]) -> Any:
-    """``model`` as the core takes it: its own model for an OpenAI-protocol model or a fallback
-    chain, else a plugin's model bound to the session's tools."""
-    from . import llm
-    from .llm._realtime import RealtimeModel as OpenAIRealtimeModel
-    from .llm.realtime import RealtimeModelFallbackAdapter
-
-    if isinstance(model, OpenAIRealtimeModel):
-        return model._core_native()
-    if isinstance(model, RealtimeModelFallbackAdapter):
-        return model._core_native([realtime_model(m, tools) for m in model._models])
-    if isinstance(model, llm.DuplexRealtimeAdapter):
-        return _core.DuplexRealtimeModel(Duplex(model, tools), audio_timeout=model._audio_timeout)
-    return _core.HostRealtimeModel(model._core_with_tools(tools))
-
-
 def forward_session_events(
     session: llm.RealtimeSession | llm.DuplexSession,
     put: Callable[[realtime_wire.Event], None],
@@ -476,14 +492,10 @@ def forward_session_events(
 
 class Duplex:
     """A ``DuplexRealtimeAdapter`` (``adapter``) as the core's duplex host: the core reads its
-    model's label and capabilities, gates and segments the output; ``tools`` names the tool
-    objects the core refers to by name."""
+    model's label and capabilities, gates and segments the output."""
 
-    def __init__(
-        self, adapter: llm.DuplexRealtimeAdapter, tools: Callable[[], Sequence[Tool | Toolset]]
-    ) -> None:
+    def __init__(self, adapter: llm.DuplexRealtimeAdapter) -> None:
         self.adapter = adapter
-        self._tools = tools
 
     def _core_gate(self) -> llm.AudioGate | None:
         """The gate the adapter or the model declares; ``None``: the adaptive gate."""
@@ -491,9 +503,12 @@ class Duplex:
             self.adapter._gate() if self.adapter._gate else self.adapter.duplex_model.audio_gate()
         )
 
-    async def _core_session(self) -> _DuplexSession:
-        """A new plugin session."""
-        return _DuplexSession(self.adapter.duplex_model.session(), self._tools)
+    async def _core_session(
+        self, tools: Callable[[], Sequence[Tool | Toolset]] | None
+    ) -> _DuplexSession:
+        """A new plugin session, offering the tools ``tools`` answers (the objects the core
+        refers to by name)."""
+        return _DuplexSession(self.adapter.duplex_model.session(), tools or list)
 
 
 class _DuplexSession:

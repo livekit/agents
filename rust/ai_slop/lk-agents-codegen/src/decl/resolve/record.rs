@@ -295,6 +295,12 @@ impl Resolver<'_> {
                 field.default = Some(default);
             }
         }
+        if pydantic.is_none()
+            && let RecordBody::Struct(fields) = &body
+            && fields.iter().any(|f| f.one_or_many)
+        {
+            return Err(format!("{at}: one_or_many applies to a pydantic model's list field"));
+        }
         if pydantic.is_some()
             && let RecordBody::Struct(fields) = &body
             && fields.iter().any(|f| f.omitted.is_some())
@@ -331,14 +337,32 @@ impl Resolver<'_> {
             return Err(format!("{at}: kw_only and hide_repr fields belong to a dataclass"));
         }
         for (i, member) in members.iter().enumerate() {
-            let RecordBody::Struct(fields) = &body else {
-                return Err(format!("{at}: computed properties belong to record structs"));
+            let fields: &[Field] = match &body {
+                RecordBody::Struct(fields) => fields,
+                // An enum class's method: a host hook on the member.
+                RecordBody::Literals(_)
+                    if enumeration
+                        && !member.is_property
+                        && member.core.is_none()
+                        && member.getter.is_none()
+                        && member.toggle.is_none() =>
+                {
+                    &[]
+                }
+                _ => {
+                    return Err(format!(
+                        "{at}: computed properties belong to record structs; an enum class's members are hook methods"
+                    ));
+                }
             };
             if (member.is_property && !member.args.is_empty())
-                || (!member.is_property && pydantic.is_none() && dataclass.is_none())
+                || (!member.is_property
+                    && pydantic.is_none()
+                    && dataclass.is_none()
+                    && !enumeration)
             {
                 return Err(format!(
-                    "{at}: properties take no arguments; model methods require pydantic or dataclass"
+                    "{at}: properties take no arguments; model methods require pydantic, dataclass or enum"
                 ));
             }
             if member.cached && !dataclass.as_ref().is_some_and(|d| !d.slots) {
@@ -576,6 +600,7 @@ impl Resolver<'_> {
                         private: false,
                         annotation: voc::text(&at, &entries, "annotation")?,
                         rename: None,
+                        one_or_many: false,
                         doc: Vec::new(),
                     })))
                 }
@@ -659,6 +684,7 @@ impl Resolver<'_> {
                     "path",
                     "emit_class",
                     "resolve",
+                    "one_or_many",
                 ],
             )?;
             let resolve = match voc::find(&entries, "resolve") {
@@ -795,6 +821,10 @@ impl Resolver<'_> {
                 emit_class: voc::text(&at, &entries, "emit_class")?,
                 resolve,
             };
+            let one_or_many = voc::find(&entries, "one_or_many").is_some();
+            if one_or_many && !matches!(ty, Ty::List(_)) {
+                return Err(format!("{at}: one_or_many applies to a pydantic model's list field"));
+            }
             out.push(Field {
                 kw_only: voc::find(&entries, "kw_only").is_some(),
                 hide_repr: voc::find(&entries, "hide_repr").is_some(),
@@ -809,6 +839,7 @@ impl Resolver<'_> {
                 private,
                 annotation,
                 rename,
+                one_or_many,
                 doc: doc(&f.attrs),
             });
         }

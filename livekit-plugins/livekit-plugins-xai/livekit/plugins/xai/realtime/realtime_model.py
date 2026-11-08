@@ -35,6 +35,7 @@ RealtimeSession = openai.realtime.RealtimeSession
 
 class RealtimeModel(openai.realtime.RealtimeModel):
     _dialect = "xai"
+    _provider_label = "livekit.plugins.xai.realtime.realtime_model.RealtimeModel"
 
     def __init__(
         self,

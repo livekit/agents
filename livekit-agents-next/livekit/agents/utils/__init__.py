@@ -7,7 +7,6 @@ import functools
 import inspect
 import logging
 import os
-import uuid
 from collections.abc import Callable, Coroutine, Sequence
 from typing import Literal, Protocol, TypeVar, overload
 
@@ -16,6 +15,7 @@ from typing_extensions import ParamSpec, TypeIs
 from livekit import rtc
 
 from .. import _core
+from .._core import shortuuid as shortuuid
 from ..types import NotGiven, NotGivenOr
 from . import aio, media
 from .aio import ConnectionPool
@@ -24,10 +24,6 @@ EventEmitter = rtc.EventEmitter
 
 
 _T = TypeVar("_T")
-
-
-def shortuuid(prefix: str = "") -> str:
-    return prefix + str(uuid.uuid4().hex)[:12]
 
 
 def is_given(obj: NotGivenOr[_T]) -> TypeIs[_T]:

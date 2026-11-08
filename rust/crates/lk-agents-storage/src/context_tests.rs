@@ -80,7 +80,7 @@ async fn several_context_declarations_share_one_direct_scope(backend: Backend) {
 
 async fn notes(store: &ContextStore) -> Vec<Vec<Value>> {
     let read = store.transaction(true).await.unwrap();
-    let rows = read.fetch("SELECT body FROM notes ORDER BY id".into(), Vec::new()).await.unwrap();
+    let rows = read.fetch("SELECT body FROM notes ORDER BY id".into(), None).await.unwrap();
     read.commit().await.unwrap();
     rows
 }
@@ -93,17 +93,19 @@ async fn application_transactions_commit_on_exit_or_with_the_turn(backend: Backe
     let direct =
         ContextStore::bound(storage.clone(), thread_id.clone(), "desk".into()).await.unwrap();
     let tx = direct.transaction(false).await.unwrap();
-    tx.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)".into(), vec![])
+    tx.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)".into(), None)
         .await
         .unwrap();
-    tx.execute("INSERT INTO notes (body) VALUES (?)".into(), vec![json!("first")]).await.unwrap();
-    let unseen = tx.fetch("SELECT body FROM notes".into(), Vec::new()).await;
+    tx.execute("INSERT INTO notes (body) VALUES (?)".into(), Some(vec![json!("first")]))
+        .await
+        .unwrap();
+    let unseen = tx.fetch("SELECT body FROM notes".into(), None).await;
     assert!(matches!(unseen, Err(StorageError::Invalid(_))), "a read after a staged write");
     tx.commit().await.unwrap();
     assert_eq!(notes(&direct).await, [[json!("first")]]);
 
     let discarded = direct.transaction(true).await.unwrap();
-    discarded.execute("INSERT INTO notes (body) VALUES ('gone')".into(), vec![]).await.unwrap();
+    discarded.execute("INSERT INTO notes (body) VALUES ('gone')".into(), None).await.unwrap();
     discarded.rollback();
     assert_eq!(notes(&direct).await.len(), 1);
 
@@ -112,7 +114,7 @@ async fn application_transactions_commit_on_exit_or_with_the_turn(backend: Backe
         .unwrap();
     let staged = turn.transaction(false).await.unwrap();
     staged
-        .execute("INSERT INTO notes (body) VALUES (?)".into(), vec![json!("turn")])
+        .execute("INSERT INTO notes (body) VALUES (?)".into(), Some(vec![json!("turn")]))
         .await
         .unwrap();
     staged.commit().await.unwrap();
@@ -133,7 +135,7 @@ async fn a_turns_application_writes_never_apply_after_a_takeover(backend: Backen
             .await
             .unwrap();
     let tx = direct.transaction(true).await.unwrap();
-    tx.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)".into(), vec![])
+    tx.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)".into(), None)
         .await
         .unwrap();
     tx.commit().await.unwrap();

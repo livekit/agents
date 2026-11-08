@@ -41,6 +41,10 @@ pub trait HostSpan: Send + Sync + Sized + 'static {
     #[host(call)]
     fn set_attribute(&self, key: String, value: AttributeValue);
 
+    /// Each attribute, as `set_attribute` sets it.
+    #[host(call)]
+    fn set_attributes(&self, attributes: Attributes);
+
     #[host(call)]
     fn add_event(
         &self,
@@ -59,6 +63,32 @@ pub trait HostSpan: Send + Sync + Sized + 'static {
     /// Ends the span; later calls do nothing.
     #[host(call)]
     fn end(&self, #[host(default = None)] end_time: Option<u64>);
+}
+
+/// `telemetry._Span`: the host's OpenTelemetry span over a native one.
+#[crate::host(facade(
+    path = "livekit.agents.telemetry",
+    name = "_Span",
+    base = "opentelemetry.trace.Span",
+    foreign,
+    native = HostSpan,
+    from_native,
+    extended
+))]
+pub trait SpanFacade {
+    #[host(native = context)]
+    fn get_span_context(&self) -> SpanContext;
+    fn end(&self, #[host(default = None)] end_time: Option<u64>);
+    fn set_attributes(&self, attributes: Attributes);
+    fn set_attribute(&self, key: String, value: AttributeValue);
+    fn add_event(
+        &self,
+        name: String,
+        #[host(default = None)] attributes: Option<Attributes>,
+        #[host(default = None)] timestamp: Option<u64>,
+    );
+    fn update_name(&self, name: String);
+    fn is_recording(&self) -> bool;
 }
 
 /// The process's telemetry: the application endpoint, message capture and the export counters.

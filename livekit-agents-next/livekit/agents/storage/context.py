@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Sequence
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import Callable, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import _MISSING_TYPE, MISSING, dataclass, field, fields, is_dataclass
 from typing import (
     Protocol,
@@ -18,7 +18,9 @@ from typing import (
 
 from pydantic import JsonValue, TypeAdapter
 
-from .._core import _core_AppTransaction, _core_ContextActivation
+from .._core import _core_ContextActivation
+from .._generated import facades_storage_context as _context_facades
+from .._generated.facades_storage import Transaction
 from .._generated.storage_context import AppStatement, ContextField, ContextScope, ContextScopeWrite
 from .._generated.storage_errors import NotSerializable
 
@@ -65,35 +67,11 @@ class _HydratedScope:
 SqlValue: TypeAlias = str | int | float | bool | None
 """A bound parameter; SQLite stores a boolean as ``0`` or ``1``."""
 
-Row: TypeAlias = tuple[str | int | float | None, ...]
+Row: TypeAlias = list[SqlValue]
 """One result row: its column values in select order."""
 
 
-class Transaction:
-    """Application SQL in one transaction (docs/context.md#application-records-and-transactions).
-
-    Reads observe committed records. Writes are staged and applied together when the
-    transaction ends, so read before the first write: a read after one is refused.
-    """
-
-    def __init__(self, core: _core_AppTransaction) -> None:
-        self._core = core
-
-    async def execute(self, sql: str, params: Sequence[SqlValue] = ()) -> None:
-        """Runs one statement when the transaction commits."""
-        await self._core.execute(sql, list(params))
-
-    async def fetch(self, sql: str, params: Sequence[SqlValue] = ()) -> list[Row]:
-        """The rows of one read."""
-        return [tuple(row) for row in await self._core.fetch(sql, list(params))]
-
-    async def fetch_one(self, sql: str, params: Sequence[SqlValue] = ()) -> Row | None:
-        """The first row of one read, ``None`` when it has none."""
-        rows = await self.fetch(sql, params)
-        return rows[0] if rows else None
-
-
-class ContextStore:
+class ContextStore(_context_facades.ContextStore):
     """A runtime-supplied store; application values remain host objects after validation."""
 
     def __init__(
@@ -174,17 +152,6 @@ class ContextStore:
         """A transaction whose writes commit when the block exits, whatever the turn does
         next."""
         return self._transaction(independent=True)
-
-    @asynccontextmanager
-    async def _transaction(self, *, independent: bool) -> AsyncIterator[Transaction]:
-        self._ensure_open()
-        core = await self._activation.transaction(independent)
-        try:
-            yield Transaction(core)
-        except BaseException:
-            core.rollback()
-            raise
-        await core.commit()
 
     def _publish(self, values: dict[str, object], revision: int, *, restored: bool = False) -> None:
         if revision != self._objects.revision:

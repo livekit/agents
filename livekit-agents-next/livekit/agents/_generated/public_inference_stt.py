@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+from .facades_inference_stt import SpeechStream as SpeechStream
 from .inference_stt import (
     AssemblyAIModels as AssemblyAIModels,
     AutoModels as AutoModels,
     CartesiaModels as CartesiaModels,
     DeepgramFluxModels as DeepgramFluxModels,
     DeepgramModels as DeepgramModels,
+    FallbackModelType as FallbackModelType,
     GoogleModels as GoogleModels,
     InworldModels as InworldModels,
     OpenAIModels as OpenAIModels,
@@ -31,6 +33,7 @@ from .stt_provider_options import (
 )
 
 __all__: list[str] = [
+    "FallbackModelType",
     "DeepgramModels",
     "DeepgramFluxModels",
     "CartesiaModels",
@@ -53,4 +56,5 @@ __all__: list[str] = [
     "InworldOptions",
     "GoogleOptions",
     "OpenAIOptions",
+    "SpeechStream",
 ]

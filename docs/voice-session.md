@@ -399,14 +399,14 @@ it, and reports its playback to the receiver with that key.
 
 ## The call's thread
 
-On a server with storage, the door resolves the call's thread before the
-entrypoint runs: the `thread_id` key of the dispatch's JSON metadata, as
-the web console sends it, else a new thread. It is `ctx.thread` on the
-`JobContext`, `None` on a server without storage, and
-`VoiceSession(thread=ctx.thread)` is how the call gets it. A `VoiceSession`
-without `thread=` keeps its history in memory, not saved. If a supplied dispatch
-thread id is unknown or deleted, the call continues with an in-memory thread
-and logs the refusal; it does not create a replacement durable thread.
+On a server with storage, the door opens the call's thread before the
+entrypoint runs: the job's `thread_id`, copied from the agent dispatch
+([how a call gets its thread](threads.md#calls)). It is `ctx.thread` on the
+`JobContext`, `None` on a server without storage or when the dispatch named no
+thread, and `VoiceSession(thread=ctx.thread)` is how the call gets it. A
+`VoiceSession` without `thread=` keeps its history in memory, not saved. An
+unknown or deleted thread id is logged as refused and the call continues in
+memory; the agent never creates a thread for a call.
 For phone-number routing and conversation continuity, see
 [channel routing](channels.md#channel-routing).
 

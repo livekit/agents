@@ -8,13 +8,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Self
 
-from livekit.agents.tokenize import SentenceStream
+from livekit.agents.tokenize import SentenceStream, SentenceTokenizer
 from livekit.agents.tts import TTS, AudioEmitter
 
 from .connect import APIConnectOptions
 from .expressive import SpeechSteeringOptions
-from .stream_pacer import SentenceStreamPacer
-from .tts import ExpressiveTag, MarkupInfo, SegmentCount, SynthesizedAudio
+from .stream_pacer import SentenceStreamPacer, TextPacing
+from .tts import ExpressiveTag, MarkupInfo, SegmentCount, SynthesizedAudio, TTSCapabilities
 
 def chat_message_text_content(parts: Sequence[str], assistant: bool) -> str | None: ...
 
@@ -67,19 +67,36 @@ class TranscriptMarkupStripper:
     def tags(self) -> list[ExpressiveTag]: ...
     def expression_attribute(self) -> dict[str, str] | None: ...
 
-async def tts_adapter_stream(
-    provider: TTS[Any],
-    conn_options: APIConnectOptions,
-    *,
-    expressive: bool = False,
-    sentences: SentenceStream | None = None,
-    pacing: SentenceStreamPacer | None = None,
-) -> TtsStream:
-    """`provider`'s synthesis of each sentence of the text pushed, one segment, each sentence
-    retried within `conn_options`. Under `expressive` the provider's markup is lowered
-    before each sentence. `sentences` is the host tokenizer's stream the text is split by
-    (blingfire's by default); `pacing` releases sentences as the audio plays out.
+class TtsStreamAdapter:
+    """`tts.StreamAdapter`'s engine: a non-streaming TTS as a streaming one, the text split into
+    sentences each synthesized on its own.
     """
+    def __new__(
+        cls,
+        *,
+        tts: TTS[Any],
+        sentence_tokenizer: SentenceTokenizer | None = None,
+        text_pacing: TextPacing | None = None,
+    ) -> Self:
+        """`tts` synthesizes each sentence of the text pushed; `sentence_tokenizer` splits it
+        (blingfire by default); `text_pacing` releases sentences as the audio plays out.
+        """
+    @property
+    def capabilities(self) -> TTSCapabilities:
+        """Streaming, with word alignment."""
+    @property
+    def sample_rate(self) -> int: ...
+    @property
+    def num_channels(self) -> int: ...
+    async def stream(
+        self,
+        *,
+        conn_options: APIConnectOptions | None = None,
+        expressive: bool = False,
+    ) -> TtsStream:
+        """One segment of the text pushed, each sentence retried within `conn_options`. Under
+        `expressive` the wrapped TTS's markup is lowered before each sentence.
+        """
 
 class _core_PacedSentences:
     """`SentenceStreamPacer.wrap()`: a host sentence stream's sentences, paced by the audio its
@@ -107,6 +124,10 @@ class TtsStream:
     def flush(self) -> None: ...
     def end_input(self) -> None: ...
     async def recv(self) -> SynthesizedAudio | None: ...
+    async def drain_into(self, emitter: AudioEmitter, *, stream: bool) -> None:
+        """Every audio it synthesizes into `emitter`, until it ends: its frames, the words they
+        cover and the usage reported, in one segment when `stream`.
+        """
     async def aclose(self) -> None: ...
 
 def validate_synthesis(text: str, duration: float, segments: SegmentCount | None) -> str | None:

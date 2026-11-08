@@ -177,7 +177,7 @@ fn no_host_filler_source_refuses_once_instead_of_rescheduling_a_decline() {
             sched: FillerScheduler::new(0.0, Some(0.0), None).unwrap(),
             call_id: "call".into(),
             speech: SpeechId(1),
-            source: FillerSource::Host(None),
+            source: FillerSource::None,
             asking: Some(hook),
             armed: None,
             fired_at: None,

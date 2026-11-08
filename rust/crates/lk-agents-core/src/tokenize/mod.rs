@@ -2,6 +2,7 @@
 //! `isinstance` them). Offsets are characters, and `str.isspace()` is not `char::is_whitespace()`.
 
 use lk_agents_abi::errors::HostError;
+use lk_agents_abi::tokenize::TokenSpan;
 use lk_agents_abi::tokenize::bindings::{BufferedTokens, HostTokenization, TokenizerCallback};
 use std::sync::Arc;
 
@@ -33,7 +34,7 @@ impl HostTokenization for HostTokenizer {
     fn xml_tokenize(
         tokenize_fnc: Arc<dyn TokenizerCallback>,
         text: String,
-    ) -> Result<Vec<(String, usize, usize)>, HostError> {
+    ) -> Result<Vec<TokenSpan>, HostError> {
         let plan = xml::Tokenization::new(&text);
         let spans = plan
             .input()
@@ -41,7 +42,7 @@ impl HostTokenization for HostTokenizer {
                 supplied_spans(tokenize_fnc.as_ref(), input).unwrap_or_else(|_| fallback(input))
             })
             .unwrap_or_default();
-        Ok(plan.finish(spans).into_iter().map(|span| (span.text, span.start, span.end)).collect())
+        Ok(plan.finish(spans).into_iter().map(TokenSpan::from).collect())
     }
 }
 

@@ -5,6 +5,7 @@ pub mod attributes;
 pub mod connect;
 pub mod headers;
 pub mod identity;
+pub mod ids;
 pub mod provider;
 pub mod retry;
 

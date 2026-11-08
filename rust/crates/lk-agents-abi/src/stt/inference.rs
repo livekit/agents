@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use crate::errors::{ApiError, ProviderError};
-use crate::inference::fallback::SttFallbackModel;
+use crate::errors::{Invalid, ProviderError};
+use crate::inference::fallback::SttFallbacks;
 use crate::utils::stream::{StreamInput, StreamOutput};
+use crate::vad::inference::VadModels;
 use crate::vad::types::Vad;
 use crate::{ApiConnectOptions, AudioFrame, SpeechEvent, Stt};
 
@@ -21,38 +22,45 @@ pub trait InferenceStt: Stt + Sized + 'static {
     type Env;
 
     #[host(sink(item = AudioFrame, class = "InferenceSttStream"))]
-    type Audio: InferenceSttAudio + 'static;
+    type Audio: StreamInput<AudioFrame> + 'static;
     #[host(source(item = SpeechEvent, class = "InferenceSttStream"))]
     type Events: StreamOutput<SpeechEvent> + 'static;
 
-    /// A client of `model` on the gateway at `base_url`. Starts nothing. `vad`'s end of speech
-    /// finalizes the transcript (Speechmatics only). `inference.STT` builds it in its constructor.
+    /// A client of `model` (``"provider/model[:language]"``) on the gateway. Starts nothing. The
+    /// gateway's URL and key pair resolve from the given values, the environment and the
+    /// server's settings. `vad`'s end of speech finalizes the transcript of a model that
+    /// endpoints client-side (Speechmatics, OpenAI), which gets a default one from
+    /// `vad_models` when none is given; a model that endpoints server-side ignores it.
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(
         env: &Self::Env,
-        #[host(kw)] model: Option<String>,
-        language: Option<String>,
-        encoding: String,
-        sample_rate: u32,
-        base_url: String,
-        api_key: String,
-        api_secret: String,
-        #[host(shape_error(
-            kind = "ValueError",
-            message = "expected a dict of extra kwargs, got {value}"
-        ))]
-        extra_kwargs: Map<String, Value>,
-        #[host(default = None, shape_error(items, kind = "ValueError", message = "each fallback entry must be a dict"))]
-        fallback: Option<Vec<SttFallbackModel>>,
-        conn_options: ApiConnectOptions,
+        vad_models: Arc<dyn VadModels>,
+        #[host(default = None)] model: Option<String>,
+        #[host(kw, default = None)] language: Option<String>,
+        #[host(default = None)] base_url: Option<String>,
+        #[host(default = None)] encoding: Option<String>,
+        #[host(default = None)] sample_rate: Option<u32>,
+        #[host(default = None)] api_key: Option<String>,
+        #[host(default = None)] api_secret: Option<String>,
+        #[host(default = None, shape_error(kind = "ValueError", message = "expected a dict of extra kwargs, got {value}"))]
+        extra_kwargs: Option<Map<String, Value>>,
+        #[host(default = None)] fallback: Option<SttFallbacks>,
+        #[host(default = None)] conn_options: Option<ApiConnectOptions>,
         #[host(default = None)] vad: Option<Arc<dyn Vad>>,
-    ) -> Result<Self, ApiError>;
+    ) -> Result<Self, Invalid>;
 
-    /// The model's VAD as the host resolved it on `update_options(model=)`; `None` drops it.
-    /// Later streams use it.
-    #[host(call)]
-    fn set_vad(&self, #[host(default = None)] vad: Option<Arc<dyn Vad>>);
+    /// `"unknown"` without a model.
+    #[host(getter)]
+    fn model(&self) -> String;
+
+    /// Recomputed from the model, its fallbacks and the extra kwargs.
+    #[host(getter)]
+    fn capabilities(&self) -> crate::SttCapabilities;
+
+    /// The policy this client was given, which a session or run that supplies none keeps.
+    #[host(getter)]
+    fn conn_options(&self) -> ApiConnectOptions;
 
     /// This client as a session of the job `headers` (`get_inference_headers()`) identifies holds
     /// it: the same options, keyterms and open streams, its connections carrying that job.
@@ -64,7 +72,8 @@ pub trait InferenceStt: Stt + Sized + 'static {
         #[host(default = None)] reporter: Option<Arc<dyn Stt>>,
     ) -> Self;
 
-    /// Read by later streams, and sent to the open ones as a mid-stream `session.update`.
+    /// Read by later streams, and sent to the open ones as a mid-stream `session.update`. A new
+    /// model resolves its VAD again.
     #[host(call)]
     fn update_options(
         &self,
@@ -99,30 +108,99 @@ pub trait InferenceStt: Stt + Sized + 'static {
     ) -> Result<crate::DuplexStream<Self::Audio, Self::Events>, ProviderError>;
 }
 
-/// `inference.STT`'s client, built by its constructor.
+/// `inference.STT`: the LiveKit Inference gateway's STT.
 #[crate::host(facade(
     path = "livekit.agents.inference.stt",
     extended,
     name = "STT",
+    base = "stt.STT",
     native = InferenceStt,
     legs(stream),
-    leg = "_core_native"
+    leg = "_core_native",
+    base_args(capabilities),
+    host_args(vad_models = ".._bindings.silero_model")
 ))]
-pub trait InferenceSttFacade {}
+pub trait InferenceSttFacade {
+    /// LiveKit Inference STT.
+    ///
+    /// Args:
+    ///     model: ``"provider/model[:language]"``.
+    ///     language: The language to transcribe; overrides the model string's.
+    ///     base_url: The gateway URL; ``LIVEKIT_INFERENCE_URL`` or the cloud gateway by default.
+    ///     encoding: The audio encoding sent to the gateway.
+    ///     sample_rate: The sample rate sent to the gateway. Defaults to 24000 for OpenAI,
+    ///         16000 for other providers.
+    ///     api_key: ``LIVEKIT_INFERENCE_API_KEY`` or ``LIVEKIT_API_KEY`` by default.
+    ///     api_secret: ``LIVEKIT_INFERENCE_API_SECRET`` or ``LIVEKIT_API_SECRET`` by default.
+    ///     extra_kwargs: Provider options passed through to the gateway.
+    ///     fallback: Fallback models, names or ``FallbackModel`` entries, run by the gateway.
+    ///     conn_options: The connection timeout, and the retries the gateway runs server-side.
+    ///     vad: A VAD whose end of speech finalizes the transcript (Speechmatics and OpenAI).
+    #[host(
+        new,
+        not_given,
+        annotation(
+            model = ".inference_stt.STTModels | str",
+            encoding = ".inference_stt.STTEncoding"
+        ),
+        resolve(vad = ".._bindings.core_leg")
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        #[host(default = None)] model: Option<String>,
+        #[host(kw, default = None)] language: Option<String>,
+        #[host(default = None)] base_url: Option<String>,
+        #[host(default = None)] encoding: Option<String>,
+        #[host(default = None)] sample_rate: Option<u32>,
+        #[host(default = None)] api_key: Option<String>,
+        #[host(default = None)] api_secret: Option<String>,
+        #[host(default = None)] extra_kwargs: Option<Map<String, Value>>,
+        #[host(default = None)] fallback: Option<SttFallbacks>,
+        #[host(default = None)] conn_options: Option<ApiConnectOptions>,
+        #[host(default = None)] vad: Option<Arc<dyn Vad>>,
+    ) -> Self;
 
-/// One live recognition's input: audio, and the options it is re-sent mid-stream.
-#[crate::host(sink)]
-pub trait InferenceSttAudio: StreamInput<AudioFrame> {
-    /// A mid-stream `session.update`, for the providers that take one (AssemblyAI, Deepgram Flux).
-    #[host(call)]
+    #[host(getter)]
+    fn model(&self) -> String;
+
+    #[host(getter)]
+    fn capabilities(&self) -> crate::SttCapabilities;
+
+    /// Update the options; open streams get them as a mid-stream ``session.update``.
+    #[host(
+        not_given,
+        annotation(
+            model = ".inference_stt.STTModels | str",
+            language = ".inference_stt.STTLanguages | str"
+        )
+    )]
     fn update_options(
         &self,
         #[host(kw, default = None)] model: Option<String>,
         #[host(default = None)] language: Option<String>,
-        #[host(default = None, shape_error(kind = "ValueError", message = "expected a dict of extra kwargs, got {value}"))]
-        extra: Option<Map<String, Value>>,
+        #[host(default = None)] extra: Option<Map<String, Value>>,
     );
 }
+
+/// `inference.STT.stream()`: one gateway recognition session; the client reconnects it under its
+/// ``conn_options``.
+#[crate::host(facade(
+    path = "livekit.agents.inference.stt",
+    base = "stt.RecognizeStream",
+    native = InferenceStt,
+    stream(
+        op = stream,
+        owner = "_stt",
+        native_retries,
+        method = "stream",
+        base_args(conn_options),
+        state(start_time_offset),
+        provider_default(conn_options),
+        annotation(language = ".inference_stt.STTLanguages | str"),
+        not_given
+    )
+))]
+pub trait SpeechStream {}
 
 // Public data contracts. Python behavior remains in its adapters.
 

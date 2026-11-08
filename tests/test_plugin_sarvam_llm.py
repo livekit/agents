@@ -22,7 +22,7 @@ pytestmark = pytest.mark.unit
 
 def _sent_kwargs(llm: SarvamLLM, stream: Any) -> dict[str, Any]:
     """The kwargs a chat sends: the call's, with the instance's over them."""
-    return {**(stream._request["extra_kwargs"] or {}), **llm._extra_kwargs}
+    return {**(stream._request["extra_kwargs"] or {}), **llm._native.extra_kwargs}
 
 
 def _chat_ctx(text: str = "hello") -> ChatContext:
@@ -70,7 +70,7 @@ def test_custom_headers_merged() -> None:
             "X-Custom": "kept",
         },
     )
-    headers = llm._extra_kwargs["extra_headers"]
+    headers = llm._native.extra_kwargs["extra_headers"]
     # Sarvam headers override caller values on conflict
     assert headers["api-subscription-key"] == "sk_test"
     assert headers["User-Agent"] == USER_AGENT
@@ -93,7 +93,7 @@ def test_filters_unsupported_extra_body_fields() -> None:
             "unknown_field": "drop-me",
         },
     )
-    assert llm._extra_kwargs["extra_body"] == {
+    assert llm._native.extra_kwargs["extra_body"] == {
         "max_tokens": 64,
         "wiki_grounding": True,
     }
@@ -312,7 +312,7 @@ def test_conversations_strips_reasoning_effort() -> None:
         api_key="sk_test",
         reasoning_effort="high",
     )
-    assert "reasoning_effort" not in llm._extra_kwargs
+    assert "reasoning_effort" not in llm._native.extra_kwargs
 
 
 @pytest.mark.asyncio
@@ -334,7 +334,7 @@ def test_conversations_strips_wiki_grounding() -> None:
         api_key="sk_test",
         wiki_grounding=True,
     )
-    assert "wiki_grounding" not in llm._extra_kwargs.get("extra_body", {})
+    assert "wiki_grounding" not in llm._native.extra_kwargs.get("extra_body", {})
 
 
 def test_conversations_rejects_image_input() -> None:

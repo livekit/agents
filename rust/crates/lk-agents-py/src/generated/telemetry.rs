@@ -122,6 +122,19 @@ impl TelemetrySpan {
         Ok(())
     }
 
+    /// Each attribute, as `set_attribute` sets it.
+    #[pyo3(signature = (attributes))]
+    fn set_attributes(&self, py: Python<'_>, attributes: Bound<'_, PyAny>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        let attributes = crate::py_values::attributes_from_py(attributes.as_any())?;
+        py.detach(|| {
+            <TelemetrySpanImpl as ::lk_agents_abi::telemetry::host::HostSpan>::set_attributes(
+                &self.0, attributes,
+            )
+        });
+        Ok(())
+    }
+
     #[pyo3(signature = (name, attributes = None, timestamp = None))]
     fn add_event(
         &self,

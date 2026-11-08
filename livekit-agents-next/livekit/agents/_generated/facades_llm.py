@@ -3,18 +3,25 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .. import _bindings, _core
 from .._bindings import core_legs
 from ..log import logger
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN
+from ..utils import is_given
 from . import llm_availability
-from .llm import LLM
+from .llm import LLM, LLMStream
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from livekit.agents.llm import ChatContext, Tool, ToolChoice
+
+    from .. import llm
+    from ..types import NotGivenOr
     from .chat_items import MetricsMetadata
+    from .connect import APIConnectOptions
     from .llm_fallback import AvailabilityChanged
 
 
@@ -87,3 +94,61 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
     async def aclose(self) -> None:
         await super().aclose()
         await self._native.aclose()
+
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool] | None = None,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> FallbackLLMStream:
+        return FallbackLLMStream(
+            llm=cast("llm.FallbackAdapter", self),
+            chat_ctx=chat_ctx,
+            tools=tools,
+            parallel_tool_calls=parallel_tool_calls if is_given(parallel_tool_calls) else None,
+            tool_choice=tool_choice if is_given(tool_choice) else None,
+            extra_kwargs=extra_kwargs if is_given(extra_kwargs) else None,
+            conn_options=conn_options,
+        )
+
+
+class FallbackLLMStream(LLMStream):
+    """`llm.FallbackAdapter.chat()`: the chain's completion, which retries and falls back."""
+
+    _core_native_retries = True
+    _llm: llm.FallbackAdapter
+
+    def __init__(
+        self,
+        *,
+        llm: llm.FallbackAdapter,
+        chat_ctx: ChatContext,
+        tools: list[Tool] | None,
+        parallel_tool_calls: bool | None,
+        tool_choice: ToolChoice | None,
+        extra_kwargs: dict[str, Any] | None,
+        conn_options: APIConnectOptions,
+    ) -> None:
+        super().__init__(llm=llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        self._parallel_tool_calls = parallel_tool_calls
+        self._tool_choice = tool_choice
+        self._extra_kwargs = extra_kwargs
+
+    async def _core_open(self) -> _core.FallbackLlmChunks:
+        return await self._llm._native.chat(
+            chat_ctx=self._chat_ctx,
+            tools=self._tools,
+            parallel_tool_calls=self._parallel_tool_calls,
+            tool_choice=self._tool_choice,
+            extra_kwargs=self._extra_kwargs,
+            conn_options=self._conn_options,
+        )
+
+    _run = LLMStream._core_run_native
+
+
+FallbackLLMStream.__module__ = "livekit.agents.llm"

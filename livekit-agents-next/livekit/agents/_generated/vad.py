@@ -11,12 +11,13 @@ from dataclasses import dataclass, field
 from enum import StrEnum, unique
 from inspect import get_annotations
 from types import TracebackType
-from typing import Generic, Literal, Never, Self
+from typing import Generic, Literal, Never, Protocol, Self
 
 from typing_extensions import TypeVar
 
 from livekit import rtc
 
+from .. import _bindings
 from ..utils import aio
 from .chat_items import MetricsMetadata
 from .rtc_frames import AudioFrame
@@ -90,6 +91,16 @@ _INPUT_CAPACITY = 256
 _OUTPUT_CAPACITY = 64
 
 
+class _NativeDetection(Protocol):
+    """A native detection ``VADStream._core_open`` opens."""
+
+    def push(self, frame: rtc.AudioFrame, /) -> None: ...
+    def flush(self) -> None: ...
+    def end_input(self) -> None: ...
+    async def recv(self) -> VADEvent | None: ...
+    async def aclose(self) -> None: ...
+
+
 class _Input(aio.Chan["rtc.AudioFrame | VADStream.Flush"]):
     """A stream's audio, read only while its reader keeps up with the events, as the native
     stream's worker waits for event space: pending events stop the detector, and the full input
@@ -111,7 +122,7 @@ class VAD(
 ):
     """A voice activity detector.
 
-    Plugins implement ``stream()``, returning a ``VADStream`` whose ``_main_task`` turns the pushed
+    Plugins implement ``stream()``, returning a ``VADStream`` whose ``_run`` turns the pushed
     audio into ``VADEvent``s.
     """
 
@@ -189,7 +200,7 @@ class VAD(
 class VADStream(ABC):
     """A live detection: audio in through ``push_frame``, ``VADEvent`` out.
 
-    Plugins implement ``_main_task``, reading ``input`` and handing each event to ``send``.
+    Plugins implement ``_run``, reading ``input`` and handing each event to ``send``.
     """
 
     class Flush:
@@ -200,13 +211,28 @@ class VADStream(ABC):
         self._events_drained = asyncio.Event()
         self._events_drained.set()
         self.input: aio.Chan[rtc.AudioFrame | VADStream.Flush] = _Input(self)
-        """The audio ``_main_task`` reads, a ``Flush`` at the end of each segment."""
+        """The audio ``_run`` reads, a ``Flush`` at the end of each segment."""
         self._event_ch = aio.Chan[VADEvent]()
-        self._task = asyncio.create_task(self._main_task())
+        self._task = asyncio.create_task(self._run())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
     @abstractmethod
-    async def _main_task(self) -> None: ...
+    async def _run(self) -> None:
+        """Read ``input`` until it ends and ``send`` each event."""
+
+    async def _core_open(self) -> _NativeDetection:
+        """A native detection, which ``_core_run_native`` pumps."""
+        raise NotImplementedError
+
+    async def _core_run_native(self) -> None:
+        """A ``_run`` over ``_core_open``: ``input`` into it, its events to ``send``."""
+        native = await self._core_open()
+        await _bindings.pump(
+            native,
+            self.input,
+            lambda item: native.flush() if isinstance(item, self.Flush) else native.push(item),
+            _bindings.drain(native, self.send),
+        )
 
     def _check_open(self) -> None:
         self._check_input_not_ended()

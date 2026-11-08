@@ -1,5 +1,5 @@
-//! A live stream's two halves: the sink the caller pushes audio into, with its mid-stream
-//! control, and the source it drains speech events from.
+//! A live stream's two halves: the sink the caller pushes audio into, with the control its
+//! client's `update_options` reaches, and the source it drains speech events from.
 
 use super::*;
 
@@ -21,17 +21,6 @@ pub(super) struct LiveOptions {
 pub struct RecognitionInput {
     pub(super) audio: AudioInput,
     pub(super) control: Arc<StreamControl>,
-}
-
-impl lk_agents_abi::stt::inference::InferenceSttAudio for RecognitionInput {
-    fn update_options(
-        &self,
-        model: Option<String>,
-        language: Option<String>,
-        extra: Option<serde_json::Map<String, serde_json::Value>>,
-    ) {
-        self.control.update_options(model.as_deref(), language.as_deref(), extra.as_ref());
-    }
 }
 
 /// What reaches a live stream from its client: `session.update` frames and deferred keyterms.

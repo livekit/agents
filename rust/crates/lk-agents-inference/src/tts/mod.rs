@@ -16,9 +16,10 @@ use futures_util::future::{Either, select};
 use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::inference::fallback::TtsFallbackModel;
+use lk_agents_abi::inference::fallback::{TtsFallbackEntry, TtsFallbacks};
 use lk_agents_abi::inference::models::InferenceProvider;
 use lk_agents_abi::inference::tts_client::InferenceTts;
+use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::tts::stream_adapter::SentenceTextProcessor;
 use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::utils::connection_pool::ConnectionPoolState;
@@ -694,29 +695,40 @@ impl InferenceTts for GatewayTts {
     fn new(
         env: &ProcessEnv,
         model: String,
-        base_url: String,
-        api_key: String,
-        api_secret: String,
-        conn_options: ApiConnectOptions,
         voice: Option<String>,
         language: Option<String>,
-        encoding: String,
-        sample_rate: u32,
+        encoding: Option<String>,
+        sample_rate: Option<u32>,
+        base_url: Option<String>,
+        api_key: Option<String>,
+        api_secret: Option<String>,
         extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
-        fallback: Option<Vec<TtsFallbackModel>>,
+        fallback: Option<TtsFallbacks>,
+        conn_options: Option<ApiConnectOptions>,
     ) -> Result<Self, Invalid> {
+        use lk_agents_abi::inference::InferenceCredentials as _;
+        let credentials =
+            crate::credentials::Credentials::inference_credentials(base_url, api_key, api_secret)?;
+        let (model, parsed_voice) = wire::parse_model_string(&model);
+        let entries = fallback.map_or_else(Vec::new, TtsFallbacks::entries);
         let opts = TtsOptions {
-            model,
-            base_url,
-            api_key,
-            api_secret,
-            conn_options,
-            voice,
-            language,
-            encoding,
-            sample_rate,
+            model: model.to_owned(),
+            voice: voice.or(parsed_voice.map(str::to_owned)),
+            language: language.map(|l| LanguageCode::new(&l).as_str().to_owned()),
+            encoding: encoding.unwrap_or_else(|| wire::DEFAULT_ENCODING.to_owned()),
+            sample_rate: sample_rate.unwrap_or(wire::DEFAULT_SAMPLE_RATE),
+            base_url: credentials.base_url,
+            api_key: credentials.api_key,
+            api_secret: credentials.api_secret,
+            conn_options: conn_options.unwrap_or(lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS),
             extra_kwargs: extra_kwargs.unwrap_or_default(),
-            fallback: fallback.unwrap_or_default(),
+            fallback: entries
+                .into_iter()
+                .map(|entry| match entry {
+                    TtsFallbackEntry::Model(model) => model,
+                    TtsFallbackEntry::Name(name) => wire::normalize_fallback_str(&name),
+                })
+                .collect(),
         };
         Ok(GatewayTts::new(
             opts,
@@ -726,11 +738,20 @@ impl InferenceTts for GatewayTts {
         ))
     }
 
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate()
+    fn model(&self) -> String {
+        GatewayTts::model(self)
     }
-    fn aligned_transcript(&self) -> bool {
-        self.aligned_transcript()
+    fn sample_rate(&self) -> u32 {
+        GatewayTts::sample_rate(self)
+    }
+    fn capabilities(&self) -> TtsCapabilities {
+        Tts::capabilities(self)
+    }
+    fn num_channels(&self) -> u16 {
+        Tts::num_channels(self)
+    }
+    fn conn_options(&self) -> ApiConnectOptions {
+        self.opts.lock().conn_options
     }
     fn prewarm(&self, headers: Option<Headers>) {
         self.prewarm_identified(headers);
@@ -740,29 +761,26 @@ impl InferenceTts for GatewayTts {
     }
     fn update_options(
         &self,
-        model: Option<String>,
         voice: Option<String>,
+        model: Option<String>,
         language: Option<String>,
-        extra: Option<serde_json::Map<String, serde_json::Value>>,
+        extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
     ) {
         self.update_options(
             model.as_deref(),
             voice.as_deref(),
             language.as_deref(),
-            extra.as_ref(),
+            extra_kwargs.as_ref(),
         );
     }
     /// Open a duplex synthesis. The gateway has no one-shot endpoint, so `synthesize` is this plus
-    /// one push and `end_input`. `headers` is `get_inference_headers()`, read by the host in the
-    /// synthesis's job context; each sentence pushed goes out as it arrives.
+    /// one push and `end_input`; each sentence pushed goes out as it arrives.
     async fn stream(
         &self,
-        headers: Option<Headers>,
         conn_options: Option<ApiConnectOptions>,
         expressive: bool,
     ) -> Result<Self::Stream, ProviderError> {
-        let (sink, source) =
-            self.configured(conn_options).stream_identified(headers, expressive)?;
+        let (sink, source) = self.configured(conn_options).stream_identified(None, expressive)?;
         Ok(TtsStream::new(Some(Box::new(sink)), Box::new(source), self.clock.clone()))
     }
 }

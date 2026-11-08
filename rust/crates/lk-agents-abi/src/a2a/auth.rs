@@ -154,14 +154,16 @@ pub trait Credentials: Send + Sync + Sized + 'static {
         #[host(default = "")] deployment: String,
     ) -> Result<AuthPrincipal, AuthError>;
 
+    /// The caller of a request with these headers: its `Authorization` bearer token, else its
+    /// thread grant header (names compared case-insensitively); with neither, the project when
+    /// the LiveKit node authorized the call.
     #[host(call)]
     fn principal(
         &self,
-        authorization: Option<String>,
-        thread_grant: Option<String>,
-        node_authorized: bool,
-        agent_name: String,
-        deployment: String,
+        headers: std::collections::BTreeMap<String, String>,
+        #[host(kw)] agent_name: String,
+        #[host(default = "")] deployment: String,
+        #[host(default = false)] node_authorized: bool,
     ) -> Result<AuthPrincipal, AuthError>;
 
     #[host(call)]
@@ -175,6 +177,43 @@ pub trait Credentials: Send + Sync + Sized + 'static {
     /// `agentEndpoint.call`, so a LiveKit node admits it to an endpoint, which authorizes the
     /// thread access itself.
     #[host(call)]
+    fn thread_grant_token(
+        &self,
+        grant: AuthGrant,
+        #[host(kw, default = "")] identity: String,
+        #[host(default = 3600)] ttl_seconds: u64,
+    ) -> Result<String, AuthError>;
+}
+
+/// `a2a.Credentials`: the worker's project key pair; signing and verification use the LiveKit
+/// SDK.
+#[crate::host(facade(path = "livekit.agents.a2a", name = "Credentials", native = Credentials))]
+pub trait CredentialsFacade {
+    #[host(new)]
+    fn new(api_key: String, api_secret: String) -> Self;
+    fn verify(
+        &self,
+        token: String,
+        #[host(kw, default = "")] agent_name: String,
+        #[host(default = "")] deployment: String,
+    ) -> Result<AuthPrincipal, AuthError>;
+    /// The caller of a request with these headers (`Credentials.principal`).
+    #[host(native = principal)]
+    fn _principal(
+        &self,
+        headers: std::collections::BTreeMap<String, String>,
+        #[host(kw)] agent_name: String,
+        #[host(default = "")] deployment: String,
+        #[host(default = false)] node_authorized: bool,
+    ) -> Result<AuthPrincipal, AuthError>;
+    fn project_token(
+        &self,
+        #[host(kw, default = "worker")] identity: String,
+        #[host(default = 3600)] ttl_seconds: u64,
+    ) -> Result<String, AuthError>;
+    /// A thread grant for a browser, a device or a delegating agent. It also carries
+    /// `agentEndpoint.call`, so a LiveKit node admits it to an endpoint, which authorizes the
+    /// thread access itself.
     fn thread_grant_token(
         &self,
         grant: AuthGrant,

@@ -2,7 +2,7 @@
 
 import pytest
 
-from livekit.agents.tokenize import basic, blingfire
+from livekit.agents.tokenize import TokenSpan, basic, blingfire
 
 pytestmark = pytest.mark.unit
 
@@ -73,14 +73,14 @@ def test_supplied_tokenizer_offsets_preserve_stream_batching_without_an_event_lo
 
     from livekit.agents import _core
 
-    def offsets(text: str) -> Iterator[tuple[str, int, int]]:
+    def offsets(text: str) -> Iterator[TokenSpan]:
         start = 0
         for index, char in enumerate(text):
             if char == "." and (index + 1 == len(text) or text[index + 1].isspace()):
-                yield text[start : index + 1].strip(), start, index + 1
+                yield TokenSpan(text[start : index + 1].strip(), start, index + 1)
                 start = index + 1
         if text[start:].strip():
-            yield text[start:].strip(), start, len(text)
+            yield TokenSpan(text[start:].strip(), start, len(text))
 
     buffer = _core.TokenBuffer(offsets, min_token_len=20, min_ctx_len=1)
     assert buffer.push("Sure. ") == []
@@ -123,4 +123,4 @@ def test_xml_tokenizer_error_preserves_markup_instead_of_failing() -> None:
     buffer = _core.TokenBuffer(fail, min_token_len=1, min_ctx_len=1, xml_aware=True)
     assert buffer.push(text) == []
     assert buffer.flush() == [text]
-    assert _core.xml_tokenize(fail, text) == [(text, 0, len(text))]
+    assert _core.xml_tokenize(fail, text) == [TokenSpan(text, 0, len(text))]

@@ -52,18 +52,29 @@ pub trait FallbackLlm: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn aclose(&self);
 
+    /// A completion of the host `chat_ctx`, offering `tools`; the chain picks an entry on the
+    /// first pull.
     #[host(await)]
-    #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     async fn chat(
         &self,
-        chat_ctx_host: crate::HostRef,
-        #[host(kw)] tools: Vec<crate::ToolSpec>,
-        #[host(default = None)] tools_host: Option<crate::HostRef>,
+        #[host(kw)] chat_ctx: crate::HostRef,
+        #[host(default = None)] tools: Option<HostTools>,
         #[host(default = None)] parallel_tool_calls: Option<bool>,
         #[host(default = None)] tool_choice: Option<serde_json::Value>,
         #[host(default = None)] extra_kwargs: Option<crate::Extra>,
         #[host(default = None)] conn_options: Option<crate::ApiConnectOptions>,
     ) -> Result<Self::Chunks, crate::errors::ProviderError>;
+}
+
+/// A host tool list (`list[Tool | Toolset]`) as a native chat takes it: the specs a native model
+/// is offered, and the list itself, which a host model is handed.
+#[crate::host(record(module = "llm_fallback", host_type = "builtins.object", boundary, extract))]
+#[derive(Debug, Clone)]
+pub struct HostTools {
+    #[host(own_value, extract_with = "py_values::tool_specs")]
+    pub specs: Vec<crate::ToolSpec>,
+    #[host(own_value, extract_with = "py_values::host_ref")]
+    pub host: crate::HostRef,
 }
 
 /// `llm.FallbackAdapter`: several LLMs behind one; a failed one is skipped until it recovers.
@@ -102,6 +113,29 @@ pub trait FallbackLlmAdapter {
     ) -> Self;
 }
 
+/// `llm.FallbackAdapter.chat()`: the chain's completion, which retries and falls back.
+#[crate::host(facade(
+    path = "livekit.agents.llm",
+    base = "llm.LLMStream",
+    native = FallbackLlm,
+    stream(
+        op = chat,
+        owner = "_llm",
+        native_retries,
+        method = "chat",
+        base_args(chat_ctx, tools, conn_options),
+        default(tools = "builtins.None", conn_options = "..types.DEFAULT_API_CONNECT_OPTIONS"),
+        annotation(
+            chat_ctx = "livekit.agents.llm.ChatContext",
+            tools = "list[livekit.agents.llm.Tool] | None",
+            tool_choice = "livekit.agents.llm.ToolChoice",
+            extra_kwargs = "dict[str, Any]"
+        ),
+        not_given
+    )
+))]
+pub trait FallbackLLMStream {}
+
 /// `tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
 #[crate::host(class(name = "FallbackTts", native = crate::Tts))]
 pub trait FallbackTts: Send + Sync + Sized + 'static {
@@ -135,12 +169,12 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
     async fn synthesize(
         &self,
         input_text: String,
-        #[host(default = None)] conn_options: Option<crate::ApiConnectOptions>,
+        #[host(kw, default = None)] conn_options: Option<crate::ApiConnectOptions>,
     ) -> Result<Self::Stream, crate::errors::ProviderError>;
     #[host(await)]
     async fn stream(
         &self,
-        #[host(default = None)] conn_options: Option<crate::ApiConnectOptions>,
+        #[host(kw, default = None)] conn_options: Option<crate::ApiConnectOptions>,
         #[host(default = false)] expressive: bool,
     ) -> Result<Self::Stream, crate::errors::ProviderError>;
 }
@@ -186,7 +220,15 @@ pub trait FallbackTtsAdapter {
     path = "livekit.agents.tts",
     base = "tts.ChunkedStream",
     native = FallbackTts,
-    stream(op = synthesize, owner = "_tts", native_retries)
+    stream(
+        op = synthesize,
+        owner = "_tts",
+        native_retries,
+        method = "synthesize",
+        base_args(input_text, conn_options),
+        rename(input_text = "text"),
+        default(conn_options = "..types.DEFAULT_API_CONNECT_OPTIONS")
+    )
 ))]
 pub trait FallbackChunkedStream {}
 
@@ -195,15 +237,24 @@ pub trait FallbackChunkedStream {}
     path = "livekit.agents.tts",
     base = "tts.SynthesizeStream",
     native = FallbackTts,
-    stream(op = stream, owner = "_tts", native_retries)
+    stream(
+        op = stream,
+        owner = "_tts",
+        native_retries,
+        method = "stream",
+        base_args(conn_options),
+        state(expressive),
+        default(conn_options = "..types.DEFAULT_API_CONNECT_OPTIONS")
+    )
 ))]
 pub trait FallbackSynthesizeStream {}
 
-/// One realtime fallback member: a native model or a host provider. Host providers open a fresh
-/// adapter on every attempt, so a failed session is never reused by a later attempt.
+/// A realtime model as the core takes it (a voice session's, a fallback member): a native model
+/// or a host provider. A fallback opens a host provider afresh on every attempt, so a failed
+/// session is never reused by a later attempt.
 #[crate::host(record(module = "llm_fallback", extract, transparent))]
 #[derive(Clone)]
-pub enum RealtimeFallbackMember {
+pub enum RealtimeLeg {
     Native(std::sync::Arc<dyn crate::Realtime>),
     Host(std::sync::Arc<dyn crate::llm::realtime::HostRealtime>),
 }
@@ -227,7 +278,7 @@ pub trait RealtimeFallbackModel: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(
         env: &Self::Env,
-        models: Vec<RealtimeFallbackMember>,
+        models: Vec<RealtimeLeg>,
         #[host(kw, default = 10.0)] cooldown: f64,
         #[host(default = None)] attempt_timeout: Option<f64>,
         #[host(default = true)] regenerate_on_swap: bool,

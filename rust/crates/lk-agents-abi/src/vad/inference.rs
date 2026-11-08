@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crate::errors::{HostError, ProviderError};
+use crate::errors::{HostError, Invalid, ProviderError};
 use crate::utils::stream::{StreamInput, StreamOutput};
 use crate::{AudioFrame, Maybe, VadEvent};
 
@@ -39,19 +39,28 @@ pub trait InferenceVad: Send + Sync + Sized + 'static {
     #[host(source(item = VadEvent, class = "InferenceVadStream"))]
     type Events: StreamOutput<VadEvent> + 'static;
 
-    /// `deactivation_threshold` is `max(activation_threshold - 0.15, 0.01)` when `None`.
+    /// `model_factory` builds the host's model when the build links no native one;
+    /// `deactivation_threshold` is `max(activation_threshold - 0.15, 0.01)` when `None`. Only the
+    /// `"silero"` model exists.
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(
         env: &Self::Env,
         model_factory: Arc<dyn VadModels>,
-        #[host(kw, default = 0.05)] min_speech_duration: f64,
+        #[host(kw, default = "silero")] model: crate::inference::models::VadModelName,
+        #[host(default = 0.05)] min_speech_duration: f64,
         #[host(default = 0.25)] min_silence_duration: f64,
         #[host(default = 0.5)] prefix_padding_duration: f64,
         #[host(default = 60.0)] max_buffered_speech: f64,
         #[host(default = 0.5)] activation_threshold: f64,
         #[host(default = None)] deactivation_threshold: Option<f64>,
-    ) -> Self;
+    ) -> Result<Self, Invalid>;
+
+    #[host(getter)]
+    fn model(&self) -> crate::inference::models::VadModelName;
+
+    #[host(getter)]
+    fn capabilities(&self) -> crate::VadCapabilities;
 
     /// The given options, applied by each running stream before its next frame.
     #[host(call)]
@@ -72,3 +81,67 @@ pub trait InferenceVad: Send + Sync + Sized + 'static {
     #[host(call)]
     fn stream(&self) -> Result<crate::DuplexStream<Self::Audio, Self::Events>, ProviderError>;
 }
+
+/// `inference.VAD`: Silero voice activity detection, the model native to the core when the build
+/// links it, else `livekit-local-inference`'s.
+#[crate::host(facade(
+    path = "livekit.agents.inference",
+    extended,
+    name = "VAD",
+    base = "VAD",
+    native = InferenceVad,
+    legs(stream),
+    base_args(capabilities),
+    host_args(model_factory = ".._bindings.silero_model")
+))]
+pub trait InferenceVadFacade {
+    /// Silero voice activity detection.
+    ///
+    /// Args:
+    ///     model: The VAD model; only ``"silero"``.
+    ///     min_speech_duration: Speech needed before a start of speech.
+    ///     min_silence_duration: Silence needed before an end of speech.
+    ///     prefix_padding_duration: Audio kept before the start of speech.
+    ///     max_buffered_speech: The longest speech kept for the end-of-speech event.
+    ///     activation_threshold: The probability above which a window is speech.
+    ///     deactivation_threshold: The probability below which speech ends;
+    ///         ``activation_threshold - 0.15`` by default.
+    #[host(new, not_given)]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        #[host(kw, default = "silero")] model: crate::inference::models::VadModelName,
+        #[host(default = 0.05)] min_speech_duration: f64,
+        #[host(default = 0.25)] min_silence_duration: f64,
+        #[host(default = 0.5)] prefix_padding_duration: f64,
+        #[host(default = 60.0)] max_buffered_speech: f64,
+        #[host(default = 0.5)] activation_threshold: f64,
+        #[host(default = None)] deactivation_threshold: Option<f64>,
+    ) -> Self;
+
+    #[host(getter)]
+    fn model(&self) -> crate::inference::models::VadModelName;
+
+    #[host(getter)]
+    fn min_silence_duration(&self) -> f64;
+
+    /// Update the options; running streams apply them before their next frame.
+    fn update_options(
+        &self,
+        #[host(kw)] min_speech_duration: Maybe<f64>,
+        min_silence_duration: Maybe<f64>,
+        prefix_padding_duration: Maybe<f64>,
+        max_buffered_speech: Maybe<f64>,
+        activation_threshold: Maybe<f64>,
+        deactivation_threshold: Maybe<f64>,
+    );
+}
+
+/// `inference.VAD.stream()`: the native detection, frames and flushes in, its events out.
+#[crate::host(facade(
+    path = "livekit.agents.inference",
+    name = "_VADStream",
+    base = "VADStream",
+    native = InferenceVad,
+    stream(op = stream, owner = "_vad", method = "stream")
+))]
+pub trait InferenceVadStream {}

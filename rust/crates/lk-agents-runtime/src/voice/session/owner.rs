@@ -175,7 +175,7 @@ impl SessionEvents for Events {
         }
         if let HostWire::Close(close) = &wire
             && let Some(owner) = self.owner.upgrade()
-            && let Err(error) = SessionOwner(owner).shutdown(close.reason.to_string(), false)
+            && let Err(error) = SessionOwner(owner).shutdown(Some(close.reason), false)
         {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "the session owner could not begin cleanup: {error}");
         }
@@ -677,14 +677,14 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
 
     fn aclose(
         &self,
-        reason: String,
+        reason: Option<CloseReason>,
         drain: bool,
     ) -> Result<BoxFuture<'static, ()>, UnknownCloseReason> {
-        let reason = CloseReason::from_wire(&reason).ok_or(UnknownCloseReason(reason))?;
+        let reason = reason.unwrap_or(CloseReason::UserInitiated);
         self.0.close(reason, drain).map_err(|e| UnknownCloseReason(e.to_string()))
     }
 
-    fn shutdown(&self, reason: String, drain: bool) -> Result<(), UnknownCloseReason> {
+    fn shutdown(&self, reason: Option<CloseReason>, drain: bool) -> Result<(), UnknownCloseReason> {
         // aclose admits and owns the work before returning its wait-only future.
         drop(self.aclose(reason, drain)?);
         Ok(())

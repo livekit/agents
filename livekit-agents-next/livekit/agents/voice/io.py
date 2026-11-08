@@ -422,36 +422,10 @@ class SpeechHandle(_facades.SpeechHandle):
         handle = ref() if ref is not None else None
         return handle or SpeechHandle(core)
 
-    @property
-    def allow_interruptions(self) -> bool:
-        return self._native.allow_interruptions
-
-    @allow_interruptions.setter
-    def allow_interruptions(self, value: bool) -> None:
-        self._native.allow_interruptions = value
-
-    def exception(self) -> BaseException | None:
-        """The error the speech failed with, or ``None``.
-
-        Raises:
-            asyncio.InvalidStateError: If the speech is not done yet.
-        """
-        if not self.done():
-            raise asyncio.InvalidStateError("SpeechHandle is not done yet")
-        return self._native.exception()
-
-    def interrupt(self, *, force: bool = False) -> SpeechHandle:
-        """Interrupt the speech."""
-        self._native.interrupt(force=force)
-        return self
-
     async def wait_for_playout(self) -> None:
         from .agent_session import _origin
 
         await self._native.wait_for_playout(origin=_origin())
-
-    async def _wait_for_generation(self, step_idx: int = -1) -> None:
-        await self._native.wait_for_generation(None if step_idx < 0 else step_idx)
 
     def __await__(self) -> Generator[None, None, SpeechHandle]:
         async def _await() -> SpeechHandle:

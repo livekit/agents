@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable
-from typing import Any, overload
+from typing import overload
 
 from .. import _core
 from .._generated import public_tokenize as _public
@@ -107,7 +107,7 @@ class WordStream(ABC):
 
 
 # a tokenizer returns tokens, or tokens with their start and end offsets in the text
-TokenizeCallable = Callable[[str], list[str] | list[tuple[str, int, int]]]
+TokenizeCallable = Callable[[str], list[str] | list[TokenSpan]]
 
 
 class BufferedTokenStream:
@@ -255,38 +255,37 @@ def replace_words(
 
 
 class _CoreSentenceTokenizer(SentenceTokenizer):
-    """A sentence tokenizer the core runs (``self._core``); a stream batches its spans."""
+    """The base of a sentence tokenizer the core runs (``self._native``): its stream batches
+    the native spans."""
 
-    _core: Any
-
-    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
-        return self._core.tokenize(text, language=language)  # type: ignore[no-any-return]
+    _native: _core.BasicSentenceTokenizer | _core.BlingfireSentenceTokenizer
 
     def stream(self, *, language: str | None = None) -> SentenceStream:
         return BufferedSentenceStream(
-            tokenizer=self._core._core_split,
-            min_token_len=self._core._core_min_token_len,
-            min_ctx_len=self._core._core_min_ctx_len,
-            max_token_len=self._core._core_max_token_len,
-            xml_aware=self._core._core_xml_aware,
+            tokenizer=self._native._core_split,
+            min_token_len=self._native._core_min_token_len,
+            min_ctx_len=self._native._core_min_ctx_len,
+            max_token_len=self._native._core_max_token_len,
+            xml_aware=self._native._core_xml_aware,
         )
 
 
 class _CoreWordTokenizer(WordTokenizer):
-    """A word tokenizer the core runs (``self._core``); a stream batches its spans."""
+    """The base of a word tokenizer the core runs (``self._native``): its stream batches the
+    native spans."""
 
-    _core: Any
-
-    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
-        return self._core.tokenize(text, language=language)  # type: ignore[no-any-return]
+    _native: _core.BasicWordTokenizer
 
     def stream(self, *, language: str | None = None) -> WordStream:
         return BufferedWordStream(
-            tokenizer=self._core._core_split,
-            min_token_len=self._core._core_min_token_len,
-            min_ctx_len=self._core._core_min_ctx_len,
+            tokenizer=self._native._core_split,
+            min_token_len=self._native._core_min_token_len,
+            min_ctx_len=self._native._core_min_ctx_len,
         )
 
 
 # the tokenizers build on the definitions above: ``tokenize.basic`` and ``tokenize.blingfire``
-from .._generated import tokenize_basic as basic, tokenize_blingfire as blingfire  # noqa: E402
+from .._generated import (  # noqa: E402
+    public_tokenize_basic as basic,
+    public_tokenize_blingfire as blingfire,
+)

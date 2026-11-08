@@ -637,30 +637,24 @@ impl FallbackLlm {
         })
     }
 
-    #[pyo3(signature = (chat_ctx_host, *, tools, tools_host = None, parallel_tool_calls = None, tool_choice = None, extra_kwargs = None, conn_options = None))]
+    /// A completion of the host `chat_ctx`, offering `tools`; the chain picks an entry on the
+    /// first pull.
+    #[pyo3(signature = (*, chat_ctx, tools = None, parallel_tool_calls = None, tool_choice = None, extra_kwargs = None, conn_options = None))]
     fn chat<'py>(
         &self,
         py: Python<'py>,
-        chat_ctx_host: Bound<'_, PyAny>,
-        tools: Bound<'_, PyAny>,
-        tools_host: Option<Bound<'_, PyAny>>,
+        chat_ctx: Bound<'_, PyAny>,
+        tools: Option<Bound<'_, PyAny>>,
         parallel_tool_calls: ::std::option::Option<bool>,
         tool_choice: Option<Bound<'_, PyAny>>,
         extra_kwargs: Option<Bound<'_, PyAny>>,
         conn_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let chat_ctx_host = crate::py_objects::object_ref_from_py(chat_ctx_host.as_any())?;
-        let tools = tools.try_iter().and_then(|items| {
-            items
-                .map(|item| {
-                    let item = item?;
-                    crate::generated::records::tool_options::tool_spec_from_py(item.as_any())
-                })
-                .collect::<PyResult<Vec<_>>>()
-        })?;
-        let tools_host =
-            tools_host.map(|v| crate::py_objects::object_ref_from_py(v.as_any())).transpose()?;
+        let chat_ctx = crate::py_objects::object_ref_from_py(chat_ctx.as_any())?;
+        let tools = tools
+            .map(|v| crate::generated::records::llm_fallback::host_tools_from_py(v.as_any()))
+            .transpose()?;
         let tool_choice = tool_choice
             .map(|v| crate::py_values::value_from_py(v.as_any(), "tool_choice"))
             .transpose()?;
@@ -678,7 +672,7 @@ impl FallbackLlm {
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::chat(&this, chat_ctx_host, tools, tools_host, parallel_tool_calls, tool_choice, extra_kwargs, conn_options)
+            let out = <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::chat(&this, chat_ctx, tools, parallel_tool_calls, tool_choice, extra_kwargs, conn_options)
                 .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -856,7 +850,7 @@ impl FallbackTts {
         })
     }
 
-    #[pyo3(signature = (input_text, conn_options = None))]
+    #[pyo3(signature = (input_text, *, conn_options = None))]
     fn synthesize<'py>(
         &self,
         py: Python<'py>,
@@ -880,7 +874,7 @@ impl FallbackTts {
         })
     }
 
-    #[pyo3(signature = (conn_options = None, expressive = false))]
+    #[pyo3(signature = (*, conn_options = None, expressive = false))]
     fn stream<'py>(
         &self,
         py: Python<'py>,
@@ -964,9 +958,7 @@ impl RealtimeFallbackModel {
             items
                 .map(|item| {
                     let item = item?;
-                    crate::generated::records::llm_fallback::realtime_fallback_member_from_py(
-                        item.as_any(),
-                    )
+                    crate::generated::records::llm_fallback::realtime_leg_from_py(item.as_any())
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
@@ -1017,6 +1009,7 @@ inventory::submit! {
 // Declared in rust/crates/lk-agents-abi/src/llm/inference.rs.
 type InferenceLlmImpl =
     <crate::generated::implementations::Selected as super::Implementations>::InferenceLlm;
+type InferenceLlmInferenceClassOutput = ::std::option::Option<::std::string::String>;
 
 /// The gateway LLM behind `inference.LLM`. Its options are shared by every view
 /// (`identified`); each view's requests carry its own job's identification.
@@ -1025,27 +1018,22 @@ pub struct InferenceLlm(pub(crate) ::std::sync::Arc<InferenceLlmImpl>);
 
 #[pymethods]
 impl InferenceLlm {
-    /// A client of `model` at `base_url`. Starts nothing. With `api_secret`, `base_url` is the
-    /// LiveKit Inference gateway; without, `api_key` is an OpenAI-compatible provider's own key,
-    /// sent as the bearer with no LiveKit header. `label` is the host class it reports as.
-    /// `strict_tool_schema`, `gzip_body` and `msgpack_body` suit a provider that refuses strict
-    /// tool schemas or accepts compressed or msgpack bodies. `inference.LLM` builds it in its
-    /// constructor.
+    /// A client of `model`. Starts nothing. On the LiveKit Inference gateway by default, its
+    /// URL and key pair resolved from the given values, the environment and the server's
+    /// settings; with `endpoint`, an OpenAI-compatible provider called with its own key and no
+    /// LiveKit header.
     #[new]
-    #[pyo3(signature = (model, *, provider = None, base_url, api_key, api_secret, label, inference_class = None, strict_tool_schema = true, gzip_body = false, msgpack_body = false, extra_kwargs = None))]
+    #[pyo3(signature = (model, *, provider = None, base_url = None, api_key = None, api_secret = None, inference_class = None, extra_kwargs = None, endpoint = None))]
     fn new(
         py: Python<'_>,
         model: ::std::string::String,
         provider: ::std::option::Option<::std::string::String>,
-        base_url: ::std::string::String,
-        api_key: ::std::string::String,
+        base_url: ::std::option::Option<::std::string::String>,
+        api_key: ::std::option::Option<::std::string::String>,
         api_secret: ::std::option::Option<::std::string::String>,
-        label: ::std::string::String,
         inference_class: ::std::option::Option<::std::string::String>,
-        strict_tool_schema: bool,
-        gzip_body: bool,
-        msgpack_body: bool,
         extra_kwargs: Option<Bound<'_, PyAny>>,
+        endpoint: Option<Bound<'_, PyAny>>,
     ) -> PyResult<InferenceLlm> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
@@ -1058,6 +1046,13 @@ impl InferenceLlm {
                 ))),
             })
             .transpose()?;
+        let endpoint = endpoint
+            .map(|v| {
+                crate::generated::records::llm_provider_options::provider_endpoint_from_py(
+                    v.as_any(),
+                )
+            })
+            .transpose()?;
         let out = py
             .detach(|| {
                 <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::new(
@@ -1067,18 +1062,13 @@ impl InferenceLlm {
                     base_url,
                     api_key,
                     api_secret,
-                    label,
                     inference_class,
-                    strict_tool_schema,
-                    gzip_body,
-                    msgpack_body,
                     extra_kwargs,
+                    endpoint,
                 )
             })
-            .map_err(|e: ::lk_agents_abi::errors::ApiError| {
-                <::lk_agents_abi::errors::ApiError as crate::py_errors::HostException>::to_py_err(
-                    &e,
-                )
+            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
             })?;
         ::pyo3::PyResult::Ok(InferenceLlm(::std::sync::Arc::new(out)))
     }
@@ -1156,13 +1146,27 @@ impl InferenceLlm {
         ::pyo3::PyResult::Ok(crate::py_values::extra_to_py(py, &out)?.into_any())
     }
 
-    /// Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs.
-    #[pyo3(signature = (*, model = None, extra_kwargs = None))]
+    /// The scheduling class of its requests.
+    #[getter]
+    fn inference_class(&self, py: Python<'_>) -> PyResult<InferenceLlmInferenceClassOutput> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::inference_class(
+                &self.0,
+            )
+        });
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs, and
+    /// ``endpoint`` the provider endpoint.
+    #[pyo3(signature = (*, model = None, extra_kwargs = None, endpoint = None))]
     fn update_options(
         &self,
         py: Python<'_>,
         model: ::std::option::Option<::std::string::String>,
         extra_kwargs: Option<Bound<'_, PyAny>>,
+        endpoint: Option<Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
         let extra_kwargs = extra_kwargs
@@ -1174,11 +1178,19 @@ impl InferenceLlm {
                 ))),
             })
             .transpose()?;
+        let endpoint = endpoint
+            .map(|v| {
+                crate::generated::records::llm_provider_options::provider_endpoint_from_py(
+                    v.as_any(),
+                )
+            })
+            .transpose()?;
         py.detach(|| {
             <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::update_options(
                 &self.0,
                 model,
                 extra_kwargs,
+                endpoint,
             )
         });
         Ok(())
@@ -2935,6 +2947,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
     fn session(
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,
+        tools: ::std::option::Option<::lk_agents_abi::HostRef>,
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
@@ -2943,6 +2956,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
         >,
     > {
         let host = ::std::sync::Arc::clone(&self.host);
+        let tools_arg = tools;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexHost._core_session",
@@ -2950,7 +2964,10 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [match tools_arg {
+                    None => py.None().into_bound(py),
+                    Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
+                }];
                 Ok((
                     host.bind(py).getattr("_core_session")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
@@ -3885,6 +3902,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,
         turn_detection_disabled: bool,
+        tools: ::std::option::Option<::lk_agents_abi::HostRef>,
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
@@ -3894,6 +3912,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let turn_detection_disabled_arg = turn_detection_disabled;
+        let tools_arg = tools;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtime._core_session",
@@ -3901,8 +3920,13 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [::pyo3::IntoPyObjectExt::into_bound_py_any(turn_detection_disabled_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(turn_detection_disabled_arg, py)?,
+                    match tools_arg {
+                        None => py.None().into_bound(py),
+                        Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
+                    },
+                ];
                 Ok((
                     host.bind(py).getattr("_core_session")?,
                     ::pyo3::types::PyTuple::new(py, args)?,

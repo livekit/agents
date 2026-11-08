@@ -1368,7 +1368,7 @@
           "id": "lk.rpc.error_code",
           "type": "int",
           "stability": "development",
-          "brief": "The RPC error code, on error."
+          "brief": "The RPC error code, on error; for a handler the SDK cancelled, its reason (`RESPONSE_TIMEOUT` or `RECIPIENT_DISCONNECTED`)."
         },
         {
           "id": "lk.rpc.handler_registered",

@@ -241,3 +241,21 @@ pub trait ThreadFacade {
         #[host(default = 100)] limit: i64,
     ) -> Result<Vec<EventRow>, StorageError>;
 }
+
+/// `thread.lane(agent)`: one agent's lane of a thread (docs/threads.md), its history and its
+/// tasks.
+#[crate::host(facade(path = "livekit.agents.storage", native = ThreadHandle, from_native))]
+pub trait Lane {
+    #[host(new)]
+    fn new(agent: String) -> Self;
+    /// The lane's whole history, in order.
+    #[host(bind(agent = "_agent"), returns = "..llm.ChatContext", each = ItemRow::payload)]
+    async fn history(&self) -> Result<Vec<ItemRow>, StorageError>;
+    /// The lane's A2A task records, most recent first; only those in `status` when given.
+    #[host(bind(agent = "_agent"))]
+    async fn tasks(
+        &self,
+        #[host(kw, default = None)] status: Option<TaskState>,
+        #[host(default = 50)] limit: i64,
+    ) -> Result<Vec<TaskRecord>, StorageError>;
+}

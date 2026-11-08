@@ -11,7 +11,8 @@ mod stream;
 use crate::abi::{AudioFrame, StreamInput, StreamOutput};
 use crate::telemetry;
 
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, Invalid, ProviderError};
+use lk_agents_abi::inference::models::VadModelName;
 use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::vad::inference::VadModels;
 use lk_agents_abi::{Maybe, ProviderId, Vad, VadCapabilities, VadEvent, VadSink, VadSource};
@@ -43,6 +44,16 @@ pub struct LocalVad {
 impl LocalVad {
     pub fn new(opts: VadOptions, models: Arc<dyn VadModelFactory>, env: &ProcessEnv) -> Self {
         LocalVad { opts: tokio::sync::watch::Sender::new(opts), models, env: env.clone() }
+    }
+
+    /// A detector whose model is the linked native one, else one `models` builds per stream.
+    pub fn with_host_models(
+        opts: VadOptions,
+        models: Arc<dyn VadModels>,
+        env: &ProcessEnv,
+    ) -> Self {
+        let host = Arc::new(HostModels(models));
+        LocalVad::new(opts, crate::local_models::vad_factory_or(host), env)
     }
 
     /// The pair for callers that need the audio and lag alongside the VAD event.
@@ -79,13 +90,17 @@ impl lk_agents_abi::vad::inference::InferenceVad for LocalVad {
     fn new(
         env: &ProcessEnv,
         model_factory: Arc<dyn VadModels>,
+        _model: VadModelName,
         min_speech_duration: f64,
         min_silence_duration: f64,
         prefix_padding_duration: f64,
         max_buffered_speech: f64,
         activation_threshold: f64,
         deactivation_threshold: Option<f64>,
-    ) -> Self {
+    ) -> Result<Self, Invalid> {
+        if deactivation_threshold.is_some_and(|t| t <= 0.0) {
+            return Err(Invalid("deactivation_threshold must be greater than 0".into()));
+        }
         let opts = VadOptions {
             min_speech_duration,
             min_silence_duration,
@@ -96,8 +111,15 @@ impl lk_agents_abi::vad::inference::InferenceVad for LocalVad {
             deactivation_threshold: deactivation_threshold
                 .unwrap_or((activation_threshold - 0.15).max(0.01)),
         };
-        let host = Arc::new(HostModels(model_factory));
-        LocalVad::new(opts, crate::local_models::vad_factory_or(host), env)
+        Ok(LocalVad::with_host_models(opts, model_factory, env))
+    }
+
+    fn model(&self) -> VadModelName {
+        VadModelName::Silero
+    }
+
+    fn capabilities(&self) -> VadCapabilities {
+        Vad::capabilities(self)
     }
 
     fn update_options(
@@ -195,7 +217,7 @@ impl Vad for LocalVad {
     fn id(&self) -> ProviderId {
         ProviderId {
             label: self.label(),
-            model: "silero".into(),
+            model: VadModelName::Silero.as_str().into(),
             provider: "livekit-local-inference".into(),
         }
     }

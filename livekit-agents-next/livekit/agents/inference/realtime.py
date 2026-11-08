@@ -24,6 +24,8 @@ __all__ = [
 class RealtimeModel(_RealtimeModel):
     """OpenAI-compatible realtime model authenticated through LiveKit Inference."""
 
+    _provider_label = "livekit.agents.inference.realtime.RealtimeModel"
+
     def __init__(
         self,
         model: str,
@@ -62,7 +64,7 @@ class RealtimeModel(_RealtimeModel):
                 inference_provider=provider,
                 inference_class=inference_class,
                 conn_options=conn_options,
-                label=f"{type(self).__module__}.{type(self).__name__}",
+                label=self._provider_label,
                 options=realtime_options(
                     input_audio_transcription=input_audio_transcription,
                     input_audio_noise_reduction=input_audio_noise_reduction,
@@ -77,6 +79,7 @@ class RealtimeModel(_RealtimeModel):
             )
         )
         llm_realtime.RealtimeModel.__init__(self, capabilities=self.capabilities)
+        self._label = self._native.label
 
     @classmethod
     def from_model_string(cls, model: str) -> RealtimeModel:
@@ -87,7 +90,7 @@ class RealtimeModel(_RealtimeModel):
     def provider(self) -> str:
         return "livekit"
 
-    def _core_native(self) -> _core.OpenAIRealtimeModel:
+    def _core_leg(self) -> _core.OpenAIRealtimeModel:
         """The model, identified as the current job's, as a ``VoiceSession`` drives it."""
         headers = get_inference_headers(inference_class=self._inference_class)
         self._native.bind_identification(list(headers.items()))

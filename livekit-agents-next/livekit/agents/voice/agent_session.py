@@ -68,7 +68,6 @@ from ._session_callbacks import (
 from .events import (
     AgentEvent,
     AgentState,
-    CloseReason,
     Context_T,
     EventTypes,
     UserState,
@@ -211,11 +210,6 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     @property
     def tools(self) -> list[llm.Tool | llm.Toolset]:
         return list(self._tools)
-
-    @property
-    def options(self) -> dict[str, Any]:
-        """The configuration the core runs on, current the instant a change is sent."""
-        return cast(dict[str, Any], self._native.resolved_options(self._adapter._legs()))
 
     @property
     def conn_options(self) -> SessionConnectOptions:
@@ -364,15 +358,6 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         await self._adapter._start_ivr_detection(transcript)
 
-    async def aclose(self) -> None:
-        await self._aclose(CloseReason.USER_INITIATED)
-
-    async def _aclose(self, reason: CloseReason) -> None:
-        await self._native.aclose(reason.value)
-
-    def shutdown(self, *, drain: bool = True) -> None:
-        self._native.shutdown(CloseReason.USER_INITIATED.value, drain=drain)
-
     async def __aenter__(self) -> VoiceSession[Context_T]:
         return self
 
@@ -391,17 +376,6 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
             return (await asyncio.shield(settled)).result
 
         return result()
-
-    @contextlib.asynccontextmanager
-    async def _claim_user_turn(self) -> AsyncIterator[None]:
-        """A programmatic user turn: the user state is pinned to ``speaking`` and
-        ``wait_for_idle`` held while inside."""
-        self._running.claim_user_turn()
-        try:
-            yield
-        finally:
-            if self._core is not None:
-                self._core.release_user_turn()
 
     def update_agent(self, agent: Agent, *, chat_ctx: ChatContext | None = None) -> None:
         """Hand the conversation to ``agent``; the session and its history stay. ``chat_ctx`` is

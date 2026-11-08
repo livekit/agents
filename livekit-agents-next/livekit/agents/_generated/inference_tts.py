@@ -56,6 +56,14 @@ AssemblyAIModels: TypeAlias = Literal["assemblyai/assemblyai-tts-1"]
 TTSEncoding: TypeAlias = Literal["pcm_s16le"]
 
 
+FallbackModelType: TypeAlias = FallbackModel | str
+"""One server-side fallback of `inference.TTS`: a `FallbackModel` or a model name."""
+
+
+FallbackModels: TypeAlias = list[FallbackModelType] | FallbackModel | str
+"""`inference.TTS(fallback=)`: one entry or a list of them."""
+
+
 TTSModels: TypeAlias = (
     CartesiaModels
     | DeepgramModels

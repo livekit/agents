@@ -11,8 +11,9 @@ from typing import Self
 from livekit.local_inference import VAD
 
 from ..types import NotGivenOr
+from .inference_models import VADModels
 from .rtc_frames import AudioFrame
-from .vad import VADEvent
+from .vad import VADCapabilities, VADEvent
 
 class InferenceVad:
     """The Silero VAD behind `inference.VAD`."""
@@ -20,6 +21,7 @@ class InferenceVad:
         cls,
         model_factory: Callable[[], VAD],
         *,
+        model: VADModels = "silero",
         min_speech_duration: float = 0.05,
         min_silence_duration: float = 0.25,
         prefix_padding_duration: float = 0.5,
@@ -27,7 +29,14 @@ class InferenceVad:
         activation_threshold: float = 0.5,
         deactivation_threshold: float | None = None,
     ) -> Self:
-        """`deactivation_threshold` is `max(activation_threshold - 0.15, 0.01)` when `None`."""
+        """`model_factory` builds the host's model when the build links no native one;
+        `deactivation_threshold` is `max(activation_threshold - 0.15, 0.01)` when `None`. Only the
+        `"silero"` model exists.
+        """
+    @property
+    def model(self) -> VADModels: ...
+    @property
+    def capabilities(self) -> VADCapabilities: ...
     def update_options(
         self,
         *,

@@ -7,6 +7,13 @@
 
 use crate::class_stub::{Dir, Imports, py_literal};
 use crate::decl::{Class, Declarations, FacadeClass, FacadeMethod, Method, MethodKind, Param, Ty};
+
+#[path = "facade_with.rs"]
+mod with;
+use with::{bound_path, known_roots};
+#[cfg(test)]
+#[path = "facade_tests.rs"]
+mod facade_tests;
 use crate::python::Out;
 
 pub fn emit(declared: &Declarations, bases: &[crate::bases::Bases]) -> Result<Vec<Out>, String> {
@@ -25,6 +32,7 @@ pub fn emit(declared: &Declarations, bases: &[crate::bases::Bases]) -> Result<Ve
             typing: Imports::new(declared),
             stdlib: std::collections::BTreeSet::new(),
             casts: false,
+            known: Vec::new(),
         };
         let mut body = String::new();
         let mut identities = String::new();
@@ -86,6 +94,8 @@ struct Module<'a> {
     stdlib: std::collections::BTreeSet<&'static str>,
     /// A provider method hands its stream the owner through `typing.cast`.
     casts: bool,
+    /// The attributes the class itself declares, which a bound path may start from.
+    known: Vec<String>,
 }
 
 impl Module<'_> {
@@ -100,20 +110,27 @@ impl Module<'_> {
     /// `module.Name` relative to `livekit.agents`, bound in the generated module at runtime: a
     /// generated class from its generated module, so a public module never imports itself.
     fn runtime_name(&mut self, dotted: &str) -> Result<String, String> {
-        let (module, name) =
-            dotted.rsplit_once('.').ok_or_else(|| format!("`{dotted}` names module.Name"))?;
-        let public = format!("livekit.agents.{module}");
+        let (source, name) = self.placed_source(dotted);
+        if source.trim_start_matches('.') != self.module {
+            self.runtime.add(&source, &name);
+        }
+        Ok(name)
+    }
+
+    /// Where `module.Name` (or a top-level `Name`) is imported from: its generated module when
+    /// placed, else its public module.
+    fn placed_source(&self, dotted: &str) -> (String, String) {
+        let (module, name) = dotted.rsplit_once('.').unwrap_or(("", dotted));
+        let public = match module {
+            "" => "livekit.agents".to_owned(),
+            module => format!("livekit.agents.{module}"),
+        };
         let source = self
             .placed
             .get(&public)
             .and_then(|names| names.iter().find(|(_, n)| n == name))
-            .map(|(source, _)| source.clone());
-        match source {
-            Some(source) if source.trim_start_matches('.') == self.module => {}
-            Some(source) => self.runtime.add(&source, name),
-            None => self.runtime.add(&format!("..{module}"), name),
-        }
-        Ok(name.to_owned())
+            .map_or_else(|| format!("..{module}"), |(source, _)| source.clone());
+        (source, name.to_owned())
     }
 
     /// A host callable `module.fn` written relative to `_generated` (`.._bindings.core_legs`).
@@ -127,18 +144,41 @@ impl Module<'_> {
     }
 
     fn class(&mut self, facade: &FacadeClass) -> Result<String, String> {
-        let native = self.native(&facade.native)?.clone();
-        let mut base = facade.base.as_deref().map(|b| self.runtime_name(b)).transpose()?;
+        let native = match facade.native.as_str() {
+            "" => Class::default(),
+            name => self.native(name)?.clone(),
+        };
+        let mut base = match (&facade.base, facade.foreign) {
+            (Some(b), true) => Some(self.callable(b)?),
+            (b, false) => b.as_deref().map(|b| self.runtime_name(b)).transpose()?,
+            (None, true) => return Err("`foreign` qualifies a `base`".into()),
+        };
+        // A facade named as its base binds the base under another name.
+        if let (Some(b), Some(dotted)) = (&mut base, &facade.base)
+            && *b == facade.name
+            && !facade.foreign
+        {
+            let (source, name) = self.placed_source(dotted);
+            self.runtime.remove(&source, &name);
+            self.runtime.add(&source, &format!("{name} as Base{name}"));
+            *b = format!("Base{name}");
+        }
         // An adapter observing availability emits its event besides its base's.
         if let (Some(b), Some(availability)) = (&mut base, &facade.availability) {
             self.runtime.add("typing", "Literal");
             *b = format!("{b}[Literal[{:?}]]", availability.event);
         }
-        let mut text = format!(
-            "\n\nclass {}{}:\n",
-            facade.name,
-            base.map(|b| format!("({b})")).unwrap_or_default()
-        );
+        let mut text = String::new();
+        let mut bases: Vec<String> = base.iter().cloned().collect();
+        if let Some(t) = &facade.generic {
+            self.runtime.add("typing", "Generic");
+            self.runtime.add("typing", "TypeVar");
+            text.push_str(&format!("\n\n{t} = TypeVar(\"{t}\")\n"));
+            bases.push(format!("Generic[{t}]"));
+        }
+        let bases =
+            if bases.is_empty() { String::new() } else { format!("({})", bases.join(", ")) };
+        text.push_str(&format!("\n\nclass {}{bases}:\n", facade.name));
         let mut body = String::new();
         if crate::python::docstring(&mut body, &facade.doc, 4) {
             body.push('\n');
@@ -146,11 +186,12 @@ impl Module<'_> {
         let new = facade.methods.iter().find(|m| m.method.kind == MethodKind::New);
         let mut declared = Vec::new();
         if let Some(stream) = &facade.stream {
-            body.push_str(&self.stream(facade, &native, stream)?);
+            let pumped = base.as_deref().ok_or("a stream names its provider stream `base`")?;
+            body.push_str(&self.stream(facade, &native, stream, pumped)?);
             text.push_str(&body);
             return Ok(text);
         }
-        for delegate in &facade.delegates {
+        for delegate in facade.delegates.iter().filter(|d| d.held) {
             let in_new =
                 new.is_some_and(|n| n.delegated.iter().any(|(_, a)| *a == delegate.attribute));
             if !in_new {
@@ -158,7 +199,10 @@ impl Module<'_> {
                 declared.push(property(&delegate.attribute, &ty));
             }
         }
-        let build = self.build(facade, &native, new.is_some(), &mut declared)?;
+        let given = new.is_some() || facade.from_native || native.name.is_empty();
+        let build = self.build(facade, &native, given, &mut declared)?;
+        declared.extend(self.read_paths(facade, new));
+        self.known = known_roots(facade, new);
         if !declared.is_empty() {
             body.push_str("    if TYPE_CHECKING:\n");
             for line in declared.join("\n").lines() {
@@ -170,7 +214,9 @@ impl Module<'_> {
             body.push('\n');
         }
         let mut members = Vec::new();
-        if let Some(new) = new {
+        if facade.from_native {
+            members.push(self.from_native(facade, &native, new)?);
+        } else if let Some(new) = new {
             members.push(self.constructor(facade, &native, new)?);
         }
         members.extend(build);
@@ -181,7 +227,8 @@ impl Module<'_> {
             );
         }
         let declared = self.declared;
-        for opened in declared.facades.iter().filter(|f| f.native == facade.native) {
+        let owned = |f: &&FacadeClass| !f.native.is_empty() && f.native == facade.native;
+        for opened in declared.facades.iter().filter(owned) {
             if let Some(stream) = opened.stream.as_ref().filter(|s| s.method.is_some()) {
                 members.push(self.provider_method(facade, &native, opened, stream)?);
             }
@@ -362,11 +409,19 @@ impl Module<'_> {
             .iter()
             .find(|m| m.kind == MethodKind::New)
             .ok_or_else(|| format!("_core.{} has no #[host(new)]", native.name))?;
+        let mut facade = facade.clone();
+        for (_, object) in &mut facade.host_args {
+            *object = self.callable(object)?;
+        }
+        let facade = &facade;
         let observer = facade.availability.as_ref().map(|a| a.observer.as_str());
         let arguments = sent(&constructor.params, |p| {
             let n = p.name.trim_start_matches("r#");
             if observer == Some(n) {
                 return Some("self".to_owned());
+            }
+            if let Some((_, object)) = facade.host_args.iter().find(|(a, _)| a == n) {
+                return Some(object.clone());
             }
             values.iter().find(|(v, _)| v == n).map(|(_, value)| value.clone())
         })?;
@@ -470,36 +525,35 @@ impl Module<'_> {
         let m = &method.method;
         let adapt = &method.adapt;
         let (signature, values) = self.parameters(native, method)?;
+        // A setter assigns the native property of its name.
+        let name = adapt.setter.as_ref().unwrap_or(&method.native);
+        let wanted = |n: &&Method| {
+            &n.name == name
+                && n.kind != MethodKind::New
+                && (adapt.setter.is_some() == (n.kind == MethodKind::Setter))
+        };
         let (target, called) = match &method.via {
             Some(delegate) => {
                 let called = match &delegate.ty {
-                    Ty::Instance { class, .. } => Some(
-                        self.native(class)?
-                            .methods
-                            .iter()
-                            .find(|n| n.name == method.native)
-                            .cloned()
-                            .ok_or_else(|| {
-                                format!("_core.{class} has no method {}", method.native)
-                            })?,
-                    ),
+                    Ty::Instance { class, .. } => {
+                        Some(self.native(class)?.methods.iter().find(wanted).cloned().ok_or_else(
+                            || format!("_core.{class} has no method {}", method.native),
+                        )?)
+                    }
                     _ => None,
                 };
                 (format!("self.{}", delegate.attribute), called)
             }
             None => {
-                let called = native
-                    .methods
-                    .iter()
-                    .find(|n| n.name == method.native && n.kind != MethodKind::New)
-                    .cloned()
-                    .ok_or_else(|| {
-                        format!("_core.{} has no method {}", native.name, method.native)
-                    })?;
+                let called = native.methods.iter().find(wanted).cloned().ok_or_else(|| {
+                    format!("_core.{} has no method {}", native.name, method.native)
+                })?;
                 ("self._native".to_owned(), Some(called))
             }
         };
         let origin = adapt.origin.as_deref().map(|o| self.callable(o)).transpose()?;
+        self.casts |=
+            adapt.bind.iter().any(|(_, p)| bound_path(&self.known, p).starts_with("cast"));
         let arguments = match &called {
             Some(called) => sent(&called.params, |p| {
                 let n = p.name.trim_start_matches("r#");
@@ -507,6 +561,9 @@ impl Module<'_> {
                     && let Some(origin) = &origin
                 {
                     return Some(format!("{origin}()"));
+                }
+                if let Some((_, path)) = adapt.bind.iter().find(|(b, _)| b == n) {
+                    return Some(bound_path(&self.known, path));
                 }
                 values.iter().find(|(v, _)| v == n).map(|(_, value)| value.clone())
             })?,
@@ -539,36 +596,19 @@ impl Module<'_> {
             if getter { head.clone() } else { inline_call(&head, &arguments, indent) }
         };
         let awaited = m.kind == MethodKind::Await;
-        let mut ret = annotation(&m.ret.ok, Dir::Out, &mut self.typing);
+        let mut ret = self.returned(method);
         let mut body = String::new();
         if let Some(exit) = &method.exit {
-            self.stdlib.insert("contextlib");
-            self.typing.add("collections.abc", "AsyncIterator");
-            let exit_method = native
-                .methods
-                .iter()
-                .find(|n| &n.name == exit)
-                .ok_or_else(|| format!("_core.{} has no method {exit}", native.name))?;
-            let takes = exit_method.params.iter().any(|p| !p.ty.hidden());
-            let unit = m.ret.ok == Ty::Unit;
+            let awaited = called.as_ref().map_or(awaited, |c| c.kind == MethodKind::Await);
             let enter = format!("{}{}", if awaited { "await " } else { "" }, invocation(8));
-            body.push_str(&match unit {
-                true => format!("        {enter}\n"),
-                false => format!("        value = {enter}\n"),
-            });
-            let close = format!(
-                "{}self._native.{exit}({})",
-                if exit_method.kind == MethodKind::Await { "await " } else { "" },
-                if takes { "value" } else { "" }
-            );
-            body.push_str(&format!(
-                "        try:\n            yield{}\n        finally:\n            {close}\n",
-                if unit { "" } else { " value" }
-            ));
-            let text = format!(
-                "    @contextlib.asynccontextmanager\n{}",
-                def(&m.name, true, &signature, &format!("AsyncIterator[{ret}]"))
-            );
+            let called = called.as_ref();
+            return self.context_manager(native, method, called, exit, &signature, &target, &enter);
+        }
+        if let Some(property) = &adapt.setter {
+            let (value, _) = values.first().ok_or("a setter takes the new value")?;
+            let text =
+                format!("    @{property}.setter\n{}", def(property, false, &signature, "None"));
+            let body = format!("        {target}.{property} = {value}\n");
             return Ok(with_doc(text, &m.doc, &body));
         }
         if method.none_ends_iteration {
@@ -591,15 +631,33 @@ impl Module<'_> {
         }
         let statement = if let Some(returns) = &adapt.returns {
             ret = self.callable(returns)?;
-            let flat = format!("return {ret}({head}({}))", arguments.join(", "));
-            match 8 + flat.len() <= 100 {
-                true => flat,
-                false => {
-                    let lines: String =
-                        arguments.iter().map(|a| format!("                {a},\n")).collect();
-                    format!("return {ret}(\n            {head}(\n{lines}            )\n        )")
+            let prefix = if awaited { "await " } else { "" };
+            match &adapt.each {
+                Some(field) => {
+                    let value = format!("{prefix}{}", invocation(8));
+                    format!("return {ret}([x.{field} for x in {value}])")
+                }
+                None => {
+                    let flat = format!("return {ret}({prefix}{head}({}))", arguments.join(", "));
+                    match 8 + flat.len() <= 100 {
+                        true => flat,
+                        false => {
+                            let lines: String = arguments
+                                .iter()
+                                .map(|a| format!("                {a},\n"))
+                                .collect();
+                            format!(
+                                "return {ret}(\n            {prefix}{head}(\n{lines}            )\n        )"
+                            )
+                        }
+                    }
                 }
             }
+        } else if adapt.chain {
+            self.runtime.add("typing", "Self");
+            ret = "Self".into();
+            let prefix = if awaited { "await " } else { "" };
+            format!("{prefix}{}\n        return self", invocation(8 + prefix.len()))
         } else if let Some((module, name, field)) = &method.wrap {
             let name = self.record(module, name);
             let prefix = if awaited { "await " } else { "" };
@@ -611,6 +669,11 @@ impl Module<'_> {
         } else if awaited && adapt.discard {
             ret = "None".into();
             format!("await {}", invocation(14))
+        } else if m.ret.ok != Ty::Unit && adapt.annotations.iter().any(|(a, _)| a == "ret") {
+            // `annotation(ret = ..)` narrows what the native's stub declares (a JSON `object`).
+            self.casts = true;
+            let prefix = if awaited { "await " } else { "" };
+            format!("return cast({ret:?}, {prefix}{})", invocation(22 + ret.len() + prefix.len()))
         } else {
             let prefix = match (awaited, m.ret.ok == Ty::Unit) {
                 (true, true) => "await ",
@@ -623,10 +686,18 @@ impl Module<'_> {
         body.push_str(&format!("        {statement}\n"));
         let asynchronous = awaited && !adapt.future;
         let mut text = def(&m.name, asynchronous, &signature, &ret);
-        if getter || m.kind == MethodKind::Getter {
+        if m.kind == MethodKind::Getter {
             text = format!("    @property\n{text}");
         }
         Ok(with_doc(text, &m.doc, &body))
+    }
+
+    /// A method's return annotation: `annotation(ret = "..")`, else its declared type's.
+    fn returned(&mut self, method: &FacadeMethod) -> String {
+        match method.adapt.annotations.iter().find(|(a, _)| a == "ret") {
+            Some((_, text)) => self.typing.annotation(text, ""),
+            None => annotation(&method.method.ret.ok, Dir::Out, &mut self.typing),
+        }
     }
 
     /// The per-call parameters of a stream's native operation: each one's provider-method
@@ -650,7 +721,20 @@ impl Module<'_> {
             };
             let defaults_none = p.default.as_ref().map(py_literal).as_deref() == Some("None");
             let host_default = stream.defaults.iter().find(|(a, _)| *a == n);
+            let public = stream
+                .rename
+                .iter()
+                .find(|(a, _)| *a == n)
+                .map_or_else(|| n.clone(), |(_, public)| public.clone());
             let (signature, stored, value) = match (&p.ty, host_default) {
+                (Ty::Optional(inner), None) if stream.provider_default.contains(&n) => {
+                    self.runtime.add("..types", "NOT_GIVEN");
+                    self.typing.add("..types", "NotGivenOr");
+                    self.runtime.add("..utils", "is_given");
+                    let a = shown(self, inner);
+                    let value = format!("{n} if is_given({n}) else self._native.{n}");
+                    (format!("{n}: NotGivenOr[{a}] = NOT_GIVEN"), a, value)
+                }
                 (Ty::Optional(inner), Some((_, value))) => {
                     let value = self.callable(value)?;
                     let a = shown(self, inner);
@@ -668,17 +752,23 @@ impl Module<'_> {
                 (ty, None) => {
                     let a = shown(self, ty);
                     let signature = match &p.default {
-                        Some(d) => format!("{n}: {a} = {}", py_literal(d)),
-                        None => format!("{n}: {a}"),
+                        Some(d) => format!("{public}: {a} = {}", py_literal(d)),
+                        None => format!("{public}: {a}"),
                     };
-                    (signature, a, n.clone())
+                    (signature, a, public.clone())
                 }
             };
             let keyword = p.kw_only && !star;
             star |= keyword;
             out.push(PerCall { name: n, signature, stored, value, keyword });
         }
-        for n in stream.state.iter().chain(&stream.base_args) {
+        let renamed = stream.rename.iter().map(|(n, _)| n);
+        for n in stream.state.iter().chain(&stream.base_args).chain(&stream.provider_default) {
+            if !op.params.iter().any(|p| &p.name == n) {
+                return Err(format!("{} takes no {n}", stream.op));
+            }
+        }
+        for n in renamed {
             if !op.params.iter().any(|p| &p.name == n) {
                 return Err(format!("{} takes no {n}", stream.op));
             }
@@ -733,9 +823,8 @@ impl Module<'_> {
         facade: &FacadeClass,
         native: &Class,
         stream: &crate::decl::StreamForm,
+        base: &str,
     ) -> Result<String, String> {
-        let base = facade.base.as_deref().ok_or("a stream names its provider stream `base`")?;
-        let base = base.rsplit('.').next().unwrap_or(base);
         let owner = self
             .declared
             .facades
@@ -768,6 +857,11 @@ impl Module<'_> {
             arguments.push(if keyword { format!("{n}={value}") } else { value });
         }
         let opened = annotation(&op.ret.ok, Dir::Out, &mut self.typing);
+        let target = match &owner.leg {
+            Some(leg) => format!("self.{}.{leg}()", stream.owner),
+            None => format!("self.{}._native", stream.owner),
+        };
+        let awaited = if op.kind == MethodKind::Await { "await " } else { "" };
         let mut text = String::new();
         if stream.native_retries {
             text.push_str("    _core_native_retries = True\n");
@@ -792,11 +886,7 @@ impl Module<'_> {
             text.push('\n');
         }
         text.push_str(&format!("    async def _core_open(self) -> {opened}:\n"));
-        text.push_str(&call(
-            &format!("return await self.{}._native.{}", stream.owner, stream.op),
-            &arguments,
-            8,
-        ));
+        text.push_str(&call(&format!("return {awaited}{target}.{}", stream.op), &arguments, 8));
         text.push_str(&format!("\n    _run = {base}._core_run_native\n"));
         Ok(text)
     }
@@ -1047,5 +1137,23 @@ mod tests {
             "return await self._tts._native.listen(\n            language=self._language,\n            offset=self._offset,\n            conn_options=self._conn_options,\n        )\n"
         ));
         assert!(text.contains("from typing import TYPE_CHECKING, Any, cast\n"));
+    }
+
+    // Catches: the provider method taking the operation's name for a renamed parameter, a
+    // parameter not given defaulting to `None` rather than the owner's policy, or a facade named
+    // as its base subclassing itself.
+    #[test]
+    fn a_provider_method_renames_and_takes_the_owners_default() {
+        let source = STREAM
+            .replace("extended, native = Chain", "extended, name = \"TTS\", base = \"tts.TTS\", native = Chain")
+            .replace(
+                "stream(op = synthesize, owner = \"_tts\", native_retries)",
+                "stream(op = synthesize, owner = \"_tts\", method = \"synthesize\", base_args(input_text, conn_options), rename(input_text = \"text\"), provider_default(conn_options))",
+            );
+        let text = emit(&source).unwrap();
+        assert!(text.contains("class TTS(BaseTTS):\n"));
+        assert!(text.contains(
+            "    def synthesize(self, text: str, conn_options: NotGivenOr[int] = NOT_GIVEN) -> AdapterStream:\n        return AdapterStream(\n            tts=cast(\"tts.TTS\", self),\n            input_text=text,\n            conn_options=conn_options if is_given(conn_options) else self._native.conn_options,\n        )\n"
+        ));
     }
 }

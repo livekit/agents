@@ -39,5 +39,5 @@ def test_a_provider_endpoint_needs_no_gateway_credentials(monkeypatch: pytest.Mo
         monkeypatch.delenv(name, raising=False)
         monkeypatch.delenv(name.replace("LIVEKIT_", "LIVEKIT_INFERENCE_"), raising=False)
     endpoint = ProviderEndpoint(base_url="https://provider.invalid/v1", api_key="own")
-    llm = inference.LLM("gpt-4.1", _endpoint=endpoint)
+    llm = inference.LLM("gpt-4.1", endpoint=endpoint)
     assert llm.model == "gpt-4.1"

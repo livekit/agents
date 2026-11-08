@@ -20,7 +20,7 @@ from typing import Any
 
 from livekit.agents import __version__ as livekit_version, llm
 from livekit.agents.inference import InferenceClass
-from livekit.agents.inference.llm import ChatCompletionOptions, ReasoningEffort
+from livekit.agents.inference.llm import ChatCompletionOptions, ProviderEndpoint, ReasoningEffort
 from livekit.agents.llm import ChatContext, ToolChoice
 from livekit.agents.llm.chat_context import ImageContent
 from livekit.agents.types import (
@@ -259,9 +259,8 @@ class LLM(OpenAILLM):
     ) -> None:
         """Update the model at runtime; ``extra_kwargs`` replaces the persistent kwargs.
 
-        Validates the new model and recreates the underlying client when the
-        API version changes (``/v1`` ↔ ``/v2``).  When both old and new models
-        share the same endpoint, the client is **not** recreated.
+        Validates the new model and moves the client to the new endpoint when the
+        API version changes (``/v1`` to ``/v2``).
         """
         if is_given(extra_kwargs):
             super().update_options(extra_kwargs=extra_kwargs)
@@ -274,12 +273,13 @@ class LLM(OpenAILLM):
         if new_version == self._sarvam_api_version:
             super().update_options(model=new_model)
             return
-        # Endpoint changed: a client for the new URL, keeping the persistent kwargs
+        # Endpoint changed: the new URL, keeping the persistent kwargs
         self._base_url = _resolve_base_url(new_model)
-        self._model = new_model
-        self._extra_kwargs = dict(self._native.extra_kwargs)
         self._sarvam_api_version = new_version
-        self._native = self._new_native()
+        self._native.update_options(
+            model=new_model,
+            endpoint=ProviderEndpoint(base_url=self._base_url, api_key=self._sarvam_api_key),
+        )
 
     def chat(
         self,
@@ -317,7 +317,7 @@ class LLM(OpenAILLM):
         effective_tool_choice = (
             tool_choice
             if is_given(tool_choice)
-            else self._extra_kwargs.get("tool_choice", NOT_GIVEN)
+            else self._native.extra_kwargs.get("tool_choice", NOT_GIVEN)
         )
         effective_tools = tools or []
         if is_given(effective_tool_choice) and not effective_tools:

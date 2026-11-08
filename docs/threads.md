@@ -18,13 +18,13 @@ history, the state, the tasks, the A2A context.
 
 ## What it holds
 
-|             |                                                                                                                                                                   |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| an id       | `AT_...`, minted by the platform. A client learns it as the `contextId` of the first reply and sends it from then on; the handler reads it as `ctx.thread.id`     |
-| scope       | an optional opaque identifier the application sets for the person or account the thread is about; the one dimension threads are listed by, and a grant's scope    |
-| attributes  | a small string map the application sets and reads back; a title, a preview, flags                                                                                 |
-| lanes       | one per configured handler lane: transport history, saved application data and tasks; see [lane concepts](#lanes-and-session-frames)                                                        |
-| the journal | the framework's append-only record of what happened, shared by every lane; see [journal](internals/storage.md#journal)                                                           |
+|             |                                                                                                                                                                |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| an id       | `AT_...`, minted by the platform. A client learns it as the `contextId` of the first reply and sends it from then on; the handler reads it as `ctx.thread.id`  |
+| scope       | an optional opaque identifier the application sets for the person or account the thread is about; the one dimension threads are listed by, and a grant's scope |
+| attributes  | a small string map the application sets and reads back; a title, a preview, flags                                                                              |
+| lanes       | one per configured handler lane: transport history, saved application data and tasks; see [lane concepts](#lanes-and-session-frames)                           |
+| the journal | the framework's append-only record of what happened, shared by every lane; see [journal](internals/storage.md#journal)                                         |
 
 Several endpoints can take part in one thread, each in its configured lane.
 Local agents coordinated by a session have separate frames within saved session
@@ -48,30 +48,58 @@ those records; lease/fence, table, and event mechanics are in
 
 ## How a thread is found
 
-By its id, and nothing else.
+By its id, and nothing else. A text request names its thread on every request; a call's
+thread is named once, by whoever dispatches the agent. The agent never picks a thread
+itself, and a call never creates one.
 
-| A request carries                     | The thread                                                                         |
-| ------------------------------------- | ---------------------------------------------------------------------------------- |
-| the id, as the A2A `contextId`        | that thread; an id the platform does not know fails the task `thread-not-found`     |
-| no `contextId`                        | a new thread; a retried first message (same `messageId`) gets the same thread and task |
-| a job dispatch for a call             | the `thread_id` in the dispatch's JSON metadata, else a new thread, as `ctx.thread` before the entrypoint runs; an unknown or deleted id logs a refusal and continues in memory |
+### Text
 
-A backend that wants to find a conversation again stores the thread id in
-its own tables, against its user, lead or order, and passes it on as
-`contextId` or in the dispatch; see [clients.md](clients.md).
-For phone-number routing, see
-[channels.md](channels.md).
+| The request                                                                              | Who names the thread                                                         | The thread                                                                                                     |
+| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| A2A `message/send` with `contextId` (a browser, a backend, `AgentClient`, another agent) | the caller, authorized by its token's `agentThread` grant or a project token | that thread; an id the platform does not know fails the task `thread-not-found`                                |
+| A2A `message/send` without `contextId`                                                   | nobody                                                                       | a new thread, in the grant's `scope`; a retried first message (same `messageId`) gets the same thread and task |
+| an SMS or a WhatsApp message                                                             | LiveKit Cloud's ingress, by the sender's `phone:+E164` key (get-or-create)   | that thread, posted as `contextId`; see [channels.md](channels.md)                                             |
+| an email                                                                                 | the ingress, by the sender's `email:<address>` key (get-or-create)           | the same                                                                                                       |
+
+### Calls
+
+A call's thread is the `thread_id` of its job, copied from the agent dispatch that started it.
+Every route below is signed with the project's key, so the agent trusts the id without a grant.
+
+| The call                                      | Where `thread_id` is set                                                                | Who sets it                                                                                                         |
+| --------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| a browser joins and its join creates the room | the token's `roomConfig.agents[].threadId`                                              | the backend that mints the token, choosing a thread the user's `agentThread` grant covers                           |
+| a backend creates the room with its agents    | `CreateRoom`'s `RoomConfiguration.agents[].thread_id`                                   | the backend                                                                                                         |
+| an agent joins a room that exists             | `CreateAgentDispatch(thread_id=)`                                                       | the backend                                                                                                         |
+| an outbound phone call                        | the dispatch of the agent that places or answers it (`CreateAgentDispatch(thread_id=)`) | the backend, from the thread it stored against the lead                                                             |
+| an inbound phone call                         | the dispatch the SIP dispatch rule creates                                              | LiveKit Cloud, by the caller's `phone:+E164` key (get-or-create), so a call continues the texts and calls before it |
+| the web console and `lk agent console`        | the console's token or simulated job                                                    | the console, which creates the thread first                                                                         |
+
+| The job's `thread_id`            | `ctx.thread` and the call                                      |
+| -------------------------------- | -------------------------------------------------------------- |
+| a known thread                   | that thread, open before the entrypoint runs                   |
+| empty                            | `None`: the call keeps its history in memory, unsaved          |
+| unknown or deleted               | `None`: the refusal is logged and the call continues in memory |
+| any, on a server without storage | `None`                                                         |
+
+Whoever dispatches the call already has its thread id and hands it to its frontend;
+the room does not publish it. A tool with the project's key reads it from the
+dispatch (`ListDispatch`).
+
+A backend that wants to find a conversation again stores the thread id in its own tables,
+against its user, lead or order, and passes it on as `contextId` or in the dispatch; see
+[clients.md](clients.md).
 
 ## One person, several conversations
 
 A thread is a conversation, not a person, so how many a person has is the
 application's choice.
 
-| Channel       | Conversations per person         | How                                                                                                                                                  |
-| ------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Channel       | Conversations per person         | How                                                                                                                                                   |
+| ------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | web chat, API | as many as the application wants | a thread per chat, created with the person as `scope`, listed by scope for a sidebar, titled with `update(attributes=)`; see [clients.md](clients.md) |
 | the same      | one                              | the backend keeps one thread id per person and sends it every time                                                                                    |
-| calls         | the one the dispatch names       | the backend or the console puts the thread id in the dispatch metadata; with none, every call is a new thread                                          |
+| calls         | the one the dispatch names       | the dispatch's `thread_id` (see [Calls](#calls)); with none, the call keeps no thread                                                                 |
 
 Tags, folders and search are the application's own table, keyed by the
 thread id. Each thread is its own memory: what the agent learned in one
@@ -100,18 +128,18 @@ server without storage, and `VoiceSession(thread=ctx.thread)` gives it to
 the call. Without storage, a run's `ctx.thread` is an in-memory thread
 with the same API and no persistence; see [storage.md](internals/storage.md).
 
-| Member | Returns | What |
-| --- | --- | --- |
-| `id` | `str` | the thread id |
-| `info()` | `ThreadInfo` | the platform's record: scope, attributes, `created_at`, `last_active`, `expires_at` |
-| `update(attributes=, idle_ttl_seconds=)` | `ThreadInfo` | change the attributes a listing returns, or the idle period |
-| `lane(agent).history()` | `ChatContext` | another agent's history in this thread |
-| `chat_history(agent=None)` | `ChatContext` | this agent's history, or another agent's |
-| `lane(agent).tasks(status=, limit=)` | `list[TaskRecord]` | A2A task records for the selected lane |
-| `list_items(agent=None, after=None, limit=100)` | `ThreadItemPage` | one page of committed chat items in insertion order; the page's `after` reads the next |
-| `list_tasks(agent=None, status=None, order="inserted", page_token=None, limit=50)` | `TaskPage` | one page of task records, in insertion order or last updated first (`order="updated"`) |
-| `task(task_id)` | `TaskRecord \| None` | one task record, `None` when the thread has none of that id |
-| `journal(after_id=0, limit=100)` | `list[EventRow]` | the journal, one page in order |
+| Member                                                                             | Returns              | What                                                                                   |
+| ---------------------------------------------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------- |
+| `id`                                                                               | `str`                | the thread id                                                                          |
+| `info()`                                                                           | `ThreadInfo`         | the platform's record: scope, attributes, `created_at`, `last_active`, `expires_at`    |
+| `update(attributes=, idle_ttl_seconds=)`                                           | `ThreadInfo`         | change the attributes a listing returns, or the idle period                            |
+| `lane(agent).history()`                                                            | `ChatContext`        | another agent's history in this thread                                                 |
+| `chat_history(agent=None)`                                                         | `ChatContext`        | this agent's history, or another agent's                                               |
+| `lane(agent).tasks(status=, limit=)`                                               | `list[TaskRecord]`   | A2A task records for the selected lane                                                 |
+| `list_items(agent=None, after=None, limit=100)`                                    | `ThreadItemPage`     | one page of committed chat items in insertion order; the page's `after` reads the next |
+| `list_tasks(agent=None, status=None, order="inserted", page_token=None, limit=50)` | `TaskPage`           | one page of task records, in insertion order or last updated first (`order="updated"`) |
+| `task(task_id)`                                                                    | `TaskRecord \| None` | one task record, `None` when the thread has none of that id                            |
+| `journal(after_id=0, limit=100)`                                                   | `list[EventRow]`     | the journal, one page in order                                                         |
 
 ## Lifecycle
 

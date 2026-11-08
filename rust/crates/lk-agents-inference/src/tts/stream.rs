@@ -1,9 +1,12 @@
 //! One native synthesis operation as the host sees it, for the gateway and fallback paths alike.
 
 use lk_agents_abi::errors::{HostError, ProviderError, PullError};
+use lk_agents_abi::tts::stream_pacer::PushedAudio;
+use lk_agents_abi::tts::streams::DrainError;
 use lk_agents_abi::utils::strings::PYTHON_WHITESPACE;
 use lk_agents_abi::{Closed, StreamInput, SynthesizedAudio, TtsSink, TtsSource};
 use lk_agents_net::source::{Pulled, SharedStream};
+use lk_agents_net::strings::shortuuid;
 use std::sync::Arc;
 
 pub struct TtsStream {
@@ -50,6 +53,29 @@ impl lk_agents_abi::tts::streams::TtsStream for TtsStream {
             Pulled::Item(audio) => Some(audio),
             Pulled::End | Pulled::Cancelled => None,
         })
+    }
+    async fn drain_into(
+        &self,
+        emitter: Arc<dyn PushedAudio>,
+        stream: bool,
+    ) -> Result<(), DrainError> {
+        let mut started = !stream;
+        while let Some(audio) = self.recv().await? {
+            if !started {
+                started = true;
+                let segment_id = match audio.segment_id.is_empty() {
+                    true => shortuuid(""),
+                    false => audio.segment_id,
+                };
+                emitter.start_segment(segment_id)?;
+            }
+            emitter.push_timed_transcript(audio.timed_transcript)?;
+            emitter.push_frame(audio.frame)?;
+            if audio.usage.is_some() || audio.characters_count.is_some() {
+                emitter.report_usage(audio.usage.map(|usage| *usage), audio.characters_count)?;
+            }
+        }
+        Ok(())
     }
     /// Cancels the synthesis; the input is not ended, so nothing pending is spoken.
     async fn aclose(&self) {

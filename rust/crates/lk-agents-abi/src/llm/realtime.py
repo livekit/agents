@@ -26,6 +26,7 @@ from .types import ProviderId
 if TYPE_CHECKING:
     from ..llm.realtime import GenerationCreatedEvent
     from ..llm.tool_context import Tool, ToolChoice, ToolContext, Toolset
+    from .llm_fallback import RealtimeLeg
 
 
 class RealtimeModel(ABC):
@@ -38,8 +39,9 @@ class RealtimeModel(ABC):
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._capabilities = capabilities
 
-    def _core_leg(self) -> object:
-        """The Python provider implementation used by the native runtime's declared proxy."""
+    def _core_leg(self) -> RealtimeLeg:
+        """The model as the core takes it: a plugin is itself, a host provider; a model the core
+        runs returns its native model."""
         return self
 
     @property
@@ -105,32 +107,13 @@ class RealtimeModel(ABC):
         return {"label": self.label, "model": self.model, "provider": self.provider}
 
     async def _core_session(
-        self, turn_detection_disabled: bool, tools: Callable[[], Sequence[Tool | Toolset]] = list
+        self,
+        turn_detection_disabled: bool,
+        tools: Callable[[], Sequence[Tool | Toolset]] | None,
     ) -> RealtimeSession:
         out = self.session(turn_detection_disabled=turn_detection_disabled)
-        out._core_attach(tools)
+        out._core_attach(tools or list)
         return out
-
-    def _core_with_tools(self, tools: Callable[[], Sequence[Tool | Toolset]]) -> Any:
-        """The model as a session hands it to the framework: its sessions offer the tools
-        ``tools`` names."""
-        return _RealtimeModelTools(self, tools)
-
-
-class _RealtimeModelTools:
-    """``RealtimeModel`` as a session holds it: the tools its sessions offer."""
-
-    def __init__(
-        self, provider: RealtimeModel, tools: Callable[[], Sequence[Tool | Toolset]]
-    ) -> None:
-        self._provider = provider
-        self._tools = tools
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._provider, name)
-
-    async def _core_session(self, turn_detection_disabled: bool) -> RealtimeSession:
-        return await self._provider._core_session(turn_detection_disabled, self._tools)
 
 
 EventTypes = Literal[

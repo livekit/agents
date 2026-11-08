@@ -74,6 +74,8 @@ job_entrypoint                          job dispatch to entrypoint exit; events 
 `room_connect` and `wait_for_participant` sit under `session_start` while the
 session starts and under `job_entrypoint` when the entrypoint calls them before
 `start()`.
+`rpc_handler` likewise sits under `job_entrypoint` for an RPC handled before the
+primary session starts.
 
 Spans with `parent = Current` appear wherever their caller is: `llm_request`
 and `tts_request` (with `llm_fallback_adapter`, `tts_fallback_adapter` and
@@ -237,7 +239,7 @@ and `user_state_changed` (`lk.old_state`, `lk.new_state`),
 | `on_exit` | `drain_agent_activity` | `lk.agent_label` |
 | `pause_agent_activity`, `resume_agent_activity` | `update_agent` | `lk.agent_label` |
 | `event_loop_blocked` | the job's first `agent_session`, else the span current when the loop's watch opened | `lk.blocking.duration`, `lk.blocking.threshold` (s), `lk.blocking.severity` (`warning`, `error`), `lk.blocking.stack` (the loop thread's 20 deepest frames, `function (file:line)`, when py-spy can read them), `lk.blocking.import` (the file being imported, if any), `lk.blocking.suppressed` (int); error status at `error` severity; at most 30 per minute; see [Event-loop stalls](telemetry.md#event-loop-stalls) |
-| `rpc_handler` (kind `SERVER`) | `agent_session` | `rpc.method`, `lk.rpc.request_id`, `lk.rpc.caller_identity`, `lk.rpc.response_timeout` (s), `lk.rpc.handler_registered` (bool), `lk.rpc.payload_size` (int, bytes), `lk.pii.rpc.payload` (first 1024 characters); `lk.rpc.error_code` (int) on error; `lk.rpc.response_size`, `lk.pii.rpc.response` on success |
+| `rpc_handler` (kind `SERVER`) | `agent_session`, else `job_entrypoint` before the session starts | `rpc.method`, `lk.rpc.request_id`, `lk.rpc.caller_identity`, `lk.rpc.response_timeout` (s), `lk.rpc.handler_registered` (bool), `lk.rpc.payload_size` (int, bytes), `lk.pii.rpc.payload` (first 1024 characters); `lk.rpc.error_code` (int) on error, the SDK's cancel reason (`RESPONSE_TIMEOUT`, `RECIPIENT_DISCONNECTED`) when it cancelled the handler; `lk.rpc.response_size`, `lk.pii.rpc.response` on success |
 | `rpc_call` (kind `CLIENT`) | current | `rpc.method`, `lk.rpc.destination_identity`, `lk.rpc.payload_size`, `lk.pii.rpc.payload`, `lk.rpc.response_timeout`; `lk.rpc.error_code` on error; `lk.rpc.response_size`, `lk.pii.rpc.response` on success |
 | `amd` | `agent_session` | at the verdict: `lk.amd.category` (string), `lk.amd.reason`, `lk.amd.speech_duration`, `lk.amd.delay` (double, s), `lk.pii.amd.transcript` |
 | `keyterm_detection` | the replying `agent_turn`, else `agent_session` | `gen_ai.request.model`, `gen_ai.provider.name` at start; `lk.keyterms.count`, `lk.keyterms.added`, `lk.keyterms.removed` (int) at end |

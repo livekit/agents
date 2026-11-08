@@ -2663,10 +2663,11 @@
     },
     {
       "name": "rpc_handler",
-      "brief": "An RPC method handled for a remote participant.",
+      "brief": "An RPC method handled for a remote participant, under the job's primary session, else the job before the session started.",
       "kind": "server",
       "parents": [
-        "agent_session"
+        "agent_session",
+        "job_entrypoint"
       ],
       "outlives_parent": null,
       "start": [

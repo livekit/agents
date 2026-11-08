@@ -30,6 +30,7 @@ use lk_agents_abi::llm::realtime::{
 };
 use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::{ChatContext, Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
+use lk_agents_net::env::ProcessError;
 use parking_lot::Mutex;
 
 use crate::fallback::machine::{ChainEvent, ChainRequest};
@@ -43,8 +44,8 @@ use lk_agents_abi::resources::ResourceId;
 #[derive(Clone)]
 pub enum ChainModel {
     Native(Arc<dyn Realtime>),
-    /// With the spawner its leg's tasks run on.
-    Host(Arc<dyn HostRealtime>, Arc<dyn lk_agents_abi::Spawner>),
+    /// With the spawner its leg's tasks run on, resolved when it opens.
+    Host(Arc<dyn HostRealtime>, fn() -> Result<Arc<dyn lk_agents_abi::Spawner>, ProcessError>),
 }
 
 impl ChainModel {
@@ -75,17 +76,19 @@ impl ChainModel {
         &self,
         cx: lk_agents_abi::telemetry::Cx,
         turn_detection_disabled: bool,
+        tools: Option<lk_agents_abi::HostRef>,
         anchor: WallAnchor,
         clock: &dyn lk_agents_abi::Clock,
         attempt_timeout: Option<Duration>,
     ) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
         let open = async {
             match self {
-                ChainModel::Native(m) => m.session(cx, turn_detection_disabled).await,
+                ChainModel::Native(m) => m.session(cx, turn_detection_disabled, tools).await,
                 // Given its anchor and spawner, it needs no environment.
                 ChainModel::Host(h, spawner) => {
-                    <HostRealtimeModel>::new(Arc::clone(h), anchor, Arc::clone(spawner))
-                        .session(cx, turn_detection_disabled)
+                    let spawner = spawner().map_err(ApiError::from)?;
+                    <HostRealtimeModel>::new(Arc::clone(h), anchor, spawner)
+                        .session(cx, turn_detection_disabled, tools)
                         .await
                 }
             }
@@ -124,26 +127,20 @@ impl lk_agents_abi::llm::fallback::RealtimeFallbackModel for RealtimeFallbackMod
 
     fn new(
         env: &Self::Env,
-        models: Vec<lk_agents_abi::llm::fallback::RealtimeFallbackMember>,
+        models: Vec<lk_agents_abi::llm::fallback::RealtimeLeg>,
         cooldown: f64,
         attempt_timeout: Option<f64>,
         regenerate_on_swap: bool,
         on_availability: Option<Arc<dyn ChainObserver>>,
     ) -> Result<Self, RealtimeConfigurationError> {
-        use lk_agents_abi::llm::fallback::RealtimeFallbackMember;
+        use lk_agents_abi::llm::fallback::RealtimeLeg;
         let children = models
             .into_iter()
-            .map(|model| {
-                Ok(match model {
-                    RealtimeFallbackMember::Native(model) => ChainModel::Native(model),
-                    RealtimeFallbackMember::Host(model) => ChainModel::Host(
-                        model,
-                        (env.spawner)()
-                            .map_err(|e| lk_agents_abi::errors::HostError::new(e.to_string()))?,
-                    ),
-                })
+            .map(|model| match model {
+                RealtimeLeg::Native(model) => ChainModel::Native(model),
+                RealtimeLeg::Host(model) => ChainModel::Host(model, env.spawner),
             })
-            .collect::<Result<Vec<_>, RealtimeConfigurationError>>()?;
+            .collect();
         Self::new(
             children,
             cooldown,
@@ -236,12 +233,14 @@ impl Realtime for RealtimeFallbackModel {
         &self,
         cx: lk_agents_abi::telemetry::Cx,
         turn_detection_disabled: bool,
+        tools: Option<lk_agents_abi::HostRef>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(async move {
             let first = self.children[0]
                 .open(
                     cx.clone(),
                     turn_detection_disabled,
+                    tools.clone(),
                     self.anchor,
                     &*self.clock,
                     self.attempt_timeout,
@@ -260,6 +259,7 @@ impl Realtime for RealtimeFallbackModel {
                 anchor: self.anchor,
                 clock: Arc::clone(&self.clock),
                 turn_detection_disabled,
+                tools,
                 cx,
                 model_active: Arc::clone(&self.active),
                 state: Mutex::new(SessionState {

@@ -1,4 +1,4 @@
-//! Transport URL classification and ephemeral operation identifiers.
+//! Transport URL classification and ids in the protocol's `guid` format.
 
 /// Is this a LiveKit Cloud URL? Hostname suffix only, so a path or query cannot fake it.
 pub fn is_cloud_url(url: &str) -> bool {
@@ -27,19 +27,42 @@ pub(crate) fn host_of(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
-/// `utils.shortuuid(prefix)`: `prefix + uuid.uuid4().hex[:12]`, twelve hex characters, all before
-/// the version nibble, so six random bytes are equivalent.
+/// The protocol's id alphabet (`guid.IDAlphabet`, shortuuid's default): no `0`, `1`, `I`, `O`, `l`.
+pub const ID_ALPHABET: &[u8; 57] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+/// The random characters after an id's prefix (`guid.Size`).
+pub const ID_SIZE: usize = 12;
+
+/// A new id in the protocol's format (`guid.New`): `prefix` then [`ID_SIZE`] random characters of
+/// [`ID_ALPHABET`].
+///
+/// 57^12 ~= 1.2e21 ids per prefix (about 70 bits): two of a billion ids collide with probability
+/// ~4e-4, and a collision is even odds only after ~4e10 ids.
 pub fn shortuuid(prefix: &str) -> String {
-    use rand::RngCore;
-    use std::fmt::Write as _;
-    let mut bytes = [0u8; 6];
-    rand::rng().fill_bytes(&mut bytes);
-    let mut out = String::with_capacity(prefix.len() + 12);
-    out.push_str(prefix);
-    for b in bytes {
-        let _ = write!(out, "{b:02x}");
+    use rand::Rng;
+    let mut rng = rand::rng();
+    let mut id = String::with_capacity(prefix.len() + ID_SIZE);
+    id.push_str(prefix);
+    id.extend(
+        (0..ID_SIZE).map(|_| char::from(ID_ALPHABET[rng.random_range(0..ID_ALPHABET.len())])),
+    );
+    id
+}
+
+/// Is `id` exactly `prefix` then [`ID_SIZE`] characters of [`ID_ALPHABET`]
+/// (`guid.IsValidWithPrefix`)?
+pub fn is_valid_id(prefix: &str, id: &str) -> bool {
+    id.strip_prefix(prefix)
+        .is_some_and(|rest| rest.len() == ID_SIZE && rest.bytes().all(|b| ID_ALPHABET.contains(&b)))
+}
+
+/// The host's [`shortuuid`].
+pub struct Ids;
+
+impl lk_agents_abi::types::ids::Ids for Ids {
+    fn shortuuid(prefix: String) -> String {
+        shortuuid(&prefix)
     }
-    out
 }
 
 /// `_observability_url(livekit_url)` (`job.py:58`). The env override wins unvalidated; otherwise
@@ -61,6 +84,21 @@ mod tests {
         assert!(is_staging_cloud_url("wss://p.staging.livekit.cloud"));
         assert!(!is_staging_cloud_url("wss://p.livekit.cloud/x.staging.livekit.cloud"));
         assert!(!is_staging_cloud_url("https://example.com?u=.staging.livekit.cloud"));
+    }
+
+    // Catches: an id outside the protocol's format (the server refuses a dispatch's thread id that
+    // `guid.IsValidWithPrefix` rejects), or a validator that accepts a wrong length or character.
+    #[test]
+    fn ids_follow_the_protocol_guid_format() {
+        let id = shortuuid("AT_");
+        assert!(is_valid_id("AT_", &id), "{id}");
+        assert_ne!(shortuuid("AT_"), id);
+        for bad in
+            ["AT_", "AT_abcdefghijk", "AT_abcdefghijkmn", "AT_0bcdefghijkm", "XX_abcdefghijkm"]
+        {
+            assert!(!is_valid_id("AT_", bad), "{bad}");
+        }
+        assert!(is_valid_id("", &shortuuid("")));
     }
 
     // Catches: matching the suffix against the whole URL, an undotted suffix, or the port or

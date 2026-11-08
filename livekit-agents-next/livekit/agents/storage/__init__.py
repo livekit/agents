@@ -13,18 +13,13 @@ from typing import TYPE_CHECKING, Any
 from .. import _core
 from .._generated import facades_storage as _facades, public_storage as _public
 from .._generated.public_storage import *  # noqa: F403
-from .._generated.storage_class import (
-    LocalStorageOptions,
-    TaskRecord,
-    TaskState,
-)
+from .._generated.storage_class import LocalStorageOptions
 from ..llm import ChatContext
 from ..log import logger
 from .context import (
     ContextStore,
     Row,
     SqlValue,
-    Transaction,
     load_context,
     persisted,
     save_context,
@@ -170,27 +165,11 @@ class Thread(_facades.Thread):
 
     def lane(self, agent: str) -> Lane:
         """An agent's lane of this thread: its history and its tasks."""
-        return Lane(self, agent)
+        return Lane(self._native, agent)
 
     async def chat_history(self, agent: str | None = None) -> ChatContext:
         """This agent's history, or another agent's."""
         return await self.lane(agent or self._agent_name).history()
-
-
-class Lane:
-    """One agent's lane of a thread (docs/threads.md): ``thread.lane(agent)``."""
-
-    def __init__(self, thread: Thread, agent: str) -> None:
-        self._native = thread._native
-        self._agent = agent
-
-    async def history(self) -> ChatContext:
-        """The lane's whole history, in order."""
-        return ChatContext([row.payload for row in await self._native.history(self._agent)])
-
-    async def tasks(self, *, status: TaskState | None = None, limit: int = 50) -> list[TaskRecord]:
-        """The lane's A2A task records, most recent first; only those in ``status`` when given."""
-        return await self._native.tasks(self._agent, status=status, limit=limit)
 
 
 @dataclass(frozen=True)
@@ -219,14 +198,12 @@ __all__ = [
     "ContextStore",
     "Row",
     "SqlValue",
-    "Transaction",
     "persisted",
     "load_context",
     "save_context",
     "AgentDBStorage",
     "SQLiteStorage",
     "Storage",
-    "Lane",
     "Thread",
 ]
 __all__ += _public.__all__

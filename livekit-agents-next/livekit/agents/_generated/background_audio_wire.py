@@ -9,38 +9,61 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeAlias
+from enum import StrEnum, unique
+from inspect import get_annotations
+from typing import TypeAlias
 
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
-    from typing import Any
-
-
-@dataclass(kw_only=True, slots=True)
-class SoundSourceFile:
-    path: str
+from livekit.rtc import AudioFrame
 
 
-@dataclass(kw_only=True, slots=True)
-class SoundSourceStream:
-    stream: AsyncIterator[Any]
+@unique
+class BuiltinAudioClip(StrEnum):
+    """A sound packaged with livekit-agents."""
+
+    CITY_AMBIENCE = "city-ambience.ogg"
+    FOREST_AMBIENCE = "forest-ambience.ogg"
+    OFFICE_AMBIENCE = "office-ambience.ogg"
+    CROWDED_ROOM = "crowded-room.ogg"
+    KEYBOARD_TYPING = "keyboard-typing.ogg"
+    KEYBOARD_TYPING2 = "keyboard-typing2.ogg"
+    HOLD_MUSIC = "hold_music.ogg"
+
+    def path(self) -> str:
+        """The packaged file, on disk for the life of the process."""
+        from .. import _bindings
+
+        return _bindings.builtin_audio_clip_path(self)
 
 
-SoundSource: TypeAlias = SoundSourceFile | SoundSourceStream
-"""What a sound plays: a file (a builtin clip arrives as its path) or a host stream."""
+@dataclass(frozen=True, slots=True)
+class AudioConfig:
+    """The audio to be played in the background."""
 
-
-@dataclass(kw_only=True, slots=True)
-class Sound:
-    """One candidate sound, as the host hands it over, and how to play it."""
-
-    source: SoundSource
-    volume: float
-    """0.0-1.0."""
-    probability: float
-    """The chance this one is picked when several are offered. 0.0-1.0."""
-    fade_in: float
+    source: AudioSource
+    volume: float = 1.0
+    """The volume of the audio (0.0-1.0)."""
+    probability: float = 1.0
+    """The chance this one is picked when a list of sounds is offered (0.0-1.0)."""
+    fade_in: float = 0.0
     """Seconds to ramp from 0 up to `volume` when playback starts. `0` starts at full volume."""
-    fade_out: float
-    """Seconds to ramp back down to 0 when `stop()` is called. `0` cuts immediately."""
+    fade_out: float = 0.0
+    """Seconds to ramp back down to 0 when `PlayHandle.stop()` is called. `0` cuts immediately."""
+
+
+AudioSource: TypeAlias = BuiltinAudioClip | str | AsyncIterator[AudioFrame]
+"""What a sound plays: a builtin clip (read as its packaged file), a file path, which can loop,
+or a host `AsyncIterator[rtc.AudioFrame]`.
+"""
+
+
+Sounds: TypeAlias = list[AudioConfig] | AudioConfig | AudioSource
+"""One sound, or a list of sounds one is drawn from by probability (a total below 1.0 may draw
+none: silence).
+"""
+
+
+BuiltinAudioClip.__module__ = "livekit.agents.voice.background_audio"
+AudioConfig.__annotations__ = get_annotations(AudioConfig, eval_str=True)
+AudioConfig.__module__ = "livekit.agents.voice.background_audio"

@@ -44,8 +44,8 @@ impl Transaction {
 }
 
 impl AppTransaction for Transaction {
-    async fn execute(&self, sql: String, params: Vec<Value>) -> Result<(), StorageError> {
-        let write = AppStatement { sql, params };
+    async fn execute(&self, sql: String, params: Option<Vec<Value>>) -> Result<(), StorageError> {
+        let write = AppStatement { sql, params: params.unwrap_or_default() };
         statement(&write)?;
         let mut state = self.state();
         Self::ensure_open(&state)?;
@@ -56,9 +56,9 @@ impl AppTransaction for Transaction {
     async fn fetch(
         &self,
         sql: String,
-        params: Vec<Value>,
+        params: Option<Vec<Value>>,
     ) -> Result<Vec<Vec<Value>>, StorageError> {
-        let read = statement(&AppStatement { sql, params })?;
+        let read = statement(&AppStatement { sql, params: params.unwrap_or_default() })?;
         {
             let state = self.state();
             Self::ensure_open(&state)?;
@@ -72,6 +72,14 @@ impl AppTransaction for Transaction {
         }
         let rows = self.database.query(read).await?;
         rows.iter().map(|row| row.iter().map(cell).collect()).collect()
+    }
+
+    async fn fetch_one(
+        &self,
+        sql: String,
+        params: Option<Vec<Value>>,
+    ) -> Result<Option<Vec<Value>>, StorageError> {
+        Ok(self.fetch(sql, params).await?.into_iter().next())
     }
 
     async fn commit(&self) -> Result<(), StorageError> {

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Literal, Self
+from typing import Any, Self
 
 from livekit.agents.tts import TTS
 
@@ -14,8 +14,7 @@ from .._core import TtsStream
 from .connect import APIConnectOptions
 from .inference_credentials import Credentials
 from .inference_models import EotSelection
-from .inference_stt import FallbackModel
-from .inference_tts import FallbackModel as HostFallbackModel
+from .inference_tts import FallbackModels
 from .realtime import RealtimeCapabilities
 from .stt import STTCapabilities
 from .tts import TTSCapabilities
@@ -64,17 +63,8 @@ def inference_quota_usage(headers: list[tuple[str, str]]) -> list[tuple[str, str
 def local_models_init(vad: bool, eot: bool) -> bool:
     """Loads the native models' weights; `false` when no provider is linked."""
 
-def tts_parse_model_string(model: str) -> tuple[str, str | None]:
-    """`"provider/model:voice"` split into the model and its voice."""
-
-def tts_has_aligned_transcript(model: str, extra_kwargs: dict[str, object]) -> bool:
-    """Whether the model streams word timings for its audio under these options."""
-
 def tts_markup_provider_key(model: str) -> str:
     """The speech-markup dialect the model's provider reads."""
-
-def stt_parse_model_string(model: str) -> tuple[str, str | None]:
-    """`"provider/model:language"` split into the model and its language."""
 
 def min_reasoning_effort(model: str) -> str | None:
     """The lowest reasoning effort the model supports, or `None` if it has no such control."""
@@ -107,30 +97,6 @@ def eot_select(
     local_fallback: bool,
 ) -> EotSelection:
     """The turn detector a host constructs."""
-
-def stt_resolve_vad_for_model(
-    model: str | None = None,
-    *,
-    has_vad: bool = False,
-) -> Literal["keep", "drop_and_warn", "create_default", "none"]:
-    """`_resolve_vad_for_model`: what the host does with the caller's VAD for this model."""
-
-def stt_normalize_fallback_str(model: str) -> FallbackModel:
-    """`_normalize_fallback`'s string arm for an STT chain."""
-
-def tts_normalize_fallback_str(model: str) -> HostFallbackModel:
-    """`_normalize_fallback`'s string arm for a TTS chain."""
-
-def stt_capabilities(
-    model: str | None = None,
-    *,
-    fallback: Sequence[str] | None = None,
-    extra_kwargs: dict[str, object] | None = None,
-) -> STTCapabilities:
-    """`inference.STT`'s capabilities. Word alignment holds only when the model and every
-    `fallback` model align: any turn may be served by a fallback, and a false claim disables
-    the fast VAD interruption path.
-    """
 
 def stt_fallback_capabilities(entries: Sequence[STTCapabilities]) -> STTCapabilities:
     """`stt.FallbackAdapter`'s capabilities, merged from its members' before any chain is built."""
@@ -198,22 +164,33 @@ class InferenceTts:
         cls,
         model: str,
         *,
-        base_url: str,
-        api_key: str,
-        api_secret: str,
-        conn_options: APIConnectOptions,
         voice: str | None = None,
         language: str | None = None,
-        encoding: str = "pcm_s16le",
-        sample_rate: int = 24000,
+        encoding: str | None = None,
+        sample_rate: int | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
         extra_kwargs: dict[str, object] | None = None,
-        fallback: list[HostFallbackModel] | None = None,
+        fallback: FallbackModels | None = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> Self:
-        """`inference.TTS` builds it in its constructor."""
+        """A client of `model` (``"provider/model[:voice]"``) on the gateway. Starts nothing. The
+        gateway's URL and key pair resolve from the given values, the environment and the server's
+        settings.
+        """
+    @property
+    def model(self) -> str: ...
+    @property
+    def capabilities(self) -> TTSCapabilities:
+        """Streaming, its alignment read from the live model and extra kwargs."""
+    @property
+    def num_channels(self) -> int: ...
+    @property
+    def conn_options(self) -> APIConnectOptions:
+        """The policy this client was given, which a session or run that supplies none keeps."""
     @property
     def sample_rate(self) -> int: ...
-    @property
-    def aligned_transcript(self) -> bool: ...
     def prewarm(self, *, headers: list[tuple[str, str]] | None = None) -> None: ...
     def identified(
         self,
@@ -223,15 +200,16 @@ class InferenceTts:
     def update_options(
         self,
         *,
-        model: str | None = None,
         voice: str | None = None,
+        model: str | None = None,
         language: str | None = None,
-        extra: dict[str, object] | None = None,
-    ) -> None: ...
+        extra_kwargs: dict[str, object] | None = None,
+    ) -> None:
+        """Read by the next synthesis; ``extra_kwargs`` merges into the persistent kwargs."""
     async def stream(
         self,
         *,
-        headers: list[tuple[str, str]] | None = None,
         conn_options: APIConnectOptions | None = None,
         expressive: bool = False,
-    ) -> TtsStream: ...
+    ) -> TtsStream:
+        """A synthesis of the text pushed; its connection carries this view's job."""

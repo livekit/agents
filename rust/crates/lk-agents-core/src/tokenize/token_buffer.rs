@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use crate::tokenize::word::{WordTokenizerOptions, split_words};
 use crate::tokenize::xml;
 use lk_agents_abi::SentenceSplitter;
+use lk_agents_abi::tokenize::TokenSpan;
 use lk_agents_abi::tokenize::bindings::TokenizerToken;
 
 /// Character indices. Spans must tile the input start-to-start, or the text in a gap is dropped.
@@ -14,6 +15,12 @@ pub struct Span {
     pub text: String,
     pub start: usize,
     pub end: usize,
+}
+
+impl From<Span> for TokenSpan {
+    fn from(span: Span) -> Self {
+        TokenSpan { token: span.text, start: span.start, end: span.end }
+    }
 }
 
 impl Span {
@@ -28,7 +35,9 @@ pub fn spans_from_tokens(text: &str, tokens: Vec<TokenizerToken>) -> Vec<Span> {
     tokens
         .into_iter()
         .map(|token| match token {
-            TokenizerToken::Span((text, start, end)) => Span { text, start, end },
+            TokenizerToken::Span(TokenSpan { token, start, end }) => {
+                Span { text: token, start, end }
+            }
             TokenizerToken::Text(token) => {
                 let start = text.find(&token).map_or(0, |byte| text[..byte].chars().count());
                 let mut end = start + token.chars().count();

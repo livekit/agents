@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+import contextlib
+from typing import TYPE_CHECKING, Any, cast
 
 from .. import _bindings, _core
 from ..types import NOT_GIVEN
@@ -14,7 +15,7 @@ from ..voice._session_callbacks import _items, _origin
 from ..voice.io import SpeechHandle
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterable, Sequence
+    from collections.abc import AsyncIterable, AsyncIterator, Sequence
 
     from livekit.agents._generated.expressive import ExpressiveOptions
     from livekit.agents.inference import TurnDetector
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
     from .chat_items import ChatItem
     from .expressive import ExpressiveOptions as HostExpressiveOptions
     from .rtc_frames import AudioFrame
-    from .session_options import TextTransforms, TurnDetectionMode
+    from .session_options import ResolvedSessionOptions, TextTransforms, TurnDetectionMode
     from .turn import EndpointingOptions, InterruptionOptions
     from .usage import Usage
     from .vad import VAD
@@ -44,6 +45,26 @@ class VoiceSession:
 
         _native: _core._core_SessionOwner
 
+    async def aclose(self) -> None:
+        """Close the session and wait for it."""
+        await self._native.aclose()
+
+    def shutdown(self, *, drain: bool = True) -> None:
+        """`aclose()` without waiting for it; `drain` lets queued speech finish first."""
+        self._native.shutdown(drain=drain)
+
+    @contextlib.asynccontextmanager
+    async def _claim_user_turn(self) -> AsyncIterator[None]:
+        """A programmatic user turn: the user state is pinned to `speaking` and `wait_for_idle`
+        held while inside.
+        """
+        target = self._running
+        target.claim_user_turn()
+        try:
+            yield
+        finally:
+            target.release_user_turn()
+
     @property
     def usage(self) -> Usage:
         """Empty before startup; the final snapshot remains readable after close."""
@@ -53,6 +74,11 @@ class VoiceSession:
     def keyterms(self) -> list[str]:
         """No keyterms are applied before a voice driver exists."""
         return self._native.keyterms
+
+    @property
+    def options(self) -> ResolvedSessionOptions:
+        """The configuration the core runs on, current the instant a change is sent."""
+        return self._native.resolved_options(cast(Any, self)._adapter._legs())
 
     def update_options(
         self,

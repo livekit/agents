@@ -1457,7 +1457,7 @@ def _to_timed_words(
         return [], text
 
     timed_words: list[TranscriptChunk] = []
-    start_indices = [start for _, start, _ in words]
+    start_indices = [word.start for word in words]
     end = 0
     # we don't know if the last word is complete, always leave it as remaining
     for start, end in zip(start_indices[:-1], start_indices[1:], strict=False):

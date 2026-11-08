@@ -1493,7 +1493,7 @@
       "type": "span",
       "span_kind": "server",
       "stability": "development",
-      "brief": "An RPC method handled for a remote participant.",
+      "brief": "An RPC method handled for a remote participant, under the job's primary session, else the job before the session started.",
       "attributes": [
         {
           "ref": "rpc.method",
@@ -1539,7 +1539,8 @@
       "annotations": {
         "livekit": {
           "parents": [
-            "agent_session"
+            "agent_session",
+            "job_entrypoint"
           ],
           "end_attributes": [
             "lk.rpc.error_code",

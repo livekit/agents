@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 from .. import _bindings, _core
 
@@ -47,3 +47,26 @@ class SpeechHandle:
 
     def done(self) -> bool:
         return self._native.done()
+
+    @property
+    def allow_interruptions(self) -> bool:
+        return self._native.allow_interruptions
+
+    @allow_interruptions.setter
+    def allow_interruptions(self, value: bool) -> None:
+        self._native.allow_interruptions = value
+
+    def exception(self) -> BaseException | None:
+        """The error the speech failed with, or `None`; raises `asyncio.InvalidStateError` before it
+        is done.
+        """
+        return self._native.exception()
+
+    def interrupt(self, *, force: bool = False) -> Self:
+        """Interrupt the speech."""
+        self._native.interrupt(force=force)
+        return self
+
+    async def _wait_for_generation(self, step: int | None = None) -> None:
+        """One step of the turn, not the whole thing; `None` is the latest."""
+        await self._native.wait_for_generation(step)

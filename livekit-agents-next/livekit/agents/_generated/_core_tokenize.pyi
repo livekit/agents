@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Sequence
 from typing import Self
 
-from .tokenizer import ReplacedWords, TokenizerToken
+from .tokenizer import ReplacedWords, TokenizerToken, TokenSpan
 from .tool_context import RawFunctionDescription
 from .tool_search import SearchFields
 
@@ -18,7 +18,7 @@ def split_words(
     ignore_punctuation: bool = True,
     split_character: bool = False,
     retain_format: bool = False,
-) -> list[tuple[str, int, int]]: ...
+) -> list[TokenSpan]: ...
 
 def replace_words(
     text: str,
@@ -34,12 +34,10 @@ def hyphenate_word(word: str) -> list[str]:
 def xml_tokenize(
     tokenize_fnc: Callable[[str], Iterable[TokenizerToken]],
     text: str,
-) -> list[tuple[str, int, int]]: ...
+) -> list[TokenSpan]: ...
 
 class BasicWordTokenizer:
-    """Really naive implementation of a word tokenizer: words split on whitespace, punctuation
-    stripped unless asked to keep it.
-    """
+    """`tokenize.basic.WordTokenizer`'s engine."""
     def __new__(
         cls,
         *,
@@ -48,16 +46,14 @@ class BasicWordTokenizer:
         retain_format: bool = False,
     ) -> Self: ...
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]: ...
-    def _core_split(self, text: str) -> list[tuple[str, int, int]]: ...
+    def _core_split(self, text: str) -> list[TokenSpan]: ...
     @property
     def _core_min_token_len(self) -> int: ...
     @property
     def _core_min_ctx_len(self) -> int: ...
 
 class BasicSentenceTokenizer:
-    """Really naive implementation of a sentence tokenizer: rule-based, and only English is really
-    tested.
-    """
+    """`tokenize.basic.SentenceTokenizer`'s engine."""
     def __new__(
         cls,
         *,
@@ -67,7 +63,7 @@ class BasicSentenceTokenizer:
         retain_format: bool = False,
     ) -> Self: ...
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]: ...
-    def _core_split(self, text: str) -> list[tuple[str, int, int]]: ...
+    def _core_split(self, text: str) -> list[TokenSpan]: ...
     @property
     def _core_min_token_len(self) -> int: ...
     @property
@@ -78,22 +74,7 @@ class BasicSentenceTokenizer:
     def _core_xml_aware(self) -> bool: ...
 
 class BlingfireSentenceTokenizer:
-    """Sentences split by the BlingFire model, batched for speech.
-
-    Args:
-        min_sentence_len: minimum length for a span to be treated as its own sentence; shorter
-            spans are merged forward into the next one.
-        stream_context_len: minimum buffered text before the stream emits.
-        retain_format: keep original whitespace/formatting in emitted tokens.
-        max_token_len: hard cap on emitted token length; a token is flushed before appending a
-            sentence that would exceed it.
-        min_token_len: minimum length a token must reach before it is emitted. Sentences are
-            batched until the running token reaches this length, so raising it (e.g. toward
-            ``max_token_len``) yields larger, fewer chunks. Defaults to ``min_sentence_len``.
-        xml_aware: treat XML markup as atomic: never split a tag across tokens and keep tags
-            attached to the following sentence. Only enable when the input carries markup (e.g.
-            expressive TTS): a stray "<" in plain text can otherwise hold back streaming.
-    """
+    """`tokenize.blingfire.SentenceTokenizer`'s engine."""
     def __new__(
         cls,
         *,
@@ -106,7 +87,7 @@ class BlingfireSentenceTokenizer:
     ) -> Self: ...
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         """The sentences of `text`, markup kept whole when `xml_aware`."""
-    def _core_split(self, text: str) -> list[tuple[str, int, int]]: ...
+    def _core_split(self, text: str) -> list[TokenSpan]: ...
     @property
     def _core_min_token_len(self) -> int: ...
     @property

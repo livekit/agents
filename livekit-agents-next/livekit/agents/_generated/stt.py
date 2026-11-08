@@ -472,7 +472,7 @@ class RecognizeStream(ABC):
             native,
             self.input,
             lambda item: native.flush() if isinstance(item, self.Flush) else native.push(item),
-            self.send,
+            _bindings.drain(native, self.send),
         )
 
     def _input_received(self, item: rtc.AudioFrame | RecognizeStream.Flush) -> None:

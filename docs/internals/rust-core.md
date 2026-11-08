@@ -1418,8 +1418,12 @@ pub trait StreamPacerWrapper {
 The generated class (`_generated/facades_<x>.py`, re-exported from `path`) subclasses `base`;
 its public `__init__` takes the `#[host(new)]` parameters with their ABI defaults and builds the
 native object from them, by name; `base_args(..)` then builds its base from the native getters
-of the same names, and `keep(..)` keeps parameters as `self._<param>` for an extending class. A
-facade with no `#[host(new)]` declares `_native`, which its handwritten subclass sets. A chain
+of the same names, and `keep(..)` keeps parameters as `self._<param>` for an extending class;
+`host_args(param = "module.object")` fills a native constructor parameter the Python signature
+does not take with a host object (`inference.VAD`'s Silero model factory). A facade named as its
+base binds the base as `Base<Name>`, and a `base` with no module names a top-level
+`livekit.agents` class (`VAD`). A facade with no `#[host(new)]` declares `_native`, which its
+handwritten subclass sets. A chain
 facade declares `availability(observer, members, kind, event, record)`: it is its chain's
 observer, keeps `members` as `_members`, emits each availability change as `record`, and names
 the serving member's `model`, `provider` and `metrics_metadata`. Method adaptations
@@ -1429,10 +1433,33 @@ are a fixed vocabulary: `none_ends_iteration` (a native `None` raises `StopAsync
 form `exit = m`, which turns a native begin/end pair into `async with`:
 
 ```rust
-/// `RunContext.foreground()`: hold the floor while inside.
-#[host(native = wait_for_idle_and_hold, exit = release_idle_hold)]
-async fn foreground(&self) -> u64;
+/// `RunContext`'s hold of the call's floor.
+#[host(facade(path = "livekit.agents.voice.events", name = "RunContext", extended))]
+pub trait RunContextFacade {
+    /// The call's session, read at each use.
+    #[host(delegate = "_call()._core")]
+    type Call: VoiceSession;
+
+    /// Wait for idle, then hold the floor while inside.
+    #[host(via = Call, native = wait_for_idle_and_hold, exit = release_idle_hold,
+           bind(origin = "_origin"), yields = "_call()")]
+    async fn foreground(&self) -> Result<(), IdleRefused>;
+}
 ```
+
+The target (`self._native`, or the `via` delegate) is read once as the block enters, so the exit
+reaches the object that entered; the native exit is idempotent, a no-op once that object closed.
+`exit = Class::m` is the entered native value's own method, `abort = m` runs instead when the
+block raises, `yields = "path"` hands the block `self.path` and `returns = "module.Name"` the
+entered value wrapped. A delegate is held as `self._x`, or read at each call from a declared path
+(`delegate = "_call()._core"`). `bind(arg = "path")` passes `self.path` as a native argument the
+Python method does not take; `returns` with `each = Record::field` maps a native list first
+(`ChatContext([x.payload for x in rows])`); `chain` answers `self`; `setter = prop` assigns a
+property. `from_native` builds the class from the native object it is handed
+(`Lane(native, agent)`), keeping the `#[host(new)]` parameters, and `foreign` lets `base` name a
+class outside `livekit.agents` (`opentelemetry.trace.Span`). `generic = "T"` makes the class
+`Generic[T]` over its own TypeVar, which its annotations name (`RunContext.foreground` yields
+`VoiceSession[Context_T]`).
 
 A stream facade (`base` a provider stream: `llm.LLMStream`, `RecognizeStream`,
 `SynthesizeStream`, `ChunkedStream`, `VADStream`) names the native operation its `_run` opens
@@ -1442,7 +1469,11 @@ class pumps input and output (`_core_run_native`), and `native_retries` marks a 
 that retries on its own, so the base's attempts do not. Per-call arguments are declared once, as
 the operation's parameters: with `method = "stream"` the owner facade gets that provider method,
 taking every parameter but those read from the base stream's `state(..)`, and the stream's
-constructor passes `base_args(..)` to its base and keeps the rest:
+constructor passes `base_args(..)` to its base and keeps the rest. `rename(op_param = "name")`
+gives an operation parameter the provider method's own name (`synthesize(text)` passing
+`input_text`), `provider_default(p)` makes a parameter not given take the owner's native getter
+`p` (a provider's own `conn_options`), and the stream opens the operation on the owner's `leg`
+when it declares one (the job's view of an inference client):
 
 ```rust
 #[host(facade(path = "livekit.agents.stt", base = "stt.RecognizeStream", native = FallbackStt,

@@ -67,6 +67,14 @@ STTLanguages: TypeAlias = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "
 STTEncoding: TypeAlias = Literal["pcm_s16le"]
 
 
+FallbackModelType: TypeAlias = FallbackModel | str
+"""One server-side fallback of `inference.STT`: a `FallbackModel` or a model name."""
+
+
+FallbackModels: TypeAlias = list[FallbackModelType] | FallbackModel | str
+"""`inference.STT(fallback=)`: one entry or a list of them."""
+
+
 STTModels: TypeAlias = (
     DeepgramModels
     | DeepgramFluxModels

@@ -21,6 +21,17 @@ class TokenData:
     token: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class TokenSpan:
+    """A token and its start and end offsets, in characters, in the text it was cut from: what a
+    tokenizer's `split` gives a stream to batch, and what a supplied tokenizer may return.
+    """
+
+    token: str
+    start: int
+    end: int
+
+
 @dataclass
 class ReplacedWords:
     """`replace_words` over a chunk: the text with its replacements, and how much of it is final
@@ -31,9 +42,11 @@ class ReplacedWords:
     processed: int
 
 
-TokenizerToken: TypeAlias = str | tuple[str, int, int]
+TokenizerToken: TypeAlias = str | TokenSpan
 """A tokenizer may supply text or character-indexed spans."""
 
 
 TokenData.__annotations__ = get_annotations(TokenData, eval_str=True)
 TokenData.__module__ = "livekit.agents.tokenize"
+TokenSpan.__annotations__ = get_annotations(TokenSpan, eval_str=True)
+TokenSpan.__module__ = "livekit.agents.tokenize"

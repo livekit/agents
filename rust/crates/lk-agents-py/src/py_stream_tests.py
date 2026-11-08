@@ -51,7 +51,7 @@ async def test_pump_stops_input_when_native_output_ends_first() -> None:
             settled.set()
 
     async with asyncio.timeout(5):
-        await _bindings.pump(native, items(), native.push, lambda _: None)
+        await _bindings.pump(native, items(), native.push, _bindings.drain(native, lambda _: None))
     assert entered.is_set() and settled.is_set()
     assert native.close_count == 1 and native.closed.is_set()
 
@@ -64,7 +64,7 @@ async def test_pump_drains_final_output_after_input_finishes() -> None:
         yield 2
 
     async with asyncio.timeout(5):
-        await _bindings.pump(native, items(), native.push, output.append)
+        await _bindings.pump(native, items(), native.push, _bindings.drain(native, output.append))
     assert output == [1, 2]
     assert native.close_count == 1 and native.closed.is_set()
 
@@ -79,7 +79,9 @@ async def test_pump_preserves_input_failure_and_closes_waiting_native_reader() -
 
     async with asyncio.timeout(5):
         with pytest.raises(ValueError) as raised:
-            await _bindings.pump(native, items(), native.push, lambda _: None)
+            await _bindings.pump(
+                native, items(), native.push, _bindings.drain(native, lambda _: None)
+            )
     assert raised.value is failure
     assert native.close_count == 1 and native.closed.is_set()
 
@@ -99,7 +101,9 @@ async def test_pump_closes_native_even_if_input_cleanup_is_still_waiting() -> No
             settled.set()
 
     async with asyncio.timeout(5):
-        pump = asyncio.create_task(_bindings.pump(native, items(), native.push, lambda _: None))
+        pump = asyncio.create_task(
+            _bindings.pump(native, items(), native.push, _bindings.drain(native, lambda _: None))
+        )
         try:
             await entered.wait()
             pump.cancel()
@@ -121,7 +125,9 @@ async def test_cancelled_input_is_terminal_even_when_native_output_is_waiting() 
 
     async with asyncio.timeout(5):
         with pytest.raises(asyncio.CancelledError):
-            await _bindings.pump(native, items(), native.push, lambda _: None)
+            await _bindings.pump(
+                native, items(), native.push, _bindings.drain(native, lambda _: None)
+            )
     assert native.close_count == 1 and native.closed.is_set()
 
 
@@ -172,7 +178,9 @@ async def test_cancelled_pump_waiter_retains_and_settles_both_cleanup_branches()
             settled.set()
 
     async with asyncio.timeout(5):
-        pump = asyncio.create_task(_bindings.pump(native, items(), native.push, lambda _: None))
+        pump = asyncio.create_task(
+            _bindings.pump(native, items(), native.push, _bindings.drain(native, lambda _: None))
+        )
         try:
             await entered.wait()
             pump.cancel()
@@ -233,7 +241,7 @@ async def test_failed_stream_keeps_correlated_input_metadata_on_the_original_fai
         raise AssertionError("the result owner is already started")
 
     stream = RunStream(start)
-    stream._core = NativeResult()
+    stream._native = NativeResult()
     stream._started = _Started(settle=lambda _: pytest.fail("failure became success"))
     with pytest.raises(RuntimeError) as raised:
         await stream.result()

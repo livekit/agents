@@ -92,7 +92,11 @@ async fn host_waits_on_a_speech_never_created_raise_why() {
     // A detached handle's setter is its own, with no loop to tell.
     HostSpeech::set_allow_interruptions(&detached, false).unwrap();
     assert!(!detached.allow_interruptions());
-    assert!(matches!(HostSpeech::exception(&detached), Ok(None)));
+    // Never done, so it has no outcome to read yet.
+    assert!(matches!(
+        HostSpeech::exception(&detached),
+        Err(lk_agents_abi::voice::speech_handle::ExceptionRefused::NotDone)
+    ));
 
     // A setter before the loop created the speech is the value it is created with.
     let pending = SpeechHandle::pending(Requests::disconnected(), SpeechId(7), true);

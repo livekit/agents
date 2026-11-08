@@ -79,7 +79,8 @@ pub trait AudioReceiverHost: Send + Sync {
 
 /// The avatar runner's receiver over a host `AudioReceiver`: its audio read from `audio` when
 /// given (`QueueAudioOutput`'s native queue), else from the host's iterator into a queue that
-/// drops its oldest audio only when far behind (measured) and is flushed by each `clear_buffer`. Playback reports reach the host receiver.
+/// drops its oldest audio only when far behind (measured) and is flushed by each `clear_buffer`.
+/// Playback reports reach the host receiver. Its host calls run under the span it was made in.
 #[crate::host(class(name = "HostAudioReceiver", native = AvatarAudioReceiver))]
 pub trait HostAudioReceiver: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
@@ -91,6 +92,7 @@ pub trait HostAudioReceiver: Send + Sync + Sized + 'static {
         env: &Self::Env,
         receiver: std::sync::Arc<dyn AudioReceiverHost>,
         #[host(kw, default = None)] audio: Option<std::sync::Arc<dyn AvatarAudio>>,
+        cx: crate::telemetry::Cx,
     ) -> Result<Self, ProviderError>;
     /// The host receiver's `clear_buffer` event: the audio queued so far is dropped.
     #[host(call)]
@@ -149,7 +151,12 @@ pub enum AvatarOutputError {
 }
 
 /// The agent's native audio sink, sending one byte stream per avatar speech segment.
-#[crate::host(class(name = "DataStreamAudioOutput", native = crate::voice::io::AudioOutput, subclass))]
+#[crate::host(class(
+    name = "DataStreamAudioOutput",
+    native = crate::voice::io::AudioOutput,
+    module = "livekit.agents.voice.avatar",
+    subclass
+))]
 pub trait DataStreamAudioOutput: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]

@@ -24,6 +24,7 @@ RealtimeSession = openai.realtime.RealtimeSession
 
 class RealtimeModel(openai.realtime.RealtimeModel):
     _dialect = "voice_live"
+    _provider_label = "livekit.plugins.azure.realtime.realtime_model.RealtimeModel"
 
     def __init__(
         self,

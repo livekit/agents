@@ -190,10 +190,16 @@ class _core_AppTransaction:
     applied atomically when the transaction ends, so a read after a write in the same
     transaction is refused.
     """
-    async def execute(self, sql: str, params: Sequence[object]) -> None:
+    async def execute(self, sql: str, params: Sequence[object] | None = None) -> None:
         """Stages one statement; `params` are JSON scalars."""
-    async def fetch(self, sql: str, params: Sequence[object]) -> list[list[object]]:
+    async def fetch(self, sql: str, params: Sequence[object] | None = None) -> list[list[object]]:
         """One read's rows, each a list of column values in select order."""
+    async def fetch_one(
+        self,
+        sql: str,
+        params: Sequence[object] | None = None,
+    ) -> list[object] | None:
+        """The first row of one read, `None` when it has none."""
     async def commit(self) -> None:
         """Ends the transaction: its writes commit (independent) or join the turn's commit."""
     def rollback(self) -> None:

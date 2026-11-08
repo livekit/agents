@@ -3,15 +3,18 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .. import _bindings, _core
+from ..llm import ChatContext
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
+    from ..storage.context import Row, SqlValue
     from .storage_class import (
         EventRow,
+        ItemRow,
         TaskOrder,
         TaskPage,
         TaskRecord,
@@ -19,6 +22,30 @@ if TYPE_CHECKING:
         ThreadInfo,
         ThreadItemPage,
     )
+
+
+class Transaction:
+    """`storage.Transaction`: application SQL in one transaction
+    (docs/context.md#application-records-and-transactions).
+
+    Reads observe committed records. Writes are staged and applied together when the
+    transaction ends, so read before the first write: a read after one is refused.
+    """
+
+    def __init__(self, native: _core._core_AppTransaction) -> None:
+        self._native = native
+
+    async def execute(self, sql: str, params: Sequence[SqlValue] | None = None) -> None:
+        """Runs one statement when the transaction commits."""
+        await self._native.execute(sql, params)
+
+    async def fetch(self, sql: str, params: Sequence[SqlValue] | None = None) -> list[Row]:
+        """The rows of one read."""
+        return cast("list[Row]", await self._native.fetch(sql, params))
+
+    async def fetch_one(self, sql: str, params: Sequence[SqlValue] | None = None) -> Row | None:
+        """The first row of one read, `None` when it has none."""
+        return cast("Row | None", await self._native.fetch_one(sql, params))
 
 
 class Thread:
@@ -89,3 +116,25 @@ class Thread:
         the last `id` to read the next.
         """
         return await self._native.journal(after_id, limit)
+
+
+class Lane:
+    """`thread.lane(agent)`: one agent's lane of a thread (docs/threads.md), its history and its
+    tasks.
+    """
+
+    def __init__(self, native: _core._core_ThreadHandle, agent: str) -> None:
+        self._native = native
+        self._agent = agent
+
+    async def history(self) -> ChatContext:
+        """The lane's whole history, in order."""
+        return ChatContext([x.payload for x in await self._native.history(self._agent)])
+
+    async def tasks(self, *, status: TaskState | None = None, limit: int = 50) -> list[TaskRecord]:
+        """The lane's A2A task records, most recent first; only those in `status` when given."""
+        return await self._native.tasks(self._agent, status=status, limit=limit)
+
+
+Transaction.__module__ = "livekit.agents.storage"
+Lane.__module__ = "livekit.agents.storage"

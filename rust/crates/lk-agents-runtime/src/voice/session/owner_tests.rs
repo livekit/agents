@@ -46,11 +46,11 @@ async fn cancelled_close_waiter_does_not_abandon_recording_and_late_close_joins(
     owner.finish_recording().await.unwrap();
     let recorder = Arc::new(Recorder::default());
     assert!(owner.0.recorder.set(recorder.clone()).is_ok());
-    let waiting = owner.aclose("user_initiated".to_owned(), false).unwrap();
+    let waiting = owner.aclose(Some(CloseReason::UserInitiated), false).unwrap();
     recorder.finishing.notified().await;
     drop(waiting);
-    owner.shutdown("user_initiated".to_owned(), false).unwrap();
-    let mut rejoined = owner.aclose("job_shutdown".to_owned(), false).unwrap();
+    owner.shutdown(Some(CloseReason::UserInitiated), false).unwrap();
+    let mut rejoined = owner.aclose(Some(CloseReason::JobShutdown), false).unwrap();
     assert!(
         std::future::poll_fn(|cx| std::task::Poll::Ready(rejoined.as_mut().poll(cx).is_pending()))
             .await
@@ -67,7 +67,7 @@ async fn recording_failure_is_retained_for_reporter_without_failing_close() {
     let owner = owner();
     let recorder = Arc::new(Recorder { fail: true, ..Default::default() });
     assert!(owner.0.recorder.set(recorder.clone()).is_ok());
-    let closing = owner.aclose("user_initiated".to_owned(), false).unwrap();
+    let closing = owner.aclose(Some(CloseReason::UserInitiated), false).unwrap();
     recorder.finishing.notified().await;
     recorder.release.notify_one();
     closing.await;
@@ -159,7 +159,7 @@ async fn cancelled_start_waiter_and_concurrent_close_settle_partial_acquisition_
     let other = owner
         .start(storage.clone(), host.clone(), None, lk_agents_abi::telemetry::Cx::NONE)
         .unwrap();
-    let mut closing = owner.aclose("job_shutdown".to_owned(), false).unwrap();
+    let mut closing = owner.aclose(Some(CloseReason::JobShutdown), false).unwrap();
     assert!(
         std::future::poll_fn(|cx| std::task::Poll::Ready(closing.as_mut().poll(cx).is_pending()))
             .await
@@ -175,7 +175,7 @@ async fn cancelled_start_waiter_and_concurrent_close_settle_partial_acquisition_
 #[tokio::test]
 async fn close_before_start_refuses_resource_acquisition() {
     let owner = owner();
-    owner.aclose("user_initiated".to_owned(), false).unwrap().await;
+    owner.aclose(Some(CloseReason::UserInitiated), false).unwrap().await;
     let host = Arc::new(FailingHost::default());
     let storage = Arc::new(SessionStorage::new(
         &ProcessEnv::current_runtime(),
@@ -395,7 +395,7 @@ async fn only_the_primary_session_records_what_the_job_records() {
     {
         joined.unwrap();
         assert_eq!(first.recording_path(), Some(path));
-        first.aclose("user_initiated".into(), false).unwrap().await;
+        first.aclose(Some(CloseReason::UserInitiated), false).unwrap().await;
     }
     #[cfg(not(feature = "media-ffmpeg"))]
     {

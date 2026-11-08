@@ -8,7 +8,6 @@ pub mod stt_wire;
 pub mod tts_wire;
 
 use crate::errors::Invalid;
-use serde_json::Value;
 
 #[crate::host(file(module = "inference_headers"))]
 const _: () = ();
@@ -95,24 +94,9 @@ pub trait InferenceModels {
     #[host(function)]
     fn local_models_init(vad: bool, eot: bool) -> bool;
 
-    /// `"provider/model:voice"` split into the model and its voice.
-    #[host(function)]
-    fn tts_parse_model_string(model: String) -> (String, Option<String>);
-
-    /// Whether the model streams word timings for its audio under these options.
-    #[host(function)]
-    fn tts_has_aligned_transcript(
-        model: String,
-        extra_kwargs: serde_json::Map<String, Value>,
-    ) -> bool;
-
     /// The speech-markup dialect the model's provider reads.
     #[host(function)]
     fn tts_markup_provider_key(model: String) -> String;
-
-    /// `"provider/model:language"` split into the model and its language.
-    #[host(function)]
-    fn stt_parse_model_string(model: String) -> (String, Option<String>);
 
     /// The lowest reasoning effort the model supports, or `None` if it has no such control.
     #[host(function)]
@@ -150,31 +134,6 @@ pub trait InferenceModels {
         local_fallback: bool,
     ) -> Result<EotSelection, Invalid>;
 
-    /// `_resolve_vad_for_model`: what the host does with the caller's VAD for this model.
-    #[host(function)]
-    fn stt_resolve_vad_for_model(
-        #[host(default = None)] model: Option<String>,
-        #[host(kw, default = false)] has_vad: bool,
-    ) -> VadResolution;
-
-    /// `_normalize_fallback`'s string arm for an STT chain.
-    #[host(function)]
-    fn stt_normalize_fallback_str(model: String) -> fallback::SttFallbackModel;
-
-    /// `_normalize_fallback`'s string arm for a TTS chain.
-    #[host(function)]
-    fn tts_normalize_fallback_str(model: String) -> fallback::TtsFallbackModel;
-
-    /// `inference.STT`'s capabilities. Word alignment holds only when the model and every
-    /// `fallback` model align: any turn may be served by a fallback, and a false claim disables
-    /// the fast VAD interruption path.
-    #[host(function)]
-    fn stt_capabilities(
-        #[host(default = None)] model: Option<String>,
-        #[host(kw, default = None)] fallback: Option<Vec<String>>,
-        #[host(default = None)] extra_kwargs: Option<serde_json::Map<String, Value>>,
-    ) -> crate::SttCapabilities;
-
     /// `stt.FallbackAdapter`'s capabilities, merged from its members' before any chain is built.
     #[host(function)]
     fn stt_fallback_capabilities(entries: Vec<crate::SttCapabilities>) -> crate::SttCapabilities;
@@ -189,20 +148,6 @@ pub trait InferenceModels {
     fn merge_realtime_capabilities(
         caps: Vec<crate::llm::realtime::RealtimeCapabilities>,
     ) -> Result<crate::llm::realtime::RealtimeCapabilities, Invalid>;
-}
-
-/// What `_resolve_vad_for_model` decides; the host performs it.
-#[crate::host(wire_enum)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VadResolution {
-    /// Keep the caller's instance (Speechmatics, which endpoints client-side).
-    Keep,
-    /// Ignore the caller's instance and warn: the model endpoints server-side.
-    DropAndWarn,
-    /// Speechmatics with no VAD supplied: construct the default local one.
-    CreateDefault,
-    /// Nothing to do.
-    None,
 }
 
 pub mod tts_client;

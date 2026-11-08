@@ -71,6 +71,7 @@ impl Realtime for HostRealtimeModel {
         &self,
         cx: telemetry::Cx,
         turn_detection_disabled: bool,
+        tools: Option<lk_agents_abi::HostRef>,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Arc<dyn RealtimeSession>, lk_agents_abi::errors::ProviderError>,
@@ -82,11 +83,15 @@ impl Realtime for HostRealtimeModel {
             }
             // The plugin's `session()` raised: the driver's start fails with its message, as the
             // reference's activity start does.
-            let host = self.host.session(&cx, turn_detection_disabled).await.map_err(|e| {
-                lk_agents_abi::errors::ProviderError::Local(lk_agents_abi::errors::ApiError::new(
-                    format!("realtime session could not be opened: {}", e.message()),
-                ))
-            })?;
+            let host =
+                self.host.session(&cx, turn_detection_disabled, tools).await.map_err(|e| {
+                    lk_agents_abi::errors::ProviderError::Local(
+                        lk_agents_abi::errors::ApiError::new(format!(
+                            "realtime session could not be opened: {}",
+                            e.message()
+                        )),
+                    )
+                })?;
             let leg = HostRealtimeLeg::open(host, cx, self.caps, self.anchor, &self.spawner);
             *slot = Some(Arc::clone(&leg));
             Ok(leg as Arc<dyn RealtimeSession>)

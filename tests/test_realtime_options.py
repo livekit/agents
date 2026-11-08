@@ -54,20 +54,20 @@ async def test_fallback_accepts_native_and_host_models_and_rejects_capability_mi
 
     native = RealtimeModel(api_key="test")
     host = HostModel(capabilities=native.capabilities)
-    fallback = _core.RealtimeFallbackModel([native._core_native(), host])
+    fallback = _core.RealtimeFallbackModel([native._core_leg(), host])
     assert fallback.capabilities().audio_output
     await fallback.restart(switch_model=True)
 
     incompatible = HostModel(capabilities=replace(native.capabilities, audio_output=False))
     with pytest.raises(ValueError, match="audio_output"):
-        _core.RealtimeFallbackModel([native._core_native(), incompatible])
+        _core.RealtimeFallbackModel([native._core_leg(), incompatible])
 
 
 @pytest.mark.parametrize("cooldown", [-1.0, float("inf"), float("nan"), 1e300])
 def test_fallback_rejects_invalid_cooldown_before_opening_a_session(cooldown: float) -> None:
     native = RealtimeModel(api_key="test")
     with pytest.raises(ValueError, match="cooldown"):
-        _core.RealtimeFallbackModel([native._core_native()], cooldown=cooldown)
+        _core.RealtimeFallbackModel([native._core_leg()], cooldown=cooldown)
 
 
 # Catches: a message cut before any word was heard (transcript "") truncated as "not given",

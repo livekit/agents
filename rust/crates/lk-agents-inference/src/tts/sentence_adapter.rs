@@ -10,9 +10,9 @@ use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::TranscriptChunk;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
-use lk_agents_abi::tts::stream_adapter::StreamAdapterFunctions;
 use lk_agents_abi::tts::stream_adapter::{
-    SentenceTextProcessor, SplitterFactory, TextProcessorFactory,
+    HostSentenceTokenizer, SentenceTextProcessor, SplitterFactory, TextPacing,
+    TextProcessorFactory, TtsStreamAdapter,
 };
 use lk_agents_abi::tts::stream_pacer::{HostSentenceStream, SentenceStreamPacer};
 use lk_agents_abi::tts::types::{SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
@@ -29,6 +29,7 @@ use tokio::sync::mpsc;
 
 // ---------------------------------------------------------------------------- StreamAdapter
 
+#[derive(Clone)]
 pub struct StreamAdapter {
     tts: Arc<dyn Tts>,
     splitter: SplitterFactory,
@@ -40,6 +41,8 @@ pub struct StreamAdapter {
     budget: lk_agents_abi::ApiConnectOptions,
     /// `(min_remaining_audio, max_text_length)`: sentences released as the audio plays out.
     pacing: Option<SentenceStreamPacer>,
+    /// The host tokenizer each stream's text is split by, in place of the native splitter.
+    tokenizer: Option<Arc<dyn HostSentenceTokenizer>>,
 }
 
 impl StreamAdapter {
@@ -54,7 +57,15 @@ impl StreamAdapter {
             max_retry: 0,
             ..lk_agents_abi::ApiConnectOptions::default()
         };
-        StreamAdapter { tts, splitter, text_processor, clock, budget, pacing: None }
+        StreamAdapter {
+            tts,
+            splitter,
+            text_processor,
+            clock,
+            budget,
+            pacing: None,
+            tokenizer: None,
+        }
     }
 
     /// Each sentence retried within `budget`.
@@ -166,7 +177,13 @@ impl Tts for StreamAdapter {
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
     > {
         let cx = cx.clone();
-        Box::pin(async move { self.open(&cx, expressive, None) })
+        Box::pin(async move {
+            let sentences = match &self.tokenizer {
+                Some(tokenizer) => Some(tokenizer.stream(&cx).await?),
+                None => None,
+            };
+            self.open(&cx, expressive, sentences)
+        })
     }
 }
 
@@ -523,37 +540,60 @@ impl lk_agents_abi::utils::stream::ProviderStream<SynthesizedAudio> for AdapterS
     }
 }
 
-pub struct AdapterStreams;
-
-impl StreamAdapterFunctions for AdapterStreams {
+/// `_core.TtsStreamAdapter`: the generated adapter calls this.
+impl TtsStreamAdapter for StreamAdapter {
     type Stream = TtsStream;
     type Env = ProcessEnv;
 
-    async fn tts_adapter_stream(
+    fn new(
         env: &ProcessEnv,
-        cx: telemetry::Cx,
-        provider: Arc<dyn Tts>,
-        conn_options: ApiConnectOptions,
-        expressive: bool,
-        sentences: Option<Arc<dyn HostSentenceStream>>,
-        pacing: Option<SentenceStreamPacer>,
-    ) -> Result<Self::Stream, ProviderError> {
-        conn_options.validate().map_err(|error| {
-            ProviderError::Local(ApiError { retryable: false, ..ApiError::new(error.to_string()) })
-        })?;
-        let provider = provider.with_conn_options(&conn_options).unwrap_or(provider);
+        tts: Arc<dyn Tts>,
+        sentence_tokenizer: Option<Arc<dyn HostSentenceTokenizer>>,
+        text_pacing: Option<TextPacing>,
+    ) -> Self {
         let splitter: SplitterFactory =
             Arc::new(|xml_aware| Box::new(super::sentences::sentence_splitter(None, xml_aware)));
-        let (sink, source) = StreamAdapter::new(
-            provider,
-            splitter,
-            Arc::new(lk_agents_core::tts::markup::text_processor),
-            env.clock.clone(),
-        )
-        .with_budget(conn_options)
-        .with_pacing(pacing)
-        .open(&cx, expressive, sentences)?
-        .split();
-        Ok(TtsStream::new(Some(sink), source, env.clock.clone()))
+        let pacing = match text_pacing {
+            Some(TextPacing::Pacer(pacer)) => Some(pacer),
+            Some(TextPacing::On(true)) => Some(SentenceStreamPacer::default()),
+            Some(TextPacing::On(false)) | None => None,
+        };
+        StreamAdapter {
+            pacing,
+            tokenizer: sentence_tokenizer,
+            ..StreamAdapter::new(
+                tts,
+                splitter,
+                Arc::new(lk_agents_core::tts::markup::text_processor),
+                env.clock.clone(),
+            )
+        }
+    }
+
+    fn capabilities(&self) -> TtsCapabilities {
+        Tts::capabilities(self)
+    }
+
+    fn sample_rate(&self) -> u32 {
+        Tts::sample_rate(self)
+    }
+
+    fn num_channels(&self) -> u16 {
+        Tts::num_channels(self)
+    }
+
+    async fn stream(
+        &self,
+        cx: telemetry::Cx,
+        conn_options: Option<ApiConnectOptions>,
+        expressive: bool,
+    ) -> Result<Self::Stream, ProviderError> {
+        // Each sentence retried within `conn`, the wrapped TTS's calls carrying it. Not the
+        // adapter's `with_conn_options`: a single-attempt request must not replace its budget.
+        let conn = conn_options.unwrap_or(lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS);
+        let tts = self.tts.with_conn_options(&conn).unwrap_or_else(|| self.tts.clone());
+        let configured = StreamAdapter { tts, budget: conn, ..self.clone() };
+        let (sink, source) = Tts::stream(&configured, &cx, expressive).await?.split();
+        Ok(TtsStream::new(Some(sink), source, self.clock.clone()))
     }
 }

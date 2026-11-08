@@ -15,8 +15,10 @@ use crate::headers::{Headers, gateway_headers};
 use crate::llm::machine::{LlmRequest, LlmRequestEvent, LlmRequestId, Policy};
 use crate::llm::request::ChatArgs;
 use crate::llm::{Auth, BodyEncoding, LlmOptions, models};
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, Invalid, ProviderError};
+use lk_agents_abi::llm::inference::ProviderEndpoint;
 use lk_agents_abi::resources::ResourceId;
+use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::{
     ApiConnectOptions, ChatContext, ChatItem, ChatRequest, Clock, Closed, Extra, Llm, LlmChunk,
     LlmStream, StreamOutput, ToolChoice, ToolSpec, Ts,
@@ -44,6 +46,8 @@ static NEXT_LLM: AtomicU64 = AtomicU64::new(1);
 /// One `inference.LLM` and its views per job identity: the options are shared, each view stamps
 /// its own job's headers on its requests.
 pub struct GatewayLlm {
+    /// The host class it reports as: its reporter's, else `opts.label`.
+    label: String,
     opts: Arc<Mutex<LlmOptions>>,
     http: Arc<GatewayHttp>,
     runtime: tokio::runtime::Handle,
@@ -64,6 +68,7 @@ impl GatewayLlm {
         clock: Arc<dyn Clock>,
     ) -> Self {
         GatewayLlm {
+            label: opts.label.clone(),
             opts: Arc::new(Mutex::new(opts)),
             http,
             runtime,
@@ -77,8 +82,10 @@ impl GatewayLlm {
     }
 
     /// The same client as a session of the job `identity` names holds it.
+    /// A view reports as its reporter's class.
     pub fn view(&self, identity: Headers, reporter: Option<Arc<dyn Llm>>) -> Self {
         GatewayLlm {
+            label: reporter.as_ref().map_or_else(|| self.label.clone(), |r| r.label()),
             opts: self.opts.clone(),
             http: self.http.clone(),
             runtime: self.runtime.clone(),
@@ -152,30 +159,41 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
         env: &ProcessEnv,
         model: String,
         provider: Option<String>,
-        base_url: String,
-        api_key: String,
+        base_url: Option<String>,
+        api_key: Option<String>,
         api_secret: Option<String>,
-        label: String,
         inference_class: Option<String>,
-        strict_tool_schema: bool,
-        gzip_body: bool,
-        msgpack_body: bool,
         extra_kwargs: Option<Extra>,
-    ) -> Result<Self, ApiError> {
-        let runtime = (env.runtime)().map_err(ApiError::from)?;
-        let http = (env.http)().map_err(ApiError::from)?;
+        endpoint: Option<ProviderEndpoint>,
+    ) -> Result<Self, Invalid> {
+        use lk_agents_abi::inference::InferenceCredentials as _;
+        let unavailable = |e: lk_agents_net::env::ProcessError| Invalid(e.to_string());
+        let runtime = (env.runtime)().map_err(unavailable)?;
+        let http = (env.http)().map_err(unavailable)?;
+        let (base_url, auth, strict_tools, body) = match endpoint {
+            Some(e) => (
+                e.base_url,
+                Auth::ProviderKey(e.api_key),
+                e.strict_tool_schema,
+                BodyEncoding { msgpack: e.msgpack_body, gzip: e.gzip_body },
+            ),
+            None => {
+                let c = crate::credentials::Credentials::inference_credentials(
+                    base_url, api_key, api_secret,
+                )?;
+                let auth = Auth::Gateway { api_key: c.api_key, api_secret: c.api_secret };
+                (c.base_url, auth, true, BodyEncoding::default())
+            }
+        };
         let opts = LlmOptions {
             model,
             base_url,
-            auth: match api_secret {
-                Some(api_secret) => Auth::Gateway { api_key, api_secret },
-                None => Auth::ProviderKey(api_key),
-            },
+            auth,
             provider,
             inference_class,
-            strict_tools: strict_tool_schema,
-            body: BodyEncoding { msgpack: msgpack_body, gzip: gzip_body },
-            label,
+            strict_tools,
+            body,
+            label: NativeLabel::InferenceLlm.as_str().into(),
             extra_kwargs: extra_kwargs.unwrap_or_default(),
         };
         Ok(GatewayLlm::new(opts, http, runtime, env.clock.clone()))
@@ -193,13 +211,28 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
         self.options().extra_kwargs
     }
 
-    fn update_options(&self, model: Option<String>, extra_kwargs: Option<Extra>) {
+    fn inference_class(&self) -> Option<String> {
+        self.options().inference_class
+    }
+
+    fn update_options(
+        &self,
+        model: Option<String>,
+        extra_kwargs: Option<Extra>,
+        endpoint: Option<ProviderEndpoint>,
+    ) {
         self.update_options(|opts| {
             if let Some(model) = model {
                 opts.model = model;
             }
             if let Some(extra) = extra_kwargs {
                 opts.extra_kwargs = extra;
+            }
+            if let Some(e) = endpoint {
+                opts.base_url = e.base_url;
+                opts.auth = Auth::ProviderKey(e.api_key);
+                opts.strict_tools = e.strict_tool_schema;
+                opts.body = BodyEncoding { msgpack: e.msgpack_body, gzip: e.gzip_body };
             }
         });
     }
@@ -244,7 +277,7 @@ impl Llm for GatewayLlm {
     }
 
     fn label(&self) -> String {
-        self.opts.lock().label.clone()
+        self.label.clone()
     }
 
     fn model(&self) -> String {

@@ -18,6 +18,12 @@ const METHOD_KEYS: &[&str] = &[
     "returns",
     "annotation",
     "resolve",
+    "each",
+    "bind",
+    "chain",
+    "setter",
+    "abort",
+    "yields",
 ];
 
 impl Resolver<'_> {
@@ -37,28 +43,22 @@ impl Resolver<'_> {
                 "extended",
                 "name",
                 "base",
+                "foreign",
+                "generic",
                 "native",
+                "from_native",
                 "legs",
                 "leg",
                 "availability",
                 "base_args",
                 "keep",
+                "host_args",
                 "stream",
             ],
         )?;
-        let native = voc::rust(at, nested, "native")?
-            .ok_or_else(|| format!("{at}: a facade names its native class: `native = Trait`"))?;
-        let native = match self.shape(self.module, &native, &[], at)? {
-            Shape::Named { found: Found::Item { module, item }, .. } => {
-                let syn::Item::Trait(native) = &self.krate.modules[module].items[item] else {
-                    return Err(format!("{at}: `native` names a #[host(class)] trait"));
-                };
-                let entries = voc::read(&native.attrs).map_err(|e| format!("{at}: {e}"))?;
-                let class = voc::find(&entries, "class")
-                    .ok_or_else(|| format!("{at}: `native` names a #[host(class)] trait"))?;
-                voc::text(at, &class.nested, "name")?.unwrap_or_else(|| native.ident.to_string())
-            }
-            _ => return Err(format!("{at}: `native` names a #[host(class)] trait")),
+        let native = match voc::rust(at, nested, "native")? {
+            Some(native) => self.facade_native(&native, at)?,
+            None => String::new(),
         };
         let flag = |key| voc::find(nested, key).is_some();
         let stream = voc::find(nested, "stream")
@@ -78,6 +78,8 @@ impl Resolver<'_> {
                         "default",
                         "annotation",
                         "not_given",
+                        "rename",
+                        "provider_default",
                     ],
                 )?;
                 let names = |key| {
@@ -98,6 +100,8 @@ impl Resolver<'_> {
                     defaults: per_parameter(at, keys, "default")?,
                     annotations: per_parameter(at, keys, "annotation")?,
                     not_given: voc::find(keys, "not_given").is_some(),
+                    rename: per_parameter(at, keys, "rename")?,
+                    provider_default: names("provider_default"),
                 })
             })
             .transpose()?;
@@ -106,9 +110,16 @@ impl Resolver<'_> {
             let syn::TraitItem::Type(t) = item else { continue };
             let entries = voc::read(&t.attrs).map_err(|e| format!("{at}: {e}"))?;
             voc::only(at, &entries, &["delegate"])?;
-            if voc::find(&entries, "delegate").is_none() {
+            let Some(declared) = voc::find(&entries, "delegate") else {
                 return Err(format!("{at}::{}: a facade's associated type is a delegate", t.ident));
-            }
+            };
+            let path = match &declared.value {
+                None => None,
+                Some(Value::Text(path)) => Some(path.clone()),
+                Some(_) => {
+                    return Err(format!("{at}::{}: `delegate = \"a.b()\"` is a path", t.ident));
+                }
+            };
             let Some(syn::TypeParamBound::Trait(bound)) = t.bounds.first() else {
                 return Err(format!("{at}::{}: a delegate is bounded by its trait", t.ident));
             };
@@ -127,9 +138,10 @@ impl Resolver<'_> {
                 }
                 _ => return Err(format!("{at}::{}: a delegate is a proxy or a class", t.ident)),
             };
-            let attribute = format!("_{}", snake(&t.ident.to_string()));
+            let held = path.is_none();
+            let attribute = path.unwrap_or_else(|| format!("_{}", snake(&t.ident.to_string())));
             self.assoc.push(Assoc { rust_name: t.ident.to_string(), ty: ty.clone() });
-            delegates.push(Delegate { assoc: t.ident.to_string(), attribute, ty });
+            delegates.push(Delegate { assoc: t.ident.to_string(), attribute, held, ty });
         }
         let mut methods = Vec::new();
         for item in &tr.items {
@@ -139,6 +151,12 @@ impl Resolver<'_> {
         let new = methods.iter().any(|m| m.method.kind == MethodKind::New);
         if stream.is_some() && new {
             return Err(format!("{at}: a stream is built by its base, not a #[host(new)]"));
+        }
+        if native.is_empty() && (new || stream.is_some() || flag("from_native")) {
+            return Err(format!("{at}: a facade building or given its native names it"));
+        }
+        if native.is_empty() && methods.iter().any(|m| m.via.is_none()) {
+            return Err(format!("{at}: with no native class, every method goes `via` a delegate"));
         }
         let names = |key| {
             voc::find(nested, key)
@@ -170,7 +188,10 @@ impl Resolver<'_> {
             extended: flag("extended"),
             module,
             base: voc::text(at, nested, "base")?,
+            foreign: flag("foreign"),
+            generic: voc::text(at, nested, "generic")?,
             native,
+            from_native: flag("from_native"),
             legs: voc::find(nested, "legs")
                 .map_or(Vec::new(), |legs| legs.nested.iter().map(|l| l.key.clone()).collect()),
             leg: voc::text(at, nested, "leg")?,
@@ -201,6 +222,7 @@ impl Resolver<'_> {
                 .transpose()?,
             base_args,
             keep,
+            host_args: per_parameter(at, nested, "host_args")?,
             stream,
             delegates,
             source: self.krate.modules[self.module].file.clone(),
@@ -271,24 +293,68 @@ impl Resolver<'_> {
                 }
             })
             .transpose()?;
-        let exit = voc::find(&entries, "exit").map(|e| rust_ident(&at, e, "exit")).transpose()?;
-        if exit.is_some() && via.is_some() {
-            return Err(format!("{at}: an `async with` enters and exits the native object"));
+        let exit_call = |key| {
+            voc::rust(&at, &entries, key)?
+                .map(|ty| match &ty {
+                    syn::Type::Path(path) => {
+                        let mut segments = path.path.segments.iter().map(|s| s.ident.to_string());
+                        match (segments.next(), segments.next(), segments.next()) {
+                            (Some(method), None, _) => Ok(ExitCall { method, on_value: None }),
+                            (Some(class), Some(method), None) => {
+                                let class = syn::parse_str::<syn::Type>(&class)
+                                    .map_err(|e| format!("{at}: {e}"))?;
+                                let on_value = Some(self.facade_native(&class, &at)?);
+                                Ok(ExitCall { method, on_value })
+                            }
+                            _ => Err(format!("{at}: `{key} = m` or `{key} = Class::m`")),
+                        }
+                    }
+                    _ => Err(format!("{at}: `{key} = m` or `{key} = Class::m`")),
+                })
+                .transpose()
+        };
+        let exit = exit_call("exit")?
+            .map(|method| {
+                Ok::<_, String>(Exit {
+                    method,
+                    abort: exit_call("abort")?,
+                    yields: voc::text(&at, &entries, "yields")?,
+                })
+            })
+            .transpose()?;
+        if exit.is_none() && (flag("abort") || flag("yields")) {
+            return Err(format!("{at}: `abort` and `yields` belong to an `exit`"));
         }
         let pairs = |key| per_parameter(&at, &entries, key);
+        let setter = voc::find(&entries, "setter").map(|e| rust_ident(&at, e, "setter"));
         let adapt = Adapt {
             future: flag("future"),
             discard: flag("discard"),
             not_given: flag("not_given"),
             origin: voc::text(&at, &entries, "origin")?,
             returns: voc::text(&at, &entries, "returns")?,
+            each: self.each(&at, &entries)?,
             annotations: pairs("annotation")?,
             resolve: pairs("resolve")?,
+            bind: pairs("bind")?,
+            chain: flag("chain"),
+            setter: setter.transpose()?,
         };
         for (name, _) in adapt.annotations.iter().chain(&adapt.resolve) {
-            if !method.params.iter().any(|p| &p.name == name) {
+            if name != "ret" && !method.params.iter().any(|p| &p.name == name) {
                 return Err(format!("{at}: names no parameter {name}"));
             }
+        }
+        if let Some((name, _)) =
+            adapt.bind.iter().find(|(n, _)| method.params.iter().any(|p| &p.name == n))
+        {
+            return Err(format!("{at}: bind({name}) is bound, not a parameter"));
+        }
+        if adapt.each.is_some() && adapt.returns.is_none() {
+            return Err(format!("{at}: `each` maps the list `returns` receives"));
+        }
+        if adapt.setter.is_some() && method.params.iter().filter(|p| !p.ty.hidden()).count() != 1 {
+            return Err(format!("{at}: a setter takes the one new value"));
         }
         if adapt.future && kind != MethodKind::Await {
             return Err(format!("{at}: future needs an awaited method"));
@@ -310,6 +376,35 @@ impl Resolver<'_> {
             }
         }
         Ok(FacadeMethod { method, native, via, delegated, none_ends_iteration, wrap, exit, adapt })
+    }
+
+    /// The host name of the `#[host(class)]` a facade's `native = Trait` names.
+    fn facade_native(&self, native: &syn::Type, at: &str) -> Result<String, String> {
+        match self.shape(self.module, native, &[], at)? {
+            Shape::Named { found: Found::Item { module, item }, .. } => {
+                let syn::Item::Trait(native) = &self.krate.modules[module].items[item] else {
+                    return Err(format!("{at}: `native` names a #[host(class)] trait"));
+                };
+                let entries = voc::read(&native.attrs).map_err(|e| format!("{at}: {e}"))?;
+                let class = voc::find(&entries, "class")
+                    .ok_or_else(|| format!("{at}: `native` names a #[host(class)] trait"))?;
+                Ok(voc::text(at, &class.nested, "name")?
+                    .unwrap_or_else(|| native.ident.to_string()))
+            }
+            _ => Err(format!("{at}: `native` names a #[host(class)] trait")),
+        }
+    }
+
+    /// `each = Record::field`: the record field each element of a native list is read as.
+    fn each(&self, at: &str, entries: &[Entry]) -> Result<Option<String>, String> {
+        voc::rust(at, entries, "each")?
+            .map(|each| match &each {
+                syn::Type::Path(path) if path.path.segments.len() >= 2 => {
+                    Ok(path.path.segments.last().expect("checked").ident.to_string())
+                }
+                _ => Err(format!("{at}: `each = Record::field`")),
+            })
+            .transpose()
     }
 
     /// Whether the trait at `module.item` is a `#[host(proxy)]`.

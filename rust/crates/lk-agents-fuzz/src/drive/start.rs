@@ -148,36 +148,39 @@ impl Run {
                     as Arc<VadLeg>,
             }),
             llm,
-            realtime: setup.realtime.map(|server| {
-                let vad = server.turn_detection.then_some(if server.semantic {
-                    fakes::RealtimeVad::Semantic
-                } else {
-                    fakes::RealtimeVad::Server
-                });
-                if server.duplex {
-                    let clock = time.clock();
-                    let duplex = fakes::FakeDuplex::new(
-                        registry.clone(),
-                        server.seed,
-                        server.delays.late_words,
-                        clock,
-                        tasks.clone(),
-                    );
-                    return duplex as Arc<dyn Realtime>;
-                }
-                let setup = fakes::ServerSetup {
-                    vad,
-                    seed: server.seed,
-                    connect,
-                    tool_calls: server.tool_calls,
-                    text_only: server.text_only,
-                    fallback: server.fallback,
-                    timing: setup.timing(),
-                    delays: server.delays,
-                };
-                fakes::FakeRealtime::new(registry.clone(), setup, time.clock(), tasks.clone())
-                    as Arc<dyn Realtime>
-            }),
+            realtime: setup
+                .realtime
+                .map(|server| {
+                    let vad = server.turn_detection.then_some(if server.semantic {
+                        fakes::RealtimeVad::Semantic
+                    } else {
+                        fakes::RealtimeVad::Server
+                    });
+                    if server.duplex {
+                        let clock = time.clock();
+                        let duplex = fakes::FakeDuplex::new(
+                            registry.clone(),
+                            server.seed,
+                            server.delays.late_words,
+                            clock,
+                            tasks.clone(),
+                        );
+                        return duplex as Arc<dyn Realtime>;
+                    }
+                    let setup = fakes::ServerSetup {
+                        vad,
+                        seed: server.seed,
+                        connect,
+                        tool_calls: server.tool_calls,
+                        text_only: server.text_only,
+                        fallback: server.fallback,
+                        timing: setup.timing(),
+                        delays: server.delays,
+                    };
+                    fakes::FakeRealtime::new(registry.clone(), setup, time.clock(), tasks.clone())
+                        as Arc<dyn Realtime>
+                })
+                .map(lk_agents_abi::llm::fallback::RealtimeLeg::Native),
             tts,
             on_event: Some(Arc::new(WireSink)),
             agent_use_tts_aligned_transcript: setup.agent_aligned_transcript,
@@ -421,12 +424,11 @@ impl Run {
                 time: run.time.clone(),
                 pool: None,
             });
-            let ambient = vec![fakes::FakeSoundStream::sound(20)];
+            let ambient = lk_agents_abi::voice::background_audio::Sounds::Choice(vec![
+                fakes::FakeSoundStream::sound(20),
+            ]);
             let error = player
-                .start(
-                    room,
-                    super::background::StartOptions { ambient, draw: fakes::HALF, choose: true },
-                )
+                .start(room, super::background::StartOptions { ambient, draw: fakes::HALF })
                 .await;
             run.record.record_boundary(
                 run.stamps.next(),

@@ -42,6 +42,8 @@ const DIARIZATION_EXTRA_KEYS: &[&str] = &[
 
 pub const DEFAULT_ENCODING: &str = "pcm_s16le";
 pub const DEFAULT_SAMPLE_RATE: u32 = 16_000;
+/// The only rate OpenAI's live transcription takes.
+pub const OPENAI_SAMPLE_RATE: u32 = 24_000;
 
 /// `"provider/model:language"` -> `("provider/model", Some("language"))`, split at the last colon.
 pub fn parse_model_string(model: &str) -> (&str, Option<&str>) {
@@ -168,7 +170,18 @@ pub fn capabilities(
     }
 }
 
-pub use lk_agents_abi::inference::VadResolution;
+/// What a model does with the caller's VAD (`_resolve_vad_for_model`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VadResolution {
+    /// Keep the caller's instance (Speechmatics, which endpoints client-side).
+    Keep,
+    /// Ignore the caller's instance and warn: the model endpoints server-side.
+    DropAndWarn,
+    /// A model that endpoints client-side with no VAD supplied: the default local one.
+    CreateDefault,
+    /// Nothing to do.
+    None,
+}
 
 /// `_resolve_vad_for_model`: what the host does with the caller's VAD for this model.
 pub fn resolve_vad_for_model(model: Option<&str>, has_vad: bool) -> VadResolution {

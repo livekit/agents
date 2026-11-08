@@ -1,22 +1,20 @@
 //! Named host arguments for the production background player's binding API.
 use super::*;
-use lk_agents_abi::voice::background_audio::Sound;
+use lk_agents_abi::voice::background_audio::Sounds;
 
 pub(super) struct Background {
     pub audio: BackgroundAudio,
 }
 
 pub(super) struct StartOptions {
-    pub ambient: Vec<Sound>,
+    pub ambient: Sounds,
     pub draw: f64,
-    pub choose: bool,
 }
 
 pub(super) struct StateOptions {
-    pub sounds: Vec<Sound>,
+    pub sounds: Sounds,
     pub draw: f64,
     pub thinking: bool,
-    pub choose: bool,
 }
 
 impl Background {
@@ -26,7 +24,7 @@ impl Background {
         options: StartOptions,
     ) -> Option<String> {
         self.audio
-            .start(room, options.draw, options.ambient, options.choose, None)
+            .start(room, options.draw, Some(options.ambient), None)
             .await
             .err()
             .map(|e| e.to_string())
@@ -34,7 +32,7 @@ impl Background {
 
     pub fn on_agent_state(&self, options: StateOptions) -> Option<String> {
         self.audio
-            .on_agent_state(options.sounds, options.draw, options.thinking, options.choose)
+            .on_agent_state(Some(options.sounds), options.draw, options.thinking)
             .err()
             .map(|e| e.to_string())
     }

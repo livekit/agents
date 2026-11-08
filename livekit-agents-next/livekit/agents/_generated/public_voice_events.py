@@ -29,6 +29,7 @@ from .session_events import (
     ToolExecutionUpdatedEvent as ToolExecutionUpdatedEvent,
 )
 from .session_wire import SpeechCreatedEvent as SpeechCreatedEvent
+from .voice_session import FillerSource as FillerSource
 
 __all__: list[str] = [
     "UserState",
@@ -53,4 +54,5 @@ __all__: list[str] = [
     "CloseEvent",
     "FunctionToolsExecutedEvent",
     "ErrorEvent",
+    "FillerSource",
 ]

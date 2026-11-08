@@ -246,17 +246,14 @@ under an authorized grant.
 ## Calls
 
 ```python
-import json
-
-dispatch = api.CreateAgentDispatchRequest(
-    agent_name="sales", room=room, metadata=json.dumps({"thread_id": thread.id})
-)
+dispatch = api.CreateAgentDispatchRequest(agent_name="sales", room=room, thread_id=thread.id)
 await lk.agent_dispatch.create_dispatch(dispatch)                              # the job carries the thread
 await lk.sip.create_sip_participant(api.CreateSIPParticipantRequest(room_name=room, sip_trunk_id=TRUNK, sip_call_to=lead.phone))
 ```
 
 The dispatch carries the thread id, and the job hands it to the call's
-`VoiceSession`.
+`VoiceSession`; every way a call gets its thread is in
+[threads.md](threads.md#calls).
 
 ## From the browser
 

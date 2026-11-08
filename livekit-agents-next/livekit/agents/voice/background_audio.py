@@ -1,99 +1,34 @@
 from __future__ import annotations
 
-import atexit
 import contextlib
-import enum
 import random
-from collections.abc import AsyncIterator, Generator
-from importlib.resources import as_file, files
-from typing import Any, NamedTuple
+from collections.abc import Generator
+from typing import Any
 
 from livekit import rtc
 
 from .. import _core
-from .._generated.background_audio_wire import Sound, SoundSourceFile, SoundSourceStream
+from .._generated import (
+    facades_voice_background_audio as _facades,
+    public_voice_background_audio as _public,
+)
+from .._generated.public_voice_background_audio import *  # noqa: F403
 from ..job import get_job_context
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .agent_session import VoiceSession
 from .events import AgentStateChangedEvent
 
-_resource_stack = contextlib.ExitStack()
-atexit.register(_resource_stack.close)
-
-
-class BuiltinAudioClip(enum.Enum):
-    CITY_AMBIENCE = "city-ambience.ogg"
-    FOREST_AMBIENCE = "forest-ambience.ogg"
-    OFFICE_AMBIENCE = "office-ambience.ogg"
-    CROWDED_ROOM = "crowded-room.ogg"
-    KEYBOARD_TYPING = "keyboard-typing.ogg"
-    KEYBOARD_TYPING2 = "keyboard-typing2.ogg"
-    HOLD_MUSIC = "hold_music.ogg"
-
-    def path(self) -> str:
-        file_path = files("livekit.agents").joinpath("resources", self.value)
-        return str(_resource_stack.enter_context(as_file(file_path)))
-
-
-AudioSource = AsyncIterator[rtc.AudioFrame] | str | BuiltinAudioClip
-
-
-class AudioConfig(NamedTuple):
-    """
-    Definition for the audio to be played in the background
-
-    Args:
-        volume: The volume of the audio (0.0-1.0)
-        probability: The probability of the audio being played, when multiple
-            AudioConfigs are provided (0.0-1.0)
-        fade_in: Duration in seconds to ramp the volume from 0 up to ``volume``
-            when playback starts. ``0`` (default) starts at full volume.
-        fade_out: Duration in seconds to ramp the volume back down to 0 when
-            ``PlayHandle.stop()`` is called. ``0`` (default) cuts immediately,
-            preserving the previous behaviour.
-    """
-
-    source: AudioSource
-    volume: float = 1.0
-    probability: float = 1.0
-    fade_in: float = 0.0
-    fade_out: float = 0.0
-
-
-def _sounds(
-    source: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None],
-) -> tuple[list[Sound], bool]:
-    """The core's candidates (none for an unset sound), and whether to draw one by probability
-    (a list)."""
-    configs = source if isinstance(source, list) else [source] if source else []
-    sounds = []
-    for cfg in configs:
-        if not isinstance(cfg, AudioConfig):
-            cfg = AudioConfig(cfg)
-        audio = cfg.source.path() if isinstance(cfg.source, BuiltinAudioClip) else cfg.source
-        sounds.append(
-            Sound(
-                source=SoundSourceFile(path=audio)
-                if isinstance(audio, str)
-                else SoundSourceStream(stream=audio),
-                volume=cfg.volume,
-                probability=cfg.probability,
-                fade_in=cfg.fade_in,
-                fade_out=cfg.fade_out,
-            )
-        )
-    return sounds, isinstance(source, list)
+__all__ = ["BackgroundAudioPlayer", "PlayHandle"]
+__all__ += _public.__all__
 
 
 class BackgroundAudioPlayer:
     def __init__(
         self,
         *,
-        ambient_sound: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
-        thinking_sound: NotGivenOr[
-            AudioSource | AudioConfig | list[AudioConfig] | None
-        ] = NOT_GIVEN,
+        ambient_sound: NotGivenOr[Sounds | None] = NOT_GIVEN,
+        thinking_sound: NotGivenOr[Sounds | None] = NOT_GIVEN,
         stream_timeout_ms: int = 200,
     ) -> None:
         """
@@ -110,25 +45,25 @@ class BackgroundAudioPlayer:
         - A total probability below 1.0 means there is a chance no sound will be selected (resulting in silence).
 
         Args:
-            ambient_sound (NotGivenOr[Union[AudioSource, AudioConfig, List[AudioConfig], None]], optional):
+            ambient_sound (NotGivenOr[Sounds | None], optional):
                 The ambient sound to be played continuously. For file paths, the sound will be looped.
                 For AsyncIterator sources, ensure the iterator is infinite or looped.
 
-            thinking_sound (NotGivenOr[Union[AudioSource, AudioConfig, List[AudioConfig], None]], optional):
+            thinking_sound (NotGivenOr[Sounds | None], optional):
                 The sound to be played when the associated agent enters a “thinking” state. This can be a single
                 sound source or a list of AudioConfig objects (with volume and probability settings).
 
         """  # noqa: E501
 
-        self._ambient = _sounds(ambient_sound)
-        self._thinking = _sounds(thinking_sound)
+        self._ambient = ambient_sound or None
+        self._thinking = thinking_sound or None
         self._player = _core.BackgroundAudioPlayer(stream_timeout_ms=stream_timeout_ms)
         self.publication: rtc.LocalTrackPublication | None = None
         self._agent_session: VoiceSession | None = None
 
     def play(
         self,
-        audio: AudioSource | AudioConfig | list[AudioConfig],
+        audio: Sounds,
         *,
         loop: bool = False,
     ) -> PlayHandle:
@@ -136,7 +71,7 @@ class BackgroundAudioPlayer:
         Plays an audio once or in a loop.
 
         Args:
-            audio (Union[AudioSource, AudioConfig, List[AudioConfig]]):
+            audio (Sounds):
                 The audio to play. Can be:
                 - A string pointing to a file path
                 - An AsyncIterator that yields `rtc.AudioFrame`
@@ -154,10 +89,7 @@ class BackgroundAudioPlayer:
             PlayHandle: An object representing the playback handle. This can be
             awaited or stopped manually.
         """  # noqa: E501
-        sounds, choose = _sounds(audio)
-        return PlayHandle(
-            _state=self._player.play(sounds, random.random(), looping=loop, choose=choose)
-        )
+        return PlayHandle(self._player.play(audio, random.random(), looping=loop))
 
     async def start(
         self,
@@ -190,12 +122,10 @@ class BackgroundAudioPlayer:
                     "Background audio is not supported in console mode. Audio will not be played."
                 )
         options = track_publish_options or rtc.TrackPublishOptions()
-        ambient, choose = self._ambient
         sid = await self._player.start(
             _core._core_create_room_session(room),
             random.random(),
-            ambient=ambient,
-            choose=choose,
+            ambient=self._ambient,
             source=options.source,
         )
         if isinstance(room, rtc.Room):
@@ -214,39 +144,10 @@ class BackgroundAudioPlayer:
             self._agent_session.off("agent_state_changed", self._agent_state_changed)
 
     def _agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
-        sounds, choose = self._thinking
-        self._player.on_agent_state(
-            sounds, random.random(), ev.new_state == "thinking", choose=choose
-        )
+        self._player.on_agent_state(self._thinking, random.random(), ev.new_state == "thinking")
 
 
-class PlayHandle:
-    def __init__(self, fade_out: float = 0.0, *, _state: _core.PlayState | None = None) -> None:
-        self._state = _state if _state is not None else _core.PlayState(fade_out)
-
-    def done(self) -> bool:
-        """
-        Returns True if the sound has finished playing.
-        """
-        return self._state.done
-
-    def stop(self) -> None:
-        """
-        Stops the sound from playing.
-
-        If the source was started with a ``fade_out`` duration, this
-        triggers the fade-out and the handle stays "not done" until the
-        generator has finished tailing out. With ``fade_out=0`` (the
-        default), playback is cut immediately as before.
-        """
-        self._state.stop()
-
-    async def wait_for_playout(self) -> None:
-        """
-        Waits for the sound to finish playing.
-        """
-        await self._state.wait_for_playout()
-
+class PlayHandle(_facades.PlayHandle):
     def __await__(self) -> Generator[Any, None, PlayHandle]:
         async def _await_impl() -> PlayHandle:
             await self.wait_for_playout()

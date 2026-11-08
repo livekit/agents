@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+from .facades_inference_tts import SynthesizeStream as SynthesizeStream
 from .inference_tts import (
     AssemblyAIModels as AssemblyAIModels,
     CartesiaModels as CartesiaModels,
     DeepgramModels as DeepgramModels,
+    FallbackModelType as FallbackModelType,
     FishAudioModels as FishAudioModels,
     InworldModels as InworldModels,
     RimeModels as RimeModels,
@@ -25,6 +27,7 @@ from .tts_provider_options import (
 )
 
 __all__: list[str] = [
+    "FallbackModelType",
     "CartesiaModels",
     "DeepgramModels",
     "RimeModels",
@@ -41,4 +44,5 @@ __all__: list[str] = [
     "XaiOptions",
     "FishAudioOptions",
     "AssemblyaiOptions",
+    "SynthesizeStream",
 ]
