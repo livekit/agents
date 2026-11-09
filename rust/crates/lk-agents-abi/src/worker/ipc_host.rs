@@ -400,9 +400,10 @@ pub trait JobRun: Send + Sync + Sized + 'static {
         framework: bool,
         name: String,
     );
-    /// Opens the job's root span for the job the parent handed over, before its run starts.
+    /// Opens the job's root span for the job the parent handed over, before its run starts;
+    /// `thread` is the call's resolved thread, its `gen_ai.conversation.id`.
     #[host(call)]
-    fn start_trace(&self, job: StartJob);
+    fn start_trace(&self, job: StartJob, thread: Option<String>);
     /// The application ends the job.
     #[host(call)]
     fn shutdown(&self, reason: String);

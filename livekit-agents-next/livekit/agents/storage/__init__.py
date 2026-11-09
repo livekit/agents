@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import functools
 import os
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -23,7 +21,7 @@ from .context import (
 )
 
 if TYPE_CHECKING:
-    from ..job import JobContext
+    from livekit.protocol import agent
 
 
 class Storage:
@@ -162,25 +160,18 @@ class Thread(_facades.Thread):
         return await self.lane(agent or self._agent_name).history()
 
 
-@dataclass(frozen=True)
-class _CallThreadEntrypoint:
-    """Opens the thread the job's ``thread_id`` names as ``ctx.thread``; none named, or one that
-    does not resolve, leaves it ``None``."""
-
-    entrypoint: Callable[[JobContext], Awaitable[None]]
-    storage: Storage
-
-    async def __call__(self, ctx: JobContext) -> None:
-        try:
-            thread = await self.storage.threads._core_call_thread(ctx.job)
-            if thread is not None:
-                ctx._thread = Thread(self.storage, thread.thread_id, agent_name=ctx.job.agent_name)
-        except StorageError as e:
-            logger.warning(
-                "the call's thread could not be resolved; the call runs without it",
-                extra={"error": str(e)},
-            )
-        await self.entrypoint(ctx)
+async def _call_thread(storage: Storage, job: agent.Job) -> Thread | None:
+    """The thread the job's ``thread_id`` names; ``None`` when it names none or does not
+    resolve."""
+    try:
+        thread = await storage.threads._core_call_thread(job)
+    except StorageError as e:
+        logger.warning(
+            "the call's thread could not be resolved; the call runs without it",
+            extra={"error": str(e)},
+        )
+        return None
+    return Thread(storage, thread.thread_id, agent_name=job.agent_name) if thread else None
 
 
 __all__ = [

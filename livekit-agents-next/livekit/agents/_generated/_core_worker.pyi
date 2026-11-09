@@ -197,8 +197,10 @@ class JobRun:
         """`callback(reason)` when it takes the reason, else `callback()`, as the job shuts down; a
         framework callback runs in the shutdown's span, any other in its own span named `name`.
         """
-    def start_trace(self, job: StartJob) -> None:
-        """Opens the job's root span for the job the parent handed over, before its run starts."""
+    def start_trace(self, job: StartJob, thread: str | None) -> None:
+        """Opens the job's root span for the job the parent handed over, before its run starts;
+        `thread` is the call's resolved thread, its `gen_ai.conversation.id`.
+        """
     def shutdown(self, reason: str) -> None:
         """The application ends the job."""
     def room_disconnected(self) -> None: ...

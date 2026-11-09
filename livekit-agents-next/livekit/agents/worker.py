@@ -22,7 +22,6 @@ from .ipc import preload_module_names
 from .job import JobContext
 from .log import logger
 from .plugin import Plugin
-from .storage import _CallThreadEntrypoint
 from .storage.session import _Handler
 from .types import NOT_GIVEN, NotGivenOr
 from .utils import is_given
@@ -325,11 +324,11 @@ class _ServerCallbacks:
             configure_forkserver(mp_ctx, [*plugin_packages, *self._server._preload_modules])
         loop = asyncio.get_running_loop()
         storage = self._server._storage
-        entrypoint = _CallThreadEntrypoint(door.entrypoint, storage) if storage else door.entrypoint
 
         async def launcher() -> ipc.JobLauncher:
             return ipc.JobLauncher(
-                job_entrypoint_fnc=entrypoint,
+                job_entrypoint_fnc=door.entrypoint,
+                storage=storage,
                 session_end_fnc=door.on_session_end,
                 simulation_end_fnc=door.on_simulation_end,
                 session_end_timeout=opts.session_end_timeout,

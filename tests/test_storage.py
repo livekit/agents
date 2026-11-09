@@ -779,28 +779,18 @@ def dispatched_job(thread_id: str = "") -> Any:
     return agent.Job.FromString(job + bytes([15 << 3 | 2, len(raw)]) + raw if raw else job)
 
 
-async def test_the_rtc_door_opens_only_the_jobs_thread(thread_storage: Storage) -> None:
+async def test_a_call_opens_only_its_jobs_thread(thread_storage: Storage) -> None:
     import pickle
-    from types import SimpleNamespace
 
-    from livekit.agents.storage import _CallThreadEntrypoint as _CallThreadEntrypoint
+    from livekit.agents.storage import _call_thread
 
-    seen: list[Thread | None] = []
-
-    async def entrypoint(ctx: Any) -> None:
-        seen.append(ctx._thread)
-
-    door = _CallThreadEntrypoint(entrypoint, thread_storage)
     sid = await new_session(thread_storage, "desk")
     before = (await thread_storage.threads.list_threads("")).threads
-    for thread_id in (sid, "", "AT_unknown"):
-        ctx = SimpleNamespace(job=dispatched_job(thread_id), _thread=None)
-        await door(ctx)  # type: ignore[arg-type]
-
-    named, unnamed, refused = seen
+    named = await _call_thread(thread_storage, dispatched_job(sid))
     assert named is not None and named.id == sid and named._agent_name == "desk"
     # no thread_id runs the call without one, and an unknown id is refused: nothing is created
-    assert unnamed is None and refused is None
+    assert await _call_thread(thread_storage, dispatched_job()) is None
+    assert await _call_thread(thread_storage, dispatched_job("AT_unknown")) is None
     assert (await thread_storage.threads.list_threads("")).threads == before
     # a job process rebuilds the storage from its configuration
     assert pickle.loads(pickle.dumps(thread_storage))._args == thread_storage._args

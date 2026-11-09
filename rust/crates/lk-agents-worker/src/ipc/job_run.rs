@@ -512,10 +512,10 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         self.inner.state.lock().shutdown_callbacks.push(callback);
     }
 
-    fn start_trace(&self, job: StartJob) {
+    fn start_trace(&self, job: StartJob, thread: Option<String>) {
         let inner = &self.inner;
         let telemetry::JobTrace { job, span } =
-            telemetry::start_job(&inner.tracer, inner.cloud.as_ref(), &job);
+            telemetry::start_job(&inner.tracer, inner.cloud.as_ref(), &job, thread.as_deref());
         let _ = inner.job.set(job);
         *inner.root.lock() = Some(span);
     }

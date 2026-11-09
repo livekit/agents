@@ -75,11 +75,13 @@ fn gap(start: Option<f64>, end: Option<f64>) -> Option<Seconds> {
     Some(Seconds((end? - start?).max(0.0)))
 }
 
-/// Opens the job's root span and registers the job with the process exporter.
+/// Opens the job's root span, its conversation the call's resolved `thread`, and registers the
+/// job with the process exporter.
 pub(crate) fn start_job(
     tracer: &Tracer,
     cloud: Option<&CloudEndpoint>,
     start: &StartJob,
+    thread: Option<&str>,
 ) -> JobTrace {
     let job = &start.info.job;
     let room = job.room.clone().unwrap_or_default();
@@ -99,12 +101,7 @@ pub(crate) fn start_job(
         );
     }
     let parent = start.traceparent.as_deref().and_then(SpanContext::parse_traceparent);
-    let cx = tracer
-        .root()
-        .continuing(parent)
-        .with_job(Some(key.clone()))
-        // `gen_ai.conversation.id`: the room session; a session's spans carry its resolved thread.
-        .with_conversation(Some(room.sid.as_str()).filter(|sid| !sid.is_empty()));
+    let cx = tracer.root().continuing(parent).with_job(Some(key.clone())).with_conversation(thread);
     let started = tracer.now_nanos() as f64 / 1e9;
     let f = &start.info;
     let decl = JobEntrypoint {
@@ -141,6 +138,35 @@ pub(crate) fn start_job(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: the job's spans recording the room session, or a dispatched id the storage refused,
+    // as their conversation instead of the resolved thread.
+    #[test]
+    fn the_conversation_is_the_resolved_thread() {
+        let tracer = Tracer::disabled(std::sync::Arc::new(lk_agents_abi::VirtualClock::new()));
+        let mut start = StartJob {
+            info: lk_agents_abi::worker::job::RunningJobInfo {
+                accept_arguments: Default::default(),
+                job: livekit_protocol::Job::default(),
+                url: String::new(),
+                token: String::new(),
+                worker_id: String::new(),
+                fake_job: true,
+                received_at: None,
+                accepted_at: None,
+                assigned_at: None,
+                launched_at: 0.0,
+            },
+            traceparent: None,
+        };
+        start.info.job.room =
+            Some(livekit_protocol::Room { sid: "RM_1".into(), ..Default::default() });
+        start.info.job.thread_id = "AT_refused".into();
+        let traced = start_job(&tracer, None, &start, Some("AT_1"));
+        assert_eq!(traced.span.cx().conversation(), Some("AT_1"));
+        let traced = start_job(&tracer, None, &start, None);
+        assert_eq!(traced.span.cx().conversation(), None);
+    }
 
     // Catches: an unknown stage counted as an instant.
     #[test]

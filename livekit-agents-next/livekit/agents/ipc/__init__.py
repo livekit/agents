@@ -20,6 +20,7 @@ from .._generated.public_ipc import *  # noqa: F403
 from .._generated.worker_ipc import JobCompletion
 from ..job import JobContext
 from ..log import logger
+from ..storage import Storage
 from . import child
 
 
@@ -44,6 +45,7 @@ class JobLauncher:
         self,
         *,
         job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
+        storage: Storage | None = None,
         session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
         simulation_end_fnc: Callable[[Any], Any] | None,
         session_end_timeout: float,
@@ -58,6 +60,7 @@ class JobLauncher:
         self._proc: Any = None
         self._args = child.JobArgs(
             job_entrypoint_fnc=job_entrypoint_fnc,
+            storage=storage,
             session_end_fnc=session_end_fnc,
             simulation_end_fnc=simulation_end_fnc,
             session_end_timeout=session_end_timeout,

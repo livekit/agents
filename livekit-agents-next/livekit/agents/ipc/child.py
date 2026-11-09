@@ -37,6 +37,7 @@ from ..job import (
     callable_name,
 )
 from ..log import logger
+from ..storage import Storage, _call_thread
 from ..utils import aio, log_exceptions
 
 _T = TypeVar("_T")
@@ -54,6 +55,8 @@ class JobArgs:
     log_config: LogLevel | None = None
     logger_levels: dict[str, int] = field(default_factory=dict)
     env: tuple[tuple[str, str], ...] = ()
+    # The server's storage, where the call's thread resolves.
+    storage: Storage | None = None
 
 
 def job_main(args: JobArgs) -> None:
@@ -121,8 +124,11 @@ class _JobProc:
 
     async def _core_start_job(self, job: StartJob) -> _core.JobRun:
         run = self._start_job(job.info)
+        if self._args.storage is not None:
+            self._job_ctx._thread = await _call_thread(self._args.storage, job.info.job)
+        thread = self._job_ctx._thread
         # The root span must exist before the job task can run.
-        run.start_trace(job)
+        run.start_trace(job, thread.id if thread is not None else None)
         self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
         self._job_task.add_done_callback(lambda _: self._client.stop())
         return run

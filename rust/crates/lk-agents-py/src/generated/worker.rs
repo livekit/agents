@@ -740,13 +740,21 @@ impl JobRun {
         Ok(())
     }
 
-    /// Opens the job's root span for the job the parent handed over, before its run starts.
-    #[pyo3(signature = (job))]
-    fn start_trace(&self, py: Python<'_>, job: Bound<'_, PyAny>) -> PyResult<()> {
+    /// Opens the job's root span for the job the parent handed over, before its run starts;
+    /// `thread` is the call's resolved thread, its `gen_ai.conversation.id`.
+    #[pyo3(signature = (job, thread))]
+    fn start_trace(
+        &self,
+        py: Python<'_>,
+        job: Bound<'_, PyAny>,
+        thread: ::std::option::Option<::std::string::String>,
+    ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
         let job = crate::generated::records::worker_ipc::start_job_from_py(job.as_any())?;
         py.detach(|| {
-            <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::start_trace(&self.0, job)
+            <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::start_trace(
+                &self.0, job, thread,
+            )
         });
         Ok(())
     }
