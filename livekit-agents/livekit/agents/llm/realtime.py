@@ -258,6 +258,11 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     @abstractmethod
     def tools(self) -> ToolContext: ...
 
+    @property
+    def background_work_running(self) -> bool:
+        """Whether background work is running, as the last ``background_work_changed`` said."""
+        return False
+
     @abstractmethod
     async def update_instructions(self, instructions: str) -> None: ...
 

@@ -474,7 +474,7 @@ class GPTLiveSession(
         # a response.create was sent and its response.created has not arrived yet
         self._backend_response_requested = False
         # the backend state last reported as background_work_changed
-        self._backend_busy_reported = False
+        self._background_work_running = False
 
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
@@ -1085,9 +1085,13 @@ class GPTLiveSession(
             or self._backend_response_requested
         )
 
+    @property
+    def background_work_running(self) -> bool:
+        return self._background_work_running
+
     def _update_backend_state(self) -> None:
-        if (busy := self._backend_busy) != self._backend_busy_reported:
-            self._backend_busy_reported = busy
+        if (busy := self._backend_busy) != self._background_work_running:
+            self._background_work_running = busy
             self.emit("background_work_changed", llm.BackgroundWorkChangedEvent(running=busy))
 
     # metrics and errors

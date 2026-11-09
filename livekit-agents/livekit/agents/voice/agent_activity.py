@@ -1291,6 +1291,8 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.on("generation_created", self._on_generation_created)
             self._rt_session.on("background_work_changed", self._on_background_work_changed)
             self._rt_session.on("session_reconnected", self._on_rt_session_reconnected)
+            # a reused session may already be busy, and its change event does not repeat
+            self._hold_for_background_work(self._rt_session.background_work_running)
             self._rt_session.on("input_speech_started", self._on_input_speech_started)
             self._rt_session.on("input_speech_stopped", self._on_input_speech_stopped)
             self._rt_session.on(
@@ -3225,8 +3227,10 @@ class AgentActivity(RecognitionHooks):
         self._hold_for_background_work(ev.running)
 
     def _on_rt_session_reconnected(self, _: llm.RealtimeSessionReconnectedEvent) -> None:
-        # a new connection (or a fallback swap) drops the old one's background work
-        self._hold_for_background_work(False)
+        # a new connection (or a fallback swap) reports its own background work
+        self._hold_for_background_work(
+            self._rt_session.background_work_running if self._rt_session else False
+        )
 
     def _hold_for_background_work(self, running: bool) -> None:
         if running == self._background_work_held:
