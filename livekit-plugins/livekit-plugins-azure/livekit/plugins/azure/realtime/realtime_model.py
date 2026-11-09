@@ -10,21 +10,21 @@ from livekit.agents.llm._realtime import (
     AzureSemanticVad,
     AzureVoice,
     NoiseReductionType,
+    RealtimeSession as RealtimeSession,
     ServerVad,
     Tracing,
+    _OpenAIProtocolModel,
 )
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from livekit.agents.utils import is_given
-from livekit.plugins import openai
 
 API_VERSION = "2026-04-10"
 DEFAULT_MODEL = "gpt-realtime"
 DEFAULT_VOICE = "en-US-AvaMultilingualNeural"
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
-RealtimeSession = openai.realtime.RealtimeSession
 
 
-class RealtimeModel(openai.realtime.RealtimeModel):
+class RealtimeModel(_OpenAIProtocolModel):
     _dialect = "voice_live"
     _provider_label = "livekit.plugins.azure.realtime.realtime_model.RealtimeModel"
 
@@ -112,7 +112,7 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         )
 
     # Voice Live's session carries no truncation or reasoning
-    def update_options(  # type: ignore[override]
+    def update_options(
         self,
         *,
         voice: NotGivenOr[str | AzureVoice] = NOT_GIVEN,
@@ -127,7 +127,7 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
     ) -> None:
         """Change the model's options; every live session sends what changed."""
-        super().update_options(
+        self._update_options(
             voice=voice,
             turn_detection=turn_detection,
             tool_choice=tool_choice,

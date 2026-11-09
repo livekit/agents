@@ -958,9 +958,11 @@ pub trait OpenAIRealtimeModelFacade {
     #[host(getter)]
     fn capabilities(&self) -> RealtimeCapabilities;
 
-    /// Change the model's options; every live session sends what changed.
+    /// Change the model's options; every live session sends what changed. Each provider's model
+    /// declares `update_options` with the options its session carries.
+    #[host(native = update_options)]
     #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
-    fn update_options(
+    fn _update_options(
         &self,
         #[host(kw)] voice: Maybe<Voice>,
         turn_detection: Maybe<Option<TurnDetection>>,

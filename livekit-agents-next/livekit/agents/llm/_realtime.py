@@ -17,7 +17,23 @@ if TYPE_CHECKING:
 RealtimeSession = llm_realtime.RealtimeSession
 
 
-class RealtimeModel(_facades.RealtimeModel):
+class _OpenAIProtocolModel(_facades.RealtimeModel):
+    """A model speaking the OpenAI realtime protocol. Each provider's model subclasses it and
+    declares ``update_options`` with the options its session carries."""
+
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        raise NotImplementedError(
+            f"{type(self).__name__} sessions run in the core; give the model to a VoiceSession"
+        )
+
+    def _core_leg(self) -> _core.OpenAIRealtimeModel:
+        return self._native
+
+    async def aclose(self) -> None:
+        pass
+
+
+class RealtimeModel(_OpenAIProtocolModel):
     _provider_label = "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
 
     @classmethod
@@ -88,16 +104,33 @@ class RealtimeModel(_facades.RealtimeModel):
             max_session_duration=max_session_duration,
         )
 
-    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
-        raise NotImplementedError(
-            f"{type(self).__name__} sessions run in the core; give the model to a VoiceSession"
+    def update_options(
+        self,
+        *,
+        voice: NotGivenOr[Voice] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[NoiseReduction | None] = NOT_GIVEN,
+        max_response_output_tokens: NotGivenOr[int | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
+        truncation: NotGivenOr[Truncation | None] = NOT_GIVEN,
+        reasoning: NotGivenOr[Reasoning | None] = NOT_GIVEN,
+    ) -> None:
+        """Change the model's options; every live session sends what changed."""
+        self._update_options(
+            voice=voice,
+            turn_detection=turn_detection,
+            tool_choice=tool_choice,
+            input_audio_transcription=input_audio_transcription,
+            input_audio_noise_reduction=input_audio_noise_reduction,
+            max_response_output_tokens=max_response_output_tokens,
+            speed=speed,
+            tracing=tracing,
+            truncation=truncation,
+            reasoning=reasoning,
         )
-
-    def _core_leg(self) -> _core.OpenAIRealtimeModel:
-        return self._native
-
-    async def aclose(self) -> None:
-        pass
 
 
 __all__ = ["RealtimeModel", "RealtimeSession"]

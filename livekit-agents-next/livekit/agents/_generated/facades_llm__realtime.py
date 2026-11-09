@@ -140,7 +140,7 @@ class RealtimeModel(BaseRealtimeModel):
         """What its sessions support; options set later may change it."""
         return self._native.capabilities
 
-    def update_options(
+    def _update_options(
         self,
         *,
         voice: NotGivenOr[Voice] = NOT_GIVEN,
@@ -154,7 +154,9 @@ class RealtimeModel(BaseRealtimeModel):
         truncation: NotGivenOr[Truncation | None] = NOT_GIVEN,
         reasoning: NotGivenOr[Reasoning | None] = NOT_GIVEN,
     ) -> None:
-        """Change the model's options; every live session sends what changed."""
+        """Change the model's options; every live session sends what changed. Each provider's model
+        declares `update_options` with the options its session carries.
+        """
         self._native.update_options(
             voice=voice,
             turn_detection=turn_detection,

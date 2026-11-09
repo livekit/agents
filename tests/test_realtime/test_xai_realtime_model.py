@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import Any
 
 import aiohttp
 import pytest
@@ -204,3 +205,12 @@ async def test_realtime_refuses_per_reply_tools_without_mutating_its_toolset(
         assert handle.exception() is not None
         assert "not supported on a realtime model" in str(handle.exception())
         assert received.empty()
+
+
+def test_xai_takes_only_the_options_its_session_carries() -> None:
+    model = realtime.RealtimeModel(api_key="test")
+    model.update_options(voice="Ara", speed=1.1, reasoning=realtime.Reasoning(effort="low"))
+    for unsupported in ("tool_choice", "max_response_output_tokens", "tracing", "truncation"):
+        with pytest.raises(TypeError):
+            options: dict[str, Any] = {unsupported: None}
+            model.update_options(**options)

@@ -6,19 +6,18 @@ from datetime import timedelta
 
 from livekit.agents.llm._realtime import (
     AudioTranscription,
+    RealtimeSession as RealtimeSession,
     Reasoning,
     SemanticVad,
     ServerVad,
+    _OpenAIProtocolModel,
 )
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
-from livekit.plugins import openai
 
 from ..types import GrokRealtimeModels, GrokVoices
 
-RealtimeSession = openai.realtime.RealtimeSession
 
-
-class RealtimeModel(openai.realtime.RealtimeModel):
+class RealtimeModel(_OpenAIProtocolModel):
     _dialect = "xai"
     _provider_label = "livekit.plugins.xai.realtime.realtime_model.RealtimeModel"
 
@@ -65,7 +64,7 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         )
 
     # xAI's session carries no tool choice, output limit, noise reduction, tracing or truncation
-    def update_options(  # type: ignore[override]
+    def update_options(
         self,
         *,
         voice: NotGivenOr[GrokVoices | str] = NOT_GIVEN,
@@ -75,7 +74,7 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         speed: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """Change the model's options; every live session sends what changed."""
-        super().update_options(
+        self._update_options(
             voice=voice,
             turn_detection=turn_detection,
             input_audio_transcription=input_audio_transcription,
