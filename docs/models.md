@@ -270,19 +270,23 @@ and OpenAI SDK objects are refused. An option not given is the provider's defaul
 turns it off. Every entry point takes every option its provider supports; an option a
 provider does not offer is absent from its model rather than ignored. `update_options()` takes
 the same records and reaches every live session; it omits only what cannot change
-mid-session, `max_session_duration`, which is set at construction.
+mid-session: `modalities`, which fixes the session's audio output, and `max_session_duration`,
+both set at construction.
 
-| Option | Records |
-| --- | --- |
-| `voice` | a voice name, `CustomVoice(id=)`, Voice Live's `AzureVoice(name=, locale=)` |
-| `input_audio_transcription` | `AudioTranscription(model=, language=, prompt=)` |
-| `input_audio_noise_reduction` | `"near_field"`, `"far_field"`, Voice Live's `AzureDeepNoiseSuppression()` |
-| `turn_detection` | `ServerVad(...)`, `SemanticVad(eagerness=)`, Voice Live's `AzureSemanticVad(...)` |
-| `tracing` | `Tracing(workflow_name=, group_id=, metadata=)`; nothing set is the server's defaults |
-| `truncation` | `"auto"`, `"disabled"`, `RetentionRatio(retention_ratio=, post_instructions_token_limit=)` |
-| `reasoning` | `Reasoning(effort=)` |
-| `max_response_output_tokens` | a count; `None` is unlimited |
-| `max_session_duration` | a `timedelta` after which the connection is recycled; `None` never |
+| Option | Records | Not offered by |
+| --- | --- | --- |
+| `voice` | a voice name, `CustomVoice(id=)`, Voice Live's `AzureVoice(name=, locale=)` | |
+| `modalities` | `["text"]` or `["audio"]`; constructor only | xAI (always audio and text) |
+| `tool_choice` | a `ToolChoice` | xAI |
+| `input_audio_transcription` | `AudioTranscription(model=, language=, prompt=)` | |
+| `input_audio_noise_reduction` | `"near_field"`, `"far_field"`, Voice Live's `AzureDeepNoiseSuppression()` | xAI |
+| `turn_detection` | `ServerVad(...)`, `SemanticVad(eagerness=)`, Voice Live's `AzureSemanticVad(...)` | |
+| `speed` | a playback speed multiplier | |
+| `tracing` | `Tracing(workflow_name=, group_id=, metadata=)`; nothing set is the server's defaults | xAI |
+| `truncation` | `"auto"`, `"disabled"`, `RetentionRatio(retention_ratio=, post_instructions_token_limit=)` | xAI, Voice Live |
+| `reasoning` | `Reasoning(effort=)` | Voice Live |
+| `max_response_output_tokens` | a count; `None` is unlimited | xAI |
+| `max_session_duration` | a `timedelta` after which the connection is recycled; `None` never; constructor only | |
 
 ```python
 from livekit.plugins import openai
