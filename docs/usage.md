@@ -247,8 +247,9 @@ a new accounting scope; saved routing state does not carry old consumption into
 the new result.
 
 A voice session includes its locally owned LLM/realtime, STT, TTS, EOT, and
-interruption models, across agent changes and temporary voice tasks. A voice task
-does not start another independently additive session total. VAD timings, avatar
+interruption models, across agent changes and temporary voice tasks, and the
+work of local agents it called as tools, counted once. A voice task does not
+start another independently additive session total. VAD timings, avatar
 playback latency, and turn latency are performance metrics, not model usage.
 
 `ctx.usage` reads the latest immutable snapshot of the owning scope. It never
