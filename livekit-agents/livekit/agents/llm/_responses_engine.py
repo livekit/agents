@@ -593,7 +593,7 @@ class ResponsesLLMStream(llm.LLMStream):
         """Emit a known phase, suppressing repeats for this item in early-phase mode."""
         if item.phase is None:
             return None
-        extra = {"openai": {"phase": item.phase}}
+        extra: dict[str, dict[str, str]] = {"openai": {"phase": item.phase}}
         if self._emit_phase_on_item_start:
             if self._message_phases.get(item.id) == item.phase:
                 return None
