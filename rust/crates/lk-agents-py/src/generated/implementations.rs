@@ -88,6 +88,7 @@ impl super::Implementations for Selected {
     type SessionReportFunctions = ::lk_agents_runtime::net::export::session_report::ReportFiles;
     type Tagger = ::lk_agents_runtime::net::export::session_report::tagger::Tagger;
     type TextSessionRunner = ::lk_agents_runtime::text_session::Runner;
+    type LocalInteraction = ::lk_agents_runtime::agent_tool::LocalInteraction;
     type TokenizeFunctions = ::lk_agents_runtime::cores::SpeechTokenizer;
     type HostTokenization = ::lk_agents_runtime::cores::HostTokenizer;
     type WordTokenizer = ::lk_agents_runtime::cores::BasicWordTokenizer;

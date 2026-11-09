@@ -235,9 +235,10 @@ it means the expected usage measurements for the operation have arrived.
 
 ## Scope and delegation
 
-A direct `agent.run()` result describes that invocation's own work. A nested
-direct invocation has its own usage. Calling a backend through an agent tool does
-not make its tokens part of the frontend model's usage.
+A direct `agent.run()` result describes that invocation's own work, including
+the local agents it called as tools (`agent.as_tool()`), counted once. A nested
+direct invocation a tool body awaits has its own usage. Calling a remote backend
+does not make its tokens part of the frontend model's usage.
 
 A `TextSession` turn owns the local invocations it coordinates, so
 `turn.result.usage` includes work across those frames exactly once. Its history

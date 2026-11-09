@@ -319,3 +319,62 @@ pub trait TextSessionRunner: Send + Sync + Sized + 'static {
     fn progress(&self, invocation_id: &str, operation: u64, message: String)
     -> Result<(), Invalid>;
 }
+
+/// One call of an agent tool outside a TextSession: the child agent runs in process as a delegate
+/// of the call (tools.md "Agents as tools"). Its decisions are `lk_agents_core::agent_tool`'s.
+#[crate::host(class(name = "_core_LocalInteraction"))]
+pub trait LocalInteraction: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
+    /// `child` runs for `function_call`, the parent's call of `tool`; `depth` counts the agent
+    /// tools it runs under, itself included.
+    #[host(new)]
+    fn new(
+        env: &Self::Env,
+        child: TextSessionAgent,
+        tool: LocalAgentTool,
+        function_call: ChatItem,
+        depth: usize,
+    ) -> Result<Self, Invalid>;
+
+    /// Run the child on `arguments` from the parent's `history`, under the caller's span: its
+    /// tools' progress reaches `host.progress`; on a call (`live`) the request is announced
+    /// through `host.delegated` and each question it asks is answered through `host.ask`, the
+    /// answer resuming it. Returns the call's outcome; off a call, the child's question.
+    #[host(await)]
+    #[allow(clippy::too_many_arguments, reason = "Mirrors the host call's arguments")]
+    async fn run(
+        &self,
+        env: &Self::Env,
+        host: Arc<dyn crate::a2a::remote::DelegationHost>,
+        arguments: Value,
+        history: Vec<ChatItem>,
+        live: bool,
+        conn_options: ApiConnectOptions,
+        #[host(context)] context: crate::invoke::CallContext,
+        cx: crate::telemetry::Cx,
+    ) -> Result<crate::llm::tool_executor::ToolOutcome, Invalid>;
+
+    /// The tool call was cancelled: the running child is cancelled; `settled()` waits for it.
+    #[host(call)]
+    fn cancelled(&self);
+
+    /// After `cancelled()`: the child's settlement, bounded by the teardown limit.
+    #[host(await)]
+    async fn settled(&self);
+
+    /// The call's retained state: the child's own history while it waits on the person.
+    #[host(getter)]
+    fn extra(&self) -> serde_json::Map<String, Value>;
+
+    /// What the child consumed across its invocations, the running one included.
+    #[host(getter)]
+    fn usage(&self) -> crate::usage::Usage;
+
+    /// `ctx.update(message)` from a tool body of the child's invocation `invocation_id`.
+    #[host(call)]
+    fn progress(&self, invocation_id: &str, operation: u64, message: String)
+    -> Result<(), Invalid>;
+}

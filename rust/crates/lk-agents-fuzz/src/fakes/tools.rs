@@ -240,7 +240,7 @@ impl AgentCallbacks for FakeTools {
                 lk_agents_abi::HostRef::new(completion_value(&call.call_id), &refs)
             });
             let report = ToolReport { outcome, transition };
-            Ok(lk_agents_abi::agent::ToolCompletion { report, extra: call.extra })
+            Ok(lk_agents_abi::agent::ToolCompletion { report, extra: call.extra, usage: None })
         })
     }
 

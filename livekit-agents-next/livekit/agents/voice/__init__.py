@@ -312,7 +312,11 @@ class Agent(Generic[Context_T, Output_T]):
         chat_history: Literal["fresh", "fork"] = "fresh",
         merge_chat_history: bool = False,
     ) -> llm.FunctionTool[..., Awaitable[Output_T]]:
-        """This agent as a tool running a typed child conversation inside a TextSession."""
+        """This agent as a tool: its accepted output is the call's result.
+
+        In a ``TextSession`` the child is a frame that persists across requests; elsewhere it runs
+        in process as the call's delegate. It shares the caller's context.
+        """
         return _LocalAgentTool(
             self,
             tool_name=tool_name,
@@ -623,8 +627,10 @@ class _LocalAgentTool(FunctionTool[..., Awaitable[object]]):
             merge_chat_history=merge_chat_history,
         )
 
-        async def invoke(**arguments: object) -> object:
-            raise RuntimeError("a local agent tool must run inside a TextSession")
+        async def invoke(ctx: RunContext[Any], **arguments: object) -> object:
+            from .agent_run import run_agent_tool
+
+            return await run_agent_tool(self, ctx, arguments)
 
         super().__init__(
             invoke,
@@ -636,6 +642,11 @@ class _LocalAgentTool(FunctionTool[..., Awaitable[object]]):
                 read_back=needs_approval if callable(needs_approval) else None,
             ),
         )
+
+    @property
+    def endpoint(self) -> str:
+        """The child's identity as an expert on a voice session."""
+        return f"agent:{self.agent.name}"
 
     def validate(self, arguments: dict[str, Any]) -> dict[str, Any]:
         if self.parameters is None:

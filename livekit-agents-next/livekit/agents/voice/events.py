@@ -78,6 +78,8 @@ class RunContext(_facades.RunContext[Context_T]):
         self._initial_step_idx = steps - 1 if steps else None
         # on a call: the person's reply to the delegated expert's question
         self._expert_answer: asyncio.Future[str] | None = None
+        # what an agent tool's child, run in process for this call, consumed
+        self._delegate_usage: Usage | None = None
 
     @property
     def live_session(self) -> VoiceSession[Context_T] | None:

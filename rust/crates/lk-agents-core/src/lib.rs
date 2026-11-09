@@ -4,6 +4,7 @@
 pub mod a2a;
 pub mod agent;
 pub mod agent_run;
+pub mod agent_tool;
 pub mod approval;
 pub mod assertions;
 pub mod effects;

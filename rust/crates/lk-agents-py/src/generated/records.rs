@@ -21665,6 +21665,13 @@ pub mod tool_report {
                     )),
                 }
             })?,
+            usage: crate::py_values::attr_with(obj, "ToolCompletion", "usage", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::usage::usage_from_py(v)).map(Some)
+                }
+            })?,
         })
     }
 

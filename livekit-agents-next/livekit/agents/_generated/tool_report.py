@@ -20,13 +20,18 @@ from livekit.agents._generated.tool_errors import ModelRetry, StopResponse, Tool
 from livekit.agents._generated.tool_outcomes import Failed, Rejected, ToolResult, Working
 from livekit.agents.llm.tool_context import Completed
 
+from .usage import Usage
+
 
 @dataclass
 class ToolCompletion:
-    """What a tool's run reports: its outcome, and the call's `extra` as the body left it."""
+    """What a tool's run reports: its outcome, the call's `extra` as the body left it, and what a
+    delegate it ran in process (an agent tool) consumed, which the caller's usage includes.
+    """
 
     report: ToolReport
     extra: dict[str, JsonValue]
+    usage: Usage | None = None
 
 
 @dataclass(kw_only=True, slots=True)

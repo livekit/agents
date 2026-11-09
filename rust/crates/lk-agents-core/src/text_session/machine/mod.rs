@@ -2,15 +2,14 @@ use super::effects::TextSessionEffect;
 use super::routing;
 use crate::agent_run::{self, AgentRun, CallId, Opening, OutputVerdict, RunInput};
 use crate::approval;
-use crate::llm::history::ChatContextExt;
 use crate::usage::Ledger;
+use lk_agents_abi::Role;
 use lk_agents_abi::agent::ArgumentIdentity;
 use lk_agents_abi::agent::run::{
     Output, RunError, RunOutcome, RunResult, StreamEvent, ValidationId,
 };
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::usage::Usage;
-use lk_agents_abi::{ChatContext, CopyOptions, Role};
 use lk_agents_abi::{ChatItem, ChatMessage, FunctionCall, Ts, WallAnchor};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -801,51 +800,6 @@ fn validated_output(invocation: &Invocation, outcome: &RunOutcome) -> Option<Val
         }
         RunOutcome::Completed { output: Output::Text(text) } => Some(Value::String(text.clone())),
         _ => None,
-    }
-}
-
-fn initial(history: &[ChatItem], mode: ChatHistory) -> Vec<ChatItem> {
-    match mode {
-        ChatHistory::Fresh => Vec::new(),
-        ChatHistory::Fork => {
-            let calls: std::collections::BTreeSet<_> = history
-                .iter()
-                .filter_map(|item| match item {
-                    ChatItem::FunctionCall(call) => Some(call.call_id.as_str()),
-                    _ => None,
-                })
-                .collect();
-            let answered: std::collections::BTreeSet<_> = history
-                .iter()
-                .filter_map(|item| match item {
-                    ChatItem::FunctionCallOutput(output)
-                        if calls.contains(output.call_id.as_str()) =>
-                    {
-                        Some(output.call_id.as_str())
-                    }
-                    _ => None,
-                })
-                .collect();
-            let complete = history
-                .iter()
-                .filter(|item| match item {
-                    ChatItem::FunctionCall(call) => answered.contains(call.call_id.as_str()),
-                    ChatItem::FunctionCallOutput(output) => {
-                        answered.contains(output.call_id.as_str())
-                    }
-                    _ => true,
-                })
-                .cloned()
-                .collect();
-            ChatContext::new(complete)
-                .copy(&CopyOptions {
-                    exclude_instructions: true,
-                    exclude_handoff: true,
-                    exclude_config_update: true,
-                    ..Default::default()
-                })
-                .items
-        }
     }
 }
 

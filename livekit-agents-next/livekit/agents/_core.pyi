@@ -178,6 +178,7 @@ from ._generated._core_telemetry import (
 from ._generated._core_text_session import (
     TextSessionRunner as TextSessionRunner,
     TextSessionUpdates as TextSessionUpdates,
+    _core_LocalInteraction as _core_LocalInteraction,
     _core_persist_text_session_state as _core_persist_text_session_state,
     _core_restore_text_session_state as _core_restore_text_session_state,
 )

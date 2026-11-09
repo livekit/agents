@@ -538,7 +538,7 @@ fn fork_preserves_complete_exchanges_and_merge_requires_delivery_receipts() {
     incomplete.call_id = "unresolved".into();
     let mut parent_history = history.clone();
     parent_history.push(ChatItem::FunctionCall(incomplete));
-    assert_eq!(initial(&parent_history, ChatHistory::Fork), history);
+    assert_eq!(crate::agent_tool::opening(&parent_history, ChatHistory::Fork), history);
     driver.reply("", &[("book", json!({"nights":2}))]);
     driver.prepare(json!({"nights":2}));
     let child_invocation = driver.invocation();

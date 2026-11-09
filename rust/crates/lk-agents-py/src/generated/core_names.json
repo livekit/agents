@@ -115,6 +115,7 @@
     "_core_Credentials",
     "_core_HandlerTurn",
     "_core_JudgeRunner",
+    "_core_LocalInteraction",
     "_core_LoopWatch",
     "_core_McpToolsetLifecycle",
     "_core_NodeCalls",

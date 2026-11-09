@@ -271,6 +271,7 @@ impl AgentCallbacks for FakeHost {
                     return Ok(lk_agents_abi::agent::ToolCompletion {
                         report: ToolOutcome::Cancelled.into(),
                         extra: Default::default(),
+                        usage: None,
                     });
                 }
                 Body::Stuck => std::future::pending::<()>().await,
@@ -290,6 +291,7 @@ impl AgentCallbacks for FakeHost {
                 extra: [("application_receipt".into(), json!("confirmed-appointment"))]
                     .into_iter()
                     .collect(),
+                usage: None,
             })
         })
     }

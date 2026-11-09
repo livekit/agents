@@ -8,9 +8,9 @@ import inspect
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, get_type_hints
+from typing import TYPE_CHECKING, Any, Generic, cast, get_type_hints
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from .. import _core, llm, telemetry, utils
@@ -83,7 +83,7 @@ from ..llm.utils import (
     validated_arguments,
 )
 from ..log import logger
-from ..types import APIConnectOptions
+from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from . import _BindingContextVar, _VoiceBinding
 from .events import Context_T, RunContext
 from .io import SpeechHandle
@@ -93,7 +93,7 @@ if TYPE_CHECKING:
     from ..llm.tool_context import ToolHandlingOptions
     from ..storage import Thread
     from ..storage.context import ContextStore
-    from . import Agent, AgentRetries
+    from . import Agent, AgentRetries, _LocalAgentTool
     from .agent_session import VoiceSession
 
 
@@ -165,6 +165,8 @@ class _TextRun(Generic[Context_T]):
         self._history = history
         self.execution_id: str | None = None
         self.frame_id: FrameId | None = None
+        # the agent tools this run is a delegate of
+        self.depth = 0
 
     @property
     def usage(self) -> Usage:
@@ -296,6 +298,7 @@ def settled_result(finished: RunFinished, hooks: RunHooks | None) -> RunResult[A
 def tool_infos(tools: ToolContext) -> list[FunctionToolInfo]:
     from .._bindings import tool_specs
     from ..a2a import _ExpertTool
+    from . import _LocalAgentTool
 
     specs = {spec["name"]: spec for spec in tool_specs(list(tools.function_tools.values()))}
     infos = []
@@ -311,7 +314,7 @@ def tool_infos(tools: ToolContext) -> list[FunctionToolInfo]:
                 on_duplicate=tool.info.on_duplicate,
                 duplicate_scope=tool.info.duplicate_scope,
                 retries=tool.info.retries,
-                remote=tool.endpoint if isinstance(tool, _ExpertTool) else None,
+                remote=tool.endpoint if isinstance(tool, (_ExpertTool, _LocalAgentTool)) else None,
             )
         )
     return infos
@@ -351,7 +354,7 @@ def prepare_arguments(
     except (ValidationError, ValueError, TypeError) as e:
         raise ToolArgumentError(f"Error parsing arguments for `{name}`: {e}") from e
     args, kwargs = (
-        ((), fields)
+        ((ctx,), fields)
         if isinstance(tool, _LocalAgentTool)
         else bind_function_arguments(tool, fields, ctx)
     )
@@ -447,10 +450,9 @@ class AgentCallbacks:
                     output = await output
             except asyncio.CancelledError:
                 report = ToolReport(outcome=ToolOutcomeCancelled())
-                return ToolCompletion(report=report, extra=prepared.ctx.function_call.extra)
+                return _completion(prepared.ctx, report)
             except Exception as e:
-                report = _classified(prepared.ctx.function_call, None, e)
-                return ToolCompletion(report=report, extra=prepared.ctx.function_call.extra)
+                return _completion(prepared.ctx, _classified(prepared.ctx.function_call, None, e))
             finally:
                 self._bodies.pop(key, None)
             report = _classified(prepared.ctx.function_call, output, None)
@@ -458,7 +460,7 @@ class AgentCallbacks:
                 report = dataclasses.replace(report, transition=output.value)
             elif isinstance(output, Failed):
                 report = dataclasses.replace(report, transition=output)
-            return ToolCompletion(report=report, extra=prepared.ctx.function_call.extra)
+            return _completion(prepared.ctx, report)
 
     async def validate_tool_completion(
         self, invocation: Invocation, prepared: _Prepared, report: ToolReport
@@ -668,6 +670,72 @@ def _template_tools(agent: Agent[Any, Any], binding: object) -> list[Tool | Tool
     if isinstance(binding, _TextRun):
         return list(binding.agent_tools)
     return list(agent.tools)
+
+
+def _completion(ctx: RunContext[Any], report: ToolReport) -> ToolCompletion:
+    return ToolCompletion(report=report, extra=ctx.function_call.extra, usage=ctx._delegate_usage)
+
+
+async def run_agent_tool(
+    tool: _LocalAgentTool, ctx: RunContext[Any], arguments: dict[str, Any]
+) -> ToolReport:
+    """An agent tool's call outside a TextSession: its child runs in process as the call's
+    delegate, with the caller's context, thread and store."""
+    from .._generated.text_session import TextSessionAgent
+    from ..a2a import _Delegation
+
+    agent = tool.agent
+    parent, session = ctx._run, ctx._session
+    if parent is not None:
+        history = list(parent.chat_ctx.items)
+        thread = parent.thread
+        store = parent.hooks.store if parent.hooks is not None else None
+        store = store or parent._store
+        conn_options = parent.llm_conn_options
+    else:
+        session = ctx._call()
+        history, thread, store = list(session.history.items), session.thread, session._store
+        conn_options = DEFAULT_API_CONNECT_OPTIONS
+    run = _TextRun(agent, history=[], context=ctx.context, hooks=None, conn_options=conn_options)
+    run.depth = (parent.depth if parent is not None else 0) + 1
+    resources = run_resources(agent, None, [run])
+    try:
+        await resources.open()
+        run.bind_resources(resources, thread=thread, store=store)
+    except BaseException:
+        await resources.rollback()
+        raise
+    try:
+        run.tools = ToolContext(run.agent_tools)
+        captured = contextvars.copy_context()
+        captured.run(_BindingContextVar.set, run)
+        child = TextSessionAgent(
+            definition=agent._definition(run.tools),
+            llm=run.llm,
+            host=agent._host,
+            output_type_explicit=agent._output_type_explicit,
+            agent_tools={},
+            host_context=(asyncio.get_running_loop(), captured),
+            tools_host=run.tools.flatten(),
+        )
+        interaction = _core._core_LocalInteraction(
+            child, tool.routing, ctx.function_call, run.depth
+        )
+        run.runner = interaction
+        try:
+            outcome = await interaction.run(
+                _Delegation(ctx), arguments, history, session is not None, conn_options
+            )
+        except asyncio.CancelledError:
+            interaction.cancelled()
+            await interaction.settled()
+            raise
+        finally:
+            ctx.function_call.extra.update(cast("dict[str, JsonValue]", interaction.extra))
+            ctx._delegate_usage = interaction.usage
+    finally:
+        await resources.aclose()
+    return ToolReport(outcome=outcome)
 
 
 def _classified(call: FunctionCall, output: Any, exc: BaseException | None) -> ToolReport:

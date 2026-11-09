@@ -147,6 +147,10 @@ pub enum AgentRunEvent {
         call: CallId,
         outcome: ToolOutcome,
     },
+    /// A delegate the call ran in process (an agent tool) consumed `usage`; the run counts it.
+    DelegateUsage {
+        usage: lk_agents_abi::usage::Usage,
+    },
     ToolLaunchFailed {
         call: CallId,
         error: HostError,
@@ -475,6 +479,7 @@ impl AgentRun {
                     a.calls.update_extra(call, extra);
                 }
             }
+            AgentRunEvent::DelegateUsage { usage } => self.ledger.add(&usage),
             AgentRunEvent::ToolSettled { call, outcome } => {
                 self.tool_settled(call, outcome, now, &mut fx)
             }

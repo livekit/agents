@@ -14,12 +14,15 @@ use crate::utils::host_ref::HostRef;
 use crate::{FunctionCall, ToolSpec};
 use std::sync::Arc;
 
-/// What a tool's run reports: its outcome, and the call's `extra` as the body left it.
+/// What a tool's run reports: its outcome, the call's `extra` as the body left it, and what a
+/// delegate it ran in process (an agent tool) consumed, which the caller's usage includes.
 #[crate::host(record(module = "tool_report", dataclass, extract))]
 #[derive(Debug, Clone)]
 pub struct ToolCompletion {
     pub report: ToolReport,
     pub extra: Map<String, Value>,
+    #[host(default = None)]
+    pub usage: Option<crate::usage::Usage>,
 }
 
 /// A definition no invocation can run.
@@ -423,8 +426,9 @@ pub struct FunctionToolInfo {
     /// `retries=` on the tool: its own budget in place of the run's `Retries.tools`.
     #[host(default = None)]
     pub retries: Option<u32>,
-    /// A `RemoteAgent(...).as_tool()`'s endpoint: with the tool's name, its configured identity
-    /// as an expert on a voice session.
+    /// A delegate's identity, a `RemoteAgent(...).as_tool()`'s endpoint or an `agent.as_tool()`'s
+    /// `agent:<name>`: with the tool's name, its configured identity as an expert on a voice
+    /// session.
     #[host(default = None)]
     pub remote: Option<String>,
 }

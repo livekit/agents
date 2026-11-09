@@ -199,6 +199,178 @@ impl TextSessionUpdates {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
+type CoreLocalInteractionImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::LocalInteraction;
+
+fn _extract_local_interaction_new_depth(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<LocalInteractionNewDepthInput> {
+    crate::py_values::number_from_py::<usize>(obj.as_any(), "depth")
+}
+type LocalInteractionNewDepthInput = usize;
+
+fn _extract_local_interaction_progress_operation(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<LocalInteractionProgressOperationInput> {
+    crate::py_values::number_from_py::<u64>(obj.as_any(), "operation")
+}
+type LocalInteractionProgressOperationInput = u64;
+
+/// One call of an agent tool outside a TextSession: the child agent runs in process as a delegate
+/// of the call (tools.md "Agents as tools"). Its decisions are `lk_agents_core::agent_tool`'s.
+#[pyclass(frozen, name = "_core_LocalInteraction", module = "livekit.agents._core")]
+pub struct CoreLocalInteraction(pub(crate) ::std::sync::Arc<CoreLocalInteractionImpl>);
+
+#[pymethods]
+impl CoreLocalInteraction {
+    /// `child` runs for `function_call`, the parent's call of `tool`; `depth` counts the agent
+    /// tools it runs under, itself included.
+    #[new]
+    #[pyo3(signature = (child, tool, function_call, depth))]
+    fn new(
+        py: Python<'_>,
+        child: Bound<'_, PyAny>,
+        tool: Bound<'_, PyAny>,
+        function_call: Bound<'_, PyAny>,
+        #[pyo3(from_py_with = _extract_local_interaction_new_depth)]
+        depth: LocalInteractionNewDepthInput,
+    ) -> PyResult<CoreLocalInteraction> {
+        crate::py_calls::check_pid()?;
+        let env = crate::process::env();
+        let child =
+            crate::generated::records::text_session::text_session_agent_from_py(child.as_any())?;
+        let tool =
+            crate::generated::records::text_session::local_agent_tool_from_py(tool.as_any())?;
+        let function_call =
+            crate::generated::records::chat_items::chat_item_from_py(function_call.as_any())?;
+        let out = py
+            .detach(|| {
+                <CoreLocalInteractionImpl as ::lk_agents_abi::text_session::LocalInteraction>::new(
+                    &env,
+                    child,
+                    tool,
+                    function_call,
+                    depth,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+            })?;
+        ::pyo3::PyResult::Ok(CoreLocalInteraction(::std::sync::Arc::new(out)))
+    }
+
+    /// Run the child on `arguments` from the parent's `history`, under the caller's span: its
+    /// tools' progress reaches `host.progress`; on a call (`live`) the request is announced
+    /// through `host.delegated` and each question it asks is answered through `host.ask`, the
+    /// answer resuming it. Returns the call's outcome; off a call, the child's question.
+    #[pyo3(signature = (host, arguments, history, live, conn_options))]
+    fn run<'py>(
+        &self,
+        py: Python<'py>,
+        host: Bound<'_, PyAny>,
+        arguments: Bound<'_, PyAny>,
+        history: Bound<'_, PyAny>,
+        live: bool,
+        conn_options: Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let env = crate::process::env();
+        let host = crate::generated::a2a::DelegationHostProxy::from_host(host.as_any())?;
+        let arguments = crate::py_values::value_from_py(arguments.as_any(), "arguments")?;
+        let history = history.try_iter().and_then(|items| {
+            items
+                .map(|item| {
+                    let item = item?;
+                    crate::generated::records::chat_items::chat_item_from_py(item.as_any())
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })?;
+        let conn_options =
+            crate::generated::records::connect::api_connect_options_from_py(conn_options.as_any())?;
+        let context = crate::py_calls::entered();
+        let cx = crate::py_calls::entry_cx();
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let out = <CoreLocalInteractionImpl as ::lk_agents_abi::text_session::LocalInteraction>::run(&this, &env, host, arguments, history, live, conn_options, context, cx)
+                .await.map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    crate::generated::records::tool_report::tool_outcome_to_py(py, out)?,
+                    py,
+                )
+            })
+        })
+    }
+
+    /// The tool call was cancelled: the running child is cancelled; `settled()` waits for it.
+    fn cancelled(&self, py: Python<'_>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| <CoreLocalInteractionImpl as ::lk_agents_abi::text_session::LocalInteraction>::cancelled(&self.0));
+        Ok(())
+    }
+
+    /// After `cancelled()`: the child's settlement, bounded by the teardown limit.
+    fn settled<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <CoreLocalInteractionImpl as ::lk_agents_abi::text_session::LocalInteraction>::settled(&this, )
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+
+    /// The call's retained state: the child's own history while it waits on the person.
+    #[getter]
+    fn extra<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <CoreLocalInteractionImpl as ::lk_agents_abi::text_session::LocalInteraction>::extra(
+                &self.0,
+            )
+        });
+        ::pyo3::PyResult::Ok(crate::py_values::extra_to_py(py, &out)?.into_any())
+    }
+
+    /// What the child consumed across its invocations, the running one included.
+    #[getter]
+    fn usage<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <CoreLocalInteractionImpl as ::lk_agents_abi::text_session::LocalInteraction>::usage(
+                &self.0,
+            )
+        });
+        crate::generated::records::usage::usage_to_py(py, out)
+    }
+
+    /// `ctx.update(message)` from a tool body of the child's invocation `invocation_id`.
+    #[pyo3(signature = (invocation_id, operation, message))]
+    fn progress(
+        &self,
+        py: Python<'_>,
+        invocation_id: ::std::string::String,
+        #[pyo3(from_py_with = _extract_local_interaction_progress_operation)]
+        operation: LocalInteractionProgressOperationInput,
+        message: ::std::string::String,
+    ) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <CoreLocalInteractionImpl as ::lk_agents_abi::text_session::LocalInteraction>::progress(
+                &self.0,
+                &invocation_id,
+                operation,
+                message,
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+            <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+        })?;
+        Ok(())
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/text_session.rs.
 
 /// `TextSessionState.to_json()`.
 #[pyfunction]

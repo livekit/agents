@@ -727,7 +727,7 @@ It is not a stateless workload API or a backend persistence mechanism. See
 | Pattern | Execution | History |
 | --- | --- | --- |
 | Direct delegation | A tool explicitly awaits another agent's `run()` | The caller selects the expert's input and history; its result becomes tool output |
-| Backend agent as a tool | A `TextSession` manages a child across requests and delivers its typed output to the parent tool call | Each child has its own frame and history |
+| Local agent as a tool | `agent.as_tool()`: in a `TextSession` a child frame across requests, elsewhere an in-process delegate of the call; its typed output resolves the parent tool call | The child keeps its own history and shares the parent's context |
 | Remote agent as a tool | `RemoteAgent(url).as_tool()` connects to another endpoint | The remote service owns its conversation; `VoiceSession` or the text session retains continuation references |
 
 Detailed delegation contracts and examples live in

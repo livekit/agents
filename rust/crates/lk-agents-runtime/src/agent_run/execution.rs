@@ -495,9 +495,12 @@ impl ToolRun {
             Err(error) => telemetry::end(span, error),
         }
         let event = match ran {
-            Ok(lk_agents_abi::agent::ToolCompletion { report, extra }) => {
+            Ok(lk_agents_abi::agent::ToolCompletion { report, extra, usage }) => {
                 let _ =
                     events.send(Report::Core(AgentRunEvent::ToolCallUpdated { call, extra })).await;
+                if let Some(usage) = usage {
+                    let _ = events.send(Report::Core(AgentRunEvent::DelegateUsage { usage })).await;
+                }
                 AgentRunEvent::ToolSettled { call, outcome: report.outcome }
             }
             Err(error) => AgentRunEvent::ToolLaunchFailed { call, error },

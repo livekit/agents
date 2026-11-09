@@ -302,7 +302,7 @@ mod proxies {
                 prepared.identity,
                 lk_agents_abi::agent::ArgumentIdentity::Json(serde_json::json!({"city": true}))
             );
-            let lk_agents_abi::agent::ToolCompletion { report, extra } = proxy.run_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, &prepared.prepared).await.unwrap();
+            let lk_agents_abi::agent::ToolCompletion { report, extra, .. } = proxy.run_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, &prepared.prepared).await.unwrap();
             assert!(matches!(
                 report.outcome,
                 lk_agents_abi::llm::tool_executor::ToolOutcome::Value { text, .. } if text == "answered"

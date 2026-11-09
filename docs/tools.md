@@ -70,9 +70,10 @@ methods) and `MCPToolOptions(retries=)` take the same budget. See
 
 ## Agents as tools
 
-Tools can delegate to another agent directly, through a backend `TextSession`,
-or through a frontend remote tool on `VoiceSession`. The execution host owns
-the pending interaction; the tool definition controls which agents may call it.
+Tools can delegate to another agent directly, through a local agent tool
+(`agent.as_tool()`), or through a remote one (`RemoteAgent(...).as_tool()`).
+The execution host owns the pending interaction; the tool definition controls
+which agents may call it.
 
 ## Direct delegation
 
@@ -108,14 +109,29 @@ before accessing the service. The agent's run loop enforces no application
 limit on reads, cost, or external operations. Use
 explicit persistence when a budget must span human turns.
 
-## Backend agents as tools
+## Local agents as tools
 
 A local specialist declares `output_type` and is attached through `tools=`
-using `.as_tool(...)`. The parent supplies validated input; accepting the
-child's output resolves its originating call. A `TextSession` owns backend
-frames, private histories, pending input, and parent-child continuation across
-requests. See [text-session execution](text-session.md#calling-an-agent-as-a-tool)
-and its [complete example](text-session.md#running-a-text-conversation).
+using `.as_tool(...)`. The parent supplies validated input; the child's accepted
+output, validated by its `output_type` and output validators, resolves its
+originating call. The child shares the parent's application context, thread and
+store, and keeps its own history: the parent's model reads only the result.
+
+The tool works wherever its parent runs:
+
+| Parent | The child | A question the child asks |
+| --- | --- | --- |
+| `TextSession` | a frame of the session, with its own history, persisted in the returned state | the turn ends on it; the next request resumes the child frame. See [text-session execution](text-session.md#calling-an-agent-as-a-tool) |
+| `agent.run()` | a delegate of the call, run in process | ends the call as `InputRequired`, passed up as asked; the turn ends `input_required`. The child's own history is kept on the call's `extra`, and the tool's next call in the supplied history resumes it |
+| `VoiceSession` | a delegate of the call, run in process, as a remote expert is: the request is announced and the conversation goes on while it works | put to the person, verbatim when the child asked verbatim; their reply resumes the same child, and the call settles when the child does |
+
+A child's own approvals work on all three: its read-back passes up verbatim and
+the answer reaches the child that asked. Cancelling the tool call cancels the
+child, which settles before the cancellation propagates. Its model usage counts
+once in the parent's (`agent.run()`, `TextSession`), its `agent_run` span nests
+under the call's `function_tool` span, and its tools' `ctx.update()` progress
+reaches the parent call's. Agent tools nest eight deep outside a `TextSession`
+(its `max_depth=` inside one); a deeper call is a tool error.
 
 ## Remote agents as tools
 
@@ -229,7 +245,7 @@ See [A2A](protocol/a2a.md) for the wire protocol and authentication rules.
 | `parameters` | Dataclass or Pydantic model defining the parent's tool arguments |
 | `needs_approval` | Requires human approval before starting the requested child invocation |
 | `chat_history` | `"fresh"` starts from the tool input; `"fork"` also copies the parent history |
-| `merge_chat_history` | `True` returns the child's visible dialogue alongside its typed result; `False` returns only the result |
+| `merge_chat_history` | In a `TextSession`, `True` returns the child's visible dialogue alongside its typed result; `False` returns only the result. Elsewhere the child has no dialogue of its own to return |
 
 The framework validates the parent-provided arguments against `parameters`
 before starting the child. These arguments become the child's task input.

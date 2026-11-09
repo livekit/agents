@@ -135,6 +135,7 @@ pub trait Implementations: 'static {
             Stream = Self::RunStream,
             Resources = Self::RunResources,
         >;
+    type LocalInteraction: ::lk_agents_abi::text_session::LocalInteraction;
     type TokenizeFunctions: ::lk_agents_abi::tokenize::bindings::TokenizeFunctions;
     type HostTokenization: ::lk_agents_abi::tokenize::bindings::HostTokenization;
     type WordTokenizer: ::lk_agents_abi::tokenize::bindings::WordTokenizer;
@@ -382,6 +383,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<telemetry::Tagger>()?;
     m.add_class::<text_session::TextSessionRunner>()?;
     m.add_class::<text_session::TextSessionUpdates>()?;
+    m.add_class::<text_session::CoreLocalInteraction>()?;
     m.add_function(wrap_pyfunction!(tokenize::split_words, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize::replace_words, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize::tokenize_paragraphs, m)?)?;

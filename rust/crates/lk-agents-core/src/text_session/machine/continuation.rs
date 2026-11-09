@@ -1,9 +1,9 @@
 use super::{
     ChildCallStatus, PendingChildCall, RoutingError, SessionFrame, TextSession, TextSessionEffect,
-    TextSessionError, TextSessionTurn, initial, transfer,
+    TextSessionError, TextSessionTurn, transfer,
 };
 use lk_agents_abi::agent::run::{RunOutcome, RunResult};
-use lk_agents_abi::{ChatItem, ChatMessage, FunctionCallOutput, Role, Ts};
+use lk_agents_abi::{ChatItem, FunctionCallOutput, Ts};
 use serde_json::Value;
 
 // A parent is invoked only after every child call in its checkpoint has a result.
@@ -42,7 +42,7 @@ impl TextSession {
             }
             let parent = &self.state.frames[&parent_id];
             let tool = &self.config.agents[&parent.agent_name].agent_tools[&pending.tool_name];
-            let history = initial(&parent.history, tool.chat_history);
+            let history = crate::agent_tool::opening(&parent.history, tool.chat_history);
             let merge_chat_history = tool.merge_chat_history;
             let frame_id = super::FrameId { value: self.mint("frame") };
             let task_id = self.mint("task");
@@ -51,12 +51,8 @@ impl TextSession {
                 .map(|i| i.id().to_owned())
                 .collect::<std::collections::BTreeSet<_>>();
             starting_history_ids.insert(task_id.clone());
-            let task = ChatMessage::text(
-                task_id,
-                Role::User,
-                pending.validated_arguments.to_string(),
-                self.stamp(now),
-            );
+            let task =
+                crate::agent_tool::task(task_id, &pending.validated_arguments, self.stamp(now));
             let frame = SessionFrame {
                 id: frame_id.clone(),
                 agent_name: pending.agent_name.clone(),

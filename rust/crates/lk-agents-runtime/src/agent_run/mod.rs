@@ -49,6 +49,8 @@ pub struct ActiveRun {
     cancel: CancellationToken,
     progress: Progress,
     usage: watch::Receiver<Usage>,
+    /// Each accepted output the host serialized, by its validation.
+    accepted: Accepted,
     /// The driver's owner: dropping the handle cancels the run through `cancel`, and the driver
     /// ends after its cleanup.
     _driver: Arc<TaskSet>,
@@ -88,6 +90,11 @@ impl ActiveRun {
         self.usage.clone()
     }
 
+    /// The accepted output `validation` as the host serialized it, when it could.
+    pub fn accepted(&self, validation: ValidationId) -> Option<serde_json::Value> {
+        self.accepted.lock().get(&validation).cloned()
+    }
+
     /// Requests cancellation; idempotent. The run settles once its work reported back.
     pub fn cancel(&self) {
         self.cancel.cancel();
@@ -99,6 +106,8 @@ impl Drop for ActiveRun {
         self.cancel();
     }
 }
+
+type Accepted = Arc<parking_lot::Mutex<BTreeMap<ValidationId, serde_json::Value>>>;
 
 /// Starts one invocation on `runtime`; its updates arrive on the receiver.
 pub fn start(
@@ -116,8 +125,10 @@ pub fn start(
     let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
     let (progress_tx, progress) = mpsc::channel(PROGRESS_QUEUE);
     let (usage_tx, usage) = watch::channel(run.usage());
+    let accepted = Accepted::default();
     let driver = Driver {
         usage: usage_tx,
+        accepted: accepted.clone(),
         run,
         work: Execution::new(
             setup,
@@ -132,7 +143,8 @@ pub fn start(
     let driving = Arc::new(TaskSet::default());
     let spawner = TokioSpawner::new(runtime.clone());
     driving.spawn(&spawner, "agent run", driver.drive(events, progress, cancel.clone()));
-    let handle = ActiveRun { cancel, progress: Progress(progress_tx), usage, _driver: driving };
+    let handle =
+        ActiveRun { cancel, progress: Progress(progress_tx), usage, accepted, _driver: driving };
     Ok((handle, update_rx))
 }
 
@@ -140,6 +152,7 @@ struct Driver {
     run: AgentRun,
     /// Republished whenever the core's ledger moved.
     usage: watch::Sender<Usage>,
+    accepted: Accepted,
     work: Execution,
     updates: mpsc::Sender<RunUpdate>,
     /// The ledger revision `usage` holds.
@@ -183,7 +196,15 @@ impl Driver {
                         None => continue,
                     }
                 }
-                Some((_, report)) = events.recv() => self.work.report(report).0,
+                Some((_, report)) = events.recv() => {
+                    let (event, serialized) = self.work.report(report);
+                    if let (AgentRunEvent::OutputValidated { validation, .. }, Some(value)) =
+                        (&event, serialized)
+                    {
+                        self.accepted.lock().insert(*validation, value);
+                    }
+                    event
+                }
                 _ = self.work.invoker.settled() => continue,
             };
             effects = self.run.handle(event, self.work.setup.clock.now());

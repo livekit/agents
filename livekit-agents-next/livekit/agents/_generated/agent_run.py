@@ -250,8 +250,9 @@ class FunctionToolInfo:
     retries: int | None = None
     """`retries=` on the tool: its own budget in place of the run's `Retries.tools`."""
     remote: str | None = None
-    """A `RemoteAgent(...).as_tool()`'s endpoint: with the tool's name, its configured identity
-    as an expert on a voice session.
+    """A delegate's identity, a `RemoteAgent(...).as_tool()`'s endpoint or an `agent.as_tool()`'s
+    `agent:<name>`: with the tool's name, its configured identity as an expert on a voice
+    session.
     """
 
 

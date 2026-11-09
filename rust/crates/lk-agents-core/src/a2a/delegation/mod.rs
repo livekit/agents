@@ -353,7 +353,7 @@ impl RemoteInteraction {
     }
 }
 
-fn answer(text: &str, exact: Option<&str>) -> ToolOutcome {
+pub(crate) fn answer(text: &str, exact: Option<&str>) -> ToolOutcome {
     if let Some(exact) = exact.filter(|s| !s.is_empty() && text.starts_with(s)) {
         let rest = text[exact.len()..].trim();
         ToolOutcome::Value {
