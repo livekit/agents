@@ -110,7 +110,33 @@ async def test_a_waiting_child_passes_its_question_up_and_resumes_on_the_next_ca
         for i in resumed
     ), "the child resumed with its own history"
     calls = [i for i in second.all_messages() if i.type == "function_call"]
-    assert "lk.agent_tool" in calls[0].extra and "lk.agent_tool" not in calls[1].extra
+    asked = [i for i in first.all_messages() if i.type == "function_call"]
+    assert "lk.agent_tool" in asked[0].extra, "the waiting child is kept"
+    assert all("lk.agent_tool" not in c.extra for c in calls), "an answered child is not kept"
+
+
+async def test_only_the_latest_waiting_child_is_kept() -> None:
+    child = _booking(
+        Script(Reply("For which date?"), Reply("Which room?"), Reply("Smoking or not?"))
+    )
+    parent = Agent(
+        instructions="Delegate bookings.",
+        context_type=Case,
+        tools=[child.as_tool(parameters=Request)],
+        llm=Script(
+            call("booking", {"nights": 1}, "first"),
+            Reply("Which date?"),
+            call("booking", {"nights": 1}, "second"),
+            Reply("Which room?"),
+        ),
+    )
+    first = await parent.run("One night", context=Case())
+    second = await parent.run("Friday", message_history=first.all_messages(), context=Case())
+    assert second.status == "input_required"
+    calls = [i for i in second.all_messages() if i.type == "function_call"]
+    assert ["lk.agent_tool" in c.extra for c in calls] == [False, True]
+    kept = json.dumps(calls[1].extra["lk.agent_tool"])
+    assert "For which date?" in kept and "Which room?" in kept
 
 
 async def test_cancelling_the_parent_cancels_and_settles_the_child() -> None:

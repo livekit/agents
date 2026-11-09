@@ -103,6 +103,19 @@ pub fn record(extra: &mut Map<String, Value>, agent: &str, waiting: Option<Vec<C
     }
 }
 
+/// A newer call of the tool supersedes what earlier ones kept: only the latest waiting child's
+/// history stays in the conversation, and none once the child answered.
+pub fn supersede(history: &mut [ChatItem], call: &FunctionCall) {
+    for item in history {
+        if let ChatItem::FunctionCall(earlier) = item
+            && earlier.name == call.name
+            && earlier.call_id != call.call_id
+        {
+            earlier.extra.remove(STATE_KEY);
+        }
+    }
+}
+
 /// What a settled child invocation is to its parent's call.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
@@ -232,6 +245,23 @@ mod tests {
         record(&mut answered, "booking", None);
         let later = vec![history[0].clone(), call("settled", answered), current];
         assert!(retained(&later, &current_call, "booking").is_empty());
+    }
+
+    #[test]
+    fn a_newer_call_drops_the_copies_earlier_calls_kept() {
+        let own = vec![ChatItem::Message(task("task".into(), &json!({}), UNIX_EPOCH))];
+        let mut waiting = Map::new();
+        record(&mut waiting, "booking", Some(own));
+        let mut history = vec![call("first", waiting.clone()), call("second", waiting)];
+        let ChatItem::FunctionCall(newest) = history[1].clone() else { unreachable!() };
+        supersede(&mut history, &newest);
+        let kept: Vec<bool> = history
+            .iter()
+            .map(
+                |item| matches!(item, ChatItem::FunctionCall(c) if c.extra.contains_key(STATE_KEY)),
+            )
+            .collect();
+        assert_eq!(kept, [false, true]);
     }
 
     #[test]

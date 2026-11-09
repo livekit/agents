@@ -477,6 +477,9 @@ impl AgentRun {
             AgentRunEvent::ToolCallUpdated { call, extra } => {
                 if let Some(a) = self.phase.acting() {
                     a.calls.update_extra(call, extra);
+                    if let Some(item) = a.calls.item(call) {
+                        crate::agent_tool::supersede(&mut self.history, item);
+                    }
                 }
             }
             AgentRunEvent::DelegateUsage { usage } => self.ledger.add(&usage),
