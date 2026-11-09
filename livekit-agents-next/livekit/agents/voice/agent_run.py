@@ -93,7 +93,6 @@ if TYPE_CHECKING:
     from ..llm.tool_context import ToolHandlingOptions
     from ..storage import Thread
     from ..storage.context import ContextStore
-    from ..text_session import _FrameContexts
     from . import Agent, AgentRetries
     from .agent_session import VoiceSession
 
@@ -166,8 +165,6 @@ class _TextRun(Generic[Context_T]):
         self._history = history
         self.execution_id: str | None = None
         self.frame_id: FrameId | None = None
-        self.context_scope: str | None = None
-        self.frame_contexts: _FrameContexts | None = None
 
     @property
     def usage(self) -> Usage:
@@ -195,7 +192,7 @@ class _TextRun(Generic[Context_T]):
             store = self._store
         if store is None:
             raise RuntimeError("this run has no managed context store")
-        return store._for_scope(self.context_scope) if self.context_scope is not None else store
+        return store
 
     def bind_resources(
         self,
@@ -571,18 +568,8 @@ class _Operation:
         run._history = list(self._invocation.history)
         run.execution_id = self._invocation.execution_id
         run.frame_id = self._invocation.frame_id
-        run.context_scope = self._invocation.context_scope
-        if run.context_scope is not None:
-            run.context = self._invocation.application_context
         self._token = _BindingContextVar.set(run)
         self._register()
-
-        try:
-            if run.frame_contexts is not None:
-                await run.frame_contexts.resolve(run)
-        except BaseException:
-            await self.__aexit__()
-            raise
         return run
 
     def _register(self) -> None:

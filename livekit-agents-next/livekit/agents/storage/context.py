@@ -88,14 +88,6 @@ class ContextStore(_context_facades.ContextStore):
         self._owns_activation = True
         self._disposed = False
 
-    def _for_scope(self, scope_id: str) -> ContextStore:
-        self._ensure_open()
-        view = ContextStore(scope_id=scope_id, activation=self._activation)
-        view._hydration = self._hydration
-        view._objects = self._hydration.setdefault(scope_id, _HydratedScope())
-        view._owns_activation = False
-        return view
-
     async def load_context(self, context: T) -> T:
         """Restore ``context``'s persisted fields, checked against their saved schemas."""
         self._ensure_open()

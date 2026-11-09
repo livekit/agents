@@ -37,8 +37,6 @@ struct InvocationStart {
     frame_id: FrameId,
     agent_name: String,
     invocation_id: String,
-    context_scope: String,
-    reads_context: bool,
     execution_id: String,
     history: Vec<lk_agents_abi::ChatItem>,
 }
@@ -164,16 +162,12 @@ impl Driver {
                 frame_id,
                 agent_name,
                 invocation_id,
-                context_scope,
-                reads_context,
                 execution_id,
                 history,
             } => self.start_invocation(InvocationStart {
                 frame_id,
                 agent_name,
                 invocation_id,
-                context_scope,
-                reads_context,
                 execution_id,
                 history,
             }),
@@ -222,8 +216,6 @@ impl Driver {
             frame_id,
             agent_name,
             invocation_id,
-            context_scope,
-            reads_context,
             execution_id,
             history,
         } = start;
@@ -235,8 +227,6 @@ impl Driver {
                 agent_name: agent_name.clone(),
             },
         );
-        let application_context =
-            reads_context.then(|| self.request.contexts[&context_scope].clone());
         let entry = Invocation {
             operation: 0,
             speech: None,
@@ -244,8 +234,6 @@ impl Driver {
             agent_name,
             execution_id: Some(execution_id),
             frame_id: Some(frame_id),
-            application_context,
-            context_scope: Some(context_scope),
             history,
             function_call: None,
             approval: None,

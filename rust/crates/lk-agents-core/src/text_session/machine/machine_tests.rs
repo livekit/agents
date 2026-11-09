@@ -119,7 +119,6 @@ fn config(approval: bool, mode: ChatHistory, merge: bool) -> TextSessionConfig {
             agent_name: "booking".into(),
             chat_history: mode,
             merge_chat_history: merge,
-            context_scope: Some("draft".into()),
         },
     );
     let child = agent(
@@ -140,9 +139,6 @@ fn input(state: Option<TextSessionState>) -> TextSessionInput {
         session_id: "conversation".into(),
         execution_id: "task-42".into(),
         task_id: None,
-        root_scope: "customer".into(),
-        available_scopes: BTreeSet::from(["customer".into(), "draft".into()]),
-        separate_contexts: false,
         state,
         wall: WallAnchor { wall: 1_700_000_000.0, at: Ts::ZERO },
         cleanup_timeout: Duration::from_secs(1),
@@ -320,7 +316,6 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
     assert!(second.effects.iter().any(|e| matches!(e, TextSessionEffect::InvocationParked { .. })));
     assert_ne!(child_id, root_id);
     assert_eq!(second.session.state.ancestors.as_slice(), std::slice::from_ref(&root_id));
-    assert_eq!(second.session.state.frames[&child_id].context_scope, "draft");
     let call = second.session.state.frames[&child_id].parent.clone().unwrap();
     assert_eq!(call.frame_id, root_id);
     assert_eq!(
@@ -576,7 +571,7 @@ fn fork_preserves_complete_exchanges_and_merge_requires_delivery_receipts() {
 }
 
 #[test]
-fn unknown_agents_scopes_and_implicit_child_outputs_refuse_routing() {
+fn unknown_agents_and_implicit_child_outputs_refuse_routing() {
     let mut cfg = config(false, ChatHistory::Fresh, false);
     cfg.agents.get_mut("booking").unwrap().output_type_explicit = false;
     assert!(matches!(TextSession::new(cfg, input(None)), Err(RoutingError::MissingOutputType(_))));
@@ -584,31 +579,32 @@ fn unknown_agents_scopes_and_implicit_child_outputs_refuse_routing() {
     first.reply("", &[("book", json!({"nights":2}))]);
     first.prepare(json!({"nights":2}));
     first.reply("Which date?", &[]);
-    let saved = first.turn().state;
-    let mut missing = saved.clone();
+    let mut missing = first.turn().state;
     let active = missing.active_frame_id.clone();
     missing.frames.get_mut(&active).unwrap().agent_name = "removed".into();
     assert!(matches!(
         TextSession::new(first.config.clone(), input(Some(missing))),
         Err(RoutingError::UnknownAgent(_))
     ));
-    let mut request = input(Some(saved));
-    request.available_scopes.remove("draft");
-    assert!(matches!(
-        TextSession::new(first.config.clone(), request),
-        Err(RoutingError::UnknownScope(_))
-    ));
-    let mut config = first.config.clone();
-    config.agents.get_mut("desk").unwrap().agent_tools.get_mut("book").unwrap().context_scope =
-        Some("missing".into());
-    let mut refused = Driver::new(config, None, "Book");
-    refused.reply("", &[("book", json!({"nights":2}))]);
-    refused.prepare(json!({"nights":2}));
-    assert_eq!(refused.session.state.frames.len(), 1);
-    assert!(refused.effects.iter().any(|e| matches!(
-        e,
-        TextSessionEffect::RoutingRefused { error: RoutingError::UnknownScope(_), .. }
-    )));
+}
+
+#[test]
+fn a_reply_under_a_new_task_resumes_the_pending_frame_under_that_task() {
+    let mut first = Driver::new(config(false, ChatHistory::Fresh, false), None, "Book");
+    first.reply("", &[("book", json!({"nights":2}))]);
+    first.prepare(json!({"nights":2}));
+    first.reply("Which date?", &[]);
+    let waiting = first.turn().state;
+    let child = waiting.active_frame_id.clone();
+    assert_ne!(child, waiting.root_frame_id);
+
+    let mut request = input(Some(waiting));
+    request.task_id = Some("task-43".into());
+    let session = TextSession::new(first.config.clone(), request).unwrap();
+    assert_eq!(session.state.execution_id, "task-43");
+    assert_eq!(session.state.active_frame_id, child);
+    let parent = &session.state.frames[&session.state.root_frame_id];
+    assert!(parent.pending_calls.iter().all(|p| p.execution_id == "task-43"));
 }
 
 #[test]

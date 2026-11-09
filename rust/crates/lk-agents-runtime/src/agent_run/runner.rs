@@ -100,8 +100,6 @@ impl AgentRunner for Runner {
                 agent_name: self.definition.name.clone(),
                 execution_id: Some(execution_id),
                 frame_id: None,
-                context_scope: None,
-                application_context: None,
                 history: input
                     .history
                     .iter()

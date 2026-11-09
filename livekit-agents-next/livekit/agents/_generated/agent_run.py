@@ -66,8 +66,6 @@ class Invocation:
     agent_name: str
     execution_id: str | None
     frame_id: FrameId | None
-    context_scope: str | None
-    application_context: object | None
     history: list[ChatItem]
     function_call: FunctionCall | None
     """The tool call, for a tool's preparation, read-back and body."""

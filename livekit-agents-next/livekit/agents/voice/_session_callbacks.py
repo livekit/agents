@@ -125,11 +125,11 @@ class _AgentHooks:
 
     async def _core_on_enter(self, agent: Agent) -> None:
         with _in_hook("on_enter", self._session, agent):
-            await agent._enter(RunContext(function_call=None, session=self._session))
+            await agent._run_hook("on_enter")
 
     async def _core_on_exit(self, agent: Agent) -> None:
         with _in_hook("on_exit", self._session, agent):
-            await agent.on_exit()
+            await agent._run_hook("on_exit")
 
     async def _core_on_user_turn_exceeded(self, agent: Agent, ev: UserTurnExceededEvent) -> None:
         session = self._session

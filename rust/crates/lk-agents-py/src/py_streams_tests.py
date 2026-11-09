@@ -331,8 +331,6 @@ async def test_voice_context_updates_use_the_captured_tool_invocation() -> None:
         agent_name="agent",
         execution_id=None,
         frame_id=None,
-        context_scope=None,
-        application_context=None,
         history=[],
         function_call=call,
         approval=None,

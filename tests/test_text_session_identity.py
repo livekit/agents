@@ -91,20 +91,29 @@ async def test_direct_resume_uses_the_execution_saved_by_the_text_session() -> N
     assert seen == ["a2a-task", "a2a-task"]
 
 
-async def test_pending_text_session_refuses_a_different_a2a_task_identity() -> None:
+async def test_a_reply_under_a_new_task_resumes_the_pending_execution_under_it() -> None:
+    seen: list[str] = []
     agent = Agent(
         instructions="Collect details.",
         output_type=int,
-        llm=FakeLLM(fake_responses=[respond("hi", "Which number?")]),
+        llm=FakeLLM(fake_responses=[respond("hi", "Which number?"), respond("two", "Thanks.")]),
     )
+
+    @agent.instructions
+    def identity(ctx: RunContext) -> str:
+        seen.append(ctx.execution_id)
+        return "Continue collecting."
+
     token = set_run_hooks(RunHooks(task_id="pending-task"))
     try:
         first = await TextSession(agent=agent).run("hi")
     finally:
         reset_run_hooks(token)
-    token = set_run_hooks(RunHooks(task_id="unrelated-task"))
+    assert first.result.status == "input_required"
+    token = set_run_hooks(RunHooks(task_id="reply-task"))
     try:
-        with pytest.raises(ValueError, match="execution identity changed while awaiting input"):
-            await TextSession(agent=agent).run("two", state=first.state)
+        second = await TextSession(agent=agent).run("two", state=first.state)
     finally:
         reset_run_hooks(token)
+    assert second.state.execution_id == "reply-task"
+    assert seen == ["pending-task", "reply-task"]

@@ -661,8 +661,6 @@ impl HostedTool {
             agent_name: agent.definition().name.clone(),
             execution_id: None,
             frame_id: None,
-            context_scope: None,
-            application_context: None,
             history: Vec::new(),
             function_call: call.cloned(),
             approval: call.and_then(lk_agents_core::approval::mark),

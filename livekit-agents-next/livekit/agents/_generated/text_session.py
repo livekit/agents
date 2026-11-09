@@ -71,7 +71,6 @@ class SessionFrame:
     agent_name: str
     history: list[ChatItem]
     parent: ParentCall | None
-    context_scope: str
     completed: bool
     pending_calls: list[PendingChildCall]
     answer_tool: str | None
@@ -116,8 +115,6 @@ class LocalAgentTool:
     agent_name: str
     chat_history: ChatHistory
     merge_chat_history: bool
-    context_scope: str | None
-    """None shares the parent's scope. A supplied reference is application-owned."""
 
 
 @dataclass(kw_only=True, slots=True)
@@ -140,10 +137,6 @@ class TextSessionRequest:
     session_id: str
     execution_id: str
     task_id: str | None = None
-    root_scope: str
-    contexts: dict[str, object]
-    separate_contexts: bool = False
-    """Construct child application contexts in their frame-owned scopes through the host."""
     message: ChatItem
     state: TextSessionState | None
     delegated: bool

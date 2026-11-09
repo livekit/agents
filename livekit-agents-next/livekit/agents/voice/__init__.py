@@ -46,7 +46,6 @@ from ..llm.tool_context import (
     Tool,
     ToolFlag,
     Toolset,
-    find_function_tools,
     function_tool,
 )
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -121,44 +120,7 @@ class _VoiceBinding(NamedTuple):
         return self.session.conn_options.llm_conn_options or DEFAULT_API_CONNECT_OPTIONS
 
 
-class _LiveHook:
-    # A descriptor (not a method) so a subclass can still override `async def on_enter(self)`;
-    # bound, it is either the registering decorator or, called bare, the hook to await.
-
-    def __set_name__(self, owner: type[Agent], name: str) -> None:
-        self._name = name
-
-    @overload
-    def __get__(self, agent: None, owner: type[Agent]) -> _LiveHook: ...
-
-    @overload
-    def __get__(self, agent: Agent, owner: type[Agent]) -> _BoundLiveHook: ...
-
-    def __get__(self, agent: Agent | None, owner: type[Agent]) -> _LiveHook | _BoundLiveHook:
-        if agent is None:
-            return self
-        return _BoundLiveHook(agent, self._name)
-
-
 _HookFnT = TypeVar("_HookFnT", bound=_HookFn)
-
-
-class _BoundLiveHook:
-    def __init__(self, agent: Agent, name: str) -> None:
-        self._agent = agent
-        self._name = name
-
-    @overload
-    def __call__(self, f: _HookFnT, /) -> _HookFnT: ...
-
-    @overload
-    def __call__(self) -> Awaitable[Any]: ...
-
-    def __call__(self, *f: _HookFn) -> Any:
-        if f:
-            self._agent._register_hook(self._name, f[0])
-            return f[0]
-        return self._agent._run_hook(self._name)
 
 
 def _assignment_namespace(frame: Any) -> dict[str, Any] | None:
@@ -266,7 +228,7 @@ class Agent(Generic[Context_T, Output_T]):
         self._defining_namespace = _assignment_namespace(sys._getframe(1)) if name is None else None
 
         self._tools: dict[int, Tool | Toolset] = {}
-        for tool in [*tools, *find_function_tools(self)]:
+        for tool in tools:
             token = self._config.register(CallbackKind.TOOL).token
             self._tools[token] = tool
         # filled by the decorators at import; frozen once the agent is first bound
@@ -533,25 +495,26 @@ class Agent(Generic[Context_T, Output_T]):
                 parts.append(str(rendered))
         return self._config.join_instructions(parts)
 
-    on_enter = _LiveHook()
-    """Called when the agent takes the active live role.
+    def on_enter(self, f: _HookFnT) -> _HookFnT:
+        """Register the function called when the agent takes the active live role, as a
+        decorator. It receives the session::
 
-    A decorator registering the function to run then, which receives the session::
+            @scheduler.on_enter
+            async def greet(session: VoiceSession) -> None:
+                session.generate_reply(instructions="Greet the caller.")
+        """
+        self._register_hook("on_enter", f)
+        return f
 
-        @scheduler.on_enter
-        async def greet(session: VoiceSession) -> None:
-            session.generate_reply(instructions="Greet the caller.")
-    """
+    def on_exit(self, f: _HookFnT) -> _HookFnT:
+        """Register the function called when the agent relinquishes the active live role, on an
+        orderly replacement or session close, as a decorator. It receives the session::
 
-    on_exit = _LiveHook()
-    """Called when the agent relinquishes the active live role, on an orderly replacement or
-    session close.
-
-    A decorator registering the function to run then, which receives the session::
-
-        @front_desk.on_exit
-        async def leave(session: VoiceSession) -> None: ...
-    """
+            @front_desk.on_exit
+            async def leave(session: VoiceSession) -> None: ...
+        """
+        self._register_hook("on_exit", f)
+        return f
 
     def _register_hook(self, name: str, f: _HookFn) -> _HookFn:
         self._check_not_frozen(f"an {name} function")
@@ -571,18 +534,7 @@ class Agent(Generic[Context_T, Output_T]):
         return result
 
     def _has_on_enter(self) -> bool:
-        return self._config.has_enter(
-            not isinstance(inspect.getattr_static(type(self), "on_enter"), _LiveHook)
-        )
-
-    async def _enter(self, ctx: RunContext[Any]) -> Any:
-        # an override may declare the context; the decorator form needs a live session
-        hook = type(self).on_enter
-        if isinstance(hook, _LiveHook):
-            return await self._run_hook("on_enter") if ctx._session is not None else None
-        if len(inspect.signature(hook).parameters) > 1:
-            return await hook(self, ctx)
-        return await hook(self)
+        return self._config.has_enter()
 
     def _bound_binding(self) -> _VoiceBinding | _TextRun[Any] | None:
         # per-context, so one shared instance serving several sessions reads the right one
@@ -669,7 +621,6 @@ class _LocalAgentTool(FunctionTool[..., Awaitable[object]]):
             agent_name=agent.name,
             chat_history=chat_history,
             merge_chat_history=merge_chat_history,
-            context_scope=None,
         )
 
         async def invoke(**arguments: object) -> object:

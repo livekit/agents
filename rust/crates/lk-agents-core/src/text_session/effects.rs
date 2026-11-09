@@ -5,15 +5,11 @@ use lk_agents_abi::agent::run::{RunResult, StreamEvent};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextSessionEffect {
-    /// The runtime binds this invocation to the supplied context scope and execution identity.
+    /// The runtime binds this invocation to its frame and execution identity.
     InvocationStarted {
         frame_id: FrameId,
         agent_name: String,
         invocation_id: String,
-        context_scope: String,
-        /// The invocation reads its scope's application context; a separate child's own scope
-        /// starts without one.
-        reads_context: bool,
         execution_id: String,
         history: Vec<ChatItem>,
     },

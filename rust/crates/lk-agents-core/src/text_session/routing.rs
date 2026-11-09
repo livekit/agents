@@ -78,7 +78,6 @@ impl TextSessionConfig {
     pub(super) fn validate_state(
         &self,
         state: &TextSessionState,
-        scopes: &BTreeSet<String>,
     ) -> Result<(), RoutingError> {
         let invalid = |reason: &str| RoutingError::InvalidState(reason.into());
         if state.session_id.is_empty() || state.execution_id.is_empty() {
@@ -104,9 +103,6 @@ impl TextSessionConfig {
             }
             if !self.agents.contains_key(&frame.agent_name) {
                 return Err(RoutingError::UnknownAgent(frame.agent_name.clone()));
-            }
-            if !scopes.contains(&frame.context_scope) {
-                return Err(RoutingError::UnknownScope(frame.context_scope.clone()));
             }
             if let Some(parent) = &frame.parent {
                 let parent_frame = state

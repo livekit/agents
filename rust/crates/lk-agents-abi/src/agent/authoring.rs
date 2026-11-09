@@ -140,7 +140,7 @@ pub trait AgentConfig: Send + Sized + 'static {
     #[host(call)]
     fn hook(&self, name: String) -> Option<u64>;
     #[host(call)]
-    fn has_enter(&self, overridden: bool) -> bool;
+    fn has_enter(&self) -> bool;
     #[host(getter)]
     fn dynamic_instructions(&self) -> bool;
     #[host(getter)]

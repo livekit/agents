@@ -127,8 +127,6 @@ fn hosted(host: Arc<PendingHost>, speech: SpeechId, operation: u64) -> HostedToo
             agent_name: "agent".into(),
             execution_id: None,
             frame_id: None,
-            context_scope: None,
-            application_context: None,
             history: Vec::new(),
             function_call: None,
             approval: None,

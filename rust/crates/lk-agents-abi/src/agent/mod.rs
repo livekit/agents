@@ -67,8 +67,6 @@ pub struct Invocation {
     pub agent_name: String,
     pub execution_id: Option<String>,
     pub frame_id: Option<crate::text_session::FrameId>,
-    pub context_scope: Option<String>,
-    pub application_context: Option<HostRef>,
     pub history: Vec<crate::ChatItem>,
     /// The tool call, for a tool's preparation, read-back and body.
     pub function_call: Option<FunctionCall>,

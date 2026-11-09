@@ -93,7 +93,8 @@ def test_agent_tool_decorator() -> None:
             """A method tool."""
             return "m"
 
-    assert [t.info.name for t in WithMethod().tools] == ["on_method"]  # type: ignore[union-attr]
+    # agents are constructed instances: a subclass's decorated methods are not its tools
+    assert WithMethod().tools == []
 
 
 @pytest.mark.parametrize("expressive", [False, {"tts_instructions_template": "Speak naturally."}])

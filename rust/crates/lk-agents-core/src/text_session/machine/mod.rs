@@ -29,15 +29,11 @@ pub use routing::{ChatHistory, LocalAgentTool, RoutingError, SessionAgent, TextS
 
 // Only a settled turn exposes a new state snapshot.
 
-/// Runtime/application inputs. Scope references describe contexts the application has built;
-/// this record contains neither services nor an instruction to load/save them.
+/// Runtime inputs: identities and saved state; no services nor an instruction to load/save them.
 pub struct TextSessionInput {
     pub session_id: String,
     pub execution_id: String,
     pub task_id: Option<String>,
-    pub root_scope: String,
-    pub available_scopes: BTreeSet<String>,
-    pub separate_contexts: bool,
     pub state: Option<TextSessionState>,
     pub wall: WallAnchor,
     pub cleanup_timeout: Duration,
@@ -134,8 +130,6 @@ pub struct TextSession {
     failure_input_requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
     config: TextSessionConfig,
     state: TextSessionState,
-    scopes: BTreeSet<String>,
-    separate_contexts: bool,
     wall: WallAnchor,
     cleanup_timeout: Duration,
     delegated: bool,
@@ -161,13 +155,10 @@ impl TextSession {
                 let pending = frame.parent.is_some()
                     || !frame.pending_calls.is_empty()
                     || agent_run::execution::pending(&frame.history).is_some();
-                match &input.task_id {
-                    Some(task_id) if pending && *task_id != state.execution_id => {
-                        return Err(RoutingError::InvalidState(
-                            "execution identity changed while awaiting input".into(),
-                        ));
-                    }
-                    Some(task_id) => state.execution_id = task_id.clone(),
+                // A reply under a new task resumes the pending frame under that task; the door
+                // completes the waiting task as merged into it.
+                match input.task_id {
+                    Some(task_id) => reidentify(&mut state, task_id),
                     None if !pending => state.execution_id = input.execution_id,
                     None => {}
                 }
@@ -180,7 +171,6 @@ impl TextSession {
                     agent_name: config.root_agent.clone(),
                     history: Vec::new(),
                     parent: None,
-                    context_scope: input.root_scope,
                     completed: false,
                     pending_calls: Vec::new(),
                     answer_tool: None,
@@ -200,25 +190,11 @@ impl TextSession {
                 }
             }
         };
-        let mut scopes = input.available_scopes;
-        if input.separate_contexts {
-            scopes.extend(
-                state
-                    .frames
-                    .values()
-                    .filter(|&frame| {
-                        frame.parent.is_some() && frame.context_scope == frame.id.value
-                    })
-                    .map(|frame| frame.context_scope.clone()),
-            );
-        }
-        config.validate_state(&state, &scopes)?;
+        config.validate_state(&state)?;
         Ok(Self {
             failure_input_requirements: Vec::new(),
             config,
             state,
-            scopes,
-            separate_contexts: input.separate_contexts,
             wall: input.wall,
             cleanup_timeout: input.cleanup_timeout,
             delegated: input.delegated,
@@ -399,8 +375,6 @@ impl TextSession {
             frame_id: frame.id.clone(),
             agent_name: frame.agent_name.clone(),
             invocation_id: invocation_id.clone(),
-            context_scope: frame.context_scope.clone(),
-            reads_context: !(self.separate_contexts && frame.context_scope == frame.id.value),
             execution_id: self.state.execution_id.clone(),
             history,
         });
@@ -788,6 +762,18 @@ impl TextSession {
             input_requirements: std::mem::take(&mut self.failure_input_requirements),
         });
     }
+}
+
+/// The pending execution continues under `execution_id`: its waiting child calls move with it.
+fn reidentify(state: &mut TextSessionState, execution_id: String) {
+    for frame in state.frames.values_mut() {
+        for pending in &mut frame.pending_calls {
+            if pending.execution_id == state.execution_id {
+                pending.execution_id = execution_id.clone();
+            }
+        }
+    }
+    state.execution_id = execution_id;
 }
 
 /// Records a child's validated arguments when they are a JSON object, else refuses them.

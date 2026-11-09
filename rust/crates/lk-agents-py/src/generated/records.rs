@@ -1845,8 +1845,6 @@ pub mod agent_run {
             agent_name,
             execution_id,
             frame_id,
-            context_scope,
-            application_context,
             history,
             function_call,
             approval,
@@ -1873,20 +1871,6 @@ pub mod agent_run {
             match frame_id {
                 None => py.None().into_bound(py),
                 Some(x) => crate::generated::records::text_session::frame_id_to_py(py, x)?,
-            },
-        )?;
-        kwargs.set_item(
-            "context_scope",
-            match context_scope {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        kwargs.set_item(
-            "application_context",
-            match application_context {
-                None => py.None().into_bound(py),
-                Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
             },
         )?;
         kwargs.set_item(
@@ -20527,12 +20511,6 @@ pub mod text_session {
                     (crate::generated::records::text_session::parent_call_from_py(v)).map(Some)
                 }
             })?,
-            context_scope: crate::py_values::attr_with(
-                obj,
-                "SessionFrame",
-                "context_scope",
-                |v| v.extract::<::std::string::String>(),
-            )?,
             completed: crate::py_values::attr_with(obj, "SessionFrame", "completed", |v| {
                 v.extract::<bool>()
             })?,
@@ -20631,7 +20609,6 @@ pub mod text_session {
             agent_name,
             history,
             parent,
-            context_scope,
             completed,
             pending_calls,
             answer_tool,
@@ -20661,10 +20638,6 @@ pub mod text_session {
                 None => py.None().into_bound(py),
                 Some(x) => crate::generated::records::text_session::parent_call_to_py(py, x)?,
             },
-        )?;
-        kwargs.set_item(
-            "context_scope",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(context_scope, py)?,
         )?;
         kwargs.set_item("completed", ::pyo3::IntoPyObjectExt::into_bound_py_any(completed, py)?)?;
         kwargs.set_item(
@@ -20920,18 +20893,6 @@ pub mod text_session {
                 "merge_chat_history",
                 |v| v.extract::<bool>(),
             )?,
-            context_scope: crate::py_values::attr_with(
-                obj,
-                "LocalAgentTool",
-                "context_scope",
-                |v| {
-                    if v.is_none() {
-                        Ok(None)
-                    } else {
-                        (v.extract::<::std::string::String>()).map(Some)
-                    }
-                },
-            )?,
         })
     }
 
@@ -20943,7 +20904,6 @@ pub mod text_session {
             agent_name,
             chat_history,
             merge_chat_history,
-            context_scope,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs
@@ -20955,13 +20915,6 @@ pub mod text_session {
         kwargs.set_item(
             "merge_chat_history",
             ::pyo3::IntoPyObjectExt::into_bound_py_any(merge_chat_history, py)?,
-        )?;
-        kwargs.set_item(
-            "context_scope",
-            match context_scope {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
         )?;
         crate::py_calls::call(
             LOCAL_AGENT_TOOL
@@ -21073,30 +21026,6 @@ pub mod text_session {
                     (v.extract::<::std::string::String>()).map(Some)
                 }
             })?,
-            root_scope: crate::py_values::attr_with(
-                obj,
-                "TextSessionRequest",
-                "root_scope",
-                |v| v.extract::<::std::string::String>(),
-            )?,
-            contexts: crate::py_values::attr_with(obj, "TextSessionRequest", "contexts", |v| {
-                v.cast::<::pyo3::types::PyDict>()?
-                    .iter()
-                    .map(|(key, item)| {
-                        let (key, item) = (&key, &item);
-                        Ok((
-                            key.extract::<::std::string::String>()?,
-                            crate::py_objects::object_ref_from_py(item)?,
-                        ))
-                    })
-                    .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
-            })?,
-            separate_contexts: crate::py_values::attr_with(
-                obj,
-                "TextSessionRequest",
-                "separate_contexts",
-                |v| v.extract::<bool>(),
-            )?,
             message: crate::py_values::attr_with(obj, "TextSessionRequest", "message", |v| {
                 crate::generated::records::chat_items::chat_item_from_py(v)
             })?,

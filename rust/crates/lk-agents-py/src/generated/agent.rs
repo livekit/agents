@@ -324,12 +324,11 @@ impl CoreAgentConfig {
         ::pyo3::PyResult::Ok(out)
     }
 
-    #[pyo3(signature = (overridden))]
-    fn has_enter(&self, overridden: bool) -> PyResult<bool> {
+    fn has_enter(&self) -> PyResult<bool> {
         crate::py_calls::check_pid()?;
         let out =
             <CoreAgentConfigImpl as ::lk_agents_abi::agent::authoring::AgentConfig>::has_enter(
-                &self.0, overridden,
+                &self.0,
             );
         ::pyo3::PyResult::Ok(out)
     }

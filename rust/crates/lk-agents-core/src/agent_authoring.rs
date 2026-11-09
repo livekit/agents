@@ -73,8 +73,8 @@ impl lk_agents_abi::agent::authoring::AgentConfig for AgentConfig {
             })
             .and_then(|ids| ids.first().copied())
     }
-    fn has_enter(&self, overridden: bool) -> bool {
-        overridden || self.hook("on_enter".into()).is_some()
+    fn has_enter(&self) -> bool {
+        self.hook("on_enter".into()).is_some()
     }
     fn dynamic_instructions(&self) -> bool {
         self.callbacks.get(&CallbackKind::Instructions).is_some_and(|ids| !ids.is_empty())

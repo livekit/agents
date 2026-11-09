@@ -55,7 +55,6 @@ pub struct SessionFrame {
     pub agent_name: String,
     pub history: Vec<ChatItem>,
     pub parent: Option<ParentCall>,
-    pub context_scope: String,
     pub completed: bool,
     pub pending_calls: Vec<PendingChildCall>,
     pub answer_tool: Option<String>,
@@ -100,8 +99,6 @@ pub struct LocalAgentTool {
     pub agent_name: String,
     pub chat_history: ChatHistory,
     pub merge_chat_history: bool,
-    /// None shares the parent's scope. A supplied reference is application-owned.
-    pub context_scope: Option<String>,
 }
 
 #[crate::host(exceptions(
@@ -120,7 +117,6 @@ pub enum RoutingError {
     Agent(crate::agent::AgentError),
     MaxDepth { max_depth: usize },
     UnknownAgent(String),
-    UnknownScope(String),
     UnknownTool(String),
     MissingOutputType(String),
     InvalidState(String),
@@ -135,7 +131,6 @@ impl std::fmt::Display for RoutingError {
                 write!(f, "agent-tool call exceeds max_depth={max_depth}")
             }
             Self::UnknownAgent(name) => write!(f, "unknown session agent: {name}"),
-            Self::UnknownScope(scope) => write!(f, "unknown context scope: {scope}"),
             Self::UnknownTool(tool) => write!(f, "unknown local agent tool: {tool}"),
             Self::MissingOutputType(name) => {
                 write!(f, "agent tool {name} requires explicit output_type")
@@ -215,11 +210,6 @@ pub struct TextSessionRequest {
     pub execution_id: String,
     #[host(default = None)]
     pub task_id: Option<String>,
-    pub root_scope: String,
-    pub contexts: BTreeMap<String, HostRef>,
-    /// Construct child application contexts in their frame-owned scopes through the host.
-    #[host(default = false)]
-    pub separate_contexts: bool,
     pub message: ChatItem,
     pub state: Option<TextSessionState>,
     pub delegated: bool,

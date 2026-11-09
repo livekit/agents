@@ -26,36 +26,25 @@ impl TextSession {
                 );
                 return;
             }
-            let admission = self.admit_child(&pending);
-            let scope = match admission {
-                Ok(scope) => scope,
-                Err(error) => {
-                    effects.push(TextSessionEffect::RoutingRefused {
-                        frame_id: parent_id.clone(),
-                        call_id: pending.parent.call_id.clone(),
-                        error: error.clone(),
-                    });
-                    if let Err(error) =
-                        self.resolve_call(&pending, error.to_string(), true, now, effects)
-                    {
-                        self.finish(Err(TextSessionError::Routing(error)), effects);
-                        return;
-                    }
-                    continue;
+            if let Err(error) = self.admit_child(&pending) {
+                effects.push(TextSessionEffect::RoutingRefused {
+                    frame_id: parent_id.clone(),
+                    call_id: pending.parent.call_id.clone(),
+                    error: error.clone(),
+                });
+                if let Err(error) =
+                    self.resolve_call(&pending, error.to_string(), true, now, effects)
+                {
+                    self.finish(Err(TextSessionError::Routing(error)), effects);
+                    return;
                 }
-            };
+                continue;
+            }
             let parent = &self.state.frames[&parent_id];
             let tool = &self.config.agents[&parent.agent_name].agent_tools[&pending.tool_name];
             let history = initial(&parent.history, tool.chat_history);
             let merge_chat_history = tool.merge_chat_history;
-            let separate_context = self.separate_contexts && tool.context_scope.is_none();
             let frame_id = super::FrameId { value: self.mint("frame") };
-            let scope = if separate_context {
-                self.scopes.insert(frame_id.value.clone());
-                frame_id.value.clone()
-            } else {
-                scope
-            };
             let task_id = self.mint("task");
             let mut starting_history_ids = history
                 .iter()
@@ -73,7 +62,6 @@ impl TextSession {
                 agent_name: pending.agent_name.clone(),
                 history,
                 parent: Some(pending.parent.clone()),
-                context_scope: scope,
                 completed: false,
                 pending_calls: Vec::new(),
                 answer_tool: None,
@@ -96,23 +84,18 @@ impl TextSession {
         }
     }
 
-    fn admit_child(&self, pending: &PendingChildCall) -> Result<String, RoutingError> {
+    fn admit_child(&self, pending: &PendingChildCall) -> Result<(), RoutingError> {
         if self.state.ancestors.len() + 1 >= self.config.max_depth {
             return Err(RoutingError::MaxDepth { max_depth: self.config.max_depth });
         }
         let parent = &self.state.frames[&pending.parent.frame_id];
-        let tool = self.config.agents[&parent.agent_name]
-            .agent_tools
-            .get(&pending.tool_name)
-            .ok_or_else(|| RoutingError::UnknownTool(pending.tool_name.clone()))?;
+        if !self.config.agents[&parent.agent_name].agent_tools.contains_key(&pending.tool_name) {
+            return Err(RoutingError::UnknownTool(pending.tool_name.clone()));
+        }
         if !self.config.agents.contains_key(&pending.agent_name) {
             return Err(RoutingError::UnknownAgent(pending.agent_name.clone()));
         }
-        let scope = tool.context_scope.as_ref().unwrap_or(&parent.context_scope);
-        if !self.scopes.contains(scope) {
-            return Err(RoutingError::UnknownScope(scope.clone()));
-        }
-        Ok(scope.clone())
+        Ok(())
     }
 
     pub(super) fn settled(

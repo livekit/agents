@@ -89,8 +89,6 @@ pub(in crate::agent_session::machine::activity) fn running(
         agent_name: "agent".into(),
         execution_id: None,
         frame_id: None,
-        context_scope: None,
-        application_context: None,
         history: Vec::new(),
         function_call: Some(call.clone()),
         approval: None,

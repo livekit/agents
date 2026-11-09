@@ -18,8 +18,6 @@ fn invocation(operation: u64) -> Invocation {
         agent_name: "agent".into(),
         execution_id: None,
         frame_id: None,
-        context_scope: None,
-        application_context: None,
         history: Vec::new(),
         approval: None,
         speech: None,
