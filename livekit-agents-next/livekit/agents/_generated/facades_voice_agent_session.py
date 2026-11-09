@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from ..stt import STT
     from ..tts import TTS
     from ..types import NotGivenOr
-    from ..voice.agent import Agent
+    from ..voice import Agent
     from .chat_items import ChatItem
     from .expressive import ExpressiveOptions as HostExpressiveOptions
     from .rtc_frames import AudioFrame

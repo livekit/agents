@@ -309,7 +309,7 @@ pub trait VoiceSessionFacade {
     #[host(getter, via = Options, annotation(ret = ".vad.VAD | None"))]
     fn vad(&self) -> Option<crate::HostRef>;
     /// The agent driving the session; refused before `start()` unless `update_agent` named one.
-    #[host(getter, annotation(ret = "..voice.agent.Agent"))]
+    #[host(getter, annotation(ret = "..voice.Agent"))]
     fn current_agent(&self) -> Result<crate::HostRef, super::session::SessionRefused>;
 
     /// Empty before startup; the final snapshot remains readable after close.
