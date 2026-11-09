@@ -748,6 +748,9 @@ class _Connection:
         self._session = session
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._streams: dict[str, _StreamData] = {}
+        # The recv loop releases a stream on `terminated`, before the stream's
+        # own task asks where its words reached, so the answer outlives the entry.
+        self._released_timed_ends: dict[str, float] = {}
         self._input_queue = utils.aio.Chan[_OutboundMsg]()
         self._send_task: asyncio.Task[None] | None = None
         self._recv_task: asyncio.Task[None] | None = None
@@ -853,12 +856,16 @@ class _Connection:
         to be spoken again.
         """
         stream = self._streams.pop(stream_id, None)
+        # Only a normal end records one, so a failed stream reports 0.0.
+        timed_end = self._released_timed_ends.pop(stream_id, 0.0)
         if stream is not None and flush:
             _flush_timed_word(stream)
+            # Interrupted: these words were heard and are not spoken again.
+            timed_end = stream.timed_end
         # If flagged non-current and idle, self-close.
         if not self._is_current and not self._streams and not self._closed:
             self._schedule_close("soniox-tts-conn-drain-close")
-        return stream.timed_end if stream is not None else 0.0
+        return timed_end
 
     def send_text(self, stream_id: str, text: str, *, text_end: bool = False) -> None:
         if self._closed or stream_id not in self._streams:
@@ -1051,6 +1058,11 @@ class _Connection:
                             )
                         else:
                             # Normal end: audio_end seen, or our own cancel landed.
+                            # The entry is about to go, so where its words reached
+                            # has to outlive it: the stream's own task asks for it
+                            # only after this, and a replayed stream must not count
+                            # - its text is about to be spoken again.
+                            self._released_timed_ends[stream_id] = stream.timed_end
                             stream.waiter.set_result(None)
                     self._streams.pop(stream_id, None)
         except Exception as e:

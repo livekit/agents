@@ -637,6 +637,90 @@ async def test_timed_words_are_pushed_with_the_audio_they_describe() -> None:
     assert [str(word) for word in emitter.words] == ["Hi ", "there"]
 
 
+async def test_a_released_stream_still_reports_where_its_words_reached() -> None:
+    """The recv loop releases the stream on `terminated`, the turn asks after."""
+    tts = soniox.TTS(api_key="test-key", word_timestamps=True)
+    connection = _Connection(tts._opts, MagicMock())
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.closed = False
+    ws.close_code = 1000
+    ws.receive = AsyncMock(
+        side_effect=[
+            _audio_frame("s1", "Hi "),
+            _audio_frame("s1", "there", start=0.3),
+            _audio_frame("s1", "", audio_end=True),
+            _audio_frame("s1", "", terminated=True),
+            aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1000, ""),
+        ]
+    )
+    connection._ws = ws
+
+    waiter = asyncio.get_running_loop().create_future()
+    connection.register_stream("s1", _RecordingEmitter(), waiter, opts=tts._opts)  # type: ignore[arg-type]
+    try:
+        await connection._recv_loop()
+        # The entry is gone by now, so answering from it would say 0.0 and the
+        # next stream of the reply would place its first word back at the
+        # emitter's duration, before this stream's last word ended.
+        assert connection.unregister_stream("s1") == pytest.approx(0.78)
+    finally:
+        waiter.cancel()
+        await connection.aclose()
+        if connection._close_task is not None:
+            await connection._close_task
+        await tts.aclose()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        _audio_frame("s2", "", terminated=True),
+        aiohttp.WSMessage(
+            aiohttp.WSMsgType.TEXT,
+            json.dumps({"stream_id": "s2", "error_code": 500, "error_message": "boom"}),
+            None,
+        ),
+    ],
+    ids=["terminated-without-audio-end", "error-code"],
+)
+async def test_a_failed_stream_does_not_report_where_the_previous_one_reached(failure) -> None:
+    """A failed stream is replayed, so it must not inherit the last stream's end."""
+    tts = soniox.TTS(api_key="test-key", word_timestamps=True)
+    connection = _Connection(tts._opts, MagicMock())
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.closed = False
+    ws.close_code = 1000
+    ws.receive = AsyncMock(
+        side_effect=[
+            _audio_frame("s1", "Hi "),
+            _audio_frame("s1", "there", start=0.3),
+            _audio_frame("s1", "", audio_end=True),
+            _audio_frame("s1", "", terminated=True),
+            failure,
+            aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1000, ""),
+        ]
+    )
+    connection._ws = ws
+
+    loop = asyncio.get_running_loop()
+    waiters = [loop.create_future(), loop.create_future()]
+    connection.register_stream("s1", _RecordingEmitter(), waiters[0], opts=tts._opts)  # type: ignore[arg-type]
+    connection.register_stream("s2", _RecordingEmitter(), waiters[1], opts=tts._opts)  # type: ignore[arg-type]
+    try:
+        await connection._recv_loop()
+        assert connection.unregister_stream("s1") == pytest.approx(0.78)
+        assert connection.unregister_stream("s2") == 0.0
+    finally:
+        for waiter in waiters:
+            if waiter.done() and not waiter.cancelled():
+                waiter.exception()
+            waiter.cancel()
+        await connection.aclose()
+        if connection._close_task is not None:
+            await connection._close_task
+        await tts.aclose()
+
+
 async def test_a_stream_terminated_without_audio_end_does_not_report_its_last_word() -> None:
     emitter = await _drive_recv_loop(
         [
