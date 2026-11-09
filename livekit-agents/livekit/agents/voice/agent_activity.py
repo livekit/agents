@@ -5315,10 +5315,10 @@ class AgentActivity(RecognitionHooks):
         ):
             if (
                 is_given(self._agent.interruption_detection)
-                and self._agent.interruption_detection == "adaptive"
+                and self._agent.interruption_detection != "vad"
             ) or (
                 is_given(self._session.interruption_detection)
-                and self._session.interruption_detection == "adaptive"
+                and self._session.interruption_detection != "vad"
             ):
                 logger.warning(
                     "interruption_detection is provided, but it's not compatible with the current configuration and will be disabled"
@@ -5338,6 +5338,10 @@ class AgentActivity(RecognitionHooks):
             and self._session.interruption_detection == "vad"
         ):
             return None
+
+        for mode in (self._agent.interruption_detection, self._session.interruption_detection):
+            if isinstance(mode, inference.AdaptiveInterruptionDetector):
+                return mode
 
         if (
             not is_given(self._agent.interruption_detection)

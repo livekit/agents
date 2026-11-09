@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 from typing_extensions import TypedDict
 
@@ -17,6 +17,9 @@ from ..types import (
     NotGivenOr,
 )
 from ..utils import is_given
+
+if TYPE_CHECKING:
+    from ..inference import AdaptiveInterruptionDetector
 
 
 @dataclass
@@ -159,10 +162,10 @@ class InterruptionOptions(TypedDict, total=False):
 
     enabled: bool
     """Whether interruptions are enabled. Defaults to ``True``."""
-    mode: Literal["adaptive", "vad"]
+    mode: Literal["adaptive", "vad"] | AdaptiveInterruptionDetector
     """Interruption handling strategy. ``"adaptive"`` for ML-based
-    detection, ``"vad"`` for simple voice-activity detection.
-    Absent means auto-detect."""
+    detection, or an ``AdaptiveInterruptionDetector`` to configure it;
+    ``"vad"`` for simple voice-activity detection. Absent means auto-detect."""
     discard_audio_if_uninterruptible: bool
     """Drop buffered audio while the agent speaks and cannot be
     interrupted. Defaults to ``True``."""

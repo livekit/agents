@@ -137,7 +137,7 @@ def test_gateway_ink2_payload_carries_no_word_alignment() -> None:
 
 
 def _build_session(
-    *, aligned_transcript: object, mode: str | None = None, streaming: bool = True
+    *, aligned_transcript: object, mode: object = None, streaming: bool = True
 ) -> AgentSession:
     speech = FakeUserSpeech(start_time=0.5, end_time=2.0, transcript="hello", stt_delay=0.0)
     interruption = InterruptionOptions(resume_false_interruption=False)
@@ -206,6 +206,19 @@ def test_explicit_adaptive_mode_accepts_unaligned_stt(
     activity = AgentActivity(Agent(instructions="You are a helpful assistant."), session)
 
     assert activity._interruption_detection_enabled is True
+
+
+def test_explicit_detector_is_the_one_used(
+    monkeypatch: pytest.MonkeyPatch, _fake_credentials: None
+) -> None:
+    monkeypatch.delenv("LIVEKIT_DEV_MODE", raising=False)
+    monkeypatch.delenv("LIVEKIT_REMOTE_EOT_URL", raising=False)
+
+    detector = inference.AdaptiveInterruptionDetector(min_interruption_duration=0.4)
+    session = _build_session(aligned_transcript=False, mode=detector)
+    activity = AgentActivity(Agent(instructions="You are a helpful assistant."), session)
+
+    assert activity._interruption_detector is detector
 
 
 def test_adaptive_stays_off_in_plain_production(
