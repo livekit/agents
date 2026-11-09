@@ -458,6 +458,8 @@ pub enum LlmGoogleModel {
     Gemini25Flash,
     #[host(rename = "google/gemini-2.5-flash-lite")]
     Gemini25FlashLite,
+    #[host(rename = "google/gemma-4-31b-it")]
+    Gemma431bIt,
 }
 
 #[crate::host(record(

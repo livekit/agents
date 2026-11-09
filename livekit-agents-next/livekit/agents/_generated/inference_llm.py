@@ -17,7 +17,7 @@ ReasoningEffort: TypeAlias = Literal["none", "minimal", "low", "medium", "high",
 OpenAIModels: TypeAlias = Literal["openai/gpt-4o", "openai/gpt-4o-mini", "openai/gpt-4.1", "openai/gpt-4.1-mini", "openai/gpt-4.1-nano", "openai/gpt-5", "openai/gpt-5-mini", "openai/gpt-5-nano", "openai/gpt-5.1", "openai/gpt-5.1-chat-latest", "openai/gpt-5.2", "openai/gpt-5.2-chat-latest", "openai/gpt-5.3-chat-latest", "openai/gpt-5.4", "openai/gpt-5.4-mini", "openai/gpt-5.4-nano", "openai/gpt-5.5", "openai/gpt-5.6-luna", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/chat-latest", "openai/gpt-oss-120b"]
 
 
-GoogleModels: TypeAlias = Literal["google/gemini-3.1-pro", "google/gemini-3-flash", "google/gemini-3.1-flash-lite", "google/gemini-3.5-flash", "google/gemini-2.5-pro", "google/gemini-2.5-flash", "google/gemini-2.5-flash-lite"]
+GoogleModels: TypeAlias = Literal["google/gemini-3.1-pro", "google/gemini-3-flash", "google/gemini-3.1-flash-lite", "google/gemini-3.5-flash", "google/gemini-2.5-pro", "google/gemini-2.5-flash", "google/gemini-2.5-flash-lite", "google/gemma-4-31b-it"]
 
 
 KimiModels: TypeAlias = Literal["moonshotai/kimi-k2.5", "moonshotai/kimi-k2.6"]
