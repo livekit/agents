@@ -93,11 +93,14 @@ impl ConsolePort for ConsoleIo {
 }
 
 impl ConsoleIo {
-    fn send(&self, message: Message) {
+    fn send(&self, message: Message) -> Result<(), HostError> {
         let msg = proto::AgentSessionMessage { message: Some(message) };
+        let bytes =
+            frame(&msg.encode_to_vec()).map_err(|e| HostError::new(format!("console: {e}")))?;
         if let Some(tx) = self.outgoing.lock().as_ref() {
-            let _ = tx.send(frame(&msg.encode_to_vec()));
+            let _ = tx.send(bytes);
         }
+        Ok(())
     }
 
     fn finish(&self) {
@@ -139,10 +142,10 @@ impl SessionTransport for Transport {
         msg: &'a proto::AgentSessionMessage,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
         Box::pin(async move {
-            if let Some(message) = msg.message.clone() {
-                self.io.send(message);
+            match msg.message.clone() {
+                Some(message) => self.io.send(message),
+                None => Ok(()),
             }
-            Ok(())
         })
     }
 
@@ -243,18 +246,17 @@ impl AudioOutput for ConsoleIo {
             if opened {
                 self.tracker.playback_started(segment, now);
             }
-            self.send(message);
-            Ok(())
+            self.send(message).map_err(IoError::Host)
         })
     }
 
     fn flush_segment(&self) {
         self.playback.lock().flush();
-        self.send(Message::AudioPlaybackFlush(console_io::AudioPlaybackFlush {}));
+        let _ = self.send(Message::AudioPlaybackFlush(console_io::AudioPlaybackFlush {}));
     }
 
     fn clear_buffer(&self) {
-        self.send(Message::AudioPlaybackClear(console_io::AudioPlaybackClear {}));
+        let _ = self.send(Message::AudioPlaybackClear(console_io::AudioPlaybackClear {}));
         self.finish();
     }
 }
@@ -268,7 +270,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     fn message(m: Message) -> Vec<u8> {
-        frame(&proto::AgentSessionMessage { message: Some(m) }.encode_to_vec())
+        frame(&proto::AgentSessionMessage { message: Some(m) }.encode_to_vec()).unwrap()
     }
 
     // Catches: the CLI's frames not reaching the session's microphone, the speaker's audio and

@@ -55,7 +55,8 @@ impl FakeCli {
         // The world's own work: the run's executor ends it with the run.
         world.spawn_detached(async move {
             while let Some(message) = sent.recv().await {
-                if writer.write_all(&frame(&message.encode_to_vec())).await.is_err() {
+                let Ok(bytes) = frame(&message.encode_to_vec()) else { return };
+                if writer.write_all(&bytes).await.is_err() {
                     return;
                 }
             }

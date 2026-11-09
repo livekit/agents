@@ -1,6 +1,4 @@
 use super::*;
-use livekit_protocol::agent::{AgentDevMessage, agent_dev_message::Message};
-use tokio::io::AsyncWriteExt;
 
 struct Server;
 
@@ -37,9 +35,13 @@ async fn receive_errors_escape_both_the_initial_reply_and_the_request_loop() {
         let addr = listener.local_addr().unwrap().to_string();
         let peer = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            assert!(matches!(recv(&mut socket).await.unwrap(), Some(Message::ServerInfo(_))));
+            let message = |m: Option<AgentDevMessage>| m.unwrap().message;
             assert!(matches!(
-                recv(&mut socket).await.unwrap(),
+                message(recv(&mut socket).await.unwrap()),
+                Some(Message::ServerInfo(_))
+            ));
+            assert!(matches!(
+                message(recv(&mut socket).await.unwrap()),
                 Some(Message::GetRunningJobsRequest(_))
             ));
             if !initial {
@@ -67,6 +69,47 @@ async fn receive_errors_escape_both_the_initial_reply_and_the_request_loop() {
         assert!(error.to_string().contains("dev channel:"));
         peer.await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn a_close_between_frames_ends_the_channel_quietly() {
+    assert!(recv(&mut [].as_slice()).await.unwrap().is_none());
+    for initial in [true, false] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let peer = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            recv(&mut socket).await.unwrap().unwrap();
+            recv(&mut socket).await.unwrap().unwrap();
+            if !initial {
+                let reply = Message::GetRunningJobsResponse(Default::default());
+                send(&mut socket, reply).await.unwrap();
+            }
+        });
+        serve_dev_channel(
+            addr,
+            "test".into(),
+            "ws://localhost".into(),
+            String::new(),
+            String::new(),
+            Arc::new(Server),
+        )
+        .await
+        .unwrap();
+        peer.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn oversized_frames_are_refused_before_sending() {
+    let mut wire = Vec::new();
+    let info = livekit_protocol::agent::ServerInfo {
+        agent_name: "a".repeat(DEV_FRAME_LIMIT),
+        url: String::new(),
+    };
+    let error = send(&mut wire, Message::ServerInfo(info)).await.unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert!(wire.is_empty());
 }
 
 #[test]

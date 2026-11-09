@@ -387,7 +387,7 @@ impl VoiceDriver {
             // A VoiceTask's parent waits on it, so no agent replaces it.
             ActivityCommand::Update(update) if self.activity.voice_tasks.running() => {
                 let refused = crate::agent_session::HandoffRefused::TaskRunning;
-                self.refuse_handoff(None, update, refused)
+                self.refuse_handoff(update, refused)
             }
             ActivityCommand::Update(update) => {
                 self.arriving(&update.agent, update.activation);

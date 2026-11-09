@@ -1,5 +1,12 @@
 use super::*;
 
+#[path = "machine_server_tests.rs"]
+mod server;
+#[path = "machine_simulation_tests.rs"]
+mod sim;
+#[path = "machine_sync_tests.rs"]
+mod sync;
+
 mod provider_tools {
     use super::*;
     use crate::realtime::dialect::XAI;

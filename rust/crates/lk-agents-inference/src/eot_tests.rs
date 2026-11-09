@@ -1,3 +1,5 @@
+//! End-of-turn streams under host lock inversion and pool saturation, in their own process.
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -263,7 +265,7 @@ fn saturated_model_construction_defaults_then_retries_on_the_next_prediction() {
 
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     runtime.block_on(async {
-        use lk_agents_runtime::media::pool::JobClass;
+        use lk_agents_media::pool::JobClass;
 
         let media_pool = lk_agents_media::pool::media_pool();
         let (release, waiting) = std::sync::mpsc::channel();

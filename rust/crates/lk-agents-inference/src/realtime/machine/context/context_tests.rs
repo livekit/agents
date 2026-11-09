@@ -1,6 +1,6 @@
-//! The realtime machine's CPU step budgets and simulated-server suites, in their own process.
+//! The realtime machine's context-sync CPU step budgets, in their own process.
+#![cfg(unix)]
 
-#[cfg(unix)]
 mod support {
     use std::sync::OnceLock;
     use std::time::Duration;
@@ -79,15 +79,7 @@ mod support {
     }
 }
 
-#[cfg(unix)]
-#[path = "realtime/budget_tests.rs"]
+#[path = "context_budget_tests.rs"]
 mod context_step_budget;
-#[cfg(unix)]
-#[path = "realtime/history_tests.rs"]
+#[path = "context_history_tests.rs"]
 mod incremental_context;
-#[path = "realtime/server_tests.rs"]
-mod server;
-#[path = "realtime/sync_tests.rs"]
-mod server_sync;
-#[path = "realtime/simulation_tests.rs"]
-mod sim;

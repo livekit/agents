@@ -4,7 +4,7 @@ Run from the repository root with the Python MCP SDK and uvicorn installed:
 
 ```sh
 MCP_TEST_PYTHON="$PWD/.venv/bin/python" cargo test --manifest-path rust/Cargo.toml \
-  -p lk-agents-runtime --test runtime -- mcp_lifecycle::
+  -p lk-agents-runtime --lib -- mcp::session::tests::lifecycle::
 uv run pytest --unit tests/test_mcp_lifecycle.py
 uv run pytest --e2e tests/test_mcp_lifecycle_e2e.py
 ```

@@ -349,7 +349,7 @@ impl VoiceDriver {
             ),
             // A handoff somebody awaits: refused as closing, explicitly.
             Command::Activity(ActivityCommand::Update(update)) => {
-                self.refuse_handoff(None, update, HandoffRefused::Closing);
+                self.refuse_handoff(update, HandoffRefused::Closing);
                 return;
             }
             // A collection that never starts: answered as stopped.

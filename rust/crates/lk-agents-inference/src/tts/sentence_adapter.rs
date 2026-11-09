@@ -592,3 +592,7 @@ impl TtsStreamAdapter for StreamAdapter {
         Ok(TtsStream::new(Some(sink), source, self.clock.clone()))
     }
 }
+
+#[cfg(test)]
+#[path = "sentence_adapter_tests.rs"]
+mod tests;

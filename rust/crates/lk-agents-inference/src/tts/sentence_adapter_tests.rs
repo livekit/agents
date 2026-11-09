@@ -1,3 +1,4 @@
+use super::StreamAdapter;
 use lk_agents_abi::Tts;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
@@ -8,7 +9,6 @@ use lk_agents_abi::utils::audio::AudioFrame;
 use lk_agents_abi::utils::clock::Ts;
 use lk_agents_abi::utils::stream::{Closed, StreamOutput};
 use lk_agents_core::tts::markup::{Markup, MarkupExt};
-use lk_agents_inference::tts::sentence_adapter::StreamAdapter;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;

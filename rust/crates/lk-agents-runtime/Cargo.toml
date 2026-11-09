@@ -58,8 +58,8 @@ lk-agents-inference = { path = "../lk-agents-inference", features = ["testkit"] 
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util", "test-util"] }
 
 [[test]]
-name = "runtime"
-path = "src/runtime_tests.rs"
+name = "tls"
+path = "src/tls_tests.rs"
 
 [features]
 media-ffmpeg = ["lk-agents-media/ffmpeg", "lk-agents-inference/ffmpeg"]

@@ -1,8 +1,9 @@
 use lk_agents_abi::errors::HostError;
 use prost::Message as _;
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use livekit_protocol::agent::{AgentDevMessage, agent_dev_message::Message};
 use lk_agents_abi::worker::job::{AcceptArguments, RunningJobInfo};
 use lk_agents_abi::worker::server_host::ServerJobs;
 
@@ -46,23 +47,40 @@ fn from_proto(
     })
 }
 
-async fn recv(
-    stream: &mut (impl AsyncRead + Unpin),
-) -> std::io::Result<Option<livekit_protocol::agent::agent_dev_message::Message>> {
+fn oversize() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        format!("dev frame exceeds {DEV_FRAME_LIMIT} bytes"),
+    )
+}
+
+/// `None` once the CLI closes the channel between frames.
+async fn recv(stream: &mut (impl AsyncRead + Unpin)) -> std::io::Result<Option<AgentDevMessage>> {
     let mut len = [0u8; 4];
-    stream.read_exact(&mut len).await?;
+    let read = stream.read(&mut len).await?;
+    if read == 0 {
+        return Ok(None);
+    }
+    stream.read_exact(&mut len[read..]).await?;
     let len = u32::from_be_bytes(len) as usize;
     if len > DEV_FRAME_LIMIT {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("dev frame exceeds {DEV_FRAME_LIMIT} bytes"),
-        ));
+        return Err(oversize());
     }
     let mut bytes = vec![0u8; len];
     stream.read_exact(&mut bytes).await?;
-    let decoded = livekit_protocol::agent::AgentDevMessage::decode(bytes.as_slice())
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    Ok(decoded.message)
+    AgentDevMessage::decode(bytes.as_slice())
+        .map(Some)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+async fn send(stream: &mut (impl AsyncWrite + Unpin), message: Message) -> std::io::Result<()> {
+    let bytes = AgentDevMessage { message: Some(message) }.encode_to_vec();
+    if bytes.len() > DEV_FRAME_LIMIT {
+        return Err(oversize());
+    }
+    stream.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
+    stream.write_all(&bytes).await?;
+    stream.flush().await
 }
 
 /// Serves the dev channel to `lk agent dev` at `cli_addr` (`host:port`): announces the server,
@@ -92,19 +110,11 @@ async fn serve_dev_channel(
     server: Arc<dyn ServerJobs>,
 ) -> Result<(), HostError> {
     use livekit_protocol::agent::{
-        AgentDevMessage, GetRunningAgentJobsRequest, GetRunningAgentJobsResponse, ServerInfo,
-        agent_dev_message::Message,
+        GetRunningAgentJobsRequest, GetRunningAgentJobsResponse, ServerInfo,
     };
-    use tokio::io::AsyncWriteExt;
 
     let io = |e: std::io::Error| HostError::new(format!("dev channel: {e}"));
     let mut stream = tokio::net::TcpStream::connect(&cli_addr).await.map_err(io)?;
-    async fn send(stream: &mut tokio::net::TcpStream, message: Message) -> std::io::Result<()> {
-        let bytes = AgentDevMessage { message: Some(message) }.encode_to_vec();
-        stream.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
-        stream.write_all(&bytes).await?;
-        stream.flush().await
-    }
 
     send(&mut stream, Message::ServerInfo(ServerInfo { agent_name, url: url.clone() }))
         .await
@@ -112,8 +122,8 @@ async fn serve_dev_channel(
     send(&mut stream, Message::GetRunningJobsRequest(GetRunningAgentJobsRequest {}))
         .await
         .map_err(io)?;
-    let first = recv(&mut stream).await.map_err(io)?;
-    if let Some(Message::GetRunningJobsResponse(kept)) = first
+    let Some(first) = recv(&mut stream).await.map_err(io)? else { return Ok(()) };
+    if let Some(Message::GetRunningJobsResponse(kept)) = first.message
         && !kept.jobs.is_empty()
     {
         log::info!(target: lk_agents_abi::LOG_TARGET, "reloading {} job(s)", kept.jobs.len());
@@ -127,14 +137,14 @@ async fn serve_dev_channel(
         server.reload_jobs(jobs).await.map_err(|e| HostError::new(e.to_string()))?;
     }
     // The CLI asks before restarting this process, to resume these jobs after the reload.
-    loop {
-        let message = recv(&mut stream).await.map_err(io)?;
-        if let Some(Message::GetRunningJobsRequest(_)) = message {
+    while let Some(message) = recv(&mut stream).await.map_err(io)? {
+        if let Some(Message::GetRunningJobsRequest(_)) = message.message {
             let jobs = server.running_jobs().into_iter().map(to_proto).collect();
             let reply = Message::GetRunningJobsResponse(GetRunningAgentJobsResponse { jobs });
             send(&mut stream, reply).await.map_err(io)?;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

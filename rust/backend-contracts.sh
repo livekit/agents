@@ -24,7 +24,6 @@ esac
 cd "$(dirname "$0")"
 args=(
     --locked -p lk-agents-storage -p lk-agents-runtime --lib
-    --test runtime
     --no-tests fail
 )
 if [[ $backend == agentdb ]]; then

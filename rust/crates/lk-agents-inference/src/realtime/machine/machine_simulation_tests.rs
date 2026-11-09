@@ -1,17 +1,17 @@
-use lk_agents_inference::effects::RealtimeConnectionEffect;
+use crate::effects::RealtimeConnectionEffect;
 use std::{
     collections::{BTreeSet, VecDeque},
     time::{Duration, SystemTime},
 };
 
+use crate::realtime::{
+    INFERENCE, Outgoing, RealtimeConnection, RealtimeMachine, ReplyKind, SessionOptions, Step,
+    TurnDetection,
+};
 use lk_agents_abi::{
     ApiConnectOptions, AudioFrame, PushAudio, Ts,
     errors::ApiError,
     llm::realtime::{Event, RealtimeModelError},
-};
-use lk_agents_inference::realtime::{
-    INFERENCE, Outgoing, RealtimeConnection, RealtimeMachine, ReplyKind, SessionOptions, Step,
-    TurnDetection,
 };
 use lk_agents_media::AudioByteStream;
 use lk_agents_net::transport::{TransportError, connect_error};

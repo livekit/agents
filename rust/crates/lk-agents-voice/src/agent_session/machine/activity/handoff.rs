@@ -12,16 +12,12 @@ use crate::trace::HandoffStep;
 use lk_agents_abi::Ts;
 use std::collections::VecDeque;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct HandoffId(pub u64);
-
 /// The switches asked for and the one in progress, and the user turn held while one runs.
 #[derive(Default)]
 pub(crate) struct Handoff {
-    next: u64,
     in_progress: Option<InProgress>,
     /// Switches land in the order they were asked for.
-    queue: VecDeque<(HandoffId, Box<AgentUpdate>, Option<crate::events::RunId>)>,
+    queue: VecDeque<(Box<AgentUpdate>, Option<crate::events::RunId>)>,
     /// A user turn decided while a switch runs, delivered to the arriving agent once.
     pub(crate) held_user_turn: Option<HeldUserTurn>,
     /// The host's `say()` / `generate_reply()` asked while the leaving agent drains, in order.
@@ -30,7 +26,6 @@ pub(crate) struct Handoff {
 }
 
 struct InProgress {
-    id: HandoffId,
     update: Box<AgentUpdate>,
     phase: Phase,
     run: Option<crate::events::RunId>,
@@ -71,7 +66,7 @@ impl Handoff {
 
     pub(crate) fn has_run_work(&self, run: crate::events::RunId) -> bool {
         self.in_progress.as_ref().is_some_and(|handoff| handoff.run == Some(run))
-            || self.queue.iter().any(|(_, _, member)| *member == Some(run))
+            || self.queue.iter().any(|(_, member)| *member == Some(run))
     }
 
     #[must_use]
@@ -93,19 +88,19 @@ impl Handoff {
                 }
                 // Refused: the agent that blocked the held turn takes it, so it is kept exactly
                 // once, and a drain that joined the switch runs on it. Under a close it drops.
-                let Some((id, update)) = self.take_in_progress() else { return };
+                let Some(update) = self.take_in_progress() else { return };
                 out.push(VoiceCallback::ReplayHeldSpeech);
                 if cx.closing {
-                    return refuse(Some(id), update, HandoffRefused::Closing, out);
+                    return refuse(update, HandoffRefused::Closing, out);
                 }
-                refuse(Some(id), update, HandoffRefused::DrainRefused, out);
+                refuse(update, HandoffRefused::DrainRefused, out);
                 out.push(VoiceCallback::DeliverHeldTurn);
                 out.push(VoiceCallback::AgentStays);
             }
             HandoffEvent::Next => self.start_next(&mut cx, out),
             HandoffEvent::Closing => {
-                if let Some((id, update)) = self.take_in_progress() {
-                    refuse(Some(id), update, HandoffRefused::Closing, out);
+                if let Some(update) = self.take_in_progress() {
+                    refuse(update, HandoffRefused::Closing, out);
                 }
                 out.extend(self.refuse_queued());
                 self.held_user_turn = None;
@@ -140,26 +135,21 @@ impl Handoff {
 
     /// Every switch it holds: the one in progress, then the queued ones.
     pub(crate) fn updates(&self) -> impl Iterator<Item = &AgentUpdate> {
-        let queued = self.queue.iter().map(|(_, update, _)| &**update);
+        let queued = self.queue.iter().map(|(update, _)| &**update);
         self.in_progress().into_iter().chain(queued)
     }
 
-    pub(crate) fn take_in_progress(&mut self) -> Option<(HandoffId, Box<AgentUpdate>)> {
-        self.in_progress.take().map(|InProgress { id, update, .. }| (id, update))
+    pub(crate) fn take_in_progress(&mut self) -> Option<Box<AgentUpdate>> {
+        self.in_progress.take().map(|InProgress { update, .. }| update)
     }
 
     #[must_use]
     pub(crate) fn refuse_queued(&mut self) -> Vec<VoiceCallback> {
         let mut callbacks = Vec::new();
-        while let Some((id, update, _)) = self.queue.pop_front() {
-            refuse(Some(id), update, HandoffRefused::Closing, &mut callbacks);
+        while let Some((update, _)) = self.queue.pop_front() {
+            refuse(update, HandoffRefused::Closing, &mut callbacks);
         }
         callbacks
-    }
-
-    fn mint(&mut self) -> HandoffId {
-        self.next += 1;
-        HandoffId(self.next)
     }
 
     /// Refused when closing, queued behind a switch in progress, begun otherwise.
@@ -170,24 +160,23 @@ impl Handoff {
         cx: &mut Cx<'_>,
         out: &mut Vec<VoiceCallback>,
     ) {
-        let id = self.mint();
         let queued = self.switching() || !self.queue.is_empty();
         if cx.closing {
-            return refuse(Some(id), update, HandoffRefused::Closing, out);
+            return refuse(update, HandoffRefused::Closing, out);
         }
         if queued {
-            self.queue.push_back((id, update, run));
+            self.queue.push_back((update, run));
             return;
         }
-        self.start(id, update, run, cx, out);
+        self.start(update, run, cx, out);
     }
 
     fn start_next(&mut self, cx: &mut Cx<'_>, out: &mut Vec<VoiceCallback>) {
         if self.switching() {
             return;
         }
-        if let Some((id, update, run)) = self.queue.pop_front() {
-            self.start(id, update, run, cx, out);
+        if let Some((update, run)) = self.queue.pop_front() {
+            self.start(update, run, cx, out);
         }
     }
 
@@ -195,7 +184,6 @@ impl Handoff {
     /// ran.
     fn start(
         &mut self,
-        id: HandoffId,
         update: Box<AgentUpdate>,
         run: Option<crate::events::RunId>,
         cx: &mut Cx<'_>,
@@ -206,42 +194,31 @@ impl Handoff {
             Some(hook) => Phase::Exiting { hook },
             None => Phase::Draining,
         };
-        self.in_progress = Some(InProgress { id, update, phase, run });
+        self.in_progress = Some(InProgress { update, phase, run });
         if exit == Exit::Done {
             out.push(VoiceCallback::PauseScheduling(PauseCause::Handoff));
         }
     }
 }
 
-/// `id` is the handoff's when it was begun (`None` for a command refused before it was).
-fn refuse(
-    id: Option<HandoffId>,
-    update: Box<AgentUpdate>,
-    cause: HandoffRefused,
-    out: &mut Vec<VoiceCallback>,
-) {
-    out.push(VoiceCallback::RefuseHandoff { id, update, cause });
+fn refuse(update: Box<AgentUpdate>, cause: HandoffRefused, out: &mut Vec<VoiceCallback>) {
+    out.push(VoiceCallback::RefuseHandoff { update, cause });
 }
 
 impl VoiceDriver {
-    pub(crate) fn refuse_handoff(
-        &mut self,
-        _id: Option<HandoffId>,
-        mut update: Box<AgentUpdate>,
-        cause: HandoffRefused,
-    ) {
+    pub(crate) fn refuse_handoff(&mut self, mut update: Box<AgentUpdate>, cause: HandoffRefused) {
         self.answer(update.call.take(), Answer::Handoff(Err(cause)));
     }
 
     /// The swap: the closing re-check, the agent installed with its two records, the caller
     /// answered, `on_enter` issued, the held turn delivered, the next queued switch begun.
     pub(crate) fn perform_handoff(&mut self, now: Ts) {
-        let Some((_id, mut update)) = self.activity.handoff.take_in_progress() else {
+        let Some(mut update) = self.activity.handoff.take_in_progress() else {
             return;
         };
         if self.session.closing.is_some() {
             self.replay_held_speech(now);
-            self.refuse_handoff(Some(_id), update, HandoffRefused::Closing);
+            self.refuse_handoff(update, HandoffRefused::Closing);
             for callback in self.activity.handoff.refuse_queued() {
                 self.defer_callback(callback);
             }

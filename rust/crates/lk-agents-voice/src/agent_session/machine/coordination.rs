@@ -1,6 +1,6 @@
 use crate::agent_session::machine::activity::drain::DrainEvent;
 use crate::agent_session::machine::activity::false_interruption::AudioInterruptTrigger;
-use crate::agent_session::machine::activity::handoff::{HandoffEvent, HandoffId};
+use crate::agent_session::machine::activity::handoff::HandoffEvent;
 use crate::agent_session::machine::activity::scheduling::PauseCause;
 use crate::agent_session::{
     AgentUpdate, Answer, HandoffRefused, HookCall, HookId, RequestId, VoiceDriver, VoiceHostEvent,
@@ -453,7 +453,6 @@ pub(crate) enum VoiceCallback {
     /// The switch's drain settled: the swap is due.
     ApplyHandoff,
     RefuseHandoff {
-        id: Option<HandoffId>,
         update: Box<AgentUpdate>,
         cause: HandoffRefused,
     },
@@ -511,9 +510,7 @@ impl VoiceDriver {
             VoiceCallback::SpeechesSettled => self.drain_step(DrainEvent::Quiet),
             VoiceCallback::HookFinished(hook) => self.dispatch_hook_completion(now, hook),
             VoiceCallback::ApplyHandoff => self.perform_handoff(now),
-            VoiceCallback::RefuseHandoff { id, update, cause } => {
-                self.refuse_handoff(id, update, cause)
-            }
+            VoiceCallback::RefuseHandoff { update, cause } => self.refuse_handoff(update, cause),
             VoiceCallback::AgentStays => self.drain_step(DrainEvent::AgentStays),
             VoiceCallback::DeliverHeldTurn => self.deliver_held_turn(now),
             VoiceCallback::ReplayHeldSpeech => self.replay_held_speech(now),

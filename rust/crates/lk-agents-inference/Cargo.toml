@@ -84,5 +84,9 @@ name = "realtime_ctx_diff_scaling"
 path = "src/realtime/context_tests.rs"
 
 [[test]]
-name = "realtime"
-path = "src/realtime_tests.rs"
+name = "context"
+path = "src/realtime/machine/context/context_tests.rs"
+
+[[test]]
+name = "eot"
+path = "src/eot_tests.rs"

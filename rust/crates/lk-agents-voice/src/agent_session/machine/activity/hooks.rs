@@ -283,20 +283,16 @@ impl VoiceDriver {
         local: bool,
     ) {
         use HookOutcome::{Failed, Filler, FunctionToolsExecuted, Raised, Returned, Turn};
-        let outcome = match outcome {
-            HookOutcome::Raised(_) => Failed,
-            outcome => outcome,
-        };
         let fits = matches!(
             (kind, &outcome),
             (
                 HookKind::OnExit | HookKind::OnEnter | HookKind::OnUserTurnExceeded,
-                Returned | Failed
-            ) | (HookKind::OnUserTurnCompleted, Turn(_) | Returned | Failed)
-                | (HookKind::FillerSource, Filler(_) | Returned | Failed)
+                Returned | Failed | Raised(_)
+            ) | (HookKind::OnUserTurnCompleted, Turn(_) | Returned | Failed | Raised(_))
+                | (HookKind::FillerSource, Filler(_) | Returned | Failed | Raised(_))
                 | (
                     HookKind::FunctionToolsExecuted,
-                    FunctionToolsExecuted { .. } | Returned | Failed
+                    FunctionToolsExecuted { .. } | Returned | Failed | Raised(_)
                 )
         );
         // The sequence must not hang on a malformed answer: it goes on as if unanswered.
@@ -328,10 +324,8 @@ impl VoiceDriver {
             HookKind::OnUserTurnCompleted => {
                 let edits = match outcome {
                     Turn(edits) => edits,
-                    Failed if fits => vec![TurnEdit::StopResponse],
-                    Failed | Returned | Filler(_) | FunctionToolsExecuted { .. } | Raised(_) => {
-                        Vec::new()
-                    }
+                    Failed | Raised(_) => vec![TurnEdit::StopResponse],
+                    Returned | Filler(_) | FunctionToolsExecuted { .. } => Vec::new(),
                 };
                 // Matched to its parked turn; a late answer is dropped.
                 if let Some(pending) = self.activity.pending_turn.take_if(|p| p.hook == Some(id)) {

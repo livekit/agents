@@ -5,8 +5,8 @@ From the repository root:
 ```sh
 cargo test --manifest-path rust/Cargo.toml -p lk-agents-inference --lib realtime_
 cargo test --manifest-path rust/Cargo.toml -p lk-agents-runtime --lib realtime::
-cargo test --manifest-path rust/Cargo.toml -p lk-agents-runtime --test realtime
-cargo test --manifest-path rust/Cargo.toml -p lk-agents-runtime --test realtime_ctx_diff_scaling -- --nocapture
+cargo test --manifest-path rust/Cargo.toml -p lk-agents-inference --test context
+cargo test --manifest-path rust/Cargo.toml -p lk-agents-inference --test realtime_ctx_diff_scaling -- --nocapture
 ```
 
 Core tests cover connection generations, acquisition cleanup, pending response deadlines,

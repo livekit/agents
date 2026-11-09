@@ -134,52 +134,5 @@ pub async fn prepare_on(
 }
 
 #[cfg(all(test, feature = "images"))]
-mod tests {
-    use std::time::Duration;
-
-    use lk_agents_abi::utils::video::{VideoBufferType, VideoFrame};
-
-    use super::*;
-
-    #[cfg(unix)]
-    fn thread_cpu() -> Duration {
-        let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-        // SAFETY: the OS writes the calling thread's CPU time to this valid timespec.
-        assert_eq!(unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) }, 0);
-        Duration::new(time.tv_sec.try_into().unwrap(), time.tv_nsec.try_into().unwrap())
-    }
-
-    #[cfg(unix)]
-    #[tokio::test(flavor = "current_thread")]
-    async fn image_preparation_services_the_callers_loop_during_encoding() {
-        let frame = VideoFrame {
-            width: 1920,
-            height: 1080,
-            buffer_type: VideoBufferType::Rgba,
-            data: vec![127; 1920 * 1080 * 4].into(),
-        };
-        let media_pool = MediaPool::new(Default::default()).unwrap();
-        let mut encoding = Box::pin(prepare_on(
-            &media_pool,
-            ImageInput::Frame(frame),
-            ImageEncodeOptions { format: ImageFormat::Jpeg, ..Default::default() },
-        ));
-        use std::future::{Future, poll_fn};
-        let encoding = poll_fn(|cx| {
-            let started = thread_cpu();
-            let result = encoding.as_mut().poll(cx);
-            assert!(thread_cpu().saturating_sub(started) <= Duration::from_millis(2));
-            result
-        });
-        tokio::pin!(encoding);
-        let mut observations = 0;
-        let prepared = loop {
-            tokio::select! {
-                output = &mut encoding => break output.unwrap(),
-                _ = tokio::time::sleep(Duration::from_millis(1)) => observations += 1,
-            }
-        };
-        assert!(observations > 0, "the encoder must yield control before completion");
-        assert!(prepared.data.unwrap().starts_with(&[0xff, 0xd8, 0xff]));
-    }
-}
+#[path = "images_tests.rs"]
+mod tests;

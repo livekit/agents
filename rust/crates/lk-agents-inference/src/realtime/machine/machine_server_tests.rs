@@ -1,21 +1,21 @@
 use std::{collections::BTreeMap, time::SystemTime};
 
+use crate::realtime::{
+    Incoming, TurnDetection,
+    protocol::{OutputItemKind, ResponseDone, TranscriptionCompleted, TranscriptionUsage},
+};
 use fastrand::Rng;
 use lk_agents_abi::{
     AudioFrame, ChatItem, ChatMessage, FunctionCall, Role, ToolChoice, Ts,
     llm::realtime::{GenerationStatus, Modalities},
     usage::TokenUsage,
 };
-use lk_agents_inference::realtime::{
-    Incoming, TurnDetection,
-    protocol::{OutputItemKind, ResponseDone, TranscriptionCompleted, TranscriptionUsage},
-};
 
 // Each event's delay after its cause is drawn from a hand-set range around what the real server
 // took; a response's audio is silence of the delta's nominal length, which truncation is judged
 // against.
 
-#[path = "client_tests.rs"]
+#[path = "machine_server_client_tests.rs"]
 mod client;
 
 /// The session's audio rate, both ways.
