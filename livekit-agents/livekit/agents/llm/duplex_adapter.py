@@ -198,6 +198,8 @@ class _Burst:
     """Span clock minus audio clock, fixed by the first fragment: the sound that opened the gate
     and the oldest unclaimed fragment describe the same moment."""
     opened_at: float = field(default_factory=time.time)
+    abandoned: bool = False
+    """Interrupted by the framework, which no longer reads it; its sound plays out unheard."""
     transcript: str = ""
     _last_annotation: float = 0.0
 
@@ -533,7 +535,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         self._chat_ctx.insert(call)
         # a call joins the burst in flight so the tool runs while the model talks; alone, it is a
         # generation of its own, over as soon as it is delivered
-        if self._burst is not None:
+        if self._burst is not None and not self._burst.abandoned:
             self._burst.function_ch.send_nowait(call)
             return
         # under a tool_choice that forces a call, the call is the reply: the speech it leads to
@@ -667,7 +669,10 @@ class _DuplexRealtimeSession(RealtimeSession):
         pass
 
     def interrupt(self) -> None:
-        pass  # barge-in is the model's own, and it cannot be cancelled
+        # barge-in is the model's own and cannot be cancelled, but the framework stops reading
+        # the burst in flight, so a call arriving later must not join it
+        if self._burst is not None:
+            self._burst.abandoned = True
 
     def truncate(
         self,
