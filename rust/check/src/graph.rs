@@ -6,7 +6,7 @@
 //! 3. abi, core, voice and media resolve no executor, transport, host or SDK crate ([`BANNED`],
 //!    [`BANNED_FAMILIES`]), through any normal, build or dev edge.
 //! 4. Only `lk-agents-py` depends on pyo3, so the compiler rejects pyo3 anywhere else.
-//! 5. Only abi, py and storage depend on `lk-agents-host-derive`, and ABI does not re-export
+//! 5. Only abi, storage and py depend on `lk-agents-host-derive`, and ABI does not re-export
 //!    `host`, so the compiler rejects `#[host]` anywhere else (storage uses `#[table]` only).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -26,6 +26,7 @@ const STORAGE: &str = "lk-agents-storage";
 const WORKER: &str = "lk-agents-worker";
 const CLI: &str = "lk-agents-cli";
 const RUNTIME: &str = "lk-agents-runtime";
+const FUZZ: &str = "lk-agents-fuzz";
 const PY: &str = "lk-agents-py";
 const HOST_DERIVE: &str = "lk-agents-host-derive";
 
@@ -37,19 +38,17 @@ const GRAPH: &[(&str, &[&str])] = &[
     (MEDIA, &[ABI, TELEMETRY]),
     (TELEMETRY, &[ABI]),
     (NET, &[ABI, CORE, MEDIA, TELEMETRY]),
-    (INFERENCE, &[ABI, CORE, MEDIA, NET, TELEMETRY]),
-    // `#[table]` for the storage records.
-    (STORAGE, &[ABI, NET, TELEMETRY, HOST_DERIVE]),
-    (WORKER, &[ABI, NET, TELEMETRY]),
-    (CLI, &[ABI, WORKER, NET]),
+    (INFERENCE, &[ABI, CORE, MEDIA, TELEMETRY, NET]),
+    (STORAGE, &[ABI, TELEMETRY, NET, HOST_DERIVE]),
+    (WORKER, &[ABI, TELEMETRY, NET]),
+    (CLI, &[ABI, NET, WORKER]),
     (RUNTIME, &[ABI, CORE, VOICE, MEDIA, TELEMETRY, NET, INFERENCE, STORAGE, WORKER, CLI]),
-    ("lk-agents-fuzz", &[ABI, CORE, VOICE, MEDIA, TELEMETRY, RUNTIME]),
+    (FUZZ, &[ABI, CORE, VOICE, MEDIA, TELEMETRY, RUNTIME]),
     (PY, &[ABI, RUNTIME, HOST_DERIVE]),
 ];
 
 /// Proc macros and generators: they define no product dependency direction.
-const TOOLS: &[&str] =
-    &["lk-agents-bindgen", "lk-agents-check", "lk-agents-codegen", "lk-agents-host-derive"];
+const TOOLS: &[&str] = &["lk-agents-bindgen", "lk-agents-check", "lk-agents-codegen", HOST_DERIVE];
 
 const SANS_IO: &[&str] = &[ABI, CORE, VOICE, MEDIA];
 
@@ -67,8 +66,8 @@ const BANNED: &[&str] = &[
     "rusqlite",
     "smol",
     "tungstenite",
-    RUNTIME,
 ];
+/// Banned with every `<family>-*` crate.
 const BANNED_FAMILIES: &[&str] = &["futures", "pyo3", "tokio"];
 
 /// The wheel targets (.github/workflows/build.yml): an edge only another target takes is never built.
@@ -114,13 +113,15 @@ struct Resolved {
 
 impl Resolved {
     fn new(metadata: &Value) -> Self {
+        let names: BTreeMap<&str, &str> = list(&metadata["packages"])
+            .iter()
+            .filter_map(|package| Some((package["id"].as_str()?, package["name"].as_str()?)))
+            .collect();
         let name = |id: &Value| -> String {
-            metadata["packages"]
-                .as_array()
-                .and_then(|packages| packages.iter().find(|p| p["id"] == *id))
-                .and_then(|p| p["name"].as_str())
+            id.as_str()
+                .and_then(|id| names.get(id))
                 .expect("every resolved id is a package")
-                .to_owned()
+                .to_string()
         };
         let members = list(&metadata["workspace_members"]).iter().map(name).collect();
         let deps = list(&metadata["resolve"]["nodes"])
@@ -158,11 +159,13 @@ fn list(value: &Value) -> &[Value] {
     value.as_array().map_or(&[], Vec::as_slice)
 }
 
+/// `name` is `family` or one of its `family-*` crates.
+fn in_family(name: &str, family: &str) -> bool {
+    name.strip_prefix(family).is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
+}
+
 fn banned(name: &str) -> bool {
-    BANNED.contains(&name)
-        || BANNED_FAMILIES.iter().any(|family| {
-            name.strip_prefix(family).is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
-        })
+    BANNED.contains(&name) || BANNED_FAMILIES.iter().any(|family| in_family(name, family))
 }
 
 fn violations(graph: &Resolved) -> BTreeSet<String> {
@@ -179,6 +182,11 @@ fn violations(graph: &Resolved) -> BTreeSet<String> {
                 }
             }
         }
+        if name != PY {
+            for dep in graph.direct(name).filter(|dep| in_family(dep, "pyo3")) {
+                errors.insert(format!("{name} depends on {dep}: pyo3 belongs to {PY} alone"));
+            }
+        }
         if TOOLS.contains(&name) {
             continue;
         }
@@ -189,13 +197,8 @@ fn violations(graph: &Resolved) -> BTreeSet<String> {
             continue;
         };
         for dep in graph.direct(name) {
-            let tool = TOOLS.contains(&dep) && dep != HOST_DERIVE;
-            let workspace = dep.starts_with("lk-agents-") && dep != name && !tool;
-            if workspace && !allowed.contains(&dep) {
+            if dep.starts_with("lk-agents-") && dep != name && !allowed.contains(&dep) {
                 errors.insert(format!("{name} must not depend on {dep} (crate graph)"));
-            }
-            if name != PY && dep.starts_with("pyo3") {
-                errors.insert(format!("{name} depends on {dep}: pyo3 belongs to {PY} alone"));
             }
         }
     }
