@@ -761,6 +761,7 @@ not_sent! {
     command::Activity => "a family, not a leaf: its leaves are in the table";
     turn::SkipReplies => "the answering-machine detector's own, on its verdict and close (`Amd`)";
     command::AmdSpan => "the answering-machine detector's own, on its attach and verdict (`Amd`)";
+    command::DelegateUsage => "an agent tool's child usage, sent by the tool executor beside its report";
 }
 
 /// Compiles only while every production command leaf is either in the table or excused above.

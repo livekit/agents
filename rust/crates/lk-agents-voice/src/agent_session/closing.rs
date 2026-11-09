@@ -432,6 +432,7 @@ impl VoiceDriver {
             | Command::Close(_)
             | Command::HookDone { .. }
             | Command::HostMetrics(_)
+            | Command::DelegateUsage(_)
             | Command::AmdSpan(_)
             | Command::SetStaticKeyterms(_)
             | Command::Recorder(_)

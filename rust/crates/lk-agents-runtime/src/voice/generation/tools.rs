@@ -337,7 +337,19 @@ impl ToolBody {
     ) -> ToolReport {
         let (host, invocation, prepared) = (&self.host, &self.invocation, &self.prepared);
         let mut report = match host.run_tool(&self.cx, invocation, prepared).await {
-            Ok(ran) => ran.report,
+            Ok(ran) => {
+                // What an agent tool's child consumed is the session's, counted once.
+                if let Some(usage) = ran.usage {
+                    use lk_agents_voice::agent_session::{Command, VoiceCommandOrigin};
+                    let origin = VoiceCommandOrigin::Tool {
+                        invocation_id: invocation.invocation_id.clone(),
+                        operation: invocation.operation,
+                        call_id: self.call.call_id.clone(),
+                    };
+                    let _ = self.shared.queue.send_from(origin, Command::DelegateUsage(usage));
+                }
+                ran.report
+            }
             Err(error) => {
                 log::error!(target: lk_agents_abi::LOG_TARGET, "the tool's host failed outside its error handling: {error}");
                 ToolOutcome::Internal.into()

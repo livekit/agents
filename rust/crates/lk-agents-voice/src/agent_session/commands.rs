@@ -29,6 +29,8 @@ pub enum Command {
     /// Plugin-measured only (VAD, realtime usage, EOT/interruption); LLM/TTS/STT/EOU never come
     /// from here.
     HostMetrics(Box<lk_agents_abi::metrics::base::AgentMetrics>),
+    /// What an agent tool's child, run in process for a tool call, consumed.
+    DelegateUsage(lk_agents_abi::usage::Usage),
     #[vocabulary(kind = IvrCommandKind)]
     Ivr(IvrCommand),
     /// `update_options(keyterms=..)`: replaces the user list; the effective list is pushed to the
@@ -625,6 +627,7 @@ impl Command {
             | Command::Close(_)
             | Command::HookDone { .. }
             | Command::HostMetrics(_)
+            | Command::DelegateUsage(_)
             | Command::Ivr(_)
             | Command::SetStaticKeyterms(_)
             | Command::Dtmf(_)

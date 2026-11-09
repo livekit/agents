@@ -256,3 +256,37 @@ async def test_on_a_call_the_persons_answer_resumes_the_waiting_child() -> None:
         assert "B-5" in await asyncio.wait_for(result(), 10)
     answer = child_model.requests[1].items[-1]
     assert answer.type == "message" and answer.text_content == "friday"
+
+
+class _ChildModel(Script):
+    @property
+    def model(self) -> str:
+        return "child-model"
+
+
+async def test_on_a_call_the_childs_usage_counts_once_in_the_sessions() -> None:
+    from livekit.agents.llm import FunctionToolCall
+
+    from .fake_llm import FakeLLM, FakeLLMResponse
+
+    child = _booking(_ChildModel(call("final_result", {"reference": "B-3"}, "final-1")))
+    delegate = FunctionToolCall(name="booking", arguments='{"nights": 2}', call_id="c1")
+    response = FakeLLMResponse(input="Two nights", content="", ttft=0, duration=0)
+    model = FakeLLM(fake_responses=[response.model_copy(update={"tool_calls": [delegate]})])
+    desk = Agent(instructions="Delegate.", name="desk", tools=[child.as_tool(parameters=Request)])
+    async with VoiceSession(
+        llm=model, vad=None, context=Case(), turn_handling={"turn_detection": "manual"}
+    ) as session:
+        await session.start(desk)
+        await session._run(user_input="Two nights")
+
+        async def child_requests() -> int:
+            while True:
+                counted = [m for m in session.usage.models if m.model == "child-model"]
+                if counted:
+                    return counted[0].requests
+                await asyncio.sleep(0.01)
+
+        assert await asyncio.wait_for(child_requests(), 5) == 1
+        await asyncio.sleep(0.2)
+        assert [m.requests for m in session.usage.models if m.model == "child-model"] == [1]

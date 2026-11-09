@@ -467,6 +467,7 @@ impl VoiceDriver {
                     counted: false,
                 });
             }
+            Command::DelegateUsage(usage) => self.session.usage.add(&usage),
             Command::SetStaticKeyterms(terms) => {
                 self.keyterms_step(now, crate::keyterm_detection::KeytermIn::StaticTerms(terms));
             }
