@@ -89,57 +89,37 @@ background. If in-flight creation returns a call SID, the task attempts to cance
 that call while the worker is alive. Provider failure or worker shutdown can still
 prevent cleanup.
 
-## Preserve the inbound caller's number with Telnyx
+## Telnyx SIP trunk transfers with the original caller ID
 
-This section applies only to Telnyx SIP trunks. Other SIP providers have their own
-caller-ID rules, so keep the default configuration in `warm_transfer.py` for them.
+[`telnyx_sip_trunk_warm_transfer.py`](telnyx_sip_trunk_warm_transfer.py) is a
+Telnyx-only variant of `warm_transfer.py`. Use it only when your outbound trunk
+terminates on Telnyx; other SIP providers have their own caller-ID rules, so keep
+`warm_transfer.py` for them.
 
-A warm transfer creates a new outbound call to the supervisor. To let the
-supervisor identify the customer, an application can preserve the customer's
-caller ID instead of presenting its business number. The existing `sip_number`
-and `sip_headers` options support this with a Telnyx SIP trunk.
-
-For an inbound call from customer A to your Telnyx number B, followed by a
-transfer to supervisor C, [Telnyx requires](https://support.telnyx.com/en/articles/13117410-how-external-call-transfers-work):
+For an inbound call from customer A to your Telnyx number B, followed by a transfer
+to supervisor C, [Telnyx requires](https://support.telnyx.com/en/articles/13117410-how-external-call-transfers-work):
 
 - The original A-to-B call must still be active when dialing C.
 - The outbound call must present A as the caller and include a SIP `Diversion`
   header identifying B.
 
-In `SIPSupportAgent._start_transfer`, use the following options when creating
-the task. `inbound_customer_number` and `inbound_telnyx_number` are application
-variables: retrieve the original caller and called number from trusted,
-server-side context for this specific inbound call. Normalize both to E.164
-before constructing the header. `SIP_TRUNK_ID` must select your configured
-Telnyx outbound trunk.
+`telnyx_caller_id()` does this with the existing `sip_number` and `sip_headers`
+options of `WarmTransferTask`. It reads A from the caller's `sip.phoneNumber`
+attribute and B from `sip.trunkPhoneNumber`, so both numbers come from the same
+inbound call. No CallToken or Telnyx-specific SDK flag is needed.
 
-```python
-return await WarmTransferTask(
-    sip_call_to=SUPERVISOR_PHONE_NUMBER,
-    sip_trunk_id=SIP_TRUNK_ID,
-    sip_number=inbound_customer_number,
-    sip_headers={
-        "Diversion": f"<sip:{inbound_telnyx_number}@sip.telnyx.com>;reason=unconditional",
-    },
-    chat_ctx=self.chat_ctx,
-    extra_instructions=SUMMARY_INSTRUCTIONS,
-)
-```
+1. Set `LIVEKIT_SIP_OUTBOUND_TRUNK` to an outbound trunk that terminates on Telnyx.
+2. Run `python telnyx_sip_trunk_warm_transfer.py dev`.
 
-This uses the existing SIP warm-transfer flow; it does not require a CallToken
-or a Telnyx-specific SDK flag. Keep the customer's original call connected
-during consultation. Applications that want their business caller ID can keep
-the existing example configuration.
+Notes:
 
-### Verify and troubleshoot
-
-Call B from phone A, request a transfer to phone C, then check the number shown
-on C and complete the consultation and transfer. Caller-ID presentation also
-depends on the receiving network. This snippet illustrates configuration; it
-does not by itself verify carrier acceptance.
-
-For `403 Unverified origination number D51`, check that the A-to-B call is still
-active, the outbound caller number matches A, and `Diversion` identifies the
-actual Telnyx number B that received the call. Inspect the outbound SIP INVITE
-to confirm that the header reaches Telnyx. An arbitrary customer number or a
-header copied from a different call does not establish a valid transfer.
+- The example uses the caller linked to the agent session. If that caller is not a
+  SIP participant, or either number is missing or not in E.164 form, it keeps
+  `LIVEKIT_SIP_NUMBER`.
+- The customer's call stays connected while the supervisor is briefed, which
+  satisfies the active-call requirement.
+- There is no automatic fallback: if Telnyx rejects the call, the task fails and the
+  caller conversation resumes.
+- For `403 Unverified origination number D51`, check that the A-to-B call is still
+  active and that `Diversion` names the Telnyx number B that received the call.
+  Inspect the outbound SIP INVITE to confirm the header reaches Telnyx.
