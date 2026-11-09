@@ -7,7 +7,10 @@ use lk_agents_abi::{
 };
 use tokio::sync::{Notify, mpsc};
 
-use super::{Control, Forward, Registry, Slot};
+use super::{
+    Control, Forward, Registry, Slot,
+    hazard::{Site, strike},
+};
 use crate::{
     input::{Input, Speaker, UserText},
     record::{Detail, Kind},
@@ -47,6 +50,7 @@ struct Recognition {
     registry: Arc<Registry>,
     events: mpsc::UnboundedReceiver<Result<SpeechEvent, ProviderError>>,
     ended: Arc<Notify>,
+    hazard: super::hazard::StreamHazard,
 }
 
 impl Stt for FakeStt {
@@ -85,6 +89,9 @@ impl Stt for FakeStt {
             if !self.connect.is_zero() {
                 tokio::time::sleep(self.connect).await;
             }
+            if let Some(fault) = self.registry.hazard(Site::SttOpen) {
+                return strike(fault, Site::SttOpen).await;
+            }
             let (sender, events) = mpsc::unbounded_channel();
             let ended = Arc::new(Notify::new());
             let opened = self.registry.now();
@@ -99,8 +106,13 @@ impl Stt for FakeStt {
                     registry: self.registry.clone(),
                     ended: Some(ended.clone()),
                 }) as SttSink,
-                Box::new(Recognition { slot, registry: self.registry.clone(), events, ended })
-                    as SttSource,
+                Box::new(Recognition {
+                    slot,
+                    registry: self.registry.clone(),
+                    events,
+                    ended,
+                    hazard: self.registry.stream_hazard(Site::SttNext, Site::SttClose),
+                }) as SttSource,
             )))
         })
     }
@@ -108,7 +120,11 @@ impl Stt for FakeStt {
 
 impl StreamOutput<SpeechEvent> for Recognition {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
+        let fault = self.registry.stream_fault(&mut self.hazard, Site::SttNext, self.slot);
         Box::pin(async move {
+            if let Some(fault) = fault {
+                return strike(fault, Site::SttNext).await;
+            }
             // A real stream ends once its input has; otherwise a replaced stream stays open.
             tokio::select! {
                 biased;
@@ -122,8 +138,12 @@ impl StreamOutput<SpeechEvent> for Recognition {
         true
     }
 
-    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+    fn close(mut self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        let fault = self.registry.stream_fault(&mut self.hazard, Site::SttClose, self.slot);
         Box::pin(async move {
+            if let Some(fault) = fault {
+                return strike(fault, Site::SttClose).await;
+            }
             self.registry.mark_closed(self.slot);
             Closed::Clean
         })

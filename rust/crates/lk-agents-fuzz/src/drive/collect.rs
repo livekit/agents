@@ -18,7 +18,9 @@ impl Run {
             && super::apply::ready_now(closing.as_mut()).is_some()
         {
             self.closing = None;
+            self.closed_probe();
         }
+        self.absorb_probes();
         let from_host = self.record.host().len();
         let host = std::mem::take(&mut *self.host.lock().unwrap());
         for (at, seen, handle) in host {
@@ -186,6 +188,21 @@ impl Run {
                 Record::Generated { at, generation, chunk } => {
                     self.record.record_generated(at, generation % 255, chunk);
                 }
+                Record::Fault { at, site, fault, on } => {
+                    self.record.record_fault(at, site, fault);
+                    // A stream that panicked unwound away, and one whose close hangs was let go:
+                    // either is gone, and nothing more reaches it.
+                    let spent = fault == crate::record::Fault::Panic || site.is_close();
+                    if let Some(slot) = on.filter(|_| spent) {
+                        self.controls.remove(&slot);
+                        if self.record.live().has(slot.kind, slot.nth) {
+                            self.record.close(at, slot.kind, slot.nth);
+                        }
+                        if slot.kind == Kind::Stt {
+                            self.end_utterances_on(at, slot.nth);
+                        }
+                    }
+                }
                 Record::CancelRefused { at, call_id } => {
                     self.record.record_cancel_refused(at, call_id);
                 }
@@ -277,6 +294,12 @@ impl Run {
                 }) => {}
                 Step::Handoff(HandoffStep::HookIssued { hook, kind, .. }) => {
                     self.open_once(at, Kind::Hook, Id::Hook(*hook), Detail::Hook { kind: *kind });
+                    let nth = self.record.resources(Kind::Hook).find(|o| o.id() == Id::Hook(*hook));
+                    if let Some(nth) = nth.map(|o| o.nth())
+                        && self.registry.hang(crate::record::Site::Hook)
+                    {
+                        self.hung_hooks.insert(nth);
+                    }
                 }
                 Step::Handoff(HandoffStep::HookFinished { hook, .. }) => {
                     self.close_by_id(at, Kind::Hook, Id::Hook(*hook));

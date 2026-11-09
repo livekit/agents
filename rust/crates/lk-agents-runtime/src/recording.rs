@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 #[cfg(any(test, feature = "media-ffmpeg"))]
 use std::io::Write;
 #[cfg(feature = "media-ffmpeg")]

@@ -1,6 +1,6 @@
 use crate::voice::VoiceRuntimeEvent;
 use crate::voice::session::Tx;
-use crate::voice::speech_handle::SpeechHandle;
+use crate::voice::speech_handle::{SpeechHandle, SpeechSignals};
 use lk_agents_voice::agent_session::{
     Answer, Command, QueueClosed, RequestId, Sent, VoiceCommandOrigin, VoiceEvent,
 };
@@ -10,8 +10,7 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 
 /// Where an awaited input's answer goes. It travels with the input that names its call; the
-/// runtime keeps it until the core answers that call, and drops it unanswered when the session
-/// ends.
+/// loop keeps it until the core answers that call, and drops it unanswered when it ends.
 pub enum ReplyTo {
     Answer(oneshot::Sender<Answer>),
     /// A `say()` / `generate_reply()`: [`Answer::Speech`] marks the speech created; another
@@ -25,7 +24,7 @@ impl ReplyTo {
             ReplyTo::Answer(tx) => {
                 let _ = tx.send(answer);
             }
-            ReplyTo::Speech(speech) => speech.0.answered(matches!(answer, Answer::Speech)),
+            ReplyTo::Speech(speech) => speech.answer(None, matches!(answer, Answer::Speech)),
         }
     }
 }
@@ -39,12 +38,48 @@ impl std::fmt::Debug for ReplyTo {
     }
 }
 
-/// Lost unless answered first.
-pub struct SpeechReply(pub Arc<SpeechHandle>);
+/// Lost unless answered first. Carries the speech's writers to the loop, which takes them as it
+/// receives the call.
+pub struct SpeechReply {
+    handle: Option<Arc<SpeechHandle>>,
+    signals: Option<SpeechSignals>,
+}
+
+impl SpeechReply {
+    pub fn new(handle: Arc<SpeechHandle>, signals: SpeechSignals) -> Self {
+        SpeechReply { handle: Some(handle), signals: Some(signals) }
+    }
+
+    /// The writers, under the speech's reserved id, for the loop's table.
+    pub fn take_signals(
+        &mut self,
+    ) -> Option<(
+        lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId,
+        SpeechSignals,
+    )> {
+        let id = self.handle.as_ref()?.reserved()?;
+        Some((id, self.signals.take()?))
+    }
+
+    pub fn reserved(
+        &self,
+    ) -> Option<lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId> {
+        self.handle.as_ref()?.reserved()
+    }
+
+    /// The loop answered: `signals` are the speech's writers from its table.
+    pub fn answer(mut self, signals: Option<&SpeechSignals>, created: bool) {
+        if let Some(handle) = self.handle.take() {
+            handle.answered(signals.or(self.signals.as_ref()), created);
+        }
+    }
+}
 
 impl Drop for SpeechReply {
     fn drop(&mut self) {
-        self.0.answered(false);
+        if let Some(handle) = self.handle.take() {
+            handle.answered(None, false);
+        }
     }
 }
 
@@ -85,47 +120,43 @@ pub fn open<T>(id: RequestId, pick: fn(Answer) -> Option<T>) -> (Call, Awaited<T
     (Call { id, reply_to: ReplyTo::Answer(tx) }, Awaited { rx, pick })
 }
 
-/// The replies of the calls sent to the loop and not answered yet. A sender registers its reply
-/// before the input naming the call is queued; the queue owner takes it to answer; the session's
-/// end drops the rest unanswered.
+/// `input`, naming `call`, queued with its reply; refused, the reply is dropped unanswered.
+pub fn send(queue: &Tx, input: VoiceEvent, call: Call) -> Result<(), QueueClosed> {
+    queue.send(VoiceRuntimeEvent::Awaited(input, call))
+}
+
+/// `command` from `origin`, with the reply of the call it names when it is awaited.
+pub fn send_command(
+    queue: &Tx,
+    origin: VoiceCommandOrigin,
+    command: Command,
+    call: Option<Call>,
+) -> Result<(), QueueClosed> {
+    let input = VoiceEvent::Host(Sent { origin, command });
+    match call {
+        Some(call) => send(queue, input, call),
+        None => queue.send(input),
+    }
+}
+
+/// The replies of the calls the loop received and the core has not answered yet: the loop's
+/// own, so its end, however it comes, drops them unanswered.
 #[derive(Default)]
-pub struct Calls(Mutex<BTreeMap<RequestId, ReplyTo>>);
+pub struct Calls(BTreeMap<RequestId, ReplyTo>);
 
 impl Calls {
-    /// `input`, naming `call`, queued with its reply kept; refused, the reply is dropped.
-    pub fn send(&self, queue: &Tx, input: VoiceEvent, call: Call) -> Result<(), QueueClosed> {
-        let id = self.register(call);
-        queue.send(VoiceRuntimeEvent::Awaited(input, id)).inspect_err(|_| drop(self.take(id)))
+    /// Kept until the core answers `call`.
+    pub fn register(&mut self, call: Call) {
+        self.0.insert(call.id, call.reply_to);
     }
 
-    /// Kept until the core answers `call` or the session ends.
-    pub fn register(&self, call: Call) -> RequestId {
-        self.0.lock().insert(call.id, call.reply_to);
-        call.id
+    pub fn take(&mut self, id: RequestId) -> Option<ReplyTo> {
+        self.0.remove(&id)
     }
 
-    /// `command` from `origin`, with the reply of the call it names when it is awaited.
-    pub fn send_command(
-        &self,
-        queue: &Tx,
-        origin: VoiceCommandOrigin,
-        command: Command,
-        call: Option<Call>,
-    ) -> Result<(), QueueClosed> {
-        let input = VoiceEvent::Host(Sent { origin, command });
-        match call {
-            Some(call) => self.send(queue, input, call),
-            None => queue.send(input),
-        }
-    }
-
-    pub fn take(&self, id: RequestId) -> Option<ReplyTo> {
-        self.0.lock().remove(&id)
-    }
-
-    /// The session ended: every call still waiting is dropped unanswered, outside the lock.
-    pub fn clear(&self) {
-        drop(std::mem::take(&mut *self.0.lock()));
+    /// Every call still waiting is dropped unanswered.
+    pub fn clear(&mut self) {
+        self.0.clear();
     }
 }
 

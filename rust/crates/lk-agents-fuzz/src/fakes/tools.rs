@@ -13,7 +13,10 @@ use lk_agents_runtime::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::{ToolOutcome, ToolReport, VoiceAgentFrame};
 use tokio::sync::oneshot;
 
-use super::{Control, Registry, Slot};
+use super::{
+    Control, Registry, Slot,
+    hazard::{Site, strike},
+};
 use crate::{
     input::{AgentText, Input, ToolAnswer as Answer},
     record::{Detail, Kind},
@@ -313,10 +316,18 @@ impl FakeTools {
         );
         let (cancel, cancelled) = oneshot::channel();
         self.running.lock().unwrap().insert(call.call_id.clone(), cancel);
+        // A hung body still honours its cancellation, as an awaiting Python body does.
+        let hazard = self.registry.hazard(Site::ToolBody);
+        let body = async {
+            match hazard {
+                Some(fault) => strike(fault, Site::ToolBody).await,
+                None => self.body(invocation, call, handle, slot, receiver).await,
+            }
+        };
         let outcome = tokio::select! {
             biased;
             Ok(()) = cancelled => None,
-            outcome = self.body(invocation, call, handle, slot, receiver) => Some(outcome),
+            outcome = body => Some(outcome),
         };
         self.running.lock().unwrap().remove(&call.call_id);
         outcome.unwrap_or_else(|| {
@@ -451,7 +462,8 @@ mod tests {
         let (registry, mut records) =
             Registry::new(crate::record::Stamps::new(time), Arc::new(TokioSpawner::current()));
         let tools = FakeTools::new(registry.clone());
-        let speech = Arc::new(SpeechHandle::new(SpeechId(1), true, Requests::disconnected()));
+        let (speech, _signals) = SpeechHandle::new(SpeechId(1), true, Requests::disconnected());
+        let speech = Arc::new(speech);
         let call = FunctionCall {
             id: "item_first".into(),
             call_id: "first".into(),

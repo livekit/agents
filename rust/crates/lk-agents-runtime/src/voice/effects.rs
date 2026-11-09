@@ -109,7 +109,7 @@ impl VoiceRuntime {
             }
         }
         self.peer.publish(SystemTap::Session(event.clone()));
-        let _ = self.peer.deliver(VoiceHostEvent::Session(event));
+        let _ = self.deliver(VoiceHostEvent::Session(event));
     }
 
     fn perform_voice_effect(&mut self, effect: VoiceEffect) {
@@ -129,7 +129,8 @@ impl VoiceRuntime {
                 if matches!(&update, lk_agents_voice::speech_handle::SpeechUpdate::Released) {
                     self.speeches.release(speech);
                 }
-                self.shared.speeches.apply(speech, update, &self.reports);
+                let producers = &mut self.speech_signals;
+                self.shared.speeches.apply(producers, speech, update, &self.reports);
             }
             E::AttachRecorder { recorder, output: _ } => self.attach_recorder(recorder),
             E::DetachRecorder(_) => {
@@ -157,11 +158,19 @@ impl VoiceRuntime {
             },
             E::Journal(step) => self.shared.journal.record(*step),
             // A late or unknown call's answer is dropped.
-            E::Answer(call, answer) => {
-                if let Some(reply_to) = self.calls.take(call) {
-                    reply_to.settle(answer);
+            E::Answer(call, answer) => match self.calls.take(call) {
+                Some(crate::voice::session::ReplyTo::Speech(reply)) => {
+                    let created = matches!(answer, lk_agents_voice::agent_session::Answer::Speech);
+                    let id = reply.reserved();
+                    reply.answer(id.and_then(|id| self.speech_signals.get(id)), created);
+                    // Lost: its writers go, which ends every wait on it.
+                    if let (false, Some(id)) = (created, id) {
+                        self.speech_signals.retire(id);
+                    }
                 }
-            }
+                Some(reply_to) => reply_to.settle(answer),
+                None => {}
+            },
             E::Host(event) => self.deliver_host_event(event),
             E::StorageAbort(speech) => {
                 self.storage_command(VoiceStorageCommand::Abort { speech: speech.0 })
@@ -347,9 +356,25 @@ impl VoiceRuntime {
         }
     }
 
+    /// To the host's drain: a `speech_done` carries the speech's `reported` writer, which the
+    /// drain finishes once the host handled it; a retirement lets the speech's writers go.
+    fn deliver(&mut self, event: VoiceHostEvent) -> Result<(), Box<VoiceHostEvent>> {
+        let reported = match &event {
+            VoiceHostEvent::Session(SessionEvent::SpeechDone { speech, .. }) => {
+                self.speech_signals.take_reported(*speech)
+            }
+            VoiceHostEvent::SpeechRetired(speech) => {
+                self.speech_signals.retire(*speech);
+                None
+            }
+            _ => None,
+        };
+        self.peer.deliver(event, reported)
+    }
+
     /// A hook the host can't take is answered as failed, so its turn does not wait for it.
-    fn deliver_host_event(&self, event: VoiceHostEvent) {
-        if let Err(event) = self.peer.deliver(event)
+    fn deliver_host_event(&mut self, event: VoiceHostEvent) {
+        if let Err(event) = self.deliver(event)
             && let VoiceHostEvent::Hook(call) = *event
         {
             let _ = self.reports.send(lk_agents_voice::agent_session::Command::HookDone {
@@ -403,7 +428,13 @@ impl VoiceRuntime {
             self.speeches.spawn(handle.id(), "speech lane reload", reload);
         }
         let speeches = self.speeches.clone();
-        self.speeches.spawn(handle.id(), "speech", async move {
+        // A speech task that panics never reports `Done` or `Failed`: its death is the input.
+        let reports = Arc::clone(&self.shared);
+        let lost = move || {
+            let error = Box::new(lk_agents_voice::generation::fatal("the speech's task panicked"));
+            reports.report(GenEvent::Failed { speech, error });
+        };
+        self.speeches.spawn_feeding(handle.id(), "speech", lost, async move {
             if let Some(storage) = storage {
                 let local = context.plan.request.chat_ctx.items.clone();
                 if let Some(history) = reload_history(storage, task.id(), local, &queue).await {

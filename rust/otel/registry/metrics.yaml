@@ -148,6 +148,81 @@
       ]
     },
     {
+      "id": "metric.lk.agents.lane.acquire_wait",
+      "type": "metric",
+      "metric_name": "lk.agents.lane.acquire_wait",
+      "instrument": "histogram",
+      "unit": "s",
+      "stability": "development",
+      "brief": "Time an exclusive lane acquire waited, taken or refused.",
+      "attributes": [
+        {
+          "ref": "lane_kind",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.agents.lane.lease_lapsed",
+      "type": "metric",
+      "metric_name": "lk.agents.lane.lease_lapsed",
+      "instrument": "counter",
+      "unit": "{lease}",
+      "stability": "development",
+      "brief": "Leases taken over after they lapsed instead of being released.",
+      "attributes": [
+        {
+          "ref": "lane_kind",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.agents.lane.ownerless_wait",
+      "type": "metric",
+      "metric_name": "lk.agents.lane.ownerless_wait",
+      "instrument": "histogram",
+      "unit": "s",
+      "stability": "development",
+      "brief": "Time an acquire waited on a lease whose holder stopped renewing it.",
+      "attributes": [
+        {
+          "ref": "lane_kind",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.agents.storage.write_uncertain",
+      "type": "metric",
+      "metric_name": "lk.agents.storage.write_uncertain",
+      "instrument": "counter",
+      "unit": "{write}",
+      "stability": "development",
+      "brief": "Writes whose outcome was still unknown when their resends ran out.",
+      "attributes": [
+        {
+          "ref": "write",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.agents.teardown.overrun",
+      "type": "metric",
+      "metric_name": "lk.agents.teardown.overrun",
+      "instrument": "counter",
+      "unit": "{teardown}",
+      "stability": "development",
+      "brief": "Teardowns that ran past their bound.",
+      "attributes": [
+        {
+          "ref": "stage",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
       "id": "metric.lk.agents.turn.e2e_latency",
       "type": "metric",
       "metric_name": "lk.agents.turn.e2e_latency",

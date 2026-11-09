@@ -38,7 +38,9 @@ impl Run {
         ];
         let mut out: Vec<Input> = Vec::new();
         for (kind, make) in each {
-            out.extend(self.record.live().of(kind).into_iter().map(make));
+            let live = self.record.live().of(kind).into_iter();
+            let hung = |nth: &u32| kind == Kind::Hook && self.hung_hooks.contains(nth);
+            out.extend(live.filter(|nth| !hung(nth)).map(make));
         }
         // A synthesis the case held is let through. One it never held waits on the driver to end
         // its input, which a release cannot do (seed 7788: behind a speech held for the person).
@@ -538,8 +540,12 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
     }
 
     run.join_tasks().await;
+    run.await_probes().await;
     // What the tasks did on their way out is part of the run.
     run.collect();
+    if run.record.driver_finished() {
+        run.record.set_parked(super::probe::parked_waiters());
+    }
     record_outcome(&run, &mut outcome);
     outcome
 }
@@ -700,6 +706,16 @@ fn dump_journal(record: &crate::record::Recording) {
             .avatar()
             .iter()
             .map(|(at, step)| (at.seq, format!("{:>6} {:>7}ms A {step:?}", at.seq, at.at_ms))),
+    );
+    lines.extend(record.faults().iter().map(|(at, site, f)| {
+        (at.seq, format!("{:>6} {:>7}ms F {site:?} {f:?}", at.seq, at.at_ms))
+    }));
+    lines.extend(
+        record
+            .host_view()
+            .storage()
+            .iter()
+            .map(|(at, step)| (at.seq, format!("{:>6} {:>7}ms S {step:?}", at.seq, at.at_ms))),
     );
     lines.extend(record.applied().iter().map(|a| {
         let mark = if a.accepted { ">" } else { "x" };

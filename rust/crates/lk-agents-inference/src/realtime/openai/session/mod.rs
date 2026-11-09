@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::effects::RealtimeConnectionEffect;
 use std::sync::{Arc, Weak};
 use std::time::Duration;

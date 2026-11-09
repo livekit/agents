@@ -21,6 +21,7 @@ use lk_agents_abi::voice::session_owner::{
 use lk_agents_abi::voice::session_storage::SessionStorage as _;
 use lk_agents_abi::worker::ipc_host::FrameworkShutdown;
 use lk_agents_abi::{BoxFuture, HostRef, Maybe};
+use lk_agents_net::signal;
 use lk_agents_net::{env::ProcessEnv, task::TaskSet};
 use lk_agents_voice::agent_session::lifecycle::{
     CloseOwner, OwnerLifecycle, SessionStartPlans, StartOwner,
@@ -28,7 +29,7 @@ use lk_agents_voice::agent_session::lifecycle::{
 use lk_agents_voice::agent_session::options::{RECORDING_ALL_OFF, validate_session_update};
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock, Weak};
-use tokio::sync::{OnceCell, watch};
+use tokio::sync::OnceCell;
 
 // Cancelling a host waiter does not abandon startup or finalization.
 
@@ -96,6 +97,9 @@ impl SessionOwner {
 /// The report's event retention, through its declared operations.
 type Retention = lk_agents_net::export::session_report::EventRetention;
 
+/// The startup's outcome, once it ran.
+type Opened = Option<Result<(), StartFailed>>;
+
 struct Inner {
     env: ProcessEnv,
     options: SessionOptions,
@@ -111,8 +115,12 @@ struct Inner {
     /// The report's events: which are kept, and the job allowed to read them.
     retention: Mutex<Retention>,
     tasks: Arc<TaskSet>,
-    opened: watch::Sender<Option<Result<(), StartFailed>>>,
-    closed: watch::Sender<bool>,
+    /// The startup task's: it ends with the task, however it ends.
+    opened: signal::Cell<Opened>,
+    open_tx: Mutex<Option<signal::Producer<Opened>>>,
+    /// The close owner's (the first close, or a failed startup): it ends with its task.
+    closed: signal::Cell<bool>,
+    close_tx: Mutex<Option<signal::Producer<bool>>>,
     recording: OnceCell<Result<(), RecordingFailure>>,
     selection: Mutex<Selection>,
     /// `update_agent(chat_ctx=)` before `start()`: the history a session started without one
@@ -199,6 +207,12 @@ impl SessionEvents for Events {
             None => Ok(error.error.to_string()),
         }
     }
+
+    fn ended(&self) {
+        if let Some(host) = &self.host {
+            host.ended();
+        }
+    }
 }
 
 impl Inner {
@@ -212,21 +226,25 @@ impl Inner {
         let action = self.lifecycle.lock().close();
         if let CloseOwner::Close { wait_start } = action {
             let inner = self.clone();
+            let closed = self.close_tx.lock().take();
             self.tasks.spawn(
                 spawner.as_ref(),
                 "session cleanup",
                 Box::pin(async move {
-                    if wait_start && opened(inner.opened.subscribe()).await.is_err() {
+                    if wait_start && opened(&inner.opened).await.is_err() {
                         return; // Failed startup already performed cleanup.
                     }
                     inner.cleanup(reason, drain).await;
-                    inner.closed.send_replace(true);
+                    if let Some(closed) = closed {
+                        closed.finish(true);
+                    }
                 }),
             );
         }
-        let mut receiver = self.closed.subscribe();
+        let closed = self.closed.clone();
         Ok(Box::pin(async move {
-            let _ = receiver.wait_for(|closed| *closed).await;
+            // Ended: the close owner is gone, so there is nothing left to wait for.
+            let _ = closed.wait_for(|closed| *closed).await;
         }))
     }
 
@@ -458,15 +476,8 @@ fn providers(
         .collect()
 }
 
-async fn opened(
-    mut receiver: watch::Receiver<Option<Result<(), StartFailed>>>,
-) -> Result<(), StartFailed> {
-    loop {
-        if let Some(result) = receiver.borrow_and_update().clone() {
-            return result;
-        }
-        receiver.changed().await.map_err(|_| HostError::new("session owner stopped"))?;
-    }
+async fn opened(opened: &signal::Cell<Opened>) -> Result<(), StartFailed> {
+    opened.wait().await.map_err(|_| HostError::new("session owner stopped"))?
 }
 
 impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
@@ -477,6 +488,8 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
     type State = super::delivered::SessionState;
 
     fn new(env: &ProcessEnv, options: SessionOptions) -> Self {
+        let (open_tx, opened) = signal::once();
+        let (close_tx, closed) = signal::signal(false);
         Self(Arc::new(Inner {
             env: env.clone(),
             options,
@@ -490,8 +503,10 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             audio: OnceLock::new(),
             retention: Mutex::new(Retention::process()),
             tasks: Arc::new(TaskSet::default()),
-            opened: watch::channel(None).0,
-            closed: watch::channel(false).0,
+            opened,
+            open_tx: Mutex::new(Some(open_tx)),
+            closed,
+            close_tx: Mutex::new(Some(close_tx)),
             recording: OnceCell::new(),
             selection: Mutex::new(Selection::default()),
             start_history: Mutex::new(None),
@@ -539,6 +554,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
                 let startup = Startup { storage, host, trace, job_ids, opening };
                 let _ = self.0.startup.set(startup.clone());
                 let inner = self.0.clone();
+                let open_tx = self.0.open_tx.lock().take();
                 self.0.tasks.spawn(
                     spawner.as_ref(),
                     "session startup",
@@ -547,16 +563,24 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
                         if let Err(error) = &result {
                             inner.start_failed(error);
                             // A failed open is terminal and settles every resource acquired so far.
-                            let _ = inner.lifecycle.lock().close();
+                            let owner = inner.lifecycle.lock().close();
+                            let closed = matches!(owner, CloseOwner::Close { .. })
+                                .then(|| inner.close_tx.lock().take())
+                                .flatten();
                             inner.cleanup(CloseReason::Error, false).await;
-                            inner.closed.send_replace(true);
+                            if let Some(closed) = closed {
+                                closed.finish(true);
+                            }
                         }
-                        inner.opened.send_replace(Some(result));
+                        if let Some(open_tx) = open_tx {
+                            open_tx.resolve(result);
+                        }
                     }),
                 );
             }
         }
-        Ok(Box::pin(opened(self.0.opened.subscribe())))
+        let inner = self.0.clone();
+        Ok(Box::pin(async move { opened(&inner.opened).await }))
     }
 
     fn session(&self) -> Option<Arc<VoiceSession>> {

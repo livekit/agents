@@ -230,6 +230,9 @@ pub enum AbandonReason {
     /// The acquire was dropped after its request may have taken the lane.
     #[host(rename = "acquire-canceled")]
     AcquireCanceled,
+    /// The run was dropped before it committed or was abandoned.
+    #[host(rename = "run-dropped")]
+    RunDropped,
 }
 
 /// How a task listing is ordered (docs/internals/storage.md#reading-thread-items-and-tasks).

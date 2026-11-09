@@ -39,20 +39,32 @@ struct RxInner {
     state: Mutex<ReceiverState>,
     /// Cancelled once the receiver ends.
     ended: tokio_util::sync::CancellationToken,
-    out_ready: tokio::sync::Notify,
+    out_ready: lk_agents_net::signal::Producer<()>,
     streams: Mutex<std::collections::VecDeque<lk_agents_abi::voice::rtc::ByteStream>>,
-    streams_ready: tokio::sync::Notify,
-    superseded_wake: tokio::sync::Notify,
+    streams_ready: lk_agents_net::signal::Producer<()>,
+    superseded_wake: lk_agents_net::signal::Producer<()>,
     rpc: tokio::sync::mpsc::UnboundedSender<PlaybackReport>,
     rpc_rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<PlaybackReport>>>,
+}
+
+/// Held by the receiver's tasks: whichever ends first, however (its streams ending, a cancel, a
+/// panic), ends the receiver, so no reader waits on a task that is gone.
+struct EndsOnDrop(Arc<RxInner>);
+
+impl Drop for EndsOnDrop {
+    fn drop(&mut self) {
+        if !self.0.ended() {
+            self.0.end(ReceiverEnd::Closed);
+        }
+    }
 }
 
 impl RxInner {
     fn end(&self, end: ReceiverEnd) {
         self.state.lock().end(end);
         self.ended.cancel();
-        self.out_ready.notify_waiters();
-        self.streams_ready.notify_waiters();
+        self.out_ready.modify(|()| ());
+        self.streams_ready.modify(|()| ());
     }
     fn ended(&self) -> bool {
         self.state.lock().ended()
@@ -65,7 +77,7 @@ impl RxInner {
             }
             state.clear();
         }
-        self.superseded_wake.notify_waiters();
+        self.superseded_wake.modify(|()| ());
         if let Some(cb) = &self.on_clear {
             cb();
         }
@@ -73,15 +85,13 @@ impl RxInner {
     }
     async fn recv(self: Arc<Self>) -> std::result::Result<(), ReceiverEnd> {
         loop {
-            let wake = self.streams_ready.notified();
-            tokio::pin!(wake);
-            wake.as_mut().enable();
+            let mut wake = self.streams_ready.cell();
             let next = self.streams.lock().pop_front();
             let Some(mut stream) = next else {
                 if self.ended() {
                     return Ok(());
                 }
-                wake.await;
+                let _ = wake.changed().await;
                 continue;
             };
             let mut reader = self.state.lock().begin(&stream.info, self.frame_size);
@@ -94,7 +104,7 @@ impl RxInner {
             state.finish(if outcome.is_ok() { reader.as_mut().ok() } else { None });
             drop(state);
             outcome?;
-            self.out_ready.notify_waiters();
+            self.out_ready.modify(|()| ());
         }
     }
 
@@ -109,7 +119,7 @@ impl RxInner {
             match self.next_chunk(stream).await {
                 Some(Ok(Some(data))) => {
                     let keep = self.state.lock().chunk(reader, &data);
-                    self.out_ready.notify_waiters();
+                    self.out_ready.modify(|()| ());
                     if !keep {
                         break;
                     }
@@ -123,7 +133,7 @@ impl RxInner {
             }
         }
         self.state.lock().flush(reader);
-        self.out_ready.notify_waiters();
+        self.out_ready.modify(|()| ());
         Ok(())
     }
 
@@ -132,16 +142,14 @@ impl RxInner {
         &self,
         stream: &mut ByteStream,
     ) -> Option<std::result::Result<Option<Vec<u8>>, ProviderError>> {
-        let superseded = self.superseded_wake.notified();
-        tokio::pin!(superseded);
-        superseded.as_mut().enable();
+        let mut superseded = self.superseded_wake.cell();
         let gave_up = self.state.lock().superseded();
         let idle_until = self.clock.now().saturating_add(STREAM_IDLE_TIMEOUT);
         tokio::select! {
             biased;
             c = stream.chunks.next() => Some(c),
             () = async {}, if gave_up => None,
-            () = &mut superseded => None,
+            _ = superseded.changed() => None,
             () = self.clock.wait_until(idle_until) => None,
         }
     }
@@ -207,6 +215,7 @@ impl RxInner {
 
     /// Queues the chosen sender's streams for [`Self::recv`]; a foreign stream is closed.
     async fn admit_streams(self: Arc<Self>, mut streams: Receiver<ByteStream>) {
+        let _ends = EndsOnDrop(Arc::clone(&self));
         loop {
             let stream = match streams.next().await {
                 Ok(Some(stream)) => stream,
@@ -235,15 +244,16 @@ impl RxInner {
         }
         self.streams.lock().push_back(stream);
         if self.state.lock().stream_admitted() {
-            self.superseded_wake.notify_waiters();
+            self.superseded_wake.modify(|()| ());
         }
-        self.streams_ready.notify_waiters();
+        self.streams_ready.modify(|()| ());
         true
     }
 
     /// Plays the streams and sends the reports until either ends; the receiver ends with the
     /// first failure.
     async fn serve(self: Arc<Self>) {
+        let _ends = EndsOnDrop(Arc::clone(&self));
         let recv = Arc::clone(&self).recv();
         let send = Arc::clone(&self).send();
         let result = tokio::try_join!(recv, send);
@@ -336,10 +346,10 @@ impl DataStreamAudioReceiver {
                 on_clear,
                 state: Mutex::default(),
                 ended: tokio_util::sync::CancellationToken::new(),
-                out_ready: tokio::sync::Notify::new(),
+                out_ready: lk_agents_net::signal::signal(()).0,
                 streams: Mutex::default(),
-                streams_ready: tokio::sync::Notify::new(),
-                superseded_wake: tokio::sync::Notify::new(),
+                streams_ready: lk_agents_net::signal::signal(()).0,
+                superseded_wake: lk_agents_net::signal::signal(()).0,
                 rpc,
                 rpc_rx: Mutex::new(Some(rpc_rx)),
             }),
@@ -443,13 +453,11 @@ impl DataStreamAudioReceiver {
         ReceiverEnd,
     > {
         loop {
-            let wake = self.inner.out_ready.notified();
-            tokio::pin!(wake);
-            wake.as_mut().enable();
+            let mut wake = self.inner.out_ready.cell();
             if let Some(item) = self.inner.state.lock().take()? {
                 return Ok(item);
             }
-            wake.await;
+            let _ = wake.changed().await;
         }
     }
 
@@ -554,9 +562,7 @@ impl AvatarAudio for DataStreamAudioReceiver {
     fn next_clear(&self, after: u64) -> BoxFuture<'_, Option<u64>> {
         Box::pin(async move {
             loop {
-                let wake = self.inner.superseded_wake.notified();
-                tokio::pin!(wake);
-                wake.as_mut().enable();
+                let mut wake = self.inner.superseded_wake.cell();
                 {
                     let state = self.inner.state.lock();
                     if state.epoch() > after {
@@ -569,7 +575,7 @@ impl AvatarAudio for DataStreamAudioReceiver {
                 tokio::select! {
                     biased;
                     () = self.inner.ended.cancelled() => {}
-                    () = wake => {}
+                    _ = wake.changed() => {}
                 }
             }
         })

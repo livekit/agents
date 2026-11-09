@@ -7,7 +7,11 @@ use lk_agents_abi::{
 };
 use tokio::sync::mpsc;
 
-use super::{Control, Registry, SAMPLE_RATE, SAMPLES_PER_CHUNK, Slot, Timing, delay, measured};
+use super::{
+    Control, Registry, SAMPLE_RATE, SAMPLES_PER_CHUNK, Slot, Timing, delay,
+    hazard::{Site, StreamHazard, strike},
+    measured,
+};
 use crate::{
     drive::TtsAlignment,
     input::Input,
@@ -162,6 +166,7 @@ struct Output {
     /// When the first audio may leave.
     first_audio: Option<tokio::time::Instant>,
     delivered: bool,
+    hazard: StreamHazard,
 }
 
 impl Tts for FakeTts {
@@ -210,6 +215,9 @@ impl Tts for FakeTts {
             if self.registry.voice_down() {
                 return Err(ProviderError::Local(ApiError::new("voice provider is down")));
             }
+            if let Some(fault) = self.registry.hazard(Site::TtsOpen) {
+                return strike(fault, Site::TtsOpen).await;
+            }
             let (sender, receiver) = mpsc::unbounded_channel();
             let synthesis = Arc::new(Synthesis {
                 slot: OnceLock::new(),
@@ -249,6 +257,7 @@ impl Tts for FakeTts {
                     receiver,
                     first_audio,
                     delivered: false,
+                    hazard: self.registry.stream_hazard(Site::TtsNext, Site::TtsClose),
                 }) as TtsSource,
             ))
         })
@@ -305,7 +314,11 @@ impl StreamOutput<SynthesizedAudio> for Output {
     fn next(
         &mut self,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
+        let fault = self.registry.stream_fault(&mut self.hazard, Site::TtsNext, self.slot);
         Box::pin(async move {
+            if let Some(fault) = fault {
+                return strike(fault, Site::TtsNext).await;
+            }
             let next = self.receiver.recv().await.transpose();
             // Only audio waits for the first-audio latency; a failure or the end reports at once.
             if let (Ok(Some(_)), Some(at)) = (&next, self.first_audio.take()) {
@@ -323,9 +336,13 @@ impl StreamOutput<SynthesizedAudio> for Output {
         true
     }
 
-    fn close(self: Box<Self>, _deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+    fn close(mut self: Box<Self>, _deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        let fault = self.registry.stream_fault(&mut self.hazard, Site::TtsClose, self.slot);
         Box::pin(async move {
             self.registry.voice_due(self.slot.nth, None);
+            if let Some(fault) = fault {
+                return strike(fault, Site::TtsClose).await;
+            }
             self.registry.mark_closed(self.slot);
             Closed::Clean
         })

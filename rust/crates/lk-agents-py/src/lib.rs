@@ -10,6 +10,7 @@ pub mod py_errors;
 pub mod py_logging;
 pub mod py_objects;
 pub mod py_stall;
+#[allow(clippy::disallowed_methods, reason = "migrating to signal")]
 pub mod py_streams;
 pub mod py_values;
 

@@ -4855,6 +4855,149 @@
       ]
     },
     {
+      "name": "lk.agents.lane.acquire_wait",
+      "brief": "Time an exclusive lane acquire waited, taken or refused.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "lane_kind",
+          "type": "string",
+          "required": true,
+          "members": [
+            "voice",
+            "text",
+            "a2a",
+            "context"
+          ],
+          "label": true
+        }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
+      ]
+    },
+    {
+      "name": "lk.agents.lane.lease_lapsed",
+      "brief": "Leases taken over after they lapsed instead of being released.",
+      "kind": "counter",
+      "unit": "{lease}",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "lane_kind",
+          "type": "string",
+          "required": true,
+          "members": [
+            "voice",
+            "text",
+            "a2a",
+            "context"
+          ],
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.lane.ownerless_wait",
+      "brief": "Time an acquire waited on a lease whose holder stopped renewing it.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "lane_kind",
+          "type": "string",
+          "required": true,
+          "members": [
+            "voice",
+            "text",
+            "a2a",
+            "context"
+          ],
+          "label": true
+        }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
+      ]
+    },
+    {
+      "name": "lk.agents.storage.write_uncertain",
+      "brief": "Writes whose outcome was still unknown when their resends ran out.",
+      "kind": "counter",
+      "unit": "{write}",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "write",
+          "type": "string",
+          "required": true,
+          "members": [
+            "acquire",
+            "receive",
+            "release",
+            "extend",
+            "commit",
+            "submit",
+            "waiter",
+            "fail_orphan",
+            "cancel",
+            "schema",
+            "context",
+            "thread"
+          ],
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.teardown.overrun",
+      "brief": "Teardowns that ran past their bound.",
+      "kind": "counter",
+      "unit": "{teardown}",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "stage",
+          "type": "string",
+          "required": true,
+          "members": [
+            "session_close",
+            "lease_release"
+          ],
+          "label": true
+        }
+      ]
+    },
+    {
       "name": "lk.agents.turn.e2e_latency",
       "brief": "End-to-end latency of an answered turn, labeled with its LLM.",
       "kind": "histogram",

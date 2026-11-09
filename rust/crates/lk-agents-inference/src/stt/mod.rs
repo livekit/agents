@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 mod executor;
 pub(crate) mod gaps;
 pub(crate) mod input;

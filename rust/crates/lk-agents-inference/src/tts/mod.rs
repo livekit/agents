@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use self::stream::TtsStream;
 use crate::abi::{
     StreamInput, StreamOutput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,

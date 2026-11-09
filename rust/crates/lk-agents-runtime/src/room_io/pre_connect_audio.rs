@@ -6,9 +6,9 @@ use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::rtc::{ByteStream, RtcRoom, TrackSid};
 use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, StreamOutput};
 use lk_agents_media::pool::{JobClass, MediaPool};
+use lk_agents_net::signal;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::machine::pre_connect_state::{PreConnectBuffer, PreConnectState};
-use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use lk_agents_voice::room_io::PRE_CONNECT_AUDIO_BUFFER_STREAM;
@@ -32,7 +32,7 @@ pub struct PreConnectAudioHandler {
     /// scheduler needs.
     pool: Option<MediaPool>,
     state: Mutex<State>,
-    changed: Notify,
+    changed: signal::Producer<()>,
     /// Cancelled under the state lock, so nothing registers once the handler closes.
     stopped: CancellationToken,
     tasks: Arc<TaskSet>,
@@ -55,7 +55,7 @@ impl PreConnectAudioHandler {
             format,
             pool,
             state: Mutex::new(State::default()),
-            changed: Notify::new(),
+            changed: signal::signal(()).0,
             stopped: CancellationToken::new(),
             tasks: Arc::default(),
         })
@@ -75,7 +75,7 @@ impl PreConnectAudioHandler {
             Ok(streams) => streams,
             Err(_) => {
                 self.state.lock().registering = false;
-                self.changed.notify_waiters();
+                self.changed.modify(|()| ());
                 return false;
             }
         };
@@ -85,7 +85,7 @@ impl PreConnectAudioHandler {
             owner.listen(streams).await;
         });
         self.state.lock().registering = false;
-        self.changed.notify_waiters();
+        self.changed.modify(|()| ());
         true
     }
 
@@ -101,7 +101,7 @@ impl PreConnectAudioHandler {
                 Ok(None) => break,
                 Err(error) => {
                     self.state.lock().core.close();
-                    self.changed.notify_waiters();
+                    self.changed.modify(|()| ());
                     log::warn!(target: lk_agents_abi::LOG_TARGET, "pre-connect stream listener failed: {error}");
                     break;
                 }
@@ -111,7 +111,7 @@ impl PreConnectAudioHandler {
                 .lock()
                 .core
                 .receive_stream(&stream.info.attributes, stream.info.id.clone());
-            self.changed.notify_waiters();
+            self.changed.modify(|()| ());
             if let Some((track, Ok(Some(id)))) = admission {
                 let owner = self.clone();
                 self.tasks.spawn(self.spawner.as_ref(), "pre-connect audio reader", async move {
@@ -142,20 +142,18 @@ impl PreConnectAudioHandler {
         let id = self.state.lock().core.slot(track)?;
         let wait = async {
             loop {
-                let changed = self.changed.notified();
-                tokio::pin!(changed);
-                changed.as_mut().enable();
+                let mut changed = self.changed.cell();
                 if let Some(outcome) = self.state.lock().core.take(id) {
                     return outcome;
                 }
-                changed.await;
+                let _ = changed.changed().await;
             }
         };
         let outcome = match lk_agents_abi::timeout(self.clock.as_ref(), self.timeout, wait).await {
             Ok(outcome) => outcome?,
             Err(_) => {
                 self.state.lock().core.expire(id);
-                self.changed.notify_waiters();
+                self.changed.modify(|()| ());
                 return Err(IoError::PreConnectTimeout(track.clone()));
             }
         };
@@ -185,7 +183,7 @@ impl PreConnectAudioHandler {
             id,
             outcome.map(|frames| PreConnectBuffer { received_at, frames }),
         );
-        self.changed.notify_waiters();
+        self.changed.modify(|()| ());
     }
 
     /// On the media pool when there is one, abandoned at close.
@@ -216,19 +214,17 @@ impl PreConnectAudioHandler {
             self.stopped.cancel();
             state.core.close();
         }
-        self.changed.notify_waiters();
+        self.changed.modify(|()| ());
         let deadline = self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         loop {
-            let changed = self.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
+            let mut changed = self.changed.cell();
             if !self.state.lock().registering {
                 break;
             }
             if lk_agents_abi::timeout(
                 self.clock.as_ref(),
                 deadline.saturating_duration_since(self.clock.now()),
-                &mut changed,
+                changed.changed(),
             )
             .await
             .is_err()

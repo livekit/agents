@@ -2,11 +2,17 @@ use super::*;
 use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 use lk_agents_voice::speech_handle::SpeechState;
 
-/// The core's speech and the session's registry its updates reach.
+/// The core's speech, the session's registry its updates reach and the loop's writers.
 struct Speech {
     state: SpeechState,
     speeches: Speeches,
+    producers: SpeechProducers,
     id: SpeechId,
+}
+
+/// A host call's handle, its writers still on their way to the loop.
+fn pending_speech(id: SpeechId, allow: bool) -> (Arc<SpeechHandle>, SpeechSignals) {
+    SpeechHandle::pending(Requests::disconnected(), id, allow)
 }
 
 impl Speech {
@@ -14,15 +20,24 @@ impl Speech {
         let mut speech = Speech {
             state: SpeechState::new(allow),
             speeches: Speeches::default(),
+            producers: SpeechProducers::default(),
             id: SpeechId(1),
         };
         speech.publish();
         speech
     }
 
-    /// Over the handle a host call returned for `id`.
-    fn over(pending: &Arc<SpeechHandle>, id: SpeechId, allow: bool) -> Self {
-        let speech = Speech { state: SpeechState::new(allow), speeches: Speeches::default(), id };
+    /// Over the handle a host call returned for `id`, its writers adopted by the loop.
+    fn over(
+        pending: &Arc<SpeechHandle>,
+        signals: SpeechSignals,
+        id: SpeechId,
+        allow: bool,
+    ) -> Self {
+        let mut producers = SpeechProducers::default();
+        producers.adopt(id, signals);
+        let speech =
+            Speech { state: SpeechState::new(allow), speeches: Speeches::default(), producers, id };
         speech.speeches.register(Arc::clone(pending));
         speech
     }
@@ -30,8 +45,13 @@ impl Speech {
     /// What the core accepted reaches the handle.
     fn publish(&mut self) {
         for update in self.state.take_updates() {
-            self.speeches.apply(self.id, update, &Tx::disconnected());
+            self.speeches.apply(&mut self.producers, self.id, update, &Tx::disconnected());
         }
+    }
+
+    /// The loop answered the host's call.
+    fn answered(&self, handle: &SpeechHandle, created: bool) {
+        handle.answered(self.producers.get(self.id), created);
     }
 
     fn handle(&self) -> Arc<SpeechHandle> {
@@ -99,20 +119,21 @@ async fn host_waits_on_a_speech_never_created_raise_why() {
     ));
 
     // A setter before the loop created the speech is the value it is created with.
-    let pending = SpeechHandle::pending(Requests::disconnected(), SpeechId(7), true);
+    let (pending, signals) = pending_speech(SpeechId(7), true);
     HostSpeech::set_allow_interruptions(&*pending, false).unwrap();
     assert!(pending.allow_interruptions(), "a queued setter is not yet accepted");
-    let mut speech = Speech::over(&pending, SpeechId(7), true);
+    let mut speech = Speech::over(&pending, signals, SpeechId(7), true);
     speech.publish();
     assert_eq!(pending.created(), Some(SpeechId(7)), "created over the host's handle");
     speech.state.set_allow_interruptions(false).unwrap();
     speech.publish();
     assert!(!pending.allow_interruptions());
 
-    let lost = SpeechHandle::pending(Requests::disconnected(), SpeechId(8), true);
+    let (lost, signals) = pending_speech(SpeechId(8), true);
     HostSpeech::interrupt(&*lost, false).unwrap();
     assert!(HostSpeech::interrupted(&*lost));
-    lost.answered(false);
+    lost.answered(Some(&signals), false);
+    drop(signals);
     assert_eq!(HostSpeech::wait_for_interrupted(&*lost).await, Err(refused(SpeechRefused::Ended)));
     assert_eq!(
         HostSpeech::wait_for_generation(&*lost, None).await,
@@ -137,7 +158,7 @@ fn a_speech_is_itself_across_handles() {
 // heard reading as an interruption the loop never made.
 #[test]
 fn the_host_reads_the_loops_verdict_on_its_interrupt() {
-    let pending = SpeechHandle::pending(Requests::disconnected(), SpeechId(3), false);
+    let (pending, _signals) = pending_speech(SpeechId(3), false);
     assert_eq!(HostSpeech::id(&*pending), "speech_3", "the id exists as the call returns");
     assert!(HostSpeech::interrupt(&*pending, false).is_err(), "disallowed at the call");
 
@@ -168,12 +189,12 @@ fn the_host_reads_the_loops_verdict_on_its_interrupt() {
 
     // Asked of a speech the loop created done (refused, or answered as the session closed): it
     // never ran, so the request lands nowhere and the host reads the core's verdict.
-    let pending = SpeechHandle::pending(Requests::disconnected(), SpeechId(4), true);
+    let (pending, signals) = pending_speech(SpeechId(4), true);
     HostSpeech::interrupt(&*pending, false).unwrap();
-    let mut speech = Speech::over(&pending, SpeechId(4), true);
+    let mut speech = Speech::over(&pending, signals, SpeechId(4), true);
     speech.state.mark_done(None);
     speech.publish();
-    pending.answered(true);
+    speech.answered(&pending, true);
     assert!(!HostSpeech::interrupted(&*pending), "a request the speech never heard was recorded");
 }
 
@@ -189,12 +210,12 @@ fn a_setter_on_an_ended_speech_keeps_the_hosts_value() {
     HostSpeech::set_allow_interruptions(&*handle, false).unwrap();
     assert!(!HostSpeech::allow_interruptions(&*handle));
 
-    let pending = SpeechHandle::pending(Requests::disconnected(), SpeechId(5), true);
+    let (pending, signals) = pending_speech(SpeechId(5), true);
     HostSpeech::set_allow_interruptions(&*pending, false).unwrap();
-    let mut speech = Speech::over(&pending, SpeechId(5), true);
+    let mut speech = Speech::over(&pending, signals, SpeechId(5), true);
     speech.state.mark_done(None);
     speech.publish();
-    pending.answered(true);
+    speech.answered(&pending, true);
     assert!(!HostSpeech::allow_interruptions(&*pending), "asked before a speech created done");
 }
 
@@ -202,7 +223,7 @@ fn a_setter_on_an_ended_speech_keeps_the_hosts_value() {
 fn a_closed_loop_does_not_accumulate_requests_from_retained_speech_handles() {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let requests = Speeches::default().requests(Tx::new(tx));
-    let handle = SpeechHandle::new(SpeechId(1), true, requests.clone());
+    let (handle, _signals) = SpeechHandle::new(SpeechId(1), true, requests.clone());
     drop(rx);
     for _ in 0..1024 {
         HostSpeech::hold_interruptions(&handle).unwrap();
@@ -250,22 +271,39 @@ async fn wait_scheduled_resolves_for_every_speech() {
     assert!(!refused.handle().interrupted(), "done unscheduled is not an interruption");
 }
 
-// Catches: a wait on a speech the core never finished outliving its session (closed or dropped).
+// Catches: a wait on a speech the core never finished outliving the loop that held its writers.
 #[tokio::test]
-async fn a_session_ending_resolves_every_wait_on_its_speeches() {
-    for drop_session in [false, true] {
-        let speeches = Speeches::default();
-        let unfinished = SpeechHandle::pending(Requests::disconnected(), SpeechId(1), true);
-        speeches.register(Arc::clone(&unfinished));
-        if drop_session {
-            drop(speeches);
-        } else {
-            speeches.end();
-        }
-        assert_eq!(unfinished.wait_scheduled().await, Err(WillNotPlay));
-        unfinished.wait_for_playout().await;
-        assert!(unfinished.interrupted() && unfinished.done());
-    }
+async fn a_loop_ending_resolves_every_wait_on_its_speeches() {
+    let (unfinished, signals) = pending_speech(SpeechId(1), true);
+    let mut producers = SpeechProducers::default();
+    producers.adopt(SpeechId(1), signals);
+    drop(producers);
+    assert_eq!(unfinished.wait_scheduled().await, Err(WillNotPlay));
+    unfinished.wait_for_playout().await;
+    assert!(unfinished.interrupted() && unfinished.done());
+    assert_eq!(
+        HostSpeech::wait_until_created(&*unfinished).await,
+        Err(refused(SpeechRefused::Ended))
+    );
+    HostSpeech::wait_reported(&*unfinished).await;
+}
+
+// Catches: a step's authorization wait hanging on a speech that finished normally without
+// authorizing that step, while the loop still holds its writers.
+#[tokio::test]
+async fn a_done_speech_resolves_the_wait_for_a_step_it_never_authorized() {
+    let mut speech = Speech::created(true);
+    speech.state.mark_scheduled();
+    speech.state.authorize_generation();
+    speech.publish();
+    let handle = speech.handle();
+    let waited = handle.wait_for_step_authorized(2);
+    tokio::pin!(waited);
+    assert!(futures_util::poll!(waited.as_mut()).is_pending());
+    speech.state.mark_done(None);
+    speech.publish();
+    let done = tokio::time::timeout(std::time::Duration::from_secs(1), waited).await;
+    assert!(done.is_ok(), "a done speech left its authorization wait parked");
 }
 
 // Catches: a generation or authorization wait outliving its session when the speech was closed
@@ -277,7 +315,7 @@ async fn a_session_ending_mid_generation_resolves_its_generation_and_authorizati
     speech.state.authorize_generation();
     speech.publish();
     let handle = speech.handle();
-    speech.speeches.end();
+    drop(speech);
     let waits = async {
         handle.wait_for_generation(0).await.unwrap();
         handle.wait_for_latest_generation().await.unwrap();

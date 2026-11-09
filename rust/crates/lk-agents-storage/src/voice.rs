@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use lk_agents_net::clock::RealClock;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::collections::{BTreeMap, BTreeSet};
@@ -130,6 +131,7 @@ impl VoiceStore {
         let thread = self.backend.open(&self.thread_id).await?;
         let mut options = RunOptions::new(shortuuid("voice_"), "");
         options.channel = Some("voice".into());
+        options.kind = crate::thread::run::LaneKind::Voice;
         let mut run = match thread.lane(&self.lane).open(options, &self.holder).await {
             Ok(run) => run,
             Err(error) => {

@@ -3,8 +3,9 @@ pub mod handler;
 
 use crate::telemetry;
 use handler::{Handler, Read};
+use lk_agents_abi::a2a::metadata::REASON_KEY;
 use lk_agents_abi::a2a::turn::Turn as TurnContract;
-use lk_agents_abi::storage::thread::TaskWrite;
+use lk_agents_abi::storage::thread::{Backoff, TaskReason, TaskWrite};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
 use lk_agents_core::a2a::task::{
     A2aTaskEffect, A2aTaskEvent, Access, Completion, Handle, HandlerEvent, LaneRun, Operation,
@@ -15,7 +16,8 @@ use lk_agents_core::a2a::{
     caller_history_of, host_error, resolve_policy,
 };
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::task::{TaskSet, TokioSpawner};
+use lk_agents_net::task::{Leave, TaskSet, TokioSpawner};
+use lk_agents_storage::thread::RESOLVE_LATER;
 use lk_agents_storage::thread::db::{Receive, ReceiveInput};
 use lk_agents_storage::thread::run::ItemRow;
 use lk_agents_storage::{
@@ -25,9 +27,10 @@ use lk_agents_storage::{
 use lk_agents_storage::{Holder, StorageError};
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// One message's live resources while its machine runs: the lane, the open run, a kept lease,
-/// the open handler.
+/// the open handler, the task it submitted.
 struct Call {
     lane: Lane,
     /// The request's lease owner: its receive, runs and drain carry it.
@@ -37,6 +40,57 @@ struct Call {
     handler: Option<Handler>,
     /// A delegating caller's conversation, when the message carried one.
     caller_history: Option<Value>,
+    submitted: Option<Submitted>,
+}
+
+/// The `submitted` row a turn writes, owned from before its insert until the turn answers it.
+/// Dropped unanswered (the client dropped the turn, or an error ended it) it is canceled in the
+/// background, through outages: no task is left submitted with nobody to run it.
+struct Submitted {
+    lane: Lane,
+    task_id: String,
+    /// Keeps the thread's connection open for the cancel.
+    open: Option<Leave>,
+    clock: Arc<dyn Clock>,
+    resolvers: Arc<TaskSet>,
+    spawner: TokioSpawner,
+    answered: bool,
+}
+
+impl Drop for Submitted {
+    fn drop(&mut self) {
+        if self.answered {
+            return;
+        }
+        let (lane, task_id, clock) = (self.lane.clone(), self.task_id.clone(), self.clock.clone());
+        let open = self.open.take();
+        self.resolvers.spawn(&self.spawner, "a2a task cancel", async move {
+            let _open = open;
+            cancel_unanswered(lane, task_id, clock).await;
+        });
+    }
+}
+
+/// Cancels a task its turn left unanswered, `caller-canceled`; a terminal row stays as it is. A
+/// database that cannot be reached is tried again for up to [`RESOLVE_LATER`].
+async fn cancel_unanswered(lane: Lane, task_id: String, clock: Arc<dyn Clock>) {
+    let reason = Value::String(TaskReason::CallerCanceled.as_str().to_owned());
+    let metadata = serde_json::Map::from_iter([(REASON_KEY.to_owned(), reason)]);
+    let epoch = clock.now();
+    let mut backoff = Backoff::new(Duration::ZERO, RESOLVE_LATER);
+    loop {
+        let error = match lane.cancel_task(&task_id, metadata.clone()).await {
+            Ok(_) => return,
+            Err(error) => error,
+        };
+        let retry = matches!(error, StorageError::Unavailable(_) | StorageError::Uncertain(_));
+        let next = backoff.next(clock.now().saturating_duration_since(epoch)).filter(|_| retry);
+        let Some(at) = next else {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, taskId = task_id.as_str(); "an unanswered task could not be canceled: {error}");
+            return;
+        };
+        clock.wait_until(epoch.saturating_add(at)).await;
+    }
 }
 
 impl Call {
@@ -218,7 +272,15 @@ impl Turn {
         let mut machine = TaskMachine::new(self.lane.clone(), msg, task_id, &self.opts, wall);
         let lane = self.thread.lane(&self.lane);
         let holder = Holder::new(&self.holder);
-        let mut call = Call { lane, holder, run: None, lease: None, handler: None, caller_history };
+        let mut call = Call {
+            lane,
+            holder,
+            run: None,
+            lease: None,
+            handler: None,
+            caller_history,
+            submitted: None,
+        };
         let mut effects = machine.handle(A2aTaskEvent::Start, elapsed());
         loop {
             match effects.pop() {
@@ -234,8 +296,11 @@ impl Turn {
                 }
                 Some(A2aTaskEffect::Finished(answer)) => {
                     let now = elapsed();
-                    let Call { holder, run, lease, .. } = call;
-                    drop((run, lease));
+                    let Call { holder, run, lease, mut submitted, .. } = call;
+                    if let (Ok(_), Some(submitted)) = (&answer, submitted.as_mut()) {
+                        submitted.answered = true;
+                    }
+                    drop((run, lease, submitted));
                     if !holder.wait_released().await {
                         log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(); "an A2A turn ended with its lease release in flight");
                     }
@@ -264,7 +329,23 @@ impl Turn {
             }
             Operation::FindTarget(task_id) => Completion::Task(self.thread.task(&task_id).await?),
             Operation::ReadTask(task_id) => Completion::Task(call.lane.task(&task_id).await?),
-            Operation::Submit(task) => Completion::Submitted(call.lane.submit(&task).await?),
+            Operation::Submit(task) => {
+                call.submitted = Some(Submitted {
+                    lane: call.lane.clone(),
+                    task_id: task.task_id.clone(),
+                    open: Some(self.thread.keep_open("a2a task cancel")),
+                    clock: self.clock.clone(),
+                    resolvers: self.resolvers.clone(),
+                    spawner: TokioSpawner::current(),
+                    answered: false,
+                });
+                let inserted = call.lane.submit(&task).await?;
+                if let (false, Some(submitted)) = (inserted, call.submitted.as_mut()) {
+                    // another send of the message owns its row
+                    submitted.answered = true;
+                }
+                Completion::Submitted(inserted)
+            }
             Operation::Receive { message, task } => self.receive(call, &message, task).await?,
             Operation::Accepted(task_id) => self.announce_accepted(&call.lane, &task_id).await?,
             Operation::Open { run_id, task_id, channel, access, pickup } => {
@@ -424,7 +505,9 @@ impl Turn {
     /// Hands a run whose commit stayed uncertain to a background resolver, which fails its task
     /// with `failed` when the commit was rejected.
     fn resolve_later(&self, lane: Lane, run: Run, answer: String, failed: a2a::Message) {
+        let open = self.thread.keep_open("a2a commit resolver");
         self.resolvers.spawn(&TokioSpawner::current(), "a2a commit resolver", async move {
+            let _open = open;
             match run.resolve_later().await {
                 Some(Err(e)) if rejected_commit(&e) => {
                     if let Err(e) = lane.fail_orphan(&answer, &failed).await {
@@ -642,6 +725,7 @@ mod lease_tests {
             lease: None,
             handler: Some(handler),
             caller_history: None,
+            submitted: None,
         };
         let result = turn.next_event(&mut call, Some(false)).await;
         assert!(matches!(result, Err(StorageError::LeaseLost(_))));

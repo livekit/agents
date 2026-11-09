@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "tests drive tokio's sync primitives directly"
+)]
 use std::sync::Arc;
 use std::time::Duration;
 

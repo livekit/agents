@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::telemetry;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::rtc::{

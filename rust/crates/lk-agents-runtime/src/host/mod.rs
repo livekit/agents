@@ -6,7 +6,7 @@ use lk_agents_abi::invoke::{HostEntry, HostNotices, Refusal, Scope};
 use lk_agents_abi::llm::tool_executor::Approval;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{BoxFuture, FunctionCall};
-use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_abi::{SpawnerExt, TaskOutcome};
 use lk_agents_net::task::TokioSpawner;
 use std::collections::BTreeMap;
 
@@ -89,8 +89,9 @@ pub struct HostInvoker {
     entry: Invocation,
     next_operation: u64,
     live: BTreeMap<u64, Invocation>,
-    /// Each callback's task; dropping the invoker cancels them.
-    tasks: FuturesUnordered<OwnedTask<u64>>,
+    /// Each callback's task, yielding its operation once settled; dropping the invoker cancels
+    /// them.
+    tasks: FuturesUnordered<BoxFuture<'static, u64>>,
 }
 
 impl HostInvoker {
@@ -106,24 +107,33 @@ impl HostInvoker {
 
     /// Runs `call` with a new invocation derived from the entry. The returned id identifies
     /// the callback for [`live`](Self::live); `call` reports its own outcome and owns delivery.
-    pub fn invoke<F, Fut>(
+    /// A callback that ends without completing (a panic, a cancel) delivers `lost` instead, so
+    /// whoever waits on its report is never left waiting.
+    pub fn invoke<F, Fut, L>(
         &mut self,
         function_call: Option<FunctionCall>,
         approval: Option<Approval>,
         runtime: &tokio::runtime::Handle,
         call: F,
+        lost: L,
     ) -> u64
     where
         F: FnOnce(Invocation) -> Fut,
         Fut: Future<Output = ()> + Send + 'static,
+        L: Future<Output = ()> + Send + 'static,
     {
         self.next_operation += 1;
         let operation = self.next_operation;
         let invocation = Invocation { operation, function_call, approval, ..self.entry.clone() };
         self.live.insert(operation, invocation.clone());
         let work = call(invocation);
-        self.tasks.push(TokioSpawner::new(runtime.clone()).spawn(async move {
-            work.await;
+        let task = TokioSpawner::new(runtime.clone()).spawn_settled(work, |outcome| async move {
+            if !matches!(outcome, TaskOutcome::Completed) {
+                lost.await;
+            }
+        });
+        self.tasks.push(Box::pin(async move {
+            let _ = task.await;
             operation
         }));
         operation
@@ -142,16 +152,12 @@ impl HostInvoker {
     /// Waits for the next callback to settle and releases its invocation (and the host context
     /// it held). Pending forever while none is in flight.
     pub async fn settled(&mut self) -> u64 {
-        loop {
-            match self.tasks.next().await {
-                Some(Ok(operation)) => {
-                    self.live.remove(&operation);
-                    return operation;
-                }
-                // A panicked delivery: its invocation is released when the invoker drops.
-                Some(Err(_)) => continue,
-                None => std::future::pending::<()>().await,
+        match self.tasks.next().await {
+            Some(operation) => {
+                self.live.remove(&operation);
+                operation
             }
+            None => std::future::pending().await,
         }
     }
 }

@@ -1,16 +1,16 @@
 use super::session::Tx;
-use crate::monotone::Monotone;
 use crate::voice::VoiceRuntimeEvent;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::session::VoiceCommandOrigin;
 use lk_agents_abi::{AudioFrame, ChatItem, HostRef, MetricsReport};
+use lk_agents_net::signal;
 use lk_agents_voice::agent_session::SpeechCommand;
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_voice::speech_handle::{SpeechError, SpeechUpdate, SpeechView};
 use parking_lot::{Mutex, MutexGuard};
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 
 /// A refusal on a host's speech handle; each `Display` is the `RuntimeError` it raises.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -36,46 +36,92 @@ pub enum SpeechRefused {
 }
 
 /// Whether the host's call was answered: `say()` and `generate_reply()` return before the loop
-/// creates the speech, and a handle constructed directly never gets one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// creates the speech, and a handle constructed directly never gets one. A pending speech whose
+/// signals ended was never created: its session ended first.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum Creation {
+    #[default]
     Pending,
     Created,
-    /// The session ended before the loop created the speech.
-    Lost,
     Detached,
 }
 
-impl Creation {
-    fn result(self) -> Result<(), SpeechRefused> {
-        match self {
-            Self::Created => Ok(()),
-            Self::Lost => Err(SpeechRefused::Ended),
-            Self::Pending | Self::Detached => Err(SpeechRefused::Detached),
-        }
-    }
-}
-
-/// A speech's lifecycle as its waiters watch it, in one cell. Each mark only ever turns on
-/// ([`Lifecycle::merge`]), so no waiter misses a phase.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// A speech's lifecycle as its waiters watch it, in one cell. Each mark only ever turns on, so no
+/// waiter misses a phase.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Lifecycle {
+    creation: Creation,
     scheduled: bool,
     /// `_interrupt_fut`: one-shot, the whole speech (its tools and any follow-up step).
     interrupted: bool,
     done: bool,
-    /// The session handed the host this speech's `speech_done` event, or will never hand it one.
-    reported: bool,
+    /// How many steps were authorized to play: each authorization opens one generation.
+    authorized: usize,
+    /// One mark per authorized step, addressed absolutely: set once its generation is done.
+    generations: Vec<bool>,
 }
 
 impl Lifecycle {
-    fn merge(self, marks: Lifecycle) -> Lifecycle {
-        Lifecycle {
-            scheduled: self.scheduled || marks.scheduled,
-            interrupted: self.interrupted || marks.interrupted,
-            done: self.done || marks.done,
-            reported: self.reported || marks.reported,
+    /// As read once its producer is gone: a speech the session never finished ends interrupted,
+    /// with its generations. A detached handle never had a speech to end.
+    fn ended(mut self) -> Lifecycle {
+        if self.creation != Creation::Detached {
+            self.interrupted |= !self.done;
+            self.done = true;
+            self.generations.iter_mut().for_each(|done| *done = true);
         }
+        self
+    }
+
+    fn publish(&mut self, view: &SpeechView) {
+        self.scheduled |= view.scheduled();
+        self.interrupted |= view.interrupted();
+        self.done |= view.done();
+        self.authorized = self.authorized.max(view.generations.len());
+        for (step, done) in view.generations.iter().enumerate() {
+            if step == self.generations.len() {
+                self.generations.push(false);
+            }
+            self.generations[step] |= *done;
+        }
+    }
+}
+
+/// The writers of one speech's cells. The voice loop holds them while the speech lives
+/// ([`SpeechProducers`]), so the loop's end, however it comes, resolves every wait on the speech.
+pub struct SpeechSignals {
+    lifecycle: signal::Producer<Lifecycle>,
+    /// Travels with the speech's `speech_done` event; finished once the host handled it.
+    reported: Option<signal::Producer<bool>>,
+}
+
+fn signals(creation: Creation) -> (SpeechSignals, signal::Cell<Lifecycle>, signal::Cell<bool>) {
+    let (lifecycle, cell) = signal::signal(Lifecycle { creation, ..Lifecycle::default() });
+    let (reported, reported_cell) = signal::signal(false);
+    (SpeechSignals { lifecycle, reported: Some(reported) }, cell, reported_cell)
+}
+
+/// The voice loop's [`SpeechSignals`], by speech: dropped with the loop.
+#[derive(Default)]
+pub struct SpeechProducers(BTreeMap<SpeechId, SpeechSignals>);
+
+impl SpeechProducers {
+    pub fn adopt(&mut self, id: SpeechId, signals: SpeechSignals) {
+        self.0.insert(id, signals);
+    }
+
+    pub fn get(&self, id: SpeechId) -> Option<&SpeechSignals> {
+        self.0.get(&id)
+    }
+
+    /// The producer that travels with `id`'s `speech_done` event.
+    pub fn take_reported(&mut self, id: SpeechId) -> Option<signal::Producer<bool>> {
+        self.0.get_mut(&id).and_then(|signals| signals.reported.take())
+    }
+
+    /// Nothing will update `id` again: its waits resolve on what it reached.
+    pub fn retire(&mut self, id: SpeechId) {
+        self.0.remove(&id);
     }
 }
 
@@ -112,14 +158,11 @@ pub struct SpeechHandle {
     reserved: Option<SpeechId>,
     /// `SpeechHandle.id`: `speech_{n}`, or what a detached handle was constructed with.
     speech_id: OnceLock<Arc<str>>,
-    creation: watch::Sender<Creation>,
     /// The loop, for what the host asks of the speech.
     requests: Requests,
-    lifecycle: watch::Sender<Lifecycle>,
-    /// How many steps were authorized to play: each authorization opens one generation.
-    authorized: Monotone<usize>,
-    /// One cell per authorized step, addressed absolutely: set once its generation is done.
-    generations: Mutex<Vec<Arc<Monotone<bool>>>>,
+    lifecycle: signal::Cell<Lifecycle>,
+    /// The session handed the host this speech's `speech_done` event (or never will, once ended).
+    reported: signal::Cell<bool>,
     inner: Mutex<Inner>,
 }
 
@@ -137,7 +180,7 @@ impl Eq for SpeechHandle {}
 
 impl SpeechHandle {
     fn base(
-        creation: Creation,
+        (lifecycle, reported): (signal::Cell<Lifecycle>, signal::Cell<bool>),
         reserved: Option<SpeechId>,
         allow: bool,
         requests: Requests,
@@ -146,11 +189,9 @@ impl SpeechHandle {
             id: OnceLock::new(),
             reserved,
             speech_id: OnceLock::new(),
-            creation: watch::Sender::new(creation),
             requests,
-            lifecycle: watch::Sender::new(Lifecycle::default()),
-            authorized: Monotone::new(0),
-            generations: Mutex::new(Vec::new()),
+            lifecycle,
+            reported,
             inner: Mutex::new(Inner {
                 view: SpeechView::new(allow),
                 requested: false,
@@ -164,27 +205,41 @@ impl SpeechHandle {
         }
     }
 
-    /// A speech the loop created on its own (a reply, a tool's follow-up).
-    pub fn new(id: SpeechId, allow_interruptions: bool, requests: Requests) -> Self {
-        let handle = SpeechHandle::base(Creation::Created, None, allow_interruptions, requests);
+    /// A speech the loop created on its own (a reply, a tool's follow-up), and its writers.
+    pub fn new(
+        id: SpeechId,
+        allow_interruptions: bool,
+        requests: Requests,
+    ) -> (Self, SpeechSignals) {
+        let (signals, lifecycle, reported) = signals(Creation::Created);
+        let handle = SpeechHandle::base((lifecycle, reported), None, allow_interruptions, requests);
         let _ = handle.speech_id.set(id.to_string().into());
         let _ = handle.id.set(id);
-        handle
+        (handle, signals)
     }
 
     /// What a host's `say()` / `generate_reply()` answers, before the loop creates the speech:
     /// its id, and the interruptibility it was asked with or the session's as the call returned.
-    pub fn pending(requests: Requests, id: SpeechId, allow_interruptions: bool) -> Arc<Self> {
-        let handle = SpeechHandle::base(Creation::Pending, Some(id), allow_interruptions, requests);
+    /// The writers travel to the loop with the call.
+    pub fn pending(
+        requests: Requests,
+        id: SpeechId,
+        allow_interruptions: bool,
+    ) -> (Arc<Self>, SpeechSignals) {
+        let (signals, lifecycle, reported) = signals(Creation::Pending);
+        let handle =
+            SpeechHandle::base((lifecycle, reported), Some(id), allow_interruptions, requests);
         let _ = handle.speech_id.set(id.to_string().into());
-        Arc::new(handle)
+        (Arc::new(handle), signals)
     }
 
     /// A handle constructed directly (`SpeechHandle.create()`): no loop will create a speech
     /// behind it.
     pub fn detached(speech_id: String, allow_interruptions: bool) -> Self {
         let requests = Requests::disconnected();
-        let handle = SpeechHandle::base(Creation::Detached, None, allow_interruptions, requests);
+        let lifecycle = Lifecycle { creation: Creation::Detached, ..Lifecycle::default() };
+        let cells = (signal::Cell::ended_with(lifecycle), signal::Cell::ended_with(false));
+        let handle = SpeechHandle::base(cells, None, allow_interruptions, requests);
         let _ = handle.speech_id.set(speech_id.into());
         handle
     }
@@ -211,13 +266,13 @@ impl SpeechHandle {
     }
 
     /// One update the core published, applied in order.
-    fn apply(&self, id: SpeechId, update: SpeechUpdate) {
+    fn apply(&self, signals: Option<&SpeechSignals>, id: SpeechId, update: SpeechUpdate) {
         match update {
             SpeechUpdate::Created => {
                 let _ = self.speech_id.set(id.to_string().into());
                 let _ = self.id.set(id);
             }
-            SpeechUpdate::View(view) => self.publish(view),
+            SpeechUpdate::View(view) => self.publish(signals, view),
             SpeechUpdate::ItemAdded(item) => self.inner.lock().chat_items.push(item),
             SpeechUpdate::UserMetrics(metrics) => self.inner.lock().user_metrics = Some(metrics),
             SpeechUpdate::InterruptRefused => self.inner.lock().requested = false,
@@ -225,27 +280,11 @@ impl SpeechHandle {
         }
     }
 
-    /// The view and the cells waiters watch, in the order a waiter must see them: a step's
-    /// generation exists before its authorization is announced.
-    fn publish(&self, view: SpeechView) {
-        {
-            let mut generations = self.generations.lock();
-            for (step, done) in view.generations.iter().enumerate() {
-                if step == generations.len() {
-                    generations.push(Arc::new(Monotone::new(false)));
-                }
-                if *done {
-                    generations[step].set(true);
-                }
-            }
+    /// The cell waiters watch, then the view.
+    fn publish(&self, signals: Option<&SpeechSignals>, view: SpeechView) {
+        if let Some(signals) = signals {
+            signals.lifecycle.modify(|lifecycle| lifecycle.publish(&view));
         }
-        self.mark(Lifecycle {
-            scheduled: view.scheduled(),
-            interrupted: view.interrupted(),
-            done: view.done(),
-            reported: false,
-        });
-        self.authorized.set(view.generations.len());
         self.inner.lock().view = view;
     }
 
@@ -253,18 +292,20 @@ impl SpeechHandle {
     /// the session ended first, not at all. Wakes whoever awaits the creation; what the host asked
     /// meanwhile reaches the created speech now. A speech created done (refused, or answered as
     /// the session closed) never ran: an interrupt asked of it lands nowhere.
-    pub fn answered(&self, created: bool) {
+    /// `signals` are the speech's writers, in the loop's table once it received the call; a
+    /// lost speech's are dropped by the caller, which ends every wait on it.
+    pub fn answered(&self, signals: Option<&SpeechSignals>, created: bool) {
         let mut requests = self.requests.lock();
         let mut inner = self.inner.lock();
-        let settled = self.creation.send_if_modified(|creation| {
-            if *creation != Creation::Pending {
-                return false;
-            }
-            *creation = if created { Creation::Created } else { Creation::Lost };
-            true
-        });
+        if let (true, Some(signals)) = (created, signals) {
+            signals.lifecycle.modify(|lifecycle| {
+                if lifecycle.creation == Creation::Pending {
+                    lifecycle.creation = Creation::Created;
+                }
+            });
+        }
         // Lost: nothing will read what `say()` streams.
-        if settled && !created {
+        if !created {
             inner.say = None;
         }
         let pending = std::mem::take(&mut inner.pending);
@@ -309,9 +350,17 @@ impl SpeechHandle {
 
     /// The created speech, or why there is none to wait on.
     async fn wait_created(&self) -> Result<(), SpeechRefused> {
-        let mut rx = self.creation.subscribe();
-        let creation = *rx.wait_for(|c| *c != Creation::Pending).await.expect("held by self");
-        creation.result()
+        let creation =
+            self.lifecycle.wait_map(|l| (l.creation != Creation::Pending).then_some(l.creation));
+        match creation.await {
+            Ok(Creation::Created) => Ok(()),
+            Ok(_) => Err(SpeechRefused::Detached),
+            Err(signal::Ended) => Err(SpeechRefused::Ended),
+        }
+    }
+
+    fn creation(&self) -> Creation {
+        self.lifecycle.with(|l| l.creation)
     }
 
     fn attached(&self) -> Result<SpeechId, SpeechRefused> {
@@ -326,7 +375,7 @@ impl SpeechHandle {
 
     /// The created speech's loop is asked now; an uncreated one's at its creation, in order.
     fn ask(&self, requests: &mut Vec<SpeechCommand>, inner: &mut Inner, command: SpeechCommand) {
-        if *self.creation.borrow() == Creation::Created {
+        if self.creation() == Creation::Created {
             self.requests.send(requests, command);
         } else {
             inner.pending.push(command);
@@ -337,22 +386,17 @@ impl SpeechHandle {
         read(&self.inner.lock().view)
     }
 
-    /// Turns on `marks`; what the lifecycle already has stays.
-    fn mark(&self, marks: Lifecycle) {
-        self.lifecycle.send_if_modified(|lifecycle| {
-            let next = lifecycle.merge(marks);
-            std::mem::replace(lifecycle, next) != next
-        });
-    }
-
     fn lifecycle(&self) -> Lifecycle {
-        *self.lifecycle.borrow()
+        let lifecycle = self.lifecycle.get();
+        if self.lifecycle.ended() { lifecycle.ended() } else { lifecycle }
     }
 
-    /// The lifecycle once `ready` holds; cancel-safe.
-    async fn wait(&self, ready: impl Fn(&Lifecycle) -> bool) -> Lifecycle {
-        let mut rx = self.lifecycle.subscribe();
-        *rx.wait_for(ready).await.expect("held by self")
+    /// The lifecycle once `ready` holds, or as it ended; cancel-safe.
+    async fn wait(&self, ready: impl Fn(&Lifecycle) -> bool + Send) -> Lifecycle {
+        match self.lifecycle.wait_for(ready).await {
+            Ok(lifecycle) => lifecycle,
+            Err(signal::Ended) => self.lifecycle(),
+        }
     }
 
     /// The loop interrupted the speech: its playout, its tools and any follow-up step.
@@ -400,28 +444,9 @@ impl SpeechHandle {
         if lifecycle.interrupted || !lifecycle.scheduled { Err(WillNotPlay) } else { Ok(()) }
     }
 
+    /// Resolves too once the speech can no longer be interrupted: its session ended.
     pub async fn wait_for_interrupted(&self) {
         self.wait(|l| l.interrupted).await;
-    }
-
-    /// The session handed the host this speech's `speech_done` event, or never will.
-    pub fn reported(&self) {
-        self.mark(Lifecycle { reported: true, ..Lifecycle::default() });
-    }
-
-    /// The session ended: a speech it never finished ends interrupted and its generations end,
-    /// so no wait outlives it.
-    fn session_ended(&self) {
-        self.generations.lock().iter().for_each(|done| done.set(true));
-        self.lifecycle.send_if_modified(|lifecycle| {
-            let next = Lifecycle {
-                interrupted: lifecycle.interrupted || !lifecycle.done,
-                done: true,
-                reported: true,
-                ..*lifecycle
-            };
-            std::mem::replace(lifecycle, next) != next
-        });
     }
 
     /// `wait_for_playout()`, and so `__await__`; the host's call adds the self-wait guard.
@@ -432,38 +457,34 @@ impl SpeechHandle {
     /// Whether step `step` (counting as [`num_steps`](Self::num_steps) does) was authorized to
     /// play.
     pub fn step_authorized(&self, step: u32) -> bool {
-        self.authorized.get() >= step as usize
+        self.lifecycle.with(|l| l.authorized >= step as usize)
     }
 
     /// `_wait_for_authorization` for step `step`: each step waits for its own grant, so a step
-    /// never plays on the one before it. Also resolves once the speech is interrupted, as it
-    /// never will be granted; callers race the interruption first.
+    /// never plays on the one before it. Also resolves once the speech is interrupted or done,
+    /// as it never will be granted; callers race the interruption first.
     pub async fn wait_for_step_authorized(&self, step: u32) {
-        tokio::select! {
-            biased;
-            _ = self.authorized.wait_for(|n| *n >= step as usize) => {}
-            _ = self.wait(|l| l.interrupted) => {}
-        }
+        self.wait(|l| l.authorized >= step as usize || l.interrupted || l.done).await;
     }
 
     /// Wait for step `step`'s generation (absolute, from zero). `RunContext.wait_for_playout()`
     /// passes the step captured at tool-call time, so a long tool waits for its own step's playout.
     pub async fn wait_for_generation(&self, step: usize) -> Result<(), SpeechError> {
         let step = self.view(|v| v.generation(step))?;
-        self.generation_cell(step).wait_for(|done| *done).await;
+        self.wait_generation(step).await;
         Ok(())
     }
 
     /// `_wait_for_generation()` with `step_idx=-1`: the step currently running.
     pub async fn wait_for_latest_generation(&self) -> Result<(), SpeechError> {
         let step = self.view(SpeechView::latest_generation)?;
-        self.generation_cell(step).wait_for(|done| *done).await;
+        self.wait_generation(step).await;
         Ok(())
     }
 
-    /// The lock is released before any await.
-    fn generation_cell(&self, step: usize) -> Arc<Monotone<bool>> {
-        self.generations.lock().get(step).cloned().expect("the accepted generation was published")
+    /// The accepted generation `step` is done, or the speech ended.
+    async fn wait_generation(&self, step: usize) {
+        self.wait(|l| l.generations.get(step).copied().unwrap_or(false)).await;
     }
 
     /// The speech waits on tool call `call_id` (`name`) until [`tool_returned`]: from its start
@@ -540,16 +561,11 @@ impl Requests {
 
 /// A session's speeches by id, from the host's call (or the core's creation) until the core
 /// retires the speech: events, runs and running tools name a speech after the loop let it go.
+/// Their writers are the loop's ([`SpeechProducers`]), never this shared table's.
 #[derive(Default)]
 pub struct Speeches {
     handles: Mutex<BTreeMap<SpeechId, Arc<SpeechHandle>>>,
     requests: Arc<Mutex<Vec<SpeechCommand>>>,
-}
-
-impl Drop for Speeches {
-    fn drop(&mut self) {
-        self.end();
-    }
 }
 
 impl Speeches {
@@ -566,12 +582,6 @@ impl Speeches {
 
     pub fn get(&self, id: SpeechId) -> Option<Arc<SpeechHandle>> {
         self.handles.lock().get(&id).cloned()
-    }
-
-    /// The session ended, drained or dropped: every speech it holds ends, so every wait resolves.
-    pub fn end(&self) {
-        let handles: Vec<_> = self.handles.lock().values().cloned().collect();
-        handles.iter().for_each(|handle| handle.session_ended());
     }
 
     /// Nothing names `id` any more: the session lets its handle go (the host keeps its own).
@@ -592,16 +602,24 @@ impl Speeches {
     }
 
     /// What the core published about `id`: its creation makes the handle a loop speech's (over
-    /// the host's handle, when a call reserved the id).
-    pub fn apply(&self, id: SpeechId, update: SpeechUpdate, wake: &Tx) {
+    /// the host's handle, when a call reserved the id), whose writers join `producers`.
+    pub fn apply(
+        &self,
+        producers: &mut SpeechProducers,
+        id: SpeechId,
+        update: SpeechUpdate,
+        wake: &Tx,
+    ) {
         let handle = {
             let mut speeches = self.handles.lock();
             let entry = speeches.entry(id).or_insert_with(|| {
-                Arc::new(SpeechHandle::new(id, true, self.requests(wake.clone())))
+                let (handle, signals) = SpeechHandle::new(id, true, self.requests(wake.clone()));
+                producers.adopt(id, signals);
+                Arc::new(handle)
             });
             Arc::clone(entry)
         };
-        handle.apply(id, update);
+        handle.apply(producers.get(id), id, update);
     }
 
     /// `invocation` as a callback of `speech` runs it: with the host's object for the speech.
@@ -686,7 +704,7 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
         inner.view.host_set_allow_interruptions(value, inner.requested).map_err(refused)?;
         // A detached handle, or a speech that ended: nothing is left to tell, the value is the
         // handle's own.
-        if *self.creation.borrow() == Creation::Detached || inner.view.done() {
+        if self.creation() == Creation::Detached || inner.view.done() {
             inner.view.allow_interruptions = value;
             return Ok(());
         }
@@ -721,7 +739,7 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
             return Ok(());
         }
         inner.requested = true;
-        if *self.creation.borrow() != Creation::Detached {
+        if self.creation() != Creation::Detached {
             self.ask(
                 &mut requests,
                 &mut inner,
@@ -787,8 +805,9 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
     }
 
     async fn wait_reported(&self) {
+        // Ended: the host will never be handed its `speech_done`.
         if self.wait_created().await.is_ok() {
-            self.wait(|l| l.reported).await;
+            let _ = self.reported.wait_for(|reported| *reported).await;
         }
     }
 }
@@ -798,7 +817,7 @@ impl std::fmt::Debug for SpeechHandle {
         f.debug_struct("SpeechHandle")
             .field("id", &self.created())
             .field("speech_id", &self.speech_id())
-            .field("creation", &*self.creation.borrow())
+            .field("creation", &self.creation())
             .field("scheduled", &self.scheduled())
             .field("interrupted", &self.interrupted())
             .field("done", &self.done())

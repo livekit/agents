@@ -29,6 +29,7 @@ use serde_json::Value as JsonValue;
 
 pub(crate) use lk_agents_abi::telemetry::decl::SpanDecl;
 pub(crate) use lk_agents_abi::telemetry::decl::{Content, Json, Measured, Seconds};
+pub(crate) use lk_agents_abi::telemetry::health::{TeardownOverrun, TeardownStage};
 pub(crate) use lk_agents_abi::telemetry::instruments::{AudioConsumer, TurnLlmTtft, TurnTtsTtfb};
 pub(crate) use lk_agents_abi::telemetry::record::JobKey;
 #[cfg(test)]

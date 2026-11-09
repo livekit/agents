@@ -155,8 +155,6 @@ struct Ready {
 struct Running {
     remote: Option<Arc<dyn SessionHosting>>,
     api: Tx,
-    /// The replies of the calls the host awaits, until the core answers them.
-    calls: Arc<Calls>,
     /// `session.keyterms`, as the driver last pushed them.
     keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
     /// `Agent.chat_ctx`: the driving agent's view, as the driver last published it.
@@ -338,7 +336,6 @@ impl VoiceSession {
                 peer,
                 ivr_detection: _,
                 speech_ids,
-                calls,
             } = handle;
             let mut owner = executor.own(cores);
             admission.check_open()?;
@@ -355,6 +352,7 @@ impl VoiceSession {
             let (drained_tx, drained) = tokio::sync::oneshot::channel();
             let runner = SessionRunner {
                 events,
+                reported: None,
                 speeches,
                 room_io: Arc::clone(&room_io),
                 api: api.clone(),
@@ -377,7 +375,6 @@ impl VoiceSession {
             );
             admission.install(Running {
                 api,
-                calls,
                 keyterms,
                 chat_ctx,
                 peer,
@@ -534,9 +531,10 @@ impl VoiceSession {
             .unwrap_or_else(|| self.stack().resolve(&self.legs()).turn.interruption.enabled());
         self.running(|r| {
             let id = SpeechId(r.speech_ids.fetch_add(1, Ordering::Relaxed));
-            let speech = SpeechHandle::pending(self.speeches.requests(r.api.clone()), id, allow);
+            let requests = self.speeches.requests(r.api.clone());
+            let (speech, signals) = SpeechHandle::pending(requests, id, allow);
             self.speeches.register(Arc::clone(&speech));
-            let reply_to = ReplyTo::Speech(SpeechReply(Arc::clone(&speech)));
+            let reply_to = ReplyTo::Speech(SpeechReply::new(Arc::clone(&speech), signals));
             let call = Call { id: r.next_call(), reply_to };
             Ok((speech, SpeechCall { id: call.id, speech: id }, call))
         })
@@ -586,7 +584,7 @@ impl VoiceSession {
     ) -> Result<(), SessionRefused> {
         let pending = self.resources.pending(cmd.resources());
         let sent = self.running(|r| {
-            r.calls.send_command(&r.api, origin, cmd, call).map_err(|_| SessionRefused::LoopEnded)
+            send_command(&r.api, origin, cmd, call).map_err(|_| SessionRefused::LoopEnded)
         });
         if sent.is_ok() {
             pending.submitted();
@@ -622,7 +620,12 @@ impl VoiceSession {
             let mut stage = self.stage.lock();
             match (stage.lifecycle().close(), &mut *stage) {
                 (CloseAction::Running, Stage::Running(running)) => (
-                    Some((running.api.clone(), running.drained.take(), running.remote.clone())),
+                    Some((
+                        running.api.clone(),
+                        running.drained.take(),
+                        running.remote.clone(),
+                        running.peer.session.clone(),
+                    )),
                     None,
                 ),
                 (CloseAction::Opening, Stage::Opening { remote, cancelled }) => {
@@ -641,11 +644,14 @@ impl VoiceSession {
         let stage = Arc::clone(&self.stage);
         let time = self.time.clone();
         async move {
-            let Some((api, drained, remote)) = running else { return };
+            let Some((api, drained, remote, session)) = running else { return };
             // A stopped receiver has already closed the session.
             let _ = api.send(Command::Close(Close { reason, drain: options.drain, error }));
             if time.timeout(CLOSE_WATCHDOG, api.closed()).await.is_err() {
                 log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = CLOSE_WATCHDOG.as_millis() as u64; "voice session close watchdog fired");
+                let overrun =
+                    telemetry::TeardownOverrun { stage: telemetry::TeardownStage::SessionClose };
+                telemetry::measure(&session, &overrun, 1u64);
             }
             // `Closed` **before** awaiting the drain: `Running` holds the `PeerHandle`, a sender on
             // the host stream, and the drain only ends when every sender is gone.
@@ -801,8 +807,7 @@ impl VoiceSession {
             return self.send_awaited(origin, wrap(update), call);
         };
         let pending = self.resources.pending(update.resources().collect());
-        let (api, calls, session) =
-            self.running(|r| Ok((r.api.clone(), Arc::clone(&r.calls), r.peer.session.clone())))?;
+        let (api, session) = self.running(|r| Ok((r.api.clone(), r.peer.session.clone())))?;
         let scope = update
             .toolset
             .agent
@@ -850,7 +855,7 @@ impl VoiceSession {
             let toolset = std::mem::take(&mut update.toolset);
             update.toolset = Toolset::set_up(set_up, toolset.host, toolset.agent);
             let cmd = wrap(update);
-            if calls.send_command(&api, origin, cmd, Some(call)).is_ok() {
+            if send_command(&api, origin, cmd, Some(call)).is_ok() {
                 drop(handoff_turn);
                 pending.submitted();
             } else {
@@ -958,7 +963,9 @@ fn origin_of(origin: Option<VoiceCommandOrigin>) -> VoiceCommandOrigin {
 /// One stream, in emission order, so ordering between items, handoffs and completions needs no
 /// barrier. Dropping the runner releases a waiting [`close`](VoiceSession::close).
 pub struct SessionRunner {
-    events: tokio::sync::mpsc::UnboundedReceiver<VoiceHostEvent>,
+    events: shared::HostEvents,
+    /// The last event's `reported` writer, finished when the host asks for the next event.
+    reported: Option<lk_agents_net::signal::Producer<bool>>,
     /// The host's objects for the speeches the events name.
     speeches: Arc<Speeches>,
     room_io: Arc<dyn RoomIo>,
@@ -984,7 +991,11 @@ impl SessionRunner {
         {
             let _ = delivered.send(());
         }
-        let ev = self.events.recv().await?;
+        if let Some(reported) = self.reported.take() {
+            reported.finish(true);
+        }
+        let (ev, reported) = self.events.recv().await?;
+        self.reported = reported;
         self.opening.left = self.opening.left.saturating_sub(1);
         #[cfg(feature = "dst")]
         if let Some(observe) = &mut self.host_event {

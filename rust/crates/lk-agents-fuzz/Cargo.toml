@@ -31,6 +31,8 @@ fastrand = "2"
 # The voice lane's fake database implements storage's connection trait.
 async-trait.workspace = true
 parking_lot.workspace = true
+# The text driver's clients cancel their runs and drop their turns.
+tokio-util = "0.7"
 
 [build-dependencies]
 serde_json.workspace = true
@@ -50,6 +52,10 @@ path = "src/soak_tests.rs"
 [[test]]
 name = "survey"
 path = "src/survey_tests.rs"
+
+[[test]]
+name = "text"
+path = "src/text_tests.rs"
 
 [[test]]
 name = "regressions"

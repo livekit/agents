@@ -10,7 +10,10 @@ use lk_agents_abi::{
 };
 use tokio::sync::mpsc;
 
-use super::{Control, Registry};
+use super::{
+    Control, Registry,
+    hazard::{Site, strike},
+};
 use crate::{
     input::{AgentText, Input},
     record::{Detail, Kind},
@@ -31,6 +34,7 @@ struct Response {
     receiver: mpsc::UnboundedReceiver<Result<LlmChunk, ProviderError>>,
     registry: Arc<Registry>,
     closed: AtomicBool,
+    hazard: super::hazard::StreamHazard,
 }
 
 impl Llm for FakeLlm {
@@ -44,6 +48,9 @@ impl Llm for FakeLlm {
         request: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         Box::pin(async move {
+            if let Some(fault) = self.registry.hazard(Site::ChatOpen) {
+                return strike(fault, Site::ChatOpen).await;
+            }
             let (sender, receiver) = mpsc::unbounded_channel();
             let slot = self.registry.register(
                 Kind::Chat,
@@ -59,6 +66,7 @@ impl Llm for FakeLlm {
                 receiver,
                 registry: self.registry.clone(),
                 closed: AtomicBool::new(false),
+                hazard: self.registry.stream_hazard(Site::ChatNext, Site::ChatClose),
             }) as LlmStream)
         })
     }
@@ -66,15 +74,25 @@ impl Llm for FakeLlm {
 
 impl StreamOutput<LlmChunk> for Response {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
-        Box::pin(async move { self.receiver.recv().await.transpose() })
+        let fault = self.registry.stream_fault(&mut self.hazard, Site::ChatNext, self.slot);
+        Box::pin(async move {
+            if let Some(fault) = fault {
+                return strike(fault, Site::ChatNext).await;
+            }
+            self.receiver.recv().await.transpose()
+        })
     }
 
     fn cancel_safe(&self) -> bool {
         true
     }
 
-    fn close(self: Box<Self>, _deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+    fn close(mut self: Box<Self>, _deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        let fault = self.registry.stream_fault(&mut self.hazard, Site::ChatClose, self.slot);
         Box::pin(async move {
+            if let Some(fault) = fault {
+                return strike(fault, Site::ChatClose).await;
+            }
             self.closed.store(true, Ordering::SeqCst);
             self.registry.mark_closed(self.slot);
             Closed::Clean

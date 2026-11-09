@@ -2,12 +2,12 @@ use crate::telemetry;
 use lk_agents_abi::utils::video::{MediaFrame, VideoFrame};
 use lk_agents_abi::voice::rtc::{AudioSource, RtcError, VideoSource};
 use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, Ts};
+use lk_agents_net::signal;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::av_sync::FramePacer;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::sync::{Notify, watch};
 
 type Outcome<T = ()> = Result<T, RtcError>;
 
@@ -33,13 +33,15 @@ struct Inner {
     video: Arc<dyn VideoSource>,
     clock: Arc<dyn Clock>,
     capacity: usize,
-    state: Mutex<State>,
-    changed: Notify,
-    closed: watch::Sender<Option<Outcome>>,
+    /// Its terminal value is `closed`, which every wait accepts.
+    state: signal::Shared<State>,
+    /// The close task's: it ends with that task.
+    closed: signal::Cell<Option<Outcome>>,
 }
 
 pub struct AVSynchronizer {
     inner: Arc<Inner>,
+    close: Mutex<Option<signal::Producer<Option<Outcome>>>>,
     worker: Mutex<Option<OwnedTask>>,
     spawner: Arc<dyn Spawner>,
     close_tasks: Arc<TaskSet>,
@@ -54,12 +56,13 @@ impl AVSynchronizer {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
     ) -> Arc<Self> {
+        let (close, closed) = signal::once();
         let inner = Arc::new(Inner {
             audio,
             video,
             clock,
             capacity,
-            state: Mutex::new(State {
+            state: signal::Shared::new(State {
                 queue: VecDeque::new(),
                 pacer,
                 epoch: 0,
@@ -69,13 +72,13 @@ impl AVSynchronizer {
                 last_video: 0.0,
                 last_audio: 0.0,
             }),
-            changed: Notify::new(),
-            closed: watch::channel(None).0,
+            closed,
         });
         let run = inner.clone();
         let worker = spawner.spawn(async move { run.run().await });
         Arc::new(Self {
             inner,
+            close: Mutex::new(Some(close)),
             worker: Mutex::new(Some(worker)),
             spawner,
             close_tasks: Arc::default(),
@@ -96,61 +99,44 @@ impl Inner {
 
     async fn run(&self) {
         loop {
-            let changed = self.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            let Some(next) = self.take_next() else { return };
-            let Some((queued, deadline)) = next else {
-                changed.await;
-                continue;
-            };
-            self.changed.notify_waiters();
+            let next = self.state.wait_until(|state| self.take_next(state)).await;
+            let Some((queued, deadline)) = next else { return };
+            // Ends the flight however the presentation ends: done, cancelled or panicked.
+            let flight = Flight(self);
             self.present(&queued, deadline).await;
-            if self.end_flight() {
+            drop(flight);
+            if self.state.with(|state| state.failure.is_some()) {
                 return;
             }
         }
     }
 
-    /// Pops the next frame, in flight from here, with its pacing deadline; `None` once closed.
-    fn take_next(&self) -> Option<Option<(Queued, Ts)>> {
-        let mut state = self.state.lock();
+    /// The next frame, in flight from here, with its pacing deadline; `Some(None)` once closed.
+    fn take_next(&self, state: &mut State) -> Option<Option<(Queued, Ts)>> {
         if state.closed {
-            return None;
+            return Some(None);
         }
-        let next = state.queue.pop_front();
-        state.in_flight = next.is_some();
-        Some(next.map(|frame| (frame, state.pacer.deadline(self.clock.now()))))
+        let next = state.queue.pop_front()?;
+        state.in_flight = true;
+        Some(Some((next, state.pacer.deadline(self.clock.now()))))
     }
 
     /// Captures the frame at its deadline. A clear/reset wakes pacing; the epoch is re-checked
     /// before entering the SDK.
     async fn present(&self, queued: &Queued, deadline: Ts) {
-        loop {
-            let changed = self.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            let discard = {
-                let s = self.state.lock();
-                s.closed || s.epoch != queued.epoch
-            };
-            if discard {
-                return;
-            }
-            tokio::select! {
-                biased;
-                _ = &mut changed => continue,
-                _ = self.clock.wait_until(deadline) => {}
-            }
-            let result = self.video.capture(&queued.frame);
-            self.record_capture(result, queued.timestamp);
-            return;
+        let discarded =
+            self.state.wait_until(|s| (s.closed || s.epoch != queued.epoch).then_some(()));
+        tokio::select! {
+            biased;
+            () = discarded => return,
+            _ = self.clock.wait_until(deadline) => {}
         }
+        let result = self.video.capture(&queued.frame);
+        self.record_capture(result, queued.timestamp);
     }
 
     fn record_capture(&self, result: Outcome, timestamp: Option<f64>) {
-        let mut state = self.state.lock();
-        match result {
+        self.state.with(|state| match result {
             Ok(()) => {
                 state.pacer.captured(self.clock.now());
                 if let Some(timestamp) = timestamp {
@@ -158,65 +144,65 @@ impl Inner {
                 }
             }
             Err(error) => state.failure = Some(error),
-        }
+        });
     }
+}
 
-    /// Ends the frame's flight and wakes the waiters; whether a capture failed.
-    fn end_flight(&self) -> bool {
-        let failed = {
-            let mut state = self.state.lock();
-            state.in_flight = false;
-            state.failure.is_some()
-        };
-        self.changed.notify_waiters();
-        failed
+/// A frame in flight; dropping it lands the flight and wakes the waiters.
+struct Flight<'a>(&'a Inner);
+
+impl Drop for Flight<'_> {
+    fn drop(&mut self) {
+        self.0.state.modify(|state| state.in_flight = false);
     }
 }
 
 impl AVSynchronizer {
     /// The current epoch, unless the synchronizer failed or closed.
     fn current_epoch(&self) -> Outcome<u64> {
-        let state = self.inner.state.lock();
-        Inner::check(&state)?;
-        Ok(state.epoch)
+        self.inner.state.with(|state| {
+            Inner::check(state)?;
+            Ok(state.epoch)
+        })
     }
 
     /// Captures the audio frame; its timestamp counts unless a clear came meanwhile.
     async fn push_audio(&self, frame: &AudioFrame, timestamp: Option<f64>) -> Outcome {
         let epoch = self.current_epoch()?;
         self.inner.audio.capture(&telemetry::Cx::NONE, frame).await?;
-        let mut state = self.inner.state.lock();
-        Inner::check(&state)?;
-        if state.epoch == epoch
-            && let Some(timestamp) = timestamp
-        {
-            state.last_audio = timestamp;
-        }
-        Ok(())
+        self.inner.state.with(|state| {
+            Inner::check(state)?;
+            if state.epoch == epoch
+                && let Some(timestamp) = timestamp
+            {
+                state.last_audio = timestamp;
+            }
+            Ok(())
+        })
     }
 
     /// Queues the video frame for pacing once there is room; a clear meanwhile drops it.
     async fn push_video(&self, frame: VideoFrame, timestamp: Option<f64>) -> Outcome {
         let epoch = self.current_epoch()?;
-        loop {
-            let changed = self.inner.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            {
-                let mut state = self.inner.state.lock();
-                Inner::check(&state)?;
+        let mut frame = Some(frame);
+        let capacity = self.inner.capacity;
+        self.inner
+            .state
+            .wait_until(|state| {
+                if let Err(error) = Inner::check(state) {
+                    return Some(Err(error));
+                }
                 if state.epoch != epoch {
-                    return Ok(());
+                    return Some(Ok(()));
                 }
-                if state.queue.len() < self.inner.capacity {
+                if state.queue.len() < capacity {
+                    let frame = frame.take().expect("a frame is queued once");
                     state.queue.push_back(Queued { frame, timestamp, epoch });
-                    drop(state);
-                    self.inner.changed.notify_waiters();
-                    return Ok(());
+                    return Some(Ok(()));
                 }
-            }
-            changed.await;
-        }
+                None
+            })
+            .await
     }
 }
 
@@ -229,78 +215,70 @@ impl lk_agents_abi::voice::rtc::media::AVSynchronizer for AVSynchronizer {
     }
 
     async fn clear_queue(&self) -> Outcome {
-        {
-            let mut state = self.inner.state.lock();
-            Inner::check(&state)?;
+        self.inner.state.modify(|state| {
+            Inner::check(state)?;
             state.epoch += 1;
             state.queue.clear();
-        }
-        self.inner.changed.notify_waiters();
+            Outcome::Ok(())
+        })?;
         self.inner.audio.clear_queue()
     }
 
     async fn wait_for_playout(&self) -> Outcome {
-        loop {
-            let changed = self.inner.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            {
-                let state = self.inner.state.lock();
-                Inner::check(&state)?;
-                if state.queue.is_empty() && !state.in_flight {
-                    break;
-                }
-            }
-            changed.await;
-        }
+        self.inner
+            .state
+            .wait_until(|state| match Inner::check(state) {
+                Err(error) => Some(Err(error)),
+                Ok(()) => (state.queue.is_empty() && !state.in_flight).then_some(Ok(())),
+            })
+            .await?;
         self.inner.audio.wait_for_playout(&telemetry::Cx::NONE).await.map(|_| ())
     }
 
     fn reset(&self) {
-        self.inner.state.lock().pacer.reset();
+        self.inner.state.with(|state| state.pacer.reset());
     }
     fn actual_fps(&self) -> f64 {
-        self.inner.state.lock().pacer.actual_fps()
+        self.inner.state.with(|state| state.pacer.actual_fps())
     }
     fn last_video_time(&self) -> f64 {
-        self.inner.state.lock().last_video
+        self.inner.state.with(|state| state.last_video)
     }
     fn last_audio_time(&self) -> Result<f64, RtcError> {
-        let last = self.inner.state.lock().last_audio;
+        let last = self.inner.state.with(|state| state.last_audio);
         Ok(last - self.inner.audio.queued_seconds()?)
     }
 
+    /// The first call closes, bounded by the host teardown timeout; every call waits for it.
     async fn aclose(&self) -> Outcome {
-        let mut closed = self.inner.closed.subscribe();
-        let first = {
-            let mut state = self.inner.state.lock();
-            let first = !state.closed;
+        self.inner.state.modify(|state| {
             state.closed = true;
             state.queue.clear();
-            first
-        };
-        self.inner.changed.notify_waiters();
-        if first {
+        });
+        let close = self.close.lock().take();
+        if let Some(closed) = close {
             let worker = self.worker.lock().take();
             let inner = self.inner.clone();
             self.close_tasks.spawn(&*self.spawner, "RTC synchronizer close", async move {
-                if let Some(worker) = worker {
-                    worker.cancel();
-                    let _ = worker.await;
-                }
-                let audio = inner.audio.close(&telemetry::Cx::NONE).await;
-                let video = inner.video.close(&telemetry::Cx::NONE).await;
-                inner.closed.send_replace(Some(audio.and(video)));
+                let close = async {
+                    if let Some(worker) = worker {
+                        worker.cancel();
+                        let _ = worker.await;
+                    }
+                    let audio = inner.audio.close(&telemetry::Cx::NONE).await;
+                    let video = inner.video.close(&telemetry::Cx::NONE).await;
+                    audio.and(video)
+                };
+                let bound = lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
+                let outcome = lk_agents_abi::timeout(&*inner.clock, bound, close).await;
+                closed.resolve(
+                    outcome
+                        .unwrap_or_else(|_| Err(RtcError::host("AVSynchronizer close timed out"))),
+                );
             });
         }
-        loop {
-            if let Some(result) = closed.borrow_and_update().clone() {
-                return result;
-            }
-            if closed.changed().await.is_err() {
-                return Err(RtcError::Closed("AVSynchronizer"));
-            }
-        }
+        let closed = self.inner.closed.wait().await;
+        closed.unwrap_or(Err(RtcError::Closed("AVSynchronizer")))
     }
 }
 

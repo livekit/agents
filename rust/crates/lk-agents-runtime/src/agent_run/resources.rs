@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use lk_agents_abi::agent::resources::{ContextHydration, ResourceError};
 use lk_agents_abi::llm::toolsets::{ToolsetGroup as _, ToolsetHooks};
 use lk_agents_abi::storage::Storage as _;

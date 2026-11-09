@@ -13,7 +13,9 @@ use serde_json::{Map, Value};
 use crate::thread::lease::{Holder, Lease, PendingLease};
 use lk_agents_net::clock::unix_now_ms;
 
-use super::{EventLog, RESOLVE_WAIT, Resend, Run, RunOptions, Tasks, Thread, db};
+use super::{EventLog, Run, RunOptions, Tasks, Thread, db};
+use crate::telemetry::{self, StorageWrite};
+use lk_agents_abi::telemetry::health::RENEW_SLACK;
 use std::ops::ControlFlow;
 
 /// One registered agent's part of a thread: every statement of the lane.
@@ -38,8 +40,9 @@ impl Lane {
         self.thread.ensure_schema().await?;
         let lease_secs = self.thread.timing.secs();
         let conn = &*self.thread.conn;
-        let mut pending =
-            PendingLease::new(self.thread.clone(), self.name(), holder, None, LEASE_WAIT_TIMEOUT);
+        let (thread, wait, write) =
+            (self.thread.clone(), LEASE_WAIT_TIMEOUT, StorageWrite::Receive);
+        let mut pending = PendingLease::new(thread, self.name(), holder, None, wait, write);
         let (received, lease) = loop {
             let (token, lost) = (pending.token().to_owned(), pending.lost());
             let request = async {
@@ -79,7 +82,8 @@ impl Lane {
     pub async fn submit(&self, task: &TaskWrite) -> Result<bool, StorageError> {
         self.thread.ensure_schema().await?;
         let insert = db::submitted_task;
-        Resend::new(RESOLVE_WAIT)
+        self.thread
+            .resend(StorageWrite::Submit)
             .probed(
                 || async move { Ok(self.thread.exec(insert(&self.name, task)).await? > 0) },
                 || async move { Ok(self.task(&task.task_id).await?.map(|_| true)) },
@@ -91,7 +95,11 @@ impl Lane {
     /// case the caller acquires instead.
     pub async fn set_waiter(&self, holder: &str) -> Result<bool, StorageError> {
         self.thread.ensure_schema().await?;
-        Ok(self.thread.exec_idempotent(|| SetWaiter { lane: &self.name, holder }).await? > 0)
+        Ok(self
+            .thread
+            .exec_idempotent(StorageWrite::Waiter, || SetWaiter { lane: &self.name, holder })
+            .await?
+            > 0)
     }
 
     /// A turn's checkpoint, one batch: the lane's waiter and the task's status.
@@ -129,7 +137,7 @@ impl Lane {
             });
             Ok(failed.then_some(true))
         };
-        Resend::new(RESOLVE_WAIT).probed(fail, failed_by_it).await
+        self.thread.resend(StorageWrite::FailOrphan).probed(fail, failed_by_it).await
     }
 
     /// The whole history; how another lane reads it.
@@ -212,7 +220,10 @@ impl Lane {
         self.thread.ensure_schema().await?;
         // the row as it stands after: the same answer however often it applied
         let conn = &*self.thread.conn;
-        Resend::new(RESOLVE_WAIT).send(|| db::cancel(conn, self.name(), task_id, &metadata)).await
+        self.thread
+            .resend(StorageWrite::Cancel)
+            .send(|| db::cancel(conn, self.name(), task_id, &metadata))
+            .await
     }
 
     /// Transfer a batch drain's existing lease into its next run deliberately.
@@ -224,8 +235,8 @@ impl Lane {
     }
 
     /// Takes the lane for `owner` and loads it. The run commits with [`Run::commit`] and ends
-    /// by error with [`Run::abandon`]; a run dropped without either releases its lease, leaving
-    /// a `run_started` without a `run_ended`.
+    /// by error with [`Run::abandon`]; a run dropped without either ends `canceled` as it
+    /// releases its lease. Only a dead worker leaves a `run_started` without a `run_ended`.
     pub async fn open(&self, opts: RunOptions, owner: &Holder) -> Result<Run, StorageError> {
         let (lease, closed, state, items, tasks, picked_up, context_scopes) = match opts.access {
             LaneAccess::Exclusive(when_held) => {
@@ -297,8 +308,19 @@ impl Lane {
         let mut poll = Backoff::new(epoch.elapsed(), opts.wait_timeout);
         let mut waiter = None;
         let (thread, wait) = (self.thread.clone(), opts.wait_timeout);
-        let mut pending = PendingLease::new(thread, self.name(), owner, Some(&opts.run_id), wait);
+        let run_id = Some(opts.run_id.as_str());
+        let mut pending =
+            PendingLease::new(thread, self.name(), owner, run_id, wait, StorageWrite::Acquire);
         let token = pending.token().to_owned();
+        let timing = self.thread.timing;
+        let stale = timing.renew_interval + RENEW_SLACK;
+        // when this acquire first found the lane held by a holder that stopped renewing
+        let mut ownerless_since = None;
+        let waited = |ownerless_since: Option<std::time::Duration>| {
+            let waited = epoch.elapsed();
+            let ownerless = ownerless_since.map(|since| waited.saturating_sub(since));
+            telemetry::acquire_waited(&self.thread.cx, opts.kind, self.name(), waited, ownerless);
+        };
         loop {
             let req = Acquire {
                 lane: self.name(),
@@ -336,17 +358,28 @@ impl Lane {
                     out => out,
                 }
             };
-            let version = |acquired: &Option<Acquired>| acquired.as_ref().map(|a| a.version);
-            let acquired = match pending.attempt(request, version).await {
+            let version = |(acquired, _): &(Option<Acquired>, db::LeaseBefore)| {
+                acquired.as_ref().map(|a| a.version)
+            };
+            let ((acquired, before), lease) = match pending.attempt(request, version).await {
                 ControlFlow::Break(out) => out?,
                 // the same token again: the holder re-enters what it may have taken
                 ControlFlow::Continue(()) => continue,
             };
             self.thread.schema_applied();
-            if let (Some(acquired), Some(lease)) = acquired {
+            if let (Some(acquired), Some(lease)) = (acquired, lease) {
+                if before.lapsed(holder) {
+                    let lapsed = before.holder.as_deref().unwrap_or_default();
+                    telemetry::lease_lapsed(&self.thread.cx, opts.kind, self.name(), lapsed);
+                }
+                waited(ownerless_since);
                 return Ok((acquired, lease));
             }
+            if ownerless_since.is_none() && before.ownerless(holder, timing.secs(), stale) {
+                ownerless_since = Some(epoch.elapsed());
+            }
             if when_held == WhenHeld::Reject {
+                waited(ownerless_since);
                 return Err(StorageError::Rejected { running_task_id: None });
             }
             if when_held == WhenHeld::Interrupt {
@@ -363,6 +396,7 @@ impl Lane {
             }
             let Some(at) = poll.next(epoch.elapsed()) else {
                 log::debug!(target: lk_agents_abi::LOG_TARGET, lane = self.name(); "the lane was not released within {}s", opts.wait_timeout.as_secs_f64());
+                waited(ownerless_since);
                 return Err(StorageError::Rejected { running_task_id: None });
             };
             tokio::time::sleep_until(epoch + at).await;

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "tests drive tokio's sync primitives directly"
+)]
 use super::executor::shifted;
 use super::*;
 use crate::testkit::{FakeWs, text};

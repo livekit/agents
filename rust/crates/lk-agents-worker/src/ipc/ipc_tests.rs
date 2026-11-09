@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "tests drive tokio's sync primitives directly"
+)]
 /// Every `log` line the code under test writes, with its key-values as text.
 pub(super) mod logs {
     use parking_lot::Mutex;

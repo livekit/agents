@@ -13,11 +13,14 @@ disallowed-types = [
   { path = "tokio::fs::OpenOptions", reason = "Tokio's files run on its blocking pool: use std::fs on lk_agents_net::blocking_io." },
   { path = "tokio::fs::DirBuilder", reason = "Tokio's files run on its blocking pool: use std::fs on lk_agents_net::blocking_io." },
   { path = "tokio::fs::ReadDir", reason = "Tokio's files run on its blocking pool: use std::fs on lk_agents_net::blocking_io." },
+  { path = "tokio::sync::Notify", reason = "A waiter on a Notify is woken only if someone remembers to: wait on lk_agents_net::signal, whose producer's drop resolves every waiter." },
 ]
 
 # No Tokio blocking pool: blocking work runs on our pools (lk_agents_media::pool::media_pool,
 # lk_agents_net::blocking_io), names resolve through lk_agents_net::dns.
 disallowed-methods = [
+  { path = "tokio::sync::watch::channel", reason = "A watch's sender can outlive its producer: use lk_agents_net::signal, whose Producer is the only writer and ends the signal on drop." },
+  { path = "tokio::sync::watch::Sender::new", reason = "A watch's sender can outlive its producer: use lk_agents_net::signal, whose Producer is the only writer and ends the signal on drop." },
   { path = "tokio::task::spawn_blocking", reason = "Run blocking work on lk_agents_net::blocking_io or the media pool." },
   { path = "tokio::runtime::Handle::spawn_blocking", reason = "Run blocking work on lk_agents_net::blocking_io or the media pool." },
   { path = "tokio::runtime::Runtime::spawn_blocking", reason = "Run blocking work on lk_agents_net::blocking_io or the media pool." },

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "tests drive tokio's sync primitives directly"
+)]
 use crate::transport::{
     Connected, TransportError, TransportEvent, WorkerSink, WorkerStream, WorkerTransport,
 };

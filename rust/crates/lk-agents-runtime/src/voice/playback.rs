@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use lk_agents_abi::voice::io::{
     Playback, PlaybackEvent, PlaybackFinished, PlaybackObserver, PlaybackReports, PlaybackSegment,
     PlaybackTracker,

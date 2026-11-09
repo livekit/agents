@@ -262,6 +262,11 @@ WHERE lane = :lane AND lease_token = :token
 }
 
 statement! {
+    /// The lane's lease as an acquire found it, and the database's clock.
+    SelectLeaseBefore<'a> { lane: &'a str } => "SELECT lease_holder, lease_token, lease_until, unixepoch() FROM lanes WHERE lane = :lane"
+}
+
+statement! {
     /// The lane's fence as it stands: its version, lease token and lease expiry.
     SelectFence<'a> { lane: &'a str } as FenceRead => "SELECT version, lease_token, lease_until FROM lanes WHERE lane = :lane"
 }

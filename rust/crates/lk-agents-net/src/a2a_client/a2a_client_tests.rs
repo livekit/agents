@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "tests drive tokio's sync primitives directly"
+)]
 use lk_agents_telemetry::Cx;
 use std::collections::BTreeMap;
 use std::io;

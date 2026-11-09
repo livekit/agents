@@ -1,7 +1,7 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 /// A realtime session and its registered resource identity.
 pub type RealtimeLeg = (Arc<dyn lk_agents_abi::RealtimeSession>, ResourceId);
 
-use super::calls::Calls;
 use super::shared::{Journal, PeerHandle, Rx, SessionHandle, SessionShared, WatchHub};
 use super::time::Timebase;
 use crate::telemetry;
@@ -14,9 +14,7 @@ use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::voice::session_options::TextTransformSet;
 use lk_agents_abi::{AudioFrame, EotDetector, Llm, Spawner, StreamInput, Stt, Tts, Vad};
 use lk_agents_voice::agent_session::machine::activity::{DriverConfig, PIPELINE_SAMPLE_RATE};
-use lk_agents_voice::agent_session::{
-    DriverError, InitialSession, Now, SessionParts, VoiceDriver, VoiceHostEvent,
-};
+use lk_agents_voice::agent_session::{DriverError, InitialSession, Now, SessionParts, VoiceDriver};
 use lk_agents_voice::audio::AudioChannel;
 use lk_agents_voice::data_plane::{AudioInputRouter, AudioInputRouterCommand};
 use lk_agents_voice::generation::Instructions;
@@ -50,6 +48,8 @@ pub struct SessionCores {
     /// Where host events and taps go.
     pub peer: PeerHandle,
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
+    /// The end of the host-event stream: the runtime holds it, so its end ends the stream.
+    pub(crate) events_end: lk_agents_net::signal::Producer<()>,
 }
 
 /// How a TTS with no duplex path is made to stream: sentence by sentence on the session's clock,
@@ -327,7 +327,8 @@ impl DriverBuilder {
         let forward_chat_context = self.forward_chat_context;
         let (queue_tx, queue_rx) = tokio::sync::mpsc::unbounded_channel::<VoiceRuntimeEvent>();
         let queue = Tx::new(queue_tx);
-        let (ev_tx, ev_rx) = tokio::sync::mpsc::unbounded_channel::<VoiceHostEvent>();
+        let (ev_tx, ev_rx) = tokio::sync::mpsc::unbounded_channel::<super::shared::HostEvent>();
+        let (ev_rx, events_end) = super::shared::HostEvents::new(ev_rx);
         let watch = WatchHub::new();
         let closing = tokio_util::sync::CancellationToken::new();
 
@@ -361,7 +362,6 @@ impl DriverBuilder {
         let (shared, publications) =
             self.shared(&queue, closing, outputs.clone(), session_id.clone(), executor.tasks());
         let session_cx = self.session_cx(&session_id);
-        let shared_calls = Arc::clone(&shared.calls);
         // The session's id sequence: the core's speeches and items, and a host speech call's id.
         let speech_ids = Arc::new(std::sync::atomic::AtomicU64::new(1));
 
@@ -476,6 +476,7 @@ impl DriverBuilder {
             shared,
             peer: peer.clone(),
             storage: self.storage.take(),
+            events_end,
         };
         Ok((
             cores,
@@ -487,7 +488,6 @@ impl DriverBuilder {
                 peer,
                 ivr_detection,
                 speech_ids,
-                calls: Arc::clone(&shared_calls),
             },
         ))
     }
@@ -526,7 +526,6 @@ impl DriverBuilder {
                 .unwrap_or_default(),
             conn: self.conn,
             queue: queue.clone(),
-            calls: Arc::new(Calls::default()),
             speeches: Arc::clone(&self.speeches),
             closing,
             spawner: Arc::clone(&self.spawner),

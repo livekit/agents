@@ -16,6 +16,7 @@ pub mod policy {
 
 pub mod decl;
 pub mod errors;
+pub mod health;
 pub mod host;
 pub mod instruments;
 pub mod record;

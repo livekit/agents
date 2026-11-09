@@ -39,7 +39,7 @@ const GRAPH: &[(&str, &[&str])] = &[
     (NET, &[ABI, CORE, MEDIA, TELEMETRY]),
     (INFERENCE, &[ABI, CORE, MEDIA, NET, TELEMETRY]),
     // `#[table]` for the storage records.
-    (STORAGE, &[ABI, NET, HOST_DERIVE]),
+    (STORAGE, &[ABI, NET, TELEMETRY, HOST_DERIVE]),
     (WORKER, &[ABI, NET, TELEMETRY]),
     (CLI, &[ABI, WORKER, NET]),
     (RUNTIME, &[ABI, CORE, VOICE, MEDIA, TELEMETRY, NET, INFERENCE, STORAGE, WORKER, CLI]),

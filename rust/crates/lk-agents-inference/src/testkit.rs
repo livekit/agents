@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "tests drive tokio's sync primitives directly"
+)]
 use async_trait::async_trait;
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use std::sync::Arc;

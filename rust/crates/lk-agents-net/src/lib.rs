@@ -11,6 +11,7 @@ pub mod export;
 pub mod http;
 pub mod owned;
 pub mod room_service;
+pub mod signal;
 pub mod source;
 pub mod sse;
 pub mod task;

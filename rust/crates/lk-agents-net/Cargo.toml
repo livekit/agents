@@ -55,6 +55,10 @@ miniz_oxide = "0.8"
 # The host name of the default storage lease holder (`env::ProcessEnv::lease_holder`).
 sysinfo.workspace = true
 
+[features]
+# Test-only: the registry of parked signal waiters a simulation checks at quiescence.
+dst = []
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util", "net", "io-util"] }
 # Regenerates `export/otlp/proto.rs` (an ignored test); already in the lock through livekit-protocol.

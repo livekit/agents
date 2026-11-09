@@ -3,6 +3,148 @@
 {
   "groups": [
     {
+      "id": "registry.livekit.agents.health",
+      "type": "attribute_group",
+      "brief": "Attributes declared in `lk_agents_abi::telemetry::health`.",
+      "attributes": [
+        {
+          "id": "lane_kind",
+          "type": {
+            "members": [
+              {
+                "id": "voice",
+                "value": "voice",
+                "brief": "voice",
+                "stability": "development"
+              },
+              {
+                "id": "text",
+                "value": "text",
+                "brief": "text",
+                "stability": "development"
+              },
+              {
+                "id": "a2a",
+                "value": "a2a",
+                "brief": "a2a",
+                "stability": "development"
+              },
+              {
+                "id": "context",
+                "value": "context",
+                "brief": "context",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The run that took, or waited for, the lane."
+        },
+        {
+          "id": "stage",
+          "type": {
+            "members": [
+              {
+                "id": "session_close",
+                "value": "session_close",
+                "brief": "session_close",
+                "stability": "development"
+              },
+              {
+                "id": "lease_release",
+                "value": "lease_release",
+                "brief": "lease_release",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The teardown that overran."
+        },
+        {
+          "id": "write",
+          "type": {
+            "members": [
+              {
+                "id": "acquire",
+                "value": "acquire",
+                "brief": "acquire",
+                "stability": "development"
+              },
+              {
+                "id": "receive",
+                "value": "receive",
+                "brief": "receive",
+                "stability": "development"
+              },
+              {
+                "id": "release",
+                "value": "release",
+                "brief": "release",
+                "stability": "development"
+              },
+              {
+                "id": "extend",
+                "value": "extend",
+                "brief": "extend",
+                "stability": "development"
+              },
+              {
+                "id": "commit",
+                "value": "commit",
+                "brief": "commit",
+                "stability": "development"
+              },
+              {
+                "id": "submit",
+                "value": "submit",
+                "brief": "submit",
+                "stability": "development"
+              },
+              {
+                "id": "waiter",
+                "value": "waiter",
+                "brief": "waiter",
+                "stability": "development"
+              },
+              {
+                "id": "fail_orphan",
+                "value": "fail_orphan",
+                "brief": "fail_orphan",
+                "stability": "development"
+              },
+              {
+                "id": "cancel",
+                "value": "cancel",
+                "brief": "cancel",
+                "stability": "development"
+              },
+              {
+                "id": "schema",
+                "value": "schema",
+                "brief": "schema",
+                "stability": "development"
+              },
+              {
+                "id": "context",
+                "value": "context",
+                "brief": "context",
+                "stability": "development"
+              },
+              {
+                "id": "thread",
+                "value": "thread",
+                "brief": "thread",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The write left unresolved."
+        }
+      ]
+    },
+    {
       "id": "registry.livekit.agents.instruments",
       "type": "attribute_group",
       "brief": "Attributes declared in `lk_agents_abi::telemetry::instruments`.",

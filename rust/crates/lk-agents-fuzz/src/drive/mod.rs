@@ -80,11 +80,13 @@ mod background;
 mod collect;
 mod executor;
 mod finish;
+mod probe;
 pub mod queue;
 mod start;
 
 pub use apply::BUDGET_MS;
 pub use finish::{Ending, Outcome, PHASES, finish, guard, run};
+pub use probe::WAIT_BOUND_MS;
 pub use queue::Policy;
 
 use self::apply::{Feeding, Pending};
@@ -232,6 +234,9 @@ pub struct Setup {
     /// The voice lane is stored, by storage's own code over its SQLite backend; `None` runs
     /// the session without storage.
     pub storage: Option<StorageSetup>,
+    /// Panic and never-answer faults at the fakes (`fakes::hazard`), drawn from this seed, and
+    /// host waits probed at random points (`probe`). `None` runs without either.
+    pub stress: Option<u64>,
 }
 
 /// The thread database behind the voice lane. Every answer takes a seeded latency.
@@ -504,6 +509,7 @@ impl Default for Setup {
             tools_refuse_cancel: false,
             stray: 0.0,
             storage: None,
+            stress: None,
         }
     }
 }
@@ -713,6 +719,10 @@ pub struct Run {
     task_awaits: BTreeMap<String, u32>,
     /// The DTMF collection's answer the host awaits, if any.
     dtmf_await: Option<u32>,
+    /// Hooks the host never answers (`Site::Hook`), by `nth`.
+    hung_hooks: BTreeSet<u32>,
+    /// The host waits armed, as tasks of the world's that stamp when they resolve.
+    probes: probe::Probes,
     streams: BTreeMap<u32, Feeding>,
     handles: BTreeMap<u64, Arc<SpeechHandle>>,
     /// Which recognition stream each utterance is on: an `SttInterim` names the utterance, and the

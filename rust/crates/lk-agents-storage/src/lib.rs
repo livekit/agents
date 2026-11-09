@@ -6,6 +6,7 @@ mod cursor;
 pub mod http;
 pub mod sql;
 pub mod storage;
+mod telemetry;
 #[cfg(feature = "testing")]
 #[allow(clippy::unwrap_used, reason = "test fixtures: a failure fails the test")]
 pub mod testing;
@@ -20,5 +21,5 @@ pub use lk_agents_abi::storage::thread::{
 pub use lk_agents_net::strings::shortuuid;
 pub use thread::db::{Commit, Committed, EventWrite, Fence, TaskQuery};
 pub use thread::lease::{Holder, Lease};
-pub use thread::run::{ItemRow, RunOutcome, TaskState};
+pub use thread::run::{ItemRow, LaneKind, RunOutcome, TaskState};
 pub use thread::{CommitOptions, Lane, Run, RunOptions, Tasks, Thread};

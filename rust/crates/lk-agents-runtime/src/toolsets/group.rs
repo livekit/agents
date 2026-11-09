@@ -1,26 +1,25 @@
 use lk_agents_abi::llm::toolsets::{self, Lease, Lifetime, ToolsetHooks};
 use lk_agents_abi::{BoxFuture, errors::HostError};
 use lk_agents_core::toolsets::Group as Policy;
+use lk_agents_net::signal;
 use lk_agents_net::{env::ProcessEnv, task::TaskSet};
 use parking_lot::Mutex;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
-use tokio::sync::watch;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 // Every acquired lease settles before a failure or close returns.
 
 type Outcome = Result<(), HostError>;
-type Reply = watch::Sender<Option<Outcome>>;
+type Reply = signal::Cell<Option<Outcome>>;
+type Settle = signal::Producer<Option<Outcome>>;
 type Entry = (Arc<dyn Lifetime>, Arc<dyn ToolsetHooks>);
 
 pub struct Group(Arc<Inner>);
 struct Inner {
     env: ProcessEnv,
     entries: Mutex<Option<Vec<Entry>>>,
-    launched: AtomicBool,
+    /// The driver's writers, taken once by whoever launches it: its end ends every wait.
+    settle: Mutex<Option<(Settle, Settle)>>,
     closing: CancellationToken,
     started: Reply,
     closed: Reply,
@@ -28,13 +27,14 @@ struct Inner {
 }
 impl Group {
     pub(super) fn from_entries(env: &ProcessEnv, entries: Vec<Entry>) -> Self {
+        let ((start, started), (close, closed)) = (signal::once(), signal::once());
         Self(Arc::new(Inner {
             env: env.clone(),
             entries: Mutex::new(Some(entries)),
-            launched: AtomicBool::new(false),
+            settle: Mutex::new(Some((start, close))),
             closing: CancellationToken::new(),
-            started: watch::channel(None).0,
-            closed: watch::channel(None).0,
+            started,
+            closed,
             tasks: Arc::default(),
         }))
     }
@@ -86,35 +86,23 @@ impl Drop for OpeningWait {
     }
 }
 async fn wait(reply: &Reply) -> Outcome {
-    let mut events = reply.subscribe();
-    loop {
-        if let Some(result) = events.borrow_and_update().clone() {
-            return result;
-        }
-        if events.changed().await.is_err() {
-            return Err(HostError::new("toolset group ended"));
-        }
-    }
+    reply.wait().await.unwrap_or_else(|_| Err(HostError::new("toolset group ended")))
 }
 impl Inner {
     fn ensure_driver(self: &Arc<Self>) {
-        if self.launched.swap(true, Ordering::SeqCst) {
-            return;
-        }
+        let Some((started, closed)) = self.settle.lock().take() else { return };
         match (self.env.spawner)() {
             Ok(spawner) => {
                 let inner = self.clone();
-                self.tasks.spawn(
-                    &*spawner,
-                    "toolset lease group",
-                    async move { inner.run().await },
-                );
+                self.tasks.spawn(&*spawner, "toolset lease group", async move {
+                    inner.run(started, closed).await
+                });
             }
             Err(error) => {
                 let retired = self.entries.lock().take();
                 drop(retired);
-                self.started.send_replace(Some(Err(HostError::new(error.to_string()))));
-                self.closed.send_replace(Some(Ok(())));
+                started.resolve(Err(HostError::new(error.to_string())));
+                closed.resolve(Ok(()));
             }
         }
     }
@@ -123,7 +111,8 @@ impl Inner {
         self.ensure_driver();
         wait(&self.closed).await
     }
-    async fn run(self: Arc<Self>) {
+    async fn run(self: Arc<Self>, started: Settle, closed: Settle) {
+        let mut started = Some(started);
         let entries = self.entries.lock().take().unwrap_or_default();
         let mut policy = Policy::new(entries.len());
         let mut leases: Vec<Arc<dyn Lease>> = Vec::new();
@@ -155,7 +144,9 @@ impl Inner {
             }
         }
         if policy.ready() {
-            self.started.send_replace(Some(Ok(())));
+            if let Some(started) = started.take() {
+                started.resolve(Ok(()));
+            }
             self.closing.cancelled().await;
             policy.request_close();
         }
@@ -164,13 +155,13 @@ impl Inner {
             futures_util::future::join_all(policy.releases().map(|index| leases[index].close()))
                 .await;
         let close_error = results.into_iter().find_map(Result::err);
-        if self.started.borrow().is_none() {
-            self.started
-                .send_replace(Some(Err(failure
-                    .unwrap_or_else(|| HostError::new("toolset initialization was cancelled")))));
+        if let Some(started) = started {
+            let failure =
+                failure.unwrap_or_else(|| HostError::new("toolset initialization was cancelled"));
+            started.resolve(Err(failure));
         }
         drop(leases);
         drop(entries);
-        self.closed.send_replace(Some(close_error.map_or(Ok(()), Err)));
+        closed.resolve(close_error.map_or(Ok(()), Err));
     }
 }

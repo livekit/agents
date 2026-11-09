@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "tests drive tokio's sync primitives directly"
+)]
 use super::*;
 use lk_agents_abi::Ts;
 use lk_agents_voice::transcription::machine::synchronizer::Liang;

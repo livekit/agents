@@ -7,12 +7,14 @@ use lk_agents_abi::voice::avatar::AvatarMedia;
 use lk_agents_abi::voice::rtc::media::{AVSynchronizer as _, VideoTrackOptions};
 use lk_agents_abi::voice::rtc::{RtcError, RtcRoom, TrackPublication, TrackPublishOptions};
 use lk_agents_net::owned::Background;
+use lk_agents_net::signal;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::av_sync::MediaPlan;
 use parking_lot::Mutex;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::watch;
+
+/// The close's outcome, once it ran.
+type Closing = Option<Result<(), RtcError>>;
 
 pub struct Media {
     room: Arc<dyn RtcRoom>,
@@ -22,8 +24,9 @@ pub struct Media {
     audio_options: TrackPublishOptions,
     video_options: VideoTrackOptions,
     publications: Arc<Mutex<Vec<Arc<dyn TrackPublication>>>>,
-    closing: AtomicBool,
-    closed: watch::Sender<Option<Result<(), RtcError>>>,
+    /// Taken by the first close, whose task holds it.
+    close: Mutex<Option<signal::Producer<Closing>>>,
+    closed: signal::Cell<Closing>,
     close_tasks: Arc<TaskSet>,
     spawner: Arc<dyn Spawner>,
 }
@@ -56,6 +59,7 @@ impl Media {
             background.clock,
             background.spawner.clone(),
         );
+        let (close, closed) = signal::once();
         Ok(Arc::new(Self {
             room,
             synchronizer,
@@ -64,8 +68,8 @@ impl Media {
             audio_options: plan.audio,
             video_options: plan.video,
             publications: Arc::default(),
-            closing: AtomicBool::new(false),
-            closed: watch::channel(None).0,
+            close: Mutex::new(Some(close)),
+            closed,
             close_tasks: Arc::default(),
             spawner: background.spawner,
         }))
@@ -94,14 +98,10 @@ impl Media {
     }
 
     async fn close(&self) -> Result<(), RtcError> {
-        let mut closed = self.closed.subscribe();
-        if !self.closing.swap(true, Ordering::SeqCst) {
-            let (publications, synchronizer, room, closed) = (
-                self.publications.clone(),
-                self.synchronizer.clone(),
-                self.room.clone(),
-                self.closed.clone(),
-            );
+        let close = self.close.lock().take();
+        if let Some(closed) = close {
+            let (publications, synchronizer, room) =
+                (self.publications.clone(), self.synchronizer.clone(), self.room.clone());
             self.close_tasks.spawn(&*self.spawner, "avatar RTC tracks close", async move {
                 let publications = std::mem::take(&mut *publications.lock());
                 let mut result = synchronizer.aclose().await;
@@ -113,17 +113,11 @@ impl Media {
                         result = Err(error);
                     }
                 }
-                closed.send_replace(Some(result));
+                closed.resolve(result);
             });
         }
-        loop {
-            if let Some(result) = closed.borrow_and_update().clone() {
-                return result;
-            }
-            if closed.changed().await.is_err() {
-                return Err(RtcError::Closed("avatar media"));
-            }
-        }
+        let closed = self.closed.wait().await;
+        closed.unwrap_or(Err(RtcError::Closed("avatar media")))
     }
 }
 

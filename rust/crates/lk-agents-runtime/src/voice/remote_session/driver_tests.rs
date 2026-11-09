@@ -1,3 +1,9 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "tests drive tokio's sync primitives directly"
+)]
+use std::sync::atomic::Ordering;
 use tokio::sync::Notify;
 
 use super::super::client::{ReadyError, RemoteSession, RequestError};

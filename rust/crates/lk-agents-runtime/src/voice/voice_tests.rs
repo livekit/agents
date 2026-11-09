@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "tests drive tokio's sync primitives directly"
+)]
 use super::*;
 use crate::telemetry::tests::{ENTRYPOINT, Records, labels};
 use crate::voice::session::{DriverBuilder, Journal, SessionExecutor, SessionHandle, Timebase};
@@ -38,13 +43,13 @@ pub(super) async fn session(name: &str) -> (VoiceRuntime, SessionHandle, Steps) 
 #[tokio::test(start_paused = true)]
 async fn driver_open_defers_host_delivery_until_runtime_executes_effects() {
     let (mut runtime, mut handle, steps) = session("effect-boundary").await;
-    while handle.events.try_recv().is_ok() {}
+    while handle.events.try_recv().is_some() {}
     let before = steps.lock().clone();
     let effects = runtime.driver.open(runtime.shared.time.read());
-    assert!(handle.events.try_recv().is_err(), "the decision step delivered a host event");
+    assert!(handle.events.try_recv().is_none(), "the decision step delivered a host event");
     assert_eq!(steps.lock().clone(), before, "the decision step invoked the journal observer");
     runtime.perform_voice(effects);
-    assert!(handle.events.try_recv().is_ok(), "runtime never delivered the opening event");
+    assert!(handle.events.try_recv().is_some(), "runtime never delivered the opening event");
     assert!(
         steps.lock().clone().len() > before.len(),
         "runtime never delivered journal observations"
@@ -115,7 +120,6 @@ async fn accepted_views_are_published_before_receipts() {
     let waker = std::task::Waker::from(Arc::new(ReadsView(view.clone())));
     let polled = std::pin::Pin::new(&mut receipt).poll(&mut std::task::Context::from_waker(&waker));
     assert!(polled.is_pending());
-    let call = runtime.calls.register(call);
     runtime.handle(
         crate::voice::VoiceRuntimeEvent::Awaited(
             lk_agents_voice::agent_session::VoiceEvent::Host(
@@ -1056,4 +1060,19 @@ async fn startup_runs_under_the_spans_start_reserved() {
             span.name
         );
     }
+}
+
+// Catches: the host's drain parked forever after the runtime dropped (a panic, an abort) because
+// a system still held a sender of the host-event stream (AMD, IVR, the session's stage).
+#[tokio::test(start_paused = true)]
+async fn a_dropped_runtime_ends_the_host_event_stream_whatever_senders_remain() {
+    let (runtime, mut handle, _) = session("dropped-stream").await;
+    let system = handle.peer.clone();
+    drop(runtime);
+    let drained = tokio::time::timeout(Duration::from_secs(1), async {
+        while handle.events.recv().await.is_some() {}
+    })
+    .await;
+    assert!(drained.is_ok(), "the stream outlived its runtime");
+    drop(system);
 }

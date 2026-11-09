@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -14,7 +15,6 @@ use crate::backends::with_thread;
 use crate::sql::{Bind as _, Row, Statement};
 use crate::thread::run::RunOutcome;
 use crate::thread::schema::{RecordAppliedWrite, SelectAppliedWrite};
-use crate::thread::{RESOLVE_WAIT, Resend};
 use crate::{CommitOptions, Holder, RunOptions, Storage, StorageError, Thread, shortuuid};
 use lk_agents_abi::storage::Unacknowledged;
 use lk_agents_abi::storage::thread::AbandonReason;
@@ -84,7 +84,7 @@ impl Database {
                 let rows = conn.query(SelectAppliedWrite { id }.bind()).await?;
                 Ok((!rows.is_empty()).then_some(()))
             };
-            Resend::new(RESOLVE_WAIT).probed(write, applied).await
+            thread.resend(crate::telemetry::StorageWrite::Context).probed(write, applied).await
         })
         .await
     }
@@ -141,6 +141,7 @@ impl Database {
     ) -> Result<crate::Run, StorageError> {
         let mut options = RunOptions::new(shortuuid("context_"), "");
         options.channel = Some("context".into());
+        options.kind = crate::thread::run::LaneKind::Context;
         let mut run = thread.lane(&self.lane).open(options, &self.holder).await?;
         // The lease serializes direct and conversational saves for this scope's lane.
         // Check before any writes so a stale direct save has a typed refusal.

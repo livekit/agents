@@ -116,6 +116,30 @@ async fn a_dropped_run_releases_its_lease() {
     });
     let mut taken = taken.await.expect("the dropped run's lease was released");
     taken.commit(CommitOptions::default()).await.unwrap();
+    // r1's end is fenced out: its owner took the lane again before the release ran
+    assert_eq!(outcome(&thread, "r3").await, Some(RunOutcome::Canceled), "the dropped run ended");
+}
+
+/// A waiting acquire notices another worker's release, over another connection, within one
+/// poll pause.
+#[tokio::test(start_paused = true)]
+async fn a_waiting_acquire_takes_a_lane_another_worker_released_within_a_poll() {
+    let db = database();
+    let (holder, waiter) = (handle(&db).await, handle(&db).await);
+    let mut held =
+        holder.lane(LANE).open(RunOptions::new("r1", ""), &Holder::new("a")).await.unwrap();
+    let lane = waiter.lane(LANE);
+    let owner = Holder::new("b");
+    let waiting = tokio::spawn(async move {
+        let run = lane.open(RunOptions::new("r2", ""), &owner).await;
+        (run.map(drop), tokio::time::Instant::now())
+    });
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    held.commit(CommitOptions::default()).await.unwrap();
+    let released = tokio::time::Instant::now();
+    let (taken, at) = waiting.await.unwrap();
+    taken.expect("the waiter takes the lane");
+    assert!(at - released <= Duration::from_millis(1_100), "taken {:?} after", at - released);
 }
 
 /// An acquire whose acknowledgment was lost, applied or not, is retried with its token.

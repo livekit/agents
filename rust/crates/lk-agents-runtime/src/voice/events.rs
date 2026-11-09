@@ -2,7 +2,7 @@ use crate::telemetry;
 use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::{SpeechEvent, VadEvent};
 use lk_agents_voice::agent_session::effects::StreamKind;
-use lk_agents_voice::agent_session::{Command, RequestId, Sent, VoiceCommandOrigin, VoiceEvent};
+use lk_agents_voice::agent_session::{Command, Sent, VoiceCommandOrigin, VoiceEvent};
 use lk_agents_voice::audio::ChannelEnd;
 use lk_agents_voice::generation::GenEvent;
 use lk_agents_voice::trace::RoomEventKind;
@@ -23,7 +23,7 @@ pub enum VoiceRuntimeEvent {
     Input(VoiceEvent),
     /// For the decision core, from a sender awaiting the answer to the call it names: the
     /// runtime keeps the call's reply until the core answers it.
-    Awaited(VoiceEvent, RequestId),
+    Awaited(VoiceEvent, super::session::calls::Call),
     /// A provider completion, adopted into runtime resources before entering the core.
     LegOpened(StreamOpened),
     /// For the data plane, from the decision core.

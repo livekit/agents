@@ -4,7 +4,11 @@ use lk_agents_abi::tokenize::language::{ThresholdOptions, ThresholdOverride, Tur
 use lk_agents_abi::{AudioFrame, EotDetector, EotPrediction, errors::ProviderError};
 use tokio::sync::oneshot;
 
-use super::{Control, Registry, Slot, tags_of};
+use super::{
+    Control, Registry, Slot,
+    hazard::{Site, strike},
+    tags_of,
+};
 use crate::{
     input::{Confidence, Input},
     record::{Detail, Kind},
@@ -53,6 +57,9 @@ impl EotDetector for FakeEot {
         timeout: Option<Duration>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<EotPrediction, ProviderError>> {
         Box::pin(async move {
+            if let Some(fault) = self.registry.hazard(Site::Predict) {
+                return strike(fault, Site::Predict).await;
+            }
             let (sender, receiver) = oneshot::channel();
             let slot =
                 self.registry.register(Kind::Prediction, Detail::None, Control::Prediction(sender));

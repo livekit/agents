@@ -12,7 +12,9 @@ use lk_agents_abi::{
     TaskError, TaskOutcome, Ts,
 };
 use tokio::runtime::Handle;
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::oneshot;
+
+use crate::signal;
 use tokio_util::sync::CancellationToken;
 
 struct Control {
@@ -200,10 +202,16 @@ impl Spawner for DedicatedThreads {
 /// holds the set until it ends, so dropping the owner's handle cancels nothing: `close`,
 /// `cancel_all` and `drain` do. A task is never addressed by id: work the set joins is spawned
 /// with `spawn`, work an owner may cancel early with `scoped`, whose handle cancels on drop.
-#[derive(Default)]
 pub struct TaskSet {
     inner: Mutex<TaskEntries>,
-    changed: Notify,
+    /// Bumped as a task leaves, so a wait for the set to empty re-checks it.
+    left: signal::Producer<u64>,
+}
+
+impl Default for TaskSet {
+    fn default() -> Self {
+        TaskSet { inner: Mutex::default(), left: signal::signal(0).0 }
+    }
 }
 
 #[derive(Default)]
@@ -239,7 +247,7 @@ impl Drop for Leave {
     fn drop(&mut self) {
         let left = self.table.inner.lock().tasks.remove(&self.id);
         drop(left);
-        self.table.changed.notify_waiters();
+        self.table.left.modify(|n| *n += 1);
     }
 }
 
@@ -394,6 +402,40 @@ impl TaskSet {
         self.launch(spawner, name, true, fut);
     }
 
+    /// Work whose result its waiters await on `producer`'s cell: the producer moves into the
+    /// task, so a cancel, a panic or a dropped runtime ends the signal and every waiter resolves.
+    /// `false`, with the signal ended, once the set closed.
+    #[track_caller]
+    pub fn spawn_settling<T: Send + Sync + 'static>(
+        self: &Arc<Self>,
+        spawner: &dyn Spawner,
+        name: &str,
+        producer: signal::Producer<Option<T>>,
+        fut: impl Future<Output = T> + Send + 'static,
+    ) -> bool {
+        self.try_spawn(spawner, name, async move { producer.resolve(fut.await) })
+    }
+
+    /// A scoped task feeding a machine: if the work panics, `lost` reports its death as the
+    /// machine's input, so the machine never waits on it. A cancel is its owner's, who knows.
+    #[track_caller]
+    pub fn scoped_feeding(
+        self: &Arc<Self>,
+        spawner: &dyn Spawner,
+        name: &str,
+        fut: impl Future<Output = ()> + Send + 'static,
+        lost: impl FnOnce() + Send + 'static,
+    ) -> ScopedTask {
+        let settled: Settle = Box::new(move |outcome| {
+            if outcome == TaskOutcome::Panicked {
+                lost();
+            }
+            Box::pin(async {})
+        });
+        let id = self.launch_with(spawner, name, false, fut, Some(settled));
+        ScopedTask { table: Some(Arc::clone(self)), id: id.expect("task admission is closed") }
+    }
+
     #[track_caller]
     fn launch(
         self: &Arc<Self>,
@@ -401,6 +443,18 @@ impl TaskSet {
         name: &str,
         cleanup: bool,
         fut: impl Future<Output = ()> + Send + 'static,
+    ) -> Option<u64> {
+        self.launch_with(spawner, name, cleanup, fut, None)
+    }
+
+    #[track_caller]
+    fn launch_with(
+        self: &Arc<Self>,
+        spawner: &dyn Spawner,
+        name: &str,
+        cleanup: bool,
+        fut: impl Future<Output = ()> + Send + 'static,
+        settled: Option<Settle>,
     ) -> Option<u64> {
         let id = {
             let mut g = self.inner.lock();
@@ -410,10 +464,14 @@ impl TaskSet {
             g.admit(name, cleanup)
         };
         let leave = Leave { table: Arc::clone(self), id };
-        let task = spawner.spawn(async move {
+        let work = async move {
             let _leave = leave;
             fut.await;
-        });
+        };
+        let task = match settled {
+            Some(settled) => spawner.spawn_settled(work, settled),
+            None => spawner.spawn(work),
+        };
         let mut g = self.inner.lock();
         if g.closed && !cleanup {
             task.cancel();
@@ -441,20 +499,20 @@ impl TaskSet {
 
     /// `true` when the table emptied.
     pub async fn wait_empty(&self, clock: &dyn Clock, deadline: Option<Ts>) -> bool {
+        // Subscribed before the check, so a task leaving after it wakes the wait.
+        let mut left = self.left.cell();
         loop {
-            let notified = self.changed.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
             if self.is_empty() {
                 return true;
             }
             let Some(at) = deadline else {
-                notified.await;
+                // The set is borrowed for the wait, so its producer outlives it.
+                let _ = left.changed().await;
                 continue;
             };
             tokio::select! {
                 biased;
-                _ = &mut notified => {}
+                _ = left.changed() => {}
                 _ = clock.wait_until(at) => return self.is_empty(),
             }
         }
@@ -615,6 +673,26 @@ mod tests {
             outcome_of(async { panic!("boom") }, false).await,
             (TaskOutcome::Panicked, true)
         );
+    }
+
+    // Catches: a task feeding a machine dying by panic without the machine hearing of it, or a
+    // cancel by its owner reported as lost.
+    #[tokio::test]
+    async fn a_feeding_task_reports_its_panic_and_not_its_cancel() {
+        let tasks = Arc::new(TaskSet::default());
+        let spawner = TokioSpawner::current();
+        let (lost, heard) = oneshot::channel();
+        let _panics = tasks.scoped_feeding(&spawner, "panics", async { panic!("boom") }, || {
+            let _ = lost.send(());
+        });
+        assert!(heard.await.is_ok());
+        let (lost, mut heard) = oneshot::channel::<()>();
+        let cancelled = tasks.scoped_feeding(&spawner, "runs", std::future::pending(), move || {
+            let _ = lost.send(());
+        });
+        drop(cancelled);
+        assert!(tasks.wait_empty(&crate::clock::RealClock::new(), None).await);
+        assert!(heard.try_recv().is_err(), "a cancel is not a loss");
     }
 
     // Catches: a dropped handle detaching its task instead of cancelling it.

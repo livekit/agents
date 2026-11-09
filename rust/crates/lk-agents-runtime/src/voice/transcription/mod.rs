@@ -1,10 +1,10 @@
-use crate::monotone::Monotone;
 use crate::telemetry;
 use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputCapabilities, AudioOutputExt, PlaybackEvent, PlaybackFinished,
     PlaybackObserver, PlaybackSegment, PlaybackTracker, Result, TextOutput,
 };
 use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TranscriptChunk};
+use lk_agents_net::signal;
 use lk_agents_voice::transcription::Heard;
 use lk_agents_voice::transcription::effects::TranscriptSyncEffect;
 use lk_agents_voice::transcription::machine::lifecycle::{
@@ -25,7 +25,8 @@ struct Synchronizer {
     tx: Mutex<Option<mpsc::UnboundedSender<TranscriptOutput>>>,
     /// Shared with the forwarder task, which must not keep the synchronizer alive (or it never
     /// ends).
-    forwarder_done: Arc<Monotone<bool>>,
+    /// The forwarder task's: it ends with the task, however it ends.
+    forwarder_done: signal::Cell<bool>,
     /// The audio node's tracker; released words are raised on it as `transcript_shown`.
     tracker: Arc<dyn PlaybackTracker>,
 }
@@ -410,19 +411,19 @@ impl TranscriptSynchronizer {
 
         let opts = TranscriptPacerOptions { speed, hyphenator };
         let (tx, rx) = mpsc::unbounded_channel();
+        let (done, forwarder_done) = signal::signal(false);
         let sync = Arc::new(Synchronizer {
             state: Mutex::new(TranscriptSync::new(opts)),
             clock,
             tx: Mutex::new(Some(tx)),
-            forwarder_done: Arc::new(Monotone::new(false)),
+            forwarder_done,
             tracker: Arc::new(crate::voice::playback::Tracker::new()),
         });
         // The task holds only the done flag, so it never keeps the synchronizer alive.
-        let forwarder_done = Arc::clone(&sync.forwarder_done);
         let sink = text_next.clone();
         let forwarder = spawner.spawn(async move {
             Synchronizer::forward(sink, rx).await;
-            forwarder_done.set(true);
+            done.set(true);
         });
 
         let audio = SyncedAudioOutput::new(sync.clone(), audio_next);

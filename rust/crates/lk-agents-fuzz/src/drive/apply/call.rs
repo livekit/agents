@@ -1,5 +1,6 @@
 use super::Pending as AnswerWait;
 use super::*;
+use crate::record::Wait;
 use lk_agents_abi::voice::session::FillerSource;
 
 #[derive(Default)]
@@ -89,6 +90,7 @@ impl Run {
             Pending::Speech { handle, kind, stream } => {
                 let id = handle.reserved().expect("a host call's handle has its id");
                 self.handles.entry(id.0).or_insert(handle.clone());
+                self.probe_new_speech(&handle);
                 self.open_once(
                     at,
                     Kind::Speech,
@@ -462,6 +464,8 @@ impl Run {
                 api.send_from(VoiceCommandOrigin::Amd, SpeechCommand::ResumeAuthorization).ok()?
             }
             Input::HostMetrics {} => api.report_avatar_metrics(avatar_metrics()).ok()?,
+            // A hung hook is one the host never answers, whatever the case sends.
+            Input::HookDone { hook, .. } if self.hung_hooks.contains(&hook.nth) => return None,
             Input::HookDone { hook, answer, text: AgentText(text) } => {
                 return self
                     .answer_hook(self.hook_id(*hook)?, *answer, text.clone())
@@ -539,8 +543,15 @@ impl Run {
                 self.record.enter_phase(Phase::Closing);
                 let mut closing: BoxFuture<'static, ()> =
                     Box::pin(self.api.aclose("user_initiated".into(), *drain).ok()?);
+                if self.probes.close.is_none() {
+                    let at = self.stamps.next();
+                    self.probes.close =
+                        Some(self.record.record_probe_armed(at, Wait::SessionClose));
+                }
                 if ready_now(closing.as_mut()).is_none() {
                     self.closing = Some(closing);
+                } else if self.closing.is_none() {
+                    self.closed_probe();
                 }
                 self.loop_runs().then(Pending::default)
             }

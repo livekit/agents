@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::realtime::openai::queue::{self, Delivery, EventReceiver};
 use crate::telemetry;
 use std::sync::Arc;

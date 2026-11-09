@@ -132,6 +132,8 @@ pub struct Namespace {
     clock: Arc<dyn lk_agents_abi::Clock>,
     /// The lease holder id this process opens threads under.
     holder: String,
+    /// Where the local backend's health metrics go.
+    cx: lk_agents_abi::telemetry::Cx,
 }
 
 /// A local items page when the caller names no limit.
@@ -145,6 +147,7 @@ impl Namespace {
                     Config::Local { directory, lease, .. } => {
                         let workers = Workers::threads(self.clock.clone());
                         let storage = SqliteStorage::open(directory, *lease, workers).await?;
+                        let storage = storage.with_telemetry(self.cx.clone());
                         log::info!(target: lk_agents_abi::LOG_TARGET, "local thread storage in {}", directory.display());
                         Backend::Local(Arc::new(storage))
                     }
@@ -372,7 +375,8 @@ impl HostStorageClass for Namespace {
         };
         let (backend, a2a_tasks, clock) = (OnceCell::new(), Arc::default(), env.clock.clone());
         let holder = holder.filter(|h| !h.is_empty()).unwrap_or_else(|| env.lease_holder());
-        Ok(Self { config, backend, a2a_tasks, clock, holder })
+        let cx = env.tracer.root();
+        Ok(Self { config, backend, a2a_tasks, clock, holder, cx })
     }
 
     fn holder(&self) -> String {
@@ -597,7 +601,8 @@ impl host::handles::Thread for Thread {
         channel: Option<String>,
         wait_timeout: Option<std::time::Duration>,
     ) -> Result<RunHandle, StorageError> {
-        let mut options = RunOptions { channel, ..RunOptions::new(run_id.clone(), run_id) };
+        let kind = crate::thread::run::LaneKind::Text;
+        let mut options = RunOptions { channel, kind, ..RunOptions::new(run_id.clone(), run_id) };
         if let Some(timeout) = wait_timeout {
             options.wait_timeout = timeout;
         }

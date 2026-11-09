@@ -4,7 +4,6 @@ use super::output::{
     transcription::{ParticipantTranscriptionOutput, SegmentIds},
 };
 use super::pre_connect_audio::PreConnectAudioHandler;
-use crate::monotone::Monotone;
 use crate::telemetry;
 use futures_util::FutureExt as _;
 use lk_agents_abi::voice::events::AgentState;
@@ -24,6 +23,7 @@ use lk_agents_abi::{
     ATTRIBUTE_AGENT_STATE, BoxFuture, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, SpawnerExt,
     TOPIC_CHAT, Ts,
 };
+use lk_agents_net::signal;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::{RoomIo as RoomIoState, RoomView};
 use lk_agents_voice::room_io::{accepted_kinds, outbound_sip, publishes_on_behalf_of};
@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::ops::ControlFlow;
 use std::sync::Arc;
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 const ROOM_EVENT_CAPACITY: usize = 64;
@@ -55,8 +55,11 @@ pub struct RoomIo {
 
     /// One state owns decisions and wakes readers after each transition.
     state: Mutex<RoomIoState>,
-    view: watch::Sender<RoomView>,
-    connected: Monotone<bool>,
+    view: signal::Producer<RoomView>,
+    /// The room connected; its producer is the events reader's, so a reader that ends first
+    /// ends the wait.
+    connected: signal::Cell<bool>,
+    connect: Mutex<Option<signal::Producer<bool>>>,
 
     events_tx: mpsc::Sender<RoomIoEvent>,
     /// The session's room events, and apart from them the input processors' failing spans: a
@@ -66,11 +69,11 @@ pub struct RoomIo {
     tasks: Arc<TaskSet>,
     /// The close, which waits `tasks` out; it holds this object until it ends.
     closing: std::sync::OnceLock<lk_agents_abi::OwnedTask>,
-    execution: Mutex<Execution>,
-    /// Cancelled under the `execution` lock, so no work begins once the room closes.
+    /// The close waits for `starting` to drop to zero.
+    execution: signal::Producer<Execution>,
+    /// Cancelled while `execution` is modified, so no work begins once the room closes.
     stopped: CancellationToken,
-    started: Notify,
-    agent_state: watch::Sender<Option<AgentState>>,
+    agent_state: signal::Producer<Option<AgentState>>,
     chat_registered: Mutex<bool>,
     /// The session's startup spans, under its `session_start`; ended with the first link.
     startup: Mutex<Option<Startup>>,
@@ -81,6 +84,7 @@ struct Startup {
     participant: Option<telemetry::ScopedSpan<telemetry::WaitForParticipant>>,
 }
 
+#[derive(Clone, Copy)]
 struct Execution {
     starting: usize,
     cleanup: Closed,
@@ -154,8 +158,9 @@ impl RoomIo {
         };
 
         let state = RoomIoState::new(config.participant_identity.clone());
+        let (connect, connected) = signal::signal(false);
         Arc::new(RoomIo {
-            view: watch::channel(state.state()).0,
+            view: signal::signal(state.state()).0,
             state: Mutex::new(state),
             room,
             clock,
@@ -167,15 +172,15 @@ impl RoomIo {
             user_tr,
             agent_tr,
             pre_connect,
-            connected: Monotone::new(false),
+            connected,
+            connect: Mutex::new(Some(connect)),
             events_tx,
             events_rx: Mutex::new(Some((events_rx, failures_rx))),
             tasks: Arc::default(),
             closing: std::sync::OnceLock::new(),
-            execution: Mutex::new(Execution { starting: 0, cleanup: Closed::Clean }),
+            execution: signal::signal(Execution { starting: 0, cleanup: Closed::Clean }).0,
             stopped: CancellationToken::new(),
-            started: Notify::new(),
-            agent_state: watch::channel(None).0,
+            agent_state: signal::signal(None).0,
             chat_registered: Mutex::new(false),
             startup: Mutex::new(None),
         })
@@ -210,10 +215,12 @@ impl RoomIo {
     async fn read_events(
         self: Arc<Self>,
         mut events: lk_agents_abi::voice::rtc::Receiver<RoomEvent>,
+        connected: Option<signal::Producer<bool>>,
     ) {
         let result = async {
+            let Some(connected) = connected else { return Ok(()) };
             if self.room.connection_state()?.is_connected() {
-                self.connected.set(true);
+                connected.set(true);
             }
             loop {
                 let event = tokio::select! {
@@ -222,7 +229,7 @@ impl RoomIo {
                     event = events.next() => event.map_err(IoError::from)?,
                 };
                 let Some(event) = event else {
-                    return Ok(());
+                    return Err(IoError::Rtc("the room's events ended".into()));
                 };
                 tokio::select! {
                     biased;
@@ -233,7 +240,8 @@ impl RoomIo {
                     event,
                     RoomEvent::ConnectionStateChanged { state: ConnectionState::Connected }
                 ) {
-                    let last = *self.agent_state.borrow();
+                    connected.set(true);
+                    let last = self.agent_state.get();
                     if let Some(state) = last {
                         self.clone().on_agent_state_changed(state);
                     }
@@ -255,7 +263,10 @@ impl RoomIo {
     }
 
     async fn init(self: Arc<Self>) -> Result<()> {
-        self.connected.wait_for(|set| *set).await;
+        // The events reader ended first: it settled the start.
+        if self.connected.wait_for(|set| *set).await.is_err() {
+            return Ok(());
+        }
 
         // Replay participants who joined before the handler was registered.
         for p in self.room.remote_participants()? {
@@ -278,9 +289,11 @@ impl RoomIo {
 
     /// Whether a participant was linked before the room settled its readiness otherwise.
     async fn wait_for_link(&self) -> bool {
-        let mut state = self.view.subscribe();
-        let state = state.wait_for(|state| state.linked.is_some() || state.ready.is_some()).await;
-        matches!(state, Ok(state) if state.linked.is_some())
+        let view = self.view.cell();
+        let linked = view.wait_map(|state| {
+            (state.linked.is_some() || state.ready.is_some()).then_some(state.linked.is_some())
+        });
+        linked.await.unwrap_or(false)
     }
 
     /// Publishes the agent's audio track, under startup's `publish_audio_output` span when the
@@ -405,7 +418,6 @@ impl RoomIo {
         if state != ConnectionState::Connected {
             return Ok(());
         }
-        self.connected.set(true);
         // Connected or reconnected: the agent's own identity for the session's spans.
         let local = self.room.local();
         let participant =
@@ -516,12 +528,12 @@ impl RoomIo {
     }
 
     async fn write_agent_state(self: Arc<Self>) {
-        let mut updates = self.agent_state.subscribe();
+        let mut updates = self.agent_state.cell();
         loop {
             if self.stopped.is_cancelled() {
                 return;
             }
-            let pending = *updates.borrow_and_update();
+            let pending = updates.get();
             let result = async {
                 if let Some(state) = pending
                     && self.room.connection_state()?.is_connected()
@@ -660,17 +672,17 @@ impl RoomIo {
     }
 
     fn begin_work(&self) -> bool {
-        let mut state = self.execution.lock();
-        if self.stopped.is_cancelled() {
-            return false;
-        }
-        state.starting += 1;
-        true
+        self.execution.modify(|state| {
+            if self.stopped.is_cancelled() {
+                return false;
+            }
+            state.starting += 1;
+            true
+        })
     }
 
     fn finish_starting(&self) {
-        self.execution.lock().starting -= 1;
-        self.started.notify_waiters();
+        self.execution.modify(|state| state.starting -= 1);
     }
 
     fn spawn_reserved(&self, name: &str, work: impl Future<Output = ()> + Send + 'static) {
@@ -679,26 +691,24 @@ impl RoomIo {
     }
 
     fn record_cleanup(&self, outcome: Closed) {
-        let mut state = self.execution.lock();
-        state.cleanup = state.cleanup.and(outcome);
+        self.execution.modify(|state| state.cleanup = state.cleanup.and(outcome));
     }
 
     fn transition<T>(&self, transition: impl FnOnce(&mut RoomIoState) -> T) -> T {
         let mut state = self.state.lock();
         let outcome = transition(&mut state);
-        self.view.send_replace(state.state());
+        self.view.set(state.state());
         outcome
     }
 
     fn request_close(self: &Arc<Self>) {
-        let closing = {
-            let _execution = self.execution.lock();
+        let closing = self.execution.modify(|_| {
             if self.stopped.is_cancelled() {
-                return;
+                return false;
             }
             self.stopped.cancel();
             self.transition(RoomIoState::begin_close)
-        };
+        });
         if closing {
             let owner = self.clone();
             let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
@@ -719,27 +729,17 @@ impl RoomIo {
     }
 
     async fn close(&self, deadline: Ts) -> Closed {
-        loop {
-            let started = self.started.notified();
-            tokio::pin!(started);
-            started.as_mut().enable();
-            if self.execution.lock().starting == 0 {
-                break;
-            }
-            if lk_agents_abi::timeout(
-                self.clock.as_ref(),
-                deadline.saturating_duration_since(self.clock.now()),
-                &mut started,
-            )
-            .await
-            .is_err()
-            {
-                break;
-            }
-        }
+        // The room is borrowed for the wait, so the producer outlives it; the deadline bounds it.
+        let execution = self.execution.cell();
+        let _ = lk_agents_abi::timeout(
+            self.clock.as_ref(),
+            deadline.saturating_duration_since(self.clock.now()),
+            execution.wait_for(|state| state.starting == 0),
+        )
+        .await;
         let joined = self.tasks.wait_empty(self.clock.as_ref(), Some(deadline)).await;
-        let mut outcome = self.execution.lock().cleanup;
-        if !joined || self.execution.lock().starting != 0 {
+        let (mut outcome, starting) = self.execution.with(|state| (state.cleanup, state.starting));
+        if !joined || starting != 0 {
             outcome = outcome.and(Closed::TimedOut);
         }
         if let Some(pc) = &self.pre_connect {
@@ -844,7 +844,8 @@ impl room_owner::RoomIo for RoomIo {
         }
         if self.begin_work() {
             let events = self.room.events();
-            self.spawn_reserved("room events", Arc::clone(&self).read_events(events));
+            let connected = self.connect.lock().take();
+            self.spawn_reserved("room events", Arc::clone(&self).read_events(events, connected));
         }
         if self.begin_work() {
             self.spawn_reserved("room startup", Arc::clone(&self).run_startup());
@@ -860,21 +861,15 @@ impl room_owner::RoomIo for RoomIo {
     /// Keep one ordered writer; a newer state cancels the pending older write.
     fn on_agent_state_changed(self: Arc<Self>, state: AgentState) {
         if !self.stopped.is_cancelled() {
-            self.agent_state.send_replace(Some(state));
+            self.agent_state.set(Some(state));
         }
     }
 
     fn wait_for_ready<'a>(&'a self) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            let mut view = self.view.subscribe();
-            loop {
-                if let Some(outcome) = view.borrow_and_update().ready.clone() {
-                    return outcome;
-                }
-                if view.changed().await.is_err() {
-                    return Err(IoError::Rtc("room readiness publisher closed".into()));
-                }
-            }
+            let view = self.view.cell();
+            let ready = view.wait_map(|view| view.ready.clone()).await;
+            ready.unwrap_or_else(|_| Err(IoError::Rtc("room readiness publisher closed".into())))
         })
     }
 
@@ -907,15 +902,8 @@ impl room_owner::RoomIo for RoomIo {
     fn aclose(self: Arc<Self>) -> BoxFuture<'static, Closed> {
         Box::pin(async move {
             self.request_close();
-            let mut view = self.view.subscribe();
-            loop {
-                if let Some(outcome) = view.borrow_and_update().closed {
-                    return outcome;
-                }
-                if view.changed().await.is_err() {
-                    return Closed::Failed;
-                }
-            }
+            let view = self.view.cell();
+            view.wait_map(|view| view.closed).await.unwrap_or(Closed::Failed)
         })
     }
 }

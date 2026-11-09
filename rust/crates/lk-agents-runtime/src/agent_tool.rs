@@ -1,6 +1,7 @@
 //! An agent tool's child, run in process as its call's delegate outside a TextSession. Core's
 //! `agent_tool` decides what the child starts from and what it is to the call; this runs it on
 //! the driver `agent.run()` uses.
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 
 use std::sync::Arc;
 

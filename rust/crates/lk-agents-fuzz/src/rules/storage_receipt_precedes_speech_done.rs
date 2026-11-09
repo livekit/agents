@@ -6,7 +6,7 @@ use crate::{
 use lk_agents_voice::{
     agent_session::machine::activity::scheduling::SpeechId,
     events::SpeechOutcome,
-    trace::{InterruptStep, Step},
+    trace::{CloseAct, CloseStep, InterruptStep, Step},
 };
 
 pub struct StorageReceiptPrecedesSpeechDone;
@@ -14,8 +14,8 @@ pub struct StorageReceiptPrecedesSpeechDone;
 impl Rule for StorageReceiptPrecedesSpeechDone {
     const CONTRACT: Contract = Contract {
         id: "storage_receipt_precedes_speech_done",
-        guarantee: "A speech is announced done only after its settle or abandon receipt, including slow and failed commits. A speech the interruption watchdog ended never reports its turn: its lane is released afterwards.",
-        examples: &[waited, released_after_watchdog],
+        guarantee: "A speech is announced done only after its settle or abandon receipt, including slow and failed commits. A speech the interruption watchdog ended never reports its turn: its lane is released afterwards. Nor does one the close released at its bound with its commit still pending (a lane another live worker holds).",
+        examples: &[waited, released_after_watchdog, released_by_the_close],
         counterexamples: &[done_before_receipt, done_without_receipt, watchdog_cut_a_pending_commit],
         probe: None,
     };
@@ -29,6 +29,13 @@ impl Rule for StorageReceiptPrecedesSpeechDone {
             }
             let timed_out = r.internal_view().speech(*speech).timed_out_at();
             if timed_out.is_some_and(|ended| ended < *requested) {
+                continue;
+            }
+            let released = r.journal().iter().any(|(at, step)| {
+                matches!(step, Step::Close(CloseStep::Performed(CloseAct::Released { speech: s }))
+                    if s.0 == *speech && at > requested)
+            });
+            if released {
                 continue;
             }
             for (done, _) in host.speech(*speech).done_announcements() {
@@ -68,6 +75,19 @@ fn waited() -> Recording {
         .later(1500)
         .storage(receipt())
         .speech_done(1, SpeechOutcome::Completed)
+        .done()
+}
+
+/// The close released speech 2 at its bound with its commit pending; speech 1 waited.
+fn released_by_the_close() -> Recording {
+    let settle = StorageOperation::Settle;
+    Authored::new()
+        .storage(request())
+        .storage(receipt())
+        .speech_done(1, SpeechOutcome::Completed)
+        .storage(StorageStep::Requested { speech: 2, operation: settle })
+        .journal(Step::Close(CloseStep::Performed(CloseAct::Released { speech: SpeechId(2) })))
+        .speech_done(2, SpeechOutcome::Interrupted)
         .done()
 }
 

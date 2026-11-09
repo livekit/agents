@@ -151,7 +151,9 @@ pub struct TransferRun {
     spawner: Arc<dyn Spawner>,
 
     running: Mutex<Running>,
-    done: tokio::sync::Notify,
+    /// Written as the run settles; the run waits on it while it borrows `self`, so the outcome
+    /// (or the run's own `Restore`) is its terminal state.
+    done: lk_agents_net::signal::Producer<()>,
     /// The human-room watcher and the caller-room follower.
     tasks: Arc<TaskSet>,
 }
@@ -170,7 +172,7 @@ impl TransferRun {
             spawner,
             running: Mutex::new(Running::default()),
             tasks: Arc::default(),
-            done: tokio::sync::Notify::new(),
+            done: lk_agents_net::signal::signal(()).0,
         }
     }
 
@@ -216,9 +218,7 @@ impl TransferRun {
         let io = host.io_state();
         let effects = self.lock().core.begin(io);
         self.perform(effects);
-        let settled = self.done.notified();
-        let mut settled = std::pin::pin!(settled);
-        settled.as_mut().enable();
+        let mut settled = self.done.cell();
         tokio::select! {
             biased;
             dialled = self.dial(&host, &api, &caller) => {
@@ -228,16 +228,14 @@ impl TransferRun {
                     self.settle(Err(TransferFailed::Dial));
                 }
             }
-            _ = &mut settled => {}
+            _ = settled.changed() => {}
         }
         loop {
-            let settled = self.done.notified();
-            let mut settled = std::pin::pin!(settled);
-            settled.as_mut().enable();
+            let mut settled = self.done.cell();
             if let Some(outcome) = self.lock().core.take_outcome() {
                 return outcome;
             }
-            settled.await;
+            let _ = settled.changed().await;
         }
     }
 
@@ -256,7 +254,7 @@ impl TransferRun {
             TransferToolEffect::MoveParticipant => self.connect().await,
             TransferToolEffect::Settled(effects) => {
                 self.perform(effects);
-                self.done.notify_waiters();
+                self.done.modify(|()| ());
                 Ok(())
             }
         }
@@ -317,7 +315,7 @@ impl TransferRun {
         let effects = self.lock().core.settle(outcome);
         if let Some(effects) = effects {
             self.perform(effects);
-            self.done.notify_waiters();
+            self.done.modify(|()| ());
         }
     }
 
@@ -403,7 +401,12 @@ impl TransferRun {
         loop {
             let event = match events.next().await {
                 Ok(Some(event)) => event,
-                Ok(None) => return,
+                // The room's events ended without its close: nothing will settle it otherwise.
+                Ok(None) => {
+                    let ended = HostError::new("the human agent's room events ended");
+                    self.settle(Err(TransferFailed::Host(ended)));
+                    return;
+                }
                 Err(error) => {
                     self.settle(Err(TransferFailed::Host(HostError::new(error.to_string()))));
                     return;
@@ -414,7 +417,7 @@ impl TransferRun {
                 let effects = self.lock().core.room_closed(reason_name(reason));
                 if let Some(effects) = effects {
                     self.perform(effects);
-                    self.done.notify_waiters();
+                    self.done.modify(|()| ());
                 }
                 return;
             }

@@ -19,9 +19,13 @@ use lk_agents_voice::{
 
 use crate::input::Input;
 
+mod probes;
+pub use probes::{Fault, Probe, Site, Wait};
 mod resources;
 mod storage;
-pub use storage::{BoundaryOperation, BoundaryOutcome, StorageOperation, StorageStep};
+pub use storage::{
+    BoundaryOperation, BoundaryOutcome, StorageFault, StorageOperation, StorageStep,
+};
 mod views;
 
 #[cfg(test)]
@@ -683,6 +687,10 @@ pub struct Recording {
     index: Index,
     /// The legs' retry budgets the session was built with.
     conn: Option<(crate::drive::ConnSetup, bool)>,
+    faults: Vec<(Observed, Site, Fault)>,
+    probes: Vec<Probe>,
+    /// Waiters still parked once the driver finished and the run went quiet, by site.
+    parked: Vec<String>,
 }
 
 /// Lookups by identity, maintained as facts arrive.
@@ -1094,5 +1102,43 @@ impl Recording {
 
     pub fn set_now(&mut self, now: Observed) {
         self.now = now;
+    }
+
+    /// Every injected panic or hang, in order.
+    pub fn faults(&self) -> &[(Observed, Site, Fault)] {
+        &self.faults
+    }
+
+    pub fn record_fault(&mut self, at: Observed, site: Site, fault: Fault) {
+        self.faults.push((at, site, fault));
+    }
+
+    /// Whether a fake never answered somewhere: what the case could not release.
+    pub fn hung(&self) -> bool {
+        self.faults.iter().any(|(_, _, fault)| *fault == Fault::Hang)
+    }
+
+    /// Every host wait armed, with when it resolved.
+    pub fn probes(&self) -> &[Probe] {
+        &self.probes
+    }
+
+    pub fn record_probe_armed(&mut self, at: Observed, wait: Wait) -> usize {
+        self.probes.push(Probe { wait, armed: at, resolved: None });
+        self.probes.len() - 1
+    }
+
+    pub fn record_probe_resolved(&mut self, probe: usize, at: Observed) {
+        if let Some(probe) = self.probes.get_mut(probe) {
+            probe.resolved.get_or_insert(at);
+        }
+    }
+
+    pub fn parked(&self) -> &[String] {
+        &self.parked
+    }
+
+    pub fn set_parked(&mut self, parked: Vec<String>) {
+        self.parked = parked;
     }
 }

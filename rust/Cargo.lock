@@ -1633,6 +1633,7 @@ dependencies = [
  "prost",
  "serde_json",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1815,6 +1816,7 @@ dependencies = [
  "lk-agents-host-derive",
  "lk-agents-net",
  "lk-agents-storage",
+ "lk-agents-telemetry",
  "log",
  "parking_lot",
  "pbjson-types",

@@ -61,11 +61,15 @@ pub struct Closing {
 impl Future for Closing {
     type Output = Closed;
 
+    /// Out of `self` while polled: a close that panics is dropped by the unwind, never handed to
+    /// the background and polled again.
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Closed> {
-        let future = self.future.as_mut().expect("a Closing is polled until it resolves, once");
-        let result = std::task::ready!(future.as_mut().poll(cx));
-        self.future = None;
-        Poll::Ready(result)
+        let mut future = self.future.take().expect("a Closing is polled until it resolves, once");
+        let polled = future.as_mut().poll(cx);
+        if polled.is_pending() {
+            self.future = Some(future);
+        }
+        polled
     }
 }
 

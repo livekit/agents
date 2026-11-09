@@ -184,6 +184,31 @@ pub struct Acquired {
     pub picked_up: bool,
 }
 
+/// The lease a lane had when an acquire tried it, on the database's clock (unix seconds).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LeaseBefore {
+    pub holder: Option<String>,
+    pub token: Option<String>,
+    pub until: i64,
+    pub now: i64,
+}
+
+impl LeaseBefore {
+    /// Another holder's lease that lapsed without a release.
+    pub(crate) fn lapsed(&self, holder: &str) -> bool {
+        self.token.is_some() && self.holder.as_deref() != Some(holder) && self.until < self.now
+    }
+
+    /// Another holder's live lease, not renewed for longer than `stale` (`ttl` the lease length).
+    pub(crate) fn ownerless(&self, holder: &str, ttl: i64, stale: std::time::Duration) -> bool {
+        let renewed_ago = (self.now - (self.until - ttl)) as f64;
+        self.token.is_some()
+            && self.holder.as_deref() != Some(holder)
+            && self.until >= self.now
+            && renewed_ago > stale.as_secs_f64()
+    }
+}
+
 /// Takes the lease and loads the lane, one atomic batch, `schema` prepended for a fresh
 /// database; `None` while another holder has the lane. A retried `run_id` loads as
 /// `already_committed` and writes nothing.
@@ -191,12 +216,13 @@ pub(crate) async fn acquire(
     conn: &dyn ThreadDbConnection,
     req: &Acquire<'_>,
     schema: Vec<Statement>,
-) -> Result<Option<Acquired>, StorageError> {
+) -> Result<(Option<Acquired>, LeaseBefore), StorageError> {
     let (lane, token) = (req.lane, req.token);
     let mut b = Batch(schema);
     b.0.extend(framework_schema());
     b.add(PruneAppliedWrites {});
     b.add(InsertLane { lane });
+    let before = b.add(SelectLeaseBefore { lane });
     let take = b.add(TakeLease {
         lane,
         holder: req.holder,
@@ -222,9 +248,18 @@ pub(crate) async fn acquire(
     b.0.push(crate::thread::schema::SelectScopes { lane }.bind());
     let context_scopes = b.0.len() - 1;
     let out = conn.batch(b.0).await?;
+    let before = match out.at(before)?.rows().first() {
+        Some(row) => LeaseBefore {
+            holder: row[0].as_str().map(str::to_owned),
+            token: row[1].as_str().map(str::to_owned),
+            until: row[2].as_i64().unwrap_or(0),
+            now: row[3].as_i64().unwrap_or(0),
+        },
+        None => LeaseBefore::default(),
+    };
 
     let Some(version) = out.at(take)?.first_int() else {
-        return Ok(None); // the reads are discarded
+        return Ok((None, before)); // the reads are discarded
     };
     let lane_row = out
         .at(lane_row)?
@@ -235,7 +270,7 @@ pub(crate) async fn acquire(
         Some(i) => out.at(i)?.rows_affected() > 0,
         None => false,
     };
-    Ok(Some(Acquired {
+    let acquired = Acquired {
         version,
         already_committed: !out.at(committed)?.rows().is_empty(),
         lane: LaneRow::from_row(lane_row)?,
@@ -243,7 +278,8 @@ pub(crate) async fn acquire(
         tasks: rows(&out, tasks, TaskRow::from_row)?,
         context_scopes: crate::context::scopes_from_rows(out.at(context_scopes)?.rows())?,
         picked_up,
-    }))
+    };
+    Ok((Some(acquired), before))
 }
 
 fn rows<T>(

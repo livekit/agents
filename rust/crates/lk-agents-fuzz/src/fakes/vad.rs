@@ -10,7 +10,10 @@ use lk_agents_runtime::inference::vad::plugin::PluginInput;
 use lk_agents_runtime::net::clock::SimClock;
 use tokio::sync::{Notify, mpsc};
 
-use super::{Control, Forward, Registry, Slot};
+use super::{
+    Control, Forward, Registry, Slot,
+    hazard::{Site, strike},
+};
 use crate::{
     input::{Confidence, Input, Millis},
     record::{Detail, Kind},
@@ -65,6 +68,7 @@ struct Detection {
     registry: Arc<Registry>,
     events: mpsc::UnboundedReceiver<Result<VadEvent, ProviderError>>,
     ended: Arc<Notify>,
+    hazard: super::hazard::StreamHazard,
 }
 
 impl Vad for FakeVad {
@@ -89,7 +93,8 @@ impl Vad for FakeVad {
         let slot = self.registry.register(Kind::Vad, detail, Control::Vad(sender));
         let registry = self.registry.clone();
         let forward = Forward { slot, registry: registry.clone(), ended: Some(ended.clone()) };
-        let detection: VadSource = Box::new(Detection { slot, registry, events, ended });
+        let hazard = registry.stream_hazard(Site::VadNext, Site::VadClose);
+        let detection: VadSource = Box::new(Detection { slot, registry, events, ended, hazard });
         let opened = match self.stall {
             None => lk_agents_abi::DuplexStream::new(Box::new(forward) as VadSink, detection),
             Some(stall) => {
@@ -106,7 +111,11 @@ impl Vad for FakeVad {
 
 impl StreamOutput<VadEvent> for Detection {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<VadEvent>, ProviderError>> {
+        let fault = self.registry.stream_fault(&mut self.hazard, Site::VadNext, self.slot);
         Box::pin(async move {
+            if let Some(fault) = fault {
+                return strike(fault, Site::VadNext).await;
+            }
             // A real stream ends once its input has; otherwise a replaced stream stays open.
             tokio::select! {
                 biased;
@@ -120,8 +129,12 @@ impl StreamOutput<VadEvent> for Detection {
         true
     }
 
-    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+    fn close(mut self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        let fault = self.registry.stream_fault(&mut self.hazard, Site::VadClose, self.slot);
         Box::pin(async move {
+            if let Some(fault) = fault {
+                return strike(fault, Site::VadClose).await;
+            }
             self.registry.mark_closed(self.slot);
             Closed::Clean
         })

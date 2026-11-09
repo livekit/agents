@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::ipc::telemetry;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use parking_lot::Mutex;

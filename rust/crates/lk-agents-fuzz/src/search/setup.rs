@@ -105,6 +105,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         stray: 0.0,
         storage: None,
         vad_stall_ms: None,
+        stress: None,
     };
     // `lk agent console` runs on the host's legs only.
     setup.console = setup.room_legs.is_none() && rng.u8(0..100) < 30;
@@ -204,5 +205,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     setup.failing_processors = (setup.room_legs.is_some() && rng.u8(0..100) < 33).then(|| {
         ProcessorFaults { denoiser: faults(rng), gain_control: rng.bool().then(|| faults(rng)) }
     });
+    // A call in four is stressed: its fakes panic or hang now and then, its waits probed.
+    setup.stress = (rng.u8(0..4) == 0).then(|| rng.u64(..));
     setup
 }

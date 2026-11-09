@@ -353,6 +353,8 @@ impl Run {
             api,
             room,
             closing: None,
+            hung_hooks: BTreeSet::new(),
+            probes: super::probe::Probes::new(setup.stress),
             host,
             session: Some(super::executor::Session::new(runtime)),
             queue: super::queue::Queue::new(schedule, policy),
@@ -457,6 +459,10 @@ impl Run {
         // The person joins the call the agent just answered; the callee AMD awaits may not have.
         if setup.amd.map_or(legs.is_some(), |amd| amd.answer != AmdAnswer::Missing) {
             run.join_caller();
+        }
+        // Faults start once the session runs, as a host's calls reach it only then.
+        if let Some(seed) = setup.stress {
+            run.registry.arm_hazards(seed);
         }
         run.collect();
         run

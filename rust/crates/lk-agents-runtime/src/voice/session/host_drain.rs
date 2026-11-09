@@ -41,19 +41,16 @@ impl HostDrain {
                         continue;
                     };
                     self.forward_usage(&mut forwarded);
+                    // What waits on the speech's end runs once the next event is asked for.
                     self.deliver(wire);
-                    // What waits on the speech's end runs after the host handled its event.
-                    if let VoiceHostEvent::Session(SessionEvent::SpeechDone { speech, .. }) = ev
-                        && let Some(handle) = speeches.get(speech)
-                    {
-                        handle.reported();
-                    }
                 }
             }
         }
         drop(answering);
-        // The session reports nothing more: no wait on a speech's end outlives it.
-        runner.speeches.end();
+        // However the stream ended (a close, a dropped or panicked runtime): no event follows.
+        if let Some(events) = &self.events {
+            events.ended();
+        }
         // Dropping the runner tells `aclose()` the host has seen everything.
         drop(runner);
         // However the session closed, its remote session host closes with it.

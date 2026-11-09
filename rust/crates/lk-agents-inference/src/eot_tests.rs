@@ -1,5 +1,10 @@
 //! End-of-turn streams under host lock inversion and pool saturation, in their own process.
 #![allow(clippy::unwrap_used, reason = "integration test")]
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "tests drive tokio's sync primitives directly"
+)]
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

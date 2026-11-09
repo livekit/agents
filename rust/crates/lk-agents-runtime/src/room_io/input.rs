@@ -13,6 +13,7 @@ use lk_agents_abi::{AudioFrame, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, S
 use lk_agents_media::media_queue::{
     self, AudioReceiver, AudioSender, Item, Stuck, VideoReceiver, VideoSender,
 };
+use lk_agents_net::signal;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::machine::input::{
     AUDIO_SOURCES, Admit, Open, Owner, ParticipantInput, ProcessorSpans, Publication,
@@ -22,7 +23,6 @@ use parking_lot::Mutex;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Notify;
 
 use super::pre_connect_audio::PreConnectAudioHandler;
 
@@ -115,7 +115,7 @@ struct State<Q> {
 struct Readers<Q: ReaderSink> {
     state: Mutex<State<Q>>,
     queue: tokio::sync::Mutex<Q::Receiver>,
-    changed: Notify,
+    changed: signal::Producer<()>,
 }
 
 impl<Q: ReaderSink> Readers<Q> {
@@ -123,7 +123,7 @@ impl<Q: ReaderSink> Readers<Q> {
         Self {
             state: Mutex::new(State { readers: ParticipantInput::new(sources), queue: Some(tx) }),
             queue: tokio::sync::Mutex::new(rx),
-            changed: Notify::new(),
+            changed: signal::signal(()).0,
         }
     }
 
@@ -142,7 +142,7 @@ impl<Q: ReaderSink> Readers<Q> {
             }
             outcome
         };
-        self.changed.notify_waiters();
+        self.changed.modify(|()| ());
         outcome
     }
 
@@ -184,13 +184,11 @@ impl<Q: ReaderSink> Readers<Q> {
     /// Resolves once voice retires the reader of `generation`.
     async fn retired(&self, generation: u64) {
         loop {
-            let changed = self.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
+            let mut changed = self.changed.cell();
             if !self.state.lock().readers.producing(generation) {
                 return;
             }
-            changed.await;
+            let _ = changed.changed().await;
         }
     }
 
@@ -215,13 +213,11 @@ impl<Q: ReaderSink> Readers<Q> {
         drop(queue);
         let settled = async {
             loop {
-                let changed = self.changed.notified();
-                tokio::pin!(changed);
-                changed.as_mut().enable();
+                let mut changed = self.changed.cell();
                 if let Some(outcome) = self.state.lock().readers.settled() {
                     return outcome;
                 }
-                changed.await;
+                let _ = changed.changed().await;
             }
         };
         let remaining = deadline.saturating_duration_since(clock.now());

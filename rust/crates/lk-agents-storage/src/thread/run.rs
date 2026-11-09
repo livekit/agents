@@ -1,3 +1,4 @@
+pub use lk_agents_abi::telemetry::health::LaneKind;
 use std::time::Duration;
 
 use crate::thread::db::{Commit, Committed, EventWrite, Fenced, Resolution};
@@ -215,6 +216,8 @@ pub struct RunOptions {
     pub wait_timeout: Duration,
     /// What the acquire does with `task_id`'s row (`Run::picked_up`).
     pub pickup: TaskPickup,
+    /// What the run is, for the lane health metrics.
+    pub kind: LaneKind,
 }
 
 impl RunOptions {
@@ -226,6 +229,7 @@ impl RunOptions {
             channel: None,
             wait_timeout: LEASE_WAIT_TIMEOUT,
             pickup: TaskPickup::Leave,
+            kind: LaneKind::A2a,
         }
     }
 }
@@ -502,7 +506,10 @@ impl Run {
                 Err(e) => Err(StorageError::Unavailable(format!("resolving: {e}"))),
             }
         };
-        Resend::after_lost(wait, lost).probed(|| self.send(commit, lease), probe).await
+        let cx = &self.lane.thread.cx;
+        Resend::after_lost(wait, cx, crate::telemetry::StorageWrite::Commit, lost)
+            .probed(|| self.send(commit, lease), probe)
+            .await
     }
 
     /// Keeps resolving a commit [`Run::commit`] left uncertain, up to [`RESOLVE_LATER`]: the
@@ -536,6 +543,19 @@ impl Run {
             log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.name(), runId = self.run_id.as_str(); "run_ended could not be written after a failed run: {e}");
         }
         Ok(())
+    }
+}
+
+/// A run dropped before it committed or was abandoned (its owner's future was dropped, or an
+/// error ended it) still ends: `run_ended` `canceled` and the release, written in the background.
+impl Drop for Run {
+    fn drop(&mut self) {
+        if self.finished || self.closed {
+            return;
+        }
+        if let Some(lease) = self.lease.take() {
+            lease.release_dropped(&self.run_id);
+        }
     }
 }
 

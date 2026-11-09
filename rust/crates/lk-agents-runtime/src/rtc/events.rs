@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 type RpcClosure = dyn Fn(&str, &str) -> String + Send + Sync;
 
 use parking_lot::Mutex;

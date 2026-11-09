@@ -763,6 +763,7 @@ async fn classify(
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_types, reason = "tests drive tokio's sync primitives directly")]
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;

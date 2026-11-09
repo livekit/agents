@@ -13,6 +13,7 @@ use crate::sql::{Bind, Cells, Row, SqlValue, Statement, statement};
 use crate::thread::db;
 use crate::thread::{LeaseTiming, SchemaCell, Thread};
 use crate::{Storage, ThreadDbConnection, shortuuid};
+use lk_agents_abi::telemetry::Cx;
 
 mod connection;
 mod lifecycle;
@@ -152,6 +153,7 @@ pub struct SqliteStorage {
     registry: FileConnection,
     pub(crate) lease: LeaseTiming,
     workers: Workers,
+    cx: Cx,
 }
 
 impl SqliteStorage {
@@ -185,7 +187,13 @@ impl SqliteStorage {
             registry.close().await;
             return Err(StorageError::Invalid("unsupported registry schema version".into()));
         }
-        Ok(Self { directory, registry, lease, workers })
+        Ok(Self { directory, registry, lease, workers, cx: Cx::NONE })
+    }
+
+    /// Its threads record their health metrics under `cx`.
+    pub fn with_telemetry(mut self, cx: Cx) -> Self {
+        self.cx = cx;
+        self
     }
 
     fn now_ms(&self) -> i64 {
@@ -365,7 +373,9 @@ impl Storage for SqliteStorage {
 
     async fn open(&self, thread_id: &str) -> Result<Thread, StorageError> {
         let connection = self.connect(thread_id).await?;
-        Thread::new(Arc::new(connection), thread_id, self.lease, SchemaCell::default()).await
+        let thread =
+            Thread::new(Arc::new(connection), thread_id, self.lease, SchemaCell::default());
+        Ok(thread.await?.with_telemetry(self.cx.clone()))
     }
 
     async fn close(&self) {

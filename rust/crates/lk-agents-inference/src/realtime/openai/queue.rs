@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use super::session::Cmd;
 use lk_agents_abi::RealtimeCommand as Command;
 use lk_agents_abi::errors::ApiError;

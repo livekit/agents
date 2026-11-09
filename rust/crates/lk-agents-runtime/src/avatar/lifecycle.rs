@@ -9,11 +9,12 @@ use lk_agents_abi::worker::job::SessionJob;
 use lk_agents_abi::{ChatItem, Clock, Role, Spawner};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::room_service::{Removal, RoomService};
+use lk_agents_net::signal;
 use lk_agents_net::task::TaskSet;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{OnceCell, watch};
+use tokio::sync::OnceCell;
 
 /// The avatars attached to a session, each told of the session's assistant messages' playback
 /// latency.
@@ -95,8 +96,8 @@ struct Inner {
     clock: Arc<dyn Clock>,
     job: Option<Arc<dyn SessionJob>>,
     attached: u64,
-    /// The join wait's outcome: `None` while it waits.
-    joined: watch::Sender<Option<Result<(), AvatarJoinError>>>,
+    /// The join wait's outcome; the wait task's, so its end (a close cancels it) ends the wait.
+    joined: signal::Cell<Option<Result<(), AvatarJoinError>>>,
     waiting: Arc<TaskSet>,
     closed: OnceCell<()>,
 }
@@ -120,13 +121,8 @@ impl avatar::AvatarLifecycle for AvatarLifecycle {
     }
 
     async fn wait_for_join(&self, timeout: Option<f64>) -> Result<(), AvatarJoinError> {
-        let mut joined = self.0.joined.subscribe();
-        let outcome = async move {
-            match joined.wait_for(Option::is_some).await {
-                Ok(outcome) => outcome.clone().unwrap_or(Err(AvatarJoinError::Closed)),
-                Err(_) => Err(AvatarJoinError::Closed),
-            }
-        };
+        let joined = self.0.joined.clone();
+        let outcome = async move { joined.wait().await.unwrap_or(Err(AvatarJoinError::Closed)) };
         let Some(limit) = timeout else { return outcome.await };
         let wait = Duration::try_from_secs_f64(limit).unwrap_or(Duration::ZERO);
         lk_agents_abi::timeout(self.0.clock.as_ref(), wait, outcome)
@@ -141,7 +137,6 @@ impl avatar::AvatarLifecycle for AvatarLifecycle {
             .get_or_init(|| async {
                 inner.owner.avatars().detach(inner.attached);
                 inner.waiting.cancel_and_wait(inner.clock.as_ref()).await;
-                inner.settle(Err(AvatarJoinError::Closed));
                 inner.remove_participant().await;
             })
             .await;
@@ -174,6 +169,7 @@ impl AvatarLifecycle {
         }
         let attached =
             owner.avatars().attach(Attached { provider: provider.clone(), host: avatar.clone() });
+        let (settle, joined) = signal::once();
         let inner = Arc::new(Inner {
             owner,
             room,
@@ -181,7 +177,7 @@ impl AvatarLifecycle {
             clock,
             job,
             attached,
-            joined: watch::channel(None).0,
+            joined,
             waiting: Arc::default(),
             closed: OnceCell::new(),
         });
@@ -201,7 +197,7 @@ impl AvatarLifecycle {
                 };
                 report(&waiter.owner, avatar.as_ref(), metrics);
             });
-            waiter.settle(outcome.map_err(AvatarJoinError::from));
+            settle.resolve(outcome.map_err(AvatarJoinError::from));
         };
         inner.waiting.spawn(spawner.as_ref(), "avatar join", Box::pin(wait));
         Ok(Self(inner))
@@ -209,17 +205,6 @@ impl AvatarLifecycle {
 }
 
 impl Inner {
-    /// The join wait's first outcome is its outcome.
-    fn settle(&self, outcome: Result<(), AvatarJoinError>) {
-        self.joined.send_if_modified(|joined| {
-            let unset = joined.is_none();
-            if unset {
-                *joined = Some(outcome);
-            }
-            unset
-        });
-    }
-
     /// Inside a job, while the room is connected: the avatar participant leaves the room.
     async fn remove_participant(&self) {
         let Some(job) = &self.job else { return };

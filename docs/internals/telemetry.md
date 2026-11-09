@@ -710,6 +710,21 @@ pub struct LlmInputTokens {
   agent identity) and the session export finds them by room; the user
   endpoint's measurements carry only declared labels.
 
+### Health metrics
+
+A hang or a stuck lane shows up in these within minutes. Each event is also a warn log on
+the `livekit.agents` target with the same labels, at most one per event kind every 10 s
+(`suppressed` counts the rest). They belong to no job, so they reach the application's OTLP
+endpoint, not Cloud.
+
+| Metric | Labels | Means | Suggested alert |
+| --- | --- | --- | --- |
+| `lk.agents.lane.acquire_wait` (s) | `lane_kind`: `voice`, `text`, `a2a`, `context` | how long a lane acquire waited, taken or refused | p95 above 15 s for 5 min (voice: above 2 s) |
+| `lk.agents.lane.ownerless_wait` (s) | `lane_kind` | an acquire waited on, or was refused by, a lease its holder stopped renewing (no renewal for one renew interval plus 2 s) | any, sustained 5 min |
+| `lk.agents.lane.lease_lapsed` | `lane_kind` | a lease taken over after it expired instead of being released: its worker died or stalled | more than 3 in 10 min |
+| `lk.agents.teardown.overrun` | `stage`: `session_close`, `lease_release` | a teardown ran past its bound | any |
+| `lk.agents.storage.write_uncertain` | `write`: `acquire`, `commit`, `release`, ... | a write's outcome was still unknown when its resends ran out | more than 5 in 10 min |
+
 ## Report records
 
 Records Cloud reads as OTLP logs are typed:

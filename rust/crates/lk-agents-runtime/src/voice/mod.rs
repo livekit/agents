@@ -81,7 +81,10 @@ pub struct VoiceRuntime {
     /// The microphone, its id and its reader.
     source: Option<(ResourceId, ScopedTask)>,
     /// Where each awaited call's answer goes, until the core answers it.
-    calls: Arc<Calls>,
+    calls: Calls,
+    /// The writers of every live speech's cells: dropped with the loop, so no wait on a speech
+    /// outlives it.
+    speech_signals: crate::voice::speech_handle::SpeechProducers,
     /// The keyterm detection pass in flight, by request.
     keyterms: Option<(u64, ScopedTask)>,
     /// Each realtime speech's player, fed the socket's events (`Effect::RealtimePlayer`).
@@ -104,6 +107,8 @@ pub struct VoiceRuntime {
         Option<Arc<dyn lk_agents_voice::agent_session::machine::activity::false_interruption::InterruptionPort>>,
     /// The tasks each speech owns: its reply, the tool calls it made and its host callbacks.
     speeches: SpeechTasks,
+    /// The host-event stream's end: dropped with the runtime, which ends the host's drain.
+    _events_end: lk_agents_net::signal::Producer<()>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -135,6 +140,20 @@ impl SpeechTasks {
         work: impl std::future::Future<Output = ()> + Send + 'static,
     ) {
         let task = self.tasks.scoped(self.spawner.as_ref(), name, work);
+        let mut owned = self.owned.lock();
+        owned.retain(|_, owned| !owned.tasks.is_empty() || !owned.callbacks.is_empty());
+        self.of(&mut owned, speech).tasks.push(task);
+    }
+
+    /// [`spawn`](Self::spawn), for work feeding the core: a panic reports `lost` as its input.
+    pub(crate) fn spawn_feeding(
+        &self,
+        speech: SpeechId,
+        name: &str,
+        lost: impl FnOnce() + Send + 'static,
+        work: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
+        let task = self.tasks.scoped_feeding(self.spawner.as_ref(), name, work, lost);
         let mut owned = self.owned.lock();
         owned.retain(|_, owned| !owned.tasks.is_empty() || !owned.callbacks.is_empty());
         self.of(&mut owned, speech).tasks.push(task);
@@ -206,6 +225,7 @@ impl VoiceRuntime {
             shared,
             peer,
             storage,
+            events_end,
         } = cores;
         let video_parts =
             audio::VideoForwarding { closing: shared.closing.clone(), queue: reports.clone() };
@@ -216,7 +236,6 @@ impl VoiceRuntime {
             owned: Arc::default(),
         };
         let predictions = ScopedTasks::new(Arc::clone(&shared.tasks));
-        let calls = Arc::clone(&shared.calls);
         let mut runtime = VoiceRuntime {
             publications,
             driver,
@@ -233,7 +252,8 @@ impl VoiceRuntime {
             source: None,
             pending_legs: Default::default(),
             realtime,
-            calls,
+            calls: Calls::default(),
+            speech_signals: Default::default(),
             keyterms: None,
             realtime_players: Default::default(),
             video_parts,
@@ -243,6 +263,7 @@ impl VoiceRuntime {
             predictions,
             interruption,
             speeches,
+            _events_end: events_end,
         };
         if let Some(session) = realtime_events {
             runtime.realtime.get_or_insert_with(|| {
@@ -373,7 +394,8 @@ impl VoiceRuntime {
                 }
                 self.step(Some(input), now);
             }
-            VoiceRuntimeEvent::Awaited(input, _) => {
+            VoiceRuntimeEvent::Awaited(input, call) => {
+                self.register_call(call);
                 self.handle(VoiceRuntimeEvent::Input(input), now)
             }
             VoiceRuntimeEvent::Wake => self.step(None, now),
@@ -468,7 +490,10 @@ impl VoiceRuntime {
         match event {
             VoiceRuntimeEvent::Input(input) => inputs.push(input),
             // Its reply is kept, so the core's refusal reaches it.
-            VoiceRuntimeEvent::Awaited(input, _) => inputs.push(input),
+            VoiceRuntimeEvent::Awaited(input, call) => {
+                self.register_call(call);
+                inputs.push(input);
+            }
             VoiceRuntimeEvent::LegOpened(opened) => inputs.push(self.prepare_leg(opened)),
             // A microphone attached too late to be read is let go, not left in the table.
             VoiceRuntimeEvent::AudioInputRouting(AudioInputRouterCommand::SetSource(Some(
@@ -489,6 +514,16 @@ impl VoiceRuntime {
             }
             VoiceRuntimeEvent::Wake | VoiceRuntimeEvent::HostRequests => {}
         }
+    }
+
+    /// Kept until the core answers it; a speech call's writers join the loop's table.
+    fn register_call(&mut self, mut call: session::calls::Call) {
+        if let session::calls::ReplyTo::Speech(reply) = &mut call.reply_to
+            && let Some((id, signals)) = reply.take_signals()
+        {
+            self.speech_signals.adopt(id, signals);
+        }
+        self.calls.register(call);
     }
 
     /// The decision core refuses what the loop never delivered and settles its own waiters once.

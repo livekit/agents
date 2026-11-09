@@ -331,9 +331,12 @@ the violation, or allow one site with `#[allow(lint, reason = "...")]`.
 - Retry or fall back only while nothing has been sent downstream; after the first item, a failure
   is final. [review]
 - Rebuild state on reconnect from the current options, never by replaying old frames. [review]
-- A waiter waits only on a cell whose sender the producer owns: dropping the producer resolves
-  every waiter, with an error when the awaited state can no longer come. No bare `Notify`, no
-  sender held by the waiter's own object, no flag someone must remember to set. [review]
+- A waiter waits only on an `lk_agents_net::signal` cell whose `Producer` lives where the
+  progress happens (moved into its task, `TaskSet::spawn_settling`, or the owning loop's table):
+  dropping it resolves every waiter, `Err(Ended)` when the state can no longer come. [lint, review]
+- No `Notify` or raw `watch` channel outside `signal.rs`; state several parties change is a
+  `signal::Shared` with a terminal value every wait accepts. [lint]
+- A task feeding a machine reports its death as an input (`TaskSet::scoped_feeding`). [review]
 - Every wait a host can await resolves when its session ends, drained or dropped. [review]
 
 ### Bindings and the host

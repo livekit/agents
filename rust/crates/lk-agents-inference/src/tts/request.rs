@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::{retry, telemetry};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::utils::stream::{Entry, ProviderStream};

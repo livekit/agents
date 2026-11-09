@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "tests drive tokio's sync primitives directly"
+)]
 use super::{group::Group, lifetime::Lifetime, scopes::Scopes};
 use lk_agents_abi::llm::toolsets::{
     self, ToolsetGroup as _, ToolsetLifetime as _, ToolsetScopes as _,

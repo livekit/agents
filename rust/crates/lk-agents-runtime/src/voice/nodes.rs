@@ -16,10 +16,11 @@ use lk_agents_abi::{
 };
 use lk_agents_media::media_queue::{self, Item, Policy};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::signal;
 use lk_agents_net::task::TaskSet;
 use std::convert::Infallible;
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 /// The numbers in a node's chunk and request ids; nothing reads them but a trace.
@@ -46,11 +47,13 @@ impl lk_agents_abi::voice::nodes::AgentNodes for AgentNodes {
 
 impl NodeFactory for AgentNodes {
     fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError> {
+        let (complete, completion) = signal::once();
         Ok(Arc::new(TranscriptionNode {
             opener: self.opener()?,
             below,
             segment: Mutex::new(None),
-            completion: watch::channel(None).0,
+            complete: Mutex::new(Some(complete)),
+            completion,
             retained: Arc::new(Mutex::new(None)),
             started: AtomicBool::new(false),
             cancelled: CancellationToken::new(),
@@ -230,6 +233,9 @@ impl Opener {
 type OpenNode<T> =
     lk_agents_abi::BoxFuture<'static, Result<Box<dyn StreamOutput<T>>, ProviderError>>;
 
+/// The node's drain outcome, once it ended.
+type Completion = Option<Result<(), IoError>>;
+
 /// `Agent.transcription_node`: one invocation per segment, opened by its first text and ended by
 /// its flush. What the node yields goes down the leg below, flushed once the node has ended.
 struct TranscriptionNode {
@@ -237,7 +243,10 @@ struct TranscriptionNode {
     below: Arc<dyn TextOutput>,
     /// The open segment's input, while the node reads it.
     segment: Mutex<Option<ChannelSink<TranscriptChunk>>>,
-    completion: watch::Sender<Option<Result<(), IoError>>>,
+    /// Moved into the node's drain task as it opens, so the task's end, however it comes, ends
+    /// the wait on `completion`.
+    complete: Mutex<Option<signal::Producer<Completion>>>,
+    completion: signal::Cell<Completion>,
     retained: Arc<Mutex<Option<Box<dyn Send>>>>,
     started: AtomicBool,
     cancelled: CancellationToken,
@@ -250,7 +259,7 @@ impl TranscriptionNode {
         if segment.is_none() {
             let (below, flushed) = (Arc::clone(&self.below), Arc::clone(&self.below));
             self.started.store(true, Ordering::SeqCst);
-            let done = self.completion.clone();
+            let done = self.complete.lock().take();
             let retained = self.retained.clone();
             *segment = Some(self.opener.open(
                 "transcription",
@@ -275,7 +284,9 @@ impl TranscriptionNode {
                     flushed.flush();
                     let owner = {
                         let mut owner = retained.lock();
-                        done.send_replace(Some(outcome));
+                        if let Some(done) = done {
+                            done.resolve(outcome);
+                        }
                         owner.take()
                     };
                     drop(owner);
@@ -301,7 +312,8 @@ impl TextNode for TranscriptionNode {
 
     fn retain_until_drained(&self, owner: Box<dyn Send>) {
         let mut retained = self.retained.lock();
-        if self.started.load(Ordering::SeqCst) && self.completion.borrow().is_none() {
+        let pending = self.completion.with(Option::is_none) && !self.completion.ended();
+        if self.started.load(Ordering::SeqCst) && pending {
             assert!(retained.is_none(), "a segment has one binding owner");
             *retained = Some(owner);
         } else {
@@ -315,16 +327,12 @@ impl TextNode for TranscriptionNode {
     }
 
     fn drain(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), IoError>> {
-        let mut completion = self.completion.subscribe();
         Box::pin(async move {
             if !self.started.load(Ordering::SeqCst) {
                 return Ok(());
             }
-            let result = completion
-                .wait_for(Option::is_some)
-                .await
-                .map_err(|_| IoError::Rtc("transcription node completion was lost".into()))?;
-            result.as_ref().expect("completed node").clone()
+            let result = self.completion.wait().await;
+            result.map_err(|_| IoError::Rtc("transcription node completion was lost".into()))?
         })
     }
 

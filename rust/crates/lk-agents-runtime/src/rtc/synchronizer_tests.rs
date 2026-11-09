@@ -1,9 +1,15 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "tests drive tokio's sync primitives directly"
+)]
 use super::*;
 use lk_agents_abi::voice::rtc::PlaybackInfo;
 use lk_agents_abi::voice::rtc::media::AVSynchronizer as _;
 use lk_agents_abi::{AudioFrame, BoxFuture, VirtualClock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+use tokio::sync::Notify;
 
 #[derive(Default)]
 struct Audio {
@@ -103,7 +109,7 @@ async fn queue_is_bounded_clear_discards_waiting_frames_and_releases_producers()
     sync.push(frame(), None).await.unwrap();
     until(|| video.captures.load(Ordering::SeqCst) == 1).await;
     sync.push(frame(), None).await.unwrap();
-    until(|| sync.inner.state.lock().in_flight).await;
+    until(|| sync.inner.state.with(|state| state.in_flight)).await;
     sync.push(frame(), None).await.unwrap();
     let mut blocked = Box::pin(sync.push(frame(), None));
     assert!(
@@ -148,4 +154,22 @@ async fn capture_failure_is_reported_to_push_and_playout_waiters() {
     assert!(sync.push(frame(), None).await.is_err());
     assert_eq!(sync.last_video_time(), 0.0);
     sync.aclose().await.unwrap();
+}
+
+// Catches: a source close that never returns holding every `aclose` (and the avatar media close
+// awaiting it) forever.
+#[tokio::test]
+async fn a_hung_source_close_is_bounded() {
+    let audio = Arc::new(Audio { hold_close: true, ..Default::default() });
+    let clock = Arc::new(VirtualClock::new());
+    let sync = sync(audio.clone(), Arc::new(Video::default()), clock.clone());
+    let mut closing = Box::pin(sync.aclose());
+    assert!(
+        std::future::poll_fn(|cx| std::task::Poll::Ready(closing.as_mut().poll(cx).is_pending()))
+            .await
+    );
+    audio.closing.notified().await;
+    clock.advance(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+    let closed = tokio::time::timeout(Duration::from_secs(5), closing).await;
+    assert!(matches!(closed, Ok(Err(_))), "the close outlived its bound");
 }

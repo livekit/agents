@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use lk_agents_net::clock::unix_now_ms;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::sync::Arc;

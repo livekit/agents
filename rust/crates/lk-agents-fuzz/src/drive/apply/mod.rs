@@ -40,6 +40,7 @@ impl Run {
             Input::AwaitAnswer { answer } => self.await_answer(answer.nth).await,
             Input::AwaitSpeech { speech } => self.await_speech(speech.nth).await,
             Input::AwaitExit {} => self.await_exit().await,
+            Input::Probe { speech, wait } => self.probe_input(*speech, *wait),
             Input::Release {} => self.phase(at, Phase::Releasing),
             Input::Settle {} => self.phase(at, Phase::Settling),
             Input::FeedText { .. } | Input::FeedAudio { .. } | Input::FeedEnd { .. } => {

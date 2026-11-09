@@ -12,6 +12,7 @@ use lk_agents_abi::voice::rtc::{
     RtcRoom, StreamBytesOptions,
 };
 use lk_agents_abi::{AudioFrame, BoxFuture, Clock, Closed, Spawner, Ts};
+use lk_agents_net::signal;
 use lk_agents_net::task::{ScopedTask, TaskSet};
 use lk_agents_voice::avatar::machine::output::{
     AfterClear, Finish, OutputState, Reject, after_clear, check_caller, report_routes,
@@ -25,8 +26,6 @@ use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Notify;
-use tokio::sync::watch;
 
 /// Waits for the room's next event; its events ending is `Closed(closed)`.
 async fn next_room_event(
@@ -62,14 +61,15 @@ struct Inner {
     tracker: Arc<dyn PlaybackTracker>,
     clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
-    /// `None` while starting, then whether the avatar became ready.
-    started: watch::Sender<Option<rtc::Result<()>>>,
+    /// `None` while starting, then whether the avatar became ready. The start task's: its end
+    /// (a close cancels it) ends every wait.
+    started: signal::Cell<Option<rtc::Result<()>>>,
     /// The open segment. Its stream is opened, written and closed by tasks of their own, so a
     /// capture the playout drops mid-write leaves the stream to the segment's close.
     segment: Mutex<Segments>,
     tasks: Arc<TaskSet>,
     closing: Arc<TaskSet>,
-    close_outcome: watch::Sender<Closed>,
+    close_outcome: Arc<Mutex<Closed>>,
     /// The give-up timer after a clear, and when it fires.
     clear_timer: Mutex<Option<(ScopedTask, Ts, PlaybackSegment)>>,
 }
@@ -96,14 +96,15 @@ enum SegmentWriter {
 
 impl Inner {
     fn is_started(&self) -> bool {
-        matches!(*self.started.borrow(), Some(Ok(())))
+        let started = self.started.with(|started| matches!(started, Some(Ok(()))));
+        started && !self.segment.lock().core.is_closed()
     }
 
     /// `_start_task`: the room connected, the RPC methods registered, the avatar in the room (and
     /// its track published, when asked).
-    async fn start(self: Arc<Self>) {
+    async fn start(self: Arc<Self>, started: signal::Producer<Option<rtc::Result<()>>>) {
         let outcome = self.wait_until_ready().await;
-        self.started.send_replace(Some(outcome));
+        started.resolve(outcome);
     }
 
     async fn wait_until_ready(self: &Arc<Self>) -> rtc::Result<()> {
@@ -271,7 +272,8 @@ impl Inner {
                         std::mem::replace(&mut *writer, SegmentWriter::Unopened)
                     && let Err(error) = given_up.close(&telemetry::Cx::NONE).await
                 {
-                    outcome.send_modify(|closed| *closed = closed.and(Closed::Failed));
+                    let mut closed = outcome.lock();
+                    *closed = closed.and(Closed::Failed);
                     log::error!(target: lk_agents_abi::LOG_TARGET, error = error.to_string().as_str();
                         "failed to close avatar audio stream");
                 }
@@ -343,7 +345,8 @@ impl Inner {
             if let SegmentWriter::Open(writer) = writer
                 && let Err(error) = writer.close(&telemetry::Cx::NONE).await
             {
-                outcome.send_modify(|closed| *closed = closed.and(Closed::Failed));
+                let mut closed = outcome.lock();
+                *closed = closed.and(Closed::Failed);
                 log::error!(target: lk_agents_abi::LOG_TARGET, error = error.to_string().as_str();
                         "failed to close avatar audio stream");
             }
@@ -364,7 +367,6 @@ impl Inner {
             let mut segments = self.segment.lock();
             segments.core.close().and_then(|key| segments.writers.get(&key).cloned())
         };
-        self.started.send_replace(Some(Err(RtcError::Closed("the avatar output"))));
         if let Some(segment) = segment {
             self.close_segment(segment);
         }
@@ -379,7 +381,7 @@ impl Inner {
         if !self.closing.wait_empty(&*self.clock, Some(deadline)).await {
             return Closed::TimedOut;
         }
-        *self.close_outcome.borrow()
+        *self.close_outcome.lock()
     }
 }
 
@@ -472,6 +474,7 @@ impl DataStreamAudioOutput {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
     ) -> Self {
+        let (start, started) = signal::once();
         let inner = Arc::new(Inner {
             room,
             destination: destination_identity,
@@ -482,14 +485,14 @@ impl DataStreamAudioOutput {
             tracker: Arc::new(crate::voice::playback::Tracker::new()),
             clock,
             spawner: Arc::clone(&spawner),
-            started: watch::channel(None).0,
+            started,
             segment: Mutex::new(Segments::default()),
             tasks: Arc::new(TaskSet::default()),
             closing: Arc::new(TaskSet::default()),
-            close_outcome: watch::channel(Closed::Clean).0,
+            close_outcome: Arc::new(Mutex::new(Closed::Clean)),
             clear_timer: Mutex::new(None),
         });
-        inner.tasks.spawn(&*spawner, "avatar_output_start", Arc::clone(&inner).start());
+        inner.tasks.spawn(&*spawner, "avatar_output_start", Arc::clone(&inner).start(start));
         DataStreamAudioOutput { inner }
     }
 
@@ -527,9 +530,11 @@ impl AudioOutput for DataStreamAudioOutput {
         frame: &'a AudioFrame,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            let mut started = self.inner.started.subscribe();
-            let ready = started.wait_for(Option::is_some).await.map(|s| s.clone()).ok().flatten();
+            let ready = self.inner.started.wait().await;
             ready.unwrap_or(Err(RtcError::Closed("the avatar output")))?;
+            if self.inner.segment.lock().core.is_closed() {
+                Err(RtcError::Closed("the avatar output"))?;
+            }
             let segment = {
                 let mut state = self.inner.segment.lock();
                 let key = self
@@ -616,35 +621,28 @@ impl AudioOutput for DataStreamAudioOutput {
 
 /// Async reader wakeups around voice's synchronous queue and playback state machine.
 pub struct QueueAudio {
-    state: Mutex<Queue>,
-    changed: Notify,
+    state: signal::Shared<Queue>,
 }
 
 impl lk_agents_abi::voice::avatar_queue::QueueAudio for QueueAudio {
     fn new(wait_playback_start: bool) -> Self {
-        Self { state: Mutex::new(Queue::new(wait_playback_start)), changed: Notify::new() }
+        Self { state: signal::Shared::new(Queue::new(wait_playback_start)) }
     }
     fn check_open(&self) -> std::result::Result<(), QueueClosed> {
-        self.state.lock().check_open()
+        self.state.with(|queue| queue.check_open())
     }
     fn capture(
         &self,
         frame: AudioFrame,
         segment: PlaybackSegment,
     ) -> std::result::Result<QueueEffects, QueueClosed> {
-        let result = self.state.lock().capture(frame, segment);
-        self.changed.notify_waiters();
-        result
+        self.state.modify(|queue| queue.capture(frame, segment))
     }
     fn flush(&self) -> std::result::Result<(), QueueClosed> {
-        let result = self.state.lock().flush();
-        self.changed.notify_waiters();
-        result
+        self.state.modify(Queue::flush)
     }
     fn clear(&self) -> QueueEffects {
-        let effects = self.state.lock().clear();
-        self.changed.notify_waiters();
-        effects
+        self.state.modify(Queue::clear)
     }
     fn playback_finished(
         &self,
@@ -652,33 +650,23 @@ impl lk_agents_abi::voice::avatar_queue::QueueAudio for QueueAudio {
         interrupted: bool,
         segment: Option<AvatarPlaybackSegment>,
     ) -> QueueEffects {
-        self.state.lock().finished(playback_position, interrupted, segment)
+        self.state.with(|queue| queue.finished(playback_position, interrupted, segment))
     }
     fn playback_started(&self, segment: Option<AvatarPlaybackSegment>) -> QueueEffects {
-        self.state.lock().started(segment)
+        self.state.with(|queue| queue.started(segment))
     }
     async fn next_audio(&self) -> AudioReceiverObservation {
         self.wait(Queue::next_audio).await
     }
     fn close(&self) -> QueueEffects {
-        let effects = self.state.lock().close();
-        self.changed.notify_waiters();
-        effects
+        self.state.modify(Queue::close)
     }
 }
 
 impl QueueAudio {
     /// What `read` finds in the queue, once it finds something.
-    async fn wait<T>(&self, mut read: impl FnMut(&mut Queue) -> Option<T>) -> T {
-        loop {
-            let changed = self.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            if let Some(found) = read(&mut self.state.lock()) {
-                return found;
-            }
-            changed.await;
-        }
+    async fn wait<T>(&self, read: impl FnMut(&mut Queue) -> Option<T>) -> T {
+        self.state.wait_until(read).await
     }
 }
 

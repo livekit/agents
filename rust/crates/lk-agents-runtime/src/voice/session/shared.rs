@@ -1,4 +1,4 @@
-use super::calls::{Awaited, Call, Calls};
+use super::calls::{Awaited, Call};
 use super::time::Timebase;
 use crate::telemetry;
 use crate::voice::VoiceRuntimeEvent;
@@ -164,12 +164,48 @@ impl std::fmt::Debug for WatchHub {
     }
 }
 
+/// A host event and, on a speech's `speech_done`, that speech's `reported` writer: the drain
+/// finishes it once the host handled the event, and dropping it unhandled ends the wait.
+pub(crate) type HostEvent = (VoiceHostEvent, Option<lk_agents_net::signal::Producer<bool>>);
+
+/// The host-event stream. Its end is the runtime's: once the runtime is gone, dropped or
+/// panicked, the stream ends after what was queued, whatever other senders remain.
+pub(crate) struct HostEvents {
+    events: Rx<HostEvent>,
+    runtime: lk_agents_net::signal::Cell<()>,
+}
+
+impl HostEvents {
+    pub(crate) fn new(events: Rx<HostEvent>) -> (Self, lk_agents_net::signal::Producer<()>) {
+        let (end, runtime) = lk_agents_net::signal::signal(());
+        (HostEvents { events, runtime }, end)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn try_recv(&mut self) -> Option<HostEvent> {
+        self.events.try_recv().ok()
+    }
+
+    /// `None` once every sender is gone, or the runtime is and nothing is queued.
+    pub(crate) async fn recv(&mut self) -> Option<HostEvent> {
+        tokio::select! {
+            biased;
+            event = self.events.recv() => event,
+            _ = self.runtime.wait_for(|()| false) => self.events.try_recv().ok(),
+        }
+    }
+}
+
 /// Everything a peer of the host may touch, and nothing else.
 #[derive(Clone)]
 pub struct PeerHandle {
     /// The loop's queue: commands, and the audio taps' installs.
     pub queue: Tx,
-    pub(crate) events: tokio::sync::mpsc::UnboundedSender<VoiceHostEvent>,
+    pub(crate) events: tokio::sync::mpsc::UnboundedSender<HostEvent>,
     pub journal: Journal,
     pub time: Timebase,
     pub spawner: Arc<dyn lk_agents_abi::Spawner>,
@@ -200,8 +236,12 @@ impl PeerHandle {
     }
 
     /// A host event to the host's drain; handed back when the drain has gone.
-    pub fn deliver(&self, event: VoiceHostEvent) -> Result<(), Box<VoiceHostEvent>> {
-        self.events.send(event).map_err(|refused| Box::new(refused.0))
+    pub fn deliver(
+        &self,
+        event: VoiceHostEvent,
+        reported: Option<lk_agents_net::signal::Producer<bool>>,
+    ) -> Result<(), Box<VoiceHostEvent>> {
+        self.events.send((event, reported)).map_err(|refused| Box::new(refused.0.0))
     }
 
     /// A tap to every watcher.
@@ -213,7 +253,7 @@ impl PeerHandle {
         if self.journal.is_on() {
             self.journal(Step::Emitted(ev.journal_form()));
         }
-        let _ = self.events.send(VoiceHostEvent::Session(ev));
+        let _ = self.events.send((VoiceHostEvent::Session(ev), None));
     }
 
     /// The microphone's own frames, never the gate's silence. A second tap replaces the first.
@@ -251,7 +291,7 @@ impl std::fmt::Debug for PeerHandle {
 pub struct SessionHandle {
     pub api: Tx,
     /// Every event, in the order the driver emitted it.
-    pub events: Rx<VoiceHostEvent>,
+    pub(crate) events: HostEvents,
     /// The last keyterm list pushed to the recogniser; `None` before any push.
     pub keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
     /// The driving agent's context and state, as last published.
@@ -261,8 +301,6 @@ pub struct SessionHandle {
     pub ivr_detection: bool,
     /// The session's id counter: a host speech call takes its speech's id from it.
     pub speech_ids: Arc<std::sync::atomic::AtomicU64>,
-    /// The replies of the calls the host awaits, until the core answers them.
-    pub calls: Arc<Calls>,
 }
 
 pub type Rx<T> = tokio::sync::mpsc::UnboundedReceiver<T>;
@@ -291,8 +329,6 @@ pub struct SessionShared {
     /// The loop's queue: a task's reports, and the commands of the speech handle a host tool
     /// receives. Unbounded: a task must never block on the loop draining it.
     pub(in crate::voice) queue: Tx,
-    /// The replies of the calls a task awaits, until the core answers them.
-    pub(in crate::voice) calls: Arc<Calls>,
     /// Every speech's live handle, which the core's updates keep current.
     pub(in crate::voice) speeches: Arc<crate::voice::speech_handle::Speeches>,
     /// Cancelled once, when the legs close or the runtime is dropped: every forwarder, drain,
@@ -351,7 +387,7 @@ impl SessionShared {
 
     /// `ev`, naming `call`, with its reply.
     pub fn report_awaited(&self, ev: GenEvent, call: Call) {
-        let _ = self.calls.send(&self.queue, VoiceEvent::Gen(ev), call);
+        let _ = super::calls::send(&self.queue, VoiceEvent::Gen(ev), call);
     }
 
     /// Through the queue, so the step is journalled in the loop's order.

@@ -2,7 +2,8 @@ use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 
 use super::super::executor::Polled;
 use super::*;
-use crate::record::{Task, TaskEnd};
+use crate::input::SpeechWait;
+use crate::record::{Task, TaskEnd, Wait};
 
 /// How long one awaited thing gets, in virtual milliseconds. Not a production SLA: every fake
 /// answers the moment it is released, so anything still pending after this is stuck.
@@ -78,10 +79,14 @@ impl Run {
         let exited = self.session.is_none();
         // The player goes with the session (`BackgroundAudioPlayer.aclose()`).
         if exited && let Some(player) = self.background.take() {
+            let probe = self.record.record_probe_armed(self.stamps.next(), Wait::BackgroundClose);
             player.audio.0.close().await;
+            self.record.record_probe_resolved(probe, self.stamps.next());
         }
         if exited && let Some(worker) = self.avatar.take() {
+            let probe = self.record.record_probe_armed(self.stamps.next(), Wait::AvatarClose);
             worker.close().await;
+            self.record.record_probe_resolved(probe, self.stamps.next());
             for (at, step) in worker.drain() {
                 self.record.record_avatar(at, step);
             }
@@ -90,21 +95,35 @@ impl Run {
             if let Some(closing) = self.closing.take() {
                 let until = self.time.now().saturating_add(Duration::from_millis(NEVER_MS));
                 tokio::select! {
-                    () = closing => {}
+                    () = closing => self.closed_probe(),
                     () = self.time.wait_until(until) => {}
                 }
             }
             // Then the host closes the call's store (`SessionStorage.aclose`).
             if let Some(store) = self.store.take() {
                 let until = self.time.now().saturating_add(Duration::from_millis(NEVER_MS));
+                let probe = self.record.record_probe_armed(self.stamps.next(), Wait::StoreClose);
                 tokio::select! {
-                    () = store.close() => {}
+                    () = store.close() => self.record.record_probe_resolved(probe, self.stamps.next()),
                     () = self.time.wait_until(until) => {}
                 }
             }
             self.record.enter_phase(Phase::Closed);
         }
         exited
+    }
+
+    /// `Input::Probe`: the host starts awaiting one of a speech's waits.
+    pub(super) fn probe_input(
+        &mut self,
+        speech: Ref<crate::input::Speech>,
+        wait: SpeechWait,
+    ) -> bool {
+        let Some(handle) = self.speech_id(speech).and_then(|id| self.handles.get(&id.0)) else {
+            return false;
+        };
+        self.probe_speech(handle.clone(), wait);
+        true
     }
 
     /// How long one awaited thing may take from now.

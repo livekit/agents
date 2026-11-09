@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 /// A server lifecycle failure, raised to the host as its message (`RuntimeError`): nothing
 /// branches on it.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

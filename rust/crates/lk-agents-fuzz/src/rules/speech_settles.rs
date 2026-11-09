@@ -6,11 +6,14 @@ use crate::{
     authored::Authored,
     check::{Check, Contract, Rule},
     input::Input,
+    drive::WAIT_BOUND_MS,
     record::{Handle, Observed, Recording, SpeechView},
 };
 
 // Once the test answered everything and timers fired until nothing new appears, the driver waits
-// on nobody but itself: a speech not yet done is stuck.
+// on nobody but itself: a speech not yet done is stuck. Past an injected hang the case cannot
+// answer everything, so every speech is held to the close instead: done within the close
+// watchdog and the host teardown bound past its start.
 
 pub struct SpeechSettles;
 
@@ -18,12 +21,16 @@ impl Rule for SpeechSettles {
     const CONTRACT: Contract = Contract {
         id: "speech_settles",
         guarantee: "Every speech is done once the test has answered everything the driver was waiting on.",
-        examples: &[done_in_time],
-        counterexamples: &[still_running],
+        examples: &[done_in_time, hung_done_by_the_close],
+        counterexamples: &[still_running, hung_still_running],
         probe: None,
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
+        if r.hung() {
+            done_by_the_close(r, check);
+            return;
+        }
         // A run that never got there -- still producing work when the runner gave up -- cannot
         // judge a speech; `session_settles` reports it.
         let Some(answered) = r.inputs_view().everything_answered_at() else { return };
@@ -74,6 +81,42 @@ impl Rule for SpeechSettles {
             );
         }
     }
+}
+
+/// Under an injected hang: every speech done within the bound past the close.
+fn done_by_the_close(r: &Recording, check: &mut Check) {
+    let Some(close) = r.close_begun() else { return };
+    if !r.driver_finished() || r.livelock().is_some() {
+        return;
+    }
+    let bound = close.at_ms + WAIT_BOUND_MS;
+    for speech in r.host_view().speeches().into_iter().filter(SpeechView::is_known) {
+        let done = speech.done_at().is_some_and(|done| done.at_ms <= bound);
+        check.expect(
+            speech,
+            done,
+            format!("not done {WAIT_BOUND_MS} ms past the close under a hang ({speech:?})"),
+        );
+    }
+}
+
+fn hung(done: bool) -> Recording {
+    let handle = if done { Handle::finished() } else { Handle::live() };
+    let mut r = Authored::new()
+        .sent(Input::Close { drain: false })
+        .speech(1, handle)
+        .driver_finished()
+        .done();
+    r.record_fault(Observed::at(1, 1), crate::record::Site::ChatNext, crate::record::Fault::Hang);
+    r
+}
+
+fn hung_done_by_the_close() -> Recording {
+    hung(true)
+}
+
+fn hung_still_running() -> Recording {
+    hung(false)
 }
 
 /// Who held the floor at `answered`, by the last change at or before it.

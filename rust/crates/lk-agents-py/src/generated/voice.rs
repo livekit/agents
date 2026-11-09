@@ -11917,6 +11917,25 @@ impl ::lk_agents_abi::voice::session_effects::SessionEvents for SessionEventsPro
             Ok(out)
         })
     }
+
+    fn ended(&self) {
+        let host = ::std::sync::Arc::clone(&self.host);
+        ::lk_agents_runtime::host::notify(
+            &self.notifier,
+            "SessionEvents._core_events_ended",
+            &crate::py_calls::calling_context(&self.context),
+            &[],
+            false,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("_core_events_ended")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/session_owner.rs.

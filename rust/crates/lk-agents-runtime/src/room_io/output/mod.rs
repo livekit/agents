@@ -6,6 +6,7 @@ use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::voice::rtc::{AudioSource, PlaybackInfo, RtcError, RtcRoom, TrackSid};
 use lk_agents_abi::{AudioFrame, Clock, Spawner, Ts};
 use lk_agents_abi::{Closed, HOST_TEARDOWN_TIMEOUT, timeout};
+use lk_agents_net::signal;
 use lk_agents_net::task::{ScopedTask, TaskSet};
 use lk_agents_voice::room_io::machine::output::Publication;
 use lk_agents_voice::room_io::machine::output::{
@@ -15,7 +16,6 @@ use parking_lot::Mutex;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Notify;
 
 pub mod transcription;
 
@@ -38,12 +38,16 @@ struct Shared {
     clock: Arc<dyn Clock>,
     tracker: Arc<dyn PlaybackTracker>,
     state: Mutex<State>,
-    /// One wake for every waiter; each re-checks its own condition.
-    wake: Notify,
+    /// One wake for every waiter; each re-checks its own condition. Waiters borrow the output,
+    /// so it cannot end under them; its terminal state is `closed`.
+    changed: signal::Producer<()>,
     sample_rate: u32,
 }
 
 impl Shared {
+    fn wake(&self) {
+        self.changed.modify(|()| ());
+    }
     /// Never held across an await, nor across a call into the source: a host source takes the GIL,
     /// which a host thread calling into this leg already holds.
     fn lock(&self) -> parking_lot::MutexGuard<'_, State> {
@@ -133,7 +137,7 @@ impl Shared {
         for report in reports {
             self.report(Some(report));
         }
-        self.wake.notify_waiters();
+        self.wake();
         true
     }
 
@@ -145,13 +149,11 @@ impl Shared {
     /// Return the observed outcome itself, rather than checking readiness then re-reading it.
     async fn wait_for<T>(&self, observe: impl Fn(&State) -> Option<T>) -> T {
         loop {
-            let parked = self.wake.notified();
-            tokio::pin!(parked);
-            parked.as_mut().enable();
+            let mut parked = self.changed.cell();
             if let Some(outcome) = observe(&self.lock()) {
                 return outcome;
             }
-            parked.await;
+            let _ = parked.changed().await;
         }
     }
 
@@ -159,9 +161,7 @@ impl Shared {
     async fn forward_audio(self: Arc<Self>) {
         loop {
             let frame = loop {
-                let parked = self.wake.notified();
-                tokio::pin!(parked);
-                parked.as_mut().enable();
+                let mut parked = self.changed.cell();
                 {
                     let mut st = self.lock();
                     if st.playback.closed() {
@@ -171,7 +171,7 @@ impl Shared {
                         break frame;
                     }
                 }
-                parked.await;
+                let _ = parked.changed().await;
             };
 
             let src = self.lock().source.clone();
@@ -179,7 +179,7 @@ impl Shared {
                 self.submit(&src, frame).await;
             }
             self.lock().playback.capture_settled();
-            self.wake.notify_waiters();
+            self.wake();
         }
     }
 
@@ -334,7 +334,7 @@ impl Shared {
                 self.report(Some(report));
             }
             // Idle again: held captures may retry.
-            self.wake.notify_waiters();
+            self.wake();
             return ControlFlow::Continue(());
         }
     }
@@ -362,7 +362,7 @@ impl Shared {
             state.cleanup_outcome =
                 Some(state.cleanup_outcome.unwrap_or(Closed::Clean).and(outcome));
         }
-        self.wake.notify_waiters();
+        self.wake();
     }
 
     /// Clears what the source still queued when frames were captured, finishes the playback,
@@ -430,7 +430,7 @@ impl ParticipantAudioOutput {
                 clock,
                 tracker: Arc::new(crate::voice::playback::Tracker::new()),
                 state: Mutex::new(state),
-                wake: Notify::new(),
+                changed: signal::signal(()).0,
                 sample_rate,
             }),
             started: Mutex::new(Vec::new()),
@@ -465,12 +465,13 @@ impl ParticipantAudioOutput {
             // Creation belongs to the output, even when the caller abandons start(). Close drains
             // this task before releasing its handles, so a late SID can always be unpublished.
             started.push(tasks.scoped(spawner, "track creation", async move {
+                let _settles = CreationGuard(shared.clone());
                 let lk_agents_abi::voice::rtc::PublishedAudioTrack { source, publication } =
                     match room.local().publish_audio_track(&telemetry::Cx::NONE, options).await {
                         Ok(published) => published,
                         Err(error) => {
                             shared.lock().publication.fail(error.into());
-                            shared.wake.notify_waiters();
+                            shared.wake();
                             return;
                         }
                     };
@@ -496,15 +497,15 @@ impl ParticipantAudioOutput {
                         Some(state.cleanup_outcome.unwrap_or(Closed::Clean).and(outcome));
                     drop(state);
                     shared.lock().publication.creation_retired();
-                    shared.wake.notify_waiters();
+                    shared.wake();
                     return;
                 }
-                shared.wake.notify_waiters();
+                shared.wake();
                 match publication.wait_for_subscription(&telemetry::Cx::NONE).await {
                     Ok(()) => shared.lock().publication.ready(),
                     Err(error) => shared.lock().publication.fail(error.into()),
                 }
-                shared.wake.notify_waiters();
+                shared.wake();
             }));
         }
     }
@@ -526,9 +527,7 @@ impl ParticipantAudioOutput {
     ) -> Result<()> {
         self.shared.wait_until(|s| s.publication.outcome().is_some()).await;
         loop {
-            let parked = self.shared.wake.notified();
-            tokio::pin!(parked);
-            parked.as_mut().enable();
+            let mut parked = self.shared.changed.cell();
             let queued = {
                 let mut st = self.shared.lock();
                 if let Some(Err(error)) = st.publication.outcome() {
@@ -545,11 +544,11 @@ impl ParticipantAudioOutput {
             match queued {
                 Some(woke) => {
                     if woke {
-                        self.shared.wake.notify_waiters();
+                        self.shared.wake();
                     }
                     return Ok(());
                 }
-                None => parked.await,
+                None => drop(parked.changed().await),
             }
         }
     }
@@ -575,7 +574,7 @@ impl ParticipantAudioOutput {
             let deadline = *state.cleanup_deadline.get_or_insert(requested_deadline);
             (first, captured, deadline)
         };
-        self.shared.wake.notify_waiters();
+        self.shared.wake();
         if first {
             self.stop_producers();
             let spawner = (self.tasks.clone(), self.spawner.clone());
@@ -687,7 +686,7 @@ impl AudioOutput for ParticipantAudioOutput {
 
     fn flush_segment(&self) {
         if self.shared.lock().playback.flush() {
-            self.shared.wake.notify_waiters();
+            self.shared.wake();
         }
     }
 
@@ -699,7 +698,7 @@ impl AudioOutput for ParticipantAudioOutput {
             }
             st.source.clone()
         };
-        self.shared.wake.notify_waiters();
+        self.shared.wake();
         if let Some(src) = src
             && let Some((report, _)) = self.shared.source_result(
                 src.as_ref(),
@@ -729,7 +728,7 @@ impl AudioOutput for ParticipantAudioOutput {
 
     fn resume(&self) {
         if self.shared.lock().playback.resume() {
-            self.shared.wake.notify_waiters();
+            self.shared.wake();
         }
     }
 }
@@ -737,4 +736,24 @@ impl AudioOutput for ParticipantAudioOutput {
 /// The source's queued audio; the SDK's figure is float seconds.
 fn source_queued(src: &dyn AudioSource) -> std::result::Result<Duration, RtcError> {
     src.queued_seconds().map(lk_agents_abi::utils::clock::secs)
+}
+
+/// Fails the publication if its creation task ends before settling it (a cancel, a panic), so
+/// no wait on the publication outlives the task.
+struct CreationGuard(Arc<Shared>);
+
+impl Drop for CreationGuard {
+    fn drop(&mut self) {
+        let unsettled = {
+            let mut state = self.0.lock();
+            let unsettled = state.publication.outcome().is_none();
+            if unsettled {
+                state.publication.fail(IoError::Rtc("the track creation ended".into()));
+            }
+            unsettled
+        };
+        if unsettled {
+            self.0.wake();
+        }
+    }
 }

@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 pub(crate) mod cloud;
 pub mod config;
 mod destination;

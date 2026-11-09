@@ -1,8 +1,10 @@
+use futures_util::FutureExt;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{
     ApiConnectOptions, BoxFuture, Clock, Closed, ProviderStream, StreamOutput, Ts,
 };
 use lk_agents_core::request::{Policy, Request, Retry};
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -186,7 +188,8 @@ impl<T: Send + 'static> State<T> {
     }
 }
 
-type Pull<T> = BoxFuture<'static, (State<T>, Result<Option<T>, ProviderError>)>;
+type Pull<T> =
+    BoxFuture<'static, (State<T>, std::thread::Result<Result<Option<T>, ProviderError>>)>;
 
 struct Output<T> {
     state: Option<State<T>>,
@@ -202,15 +205,18 @@ impl<T: Send + 'static> StreamOutput<T> for Output<T> {
         Box::pin(async move {
             if self.pending.is_none() {
                 let Some(mut state) = self.state.take() else { return Ok(None) };
+                // The pull never panics itself: a panic inside ends the stream but keeps its
+                // state, so the pull is never resumed and close still closes the source.
                 self.pending = Some(Box::pin(async move {
-                    let result = state.next().await;
+                    let result = AssertUnwindSafe(state.next()).catch_unwind().await;
+                    state.ended |= result.is_err();
                     (state, result)
                 }));
             }
             let (state, result) = self.pending.as_mut().expect("pending pull").await;
             self.pending = None;
             self.state = Some(state);
-            result
+            result.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
         })
     }
 
@@ -262,3 +268,7 @@ impl<T> Drop for Output<T> {
         self.stop.cancel();
     }
 }
+
+#[cfg(test)]
+#[path = "retry_tests.rs"]
+mod tests;

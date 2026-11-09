@@ -33,6 +33,31 @@ pub enum StorageStep {
         held: bool,
         faulted: bool,
     },
+    /// A storage-layer fault was injected.
+    Fault {
+        fault: StorageFault,
+    },
+    /// A write carrying a lease token another worker stole, while that worker held the lane:
+    /// whether it changed the lane (its version moved).
+    StaleWrite {
+        applied: bool,
+    },
+}
+
+/// A storage-layer fault, as the database or another worker produces it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StorageFault {
+    /// A statement refused as `sqlite_error` maps it: busy, locked, an I/O error or a full disk.
+    Sqlite(&'static str),
+    /// The wall clock `unixepoch()` reads jumped by this many ms (negative: backward).
+    ClockJump(i64),
+    /// The database's worker crashed with a write applied and unanswered; the next request
+    /// reopens the file (WAL recovery).
+    Crash,
+    /// Another worker's connection took the free lane and held it, renewing.
+    Held,
+    /// Another worker's connection overwrote the lane's lease while the call held it.
+    Stolen,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

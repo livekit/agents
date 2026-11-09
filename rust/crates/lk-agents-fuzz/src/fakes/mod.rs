@@ -26,6 +26,7 @@ mod avatar;
 mod console;
 pub use console::{FakeCli, FakeConsolePort};
 mod eot;
+pub mod hazard;
 mod interruption;
 mod llm;
 mod nodes;
@@ -49,7 +50,7 @@ pub use output::{
     HALF, room_camera,
 };
 pub use realtime::{FakeDuplex, FakeRealtime, RealtimeDelays, ServerSetup, Vad as RealtimeVad};
-pub use storage::{FakeStore, worker_deaths};
+pub use storage::{FakeStore, storage_faults, worker_deaths};
 pub use stt::FakeStt;
 pub use tools::{FakeTools, TEMPLATED_REPLY, TEMPLATED_TOOL, completion_value, frame};
 pub use tts::{FakeTts, MS_PER_WORD, TtsOptions};
@@ -179,6 +180,14 @@ pub enum Record {
         at: Observed,
         generation: u32,
         chunk: u16,
+    },
+    /// A fake panicked or never answered here instead (`hazard`).
+    Fault {
+        at: Observed,
+        site: hazard::Site,
+        fault: hazard::Fault,
+        /// The provider stream it struck, if it struck one.
+        on: Option<Slot>,
     },
     /// A tool body refused the host's cancellation and runs on.
     CancelRefused {
@@ -328,6 +337,8 @@ pub struct Registry {
     /// Acquires of the voice lane still awaited.
     storage_pending: AtomicU32,
     chat_responses: std::sync::Mutex<BTreeMap<String, u32>>,
+    /// Armed once the session started, in a stressed run only.
+    hazards: std::sync::OnceLock<hazard::Hazards>,
 }
 
 impl Registry {
@@ -350,8 +361,52 @@ impl Registry {
             storage_due: std::sync::Mutex::new(lk_agents_abi::Ts::ZERO),
             storage_pending: AtomicU32::new(0),
             chat_responses: std::sync::Mutex::default(),
+            hazards: std::sync::OnceLock::new(),
         };
         (Arc::new(registry), receiver)
+    }
+
+    /// From now on every site draws its fault from `seed`.
+    pub fn arm_hazards(&self, seed: u64) {
+        let _ = self.hazards.set(hazard::Hazards::new(seed));
+    }
+
+    /// The fault to play out at `site` instead of answering, recorded; `None` almost always.
+    pub fn hazard(&self, site: hazard::Site) -> Option<hazard::Fault> {
+        let fault = self.hazards.get()?.draw()?;
+        self.struck(site, fault, None);
+        Some(fault)
+    }
+
+    /// Whether the host never answers at `site`: a call with no future of the fake's to panic in.
+    pub fn hang(&self, site: hazard::Site) -> bool {
+        let hung = self.hazards.get().and_then(hazard::Hazards::draw).is_some();
+        if hung {
+            self.struck(site, hazard::Fault::Hang, None);
+        }
+        hung
+    }
+
+    /// A provider stream's fault, drawn at its open (`hazard::StreamHazard`).
+    pub fn stream_hazard(&self, next: hazard::Site, close: hazard::Site) -> hazard::StreamHazard {
+        self.hazards.get().map(|h| h.draw_stream(next, close)).unwrap_or_default()
+    }
+
+    /// Stream `on`'s fault at `site`, now due: recorded.
+    pub fn stream_fault(
+        &self,
+        hazard: &mut hazard::StreamHazard,
+        site: hazard::Site,
+        on: Slot,
+    ) -> Option<hazard::Fault> {
+        let fault = hazard.due(site)?;
+        self.struck(site, fault, Some(on));
+        Some(fault)
+    }
+
+    fn struck(&self, site: hazard::Site, fault: hazard::Fault, on: Option<Slot>) {
+        hazard::count(fault);
+        self.write(Record::Fault { at: self.stamps.next(), site, fault, on });
     }
 
     pub fn set_voice_down(&self, down: bool) {

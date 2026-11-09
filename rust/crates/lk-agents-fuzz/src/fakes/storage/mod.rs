@@ -8,6 +8,7 @@ use parking_lot::Mutex;
 use super::Registry;
 use crate::drive::StorageSetup;
 use crate::record::{StorageOperation, StorageStep};
+use lk_agents_abi::SpawnerExt as _;
 use lk_agents_abi::llm::chat_context::protocol::{decode_chat_item, encode_chat_item};
 use lk_agents_abi::storage::voice::{
     StorageWork, VoiceStorage, VoiceStorageCommand, VoiceStorageEvent, VoiceStore as _,
@@ -29,7 +30,11 @@ use lk_agents_runtime::storage::{
 // commit) over the production SQLite backend in a directory of the run's own: its workers are
 // tasks on the run's scheduler, its `unixepoch()` the run's clock. Each thread connection is
 // wrapped: it answers late, loses answers, refuses and goes down, and observes which lease holds
-// the lane. A worker can also die with requests queued, at the scheduler.
+// the lane. A worker can also die with requests queued, at the scheduler. `layer` adds SQLite
+// refusals, clock jumps, crashes and another worker on the lane.
+
+mod layer;
+pub use layer::storage_faults;
 
 const LANE: &str = "voice";
 
@@ -59,6 +64,8 @@ impl FakeStore {
     ) -> Self {
         let dir = TempDir::new("lk-agents-fuzz-");
         let dying = Arc::new(Dying::new(registry.world.clone()));
+        let skew = Arc::new(layer::Skewed::new(clock));
+        let clock: Arc<dyn Clock> = skew.clone();
         let workers = Workers { spawner: dying.clone(), clock: clock.clone() };
         let storage = SqliteStorage::open(&dir.0, LeaseTiming::default(), workers);
         let storage = Arc::new(storage.await.expect("a storage directory"));
@@ -70,7 +77,7 @@ impl FakeStore {
             registry.clone(),
             clock,
             (storage.clone(), thread.thread_id.clone(), observer),
-            dying,
+            (dying, skew),
         ));
         let calls = database.clone();
         let wrap = move |inner: FileConnection| {
@@ -110,7 +117,9 @@ struct FakeDatabase {
     /// A connection of the observer's own, never faulted.
     observer: FileConnection,
     dying: Arc<Dying>,
+    /// The database's view of time: the run's clock, its wall skewed by `layer`'s jumps.
     clock: Arc<dyn Clock>,
+    skew: Arc<layer::Skewed>,
     registry: Arc<Registry>,
     setup: StorageSetup,
     state: Mutex<State>,
@@ -130,6 +139,13 @@ struct State {
     text_turn_every: u32,
     /// Lease takes applied whose answers are still owed.
     taking: u32,
+    /// `layer`'s own draws.
+    layer: fastrand::Rng,
+    /// Another worker's connection is on the lane, and how many came.
+    intruding: bool,
+    intruders: u32,
+    /// The call's lease tokens another worker overwrote.
+    stolen: Vec<String>,
 }
 
 /// What one request meets: its latency on either side of the apply, and how it fails.
@@ -149,7 +165,7 @@ impl FakeDatabase {
         registry: Arc<Registry>,
         clock: Arc<dyn Clock>,
         (storage, thread_id, observer): (Arc<SqliteStorage>, String, FileConnection),
-        dying: Arc<Dying>,
+        (dying, skew): (Arc<Dying>, Arc<layer::Skewed>),
     ) -> Self {
         // Mixed: neighbouring seeds' streams stay correlated at one position for a while.
         let mut rng =
@@ -164,9 +180,13 @@ impl FakeDatabase {
             takes: 0,
             text_turn_every,
             taking: 0,
+            layer: fastrand::Rng::with_seed(seed ^ 0x006c_6179_6572),
+            intruding: false,
+            intruders: 0,
+            stolen: Vec::new(),
         };
         let state = Mutex::new(state);
-        Self { storage, thread_id, observer, dying, clock, registry, setup, state }
+        Self { storage, thread_id, observer, dying, clock, skew, registry, setup, state }
     }
 
     /// Stress frequencies, not measured rates.
@@ -304,7 +324,10 @@ impl FakeDatabase {
         let lane = thread.lane(LANE);
         let runs = lane.runs(usize::MAX).await.unwrap_or_default();
         let unended = runs.iter().filter(|run| run.interrupted()).count() as u32;
-        let held = self.lessee().await.is_some_and(|(_, until)| until >= self.unix_secs());
+        // Another worker's lease is its own to release.
+        let held = self.lessee().await.is_some_and(|(token, until)| {
+            until >= self.unix_secs() && !token.starts_with(layer::INTRUDER)
+        });
         let faulted = self.state.lock().faulted;
         self.registry.record_storage(StorageStep::LaneSettled { unended, held, faulted });
     }
@@ -330,8 +353,9 @@ impl ThreadDbConnection for FakeConnection {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
         let db = &self.db;
         let plan = db.plan(false, false, None);
+        let layer = db.layer(false, false);
         db.wait(plan.before).await;
-        if let Some(error) = plan.refused {
+        if let Some(error) = plan.refused.or(layer.refused) {
             return Err(error);
         }
         let rows = self.inner.query(statement).await;
@@ -365,14 +389,25 @@ impl ThreadDbConnection for FakeConnection {
             statements.iter().any(|s| s.params().contains(&token))
         });
         let plan = db.plan(true, !takes.is_empty(), carried.as_deref());
+        let layer = db.layer(true, !takes.is_empty());
+        if let Some(steal) = layer.intrude {
+            db.registry.world.spawn_detached(db.clone().intrude(steal));
+        }
         db.wait(plan.before).await;
-        if let Some(error) = plan.refused {
+        if let Some(error) = plan.refused.or(layer.refused) {
             return Err(error);
         }
         if plan.worker_dies {
             db.dying.die_next_poll();
         }
-        let result = self.inner.batch(statements).await;
+        let result = if db.carries_stolen(&statements) {
+            db.fenced(self.inner.batch(statements)).await
+        } else {
+            self.inner.batch(statements).await
+        };
+        if layer.crash && result.is_ok() {
+            return Err(db.crash());
+        }
         let _taking = if takes.is_empty() {
             None
         } else {

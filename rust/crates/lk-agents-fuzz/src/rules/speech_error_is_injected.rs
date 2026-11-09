@@ -15,7 +15,7 @@ pub struct SpeechErrorIsInjected;
 impl Rule for SpeechErrorIsInjected {
     const CONTRACT: Contract = Contract {
         id: "speech_error_is_injected",
-        guarantee: "A failed speech had a provider failure delivered to one of its own requests, lost the realtime socket it waited on or heard its server err, waited out the reply bound on a stalled server, was refused by Close before scheduling, was a say the driver refused on the journal, or lost its own keyed sink completion after its declared deadline with no playback receipt in between.",
+        guarantee: "A failed speech had a provider failure delivered to one of its own requests, lost the realtime socket it waited on or heard its server err, waited out the reply bound on a stalled server, was refused by Close before scheduling, was a say the driver refused on the journal, lost its own keyed sink completion after its declared deadline with no playback receipt in between, or met a panic or hang the run injected.",
         examples: &[
             failed_by_injection,
             failed_from_its_own_missing_playback,
@@ -120,7 +120,13 @@ impl Rule for SpeechErrorIsInjected {
                 matches!(step, Step::Playout(PlayoutStep::OutputRefused { speech: refused, reason })
                     if refused.0 == speech.id && error.contains(&format!("output admission refused: {reason}")))
             });
+            // A provider or host call the run made panic or hang (`fakes::hazard`).
+            let faulted = r
+                .faults()
+                .iter()
+                .any(|(at, _, _)| speech.done_at().is_none_or(|done| *at < done));
             let accounted = injected
+                || faulted
                 || voice_failed
                 || voice_down
                 || socket_dropped

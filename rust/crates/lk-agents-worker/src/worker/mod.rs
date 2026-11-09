@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::http::IncomingRequest;
 use crate::hw::cpu::CpuMonitor;
 use crate::transport::{

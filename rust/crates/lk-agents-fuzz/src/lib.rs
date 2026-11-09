@@ -21,3 +21,4 @@ pub mod record;
 pub mod rules;
 pub mod sched;
 pub mod search;
+pub mod text;

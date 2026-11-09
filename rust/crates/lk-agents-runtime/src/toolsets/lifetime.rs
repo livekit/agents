@@ -5,18 +5,19 @@ use lk_agents_abi::llm::toolsets::{self, Acquisition, Lease, ToolsetHooks};
 use lk_agents_abi::{BoxFuture, OwnedTask, SpawnerExt};
 use lk_agents_core::toolsets::{Lifetime as Policy, ToolsetEffect};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::signal;
 use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use tokio::sync::watch;
 
 // Ready resources retain no host callbacks.
 
 type Outcome = Result<(), HostError>;
-type Reply = watch::Sender<Option<Outcome>>;
+type Reply = signal::Cell<Option<Outcome>>;
+type Answer = signal::Producer<Option<Outcome>>;
 /// The running operation: its epoch, its task and its cancellation.
 type Running = (u64, OwnedTask, Arc<Cancellation>);
 
@@ -34,11 +35,12 @@ struct TicketData {
     released: Reply,
     releasing: AtomicBool,
 }
+/// Holds every ticket's answers (never the ticket): an answer removed unsent ends its wait.
 struct State {
     policy: Policy,
     next: u64,
-    pending: BTreeMap<u64, Arc<TicketData>>,
-    releases: BTreeMap<u64, Reply>,
+    pending: BTreeMap<u64, (Arc<TicketData>, Answer)>,
+    releases: BTreeMap<u64, Answer>,
     epoch: u64,
     operation: Option<(u64, OwnedTask, Arc<Cancellation>)>,
 }
@@ -70,14 +72,16 @@ impl toolsets::Lifetime for Lifetime {
             let mut state = self.0.state.lock();
             state.next += 1;
             let id = state.next;
+            let ((ready_tx, ready), (released_tx, released)) = (signal::once(), signal::once());
             let data = Arc::new(TicketData {
                 id,
                 hooks,
-                ready: watch::channel(None).0,
-                released: watch::channel(None).0,
+                ready,
+                released,
                 releasing: AtomicBool::new(false),
             });
-            state.pending.insert(id, data.clone());
+            state.pending.insert(id, (data.clone(), ready_tx));
+            state.releases.insert(id, released_tx);
             let effects = state.policy.acquire(id);
             (data, effects)
         };
@@ -153,15 +157,7 @@ fn cancelled() -> HostError {
     HostError::new("toolset initialization was cancelled")
 }
 async fn wait(reply: &Reply) -> Outcome {
-    let mut events = reply.subscribe();
-    loop {
-        if let Some(result) = events.borrow_and_update().clone() {
-            return result;
-        }
-        if events.changed().await.is_err() {
-            return Err(cancelled());
-        }
-    }
+    reply.wait().await.unwrap_or_else(|_| Err(cancelled()))
 }
 
 impl Inner {
@@ -169,11 +165,7 @@ impl Inner {
         if data.releasing.swap(true, Ordering::SeqCst) {
             return;
         }
-        let effects = {
-            let mut state = self.state.lock();
-            state.releases.insert(data.id, data.released.clone());
-            state.policy.release(data.id)
-        };
+        let effects = self.state.lock().policy.release(data.id);
         self.apply(effects, None, data.hooks.clone());
     }
 
@@ -199,7 +191,7 @@ impl Inner {
 
     /// Sets the toolset up with the waiting ticket's hooks, else with the caller's.
     fn launch_setup(self: &Arc<Self>, id: u64, hooks: &Arc<dyn ToolsetHooks>) {
-        let data = self.state.lock().pending.get(&id).cloned();
+        let data = self.state.lock().pending.get(&id).map(|(data, _)| data.clone());
         self.launch(
             data.map_or_else(|| hooks.clone(), |data| data.hooks.clone()),
             Operation::Setup,
@@ -223,9 +215,9 @@ impl Inner {
 
     /// Answers a waiting ticket's acquisition.
     fn answer_ticket(&self, id: u64, outcome: Outcome) {
-        let data = self.state.lock().pending.remove(&id);
-        if let Some(data) = data {
-            data.ready.send_replace(Some(outcome));
+        let pending = self.state.lock().pending.remove(&id);
+        if let Some((_, ready)) = pending {
+            ready.resolve(outcome);
         }
     }
 
@@ -235,11 +227,11 @@ impl Inner {
             let mut state = self.state.lock();
             (state.releases.remove(&id), state.pending.remove(&id))
         };
-        if let Some(pending) = pending {
-            pending.ready.send_replace(Some(Err(cancelled())));
+        if let Some((_, ready)) = pending {
+            ready.resolve(Err(cancelled()));
         }
         if let Some(reply) = reply {
-            reply.send_replace(Some(error.clone().map_or(Ok(()), Err)));
+            reply.resolve(error.clone().map_or(Ok(()), Err));
         }
     }
 

@@ -8,9 +8,9 @@ use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::{BoxFuture, OwnedTask, Spawner, SpawnerExt};
 use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::signal;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tokio::sync::watch;
 
 /// How far a host receiver's audio may run ahead of the runner before its oldest is dropped.
 const HOST_AUDIO_POLICY: Policy = Policy::CatchUp(Duration::from_secs(30));
@@ -41,10 +41,26 @@ struct Pumped {
     sender: Arc<AudioSender<Event>>,
     /// The queue, the epoch of the audio it yields, and whether it ended.
     receiver: tokio::sync::Mutex<(AudioReceiver<Event>, u64, bool)>,
-    clears: watch::Sender<u64>,
+    clears: Arc<signal::Shared<Clears>>,
     spawner: Arc<dyn Spawner>,
     /// Pulls the host's iterator from the first read on.
     pump: OnceLock<OwnedTask>,
+}
+
+/// The clear epoch, and whether the pump ended: a clear wait resolves on either.
+#[derive(Default)]
+struct Clears {
+    epoch: u64,
+    ended: bool,
+}
+
+/// Held by the pump: its end, however it comes, ends every clear wait.
+struct PumpEnded(Arc<signal::Shared<Clears>>);
+
+impl Drop for PumpEnded {
+    fn drop(&mut self) {
+        self.0.modify(|clears| clears.ended = true);
+    }
 }
 
 impl avatar::HostAudioReceiver for HostAudioReceiver {
@@ -68,7 +84,7 @@ impl avatar::HostAudioReceiver for HostAudioReceiver {
                 Audio::Pumped(Pumped {
                     sender: Arc::new(sender),
                     receiver: tokio::sync::Mutex::new((queue, 0, false)),
-                    clears: watch::Sender::new(0),
+                    clears: Arc::new(signal::Shared::new(Clears::default())),
                     spawner,
                     pump: OnceLock::new(),
                 })
@@ -79,8 +95,10 @@ impl avatar::HostAudioReceiver for HostAudioReceiver {
 
     fn clear_buffer(&self) {
         let Audio::Pumped(pumped) = &self.audio else { return };
-        pumped.clears.send_modify(|epoch| *epoch += 1);
-        let epoch = *pumped.clears.borrow();
+        let epoch = pumped.clears.modify(|clears| {
+            clears.epoch += 1;
+            clears.epoch
+        });
         if pumped.sender.flush(Event::Cleared(epoch)).is_err() {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "avatar audio receiver stopped draining; clear_buffer dropped");
         }
@@ -91,7 +109,9 @@ async fn pump(
     host: Arc<dyn AudioReceiverHost>,
     sender: Arc<AudioSender<Event>>,
     cx: telemetry::Cx,
+    ended: PumpEnded,
 ) {
+    let _ended = ended;
     let end = loop {
         break match host.next_frame(&cx).await {
             Ok(Some(AudioReceiverFrame::Audio(frame))) => {
@@ -118,7 +138,8 @@ impl Pumped {
         cx: &telemetry::Cx,
     ) -> Result<AudioReceiverObservation, ProviderError> {
         self.pump.get_or_init(|| {
-            self.spawner.spawn(pump(host.clone(), self.sender.clone(), cx.clone()))
+            let ended = PumpEnded(self.clears.clone());
+            self.spawner.spawn(pump(host.clone(), self.sender.clone(), cx.clone(), ended))
         });
         let mut queue = self.receiver.lock().await;
         let (receiver, epoch, ended) = &mut *queue;
@@ -157,10 +178,13 @@ impl AvatarAudio for HostAudioReceiver {
     fn next_clear(&self, after: u64) -> BoxFuture<'_, Option<u64>> {
         match &self.audio {
             Audio::Native(audio) => audio.next_clear(after),
-            Audio::Pumped(pumped) => Box::pin(async move {
-                let mut clears = pumped.clears.subscribe();
-                clears.wait_for(|epoch| *epoch > after).await.ok().map(|epoch| *epoch)
-            }),
+            Audio::Pumped(pumped) => Box::pin(pumped.clears.wait_until(move |clears| {
+                match (clears.epoch > after, clears.ended) {
+                    (true, _) => Some(Some(clears.epoch)),
+                    (false, true) => Some(None),
+                    (false, false) => None,
+                }
+            })),
         }
     }
 }

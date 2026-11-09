@@ -216,7 +216,7 @@ lk-agents-inference -> lk-agents-core
 lk-agents-net -> lk-agents-core
 lk-agents-net -> lk-agents-media (the worker pool primitive)
 inference, worker, storage -> lk-agents-net
-voice, media, net, inference, worker, runtime, fuzz -> lk-agents-telemetry -> lk-agents-abi
+voice, media, net, inference, storage, worker, runtime, fuzz -> lk-agents-telemetry -> lk-agents-abi
 async I/O crates -> lk-agents-abi
 fuzz -> sans-I/O crates + lk-agents-abi
 lk-agents-fuzz -> lk-agents-runtime (voice and room executors over fake ports)

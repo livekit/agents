@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,11 +15,12 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::sql::{Bind, SqlValue, Statement};
+use crate::telemetry::{self, StorageWrite, TeardownStage};
 use crate::thread::db::EventWrite;
 use crate::thread::schema::{
     ExtendLease, InsertRunEnded, ReleaseLease, ReleaseLeaseIfDrained, SelectFence, WithdrawWaiter,
 };
-use crate::thread::{LeaseTiming, RESOLVE_WAIT, Resend, Thread};
+use crate::thread::{LeaseTiming, Resend, Thread};
 use crate::{Fence, RunOutcome, StorageError, shortuuid};
 
 // The renewal task holds only the database and the fence, never the lease, so dropping the last
@@ -89,11 +91,29 @@ fn release(lane: &str, token: &str, ended: Option<(&str, &EventWrite)>) -> Vec<S
 }
 
 /// [`release`] from a drop, on the spawner captured while the lease was taken (the caller may
-/// already be gone, or off the runtime), counted by its owner.
-fn release_detached(spawner: &TokioSpawner, owner: &Holder, db: Thread, batch: Vec<Statement>) {
+/// already be gone, or off the runtime), counted by its owner. One still running past
+/// [`HOST_TEARDOWN_TIMEOUT`] is a teardown overrun.
+fn release_detached(
+    spawner: &TokioSpawner,
+    owner: &Holder,
+    db: Thread,
+    lane: &str,
+    batch: Vec<Statement>,
+) {
+    let lane = lane.to_owned();
+    let open = db.keep_open("lease release");
     owner.releases.spawn(spawner, "lease release", async move {
-        let release = Resend::new(RESOLVE_WAIT).send(|| db.conn().batch(batch.clone()));
-        if let Err(error) = release.await {
+        let _open = open;
+        let release = db.resend(StorageWrite::Release).send(|| db.conn().batch(batch.clone()));
+        let mut release = std::pin::pin!(release);
+        let out = match tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, &mut release).await {
+            Ok(out) => out,
+            Err(_) => {
+                telemetry::teardown_overrun(&db.cx, TeardownStage::LeaseRelease, &lane);
+                release.await
+            }
+        };
+        if let Err(error) = out {
             log::debug!(target: lk_agents_abi::LOG_TARGET, "lease cleanup failed: {error}");
         }
     });
@@ -121,11 +141,13 @@ impl Waiter {
 impl Drop for Waiter {
     fn drop(&mut self) {
         let (db, lane, holder) = (self.db.clone(), self.lane.clone(), self.holder.clone());
+        let open = db.keep_open("waiter withdrawal");
         // The acquire's caller may already be gone. This conditional cleanup ends on its own;
         // an owner change also clears the mark if the worker or database is unavailable.
         self.spawner.spawn_detached(async move {
+            let _open = open;
             let withdraw = || WithdrawWaiter { lane: &lane, holder: &holder };
-            if let Err(error) = db.exec_idempotent(withdraw).await {
+            if let Err(error) = db.exec_idempotent(StorageWrite::Waiter, withdraw).await {
                 log::debug!(target: lk_agents_abi::LOG_TARGET, lane = lane.as_str(); "waiter cleanup failed: {error}");
             }
         });
@@ -155,10 +177,11 @@ impl PendingLease {
         holder: &Holder,
         run_id: Option<&str>,
         wait: std::time::Duration,
+        write: StorageWrite,
     ) -> Self {
         let (lane, token, holder) = (lane.to_owned(), shortuuid("lease_"), holder.clone());
         let run_id = run_id.map(str::to_owned);
-        let (resend, spawner) = (Resend::new(wait), TokioSpawner::current());
+        let (resend, spawner) = (Resend::new(wait, &db.cx, write), TokioSpawner::current());
         Self { db, lane, token, holder, run_id, armed: false, resend, spawner }
     }
 
@@ -213,7 +236,7 @@ impl Drop for PendingLease {
         let ended = EventWrite::new(unix_now_ms(), event);
         let ended = self.run_id.as_deref().map(|run_id| (run_id, &ended));
         let batch = release(&self.lane, &self.token, ended);
-        release_detached(&self.spawner, &self.holder, self.db.clone(), batch);
+        release_detached(&self.spawner, &self.holder, self.db.clone(), &self.lane, batch);
     }
 }
 
@@ -238,8 +261,9 @@ struct Held {
 impl Drop for Held {
     fn drop(&mut self) {
         if !self.released.load(Ordering::Acquire) {
-            let batch = release(&self.fence.lane, &self.fence.token, None);
-            release_detached(&self.spawner, &self.fence.holder, self.db.clone(), batch);
+            let (fence, db) = (&self.fence, self.db.clone());
+            let batch = release(&fence.lane, &fence.token, None);
+            release_detached(&self.spawner, &fence.holder, db, &fence.lane, batch);
         }
     }
 }
@@ -369,10 +393,23 @@ impl Lease {
     /// Both are keyed by the token, so a lost acknowledgment is sent again.
     pub async fn release(&self, ended: Option<(&str, &EventWrite)>) -> Result<(), StorageError> {
         let Fence { lane, token, .. } = &self.inner.fence;
-        let conn = self.inner.db.conn();
-        Resend::new(RESOLVE_WAIT).send(|| conn.batch(release(lane, token, ended))).await?;
+        let (db, conn) = (&self.inner.db, self.inner.db.conn());
+        db.resend(StorageWrite::Release).send(|| conn.batch(release(lane, token, ended))).await?;
         self.mark_released();
         Ok(())
+    }
+
+    /// The release of a run dropped before it ended, in the background: `run_ended` `canceled`
+    /// for `run_id`, then the lease, both fenced on its token.
+    pub(crate) fn release_dropped(&self, run_id: &str) {
+        let reason = Some(AbandonReason::RunDropped.as_str().to_owned());
+        let event = JournalEvent::RunEnded(RunEnded { outcome: RunOutcome::Canceled, reason });
+        let ended = EventWrite::new(unix_now_ms(), event);
+        let Fence { lane, token, holder, .. } = &self.inner.fence;
+        let batch = release(lane, token, Some((run_id, &ended)));
+        release_detached(&self.inner.spawner, holder, self.inner.db.clone(), lane, batch);
+        self.stop();
+        self.mark_released();
     }
 
     /// Releases when no inbox row is pending past `drained_id`; `true` when released. A row
@@ -381,7 +418,7 @@ impl Lease {
     pub async fn release_if_drained(&self) -> Result<bool, StorageError> {
         let (db, fence) = (&self.inner.db, &self.inner.fence);
         let (lane, token) = (&*fence.lane, &*fence.token);
-        let released = Resend::new(RESOLVE_WAIT).probed(
+        let released = db.resend(StorageWrite::Release).probed(
             || async move { Ok(db.exec(ReleaseLeaseIfDrained { lane, token }).await? > 0) },
             // a lost release left the lane under another token, or none
             || async move {
@@ -395,7 +432,8 @@ impl Lease {
             self.mark_released();
             return Ok(true);
         }
-        if db.exec_idempotent(|| extend(fence, db.timing.secs())).await? == 0 {
+        if db.exec_idempotent(StorageWrite::Extend, || extend(fence, db.timing.secs())).await? == 0
+        {
             return Err(StorageError::LeaseLost(format!("lease on lane {} was taken", fence.lane)));
         }
         Ok(false)
@@ -437,7 +475,8 @@ impl LeaseRenewal {
     ) -> ControlFlow<()> {
         let wait = self.ownership.deadline.lock().saturating_duration_since(started);
         let extend = || self.db.exec(extend(&self.fence, self.db.timing.secs()));
-        let outcome = tokio::time::timeout_at(until, Resend::new(wait).send(extend))
+        let resend = Resend::new(wait, &self.db.cx, StorageWrite::Extend);
+        let outcome = tokio::time::timeout_at(until, resend.send(extend))
             .await
             .unwrap_or_else(|_| Err(StorageError::Unavailable("the extend timed out".into())));
         if self.ownership.check().is_err() {

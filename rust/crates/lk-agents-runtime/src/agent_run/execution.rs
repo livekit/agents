@@ -4,7 +4,8 @@ use crate::telemetry;
 use lk_agents_abi::agent::run::{RunInputRequirement, RunOutcome, RunResult};
 use lk_agents_abi::agent::{FunctionToolInfo, OutputCandidate, ToolArgumentError, ToolTemplate};
 use lk_agents_abi::errors::{ApiError, HostError};
-use lk_agents_abi::{ChatContext, ToolSpec};
+use lk_agents_abi::llm::tool_executor::ToolOutcome;
+use lk_agents_abi::{ChatContext, SpawnerExt, ToolSpec};
 use serde_json::{Map, Value};
 
 #[derive(Clone)]
@@ -47,6 +48,35 @@ enum Work {
     Validation(ValidationId),
 }
 
+impl Work {
+    /// What the core is told when the work's callback ended without reporting.
+    fn lost(self) -> Report {
+        let error = || HostError::new("the host callback ended without reporting");
+        let event = match self {
+            Work::Checkpoint(checkpoint) => AgentRunEvent::HostCheckpointDone {
+                checkpoint,
+                should_yield: Err(error()),
+                tools: None,
+            },
+            Work::Render(render) => {
+                AgentRunEvent::InstructionsRendered { render, result: Err(error()) }
+            }
+            Work::Call(call) => AgentRunEvent::CallLost { call, outcome: ToolOutcome::Internal },
+            Work::Validation(validation) => {
+                let verdict = OutputVerdict::Failed(error().message);
+                return Report::Validated { validation, verdict, value: None, serialized: None };
+            }
+        };
+        Report::Core(event)
+    }
+}
+
+/// One model request in flight: its stop, and the task streaming it.
+pub(crate) struct Request {
+    stop: tokio_util::sync::DropGuard,
+    _task: lk_agents_abi::OwnedTask,
+}
+
 pub(crate) struct Execution {
     pub invoker: HostInvoker,
     /// The invocation's `agent_run` span, ended with its result; dropped (cancelled) with an
@@ -57,8 +87,8 @@ pub(crate) struct Execution {
     pub(super) setup: RunSetup,
     runtime: tokio::runtime::Handle,
     events_tx: Reporter,
-    /// Each model request's stop; a request dropped from here stops too.
-    pub requests: BTreeMap<RequestId, tokio_util::sync::DropGuard>,
+    /// Each model request in flight; a request dropped from here stops too.
+    pub requests: BTreeMap<RequestId, Request>,
     operations: BTreeMap<Work, u64>,
     calls: BTreeMap<CallId, FunctionCall>,
     prepared: BTreeMap<ResourceId, HostRef>,
@@ -135,8 +165,8 @@ impl Execution {
                 self.start_llm_request(request, chat_ctx, tools)
             }
             AgentRunEffect::LlmRequestCancel { request } => {
-                if let Some(stop) = self.requests.get(&request) {
-                    stop.token().cancel();
+                if let Some(request) = self.requests.get(&request) {
+                    request.stop.token().cancel();
                 }
             }
             AgentRunEffect::RenderInstructions { render } => self.render_instructions(render),
@@ -198,7 +228,6 @@ impl Execution {
         tools: Vec<ToolSpec>,
     ) {
         let cancelled = CancellationToken::new();
-        self.requests.insert(request, cancelled.clone().drop_guard());
         self.descriptions = tools.iter().map(|t| (t.name.clone(), t.description.clone())).collect();
         let req = ChatRequest {
             tools_host: self.setup.tools_host.clone(),
@@ -211,7 +240,19 @@ impl Execution {
         let clock = self.setup.clock.clone();
         let events = self.events_tx.clone();
         let trace = telemetry::LlmTrace::start(&self.cx, llm.as_ref(), &req);
-        self.runtime.spawn(stream_request(request, req, llm, clock, events, cancelled, trace));
+        let lost = events.clone();
+        let stream = stream_request(request, req, llm, clock, events, cancelled.clone(), trace);
+        // A stream whose task ended without its end or failure (it panicked) reports it failed.
+        let task = TokioSpawner::new(self.runtime.clone()).spawn_settled(
+            stream,
+            move |outcome| async move {
+                if !matches!(outcome, lk_agents_abi::TaskOutcome::Completed) {
+                    let error = ApiError::new("the model request ended without reporting").into();
+                    let _ = lost.send(Report::LlmFailed { request, error }).await;
+                }
+            },
+        );
+        self.requests.insert(request, Request { stop: cancelled.drop_guard(), _task: task });
     }
 
     fn render_instructions(&mut self, render: RenderId) {
@@ -386,7 +427,8 @@ impl Execution {
         }
     }
 
-    /// One host callback through the invoker, under the work it serves.
+    /// One host callback through the invoker, under the work it serves. A callback that never
+    /// reports (it panicked) reports its work lost, so the run settles it.
     fn invoke<F, Fut>(
         &mut self,
         work: Work,
@@ -398,9 +440,17 @@ impl Execution {
         Fut: Future<Output = ()> + Send + 'static,
     {
         let events = self.events_tx.clone();
-        let operation = self
-            .invoker
-            .invoke(function_call, approval, &self.runtime, move |inv| call(inv, events));
+        let lost = self.events_tx.clone();
+        let lost = async move {
+            let _ = lost.send(work.lost()).await;
+        };
+        let operation = self.invoker.invoke(
+            function_call,
+            approval,
+            &self.runtime,
+            move |inv| call(inv, events),
+            lost,
+        );
         self.operations.insert(work, operation);
     }
 

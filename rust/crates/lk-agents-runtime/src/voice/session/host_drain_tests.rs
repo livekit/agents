@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "tests drive tokio's sync primitives directly"
+)]
 use super::super::HostAgents;
 use super::super::tests::{agent_update, no_room, running, settle};
 use crate::voice::VoiceRuntimeEvent;

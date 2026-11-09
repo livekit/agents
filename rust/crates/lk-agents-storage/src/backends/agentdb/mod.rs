@@ -20,6 +20,7 @@ use lk_agents_abi::storage::Unacknowledged;
 use lk_agents_abi::storage::wsdb::WsdbCode;
 use lk_agents_net::env::ProcessEnv;
 
+use crate::telemetry::{Cx, StorageWrite};
 use crate::thread::{LeaseTiming, RESOLVE_WAIT, Resend, SchemaCell, Thread};
 use crate::{Storage, ThreadDbConnection};
 pub use connection::{Conn, Options as ConnOptions, TokenMinter, WriteError, WsdbError};
@@ -145,6 +146,8 @@ pub struct AgentDbStorage {
     pool: Arc<DbPool>,
     /// The runtime the process lends: its connections run there.
     runtime: tokio::runtime::Handle,
+    /// Where its health metrics go.
+    cx: Cx,
 }
 
 impl AgentDbStorage {
@@ -171,7 +174,8 @@ impl AgentDbStorage {
             minter.api_secret(),
             http.client(),
         ));
-        Ok(Self { data_plane, opts, minter, api, pool: Arc::default(), runtime })
+        let cx = env.tracer.root();
+        Ok(Self { data_plane, opts, minter, api, pool: Arc::default(), runtime, cx })
     }
 
     pub fn options(&self) -> &AgentDbOptions {
@@ -203,7 +207,7 @@ impl Storage for AgentDbStorage {
     /// The same merge applied twice is one: a lost response is sent again.
     async fn update_thread(&self, request: UpdateRequest) -> Result<ThreadRecord, StorageError> {
         let request = &request;
-        Resend::new(RESOLVE_WAIT)
+        Resend::new(RESOLVE_WAIT, &self.cx, StorageWrite::Thread)
             .send(|| async move {
                 self.threads().update(request.clone()).await.map_err(service_write_error)
             })
@@ -212,7 +216,7 @@ impl Storage for AgentDbStorage {
 
     /// Repeat-safe, so a lost response is sent again.
     async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError> {
-        Resend::new(RESOLVE_WAIT)
+        Resend::new(RESOLVE_WAIT, &self.cx, StorageWrite::Thread)
             .send(|| async move {
                 match self.threads().delete(thread_id).await.map_err(service_write_error) {
                     Err(StorageError::NotFound(_)) => Ok(()),
@@ -241,7 +245,8 @@ impl Storage for AgentDbStorage {
             pool: self.pool.clone(),
             closed: AtomicBool::new(false),
         };
-        Thread::new(Arc::new(pooled), thread_id, self.opts.lease, schema).await
+        let thread = Thread::new(Arc::new(pooled), thread_id, self.opts.lease, schema).await?;
+        Ok(thread.with_telemetry(self.cx.clone()))
     }
 
     async fn get_thread_items(

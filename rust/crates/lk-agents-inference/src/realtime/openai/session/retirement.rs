@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use super::{Pump, Shared};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};

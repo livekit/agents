@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "tests drive tokio's sync primitives directly"
+)]
 use super::FallbackTts;
 use crate::fallback::ChainPolicy;
 use crate::testkit::fallback::{Frames, NO_DEADLINE, boom, parts, until, within};

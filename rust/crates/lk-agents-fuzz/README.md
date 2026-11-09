@@ -25,9 +25,11 @@ generator must not change how the same case is judged.
 | --- | --- | --- |
 | Voice | `VoiceSession`, its runtime loop, room/avatar executors, composed decision cores, and the voice lane's storage (`VoiceStore`, leases, renewal, fenced commit) | Provider, host, room, and media ports; the thread database connection |
 | Room | Room I/O, participant streams, output, readiness, and lifecycle | The same fake RTC ports, including failures and stalls |
+| Text | The AgentRun driver, TextSession and A2A turns (the runtime's `Turn`: receive, run, commit, drain) on the same production SQLite storage | The model and host callbacks (answering, panicking, never answering), the thread database connection, the clients (waiting, resending, disconnecting, cancelling, aborting) |
 
-Standalone A2A and TextSession execution is outside this crate. Their component tests remain
-in the core, runtime and storage crates. Storage is faked at the database connection only: the
+The text driver lives in [text/](src/text/mod.rs); its rules are the `rules/*.rs` files that
+implement `TextRule`, and `--test text` holds its checker tests, regressions and campaign
+(`TEXT_SEEDS`, `TEXT_FIRST_SEED`, `TEXT_SEED`). Storage is faked at the database connection only: the
 voice lane runs storage's own code over the production SQLite backend (registry, thread files,
 lifecycle lock) in a directory of the run's own, its workers tasks on the run's scheduler and its
 `unixepoch()` the run's clock. The voice

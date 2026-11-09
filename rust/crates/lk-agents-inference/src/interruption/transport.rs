@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::effects::InterruptionEffect;
 use crate::headers::{HeaderProvider, Headers, gateway_headers};
 use crate::interruption::event::OverlappingSpeechEvent;

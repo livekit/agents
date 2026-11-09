@@ -448,6 +448,12 @@ impl DtmfKey {
 }
 
 plain_enum! {
+    /// A host wait on a speech handle: `wait_until_created`, `wait_scheduled`,
+    /// `wait_for_playout` (`await handle`), the first generation step, the latest generation,
+    /// the first step's authorization, and the host's `speech_done` delivery.
+    SpeechWait { Created, Scheduled, Playout, Generation, LatestGeneration, StepAuthorized, Reported }
+}
+plain_enum! {
     /// Which models a swap replaces.
     Models { Stt, Llm, Tts, LlmAndTts, All }
 }
@@ -471,7 +477,7 @@ macro_rules! unreferenced {
 unreferenced!(
     bool, AgentText, UserText, Millis, Count, String, IoKind, SayInput, ToolAnswer, HookAnswer,
     Knob, TurnMode, IvrInput, Models, Role, RoomIn, ConsoleAsk, Confidence, ToolArgs, Speaker,
-    RtEvent, DtmfInput, DtmfKey, AmdInput, AgentTurn
+    RtEvent, DtmfInput, DtmfKey, AmdInput, AgentTurn, SpeechWait
 );
 
 impl<K: Resource> Referenced for Ref<K> {
@@ -736,6 +742,9 @@ inputs! {
     AwaitSpeech { speech: Ref<Speech> };
     /// Wait for the driver loop to end.
     AwaitExit { };
+    /// The host starts awaiting one of a speech's waits and keeps the await, created or not:
+    /// `every_wait_resolves` judges whether and when it ends.
+    Probe { speech: Ref<Speech>, wait: SpeechWait };
 
     /// The case stops adding work; from here the runner releases what is pending.
     Release { } never true;
@@ -761,7 +770,7 @@ not_sent! {
     command::Activity => "a family, not a leaf: its leaves are in the table";
     turn::SkipReplies => "the answering-machine detector's own, on its verdict and close (`Amd`)";
     command::AmdSpan => "the answering-machine detector's own, on its attach and verdict (`Amd`)";
-    command::DelegateUsage => "an agent tool's child usage, sent by the tool executor beside its report";
+    command::DelegateUsage => "an agent tool's in-process child reports its usage; no fake runs one";
 }
 
 /// Compiles only while every production command leaf is either in the table or excused above.

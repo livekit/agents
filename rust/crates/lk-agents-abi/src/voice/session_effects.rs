@@ -209,4 +209,8 @@ pub trait SessionEvents: Send + Sync {
     ) -> Result<String, crate::errors::HostError> {
         Ok(error.error.to_string())
     }
+
+    /// The event stream ended, however the session's runtime ended: no event follows.
+    #[host(notify, name = "_core_events_ended")]
+    fn ended(&self) {}
 }

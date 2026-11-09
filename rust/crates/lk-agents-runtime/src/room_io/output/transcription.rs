@@ -1,4 +1,3 @@
-use crate::monotone::Monotone;
 use crate::telemetry;
 use lk_agents_abi::OwnedTask;
 use lk_agents_abi::voice::io::TextOutput;
@@ -10,6 +9,7 @@ use lk_agents_abi::voice::rtc::{
 use lk_agents_abi::{
     Clock, HOST_TEARDOWN_TIMEOUT, Spawner, SpawnerExt, TOPIC_TRANSCRIPTION, TranscriptChunk, Ts,
 };
+use lk_agents_net::signal;
 use lk_agents_voice::room_io::effects::RoomTranscriptionEffect;
 use lk_agents_voice::room_io::machine::transcription::{
     Admission, Batch, ParticipantTracks, RoomTranscriptionWriter, Subject, cancellable,
@@ -18,8 +18,8 @@ use lk_agents_voice::room_io::machine::transcription::{
 use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::Notify;
 
 // Word pacing is TranscriptSync's, upstream: this adapter publishes already-delivered text.
 
@@ -154,10 +154,13 @@ pub struct ParticipantTranscriptionOutput {
     ids: Arc<SegmentIds>,
     clock: Arc<dyn Clock>,
     writer: Mutex<WriterState>,
-    changed: Notify,
-    performer_done: Monotone<bool>,
+    /// Written on every change the performer must see.
+    changed: signal::Producer<()>,
+    /// The performer's own: it ends with the performer, however it ends.
+    performer_done: signal::Cell<bool>,
     next_in_chain: Option<Arc<dyn TextOutput>>,
-    /// The performer, which holds the output until it ends.
+    /// The performer, which holds the output only while it works: once the output is gone it
+    /// closes its writer and ends.
     performer: Mutex<Option<OwnedTask>>,
 }
 
@@ -172,6 +175,7 @@ impl ParticipantTranscriptionOutput {
         next_in_chain: Option<Arc<dyn TextOutput>>,
     ) -> Arc<Self> {
         let segment = ids.next_segment_id();
+        let (done, performer_done) = signal::signal(false);
         let output = Arc::new(Self {
             room: room.clone(),
             ids,
@@ -182,14 +186,16 @@ impl ParticipantTranscriptionOutput {
                 deadline: None,
                 subject: Subject::default(),
             }),
-            changed: Notify::new(),
-            performer_done: Monotone::new(false),
+            changed: signal::signal(()).0,
+            performer_done,
             next_in_chain,
             performer: Mutex::new(None),
         });
-        let owner = output.clone();
+        let owner = Arc::downgrade(&output);
+        let changed = output.changed.cell();
         let task = spawner.spawn(async move {
-            owner.run(Performer { room, writer: None }).await;
+            Self::run(owner, changed, Performer { room, writer: None }).await;
+            done.set(true);
         });
         *output.performer.lock() = Some(task);
         output
@@ -199,7 +205,7 @@ impl ParticipantTranscriptionOutput {
     /// on, and [`Self::aclose`] reports it. Neither the speech nor the room fails with it.
     fn latched(&self, error: IoError) {
         log::warn!(target: lk_agents_abi::LOG_TARGET, "room transcription output failed, dropping its text: {error}");
-        self.changed.notify_waiters();
+        self.changed.modify(|()| ());
     }
 
     fn fail(&self, error: IoError) {
@@ -218,7 +224,7 @@ impl ParticipantTranscriptionOutput {
         let WriterState { core, admission, subject, .. } = writer;
         let refused = admission.submit(core, subject).err();
         if refused.is_none() {
-            self.changed.notify_waiters();
+            self.changed.modify(|()| ());
         }
         refused
     }
@@ -274,10 +280,8 @@ impl ParticipantTranscriptionOutput {
             return action.await;
         }
         tokio::pin!(action);
+        let mut changed = self.changed.cell();
         loop {
-            let changed = self.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
             let (failure, deadline) = self.status();
             if let Some(error) = failure {
                 return Err(error);
@@ -290,7 +294,7 @@ impl ParticipantTranscriptionOutput {
             };
             tokio::select! {
                 biased;
-                () = &mut changed => {},
+                _ = changed.changed() => {},
                 result = &mut action => return result,
                 () = elapsed => return Err(IoError::Rtc("transcription cleanup deadline expired".into())),
             }
@@ -310,32 +314,36 @@ impl ParticipantTranscriptionOutput {
         result
     }
 
-    async fn run(self: Arc<Self>, mut performer: Performer) {
+    /// `changed` was subscribed before the first check, so no change is missed; once the output
+    /// is dropped its producer ends and the wait returns.
+    async fn run(owner: Weak<Self>, mut changed: signal::Cell<()>, mut performer: Performer) {
         loop {
-            let changed = self.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
+            let Some(this) = owner.upgrade() else { break };
             let next = {
-                let mut writer = self.writer.lock();
+                let mut writer = this.writer.lock();
                 if writer.admission.drained() {
                     break;
                 }
                 writer.admission.pop_batch()
             };
             let Some(batch) = next else {
-                changed.await;
+                drop(this);
+                if changed.changed().await.is_err() {
+                    break;
+                }
                 continue;
             };
-            if let Err(error) = self.batch(&mut performer, batch).await {
-                self.fail(error);
+            if let Err(error) = this.batch(&mut performer, batch).await {
+                this.fail(error);
                 break;
             }
         }
         // The worker, not a caller, owns this consuming close even beyond a waiter's deadline.
-        if let Err(error) = performer.close().await {
-            self.fail(error);
+        if let Err(error) = performer.close().await
+            && let Some(this) = owner.upgrade()
+        {
+            this.fail(error);
         }
-        self.performer_done.set(true);
     }
 
     pub async fn set_participant(&self, participant: Option<ParticipantIdentity>) -> Result<()> {
@@ -383,7 +391,7 @@ impl ParticipantTranscriptionOutput {
         if let Some(error) = refused {
             self.latched(error);
         }
-        self.changed.notify_waiters();
+        self.changed.modify(|()| ());
         let completed = lk_agents_abi::before(
             self.clock.as_ref(),
             Some(deadline),
@@ -393,7 +401,7 @@ impl ParticipantTranscriptionOutput {
         if completed.is_err() {
             self.fail(IoError::Rtc("transcription cleanup deadline expired".into()));
         }
-        if self.performer_done.get() {
+        if self.performer_done.get() || self.performer_done.ended() {
             self.performer.lock().take();
         }
         self.writer.lock().admission.failure().cloned().map_or(Ok(()), Err)

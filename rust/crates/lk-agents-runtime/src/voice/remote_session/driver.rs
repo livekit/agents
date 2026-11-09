@@ -1,6 +1,5 @@
 use parking_lot::Mutex;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::voice::session::Timebase;
@@ -187,10 +186,11 @@ pub const SHUTDOWN_DRAIN: Duration = Duration::from_secs(3);
 pub struct RemoteSessionLink {
     host: Arc<SessionServer>,
     spawner: Arc<dyn Spawner>,
-    /// Set by the first close: a start after it (the session closed while opening) is a no-op.
-    closing: std::sync::atomic::AtomicBool,
-    /// Whether the close has run to its end; every close waits for it.
-    closed: tokio::sync::watch::Sender<bool>,
+    /// Taken by the first close, whose task holds it: a start after it (the session closed while
+    /// opening) is a no-op.
+    close: parking_lot::Mutex<Option<lk_agents_net::signal::Producer<Option<()>>>>,
+    /// The close ran to its end, or its task is gone; every close waits for it.
+    closed: lk_agents_net::signal::Cell<Option<()>>,
     transport: Arc<dyn SessionTransport>,
     console: Option<Arc<dyn ConsoleSink>>,
     /// The close, which a cancelled caller leaves to finish.
@@ -207,11 +207,12 @@ impl RemoteSessionLink {
     ) -> Self {
         let host = Arc::new(SessionServer::new(time, Arc::clone(&spawner)));
         host.set_port(port);
+        let (close, closed) = lk_agents_net::signal::once();
         RemoteSessionLink {
             host,
             spawner,
-            closing: Default::default(),
-            closed: tokio::sync::watch::Sender::new(false),
+            close: parking_lot::Mutex::new(Some(close)),
+            closed,
             transport,
             console,
             tasks: Arc::default(),
@@ -250,7 +251,7 @@ impl RemoteSessionLink {
     }
 
     pub async fn start(&self) -> Result<(), HostError> {
-        if self.closing.load(Ordering::Acquire) {
+        if self.close.lock().is_none() {
             return Ok(());
         }
         self.host.start(Arc::clone(&self.transport), self.console.clone()).await
@@ -259,18 +260,19 @@ impl RemoteSessionLink {
     /// Once the session's loop has returned. The close runs on a task of its own, so a caller
     /// cancelled midway leaves it to finish; every call waits for its end.
     pub async fn aclose(&self) {
-        if !self.closing.swap(true, Ordering::AcqRel) {
-            let (host, closed) = (Arc::clone(&self.host), self.closed.clone());
+        let close = self.close.lock().take();
+        if let Some(closed) = close {
+            let host = Arc::clone(&self.host);
             self.tasks.spawn(self.spawner.as_ref(), "remote session close", async move {
                 let cancelled = host.aclose(SHUTDOWN_DRAIN).await;
                 if !cancelled.is_empty() {
                     log::warn!(target: lk_agents_abi::LOG_TARGET, request_types = cancelled.join(", ").as_str();
                         "cancelled in-flight session requests while closing");
                 }
-                closed.send_replace(true);
+                closed.resolve(());
             });
         }
-        let _ = self.closed.subscribe().wait_for(|closed| *closed).await;
+        let _ = self.closed.wait().await;
     }
 }
 

@@ -40,7 +40,6 @@ pub mod agent_run;
 pub mod agent_tool;
 pub mod host;
 pub mod mcp;
-pub mod monotone;
 mod output_validation;
 pub mod process;
 pub mod recording;

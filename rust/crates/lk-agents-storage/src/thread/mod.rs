@@ -11,10 +11,14 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 
+use lk_agents_abi::SpawnerExt as _;
+use lk_agents_net::clock::RealClock;
+use lk_agents_net::task::{Leave, TaskSet, TokioSpawner};
 use parking_lot::Mutex;
 
 use crate::StorageError;
 use crate::sql::{Bind, SqlValue, Statement, Table};
+use crate::telemetry::{self, Cx, StorageWrite};
 use crate::thread::db::{ItemPage, TaskPage, TaskQuery};
 use crate::thread::schema::*;
 use lk_agents_abi::storage::Unacknowledged;
@@ -66,17 +70,26 @@ pub(crate) struct Resend {
     epoch: tokio::time::Instant,
     backoff: Backoff,
     lost: Option<Unacknowledged>,
+    /// Where a write left unresolved is counted, under its kind.
+    cx: Cx,
+    write: StorageWrite,
 }
 
 impl Resend {
-    pub(crate) fn new(wait: Duration) -> Self {
+    pub(crate) fn new(wait: Duration, cx: &Cx, write: StorageWrite) -> Self {
         let epoch = tokio::time::Instant::now();
-        Self { epoch, backoff: Backoff::new(epoch.elapsed(), wait), lost: None }
+        let backoff = Backoff::new(epoch.elapsed(), wait);
+        Self { epoch, backoff, lost: None, cx: cx.clone(), write }
     }
 
     /// Resolving a write whose acknowledgment `lost` already reported lost.
-    pub(crate) fn after_lost(wait: Duration, lost: Unacknowledged) -> Self {
-        Self { lost: Some(lost), ..Self::new(wait) }
+    pub(crate) fn after_lost(
+        wait: Duration,
+        cx: &Cx,
+        write: StorageWrite,
+        lost: Unacknowledged,
+    ) -> Self {
+        Self { lost: Some(lost), ..Self::new(wait, cx, write) }
     }
 
     /// Whether an earlier send may have applied.
@@ -99,6 +112,7 @@ impl Resend {
             }
         };
         let Some(at) = self.backoff.next(self.epoch.elapsed()) else {
+            telemetry::write_uncertain(&self.cx, self.write);
             return ControlFlow::Break(Err(StorageError::Uncertain(lost)));
         };
         log::debug!(target: lk_agents_abi::LOG_TARGET, "write acknowledgment lost, sending it again: {lost}");
@@ -165,6 +179,11 @@ pub struct Thread {
     thread_id: Arc<str>,
     pub(crate) timing: LeaseTiming,
     schema: SchemaCell,
+    /// Where its health metrics go.
+    pub(crate) cx: Cx,
+    /// The background writes its callers left (a dropped lease's release, a dropped turn's
+    /// cleanup): the connection stays open past [`Thread::close`] until they end.
+    background: Arc<TaskSet>,
 }
 
 impl Thread {
@@ -175,7 +194,9 @@ impl Thread {
         timing: LeaseTiming,
         schema: SchemaCell,
     ) -> Result<Self, StorageError> {
-        let thread = Self { conn, thread_id: thread_id.into(), timing, schema };
+        let background = Arc::default();
+        let thread =
+            Self { conn, thread_id: thread_id.into(), timing, schema, cx: Cx::NONE, background };
         if thread.schema_missing() {
             let found = db::schema_version(&*thread.conn).await?;
             *thread.schema.lock() = found;
@@ -187,9 +208,34 @@ impl Thread {
         &self.thread_id
     }
 
-    /// Done with the database: the backend releases or parks the connection.
+    /// Records its health metrics under `cx`.
+    pub fn with_telemetry(mut self, cx: Cx) -> Self {
+        self.cx = cx;
+        self
+    }
+
+    /// The resends of one `write`, for up to [`RESOLVE_WAIT`].
+    pub(crate) fn resend(&self, write: StorageWrite) -> Resend {
+        Resend::new(RESOLVE_WAIT, &self.cx, write)
+    }
+
+    /// Done with the database: the backend releases or parks the connection, once the
+    /// background writes its callers left ended.
     pub async fn close(&self) {
-        self.conn.close().await;
+        if self.background.is_empty() {
+            return self.conn.close().await;
+        }
+        let (conn, background) = (self.conn.clone(), self.background.clone());
+        TokioSpawner::current().spawn_detached(async move {
+            background.wait_empty(&RealClock::new(), None).await;
+            conn.close().await;
+        });
+    }
+
+    /// Keeps the connection open past [`Thread::close`] until the guard drops: what a background
+    /// write on this thread holds.
+    pub fn keep_open(&self, name: &str) -> Leave {
+        self.background.track(name)
     }
 
     pub fn lane(&self, name: &str) -> Lane {
@@ -246,7 +292,7 @@ impl Thread {
             return Ok(());
         }
         // a lost acknowledgment is sent again; a resend refused by its own schema reconciles
-        match Resend::new(RESOLVE_WAIT).send(|| self.conn.batch(db::bootstrap())).await {
+        match self.resend(StorageWrite::Schema).send(|| self.conn.batch(db::bootstrap())).await {
             Ok(_) => {}
             Err(error) => self.reconcile_schema(error).await?,
         }
@@ -276,9 +322,10 @@ impl Thread {
     /// outcome is known: the rows it matched.
     pub(crate) async fn exec_idempotent<S: Bind>(
         &self,
+        write: StorageWrite,
         statement: impl Fn() -> S,
     ) -> Result<i64, StorageError> {
-        Resend::new(RESOLVE_WAIT).send(|| self.exec(statement())).await
+        self.resend(write).send(|| self.exec(statement())).await
     }
 
     /// The journal, every lane, after the event `after_id`, at most `limit` events.

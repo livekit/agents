@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::fallback::chain::{
     Attempt, Backend, ChainCall, ChainObserver, FallbackChain, RecoveryMode,
 };

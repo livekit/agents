@@ -38,6 +38,14 @@ impl FakeNodes {
         Arc::new(FakeNodes { registry, agent: agent.to_owned(), llm, tts, stt, llm_text })
     }
 
+    /// The host's node override panics or never returns, when the run draws it.
+    async fn hazard(&self) {
+        use super::hazard::{Site, strike};
+        if let Some(fault) = self.registry.hazard(Site::Node) {
+            strike::<()>(fault, Site::Node).await;
+        }
+    }
+
     fn used(&self, node: NodeUse) {
         self.registry.node_used(&self.agent, node);
     }
@@ -210,6 +218,7 @@ impl NodeFactory for FakeNodes {
         let cx = cx.clone();
         Box::pin(async move {
             self.used(NodeUse::Llm);
+            self.hazard().await;
             if let Some(text) = self.llm_text {
                 return Ok(Box::new(NodeText(Some(text))) as LlmStream);
             }
@@ -227,6 +236,7 @@ impl NodeFactory for FakeNodes {
     > {
         Box::pin(async move {
             self.used(NodeUse::Tts);
+            self.hazard().await;
             self.tts
                 .as_ref()
                 .ok_or_else(|| missing("TTS"))?
@@ -245,6 +255,7 @@ impl NodeFactory for FakeNodes {
         let cx = cx.clone();
         Box::pin(async move {
             self.used(NodeUse::Stt);
+            self.hazard().await;
             let stt = self.stt.as_ref().ok_or_else(|| missing("STT"))?;
             stt.stream(&cx, None, None).await?.ok_or_else(|| missing("streaming STT"))
         })

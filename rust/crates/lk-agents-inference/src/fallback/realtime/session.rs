@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use super::*;
 use crate::effects::FallbackChainEffect;
 use lk_agents_abi::llm::fallback::{

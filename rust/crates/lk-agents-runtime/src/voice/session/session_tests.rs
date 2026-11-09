@@ -1016,9 +1016,9 @@ async fn missing_playback_progress_and_finish_ends_the_speech_without_inventing_
 
 struct PendingTextCleanup {
     captured: AtomicBool,
-    cancelled: crate::monotone::Monotone<bool>,
-    allow_cleanup: crate::monotone::Monotone<bool>,
-    completed: crate::monotone::Monotone<bool>,
+    cancelled: lk_agents_net::signal::Producer<bool>,
+    allow_cleanup: lk_agents_net::signal::Producer<bool>,
+    completed: lk_agents_net::signal::Producer<bool>,
     retained: Mutex<Option<Box<dyn Send>>>,
 }
 
@@ -1026,9 +1026,9 @@ impl Default for PendingTextCleanup {
     fn default() -> Self {
         Self {
             captured: AtomicBool::new(false),
-            cancelled: crate::monotone::Monotone::new(false),
-            allow_cleanup: crate::monotone::Monotone::new(false),
-            completed: crate::monotone::Monotone::new(false),
+            cancelled: lk_agents_net::signal::signal(false).0,
+            allow_cleanup: lk_agents_net::signal::signal(false).0,
+            completed: lk_agents_net::signal::signal(false).0,
             retained: Mutex::new(None),
         }
     }
@@ -1059,7 +1059,7 @@ impl lk_agents_abi::voice::nodes::TextNode for ClosingTextNode {
     }
     fn drain(&self) -> lk_agents_abi::BoxFuture<'_, lk_agents_abi::voice::io::Result<()>> {
         Box::pin(async move {
-            self.0.completed.wait_for(|done| *done).await;
+            let _ = self.0.completed.cell().wait_for(|done| *done).await;
             Ok(())
         })
     }
@@ -1082,8 +1082,8 @@ impl lk_agents_abi::voice::nodes::NodeFactory for ClosingTextFactory {
         let state = self.0.clone();
         // The host drain owns its output until its explicitly gated source close finishes.
         tokio::spawn(async move {
-            state.cancelled.wait_for(|cancelled| *cancelled).await;
-            state.allow_cleanup.wait_for(|allowed| *allowed).await;
+            let _ = state.cancelled.cell().wait_for(|cancelled| *cancelled).await;
+            let _ = state.allow_cleanup.cell().wait_for(|allowed| *allowed).await;
             below.flush();
             let owner = {
                 let mut retained = state.retained.lock();

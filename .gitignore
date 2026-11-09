@@ -182,3 +182,4 @@ examples/dev/*
 
 # Generated from installed external SDK schemas for strict type checking.
 .type_stubs/
+target-*/

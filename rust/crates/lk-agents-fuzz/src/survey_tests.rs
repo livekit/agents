@@ -332,6 +332,13 @@ fn campaign(window: &Window) {
         "{} storage workers died with requests queued",
         lk_agents_fuzz::fakes::worker_deaths()
     );
+    let (panics, hangs) = lk_agents_fuzz::fakes::hazard::struck();
+    println!("{panics} injected panics, {hangs} injected hangs");
+    let [sqlite, clock, crash, held, stolen] = lk_agents_fuzz::fakes::storage_faults();
+    println!(
+        "storage faults: {sqlite} sqlite refusals, {clock} clock jumps, {crash} crashes, \
+         {held} lanes held and {stolen} stolen by another worker"
+    );
     println!("busiest instant: {} steps of the run's loop (seed {})", busiest.0, busiest.1);
     let endings: Vec<String> =
         endings.iter().map(|(k, (n, seed))| format!("{k} {n} (seed {seed})")).collect();
