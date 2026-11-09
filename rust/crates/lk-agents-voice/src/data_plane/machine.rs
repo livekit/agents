@@ -201,7 +201,11 @@ impl AudioInputRouter {
                     effects.push(AudioInputRouterEffect::EndInput(sink));
                 }
             }
-            AudioInputRouterCommand::SetSource(_) => self.input_started = false,
+            AudioInputRouterCommand::SetSource(_) => {
+                self.input_started = false;
+                // Another microphone's audio is no pre-roll for this one.
+                self.turns.pre_roll.take();
+            }
             // The silence the closing verdict produced, reported before the verdict that ends it.
             AudioInputRouterCommand::SetGateDiscard(discard) => {
                 self.report_gate_silence(&mut effects);
@@ -209,9 +213,11 @@ impl AudioInputRouter {
             }
             AudioInputRouterCommand::SetInputEnabled(enabled) => {
                 self.input_enabled = enabled;
-                // Nothing more will be heard: the tail ends now.
+                // Nothing more will be heard: the tail ends now, and what was said before the
+                // mute is no pre-roll for a turn after it.
                 if !enabled {
                     self.end_tail(&mut effects);
+                    self.turns.pre_roll.take();
                 }
             }
             AudioInputRouterCommand::FlushSttWithSilence { frames } => {
@@ -224,8 +230,12 @@ impl AudioInputRouter {
             }
             AudioInputRouterCommand::StartTurn => {
                 self.turns.open = true;
-                for frame in self.turns.pre_roll.take() {
-                    self.fan_out(frame, Delivery::Live, &mut effects);
+                let pre_roll = self.turns.pre_roll.take();
+                // A muted microphone forwards nothing, its pre-roll included.
+                if self.input_enabled {
+                    for frame in pre_roll {
+                        self.fan_out(frame, Delivery::Live, &mut effects);
+                    }
                 }
             }
             AudioInputRouterCommand::EndTurn => {
@@ -597,5 +607,23 @@ mod tests {
         let install = router
             .handle(AudioInputRouterCommand::Install { channel: AudioChannel::Stt, sink: stt });
         assert_eq!(pushed(&install), vec![(stt, true); 3]);
+    }
+
+    // Catches: a press replaying audio from before a mute into the recognisers (seed 2544).
+    #[test]
+    fn a_muted_microphone_keeps_no_pre_roll() {
+        let (mut router, _, _) = turn_router();
+        for _ in 0..10 {
+            router.on_frame(mic(), false, Ts::ZERO);
+        }
+        router.handle(AudioInputRouterCommand::SetInputEnabled(false));
+        assert!(pushed(&router.handle(AudioInputRouterCommand::StartTurn)).is_empty());
+        router.handle(AudioInputRouterCommand::CancelTurn);
+        router.handle(AudioInputRouterCommand::SetInputEnabled(true));
+        for _ in 0..10 {
+            router.on_frame(mic(), false, Ts::ZERO);
+        }
+        router.handle(AudioInputRouterCommand::SetSource(None));
+        assert!(pushed(&router.handle(AudioInputRouterCommand::StartTurn)).is_empty());
     }
 }
