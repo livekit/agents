@@ -11,7 +11,7 @@ import pytest
 from google.auth.credentials import AnonymousCredentials
 from google.genai import types
 
-from livekit.agents import llm, utils
+from livekit.agents import APIConnectOptions, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.plugins.google.realtime.api_proto import ClientEvents
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
@@ -773,6 +773,11 @@ class _FakeLiveSession:
     async def send_tool_response(self, *, function_responses: object) -> None:
         self.sent.append(("tool_response", function_responses))
 
+    async def send_context_update(
+        self, *, system_instruction: object = None, tools: object = None
+    ) -> None:
+        self.sent.append(("context_update", (system_instruction, tools)))
+
     async def send_realtime_input(self, **kwargs: object) -> None:
         pass
 
@@ -999,14 +1004,138 @@ async def test_handle_does_not_claim_a_queued_but_unsent_update(
         # the diff is queued but its send is blocked, so the new handle must not cover it
         assert [m.text_content for m in session._resumption_chat_ctx.messages()] == ["hello"]
 
-        # restart before the send completes: the channel drain drops the queued diff
-        await session.update_tools([_restart_tool])
+        # an error restart before the send completes resumes from the handle and drops the
+        # queued diff with the old channel
+        session._mark_restart_needed(on_error=True)
         while len(opened) < 2:
             await asyncio.sleep(0.01)
         await asyncio.sleep(0.05)
         assert _texts(opened[1].sent) == [["queued behind the handle"]]
     finally:
         await session.aclose()
+
+
+@asynccontextmanager
+async def _two_sockets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[tuple[RealtimeSession, list[_FakeLiveSession], list[str | None]]]:
+    """A session over two fake sockets, recording the resumption handle of each connect."""
+    from google.genai.live import AsyncLive
+
+    sockets = [_FakeLiveSession(), _FakeLiveSession()]
+    opened: list[_FakeLiveSession] = []
+    handles: list[str | None] = []
+
+    @asynccontextmanager
+    async def _connect(
+        self: AsyncLive, *, config: types.LiveConnectConfig, **kwargs: object
+    ) -> AsyncIterator[_FakeLiveSession]:
+        handles.append(config.session_resumption.handle if config.session_resumption else None)
+        fake = sockets[len(opened)]
+        opened.append(fake)
+        yield fake
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel().session()
+    session._session_resumption_handle = "resume-1"
+    try:
+        while not opened:
+            await asyncio.sleep(0.01)
+        yield session, opened, handles
+    finally:
+        await session.aclose()
+
+
+async def _wait_for_socket(opened: list[_FakeLiveSession], count: int) -> None:
+    while len(opened) < count:
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+
+
+def _tool_ctx(output: str = "booked") -> llm.ChatContext:
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="book it")
+    chat_ctx.items.append(llm.FunctionCall(call_id="call_1", name="book", arguments="{}"))
+    chat_ctx.items.append(
+        llm.FunctionCallOutput(call_id="call_1", name="book", output=output, is_error=False)
+    )
+    return chat_ctx
+
+
+def _tool_responses(sent: list[tuple[str, object]]) -> list[str | None]:
+    return [
+        r.id  # type: ignore[attr-defined]
+        for kind, responses in sent
+        if kind == "tool_response"
+        for r in responses  # type: ignore[attr-defined]
+    ]
+
+
+async def test_config_restart_starts_a_fresh_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A resumed session keeps its old setup, so a config change must not resume."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        await session.update_tools([_restart_tool])
+        await _wait_for_socket(opened, 2)
+        assert handles == ["resume-1", None]
+
+
+async def test_handle_stored_during_config_restart_is_not_resumed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The old socket can store one more handle before its receive task stops."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        await session.update_tools([_restart_tool])
+        session._session_resumption_handle = "late"
+        await _wait_for_socket(opened, 2)
+        assert handles == ["resume-1", None]
+
+
+async def test_config_change_during_error_restart_starts_a_fresh_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A config change made while an error restart is pending still forbids resuming."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        session._mark_restart_needed(on_error=True)
+        await session.update_tools([_restart_tool])
+        await _wait_for_socket(opened, 2)
+        assert handles == ["resume-1", None]
+
+
+async def test_tool_result_between_sockets_reaches_the_fresh_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A result that arrives with no socket open is answered on the fresh connect."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        session._open_call_ids.add("call_1")
+        await session.update_tools([_restart_tool])
+        session._pending_chat_ctx = _tool_ctx()
+        await _wait_for_socket(opened, 2)
+        assert _tool_responses(opened[1].sent) == ["call_1"]
+
+
+async def test_queued_tool_result_survives_config_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A result queued but unsent when a config change drains the channel is still sent once."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        session._open_call_ids.add("call_1")
+        await session.update_chat_ctx(_tool_ctx())
+        await session.update_tools([_restart_tool])
+        await _wait_for_socket(opened, 2)
+        assert _tool_responses(opened[0].sent) + _tool_responses(opened[1].sent) == ["call_1"]
+
+
+async def test_tool_result_queued_for_the_new_socket_is_sent_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A result queued while the old socket closes is not sent again after the replay."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        session._open_call_ids.add("call_1")
+        await session.update_tools([_restart_tool])
+        await session.update_chat_ctx(_tool_ctx())
+        await _wait_for_socket(opened, 2)
+        assert _tool_responses(opened[1].sent) == ["call_1"]
 
 
 async def test_failed_send_with_a_queued_update_replays_each_item_once(
@@ -1154,3 +1283,256 @@ async def test_reply_instructions_turns_follow_the_model(
         assert len(sent) == 1
         assert sent[0].turn_complete
         assert [(t.role, t.parts[0].text) for t in sent[0].turns or [] if t.parts] == expected
+
+
+def test_mutable_tools_and_labels_in_connect_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    v38 = RealtimeModel(
+        model="gemini-3.8-live",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+        labels={"env": "prod", "workload": "voice"},
+    )
+    g38 = RealtimeModel(model="gemini-3.8-live", vertexai=False)
+    v25 = RealtimeModel(
+        model="gemini-live-2.5-flash-native-audio",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+    )
+
+    assert v38.capabilities.mutable_tools is True
+    assert g38.capabilities.mutable_tools is False
+    assert v25.capabilities.mutable_tools is False
+
+    session = object.__new__(RealtimeSession)
+    session._opts = v38._opts
+    session._realtime_model = v38
+    session._tools = llm.ToolContext.empty()
+    session._session_resumption_handle = None
+    session._replay_tool_history = []
+    assert session._build_connect_config().labels == {"env": "prod", "workload": "voice"}
+
+
+async def test_vertex_gemini_3_8_context_update_order_and_resume_resend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from google.genai.live import AsyncLive
+
+    class _ContextUpdateSession(_FakeLiveSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.block_send = asyncio.Event()
+            self.block_send.set()
+            self.incoming: asyncio.Queue[types.LiveServerMessage] = asyncio.Queue()
+
+        async def send_context_update(
+            self, *, system_instruction: object = None, tools: object = None
+        ) -> None:
+            await self.block_send.wait()
+            await super().send_context_update(system_instruction=system_instruction, tools=tools)
+
+        async def receive(self) -> AsyncIterator[types.LiveServerMessage]:
+            while not self._closed.is_set():
+                get_task = asyncio.create_task(self.incoming.get())
+                close_task = asyncio.create_task(self._closed.wait())
+                done, pending = await asyncio.wait(
+                    [get_task, close_task], return_when=asyncio.FIRST_COMPLETED
+                )
+                for p in pending:
+                    p.cancel()
+                if get_task in done:
+                    yield get_task.result()
+
+    sockets = [_ContextUpdateSession(), _ContextUpdateSession()]
+    opened: list[_ContextUpdateSession] = []
+    handles: list[str | None] = []
+
+    @asynccontextmanager
+    async def _connect(
+        self: AsyncLive, *, config: types.LiveConnectConfig, **kwargs: object
+    ) -> AsyncIterator[_ContextUpdateSession]:
+        handles.append(config.session_resumption.handle if config.session_resumption else None)
+        fake = sockets[len(opened)]
+        opened.append(fake)
+        yield fake
+
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    model = RealtimeModel(
+        model="gemini-3.8-live",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+    )
+    session = model.session()
+    session._session_resumption_handle = "resume-initial"
+    try:
+        while not opened or session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert session._context_updated is False
+
+        # updates go out in order; update_tools([]) sends tools=[] rather than dropping the field
+        opened[0].block_send.clear()
+        await session.update_instructions("Speak concisely.")
+        await session.update_tools([_restart_tool])
+        opened[0].block_send.set()
+        await session.update_tools([])
+        while len(opened[0].sent) < 3:
+            await asyncio.sleep(0.01)
+        assert session._context_updated is True
+
+        assert [kind for kind, _ in opened[0].sent] == [
+            "context_update",
+            "context_update",
+            "context_update",
+        ]
+        ctx_0: tuple[Any, Any] = opened[0].sent[0][1]  # type: ignore[assignment]
+        assert ctx_0[0].parts[0].text == "Speak concisely."
+        assert ctx_0[1] is None
+
+        ctx_1: tuple[Any, Any] = opened[0].sent[1][1]  # type: ignore[assignment]
+        assert len(ctx_1[1]) == 1
+
+        ctx_2: tuple[Any, Any] = opened[0].sent[2][1]  # type: ignore[assignment]
+        assert ctx_2[1] == []
+
+        # a handle is still accepted after an update: it keeps the spoken conversation
+        await opened[0].incoming.put(
+            types.LiveServerMessage(
+                session_resumption_update=types.LiveServerSessionResumptionUpdate(
+                    new_handle="handle-after-update", resumable=True
+                )
+            )
+        )
+        while session._session_resumption_handle != "handle-after-update":
+            await asyncio.sleep(0.01)
+
+        # a reconnect resumes that handle and re-sends the current instructions and tools
+        # before anything else, since the handle may predate the last context_update
+        await session.update_tools([_restart_tool])
+        while len(opened[0].sent) < 4:
+            await asyncio.sleep(0.01)
+        session._mark_restart_needed(on_error=True)
+        while len(opened) < 2 or session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert handles == ["resume-initial", "handle-after-update"]
+        while len(opened[1].sent) < 1:
+            await asyncio.sleep(0.01)
+        kind, payload = opened[1].sent[0]
+        assert kind == "context_update"
+        resent: tuple[Any, Any] = payload  # type: ignore[assignment]
+        assert resent[0].parts[0].text == "Speak concisely."
+        assert len(resent[1]) == 1
+        assert resent[1][0].function_declarations[0].name == _restart_tool.info.name
+    finally:
+        await session.aclose()
+
+
+async def test_vertex_gemini_3_8_retrieval_tool_never_goes_in_context_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gemini rejects retrieval tools in a context_update, so they restart the session instead."""
+    from google.genai.live import AsyncLive
+
+    from livekit.plugins.google.tools import VertexRAGRetrieval
+
+    opened: list[_FakeLiveSession] = []
+    configs: list[types.LiveConnectConfig] = []
+
+    @asynccontextmanager
+    async def _connect(
+        self: AsyncLive, *, config: types.LiveConnectConfig, **kwargs: object
+    ) -> AsyncIterator[_FakeLiveSession]:
+        configs.append(config)
+        sock = _FakeLiveSession()
+        opened.append(sock)
+        yield sock
+
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    model = RealtimeModel(
+        model="gemini-3.8-live",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+    )
+    session = model.session()
+    rag = VertexRAGRetrieval(rag_resources=["projects/1/locations/us-central1/ragCorpora/2"])
+
+    def _has_rag(config: types.LiveConnectConfig) -> bool:
+        return any(tool.retrieval is not None for tool in config.tools or [])
+
+    try:
+        await _wait_for_socket(opened, 1)
+
+        # adding, keeping, or dropping a retrieval tool each start a fresh session that
+        # carries the new tools in its connect config
+        await session.update_tools([rag])
+        await _wait_for_socket(opened, 2)
+        await session.update_tools([rag, _restart_tool])
+        await _wait_for_socket(opened, 3)
+        await session.update_tools([_restart_tool])
+        await _wait_for_socket(opened, 4)
+        assert [_has_rag(config) for config in configs] == [False, True, True, False]
+        assert all(config.session_resumption.handle is None for config in configs[1:])  # type: ignore[union-attr]
+        assert not [kind for sock in opened for kind, _ in sock.sent if kind == "context_update"]
+
+        # a resume after an instructions update re-sends the instructions but leaves the
+        # tools out, since the resumed session already has its retrieval tool
+        await session.update_tools([rag, _restart_tool])
+        await _wait_for_socket(opened, 5)
+        await session.update_instructions("Cite the corpus.")
+        while not opened[4].sent:
+            await asyncio.sleep(0.01)
+        session._session_resumption_handle = "handle-with-rag"
+        session._mark_restart_needed(on_error=True)
+        await _wait_for_socket(opened, 6)
+        assert configs[5].session_resumption.handle == "handle-with-rag"  # type: ignore[union-attr]
+        kind, payload = opened[5].sent[0]
+        assert kind == "context_update"
+        resent: tuple[Any, Any] = payload  # type: ignore[assignment]
+        assert resent[0].parts[0].text == "Cite the corpus."
+        assert resent[1] is None
+    finally:
+        await session.aclose()
+
+
+async def test_failed_resume_context_update_keeps_pending_chat_ctx(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resume that fails while re-sending the context must not drop pending chat context."""
+    from google.genai.live import AsyncLive
+
+    class _FailingContextUpdate(_FakeLiveSession):
+        async def send_context_update(
+            self, *, system_instruction: object = None, tools: object = None
+        ) -> None:
+            raise RuntimeError("socket closed during resume")
+
+    sockets: list[_FakeLiveSession] = [_FailingContextUpdate(), _FakeLiveSession()]
+    opened: list[_FakeLiveSession] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        fake = sockets[len(opened)]
+        opened.append(fake)
+        yield fake
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel(
+        conn_options=APIConnectOptions(max_retry=2, retry_interval=0.0)
+    ).session()
+    session._session_resumption_handle = "resume-me"
+    session._context_updated = True
+    pending = llm.ChatContext.empty()
+    msg = pending.add_message(role="user", content="queued while offline")
+    session._pending_chat_ctx = pending
+    try:
+        while len(opened) < 2 or session._active_session is not opened[1]:
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        assert opened[1].sent[0][0] == "context_update"
+        assert session._chat_ctx.get_by_id(msg.id) is not None
+    finally:
+        await session.aclose()
