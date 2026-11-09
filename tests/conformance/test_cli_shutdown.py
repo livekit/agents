@@ -150,11 +150,12 @@ async def test_signals_share_one_budget_across_drain_and_cleanup(
                     time.sleep(60)
                 await asyncio.Event().wait()
 
-            async def _drain(self):
+            async def _drain(self, timeout):
                 print("draining", flush=True)
                 if BEHAVIOR == "blocked_loop":
                     time.sleep(60)
-                await asyncio.sleep(60 if BEHAVIOR == "drain_timeout" else 0.15)
+                work = asyncio.sleep(60 if BEHAVIOR == "drain_timeout" else 0.15)
+                await asyncio.wait_for(work, timeout)
                 print("drained", flush=True)
 
             async def aclose(self):
