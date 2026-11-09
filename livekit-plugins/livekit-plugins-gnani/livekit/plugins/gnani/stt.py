@@ -25,7 +25,7 @@ import contextlib
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from livekit import rtc
 from livekit.agents import (
@@ -212,7 +212,7 @@ class STT(stt.STT):
                         body=error_text,
                     )
 
-                response_json = await res.json()
+                response_json = cast(dict[str, Any], await res.json())
                 transcript = response_json.get("transcript", "")
                 request_id = response_json.get("request_id", "")
 

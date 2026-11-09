@@ -795,7 +795,7 @@ fn a_generic_union_of_dataclass_subclasses_shares_its_base_and_caches_a_view() {
             base = "_Base", constant(status = "empty")))]
         pub struct Empty {{}}
         #[crate::host(record(module = "results", name = "Outcome", path = "pkg.results",
-            transparent, generic = "T"))]
+            transparent, generic = "T", generic_default = "str"))]
         pub enum Outcome {{ #[host(annotation = "Done[T]")] Done(Done), Empty(Empty) }}
         "#
         )
@@ -804,7 +804,7 @@ fn a_generic_union_of_dataclass_subclasses_shares_its_base_and_caches_a_view() {
     let models = crate::records::python(&decls).expect("models");
     let text = &models.iter().find(|o| o.path == "results.py").expect("results.py").text;
     assert!(
-        text.contains("T = TypeVar(\"T\", default=Any)\n")
+        text.contains("T = TypeVar(\"T\", default=str)\n")
             && text.contains("class Done(_Base, Generic[T]):\n")
             && text.contains("class Empty(_Base):\n")
             && text.contains("    @functools.cached_property\n    def cursor(self) -> int:\n")

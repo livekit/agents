@@ -190,7 +190,8 @@ pub struct RunNoOutput {
     path = "livekit.agents.voice.run_result",
     emit,
     transparent,
-    generic = "Output_T"
+    generic = "Output_T",
+    generic_default = "str"
 ))]
 #[derive(Debug, Clone)]
 pub enum CallerRunResult {

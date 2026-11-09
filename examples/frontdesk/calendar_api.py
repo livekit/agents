@@ -6,7 +6,7 @@ import hashlib
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol, cast
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
@@ -115,14 +115,14 @@ class CalComCalendar:
             return self._event_id
         async with self._http.get(CAL_COM + "me/", headers=self._headers("2024-06-14")) as resp:
             await resp.raise_for_status()
-            username = (await resp.json())["data"]["username"]
+            username = (await _body(resp))["data"]["username"]
         query = urlencode({"username": username})
         async with self._http.get(
             CAL_COM + f"event-types/?{query}", headers=self._headers("2024-06-14")
         ) as resp:
             await resp.raise_for_status()
             found = next(
-                (e for e in (await resp.json())["data"] if e.get("slug") == EVENT_SLUG), None
+                (e for e in (await _body(resp))["data"] if e.get("slug") == EVENT_SLUG), None
             )
         if found is None:
             async with self._http.post(
@@ -135,7 +135,7 @@ class CalComCalendar:
                 },
             ) as resp:
                 await resp.raise_for_status()
-                found = (await resp.json())["data"]
+                found = (await _body(resp))["data"]
             logging.getLogger("cal.com").info("created the %s event type", EVENT_SLUG)
         self._event_id = int(found["id"])
         return self._event_id
@@ -152,7 +152,7 @@ class CalComCalendar:
             CAL_COM + f"slots/?{query}", headers=self._headers("2024-09-04")
         ) as resp:
             await resp.raise_for_status()
-            days = (await resp.json())["data"]
+            days = (await _body(resp))["data"]
         return [
             Slot(datetime.datetime.fromisoformat(s["start"]).astimezone(TIMEZONE))
             for slots in days.values()
@@ -169,11 +169,15 @@ class CalComCalendar:
                 "eventTypeId": await self._event(),
             },
         ) as resp:
-            data = await resp.json()
+            data = await _body(resp)
             if "already has booking" in str(data.get("error", {}).get("message", "")):
                 raise SlotUnavailable
             await resp.raise_for_status()
         self.appointments.append(Appointment(slot, email))
+
+
+async def _body(resp: http.HttpResponse) -> dict[str, Any]:
+    return cast(dict[str, Any], await resp.json())
 
 
 def calendar() -> Calendar:

@@ -110,16 +110,23 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
         let mut typing = Imports::new(decls);
         let mut body = String::new();
         // A generic model's type variable, declared before the classes naming it.
-        let mut generics: Vec<&str> = Vec::new();
-        for generic in records.iter().filter_map(|r| r.generic.as_deref()) {
-            if !generics.contains(&generic) {
-                generics.push(generic);
+        let mut generics: Vec<(&str, Option<&str>)> = Vec::new();
+        for r in &records {
+            let Some(generic) = r.generic.as_deref() else { continue };
+            let default = r.generic_default.as_deref();
+            match generics.iter_mut().find(|(name, _)| *name == generic) {
+                None => generics.push((generic, default)),
+                Some((_, known)) if default.is_none() || *known == default => {}
+                Some((_, known @ None)) => *known = default,
+                Some(_) => {
+                    return Err(format!("{module}: `{generic}` declares two different defaults"));
+                }
             }
         }
-        for generic in generics {
-            runtime.add("typing", "Any");
+        for (generic, default) in generics {
             runtime.add("typing_extensions", "TypeVar");
-            body.push_str(&format!("\n\n{generic} = TypeVar({generic:?}, default=Any)\n"));
+            let default = default.map(|d| format!(", default={d}")).unwrap_or_default();
+            body.push_str(&format!("\n\n{generic} = TypeVar({generic:?}{default})\n"));
         }
         let own: Vec<String> = records
             .iter()

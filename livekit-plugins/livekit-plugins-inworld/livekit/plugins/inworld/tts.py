@@ -1197,15 +1197,15 @@ class TTS(tts.TTS):
             params=params,
         ) as resp:
             if not resp.ok:
-                error_body = await resp.json()
+                error_body = cast(dict[str, Any], await resp.json())
                 raise APIStatusError(
-                    message=error_body.get("message"),
+                    message=str(error_body.get("message")),
                     status_code=resp.status,
                     request_id=None,
                     body=None,
                 )
 
-            data = await resp.json()
+            data = cast(dict[str, Any], await resp.json())
             return TypeAdapter(list[dict[str, object]]).validate_python(data.get("voices", []))
 
 

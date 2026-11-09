@@ -266,10 +266,11 @@ pub struct RecordDecl {
     /// `Annotated[.., Field(discriminator=..)]` over its model members.
     pub discriminator: Option<String>,
     /// `record(.., generic = "Output_T")`: the model is generic over that type variable, which
-    /// its module declares (defaulting to `Any`) and a field's `annotation` names; a dataclass
-    /// subclasses `Generic[Output_T]`, a transparent union is a `TypeAliasType` with it as its
-    /// parameter.
+    /// its module declares and a field's `annotation` names; a dataclass subclasses
+    /// `Generic[Output_T]`, a transparent union is a `TypeAliasType` with it as its parameter.
     pub generic: Option<String>,
+    /// `record(.., generic_default = "str")`: the type variable's default; without one it has none.
+    pub generic_default: Option<String>,
     pub body: RecordBody,
 }
 

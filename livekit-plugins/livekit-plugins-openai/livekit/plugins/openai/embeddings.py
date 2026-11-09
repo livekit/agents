@@ -4,6 +4,7 @@ import base64
 import os
 import struct
 from dataclasses import dataclass
+from typing import Any, cast
 
 from livekit.agents import http
 
@@ -40,7 +41,7 @@ async def create_embeddings(
             "dimensions": dimensions,
         },
     ) as resp:
-        json = await resp.json()
+        json = cast(dict[str, Any], await resp.json())
         data = json["data"]
         list_data: list[EmbeddingData] = []
         for d in data:

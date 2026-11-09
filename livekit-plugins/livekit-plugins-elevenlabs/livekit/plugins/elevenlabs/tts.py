@@ -23,7 +23,7 @@ import weakref
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from functools import cached_property
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from livekit.agents import (
     APIConnectionError,
@@ -266,7 +266,7 @@ class TTS(tts.TTS):
             f"{self._opts.base_url}/voices",
             headers={AUTHORIZATION_HEADER: self._opts.api_key},
         ) as resp:
-            return _dict_to_voices_list(await resp.json())
+            return _dict_to_voices_list(cast(dict[str, Any], await resp.json()))
 
     def update_options(
         self,

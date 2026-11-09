@@ -14,7 +14,7 @@ import time
 import weakref
 from collections.abc import AsyncIterable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal, cast
 
 from pydantic import JsonValue
 
@@ -757,7 +757,7 @@ class RealtimeSession(
                     conn_options=DEFAULT_API_CONNECT_OPTIONS,
                 ) as resp:
                     await resp.raise_for_status()
-                    response_json = await resp.json()
+                    response_json = cast(dict[str, Any], await resp.json())
                     join_url = response_json.get("joinUrl")
                     if not join_url:
                         raise APIConnectionError("Ultravox call created, but no joinUrl received.")

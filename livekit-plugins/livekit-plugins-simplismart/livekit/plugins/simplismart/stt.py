@@ -24,7 +24,7 @@ import json
 import os
 import traceback
 from collections.abc import Callable
-from typing import Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
 from pydantic import BaseModel
@@ -238,7 +238,7 @@ class STT(stt.STT):
                         body=error_text,
                     )
 
-                response_json = await res.json()
+                response_json = cast(dict[str, Any], await res.json())
                 timestamps = response_json.get("timestamps", [])
                 transcription = response_json.get("transcription", [])
 

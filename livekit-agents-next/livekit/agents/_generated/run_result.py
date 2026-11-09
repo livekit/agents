@@ -12,7 +12,7 @@ from __future__ import annotations
 import functools
 from dataclasses import dataclass, field
 from inspect import get_annotations
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias
+from typing import TYPE_CHECKING, Generic, Literal, TypeAlias
 
 from typing_extensions import TypeAliasType, TypeVar
 
@@ -24,7 +24,7 @@ from .usage import Usage
 if TYPE_CHECKING:
     from livekit.agents.voice.run_result import RunAssert
 
-Output_T = TypeVar("Output_T", default=Any)
+Output_T = TypeVar("Output_T", default=str)
 
 
 @dataclass(kw_only=True)

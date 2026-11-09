@@ -19,6 +19,7 @@ import json
 import os
 import time
 import wave
+from typing import Any, cast
 
 from livekit import rtc
 from livekit.agents import (
@@ -136,10 +137,10 @@ class STT(stt.STT):
             headers=headers,
             conn_options=conn_options,
         ) as response:
-            response_data = await response.json()
+            response_data = cast(dict[str, Any], await response.json())
             end = time.time()
             text = response_data.get("text")
-            confidence = response_data.get("confidence")
+            confidence = response_data.get("confidence", 0.0)
             logger.info(
                 "clova stt result",
                 extra={

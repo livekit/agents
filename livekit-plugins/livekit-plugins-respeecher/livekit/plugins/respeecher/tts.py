@@ -21,6 +21,7 @@ import os
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from typing import Any, cast
 
 from livekit.agents import (
     APIConnectionError,
@@ -90,7 +91,7 @@ async def list_voices(
         },
     ) as resp:
         await resp.raise_for_status()
-        data = await resp.json()
+        data = cast(list[dict[str, Any]], await resp.json())
         voices = [Voice(voice_data) for voice_data in data]
         if not voices:
             raise APIError("No voices are available")

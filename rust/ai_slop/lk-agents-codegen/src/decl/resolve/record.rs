@@ -126,6 +126,12 @@ impl Resolver<'_> {
             ));
         }
         let generic = voc::text(at, &record.nested, "generic")?;
+        let generic_default = voc::text(at, &record.nested, "generic_default")?;
+        if generic_default.is_some() && generic.is_none() {
+            return Err(format!(
+                "{at}: generic_default is the default of the `generic` type variable"
+            ));
+        }
         if let Some(name) = &generic
             && (syn::parse_str::<syn::Ident>(name).is_err()
                 || !(dataclass.is_some() || (transparent && matches!(item, syn::Item::Enum(_)))))
@@ -493,6 +499,7 @@ impl Resolver<'_> {
             dispatch,
             discriminator,
             generic,
+            generic_default,
             body,
         })
     }
@@ -940,6 +947,7 @@ pub(super) fn record_target(
             "private",
             "discriminator",
             "generic",
+            "generic_default",
             // Rust's own: the record marker expands `ModelDump` (`model_dump(mode="json")`).
             "model_dump",
             "mapping",

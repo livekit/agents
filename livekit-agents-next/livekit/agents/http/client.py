@@ -17,6 +17,7 @@ import aiohttp
 import aiohttp.payload
 import certifi
 from aiohttp.abc import AbstractStreamWriter
+from pydantic import JsonValue
 
 from .._bindings import (
     APIConnectionError,
@@ -211,9 +212,10 @@ class HttpResponse:
     async def text(self) -> str:
         return await self._response.text()
 
-    async def json(self) -> Any:
+    async def json(self) -> JsonValue:
         """The body as JSON, whatever its content type."""
-        return jsonlib.loads(await self._response.read())
+        value: JsonValue = jsonlib.loads(await self._response.read())
+        return value
 
     async def iter_bytes(self) -> AsyncIterator[bytes]:
         """The body as it arrives."""
@@ -293,8 +295,9 @@ class WebSocketMessage:
             raise TypeError(f"a {self.type.value} message has no binary payload")
         return self.data
 
-    def json(self) -> Any:
-        return jsonlib.loads(self.data)
+    def json(self) -> JsonValue:
+        value: JsonValue = jsonlib.loads(self.data)
+        return value
 
 
 class WebSocket:

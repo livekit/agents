@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias, Union
+from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias
+
+from pydantic import JsonValue
 
 from livekit.protocol import agent_simulation as proto
 
@@ -216,7 +218,7 @@ def _runner(llm: LLM | None, host: _Evaluation) -> _core._core_JudgeRunner:
     return _core._core_JudgeRunner(None if llm is None else _bindings.core_leg(llm), host)
 
 
-ScenarioUserdata: TypeAlias = dict[str, Union["ScenarioUserdata", Any]]
+ScenarioUserdata: TypeAlias = dict[str, JsonValue]
 """A scenario's ``userdata``, decoded from its JSON string."""
 
 
