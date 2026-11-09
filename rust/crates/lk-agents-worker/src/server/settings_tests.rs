@@ -16,8 +16,8 @@ fn an_empty_proxy_variable_is_unset() {
     assert_eq!(http.as_deref(), Some("http://p"));
 }
 
-// Catches: an argument losing to the environment, the override losing to the argument, or an
-// empty variable read as a value.
+// Catches: an argument losing to the environment, the override losing to the argument, an
+// empty variable read as a value, or a thread API port that is not a port taken as one.
 #[test]
 fn options_fall_back_to_the_environment_and_the_override_wins() {
     let mut given = settings();
@@ -38,6 +38,11 @@ fn options_fall_back_to_the_environment_and_the_override_wins() {
     let s = settings().with_env(env(&[("LIVEKIT_AGENT_NAME", "from-env")]));
     assert_eq!(s.agent_name, "from-env");
     assert!(!s.cloud());
+    assert_eq!(s.thread_api_port, None);
+    let s = settings().with_env(env(&[("LIVEKIT_THREAD_API_PORT", "7890")]));
+    assert_eq!(s.thread_api_port, Some(7890));
+    let s = settings().with_env(env(&[("LIVEKIT_THREAD_API_PORT", "not a port")]));
+    assert_eq!(s.thread_api_port, None);
 }
 
 // Catches: the worker dialing ws_url when LIVEKIT_WORKER_URL names its address, an empty worker

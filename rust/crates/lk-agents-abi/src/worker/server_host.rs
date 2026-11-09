@@ -45,6 +45,10 @@ pub trait ServerConfig: Send + Sync + Sized + 'static {
     /// Hosted on Cloud (`LIVEKIT_WORKER_TOKEN` set).
     #[host(getter)]
     fn cloud(&self) -> bool;
+    /// `LIVEKIT_THREAD_API_PORT`: where a local `SQLiteStorage` serves the thread API outside
+    /// development.
+    #[host(getter)]
+    fn thread_api_port(&self) -> Option<u16>;
     #[host(getter)]
     fn drain_timeout(&self) -> f64;
     #[host(getter)]

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import multiprocessing as mp
-import os
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypedDict, TypeVar
@@ -216,13 +215,13 @@ class AgentServer(AgentHandler):
         runtime = self._ensure_runtime()
         from .storage import SQLiteStorage
 
-        thread_api_port = os.environ.get("LIVEKIT_THREAD_API_PORT")
+        thread_api_port = self._config.thread_api_port
         try:
             if isinstance(storage, SQLiteStorage) and (
-                (devmode and not unregistered) or thread_api_port
+                (devmode and not unregistered) or thread_api_port is not None
             ):
                 self._thread_server = await storage.threads._core_serve_threads(
-                    self._config.api_key, self._config.api_secret, int(thread_api_port or 0)
+                    self._config.api_key, self._config.api_secret, thread_api_port or 0
                 )
                 logger.info(
                     "local thread service",

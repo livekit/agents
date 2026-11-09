@@ -924,6 +924,7 @@ pub fn init(py: Python<'_>, role: Bound<'_, PyAny>) -> PyResult<()> {
 // Declared in rust/crates/lk-agents-abi/src/worker/server_host.rs.
 type ServerConfigImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ServerConfig;
+type ServerConfigThreadApiPortOutput = ::std::option::Option<u16>;
 type ServerConfigEndpointUrlOutput = ::std::option::Option<::std::string::String>;
 
 #[pyclass(frozen, name = "ServerConfig", module = "livekit.agents._core")]
@@ -1042,6 +1043,15 @@ impl ServerConfig {
         let out = py.detach(|| {
             <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::cloud(&self.0)
         });
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// `LIVEKIT_THREAD_API_PORT`: where a local `SQLiteStorage` serves the thread API outside
+    /// development.
+    #[getter]
+    fn thread_api_port(&self, py: Python<'_>) -> PyResult<ServerConfigThreadApiPortOutput> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::thread_api_port(&self.0));
         ::pyo3::PyResult::Ok(out)
     }
 

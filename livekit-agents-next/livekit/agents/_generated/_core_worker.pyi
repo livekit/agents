@@ -259,6 +259,11 @@ class ServerConfig:
     def cloud(self) -> bool:
         """Hosted on Cloud (`LIVEKIT_WORKER_TOKEN` set)."""
     @property
+    def thread_api_port(self) -> int | None:
+        """`LIVEKIT_THREAD_API_PORT`: where a local `SQLiteStorage` serves the thread API outside
+        development.
+        """
+    @property
     def drain_timeout(self) -> float: ...
     @property
     def shutdown_timeout(self) -> float: ...

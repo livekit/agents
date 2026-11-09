@@ -96,6 +96,10 @@ impl ServerConfig for Configuration {
         self.get().deployment.clone()
     }
 
+    fn thread_api_port(&self) -> Option<u16> {
+        self.get().thread_api_port
+    }
+
     fn card_version(&self) -> String {
         let deployment = self.deployment();
         if !deployment.is_empty() {

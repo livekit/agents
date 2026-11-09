@@ -67,6 +67,9 @@ pub struct ServerSettings {
     /// `LIVEKIT_AGENT_ENDPOINTS_URL`: where a job process delegates to its server's endpoints,
     /// resolved by the server before it starts them.
     pub endpoints_url: String,
+    /// `LIVEKIT_THREAD_API_PORT`: the port a local `SQLiteStorage` serves the thread API on
+    /// outside development.
+    pub thread_api_port: Option<u16>,
     pub listeners: Listeners,
     pub load_threshold: EnvOption<f32>,
     pub num_idle_processes: Option<EnvOption<u32>>,
@@ -105,6 +108,7 @@ impl Default for ServerSettings {
             deployment: String::new(),
             agent_name: String::new(),
             endpoints_url: String::new(),
+            thread_api_port: None,
             listeners: Listeners::default(),
             load_threshold: DEFAULT_LOAD_THRESHOLD,
             num_idle_processes: None,
@@ -257,6 +261,13 @@ impl ServerSettings {
         self.worker_url = env("LIVEKIT_WORKER_URL").unwrap_or_default();
         self.deployment = env("LIVEKIT_AGENT_DEPLOYMENT").unwrap_or_default();
         self.endpoints_url = env("LIVEKIT_AGENT_ENDPOINTS_URL").unwrap_or_default();
+        self.thread_api_port = env("LIVEKIT_THREAD_API_PORT").and_then(|port| {
+            let parsed = port.parse().ok();
+            if parsed.is_none() {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, port = port.as_str(); "LIVEKIT_THREAD_API_PORT is not a port; the thread API is not served");
+            }
+            parsed
+        });
         self
     }
 
