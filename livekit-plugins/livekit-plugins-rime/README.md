@@ -596,3 +596,25 @@ The tests include response settings revisions, completed tool history rebuilds,
 history snapshot isolation, and cancellation during acknowledged updates.
 Validate typed replies and audio playback against the target Prism deployment
 separately. Caller-interruption checks require a speech fixture with nonzero audio.
+
+### Upcoming Prism SDK settings
+
+The next SDK and plugin release adds `speed` to `RealtimeModel` and
+`update_options`. Values range from 0.85 through 1.3. It also accepts SDK
+`TurnDetection` settings at connect time and `TurnDetectionUpdate` for live
+changes to interruption word counts and phrase lists. The silence floor is
+connect-only. An empty phrase list clears it; omitted settings stay unchanged.
+Live updates change stored options after the server confirms them.
+
+Pass an SDK `Review` to the model's `review` option to check proposed speech.
+The SDK runs and cancels callbacks. They can run before a LiveKit generation
+exists and must support async cancellation. The adapter forwards SDK faults
+and server timestamps through `rime_server_event_received`. Partial captions
+use the cumulative transcript when present, including an empty correction;
+older events still append their delta.
+
+Use the matching new Python SDK for these options. The five unreleased Prism
+features require the next Prism image. Default requests omit the new settings
+and retain support for older images. Before publishing this plugin, raise its
+SDK dependency floor to the actual SDK release that contains these additions.
+The full validation run against the new image is still pending.

@@ -4998,6 +4998,78 @@ class TestRealtime:
                 assert peer.connections == 1
                 assert any(item.get("call_id") == "transfer-call" for item in peer.items)
 
+    async def test_prism_speed_and_turn_settings_confirmed_update(self):
+        async with peer_model(
+            speed=1.1,
+            turn_detection=r.TurnDetection(end_of_turn_min_silence_ms=750, interrupt_min_words=2),
+        ) as (peer, model, _):
+            session = model.session()
+            await session._update_session(instructions="Help")
+            assert peer.settings["speed"] == 1.1
+            assert peer.settings["turn_detection"]["end_of_turn_min_silence_ms"] == 750
+            peer.update_release.clear()
+            peer.update_started.clear()
+            session.update_options(
+                speed=0.9, turn_detection=r.TurnDetectionUpdate(interrupt_phrases=())
+            )
+            await peer.update_started.wait()
+            assert model._speed == 1.1
+            peer.update_release.set()
+            await wait_until(lambda: model._speed == 0.9)
+            assert peer.updates[-1] == {"speed": 0.9, "turn_detection": {"interrupt_phrases": []}}
+            assert model._turn_detection.end_of_turn_min_silence_ms == 750
+            assert model._turn_detection.interrupt_phrases == ()
+
+    async def test_prism_cumulative_transcript_corrects_and_clears_caption(self):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            await session._update_session(instructions="Help")
+            transcripts, events = [], []
+            session.on("input_audio_transcription_completed", transcripts.append)
+            session.on("rime_server_event_received", events.append)
+            for body in (
+                {"delta": "night"},
+                {"delta": "", "transcript": "nine"},
+                {"delta": "", "transcript": ""},
+                {"delta": "new"},
+            ):
+                await peer.emit(
+                    "conversation.item.input_audio_transcription.delta",
+                    item_id="input",
+                    server_time_ms=123,
+                    **body,
+                )
+            await wait_until(lambda: len(transcripts) == 4)
+            assert [event.transcript for event in transcripts] == ["night", "nine", "", "new"]
+            assert [
+                event.server_time_ms
+                for event in events
+                if isinstance(event.payload, r.TranscriptDelta)
+            ] == [123] * 4
+
+    async def test_prism_review_runs_before_generation(self):
+        seen = []
+
+        async def review(request):
+            seen.append(request)
+            return r.Allow()
+
+        async with peer_model(review=r.Review(callback=review)) as (peer, model, _):
+            session = model.session()
+            await session._update_session(instructions="Help")
+            assert peer.settings["prism_review"] == {"timeout_ms": 1000, "on_timeout": "stop"}
+            await peer.emit(
+                "prism.review.requested",
+                review_id="review",
+                response_id="provisional",
+                item_id="speech",
+                index=0,
+                text="Hello",
+            )
+            event = await peer.next("prism.review.result")
+            assert event["action"] == "allow"
+            assert seen[0].response_id == "provisional"
+
     async def test_generation_diagnostics_and_transcript_deltas(self):
         async with peer_model(request_id="diagnostics") as (peer, model, _):
             session = model.session()
