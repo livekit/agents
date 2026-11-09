@@ -513,7 +513,10 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
         let taken =
             applied[applied.len() - 1 - releases..applied.len() - 1].iter().any(|a| a.accepted);
         let avatar_reported = run.avatar.as_ref().map(|w| w.progress()) != avatar_before;
-        if (releases == 0 && !run.deadline_ahead() && !avatar_reported)
+        // Past an injected hang, a release the session refuses waits on what hung (a segment
+        // still taking frames from a voice that never answers): the run is held to its close.
+        let released = releases == 0 || (run.record.hung() && !taken);
+        if (released && !run.deadline_ahead() && !avatar_reported)
             || (run.record.driver_finished() && !taken)
         {
             quiet += 1;

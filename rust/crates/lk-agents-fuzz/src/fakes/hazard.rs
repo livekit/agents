@@ -8,9 +8,10 @@ pub use crate::record::{Fault, Site};
 // other fault. Stress frequencies, not measured rates: a stressed run draws once per host call
 // and once per provider stream (at its open), and one draw in `ONE_IN` strikes, half of those a
 // panic and half a fake that never answers. A stream's fault lands at one of its first eight
-// steps, or at its close, a quarter of the time. A panic unwinds out of the fake's future inside
-// the product's task, where the runtime's spawn wrapper (`lk_agents_net::task::launch`) reports
-// it and resumes it, as in production.
+// steps, or at its close, a quarter of the time; a close that never answers is abandoned at its
+// deadline, as every port bounds its close (`Registry::strike_close`). A panic unwinds out of the
+// fake's future inside the product's task, where the runtime's spawn wrapper
+// (`lk_agents_net::task::launch`) reports it and resumes it, as in production.
 
 /// One draw in this many strikes.
 pub const ONE_IN: u32 = 24;

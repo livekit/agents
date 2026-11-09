@@ -397,6 +397,19 @@ impl Registry {
         self.hazards.get().map(|h| h.draw_stream(next, close)).unwrap_or_default()
     }
 
+    /// A stream's close fault as its port reports it: a panic at the poll, or a teardown that
+    /// never answers, abandoned at `deadline` on the session's clock, as the binding bounds a
+    /// host's `aclose()` (`py_streams`). No port's close outlives its deadline.
+    pub(super) async fn strike_close(
+        &self,
+        fault: hazard::Fault,
+        site: hazard::Site,
+        deadline: Ts,
+    ) -> lk_agents_abi::Closed {
+        let clock = self.stamps.clock();
+        lk_agents_abi::Closed::bounded(clock.as_ref(), deadline, hazard::strike(fault, site)).await
+    }
+
     /// Stream `on`'s fault at `site`, now due: recorded.
     pub fn stream_fault(
         &self,

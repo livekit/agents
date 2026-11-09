@@ -129,11 +129,11 @@ impl StreamOutput<VadEvent> for Detection {
         true
     }
 
-    fn close(mut self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+    fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
         let fault = self.registry.stream_fault(&mut self.hazard, Site::VadClose, self.slot);
         Box::pin(async move {
             if let Some(fault) = fault {
-                return strike(fault, Site::VadClose).await;
+                return self.registry.strike_close(fault, Site::VadClose, deadline).await;
             }
             self.registry.mark_closed(self.slot);
             Closed::Clean

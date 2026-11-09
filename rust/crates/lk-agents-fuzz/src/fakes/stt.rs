@@ -161,11 +161,11 @@ impl StreamOutput<SpeechEvent> for Recognition {
         true
     }
 
-    fn close(mut self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+    fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
         let fault = self.registry.stream_fault(&mut self.hazard, Site::SttClose, self.slot);
         Box::pin(async move {
             if let Some(fault) = fault {
-                return strike(fault, Site::SttClose).await;
+                return self.registry.strike_close(fault, Site::SttClose, deadline).await;
             }
             self.registry.mark_closed(self.slot);
             Closed::Clean

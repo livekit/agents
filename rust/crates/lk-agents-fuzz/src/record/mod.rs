@@ -102,6 +102,11 @@ impl Stamps {
     pub fn ts(&self) -> Ts {
         self.time.now()
     }
+
+    /// The session's own clock, for what a fake waits on.
+    pub fn clock(&self) -> std::sync::Arc<dyn lk_agents_abi::Clock> {
+        self.time.clock()
+    }
 }
 
 /// A kind of thing a run can open and point at.

@@ -880,3 +880,81 @@ fn recorder_attachment_after_the_loop_exits_retires_its_registration() {
         assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
     });
 }
+
+mod hung_close_abandoned_at_its_deadline {
+    //! A provider stream whose close never answers is abandoned at its deadline, as the binding
+    //! bounds a host's `aclose()`: the session's close still finishes.
+    use lk_agents_fuzz::drive::{Outcome, Run, Setup, finish, simulate};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
+    use lk_agents_fuzz::record::{Fault, Site};
+
+    /// Arms the one hazard this case draws: the reply's chat stream hangs at its close.
+    const CHAT_CLOSE_HANGS: u64 = 2280;
+
+    // Catches: the fakes' hung close never resolving past its deadline, which no port can do, so
+    // the close an interrupted reply left to the session's cleanup held the session's close
+    // forever (survey seed 982).
+    #[test]
+    fn an_interrupted_reply_whose_close_hangs_lets_the_session_close() {
+        let setup = Setup { stress: Some(CHAT_CLOSE_HANGS), ..Setup::default() };
+        simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in [
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(20) },
+                Input::LlmText { chat: Ref::new(0), text: AgentText("Let me check.".into()) },
+                Input::Advance { ms: Millis(100) },
+                Input::Interrupt { force: true, wait: false },
+                Input::Advance { ms: Millis(100) },
+            ] {
+                run.apply(&input).await;
+            }
+            let faults: Vec<_> = run.record.faults().iter().map(|(_, s, f)| (*s, *f)).collect();
+            assert_eq!(faults, [(Site::ChatClose, Fault::Hang)], "the seed arms only the close");
+            let outcome = finish(run, Outcome::default()).await;
+            assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
+        });
+    }
+}
+
+mod hung_voice_held_to_the_close {
+    //! A voice that never answers holds an uninterruptible `say` and its segment open: no release
+    //! of the case's can end them, so the run is held to its close instead.
+    use lk_agents_fuzz::drive::{Ending, Outcome, Run, Setup, finish, simulate};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, SayInput};
+    use lk_agents_fuzz::record::{Fault, Site};
+
+    /// Arms the one hazard this case draws: the say's voice hangs at its first read.
+    const VOICE_HANGS: u64 = 29;
+
+    // Catches: the release phase offering the hung segment's finish every round, refused every
+    // round, so a run past an injected hang never went quiet and never reached the close its
+    // rules judge (survey seed 404).
+    #[test]
+    fn an_uninterruptible_say_on_a_hung_voice_reaches_the_close() {
+        let setup = Setup { stress: Some(VOICE_HANGS), ..Setup::default() };
+        simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in [
+                Input::Say {
+                    text: AgentText("Your options are many.".into()),
+                    input: SayInput::TextStream,
+                    allow: Some(false),
+                    to_ctx: false,
+                },
+                Input::Advance { ms: Millis(20) },
+                Input::FeedText {
+                    stream: Ref::new(0),
+                    text: AgentText("Your options are many. ".into()),
+                },
+                Input::Advance { ms: Millis(20_000) },
+            ] {
+                run.apply(&input).await;
+            }
+            let faults: Vec<_> = run.record.faults().iter().map(|(_, s, f)| (*s, *f)).collect();
+            assert_eq!(faults, [(Site::TtsNext, Fault::Hang)], "the seed arms only the voice");
+            let outcome = finish(run, Outcome::default()).await;
+            assert_eq!(outcome.ending, Ending::Completed, "{:#?}", outcome.failures);
+        });
+    }
+}

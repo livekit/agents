@@ -336,12 +336,12 @@ impl StreamOutput<SynthesizedAudio> for Output {
         true
     }
 
-    fn close(mut self: Box<Self>, _deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+    fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
         let fault = self.registry.stream_fault(&mut self.hazard, Site::TtsClose, self.slot);
         Box::pin(async move {
             self.registry.voice_due(self.slot.nth, None);
             if let Some(fault) = fault {
-                return strike(fault, Site::TtsClose).await;
+                return self.registry.strike_close(fault, Site::TtsClose, deadline).await;
             }
             self.registry.mark_closed(self.slot);
             Closed::Clean
