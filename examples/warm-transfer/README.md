@@ -91,6 +91,9 @@ prevent cleanup.
 
 ## Preserve the inbound caller's number with Telnyx
 
+This section applies only to Telnyx SIP trunks. Other SIP providers have their own
+caller-ID rules, so keep the default configuration in `warm_transfer.py` for them.
+
 A warm transfer creates a new outbound call to the supervisor. To let the
 supervisor identify the customer, an application can preserve the customer's
 caller ID instead of presenting its business number. The existing `sip_number`
