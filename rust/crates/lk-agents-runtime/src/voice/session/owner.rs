@@ -234,7 +234,7 @@ impl Inner {
         let Startup { storage, host, trace, job_ids, mut opening } = startup;
         let ready = storage.open_ready().await?;
         // `gen_ai.conversation.id` is the call's thread.
-        let trace = trace.with_conversation(Some(ready.thread()));
+        let trace = trace.with_conversation(ready.thread());
         // Startup work runs under `session_start`, reserved before the driver opens it.
         let starting = trace.clone().under::<telemetry::SessionStart>(opening.start.context);
         let bindings = host.prepare(&starting).await?.bindings();
@@ -272,7 +272,7 @@ impl Inner {
         }
         args.on_event =
             Some(Arc::new(Events { owner: Arc::downgrade(self), host: args.on_event.take() }));
-        args.storage = Some(ready.voice_store());
+        args.storage = ready.voice_store().map(|store| store as _);
         if let Some(history) = ready.history() {
             args.chat_ctx = Some(history);
         }

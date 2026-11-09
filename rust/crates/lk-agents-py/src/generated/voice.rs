@@ -4594,6 +4594,7 @@ impl CoreSessionOwner {
 // Declared in rust/crates/lk-agents-abi/src/voice/session_storage.rs.
 type CoreSessionStorageImpl =
     <crate::generated::implementations::Selected as super::Implementations>::SessionStorage;
+type SessionStorageThreadIdOutput = ::std::option::Option<::std::string::String>;
 
 #[pyclass(frozen, name = "_core_SessionStorage", module = "livekit.agents._core")]
 pub struct CoreSessionStorage(pub(crate) ::std::sync::Arc<CoreSessionStorageImpl>);
@@ -4636,8 +4637,7 @@ impl CoreSessionStorage {
     }
 
     /// Load the supplied thread's lane; its failure is the call's (no other thread replaces it).
-    /// Without a thread, the call runs on a new thread of the local SQLite storage
-    /// (`SQLiteStorage()`'s default directory).
+    /// Without a thread, the call runs in memory: nothing is written anywhere.
     fn open<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
@@ -4648,16 +4648,19 @@ impl CoreSessionStorage {
         })
     }
 
-    /// The storage the call's thread lives in.
+    /// The storage the call's thread lives in; `None` in memory.
     #[getter]
-    fn namespace(&self, py: Python<'_>) -> PyResult<super::storage::Storage> {
+    fn namespace(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<::std::option::Option<super::storage::Storage>> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| <CoreSessionStorageImpl as ::lk_agents_abi::voice::session_storage::SessionStorage>::namespace(&self.0));
-        ::pyo3::PyResult::Ok(super::storage::Storage(out))
+        out.map(|value| ::pyo3::PyResult::Ok(super::storage::Storage(value))).transpose()
     }
 
     #[getter]
-    fn thread_id(&self, py: Python<'_>) -> PyResult<::std::string::String> {
+    fn thread_id(&self, py: Python<'_>) -> PyResult<SessionStorageThreadIdOutput> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| <CoreSessionStorageImpl as ::lk_agents_abi::voice::session_storage::SessionStorage>::thread_id(&self.0));
         ::pyo3::PyResult::Ok(out)
@@ -4678,10 +4681,13 @@ impl CoreSessionStorage {
     }
 
     #[getter]
-    fn voice_store(&self, py: Python<'_>) -> PyResult<super::storage::CoreVoiceStore> {
+    fn voice_store(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<::std::option::Option<super::storage::CoreVoiceStore>> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| <CoreSessionStorageImpl as ::lk_agents_abi::voice::session_storage::SessionStorage>::voice_store(&self.0));
-        ::pyo3::PyResult::Ok(super::storage::CoreVoiceStore(out))
+        out.map(|value| ::pyo3::PyResult::Ok(super::storage::CoreVoiceStore(value))).transpose()
     }
 
     #[getter]

@@ -141,8 +141,8 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
             tools: Tools shared by every agent of the session. A name an agent's own tool
                 also has is refused with ``ValueError`` when that agent runs.
             context, thread: Read by tools through ``RunContext``. Without ``thread``, the call
-                runs on a new thread of the local ``SQLiteStorage()``; a ``thread`` whose lane
-                does not load fails ``start()`` with its ``StorageError``.
+                runs in memory and writes nothing; a ``thread`` whose lane does not load fails
+                ``start()`` with its ``StorageError``.
             video_sampler: How often camera frames reach the model; ``None`` sends every frame.
             conn_options: Each leg's connection policy.
             stt_context_options: The keyterms and context the STT is biased toward.
@@ -174,7 +174,7 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     @property
     def store(self) -> ContextStore:
         """The call's store for explicit ``load_context`` and ``save_context``: its thread's
-        lane."""
+        lane, or the session's memory without a thread."""
         if self._store is None:
             raise RuntimeError("VoiceSession isn't running")
         return self._store
@@ -186,8 +186,7 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
 
     @property
     def thread(self) -> Thread | None:
-        """The call's thread: the supplied one, else, once started, a new thread of the local
-        ``SQLiteStorage()``; ``None`` before ``start()`` without one."""
+        """The call's thread: the supplied one; ``None`` for a call in memory."""
         return self._thread
 
     @property

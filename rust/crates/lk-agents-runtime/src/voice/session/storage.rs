@@ -14,9 +14,8 @@ use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 
-/// The call's lane, on the supplied thread or, without one, a new local one.
+/// The call's lane on the supplied thread or, without one, in memory.
 pub struct SessionStorage {
-    env: ProcessEnv,
     namespace: Option<Arc<Namespace>>,
     thread_id: Option<String>,
     lane: String,
@@ -26,12 +25,17 @@ pub struct SessionStorage {
 }
 
 pub(super) struct Opened {
-    namespace: Arc<Namespace>,
-    thread_id: String,
+    lane: Option<Lane>,
     scope_id: String,
     activation: ContextStore,
-    voice_store: Arc<VoiceStore>,
     history: Option<Vec<ChatItem>>,
+}
+
+/// The supplied thread's lane, as it loaded.
+struct Lane {
+    namespace: Arc<Namespace>,
+    thread_id: String,
+    voice_store: Arc<VoiceStore>,
 }
 
 impl SessionStorage {
@@ -56,53 +60,42 @@ impl SessionStorage {
         self.opened.get_or_try_init(|| self.load()).await
     }
 
-    /// The supplied thread's lane, whose failure is the call's; without one, a new thread of the
-    /// local SQLite storage.
+    /// The supplied thread's lane, whose failure is the call's; without one, the call runs in
+    /// memory on the history it was given.
     async fn load(&self) -> Result<Opened, StorageError> {
-        if let (Some(namespace), Some(thread_id)) = (&self.namespace, &self.thread_id) {
-            let initial_history = self.initial_history.clone();
-            return self.lane(Arc::clone(namespace), thread_id.clone(), initial_history).await;
-        }
-        let local = lk_agents_abi::storage::LocalStorageOptions {
-            directory: None,
-            project_id: lk_agents_storage::storage::DEFAULT_PROJECT_ID.into(),
+        let scope_id = format!("root:{}", self.lane);
+        let (Some(namespace), Some(thread_id)) = (&self.namespace, &self.thread_id) else {
+            return Ok(Opened {
+                lane: None,
+                scope_id,
+                activation: ContextStore::new(Vec::new(), None, false)?,
+                history: self.initial_history.clone(),
+            });
         };
-        let local =
-            Arc::new(Namespace::new(&self.env, Some(local), None, None, None, None, None, None)?);
-        let thread = local.create_thread(None, None, 0).await?;
-        // A new thread has nothing to load: the call starts on the history it was given.
-        let history = self.initial_history.clone().unwrap_or_default();
-        self.lane(local, thread.thread_id, Some(history)).await
-    }
-
-    async fn lane(
-        &self,
-        namespace: Arc<Namespace>,
-        thread_id: String,
-        initial_history: Option<Vec<ChatItem>>,
-    ) -> Result<Opened, StorageError> {
         let store = namespace
-            ._core_voice_store(thread_id.clone(), self.lane.clone(), initial_history)
+            ._core_voice_store(thread_id.clone(), self.lane.clone(), self.initial_history.clone())
             .await?;
         Ok(Opened {
-            namespace,
-            thread_id,
-            scope_id: format!("root:{}", self.lane),
+            scope_id,
             activation: store.activation(),
             history: store.initial_history(),
-            voice_store: Arc::new(store),
+            lane: Some(Lane {
+                namespace: Arc::clone(namespace),
+                thread_id: thread_id.clone(),
+                voice_store: Arc::new(store),
+            }),
         })
     }
 }
 
 impl Opened {
-    pub(super) fn voice_store(&self) -> Arc<VoiceStore> {
-        Arc::clone(&self.voice_store)
+    pub(super) fn voice_store(&self) -> Option<Arc<VoiceStore>> {
+        self.lane.as_ref().map(|lane| Arc::clone(&lane.voice_store))
     }
 
     /// The call's thread: the conversation its spans record.
-    pub(super) fn thread(&self) -> &str {
-        &self.thread_id
+    pub(super) fn thread(&self) -> Option<&str> {
+        self.lane.as_ref().map(|lane| lane.thread_id.as_str())
     }
 
     pub(super) fn history(&self) -> Option<Vec<ChatItem>> {
@@ -117,31 +110,23 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
     type VoiceStore = VoiceStore;
 
     fn new(
-        env: &ProcessEnv,
+        _env: &ProcessEnv,
         namespace: Option<Arc<Namespace>>,
         thread_id: Option<String>,
         lane: String,
         agent: String,
         initial_history: Option<Vec<ChatItem>>,
     ) -> Self {
-        Self {
-            env: env.clone(),
-            namespace,
-            thread_id,
-            lane,
-            agent,
-            initial_history,
-            opened: OnceCell::new(),
-        }
+        Self { namespace, thread_id, lane, agent, initial_history, opened: OnceCell::new() }
     }
     async fn open(&self) -> Result<(), StorageError> {
         self.open_ready().await.map(|_| ())
     }
-    fn namespace(&self) -> Arc<Namespace> {
-        Arc::clone(&self.opened().namespace)
+    fn namespace(&self) -> Option<Arc<Namespace>> {
+        self.opened().lane.as_ref().map(|lane| Arc::clone(&lane.namespace))
     }
-    fn thread_id(&self) -> String {
-        self.opened().thread_id.clone()
+    fn thread_id(&self) -> Option<String> {
+        self.opened().thread().map(str::to_owned)
     }
     fn scope_id(&self) -> String {
         self.opened().scope_id.clone()
@@ -149,7 +134,7 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
     fn activation(&self) -> ContextStore {
         self.opened().activation.clone()
     }
-    fn voice_store(&self) -> Arc<VoiceStore> {
+    fn voice_store(&self) -> Option<Arc<VoiceStore>> {
         self.opened().voice_store()
     }
     fn history(&self) -> Option<Vec<ChatItem>> {
@@ -157,7 +142,9 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
     }
     async fn aclose(&self) {
         let Some(opened) = self.opened.get() else { return };
-        if let Err(error) = opened.voice_store.aclose().await {
+        if let Some(lane) = &opened.lane
+            && let Err(error) = lane.voice_store.aclose().await
+        {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice store could not close: {error}");
         }
         opened.activation.close();

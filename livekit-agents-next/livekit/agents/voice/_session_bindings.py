@@ -373,17 +373,11 @@ class SessionHost:
             else None
         )
 
-        from ..storage import Thread, _StorageHandle
         from ..storage.context import ContextStore
 
         storage = session._native.storage
         assert storage is not None
         session._store = ContextStore(activation=storage.activation, scope_id=storage.scope_id)
-        # the call's thread: the supplied one, or the new local thread it runs on without one
-        if session._thread is None or session._thread.id != storage.thread_id:
-            session._thread = Thread(
-                _StorageHandle(storage.namespace), storage.thread_id, agent_name=agent.name
-            )
 
         hooks = _AgentHooks(session)
         frame = session._frame(agent)

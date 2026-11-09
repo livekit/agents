@@ -202,16 +202,24 @@ async def test_a_call_on_a_thread_that_does_not_load_fails_to_start(
     assert record.levelno == logging.ERROR and getattr(record, "thread_id", None) == thread_id
 
 
-async def test_call_without_a_thread_keeps_its_context_on_a_local_thread() -> None:
+# Catches: a call without a thread writing a thread anywhere, a local SQLite file included,
+# instead of keeping its context and history in the session's memory.
+async def test_call_without_a_thread_runs_in_memory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    local = tmp_path / "local-threads"
+    monkeypatch.setenv("LIVEKIT_AGENT_THREADS_DIR", str(local))
     app = Application()
     async with VoiceSession(llm=ObservedLLM(), context=app) as session:
         await session.start(Agent(instructions="desk", name="desk"))
+        assert session.thread is None
         await session.store.load_context(app)
         app.draft.count = 2
         await session.store.save_context(app)
         restored = Application()
         await session.store.load_context(restored)
         assert restored.draft.count == 2
+    assert not local.exists()
 
 
 async def test_failed_voice_generation_abandons_saved_fields_before_the_next_turn(
