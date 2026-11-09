@@ -13,7 +13,12 @@ impl TurnAccumulator {
     /// The first output determines the speaking stamp for the entire generation step.
     /// Returns whether text-only delivery must publish the first-frame notification. Audio
     /// delivery records its stamp here but publishes through its existing playback path.
-    pub fn on_forwarded(&mut self, event: TurnAccumulatorOutputEvent<'_>, now: f64) -> bool {
+    /// `now` is read only for the first frame, the one reading kept.
+    pub fn on_forwarded(
+        &mut self,
+        event: TurnAccumulatorOutputEvent<'_>,
+        now: impl FnOnce() -> f64,
+    ) -> bool {
         match event {
             TurnAccumulatorOutputEvent::TextDelta { delta, has_audio_output, interrupted } => {
                 if delta.is_empty() {
@@ -211,14 +216,14 @@ mod tests {
                 has_audio_output: false,
                 interrupted: false,
             },
-            1.0
+            || 1.0
         ));
         assert!(!acc.on_forwarded(
             TurnAccumulatorOutputEvent::SegmentOpened {
                 has_audio_output: false,
                 interrupted: true,
             },
-            1.0
+            || 1.0
         ));
         assert!(acc.on_forwarded(
             TurnAccumulatorOutputEvent::TextDelta {
@@ -226,14 +231,14 @@ mod tests {
                 has_audio_output: false,
                 interrupted: false,
             },
-            2.0
+            || 2.0
         ));
         assert!(!acc.on_forwarded(
             TurnAccumulatorOutputEvent::SegmentOpened {
                 has_audio_output: false,
                 interrupted: false,
             },
-            3.0
+            || 3.0
         ));
     }
 

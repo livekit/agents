@@ -311,3 +311,34 @@ async fn a_delayed_old_observation_does_not_release_the_next_segments_words() {
     let shown: String = c.take_shown().into_iter().map(|(word, _)| word).collect();
     assert_eq!(shown, "next words");
 }
+
+/// The playback each released word was reported against.
+struct Attributed(parking_lot::Mutex<Vec<(String, Option<PlaybackSegment>)>>);
+
+impl PlaybackObserver for Attributed {
+    fn on_playback_event(&self, _ev: &PlaybackEvent) {}
+
+    fn on_transcript_shown(&self, segment: Option<PlaybackSegment>, word: &TranscriptChunk) {
+        self.0.lock().push((word.text.clone(), segment));
+    }
+}
+
+// Catches: a pause released the playing segment's started word with no playback named, so the
+// speech playing next took it for its own: after a speech whose finish was lost, the next one's
+// launch pause showed the old speech's " refund" as the new speech's, ahead of its audio (survey
+// seed 24922).
+#[tokio::test]
+async fn a_pause_names_the_playback_whose_word_it_shows() {
+    let c = Chain::new();
+    let attributed = Arc::new(Attributed(Default::default()));
+    c.sync.audio_output().tracker().observe(attributed.clone());
+    c.text("one two three four five six").await;
+    c.audio(2).await;
+    c.leaf.playback_started(c.key(), Ts::ZERO);
+    c.played(0, 700);
+    attributed.0.lock().clear();
+    c.sync.audio_output().pause();
+    let shown = attributed.0.lock().clone();
+    assert!(!shown.is_empty(), "the pause shows the word whose audio started");
+    assert!(shown.iter().all(|(_, segment)| *segment == Some(c.key())), "{shown:?}");
+}

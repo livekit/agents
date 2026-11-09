@@ -98,6 +98,7 @@ overrides = [{ name = "livekit-agents", marker = "sys_platform == 'never'" }]
 [manifest.dependency-groups]
 dev = [
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=1.1.2,<2" },
+    { name = "colorama" },
     { name = "jiwer", specifier = ">=3.1.0" },
     { name = "jsonschema", specifier = ">=4.25.0" },
     { name = "mcp", specifier = ">=2.2,<3" },

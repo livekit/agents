@@ -619,3 +619,22 @@ mod unset_detection_stt_only {
         assert_eq!(observed(&setup), (0, 0), "no user state change, no user item");
     }
 }
+
+mod stt_flush_is_filler {
+    //! The silence `commit_user_turn` flushes the recogniser with never pushes the person's
+    //! queued audio out of the recogniser's input.
+    use lk_agents_fuzz::search;
+
+    // Catches: a 15 s flush of silence into the recogniser's 10 s input queue dropping the
+    // person's frames queued ahead of it (`forwarded_while_enabled`, campaign seeds 6573, 30122
+    // and 32653).
+    #[test]
+    fn a_long_flush_keeps_the_queued_microphone_audio() {
+        for seed in [6573, 30122, 32653] {
+            let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
+            let outcome = search::explore(setup, seed, 3000);
+            let failed = outcome.failures.iter().any(|f| f.contract == "forwarded_while_enabled");
+            assert!(!failed, "seed {seed}: the flush dropped the person's audio");
+        }
+    }
+}

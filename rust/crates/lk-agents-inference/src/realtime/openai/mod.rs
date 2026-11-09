@@ -1,12 +1,12 @@
 mod encode;
-#[cfg(test)]
-#[path = "openai_tests.rs"]
-mod tests;
 mod model;
 pub(crate) mod queue;
 pub mod session;
 #[cfg(test)]
 mod testfix;
+#[cfg(test)]
+#[path = "openai_tests.rs"]
+mod tests;
 pub mod wire;
 mod writer;
 

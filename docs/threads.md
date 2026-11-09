@@ -75,12 +75,12 @@ Every route below is signed with the project's key, so the agent trusts the id w
 | an inbound phone call                         | the dispatch the SIP dispatch rule creates                                              | LiveKit Cloud, by the caller's `phone:+E164` key (get-or-create), so a call continues the texts and calls before it |
 | the web console and `lk agent console`        | the console's token or simulated job                                                    | the console, which creates the thread first                                                                         |
 
-| The job's `thread_id`            | `ctx.thread` and the call                                      |
-| -------------------------------- | -------------------------------------------------------------- |
-| a known thread                   | that thread, open before the entrypoint runs                   |
-| empty                            | `None`: the call keeps its history in memory, unsaved          |
-| unknown or deleted               | `None`: the refusal is logged and the call continues in memory |
-| any, on a server without storage | `None`                                                         |
+| The job's `thread_id`            | `ctx.thread` and the call                                                               |
+| -------------------------------- | --------------------------------------------------------------------------------------- |
+| a known thread                   | that thread, open before the entrypoint runs; a lane that does not load fails `start()` |
+| empty                            | `None`: the call runs on a new thread of the local `SQLiteStorage()`                    |
+| unknown or deleted               | `None`: the refusal is logged; the call runs on a new local thread                      |
+| any, on a server without storage | `None`: the call runs on a new local thread                                             |
 
 Whoever dispatches the call already has its thread id and hands it to its frontend;
 the room does not publish it. A tool with the project's key reads it from the
@@ -99,7 +99,7 @@ application's choice.
 | ------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | web chat, API | as many as the application wants | a thread per chat, created with the person as `scope`, listed by scope for a sidebar, titled with `update(attributes=)`; see [clients.md](clients.md) |
 | the same      | one                              | the backend keeps one thread id per person and sends it every time                                                                                    |
-| calls         | the one the dispatch names       | the dispatch's `thread_id` (see [Calls](#calls)); with none, the call keeps no thread                                                                 |
+| calls         | the one the dispatch names       | the dispatch's `thread_id` (see [Calls](#calls)); with none, a new thread of the local `SQLiteStorage()`                                             |
 
 Tags, folders and search are the application's own table, keyed by the
 thread id. Each thread is its own memory: what the agent learned in one
@@ -125,8 +125,10 @@ On every context, in a tool during any run and in an endpoint's handler,
 `ctx.live_session`, `None` outside a call; only it speaks. In an
 `rtc_session` entrypoint, `ctx.thread` is the call's thread, `None` on a
 server without storage, and `VoiceSession(thread=ctx.thread)` gives it to
-the call. Without storage, a run's `ctx.thread` is an in-memory thread
-with the same API and no persistence; see [storage.md](internals/storage.md).
+the call. A call without a thread runs on a new thread of the local
+`SQLiteStorage()` (its default directory); a call whose thread does not load
+fails to start (see [voice-session.md](voice-session.md#the-calls-thread)),
+and a text run without storage has no thread. See [storage.md](internals/storage.md).
 
 | Member                                                                             | Returns              | What                                                                                   |
 | ---------------------------------------------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------- |

@@ -307,11 +307,7 @@ impl Inner {
                 String::new(),
             )
             .await
-            .map(drop)
-            .map_err(|error| match error.rpc() {
-                Some(rpc) => format!("{}: {}", rpc.code, rpc.message),
-                None => error.to_string(),
-            });
+            .map(drop);
         let pending = self.tracker.has_pending_segment(key);
         let give_up_after = match after_clear(pending, rpc, self.clear_buffer_timeout) {
             AfterClear::Retire => {

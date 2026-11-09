@@ -36,7 +36,7 @@ again when left empty.
 | `tts_text_transforms` | the `TextTransforms` applied before synthesis: `"filter_markdown"`, `"filter_emoji"` |
 | `tools` | tools and toolsets every agent of the call is offered, besides its own; a name an agent's tool already has is refused (`ValueError`) when that agent runs, see [tools](tools.md#tools-on-an-agent) |
 | `context` | the application object; marked fields require explicit loading and saving |
-| `thread` | the call's durable thread, `ctx.thread`; omitted, the history is kept in memory and not saved |
+| `thread` | the call's durable thread, `ctx.thread`; omitted, the call runs on a new thread of the local `SQLiteStorage()`; one whose lane does not load fails `start()` ([the call's thread](#the-calls-thread)) |
 
 `turn_detection` is a mode (`"stt"`, `"vad"`, `"realtime_llm"`, `"manual"`) or an
 `inference.TurnDetector`, which predicts the end of the person's turn on their audio; any other
@@ -404,9 +404,32 @@ entrypoint runs: the job's `thread_id`, copied from the agent dispatch
 ([how a call gets its thread](threads.md#calls)). It is `ctx.thread` on the
 `JobContext`, `None` on a server without storage or when the dispatch named no
 thread, and `VoiceSession(thread=ctx.thread)` is how the call gets it. A
-`VoiceSession` without `thread=` keeps its history in memory, not saved. An
-unknown or deleted thread id is logged as refused and the call continues in
-memory; the agent never creates a thread for a call.
+`VoiceSession` without `thread=` runs on a new thread of the local
+`SQLiteStorage()`, in its default directory, and `session.thread` is that thread
+once started. An unknown or deleted dispatch thread id is logged as refused and
+`ctx.thread` is `None`.
+
+A call given a thread whose lane does not load does not start: no other thread
+replaces it. `await session.start(...)` raises the storage's error,
+`ThreadNotFound` for an unknown, deleted or expired thread and
+`StorageUnavailable` for a storage that cannot be reached (retryable), both
+`livekit.agents.storage.StorageError`s; the session is closed, its
+`agent_session` and `session_start` spans end with that error, and the job
+logs `the session could not start` once, with `job_id` and `thread_id`. The
+entrypoint decides what the caller hears:
+
+```python
+from livekit.agents.storage import StorageError, StorageUnavailable
+
+try:
+    await session.start(agent)
+except StorageUnavailable:
+    ...  # retry the start, or end the call
+except StorageError:
+    ...  # the thread is gone: start a new session on a new thread, or end the call
+```
+
+Uncaught, the error ends the job as any entrypoint exception does.
 For phone-number routing and conversation continuity, see
 [channel routing](channels.md#channel-routing).
 

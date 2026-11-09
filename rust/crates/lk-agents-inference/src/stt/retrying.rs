@@ -297,6 +297,10 @@ impl StreamInput<AudioFrame> for InputSink {
         if self.0.head(item) { Ok(()) } else { Err(input_closed()) }
     }
 
+    fn filler(&self, item: AudioFrame) -> Result<(), ProviderError> {
+        if self.0.filler(item) { Ok(()) } else { Err(input_closed()) }
+    }
+
     fn flush(&self) -> Result<(), ProviderError> {
         match self.0.flush() {
             Some(flushed) => flushed.map_err(|stuck| ApiError::new(stuck.to_string()).into()),

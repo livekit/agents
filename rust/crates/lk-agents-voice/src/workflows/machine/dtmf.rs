@@ -7,6 +7,7 @@ use crate::trace::{InterruptCause, InterruptStep};
 use crate::workflows::render;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::{AgentState, UserState};
+use lk_agents_abi::voice::workflows::UnknownDtmfSymbol;
 use std::time::Duration;
 
 pub use lk_agents_abi::voice::workflows::dtmf::DtmfEvent;
@@ -50,20 +51,15 @@ pub fn dtmf_result(inputs: &[DtmfEvent]) -> GetDtmfResult {
     GetDtmfResult { user_input: format_dtmf(inputs) }
 }
 
-/// Each symbol a key, or the first that is not one, refused by name.
-pub(crate) fn parse_all(
-    symbols: &[String],
-    refusal: impl Fn(&str) -> String,
-) -> Result<Vec<DtmfEvent>, String> {
-    symbols.iter().map(|s| DtmfEvent::from_wire(s).ok_or_else(|| refusal(s))).collect()
+/// `symbol` as a key, or refused by name.
+pub(crate) fn parse(symbol: &str) -> Result<DtmfEvent, UnknownDtmfSymbol> {
+    DtmfEvent::from_wire(symbol).ok_or_else(|| UnknownDtmfSymbol(symbol.to_owned()))
 }
 
 /// `dtmf_event_to_code`: digits are themselves, `*` is 10, `#` is 11
 /// and `A`-`D` are 12-15.
-pub fn dtmf_code(symbol: &str) -> Result<u8, String> {
-    let event =
-        DtmfEvent::from_wire(symbol).ok_or_else(|| format!("unknown DTMF symbol {symbol:?}"))?;
-    Ok(dtmf_event_to_code(event))
+pub fn dtmf_code(symbol: &str) -> Result<u8, UnknownDtmfSymbol> {
+    parse(symbol).map(dtmf_event_to_code)
 }
 
 /// Why `send_dtmf_events` stopped before every key was published.

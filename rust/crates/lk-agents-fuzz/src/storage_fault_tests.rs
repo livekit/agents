@@ -93,3 +93,75 @@ fn storage_faults_and_slow_commits_finish_the_speech() {
         "seed window missed storage outcomes: unavailable={unavailable:?}, conflict={conflict:?}, slow={slow}"
     );
 }
+
+// Catches: the interruption watchdog ending a speech whose tools ended just before it fired, while
+// the turn they reported was still being committed: the speech was announced done before its
+// storage receipt (seed 21210, BasicPos).
+#[test]
+fn a_turn_reported_before_the_watchdog_fires_waits_for_its_receipt() {
+    use lk_agents_fuzz::input::{ToolAnswer, ToolArgs};
+    let mut straddled = false;
+    for seed in 0..256 {
+        let recording = simulate(async {
+            let setup = Setup {
+                tts: false,
+                tools: vec!["lookup".into()],
+                storage_lost_at: Some(u32::MAX),
+                ..Setup::default()
+            };
+            let mut run = Run::start(&setup, seed, Default::default()).await;
+            for input in [
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmToolCall {
+                    chat: Ref::new(0),
+                    name: "lookup".into(),
+                    args: ToolArgs("{}".into()),
+                },
+                Input::LlmEnd { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(100) },
+                Input::Interrupt { force: true, wait: false },
+                // One millisecond short of the watchdog the interruption armed.
+                Input::Advance { ms: Millis(4_999) },
+                Input::ToolAnswered {
+                    tool: Ref::new(0),
+                    answer: ToolAnswer::Value,
+                    text: AgentText("Found it.".into()),
+                },
+                Input::Advance { ms: Millis(3_000) },
+            ] {
+                run.apply(&input).await;
+            }
+            run.record
+        });
+        let host = recording.host_view();
+        let committed = host.storage().iter().find_map(|(at, step)| {
+            matches!(step, StorageStep::Requested { operation: StorageOperation::Settle, .. })
+                .then_some(at.at_ms)
+        });
+        let received = host.storage().iter().find_map(|(at, step)| {
+            matches!(step, StorageStep::Answered { operation: StorageOperation::Settle, .. })
+                .then_some(at.at_ms)
+        });
+        straddled |= committed.zip(received).is_some_and(|(c, r)| r > c);
+        let (failures, _) = lk_agents_fuzz::check::check_all(&recording);
+        assert!(
+            !failures.iter().any(|f| f.contract.starts_with("storage_")),
+            "seed {seed}: {failures:?}"
+        );
+    }
+    assert!(straddled, "no seed committed the turn across the watchdog");
+}
+
+// Catches: a realtime reply whose server audio was already arriving held back until its speech
+// reloaded the voice lane, so the person waited on storage for the first word
+// (`first_audio_is_prompt`, campaign seeds 9850, 27056 and 27623, with storage lost).
+#[test]
+fn a_realtime_reply_plays_while_its_lane_reloads() {
+    for seed in [9850, 27056, 27623] {
+        let setup = lk_agents_fuzz::search::sample_setup(&mut fastrand::Rng::with_seed(seed));
+        let outcome = lk_agents_fuzz::search::explore(setup, seed, 3000);
+        let late = outcome.failures.iter().any(|f| f.contract == "first_audio_is_prompt");
+        assert!(!late, "seed {seed}: the reply's first audio waited on the lane");
+    }
+}

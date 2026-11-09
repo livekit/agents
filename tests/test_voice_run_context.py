@@ -38,7 +38,9 @@ def _calls(*inputs: str) -> FakeLLM:
     return FakeLLM(fake_responses=responses)
 
 
-async def test_a_call_without_storage_has_an_in_memory_thread() -> None:
+async def test_a_call_without_storage_runs_on_a_local_thread() -> None:
+    from livekit.agents.storage import SQLiteStorage, Thread
+
     agent = Agent(instructions="Check.", name="desk")
     seen: list[str] = []
 
@@ -46,7 +48,6 @@ async def test_a_call_without_storage_has_an_in_memory_thread() -> None:
     async def check(ctx: RunContext) -> str:
         """Check the thread."""
         assert ctx.thread is ctx.live_session.thread
-        await ctx.thread.chat_history()
         seen.append(ctx.thread.id)
         return "checked 0"
 
@@ -55,7 +56,39 @@ async def test_a_call_without_storage_has_an_in_memory_thread() -> None:
     ) as session:
         await session.start(agent)
         await session._run(user_input="hello")
-    assert len(seen) == 1 and seen[0]
+    (thread_id,) = seen
+    # the call's history is committed to the local SQLite storage, where a later call finds it
+    local = SQLiteStorage()
+    history = await Thread(local, thread_id, agent_name="desk").chat_history()
+    said = [item.text_content for item in history.items if item.type == "message"]
+    assert said[0] == "hello" and said[-1] == "done"
+    await local.aclose()
+
+
+# Catches: a voice run's `new_messages()` leaving out the input it was run on, which a text run's
+# starts with; and the remote session's `run_input` reply echoing that input back.
+async def test_a_voice_run_starts_with_its_input_and_run_input_answers_without_it() -> None:
+    from livekit.agents.voice._session_bindings import RemoteSessionAccess
+
+    agent = Agent(instructions="Check.", name="desk")
+    checked: list[str] = []
+
+    @agent.tool
+    async def check(ctx: RunContext) -> str:
+        """Check the caller's request."""
+        checked.append(ctx.execution_id)
+        return f"checked {len(checked) - 1}"
+
+    async with VoiceSession(
+        llm=_calls("hello", "again"), vad=None, turn_detection="manual"
+    ) as session:
+        await session.start(agent)
+        result = await session._run(user_input="hello")
+        first = result.new_messages()[0]
+        assert first.type == "message" and first.role == "user"
+        assert first.text_content == "hello"
+        reply = await RemoteSessionAccess(session)._core_run_input("again")
+    assert [item.type for item in reply] == ["function_call", "function_call_output", "message"]
 
 
 async def test_a_call_keeps_one_execution_id_across_its_turns() -> None:

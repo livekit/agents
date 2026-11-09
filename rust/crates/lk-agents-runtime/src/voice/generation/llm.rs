@@ -261,7 +261,8 @@ impl LlmInference<'_> {
             for raw in chunk.delta.iter().flat_map(|delta| &delta.tool_calls) {
                 self.tools.dispatch(shared, handle, self.ctx, mint_call(shared, raw));
             }
-            for effect in data.chunk(&chunk, shared.time.wall_secs()) {
+            let at = shared.time.now().as_secs_f64();
+            for effect in data.chunk(&chunk, at, || shared.time.wall_secs()) {
                 let _ = tx.send(effect);
             }
         };

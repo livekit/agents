@@ -172,8 +172,7 @@ async fn answered(hooks: &Arc<ScriptedHooks>, call: HookCall) -> HookOutcome {
     let hooks: Arc<dyn SessionHooks> = hooks.clone();
     let tasks = Arc::new(lk_agents_net::task::TaskSet::default());
     let session = lk_agents_abi::telemetry::Cx::NONE;
-    super::answer_hook(hooks, call, agents, handle.api.clone(), spawner, tasks, session)
-        .await;
+    super::answer_hook(hooks, call, agents, handle.api.clone(), spawner, tasks, session).await;
     while let Ok(event) = runtime.queue.try_recv() {
         if let VoiceRuntimeEvent::Input(VoiceEvent::Host(Sent {
             command: Command::HookDone { outcome, .. },
@@ -319,8 +318,7 @@ async fn a_handoff_refused_after_preparation_retires_its_registered_callbacks() 
         hooks: Some(Arc::new(ScriptedHooks::default())),
         ..Default::default()
     };
-    let api =
-        super::super::VoiceSession::new(&env, Arc::new(no_room()), args, None).unwrap();
+    let api = super::super::VoiceSession::new(&env, Arc::new(no_room()), args, None).unwrap();
     let api = running(api).await;
     let (call, _) = api.call(Answer::handoff).unwrap();
     // A native close can finish between the call's admission and its frame's registration.
@@ -328,8 +326,7 @@ async fn a_handoff_refused_after_preparation_retires_its_registered_callbacks() 
     let instructions = Arc::new(Instructions);
     let retained = Arc::downgrade(&instructions);
     let id = api.resources.register_instructions(instructions);
-    let mut update =
-        agent_update("next", lk_agents_voice::generation::Instructions::plain(""));
+    let mut update = agent_update("next", lk_agents_voice::generation::Instructions::plain(""));
     update.dynamic_instructions = Some(id);
     update.toolset.host = Some(host_ref(1));
     assert!(
@@ -394,8 +391,7 @@ async fn session_with_hooks(hooks: Arc<ScriptedHooks>) -> super::super::VoiceSes
         hooks: Some(hooks),
         ..Default::default()
     };
-    let api =
-        super::super::VoiceSession::new(&env, Arc::new(no_room()), args, None).unwrap();
+    let api = super::super::VoiceSession::new(&env, Arc::new(no_room()), args, None).unwrap();
     running(api).await
 }
 
@@ -414,8 +410,7 @@ async fn cancelling_preparation_retires_callbacks_after_releasing_the_handoff_tu
         dropped: dropped.clone(),
     });
     let retained = Arc::downgrade(&instructions);
-    let mut update =
-        agent_update("next", lk_agents_voice::generation::Instructions::plain(""));
+    let mut update = agent_update("next", lk_agents_voice::generation::Instructions::plain(""));
     update.dynamic_instructions = Some(api.resources.register_instructions(instructions));
     update.toolset.host = Some(host_ref(1));
     api.send_frame(
@@ -446,8 +441,7 @@ async fn closed_setup_task_admission_retires_an_unpolled_handoff_without_panicki
         dropped: dropped.clone(),
     });
     let retained = Arc::downgrade(&instructions);
-    let mut update =
-        agent_update("next", lk_agents_voice::generation::Instructions::plain(""));
+    let mut update = agent_update("next", lk_agents_voice::generation::Instructions::plain(""));
     update.dynamic_instructions = Some(api.resources.register_instructions(instructions));
     update.toolset.host = Some(host_ref(1));
     api.tasks.close();

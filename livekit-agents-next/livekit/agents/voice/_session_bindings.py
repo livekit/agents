@@ -379,10 +379,10 @@ class SessionHost:
         storage = session._native.storage
         assert storage is not None
         session._store = ContextStore(activation=storage.activation, scope_id=storage.scope_id)
-        if session._thread is None and (namespace := storage.namespace) is not None:
-            assert storage.thread_id is not None
+        # the call's thread: the supplied one, or the new local thread it runs on without one
+        if session._thread is None or session._thread.id != storage.thread_id:
             session._thread = Thread(
-                _StorageHandle(namespace), storage.thread_id, agent_name=agent.name
+                _StorageHandle(storage.namespace), storage.thread_id, agent_name=agent.name
             )
 
         hooks = _AgentHooks(session)
@@ -495,9 +495,12 @@ class RemoteSessionAccess:
         )
 
     async def _core_run_input(self, text: str) -> list[llm.ChatItem]:
+        from .run_result import _events
+
         await self.session.interrupt(force=True)
         result = await self.session._run(user_input=text)
-        return result.new_messages()
+        # the reply to `text`: the run's events, without the input itself (1.x `RunResult.events`)
+        return [event.item for event in _events(result.new_messages())]
 
     async def _core_session_state(self) -> RemoteSessionState:
         options = self.session.options

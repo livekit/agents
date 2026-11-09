@@ -125,10 +125,20 @@ impl VoiceDriver {
             })
             .collect();
         for item in &mut items {
-            if let ChatItem::FunctionCallOutput(output) = item
-                && let Some(required) = reply_required.get(&output.call_id)
-            {
-                output.reply_required = *required;
+            match item {
+                ChatItem::FunctionCallOutput(output) => {
+                    if let Some(required) = reply_required.get(&output.call_id) {
+                        output.reply_required = *required;
+                    }
+                    // Recorded now: after every item the session stamped before it, so the
+                    // history holds two replies' questions in the order they were put.
+                    output.created_at = output.created_at.max(self.step.wall());
+                }
+                // A cut speech never put its question: the person's next words do not answer it.
+                ChatItem::FunctionCall(call) if interrupted => {
+                    call.extra.remove(lk_agents_core::agent_run::planning::INPUT_REQUESTED_KEY);
+                }
+                _ => {}
             }
         }
         if let Some(rt) = self.activity.realtime_activity()

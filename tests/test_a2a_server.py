@@ -354,6 +354,7 @@ async def test_thin_slice_across_two_workers(thread_storages: Workers) -> None:
 async def test_a_server_defaults_to_project_isolated_sqlite(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.delenv("LIVEKIT_AGENT_THREADS_DIR")
     seen: list[list[str]] = []
 
     async def handler(ctx: A2ASessionContext) -> str:

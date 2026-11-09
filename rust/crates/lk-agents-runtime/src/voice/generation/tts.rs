@@ -365,7 +365,7 @@ impl Segment for Streaming<'_, '_> {
             }
             Err(e) => return Err(DriverError::from(e)),
         };
-        if let Some(stats) = self.tts_data.note(&chunk, self.shared.time.wall_secs()) {
+        if let Some(stats) = self.tts_data.note(&chunk, || self.shared.time.wall_secs()) {
             self.acc.record_tts(self.tts_data.segment, stats);
         }
         if let Some(a) = self.aligned.as_deref_mut() {

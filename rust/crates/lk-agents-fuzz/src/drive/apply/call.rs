@@ -240,13 +240,8 @@ impl Run {
                 else {
                     return None;
                 };
-                let outcome = match progress {
-                    Some(AgentText(m)) => {
-                        ToolOutcome::Update { message: m.clone(), raw: m.clone() }
-                    }
-                    None if *end == crate::input::ToolAnswer::Detached => ToolOutcome::Nothing,
-                    None => crate::fakes::tools::outcome_of(*end, "the tool finished"),
-                };
+                let progress = progress.as_ref().map(|AgentText(m)| m.as_str());
+                let outcome = crate::fakes::tools::update_outcome(progress, *end);
                 api.tool_update(invocation_id.clone(), *operation, call_id.clone(), outcome.into())
                     .ok()?;
             }

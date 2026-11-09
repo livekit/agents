@@ -78,14 +78,18 @@ pub enum AfterClear {
 /// any. A failed clear gives up at once, else after `clear_buffer_timeout`.
 pub fn after_clear(
     pending: bool,
-    rpc: Result<(), String>,
+    rpc: Result<(), lk_agents_abi::voice::rtc::RtcError>,
     clear_buffer_timeout: Option<Duration>,
 ) -> AfterClear {
     if !pending {
         return AfterClear::Retire;
     }
-    let Err(failed) = rpc else {
-        return AfterClear::AwaitFinish { give_up_after: clear_buffer_timeout };
+    let failed = match rpc {
+        Ok(()) => return AfterClear::AwaitFinish { give_up_after: clear_buffer_timeout },
+        Err(error) => match error.rpc() {
+            Some(rpc) => format!("{}: {}", rpc.code, rpc.message),
+            None => error.to_string(),
+        },
     };
     log::error!(target: lk_agents_abi::LOG_TARGET, error = failed.as_str(); "failed to perform clear buffer rpc");
     AfterClear::AwaitFinish { give_up_after: Some(Duration::ZERO) }

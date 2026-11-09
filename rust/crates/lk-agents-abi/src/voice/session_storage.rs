@@ -20,23 +20,26 @@ pub trait SessionStorage: Send + Sync + Sized + 'static {
         namespace: Option<Arc<Self::Namespace>>,
         thread_id: Option<String>,
         lane: String,
-        fallback_lane: String,
+        agent: String,
         initial_history: Option<Vec<ChatItem>>,
     ) -> Self;
 
-    /// Load the supplied lane, or create the ephemeral context store selected by voice policy.
+    /// Load the supplied thread's lane; its failure is the call's (no other thread replaces it).
+    /// Without a thread, the call runs on a new thread of the local SQLite storage
+    /// (`SQLiteStorage()`'s default directory).
     #[host(await)]
     async fn open(&self) -> Result<(), StorageError>;
+    /// The storage the call's thread lives in.
     #[host(getter)]
-    fn namespace(&self) -> Option<Arc<Self::Namespace>>;
+    fn namespace(&self) -> Arc<Self::Namespace>;
     #[host(getter)]
-    fn thread_id(&self) -> Option<String>;
+    fn thread_id(&self) -> String;
     #[host(getter)]
     fn scope_id(&self) -> String;
     #[host(getter)]
     fn activation(&self) -> Self::Activation;
     #[host(getter)]
-    fn voice_store(&self) -> Option<Arc<Self::VoiceStore>>;
+    fn voice_store(&self) -> Arc<Self::VoiceStore>;
     #[host(getter)]
     fn history(&self) -> Option<Vec<ChatItem>>;
     #[host(await)]

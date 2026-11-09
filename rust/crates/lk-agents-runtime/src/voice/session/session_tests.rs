@@ -2,8 +2,8 @@ use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 
 use super::*;
 use crate::room_io::FixedRoom;
-use crate::voice::speech_handle::SpeechHandle;
 use crate::voice::Executor;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::voice::events::CloseReason;
@@ -740,7 +740,6 @@ pub(super) fn option_kwargs() -> lk_agents_abi::voice::session_options::SessionK
         session_close_transcript_timeout: 2.0,
     }
 }
-
 
 // Catches: the session holding every speech's live handle (its items, generations and the host's
 // object) until it ends, which a long call grows without bound.

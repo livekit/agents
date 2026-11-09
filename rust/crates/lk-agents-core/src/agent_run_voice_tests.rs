@@ -267,11 +267,12 @@ fn retry_budget_failure_has_no_selected_terminal_delivery_and_cannot_be_reopened
         AgentRunEffect::HandleToolResults { terminal_call: None, .. }
     )));
     assert!(items.iter().all(|item| !matches!(item,
-        ChatItem::FunctionCall(call) if call.extra.get(crate::request::INPUT_REQUESTED_KEY).and_then(Value::as_bool) == Some(true)
+        ChatItem::FunctionCall(call) if call.extra.get(crate::agent_run::planning::INPUT_REQUESTED_KEY).and_then(Value::as_bool) == Some(true)
     )), "a failed batch selects no question");
     let mut failed_history = items.clone();
     assert!(
-        crate::request::answer_pending_input(&mut failed_history, "unrelated").is_empty(),
+        crate::agent_run::planning::answer_pending_input(&mut failed_history, "unrelated")
+            .is_empty(),
         "a failed batch answers no question"
     );
     let edits = items
@@ -434,6 +435,32 @@ fn a_call_the_coordinator_made_keeps_its_item() {
     let (_, items, _) = d.step_settled();
     assert_eq!(items[0].id(), "voice_item_7");
     assert_eq!(items[1].id(), "voice_item_7_out");
+}
+
+// Catches: an output stamped from the run's clock before the call the coordinator stamped
+// finer, so the history held the output ahead of its call and the person's answer went to the
+// other reply's question (DST tool_output_follows_outcome, VOICE_SEED=5264 VOICE_POLICY=Arrival).
+#[test]
+fn an_output_is_never_stamped_before_its_call() {
+    let mut d = coordinated(text_agent(vec![string_tool("find_slot", "day")]));
+    let request = d.plans()[0].request;
+    // The run's clock reads the instant as 1_700_000_000.0; the coordinator stamped the call later
+    // in that same instant.
+    let made = std::time::UNIX_EPOCH + std::time::Duration::new(1_700_000_000, 13_000);
+    let call = lk_agents_abi::FunctionCall {
+        id: "voice_item_7".into(),
+        call_id: "call_a".into(),
+        arguments: json!({"day": "Monday"}).to_string(),
+        name: "find_slot".into(),
+        created_at: made,
+        extra: Default::default(),
+        group_id: None,
+    };
+    d.send(AgentRunEvent::CallMade { request, call });
+    d.send(AgentRunEvent::LlmEnded { request });
+    d.run_tools(|_| value("9:00 is free"));
+    let (_, items, _) = d.step_settled();
+    assert!(items[1].created_at() >= made, "{:?} before {made:?}", items[1].created_at());
 }
 
 fn approval_tool() -> FunctionToolInfo {

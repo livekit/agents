@@ -73,16 +73,20 @@ pub enum CommandRefused {
 #[error("This generation handle does not allow interruptions")]
 pub struct NotInterruptible;
 
-/// `start()`'s awaited half failed: the loop, or what the host does beside it (the room's
-/// connection, the remote session's transport), which raises as itself.
+/// `start()`'s awaited half failed: the loop, the call's thread (its lane did not load, raised
+/// as its storage error: `ThreadNotFound`, `StorageUnavailable`, ...), or what the host does
+/// beside it (the room's connection, the remote session's transport), which raises as itself.
 #[crate::host(error(kind = "RuntimeError"))]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum StartFailed {
     #[error("the session failed to start: {0}")]
     Driver(String),
     #[error(transparent)]
     #[host(delegate)]
-    Host(HostError),
+    Storage(#[from] crate::storage::StorageError),
+    #[error(transparent)]
+    #[host(delegate)]
+    Host(#[from] HostError),
 }
 
 /// `aclose(reason=..)` with a reason that is no `CloseReason`.

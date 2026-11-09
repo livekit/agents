@@ -140,7 +140,9 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
                 defaults to ``inference.VAD(model="silero")``; ``vad=None`` opts out.
             tools: Tools shared by every agent of the session. A name an agent's own tool
                 also has is refused with ``ValueError`` when that agent runs.
-            context, thread: Read by tools through ``RunContext``.
+            context, thread: Read by tools through ``RunContext``. Without ``thread``, the call
+                runs on a new thread of the local ``SQLiteStorage()``; a ``thread`` whose lane
+                does not load fails ``start()`` with its ``StorageError``.
             video_sampler: How often camera frames reach the model; ``None`` sends every frame.
             conn_options: Each leg's connection policy.
             stt_context_options: The keyterms and context the STT is biased toward.
@@ -171,8 +173,8 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
 
     @property
     def store(self) -> ContextStore:
-        """The call's store for explicit ``load_context`` and ``save_context``: the thread's
-        lane, or memory when the call has no thread or its lane did not load."""
+        """The call's store for explicit ``load_context`` and ``save_context``: its thread's
+        lane."""
         if self._store is None:
             raise RuntimeError("VoiceSession isn't running")
         return self._store
@@ -184,7 +186,8 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
 
     @property
     def thread(self) -> Thread | None:
-        """The call's supplied thread, or ``None`` without configured storage."""
+        """The call's thread: the supplied one, else, once started, a new thread of the local
+        ``SQLiteStorage()``; ``None`` before ``start()`` without one."""
         return self._thread
 
     @property
@@ -304,7 +307,12 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         chat_ctx: llm.ChatContext | None = None,
     ) -> None:
         """Start the session on ``room`` (the job's room by default, an offline room without
-        one) with ``agent`` driving."""
+        one) with ``agent`` driving.
+
+        Raises:
+            StorageError: The call's thread did not load (``ThreadNotFound``,
+                ``StorageUnavailable``, ...); the session is closed.
+        """
         from opentelemetry import context as otel_context
 
         from .._generated.session_owner import SessionJobInfo

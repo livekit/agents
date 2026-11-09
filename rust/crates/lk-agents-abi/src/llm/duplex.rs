@@ -351,7 +351,9 @@ pub trait DuplexRealtimeAdapterFacade {
     ///         finished, for a provider that stops sending rather than streaming its silence.
     #[host(
         new,
-        annotation(gate = "collections.abc.Callable[[], livekit.agents.llm.duplex.AudioGate] | None")
+        annotation(
+            gate = "collections.abc.Callable[[], livekit.agents.llm.duplex.AudioGate] | None"
+        )
     )]
     fn new(
         duplex_model: Self::DuplexModel,

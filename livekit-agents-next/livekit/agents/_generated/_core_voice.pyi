@@ -883,6 +883,8 @@ class _core_SessionOwner:
         console's) claims the job's primary session and sets the job's recording from its plan;
         the start time is set; the job's session opens its audio recording and the job's shutdown
         is made to close it; the recording is ready; the toolsets set up and the voice loop starts.
+        A failure closes the owner and ends the session's spans with it; a thread whose lane does
+        not load fails it with its storage error.
         """
     @property
     def session(self) -> VoiceSession | None: ...
@@ -1017,21 +1019,25 @@ class _core_SessionStorage:
         namespace: Storage | None,
         thread_id: str | None,
         lane: str,
-        fallback_lane: str,
+        agent: str,
         initial_history: Sequence[ChatItem] | None,
     ) -> Self: ...
     async def open(self) -> None:
-        """Load the supplied lane, or create the ephemeral context store selected by voice policy."""
+        """Load the supplied thread's lane; its failure is the call's (no other thread replaces it).
+        Without a thread, the call runs on a new thread of the local SQLite storage
+        (`SQLiteStorage()`'s default directory).
+        """
     @property
-    def namespace(self) -> Storage | None: ...
+    def namespace(self) -> Storage:
+        """The storage the call's thread lives in."""
     @property
-    def thread_id(self) -> str | None: ...
+    def thread_id(self) -> str: ...
     @property
     def scope_id(self) -> str: ...
     @property
     def activation(self) -> _core_ContextActivation: ...
     @property
-    def voice_store(self) -> _core_VoiceStore | None: ...
+    def voice_store(self) -> _core_VoiceStore: ...
     @property
     def history(self) -> list[ChatItem] | None: ...
     async def aclose(self) -> None: ...

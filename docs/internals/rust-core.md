@@ -748,7 +748,7 @@ references outside its lock. Language adapters keep no provider precedence stack
 
 Session defaults are declared in ABI and resolved by voice. The host constructs
 Python provider objects from the resulting model plan. Native `SessionStorage`
-opens a configured lane or executes voice's ephemeral fallback, owns the context
+opens the supplied thread's lane, else one on a new local SQLite thread, owns the context
 activation and closes its storage resources. Python only wraps the supplied
 activation and thread namespace.
 

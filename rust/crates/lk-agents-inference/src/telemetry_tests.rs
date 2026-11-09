@@ -109,7 +109,7 @@ fn request() -> ChatRequest {
     ChatRequest {
         chat_ctx: ChatContext::new(vec![
             ChatMessage::text(
-                lk_agents_core::request::INSTRUCTIONS_MESSAGE_ID,
+                lk_agents_core::agent_run::planning::INSTRUCTIONS_MESSAGE_ID,
                 Role::System,
                 "be brief",
                 at,

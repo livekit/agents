@@ -75,10 +75,9 @@ use lk_agents_voice::{
     },
     events::SessionEvent,
     filler_scheduler::FillerId,
-    tool_executor::ToolOutcome,
     trace::{
-        CoreStep, DetectorStep, GenerationStep, HandoffStep, PlayoutStep, SpeechStep, Step,
-        ToolStep, TurnStep,
+        CoreStep, DetectorStep, GenerationStep, HandoffStep, PlayoutStep, ProviderKind, SpeechStep,
+        Step, ToolStep, TurnStep,
     },
 };
 use tokio::{
@@ -782,6 +781,10 @@ pub struct Run {
     /// A task the run awaited could never finish: nothing was pending, no wake was armed and no
     /// task could run when its deadline passed. The evidence of a deadlock.
     deadlock: Option<String>,
+    /// Retries the request stream armed for a speech's chat request, with the context the request
+    /// is reopened with and when its backoff ends (ms), until the reopened request is seen or the
+    /// speech's request finishes.
+    retried_chats: Vec<(u64, Vec<String>, u64)>,
 }
 
 impl Run {

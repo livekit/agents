@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 mod audio;
 mod event;
-pub mod machine;
 mod leg;
+pub mod machine;
 mod options;
 pub mod proto;
 pub mod transport;

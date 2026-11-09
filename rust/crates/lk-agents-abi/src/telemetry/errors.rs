@@ -118,6 +118,29 @@ impl SpanError for crate::storage::StorageError {
     }
 }
 
+/// A session's start that failed: what failed it.
+impl SpanError for crate::voice::session::StartFailed {
+    fn error_type(&self) -> ErrorType {
+        match self {
+            Self::Driver(_) => ErrorType::Exception("RuntimeError".to_owned()),
+            Self::Storage(error) => error.error_type(),
+            Self::Host(error) => error.error_type(),
+        }
+    }
+    fn message(&self) -> String {
+        match self {
+            Self::Driver(_) | Self::Storage(_) => self.to_string(),
+            Self::Host(error) => error.message(),
+        }
+    }
+    fn stacktrace(&self) -> Option<String> {
+        match self {
+            Self::Host(error) => error.stacktrace(),
+            Self::Driver(_) | Self::Storage(_) => None,
+        }
+    }
+}
+
 /// An A2A request the door refused or failed.
 impl SpanError for crate::a2a::door::DoorError {
     fn error_type(&self) -> ErrorType {
