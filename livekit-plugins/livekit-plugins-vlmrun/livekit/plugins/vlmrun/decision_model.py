@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -65,7 +66,9 @@ class DecisionModel(llm.DecisionModel):
                 "VLMRUN_API_KEY is required, either as argument or set VLMRUN_API_KEY environment variable"  # noqa: E501
             )
         self._model = model
-        self._url = f"{gateway_url(base_url)}/typesafe/v1/systemone"
+        root = gateway_url(base_url)
+        self._url = f"{root}/typesafe/v1/systemone"
+        self._provider = urlsplit(root).netloc
         self._headers = client_headers(key)
         self._session = http_session
 
@@ -75,7 +78,7 @@ class DecisionModel(llm.DecisionModel):
 
     @property
     def provider(self) -> str:
-        return "gateway.vlm.run"
+        return self._provider
 
     async def _evaluate_impl(
         self,

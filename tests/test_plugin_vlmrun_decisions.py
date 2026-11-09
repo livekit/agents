@@ -99,7 +99,7 @@ def test_key_and_gateway_url_from_the_environment(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("VLMRUN_API_KEY", "vlm-env")
     monkeypatch.setenv("VLMRUN_GATEWAY_BASE_URL", "https://gw.example.com/v1")
     model = vlmrun.DecisionModel(model="qwen/qwen3.5-0.8b")
-    assert (model.model, model.provider) == ("qwen/qwen3.5-0.8b", "gateway.vlm.run")
+    assert (model.model, model.provider) == ("qwen/qwen3.5-0.8b", "gw.example.com")
     assert model._url == "https://gw.example.com/typesafe/v1/systemone"
     assert model._headers["Authorization"] == "Bearer vlm-env"
 
