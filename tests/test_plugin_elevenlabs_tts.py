@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import aiohttp
 import pytest
 
-from livekit.agents import tts as agents_tts, utils
+from livekit.agents import APIConnectOptions, tts as agents_tts, utils
 from livekit.agents.voice.io import TimedString
 from livekit.plugins.elevenlabs import tts as elevenlabs_tts
 
@@ -566,6 +566,78 @@ async def test_interrupted_stream_unregisters_before_ending_the_segment(
 
     assert calls.index("unregister_stream") < calls.index("end_segment")
     assert "close_context" in calls
+
+
+class _AnsweringConnection:
+    """Finishes every context when it is closed; only `with_audio` sockets send audio."""
+
+    instances: list["_AnsweringConnection"] = []
+    with_audio: list[bool] = []
+
+    def __init__(self, opts: object, session: object) -> None:
+        self._closed = False
+        self.is_current = True
+        self._recv_task = None
+        self._has_audio = self.with_audio[len(self.instances)]
+        self._streams: dict[str, tuple[agents_tts.AudioEmitter, asyncio.Future[None]]] = {}
+        self.instances.append(self)
+
+    async def connect(self) -> None:
+        pass
+
+    async def aclose(self) -> None:
+        self._closed = True
+
+    def mark_non_current(self) -> None:
+        self.is_current = False
+
+    def register_stream(
+        self, stream: object, emitter: agents_tts.AudioEmitter, waiter: asyncio.Future[None]
+    ) -> None:
+        self._streams[stream._context_id] = (emitter, waiter)  # type: ignore[attr-defined]
+
+    def unregister_stream(self, context_id: str) -> None:
+        self._streams.pop(context_id, None)
+
+    def send_content(self, content: object) -> None:
+        pass
+
+    def close_context(self, context_id: str) -> None:
+        if (entry := self._streams.get(context_id)) is None:
+            return
+        emitter, waiter = entry
+        if self._has_audio:
+            emitter.push(bytes(4800))  # 100 ms of pcm_24000
+        waiter.set_result(None)
+
+
+@pytest.mark.asyncio
+async def test_retry_runs_on_a_fresh_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    # the first socket finishes the context without audio, as a stuck socket does;
+    # the retry must not be sent to it again
+    monkeypatch.setattr(_AnsweringConnection, "instances", [])
+    monkeypatch.setattr(_AnsweringConnection, "with_audio", [False, True])
+    monkeypatch.setattr(elevenlabs_tts, "_Connection", _AnsweringConnection)
+
+    async with aiohttp.ClientSession() as session:
+        tts = elevenlabs_tts.TTS(api_key="test-key", encoding="pcm_24000", http_session=session)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=1, timeout=1.0))
+        stream.push_text("hello world.")
+        stream.end_input()
+        frames = [ev.frame async for ev in stream]
+
+        first, second = _AnsweringConnection.instances
+        assert not first.is_current
+        assert second.is_current
+        assert sum(f.duration for f in frames) == pytest.approx(0.1)
+
+        # the next turn keeps the socket that worked
+        connection, _, reused = await tts._current_connection()
+        assert connection is second
+        assert reused
+
+        await stream.aclose()
+        await tts.aclose()
 
 
 # -- eleven_v3 / eleven_v4 (text-to-dialogue) ----------------------------------------

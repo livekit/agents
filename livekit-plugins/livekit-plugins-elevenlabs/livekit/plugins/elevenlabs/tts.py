@@ -358,6 +358,12 @@ class TTS(tts.TTS):
                 self.__current_connection = conn
                 return conn, acquire_time, False
 
+    def _discard_connection(self, conn: _Connection | _DialogueConnection) -> None:
+        """Stop handing out `conn` to new streams; it closes once its contexts drain."""
+        conn.mark_non_current()
+        if self.__current_connection is conn:
+            self.__current_connection = None
+
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
@@ -525,6 +531,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         output_emitter.start_segment(segment_id=self._context_id)
 
+        if self._connection is not None:
+            # the previous attempt failed on this socket (an error, a timeout or no audio);
+            # a socket can stay open but stop answering, so don't retry on it
+            self._tts._discard_connection(self._connection)
+            self._connection = None
+
         connection: _Connection | _DialogueConnection
         try:
             connection, self._acquire_time, self._connection_reused = await asyncio.wait_for(
@@ -541,6 +553,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError("could not connect to ElevenLabs") from e
 
+        self._connection = connection
         waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
         connection.register_stream(self, output_emitter, waiter)
         context_closed = False
