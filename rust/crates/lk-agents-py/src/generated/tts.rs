@@ -1100,6 +1100,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
     ) -> ::std::option::Option<::std::sync::Arc<dyn ::lk_agents_abi::Tts>> {
         Some(::std::sync::Arc::new(Self {
             conn: Some(::std::clone::Clone::clone(conn)),
+            conn_options: Some(::std::clone::Clone::clone(conn)),
             ..::std::clone::Clone::clone(self)
         }))
     }

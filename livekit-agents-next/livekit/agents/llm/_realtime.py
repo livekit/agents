@@ -1,131 +1,23 @@
-"""The OpenAI Realtime API, and every provider speaking it (Azure OpenAI, xAI, LiveKit Inference).
-
-The model is the core's (``_core.OpenAIRealtimeModel``): the socket, the session options, the
-reconnects and the conversation mirror are Rust, and a ``VoiceSession`` drives it directly. This
-class keeps the plugin's constructor and hands its arguments over as given.
-"""
-
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal
-
-from pydantic import BaseModel
+from datetime import timedelta
+from typing import TYPE_CHECKING
 
 from .. import _core
+from .._generated import facades_llm__realtime as _facades, public_llm__realtime as _public
 from .._generated.public_llm__realtime import *  # noqa: F403
-from .._generated.realtime_options import DEFAULT_VOICE, OpenAIRealtimeConfig, RealtimeOptions
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGiven, NotGivenOr
-from ..utils import is_given
+from ..types import NOT_GIVEN, NotGivenOr
 from . import realtime as llm_realtime
-from .tool_context import ToolChoice
 
-RealtimeModels = Literal[
-    "gpt-realtime",
-    "gpt-realtime-1.5",
-    "gpt-realtime-2",
-    "gpt-realtime-2025-08-28",
-    "gpt-4o-realtime-preview",
-]
+if TYPE_CHECKING:
+    from .._generated.realtime_wire import Modalities
 
-
-# sessions run in the core; the name stays for the plugins that subclass it
+# kept for plugins that subclass it
 RealtimeSession = llm_realtime.RealtimeSession
 
 
-class RealtimeModel(llm_realtime.RealtimeModel):
-    _dialect: ClassVar[str | None] = None
-    # the name logs and metrics give the model; each provider subclass sets its own
-    _provider_label: ClassVar[str] = "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
-
-    def __init__(
-        self,
-        *,
-        model: RealtimeModels | str = "gpt-realtime",
-        voice: str | dict[str, Any] = DEFAULT_VOICE,
-        modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        input_audio_transcription: NotGivenOr[Any] = NOT_GIVEN,
-        input_audio_noise_reduction: NotGivenOr[Any] = NOT_GIVEN,
-        turn_detection: NotGivenOr[Any] = NOT_GIVEN,
-        speed: NotGivenOr[float] = NOT_GIVEN,
-        tracing: NotGivenOr[Any] = NOT_GIVEN,
-        truncation: NotGivenOr[Any] = NOT_GIVEN,
-        reasoning: NotGivenOr[Any] = NOT_GIVEN,
-        api_key: str | None = None,
-        azure_deployment: str | None = None,
-        entra_token: str | None = None,
-        max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        _azure_defaults: bool = False,
-        _azure_endpoint: str | None = None,
-    ) -> None:
-        """
-        Initialize a Realtime model client for OpenAI or Azure OpenAI.
-
-        Args:
-            model (str): Realtime model name, e.g., "gpt-realtime".
-            voice (str | dict): Voice used for audio responses, a name or the provider's voice object. Defaults to "marin".
-            modalities (list[Literal["text", "audio"]] | NotGiven): Modalities to enable. Defaults to ["text", "audio"] if not provided.
-            tool_choice (llm.ToolChoice | None | NotGiven): Tool selection policy for responses.
-            base_url (str | NotGiven): HTTP base URL of the OpenAI/Azure API. If not provided, uses OPENAI_BASE_URL for OpenAI; for Azure, constructed from AZURE_OPENAI_ENDPOINT.
-            input_audio_transcription (AudioTranscription | None | NotGiven): Options for transcribing input audio.
-            input_audio_noise_reduction (NoiseReductionType | NoiseReduction | InputAudioNoiseReduction | None | NotGiven): Input audio noise reduction settings.
-            turn_detection (RealtimeAudioInputTurnDetection | None | NotGiven): Server-side turn-detection options.
-            speed (float | NotGiven): Audio playback speed multiplier.
-            tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
-            truncation (RealtimeTruncation | None | NotGiven): Truncation configuration for OpenAI Realtime.
-            reasoning (RealtimeReasoning | None | NotGiven): Reasoning config for reasoning-capable models (e.g. ``gpt-realtime-2``), e.g. ``RealtimeReasoning(effort="low")``.
-            api_key (str | None): OpenAI API key. If None and not using Azure, read from OPENAI_API_KEY.
-            azure_deployment (str | None): Azure deployment name. Presence of any Azure-specific option enables Azure mode.
-            entra_token (str | None): Azure Entra token auth (alternative to api_key).
-            max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
-            conn_options (APIConnectOptions): Retry/backoff and connection settings.
-
-        Raises:
-            ValueError: If OPENAI_API_KEY is missing in non-Azure mode, or if Azure endpoint cannot be determined when in Azure mode.
-        """
-        self._native = _core.OpenAIRealtimeModel(
-            OpenAIRealtimeConfig(
-                dialect=self._dialect,
-                api_key=api_key,
-                base_url=base_url if is_given(base_url) else None,
-                azure_endpoint=_azure_endpoint,
-                model=model,
-                voice=voice,
-                modalities=list[str](modalities) if modalities else None,
-                azure_deployment=azure_deployment,
-                entra_token=entra_token,
-                azure_defaults=_azure_defaults,
-                conn_options=conn_options,
-                label=self._provider_label,
-                options=realtime_options(
-                    input_audio_transcription=input_audio_transcription,
-                    input_audio_noise_reduction=input_audio_noise_reduction,
-                    turn_detection=turn_detection,
-                    tool_choice=tool_choice,
-                    speed=speed,
-                    tracing=tracing,
-                    truncation=truncation,
-                    reasoning=reasoning,
-                    max_session_duration=max_session_duration,
-                ),
-            )
-        )
-        super().__init__(capabilities=self.capabilities)
-        self._label = self._native.label
-
-    @property
-    def model(self) -> str:
-        return self._native.model
-
-    @property
-    def provider(self) -> str:
-        return self._native.provider
-
-    @property
-    def capabilities(self) -> llm_realtime.RealtimeCapabilities:
-        return self._native.capabilities()
+class RealtimeModel(_facades.RealtimeModel):
+    _provider_label = "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
 
     @classmethod
     def with_azure(
@@ -136,39 +28,44 @@ class RealtimeModel(llm_realtime.RealtimeModel):
         api_key: str | None = None,
         entra_token: str | None = None,
         base_url: str | None = None,
-        voice: str = DEFAULT_VOICE,
-        modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
-        input_audio_transcription: NotGivenOr[Any] = NOT_GIVEN,
-        input_audio_noise_reduction: Any = None,
-        turn_detection: NotGivenOr[Any] = NOT_GIVEN,
+        voice: Voice | None = None,
+        modalities: list[Modalities] | None = None,
+        input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[NoiseReduction | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
-        tracing: NotGivenOr[Any] = NOT_GIVEN,
-        reasoning: NotGivenOr[Any] = NOT_GIVEN,
-        max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
+        reasoning: NotGivenOr[Reasoning | None] = NOT_GIVEN,
+        max_session_duration: NotGivenOr[timedelta | None] = NOT_GIVEN,
     ) -> RealtimeModel:
-        """
-        Create a RealtimeModel configured for Azure OpenAI.
+        """Create a RealtimeModel configured for Azure OpenAI.
 
         Args:
-            azure_deployment (str): Azure OpenAI deployment name.
-            azure_endpoint (str | None): Azure endpoint URL; if None, taken from AZURE_OPENAI_ENDPOINT.
-            api_key (str | None): Azure API key; if None, taken from AZURE_OPENAI_API_KEY. Omit if using `entra_token`.
-            entra_token (str | None): Azure Entra token for AAD auth. Provide instead of `api_key`.
-            base_url (str | None): Explicit base URL. Mutually exclusive with `azure_endpoint`. If provided, used as-is.
-            voice (str): Voice used for audio responses.
-            modalities (list[Literal["text", "audio"]] | NotGiven): Modalities to enable. Defaults to ["text", "audio"] if not provided.
-            input_audio_transcription (AudioTranscription | InputAudioTranscription | None | NotGiven): Transcription options; defaults to Azure-optimized values when not provided.
-            input_audio_noise_reduction (NoiseReductionType | InputAudioNoiseReduction | None): Input noise reduction settings. Defaults to None.
-            turn_detection (RealtimeAudioInputTurnDetection | TurnDetection | None | NotGiven): Server-side VAD; defaults to Azure-optimized values when not provided.
-            speed (float | NotGiven): Audio playback speed multiplier.
-            tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
-            reasoning (RealtimeReasoning | None | NotGiven): Reasoning config for reasoning-capable models, e.g. ``RealtimeReasoning(effort="low")``.
-            max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
+            azure_deployment: Azure OpenAI deployment name.
+            azure_endpoint: Azure endpoint URL; defaults to AZURE_OPENAI_ENDPOINT.
+            api_key: Azure API key; defaults to AZURE_OPENAI_API_KEY. Omit with `entra_token`.
+            entra_token: Azure Entra token for AAD auth, instead of `api_key`.
+            base_url: Explicit base URL, used as-is. Mutually exclusive with `azure_endpoint`.
+            voice: Voice used for audio responses.
+            modalities: Modalities to enable. Defaults to audio.
+            input_audio_transcription: Transcription options; ``whisper-1`` when not given.
+            input_audio_noise_reduction: Input noise reduction settings.
+            turn_detection: Server-side turn detection; server VAD when not given.
+            speed: Audio playback speed multiplier.
+            tracing: Tracing configuration for OpenAI Realtime.
+            reasoning: Reasoning config for reasoning-capable models.
+            max_session_duration: How long one connection serves before it is recycled.
 
         Raises:
-            ValueError: If credentials are missing, Azure endpoint cannot be determined, or both `base_url` and `azure_endpoint` are provided.
+            ValueError: If credentials are missing, the Azure endpoint cannot be determined, or
+                both `base_url` and `azure_endpoint` are given.
         """
-        return RealtimeModel(
+        return cls(
+            azure_deployment=azure_deployment,
+            azure_endpoint=azure_endpoint,
+            api_key=api_key,
+            entra_token=entra_token,
+            base_url=base_url,
             voice=voice,
             modalities=modalities,
             input_audio_transcription=input_audio_transcription,
@@ -177,43 +74,7 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             speed=speed,
             tracing=tracing,
             reasoning=reasoning,
-            api_key=api_key,
-            azure_deployment=azure_deployment,
-            entra_token=entra_token,
-            base_url=NOT_GIVEN if base_url is None else base_url,
             max_session_duration=max_session_duration,
-            _azure_defaults=True,
-            _azure_endpoint=azure_endpoint,
-        )
-
-    def update_options(
-        self,
-        *,
-        voice: NotGivenOr[str | dict[str, Any]] = NOT_GIVEN,
-        turn_detection: NotGivenOr[Any] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN,
-        input_audio_transcription: NotGivenOr[Any] = NOT_GIVEN,
-        input_audio_noise_reduction: NotGivenOr[Any] = NOT_GIVEN,
-        max_response_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
-        speed: NotGivenOr[float] = NOT_GIVEN,
-        tracing: NotGivenOr[Any] = NOT_GIVEN,
-        truncation: NotGivenOr[Any] = NOT_GIVEN,
-        reasoning: NotGivenOr[Any] = NOT_GIVEN,
-    ) -> None:
-        """Change the model's options; every live session sends what changed."""
-        self._native.update_options(
-            realtime_options(
-                voice=voice,
-                turn_detection=turn_detection,
-                tool_choice=tool_choice,
-                input_audio_transcription=input_audio_transcription,
-                input_audio_noise_reduction=input_audio_noise_reduction,
-                max_response_output_tokens=max_response_output_tokens,
-                speed=speed,
-                tracing=tracing,
-                truncation=truncation,
-                reasoning=reasoning,
-            )
         )
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
@@ -228,37 +89,5 @@ class RealtimeModel(llm_realtime.RealtimeModel):
         pass
 
 
-def _json(value: object) -> object:
-    """A provider's pydantic option as the JSON it sends; ``NOT_GIVEN`` and ``None`` as they are."""
-    if isinstance(value, BaseModel):
-        return value.model_dump(by_alias=True, exclude_unset=True)
-    return value
-
-
-def realtime_options(
-    *,
-    input_audio_transcription: object = NOT_GIVEN,
-    input_audio_noise_reduction: object = NOT_GIVEN,
-    turn_detection: object = NOT_GIVEN,
-    tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN,
-    speed: NotGivenOr[float] = NOT_GIVEN,
-    tracing: object = NOT_GIVEN,
-    truncation: object = NOT_GIVEN,
-    reasoning: object = NOT_GIVEN,
-    max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
-    voice: NotGivenOr[str | dict[str, object]] = NOT_GIVEN,
-    max_response_output_tokens: object = NOT_GIVEN,
-) -> RealtimeOptions:
-    return RealtimeOptions(
-        input_audio_transcription=_json(input_audio_transcription),
-        input_audio_noise_reduction=_json(input_audio_noise_reduction),
-        turn_detection=_json(turn_detection),
-        tool_choice=tool_choice if isinstance(tool_choice, NotGiven) else tool_choice or None,
-        speed=speed,
-        tracing=_json(tracing),
-        truncation=_json(truncation),
-        reasoning=_json(reasoning),
-        max_session_duration=max_session_duration,
-        voice=voice,
-        max_response_output_tokens=_json(max_response_output_tokens),
-    )
+__all__ = ["RealtimeModel", "RealtimeSession"]
+__all__ += _public.__all__

@@ -3,15 +3,19 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .. import _bindings, _core
-from ..types import NOT_GIVEN
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN
 from ..utils import is_given
-from .llm import LLM as BaseLLM
+from .llm import LLM as BaseLLM, LLMStream
 
 if TYPE_CHECKING:
+    from livekit.agents.llm import ChatContext, Tool, ToolChoice
+
+    from ..inference import llm
     from ..types import NotGivenOr
+    from .connect import APIConnectOptions
     from .inference_llm import LLMModels
     from .inference_models import InferenceClass
     from .llm_provider_options import ChatCompletionOptions, ProviderEndpoint
@@ -79,3 +83,73 @@ class LLM(BaseLLM):
             model=model if is_given(model) else None,
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else None,
         )
+
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool] | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        response_format: NotGivenOr[Any] = NOT_GIVEN,
+        inference_class: NotGivenOr[InferenceClass] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> LLMStream:
+        return GatewayLLMStream(
+            llm=cast("llm.LLM", self),
+            chat_ctx=chat_ctx,
+            tools=tools,
+            conn_options=conn_options,
+            parallel_tool_calls=parallel_tool_calls if is_given(parallel_tool_calls) else None,
+            tool_choice=tool_choice if is_given(tool_choice) else None,
+            response_format=response_format if is_given(response_format) else None,
+            inference_class=inference_class if is_given(inference_class) else None,
+            extra_kwargs=extra_kwargs if is_given(extra_kwargs) else None,
+        )
+
+
+class GatewayLLMStream(LLMStream):
+    """`inference.LLM.chat()`: one gateway completion; the client retries it under its
+    ``conn_options``.
+    """
+
+    _core_native_retries = True
+    _llm: llm.LLM
+
+    def __init__(
+        self,
+        *,
+        llm: llm.LLM,
+        chat_ctx: ChatContext,
+        tools: list[Tool] | None,
+        conn_options: APIConnectOptions,
+        parallel_tool_calls: bool | None,
+        tool_choice: ToolChoice | None,
+        response_format: Any | None,
+        inference_class: InferenceClass | None,
+        extra_kwargs: dict[str, Any] | None,
+    ) -> None:
+        super().__init__(llm=llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        self._parallel_tool_calls: bool | None = parallel_tool_calls
+        self._tool_choice: ToolChoice | None = tool_choice
+        self._response_format: Any | None = response_format
+        self._inference_class: InferenceClass | None = inference_class
+        self._extra_kwargs: dict[str, Any] | None = extra_kwargs
+
+    async def _core_open(self) -> _core.InferenceLlmChunks:
+        return self._llm._core_native().chat(
+            chat_ctx=self._chat_ctx,
+            tools=self._tools,
+            conn_options=self._conn_options,
+            parallel_tool_calls=self._parallel_tool_calls,
+            tool_choice=self._tool_choice,
+            response_format=self._response_format,
+            inference_class=self._inference_class,
+            extra_kwargs=self._extra_kwargs,
+        )
+
+    _run = LLMStream._core_run_native
+
+
+GatewayLLMStream.__module__ = "livekit.agents.inference.llm"

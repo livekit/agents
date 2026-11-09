@@ -3,11 +3,12 @@
 
 from __future__ import annotations
 
-from .._core import AudioByteStream as AudioByteStream
+from .._core import AudioByteStream as AudioByteStream, AudioStreamDecoder as AudioStreamDecoder
 from .image_options import EncodeOptions as EncodeOptions, ResizeOptions as ResizeOptions
 
 __all__: list[str] = [
     "ResizeOptions",
     "EncodeOptions",
+    "AudioStreamDecoder",
     "AudioByteStream",
 ]

@@ -490,27 +490,6 @@ def forward_session_events(
     )
 
 
-class Duplex:
-    """A ``DuplexRealtimeAdapter`` (``adapter``) as the core's duplex host: the core reads its
-    model's label and capabilities, gates and segments the output."""
-
-    def __init__(self, adapter: llm.DuplexRealtimeAdapter) -> None:
-        self.adapter = adapter
-
-    def _core_gate(self) -> llm.AudioGate | None:
-        """The gate the adapter or the model declares; ``None``: the adaptive gate."""
-        return (
-            self.adapter._gate() if self.adapter._gate else self.adapter.duplex_model.audio_gate()
-        )
-
-    async def _core_session(
-        self, tools: Callable[[], Sequence[Tool | Toolset]] | None
-    ) -> _DuplexSession:
-        """A new plugin session, offering the tools ``tools`` answers (the objects the core
-        refers to by name)."""
-        return _DuplexSession(self.adapter.duplex_model.session(), tools or list)
-
-
 class _DuplexSession:
     """A plugin's ``DuplexSession`` (``plugin``) flattened: the core feeds its input, applies the
     updates in order and pulls ``plugin.audio_stream``; the session's callbacks queue one event at a time

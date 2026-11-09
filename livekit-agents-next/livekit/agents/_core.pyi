@@ -50,7 +50,6 @@ from ._generated._core_errors import (
 )
 from ._generated._core_evals import (
     _core_evaluation_score as _core_evaluation_score,
-    _core_judge_tool_schemas as _core_judge_tool_schemas,
     _core_JudgeRunner as _core_JudgeRunner,
     _core_judgment_failed as _core_judgment_failed,
     _core_judgment_passed as _core_judgment_passed,
@@ -70,7 +69,6 @@ from ._generated._core_inference import (
     inference_url as inference_url,
     llm_unsupported_params as llm_unsupported_params,
     local_models_init as local_models_init,
-    merge_realtime_capabilities as merge_realtime_capabilities,
     min_reasoning_effort as min_reasoning_effort,
     stt_fallback_capabilities as stt_fallback_capabilities,
     tts_fallback_capabilities as tts_fallback_capabilities,
@@ -109,7 +107,6 @@ from ._generated._core_llm import (
     check_tool_names as check_tool_names,
     compute_chat_ctx_diff as compute_chat_ctx_diff,
     convert_mid_conversation_instructions as convert_mid_conversation_instructions,
-    duplex_realtime_capabilities as duplex_realtime_capabilities,
     inject_confirm_duplicate as inject_confirm_duplicate,
     inject_schema_defaults as inject_schema_defaults,
     llm_usage_chunk as llm_usage_chunk,
@@ -125,8 +122,8 @@ from ._generated._core_llm import (
     tool_report as tool_report,
 )
 from ._generated._core_media import (
-    AudioDecoder as AudioDecoder,
     AudioEmitter as AudioEmitter,
+    AudioStreamDecoder as AudioStreamDecoder,
     encode_image as encode_image,
     serialize_image_frame as serialize_image_frame,
     serialize_image_url as serialize_image_url,
@@ -135,7 +132,6 @@ from ._generated._core_metrics import (
     LlmMetricState as LlmMetricState,
     TtsMetricState as TtsMetricState,
     _core_token_usage_total as _core_token_usage_total,
-    metrics_log_fields as metrics_log_fields,
     runtime_busy_seconds as runtime_busy_seconds,
     stt_batch_metrics as stt_batch_metrics,
     stt_stream_metrics as stt_stream_metrics,

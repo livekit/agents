@@ -106,7 +106,7 @@ class STT(BaseSTT):
         *,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
-    ) -> SpeechStream:
+    ) -> RecognizeStream:
         return SpeechStream(
             stt=cast("stt.STT", self),
             language=language if is_given(language) else None,
@@ -130,7 +130,7 @@ class SpeechStream(RecognizeStream):
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options)
-        self._language = language
+        self._language: STTLanguages | str | None = language
 
     async def _core_open(self) -> _core.InferenceSttStream:
         return self._stt._core_native().stream(

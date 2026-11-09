@@ -8,7 +8,8 @@
 //! operation driving the call. Generation refuses a host call emitted any other way. Every parameter crosses by its declared kind and the result is read by its
 //! declared kind; a host failure becomes the declared error. `read_once` values are read when the
 //! proxy is taken; a `bind` method returns a copy whose awaited calls pass the bound value last,
-//! handed out through its declared native wrapper when it names one.
+//! and whose `read_once` member of that value's `Option` reads it back, handed out through its
+//! declared native wrapper when it names one.
 
 use crate::adapter::from_object;
 use crate::decl::{HostForm, Param, Proxy, ProxyCall, ProxyMethod, Record, Target, Ty};
@@ -163,8 +164,16 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         }
         ProxyCall::Bind => {
             let q = &m.params[0];
+            // The copy reports its binding through a `read_once` member holding that value.
+            let bound = Ty::Optional(Box::new(q.ty.clone()));
+            let reported: String = p
+                .methods
+                .iter()
+                .filter(|r| r.kind == ProxyCall::ReadOnce && r.ret.ok == bound)
+                .map(|r| format!("{}: Some({}), ", r.rust_name, owned(q)))
+                .collect();
             let copy = format!(
-                "::std::sync::Arc::new(Self {{ {}: Some({}), ..::std::clone::Clone::clone(self) }})",
+                "::std::sync::Arc::new(Self {{ {}: Some({}), {reported}..::std::clone::Clone::clone(self) }})",
                 q.name,
                 owned(q)
             );

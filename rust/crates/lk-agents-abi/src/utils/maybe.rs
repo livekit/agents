@@ -25,6 +25,13 @@ impl<T> Maybe<T> {
     pub fn unwrap_or(self, default: T) -> T {
         self.given().unwrap_or(default)
     }
+
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Maybe<U> {
+        match self {
+            Maybe::NotGiven => Maybe::NotGiven,
+            Maybe::Given(v) => Maybe::Given(f(v)),
+        }
+    }
 }
 
 impl<T> std::fmt::Debug for Maybe<Option<T>> {

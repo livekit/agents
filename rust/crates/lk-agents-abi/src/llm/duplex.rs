@@ -90,14 +90,6 @@ pub struct DuplexCapabilities {
     pub mutable_tools: bool,
 }
 
-#[crate::host(functions(pid = false))]
-pub trait DuplexConfiguration {
-    #[host(function)]
-    fn duplex_realtime_capabilities(
-        caps: DuplexCapabilities,
-    ) -> crate::llm::realtime::RealtimeCapabilities;
-}
-
 /// One frame of the model's output audio; `start_ms` places it on the model's timeline.
 #[crate::host(record(
     module = "duplex",
@@ -212,17 +204,17 @@ pub trait DuplexInput: Send + Sync + Sized + 'static {
     async fn next(&self) -> Result<Option<DuplexInputItem>, ApiError>;
 }
 
-/// A `DuplexRealtimeAdapter` (`adapter`) and its model, as the engine opens sessions on it.
-#[crate::host(proxy(host = "livekit.agents._bindings.Duplex"))]
+/// A plugin's `DuplexModel`, as the engine opens sessions on it.
+#[crate::host(proxy(host = "livekit.agents.llm.duplex.DuplexModel"))]
 pub trait DuplexHost: Send + Sync {
-    #[host(call, getter = "adapter.duplex_model.label")]
+    #[host(call, getter = "label")]
     fn label(&self) -> Result<String, HostError>;
 
-    #[host(call, getter = "adapter.duplex_model.capabilities")]
+    #[host(call, getter = "capabilities")]
     fn capabilities(&self) -> Result<DuplexCapabilities, HostError>;
 
-    /// The gate the adapter or the model declares; `None`: the adaptive gate.
-    #[host(call, name = "_core_gate")]
+    /// The gate the model declares for its output; `None`: the adaptive gate.
+    #[host(call, name = "audio_gate")]
     fn gate(&self) -> Result<Option<Arc<dyn AudioGate>>, HostError>;
 
     /// A new plugin session, offering the tools the voice session's `tools` callable answers.
@@ -306,6 +298,13 @@ pub trait DuplexSession: Send + Sync {
     fn aclose(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, ()>;
 }
 
+/// The adapter's own gate (`gate=`): called once per session, in place of the model's.
+#[crate::host(proxy(host = "collections.abc.Callable"))]
+pub trait AudioGateFactory: Send + Sync {
+    #[host(call, name = "__call__")]
+    fn create(&self) -> Result<Arc<dyn AudioGate>, HostError>;
+}
+
 /// `DuplexRealtimeAdapter`'s engine, the session's realtime model when handed to it.
 #[crate::host(class(name = "DuplexRealtimeModel", native = crate::Realtime))]
 pub trait DuplexRealtimeModel: Send + Sync + Sized + 'static {
@@ -313,15 +312,62 @@ pub trait DuplexRealtimeModel: Send + Sync + Sized + 'static {
     #[host(env)]
     type Env;
 
+    /// Each session's gate is `gate`'s, else the model's own, else the adaptive gate.
     /// `audio_timeout`: how long to wait for the next frame before the output counts as finished.
     #[host(new)]
     fn new(
         env: &Self::Env,
-        host: Arc<dyn DuplexHost>,
-        #[host(kw, default = 0.8)] audio_timeout: f64,
+        duplex_model: Arc<dyn DuplexHost>,
+        #[host(kw, default = None)] gate: Option<Arc<dyn AudioGateFactory>>,
+        #[host(default = 0.8)] audio_timeout: f64,
     ) -> Result<Self, HostError>;
 
     /// The realtime capabilities the model runs under.
-    #[host(call)]
+    #[host(getter)]
     fn capabilities(&self) -> crate::llm::realtime::RealtimeCapabilities;
+}
+
+/// `llm.DuplexRealtimeAdapter`: runs a `DuplexModel` inside a `VoiceSession`. The core gates the
+/// model's continuous output, segments it into generations and attaches its transcript; output
+/// the model never transcribes still plays, it just has no chat item.
+#[crate::host(facade(
+    path = "livekit.agents.llm.duplex",
+    extended,
+    name = "DuplexRealtimeAdapter",
+    base = "llm.realtime.RealtimeModel",
+    native = DuplexRealtimeModel,
+    legs(session),
+    base_args(capabilities)
+))]
+pub trait DuplexRealtimeAdapterFacade {
+    /// The wrapped plugin model.
+    #[host(delegate)]
+    type DuplexModel: DuplexHost;
+
+    /// Run a duplex model as an ordinary realtime session.
+    ///
+    /// Args:
+    ///     duplex_model: The model to wrap.
+    ///     gate: Decides which output frames carry speech. Defaults to the model's own gate,
+    ///         or an adaptive one that learns the model's silence.
+    ///     audio_timeout: How long to wait for the next frame before the output counts as
+    ///         finished, for a provider that stops sending rather than streaming its silence.
+    #[host(
+        new,
+        annotation(gate = "collections.abc.Callable[[], livekit.agents.llm.duplex.AudioGate] | None")
+    )]
+    fn new(
+        duplex_model: Self::DuplexModel,
+        #[host(kw, default = None)] gate: Option<Arc<dyn AudioGateFactory>>,
+        #[host(default = 0.8)] audio_timeout: f64,
+    ) -> Self;
+
+    #[host(getter, via = DuplexModel)]
+    fn model(&self) -> String;
+
+    #[host(getter, via = DuplexModel)]
+    fn provider(&self) -> String;
+
+    #[host(via = DuplexModel)]
+    async fn aclose(&self);
 }

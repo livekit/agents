@@ -14,7 +14,7 @@ pub use crate::duplex::{
     Fragment, Segmenter, Step,
 };
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::llm::duplex::DuplexHost;
+use lk_agents_abi::llm::duplex::{AudioGateFactory, DuplexHost};
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};
 use lk_agents_abi::{
     ChatContext, ChatItem, Clock, Realtime, RealtimeCommand, RealtimeSession, Spawner, WallAnchor,
@@ -24,6 +24,8 @@ use lk_agents_abi::{
 /// was built with and the executor resolved when one opens (building it starts nothing).
 pub struct DuplexAdapterModel {
     pub(super) host: Arc<dyn DuplexHost>,
+    /// The adapter's own gate, preferred to the model's.
+    pub(super) gate: Option<Arc<dyn AudioGateFactory>>,
     pub(super) label: String,
     pub(super) caps: RealtimeCapabilities,
     pub(super) audio_timeout: Duration,
@@ -49,7 +51,11 @@ impl Realtime for DuplexAdapterModel {
         tools: Option<lk_agents_abi::HostRef>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(async move {
-            let gate = SessionGate::new(self.host.gate().map_err(ProviderError::from)?);
+            let declared = match &self.gate {
+                Some(gate) => Some(gate.create()),
+                None => self.host.gate().transpose(),
+            };
+            let gate = SessionGate::new(declared.transpose().map_err(ProviderError::from)?);
             let view = self.host.session(&cx, tools).await.map_err(ProviderError::from)?;
             let spawner = (self.spawner)().map_err(lk_agents_abi::errors::ApiError::from)?;
             let host = HostSession::open(view, self.label.clone(), &spawner);

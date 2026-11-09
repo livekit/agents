@@ -124,7 +124,7 @@ plugin's classes, not these bases.
 | Module | Names |
 | --- | --- |
 | `livekit.agents.llm` | `LLM`, `LLMStream`, `ChatChunk` (its `usage` is a `TokenUsage`), `ChoiceDelta`, `FunctionToolCall`, `LLMError`; realtime: `RealtimeModel`, `RealtimeSession`, `RealtimeCapabilities`, `RealtimeError`, `RealtimeModelError` and its events (`EventTypes`: `InputSpeechStartedEvent`, `InputSpeechStoppedEvent`, `InputTranscriptionCompleted`, `GenerationCreatedEvent` with its `MessageGeneration`s, `RemoteItemAddedEvent`, `RealtimeSessionReconnectedEvent`); duplex (`llm.duplex`): `DuplexModel`, `DuplexSession`, `DuplexCapabilities`, `DuplexRealtimeAdapter` (a duplex model as a realtime model), `DuplexAudioFrame`, `DuplexOutputTranscriptDelta`, `AudioGate`/`FixedGate`; tools as providers read them: `Tool`, `ToolContext`, `ToolChoice`, `FunctionTool`, `RawFunctionTool`, `ProviderTool`, `is_function_tool`, `is_raw_function_tool` |
-| `livekit.agents.stt`, `livekit.agents.tts` | `STT`, `RecognizeStream`, `SpeechEvent` (`SpeechEventType`, `SpeechData` alternatives, `RecognitionUsage`), `STTCapabilities`, `STTError`, `SpeakerContext`; `TTS`, `ChunkedStream`, `SynthesizeStream`, `SynthesizedAudio`, `AudioEmitter`, `TTSCapabilities`, `MarkupInfo`, `TTSError`, `SentenceStreamPacer`; each module's `FallbackAdapter` and `StreamAdapter` |
+| `livekit.agents.stt`, `livekit.agents.tts` | `STT`, `RecognizeStream`, `SpeechEvent` (`SpeechEventType`, `SpeechData` alternatives, `RecognitionUsage`), `STTCapabilities`, `STTError`; `TTS`, `ChunkedStream`, `SynthesizeStream`, `SynthesizedAudio`, `AudioEmitter`, `TTSCapabilities`, `MarkupInfo`, `TTSError`, `SentenceStreamPacer`; each module's `FallbackAdapter` and `StreamAdapter` |
 | `livekit.agents` | `Plugin`, `VAD`, `VADStream`, `VADEvent`, `VADEventType`, `VADCapabilities`, `LanguageCode`, `get_job_context`, `NOT_GIVEN`/`NotGivenOr`/`NotGiven`, `DEFAULT_API_CONNECT_OPTIONS`, `create_api_error_from_http`, `redacted_cause`, `ProviderAttempts` (a stream's `_core_attempts`, see [provider attempts](#provider-attempts)) |
 | `livekit.agents.tokenize` | `SentenceTokenizer`, `SentenceStream`, `WordTokenizer`, `WordStream`, `TokenData`, `TokenSpan`, `BufferedSentenceStream`, `BufferedWordStream`, the `basic` and `blingfire` tokenizers, `replace_words` |
 | `livekit.agents.utils` | `ConnectionPool`, `shortuuid`, `is_given`, `log_exceptions`, `EventEmitter`; `aio`: `Chan`, `ChanClosed`, `ChanEmpty`, `Interval`, `cancel_and_wait`; `media`: `AudioStreamDecoder`, `encode` |
@@ -249,6 +249,41 @@ appropriate transport phases. Call `get(conn_options=...)` or use
 `async with pool.connection(conn_options=...)` for each operation. The
 context manager returns a healthy connection to the pool and retires it on
 failure. `await pool.aclose()` releases the pool's connections.
+
+## Realtime options over the OpenAI protocol
+
+`openai.realtime.RealtimeModel` and the providers speaking its protocol (`with_azure()`,
+`xai.realtime.RealtimeModel`, `azure.realtime.RealtimeModel` for Voice Live and
+`inference.RealtimeModel`) take their session options as records from
+`livekit.agents.llm._realtime`, re-exported by each plugin's `realtime` module; plain dicts
+and OpenAI SDK objects are refused. An option not given is the provider's default; `None`
+turns it off. `update_options()` takes the same records and reaches every live session.
+
+| Option | Records |
+| --- | --- |
+| `voice` | a voice name, `CustomVoice(id=)`, Voice Live's `AzureVoice(name=, locale=)` |
+| `input_audio_transcription` | `AudioTranscription(model=, language=, prompt=)` |
+| `input_audio_noise_reduction` | `"near_field"`, `"far_field"`, Voice Live's `AzureDeepNoiseSuppression()` |
+| `turn_detection` | `ServerVad(...)`, `SemanticVad(eagerness=)`, Voice Live's `AzureSemanticVad(...)` |
+| `tracing` | `Tracing(workflow_name=, group_id=, metadata=)`; nothing set is the server's defaults |
+| `truncation` | `"auto"`, `"disabled"`, `RetentionRatio(retention_ratio=, post_instructions_token_limit=)` |
+| `reasoning` | `Reasoning(effort=)` |
+| `max_response_output_tokens` | a count; `None` is unlimited |
+| `max_session_duration` | a `timedelta` after which the connection is recycled; `None` never |
+
+```python
+from livekit.plugins import openai
+
+model = openai.realtime.RealtimeModel(
+    voice="marin",
+    input_audio_transcription=openai.realtime.AudioTranscription(model="gpt-4o-mini-transcribe"),
+    turn_detection=openai.realtime.SemanticVad(eagerness="low"),
+    reasoning=openai.realtime.Reasoning(effort="low"),
+)
+```
+
+Selecting Azure (`azure_deployment=` or `entra_token=`) reads `AZURE_OPENAI_API_KEY` and
+`AZURE_OPENAI_ENDPOINT` and defaults to `whisper-1` transcription and server VAD.
 
 ## Realtime context updates over the OpenAI protocol
 

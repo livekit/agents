@@ -843,10 +843,7 @@ fn a_class_hands_out_an_async_iterable_instance_of_another_class() {
         pub trait R: Sized { #[host(next)] async fn next(&self) -> Res<Chunk>; }"#,
     )
     .expect_err("an iteration with no end is refused");
-    assert!(
-        err.contains("R::next: next is `async fn next(&self) -> Result<Option<T>, E>`"),
-        "{err}"
-    );
+    assert!(err.contains("R::next: next is `async fn next(&self) -> Option<T>`"), "{err}");
 }
 
 // Catches: the `str | Message` client annotation being emitted without the generated record's

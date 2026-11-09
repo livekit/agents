@@ -86,6 +86,21 @@ fn the_hosts_identification_headers_ride_on_the_request() {
     assert_eq!(header(&request, "X-LiveKit-Inference-Provider"), Some("openai"));
 }
 
+// Catches: a call's own `inference_class` dropped because the job's identification already
+// carried the client's priority.
+#[test]
+fn the_calls_inference_class_overrides_the_identifications() {
+    let ident: Headers = [("User-Agent", "ua"), ("X-LiveKit-Inference-Priority", "high")]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+    let args = ChatArgs { inference_class: Some("low".into()), ..ChatArgs::default() };
+    let request =
+        build_request(&opts(), Some(&ident), &NoImages, &ChatContext::default(), &[], args, "t")
+            .unwrap();
+    assert_eq!(header(&request, "X-LiveKit-Inference-Priority"), Some("low"));
+}
+
 // Catches: a LiveKit header or gateway token reaching a provider, `extra_body` sent as a
 // field instead of merged, `extra_query` dropped, or a strict schema a provider refuses.
 #[test]

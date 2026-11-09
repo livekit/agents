@@ -29,13 +29,17 @@ if TYPE_CHECKING:
     from .llm_fallback import RealtimeLeg
 
 
-class RealtimeModel(ABC):
+TEvent = TypeVar("TEvent", default=Never, contravariant=True)
+
+
+class RealtimeModel(ABC, rtc.EventEmitter[TEvent], Generic[TEvent]):
     """A realtime model: speech in, speech out, over one live session.
 
     Plugins implement ``session()``, returning a ``RealtimeSession``.
     """
 
     def __init__(self, *, capabilities: RealtimeCapabilities) -> None:
+        super().__init__()
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._capabilities = capabilities
 
@@ -126,8 +130,6 @@ EventTypes = Literal[
     "remote_item_added",
     "error",
 ]
-
-TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 
 
 class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent]):

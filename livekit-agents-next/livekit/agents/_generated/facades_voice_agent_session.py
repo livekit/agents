@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from ..stt import STT
     from ..tts import TTS
     from ..types import NotGivenOr
+    from ..voice.agent import Agent
     from .chat_items import ChatItem
     from .expressive import ExpressiveOptions as HostExpressiveOptions
     from .rtc_frames import AudioFrame
@@ -42,6 +43,9 @@ class VoiceSession:
     if TYPE_CHECKING:
         @property
         def _running(self) -> _core.VoiceSession: ...
+
+        @property
+        def _options(self) -> _core.SessionOptions: ...
 
         _native: _core._core_SessionOwner
 
@@ -64,6 +68,28 @@ class VoiceSession:
             yield
         finally:
             target.release_user_turn()
+
+    @property
+    def stt(self) -> STT | None:
+        """The STT the session listens with now: an `override_options` layer's while one holds it,
+        else the base's (the constructor's or `update_options`').
+        """
+        return cast("STT | None", self._options.stt)
+
+    @property
+    def tts(self) -> TTS | None:
+        """The TTS the session speaks with now, resolved as `stt` is."""
+        return cast("TTS | None", self._options.tts)
+
+    @property
+    def vad(self) -> VAD | None:
+        """The VAD the session runs now, resolved as `stt` is."""
+        return cast("VAD | None", self._options.vad)
+
+    @property
+    def current_agent(self) -> Agent:
+        """The agent driving the session; refused before `start()` unless `update_agent` named one."""
+        return cast("Agent", self._native.current_agent)
 
     @property
     def usage(self) -> Usage:

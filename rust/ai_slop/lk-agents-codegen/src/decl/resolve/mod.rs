@@ -535,11 +535,10 @@ impl Resolver<'_> {
         }
         if kind == MethodKind::Next
             && (!f.sig.inputs.iter().all(|i| matches!(i, syn::FnArg::Receiver(_)))
-                || ret.err.is_none()
                 || !matches!(ret.ok, Ty::Optional(_)))
         {
             return Err(format!(
-                "{at}: next is `async fn next(&self) -> Result<Option<T>, E>`: `None` ends the iteration"
+                "{at}: next is `async fn next(&self) -> Option<T>` or `Result<Option<T>, E>`: `None` ends the iteration"
             ));
         }
         if kind == MethodKind::New && ret.ok != Ty::This {

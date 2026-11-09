@@ -188,24 +188,8 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         return self._thread
 
     @property
-    def stt(self) -> stt.STT | None:
-        """The STT the session listens with now: an ``override_options`` layer's while one holds
-        it, else the base's (the constructor's or ``update_options``')."""
-        return cast("stt.STT | None", self._options.provider("stt"))
-
-    @property
     def llm(self) -> llm.LLM | llm.RealtimeModel | None:
         return self._llm
-
-    @property
-    def tts(self) -> tts.TTS | None:
-        """The TTS the session speaks with now, as ``stt`` is resolved."""
-        return cast("tts.TTS | None", self._options.provider("tts"))
-
-    @property
-    def vad(self) -> VAD | None:
-        """The VAD the session runs now, as ``stt`` is resolved."""
-        return cast("VAD | None", self._options.provider("vad"))
 
     @property
     def tools(self) -> list[llm.Tool | llm.Toolset]:
@@ -255,13 +239,6 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     def user_state(self) -> UserState:
         """``"listening"`` until the person's first state change; read as ``history`` is."""
         return self._state.user_state
-
-    @property
-    def current_agent(self) -> Agent:
-        agent = self._native.current_agent
-        if agent is None:
-            raise RuntimeError("VoiceSession isn't running")
-        return cast(Agent, agent)
 
     @property
     def _core(self) -> _NativeSession:

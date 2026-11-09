@@ -250,7 +250,7 @@ these are substantial integrations, rather than forwarding layers.
 | `telemetry/__init__.py` | Cheap context, carriers, constants, PII helpers, diagnostics and job attribution | About 580 |
 | `telemetry/_export.py` | SDK admission/bounding, immutable snapshots, redaction and exporter wrappers | 511 |
 | `telemetry/metrics.py` | OTel/Prometheus metric collection | 153 |
-| `metrics.py` | Retained public provider metric records and log_metrics | 45 |
+| `metrics.py` | Retained public provider metric records | 4 |
 | `telemetry/_providers.py` | Process providers and Cloud pipelines, minus cheap attribution helper | About 675 |
 | `telemetry/_destination.py` | Per-job destination/auth/gating and early-log retention | 386 |
 | `telemetry/traces.py` | Session report and RTC RPC integration | 455 |
@@ -315,7 +315,7 @@ call one another. Preserve copy-before-redaction, native destination policy, lim
 bounded cleanup. Keep destination/early-buffer behavior separate from process provider
 construction, and keep report/RPC and metric collection as their actual integrations.
 
-Keep provider metric records/log_metrics in the existing public metrics.py module.
+Keep the provider metric records in the existing public metrics.py module.
 Keep telemetry.metrics for actual OTel/Prometheus collection. These responsibilities remain
 distinct, and existing `from livekit.agents import metrics` and `from livekit.agents.metrics
 import STTMetrics` keep their module/class identity. Register collection instruments once
@@ -585,7 +585,7 @@ These source classifications are not additive savings; the exact target contains
 | [http/server.py](../../livekit-agents-next/livekit/agents/http/server.py) | 282 | Retain | `http/server.py`. Route authoring and the ASGI adapter over the worker's parsed exchanges; the worker owns HTTP and WebSocket protocol. |
 | [job.py](../../livekit-agents-next/livekit/agents/job.py) | 1124 | Retain | `job.py`. Keep job/resource owner. It refers to simulation context from evals without absorbing unrelated judge behavior. |
 | [log.py](../../livekit-agents-next/livekit/agents/log.py) | 108 | Retain | `log.py`. Keep import-time Python log levels/logger/filter setup independent of SDK exporter/provider loading. |
-| [metrics.py](../../livekit-agents-next/livekit/agents/metrics.py) | 45 | Retain | `metrics.py`. Retain the v1 public provider metric records and log_metrics API; OTel/Prometheus collection stays separate. |
+| [metrics.py](../../livekit-agents-next/livekit/agents/metrics.py) | 4 | Retain | `metrics.py`. The public provider metric records, re-exported from their generated module; OTel/Prometheus collection stays separate. |
 | [simulation.py](../../livekit-agents-next/livekit/agents/simulation.py) | 111 | Merge | `evals.py`. Simulation verdict/context and judge evaluation form one evaluation/testing API; avoid adding this to already-large job.py. |
 | [stt.py](../../livekit-agents-next/livekit/agents/stt.py) | 298 | Retain | `stt.py`. Already consolidated public STT contract, fallback and stream adaptation module. |
 | [plugin.py](../../livekit-agents-next/livekit/agents/plugin.py) | 50 | Retain | `plugin.py`. The plugin-author contract: the `Plugin` a provider package registers on import; the server and the forkserver preload read the registry. |

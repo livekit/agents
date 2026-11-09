@@ -1,19 +1,32 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from datetime import timedelta
+from typing import TYPE_CHECKING
 
 from .. import _core
-from .._generated.realtime_options import OpenAIRealtimeConfig
-from ..llm import realtime as llm_realtime
-from ..llm._realtime import RealtimeModel as _RealtimeModel, RealtimeSession, realtime_options
+from .._generated.realtime_options import InferenceGateway
+from ..llm._realtime import (
+    AudioTranscription,
+    NoiseReduction,
+    RealtimeModel as _RealtimeModel,
+    RealtimeSession,
+    Reasoning,
+    Tracing,
+    Truncation,
+    TurnDetection,
+    Voice,
+)
 from ..llm.tool_context import ToolChoice
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from . import (
     InferenceClass,
     get_default_inference_url,
     get_inference_headers,
     resolve_credentials,
 )
+
+if TYPE_CHECKING:
+    from .._generated.realtime_wire import Modalities
 
 __all__ = [
     "RealtimeModel",
@@ -24,6 +37,7 @@ __all__ = [
 class RealtimeModel(_RealtimeModel):
     """OpenAI-compatible realtime model authenticated through LiveKit Inference."""
 
+    _dialect = "inference"
     _provider_label = "livekit.agents.inference.realtime.RealtimeModel"
 
     def __init__(
@@ -35,55 +49,47 @@ class RealtimeModel(_RealtimeModel):
         api_key: str | None = None,
         api_secret: str | None = None,
         inference_class: InferenceClass | None = None,
-        voice: NotGivenOr[str] = NOT_GIVEN,
-        modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
-        input_audio_transcription: NotGivenOr[Any] = NOT_GIVEN,
-        input_audio_noise_reduction: NotGivenOr[Any] = NOT_GIVEN,
-        turn_detection: NotGivenOr[Any] = NOT_GIVEN,
+        voice: Voice | None = None,
+        modalities: list[Modalities] | None = None,
+        input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[NoiseReduction | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
-        tracing: NotGivenOr[Any] = NOT_GIVEN,
-        truncation: NotGivenOr[Any] = NOT_GIVEN,
-        reasoning: NotGivenOr[Any] = NOT_GIVEN,
-        max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
+        truncation: NotGivenOr[Truncation | None] = NOT_GIVEN,
+        reasoning: NotGivenOr[Reasoning | None] = NOT_GIVEN,
+        max_session_duration: NotGivenOr[timedelta | None] = NOT_GIVEN,
+        conn_options: APIConnectOptions | None = None,
     ) -> None:
         if "/" not in model:
             raise ValueError("model must be provider-prefixed, for example 'openai/gpt-realtime'")
         api_key, api_secret = resolve_credentials(api_key, api_secret)
         self._inference_class = inference_class
-        self._native = _core.OpenAIRealtimeModel(
-            OpenAIRealtimeConfig(
-                dialect="inference",
-                api_key=api_key,
-                api_secret=api_secret,
-                base_url=base_url or get_default_inference_url(),
-                model=model,
-                voice=voice or None,
-                modalities=list[str](modalities) if modalities else None,
-                inference_provider=provider,
-                inference_class=inference_class,
-                conn_options=conn_options,
-                label=self._provider_label,
-                options=realtime_options(
-                    input_audio_transcription=input_audio_transcription,
-                    input_audio_noise_reduction=input_audio_noise_reduction,
-                    turn_detection=turn_detection,
-                    tool_choice=tool_choice,
-                    speed=speed,
-                    tracing=tracing,
-                    truncation=truncation,
-                    reasoning=reasoning,
-                    max_session_duration=max_session_duration,
-                ),
-            )
+        self._gateway = InferenceGateway(
+            api_secret=api_secret, provider=provider, inference_class=inference_class
         )
-        llm_realtime.RealtimeModel.__init__(self, capabilities=self.capabilities)
-        self._label = self._native.label
+        super().__init__(
+            model=model,
+            voice=voice,
+            modalities=modalities,
+            tool_choice=tool_choice,
+            base_url=base_url or get_default_inference_url(),
+            input_audio_transcription=input_audio_transcription,
+            input_audio_noise_reduction=input_audio_noise_reduction,
+            turn_detection=turn_detection,
+            speed=speed,
+            tracing=tracing,
+            truncation=truncation,
+            reasoning=reasoning,
+            api_key=api_key,
+            max_session_duration=max_session_duration,
+            conn_options=conn_options,
+        )
 
     @classmethod
     def from_model_string(cls, model: str) -> RealtimeModel:
-        """Create a RealtimeModel instance from a model string"""
+        """A RealtimeModel from ``"provider/model"``."""
         return cls(model)
 
     @property
@@ -91,7 +97,6 @@ class RealtimeModel(_RealtimeModel):
         return "livekit"
 
     def _core_leg(self) -> _core.OpenAIRealtimeModel:
-        """The model, identified as the current job's, as a ``VoiceSession`` drives it."""
         headers = get_inference_headers(inference_class=self._inference_class)
         self._native.bind_identification(list(headers.items()))
         return self._native

@@ -358,7 +358,7 @@ async def test_realtime_chain_accepts_host_and_native_members() -> None:
     first = _core.RealtimeFallbackModel([provider])
     chain = _core.RealtimeFallbackModel([first, provider])
     assert chain.active_index == 0
-    assert chain.capabilities() == capabilities
+    assert chain.capabilities == capabilities
     await chain.restart(switch_model=True)
 
 
@@ -676,14 +676,14 @@ async def test_refused_amd_handle_cannot_replace_or_close_the_attached_detector(
         await session.start(Agent(instructions="Welcome the caller.", name="desk"))
         first, second = AMD(session, llm=None, stt=None), AMD(session, llm=None, stt=None)
         try:
-            await first._run(session)
+            await first.__aenter__()
             assert first.enabled
-            await second._run(session)
+            await second.__aenter__()
             assert not second.enabled and session._amd is first
             await second.aclose()
             assert first.enabled and session._amd is first
             await first.aclose()
-            await second._run(session)
+            await second.__aenter__()
             assert second.enabled and session._amd is second
         finally:
             await first.aclose()

@@ -40,7 +40,6 @@ impl super::Implementations for Selected {
     type AdaptiveNoiseGate = ::lk_agents_runtime::inference::duplex::GateClass<
         ::lk_agents_runtime::inference::duplex::AdaptiveNoiseGate,
     >;
-    type DuplexConfiguration = ::lk_agents_runtime::inference::duplex::DuplexConfiguration;
     type DuplexInput = ::lk_agents_runtime::inference::duplex::DuplexInput;
     type DuplexRealtimeModel = ::lk_agents_runtime::inference::duplex::DuplexAdapterModel;
     type FallbackLlm = ::lk_agents_runtime::inference::fallback::FallbackLlm;
@@ -68,7 +67,6 @@ impl super::Implementations for Selected {
     type AudioEmitter = ::lk_agents_runtime::inference::tts::emitter::AudioEmitter;
     type AudioDecoder = ::lk_agents_runtime::inference::codecs::StreamDecoder;
     type RuntimeLoad = ::lk_agents_runtime::process::RuntimeLoad;
-    type MetricsRecords = ::lk_agents_runtime::cores::MetricsRecords;
     type ProviderMetrics = ::lk_agents_runtime::cores::ProviderMetrics;
     type LlmMetricState = ::lk_agents_runtime::cores::LlmMetricState;
     type TtsMetricState = ::lk_agents_runtime::cores::TtsMetricState;

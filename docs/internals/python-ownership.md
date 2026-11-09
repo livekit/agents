@@ -239,7 +239,7 @@ Keep public Python iterator/callback interfaces. Media/core own buffering, frami
 
 | File | Lines |
 | --- | ---: |
-| [tokenize/__init__.py](../../livekit-agents-next/livekit/agents/tokenize/__init__.py) | 296 |
+| [tokenize.py](../../livekit-agents-next/livekit/agents/tokenize.py) | 296 |
 | [utils/audio.py](../../livekit-agents-next/livekit/agents/utils/audio.py) | 200 |
 | [utils/codecs.py](../../livekit-agents-next/livekit/agents/utils/codecs.py) | 83 |
 | [utils/images.py](../../livekit-agents-next/livekit/agents/utils/images.py) | 38 |
@@ -254,6 +254,19 @@ Python-facing channels, asyncio task references and aiohttp hooks remain host ad
 | [utils/connection_pool.py](../../livekit-agents-next/livekit/agents/utils/connection_pool.py) | 201 |
 | [http/client.py](../../livekit-agents-next/livekit/agents/http/client.py) | 358 |
 | [utils/misc.py](../../livekit-agents-next/livekit/agents/utils/misc.py) | 131 |
+
+## Kept handwritten
+
+Classes reviewed for generation and kept in Python, each for the reason given:
+
+- `voice.io.AgentInput` / `AgentOutput`: legs set before `start()` are host objects held until the running session exists; the native setters and `set_io_enabled(IoKind)` apply them after.
+- `VoiceSession.history`, `agent_state`, `user_state`: read the state delivered to the event being handled, an invocation-local contextvar, else the owner's latest.
+- `voice.run_result` `RunAssert` / `EventAssert` / `EventRangeAssert` / `*Assert`: pytest ergonomics (typed overloads, slices, `__tracebackhide__`, a class per event kind) over the host items; native `RunEvents` owns matching and failure text.
+- `voice.background_audio.BackgroundAudioPlayer`: binds the SDK room and its publication, subscribes to the session's `agent_state_changed` and warns in console jobs; the native player owns mixing, selection and playback.
+- `beta.KeywordSearchStrategy` / `BM25SearchStrategy`: implement the public `SearchStrategy` protocol over host `SearchItem`s (index data stored on the item, results the caller's items); native code ranks.
+- `tokenize.BufferedTokenStream` / `BufferedSentenceStream` / `BufferedWordStream`: an asyncio channel and segment ids around the synchronous core `TokenBuffer`; the public constructor is what custom tokenizers (nltk) build.
+- `ipc.child` `_core_ping`: an empty coroutine; the measurement is the host event loop running it.
+- `A2AEndpoint._door()`: assembles the native `_core_A2ADoor` over the Python handler, its thread and the server's late-bound agent name (the former `A2AService`).
 
 ## Completion criteria
 
@@ -285,6 +298,8 @@ Implemented ownership changes (validation is recorded with the change):
 - A job's session startup is the runtime `SessionOwner`'s: after `SessionHost.prepare` (which keeps the console claim, the room and the legs, and names the job in `args.job`), the owner claims the job's primary session, plans and initializes the job's recording, decides hosting and the job run, sets the start time, opens the audio recorder in the job's session directory and registers the session's native close on the job's shutdown (`JobExecution::add_framework_shutdown` on the job's native run), through the `SessionJob` proxy over `JobContext` (`_core_claim_primary`, `job.enable_recording`, `_core_recording_dir`, `init_recording`, `_run`). The owner holds what the report reads (`started_at`, `recording_options`, `recording_path`, `recording_started_at`) and the report's event retention (`allows_report`, `accepts_event`, `admit_event`); the session's `_started_at`, `_recording_options`, `_recording_path`, `_recorder` and `_event_retention` attributes, `JobContext._claim_session` and the `plan_session_start` export are removed.
 - `generate_reply(tools=)` sends the names; the voice core narrows the driving agent's installed toolset (`Toolset::narrowed`). Python's pool reflection, per-reply agent frame and the `reply_tool_indices` export are removed.
 - Lifecycle hooks and session views carry the agent scope identity separately from its name. Distinct agents sharing a name retain their own hooks and resources; failed activation does not replace the current agent.
+- `utils.media.AudioStreamDecoder` is the native class itself (`_core.AudioStreamDecoder`): a failure to open, push or decode is logged natively and ends the stream; the Python wrapper and `CodecFailure` are removed.
+- `session.stt`, `tts`, `vad` and `current_agent` are generated facade getters (the native `SessionOptions.stt`/`tts`/`vad`, replacing `provider(slot)`; `current_agent` refuses with `SessionRefused::NotStarted`).
 
 The inventory is **not an assertion that the whole Python framework has been migrated**.
 Source-reviewed responsibilities above deliberately retain SDK, reflection and hydration code.

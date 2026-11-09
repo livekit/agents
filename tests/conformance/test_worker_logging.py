@@ -38,14 +38,18 @@ async def _run_job() -> None:
     records: list[tuple[int, str, dict[str, Any]]] = []
 
     class Stalling(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            message = record.getMessage()
-            if message == "job thread initialized":
+        # Stalls the drain outside the handler's lock: the job's own Python lines on this
+        # logger must not wait for the drain either.
+        def handle(self, record: logging.LogRecord) -> bool:
+            if record.getMessage() == "job thread initialized":
                 entered.set()
                 if not release.wait(timeout=10):
                     raise TimeoutError("test did not release the log handler")
+            return super().handle(record)
+
+        def emit(self, record: logging.LogRecord) -> None:
             fields = {key: getattr(record, key) for key in _FIELDS if hasattr(record, key)}
-            records.append((record.levelno, message, fields))
+            records.append((record.levelno, record.getMessage(), fields))
 
     agents_logger = logging.getLogger("livekit.agents")
     agents_logger.addHandler(Stalling(logging.DEBUG))

@@ -1,8 +1,3 @@
-"""What runs inside a job process (or a job thread): the handshake with the
-parent and its messages over the core's ``IpcClient``, the process's own log lines, and the job
-itself: its ``JobContext`` and the steps of the shutdown the core runs (``_core.JobRun``).
-The parent's side is ``ipc/__init__.py``."""
-
 from __future__ import annotations
 
 from multiprocessing import current_process
@@ -10,7 +5,7 @@ from multiprocessing import current_process
 if current_process().name == "job_proc":
     import signal
 
-    # the parent handles the signals (and asks the process to shut down)
+    # Before any other import: the parent handles signals and asks the process to shut down.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
@@ -49,8 +44,6 @@ _T = TypeVar("_T")
 
 @dataclass
 class JobArgs:
-    """What a job process (or thread) is started with."""
-
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
     simulation_end_fnc: Callable[[Any], Any] | None
@@ -60,12 +53,11 @@ class JobArgs:
     mp_cch: socket.socket | PipeEnd | None = None
     log_config: LogLevel | None = None
     logger_levels: dict[str, int] = field(default_factory=dict)
-    # the server's settings as environment variables, which the job's code reads
     env: tuple[tuple[str, str], ...] = ()
 
 
 def job_main(args: JobArgs) -> None:
-    # a process forked from the forkserver inherits its core: this one is a job process
+    # A forkserver child inherits the forkserver's core; re-init it as a job process.
     _core.init(_core.Role.Job)
     os.environ.update(args.env)
     job_proc = _JobProc(args, JobExecutorType.PROCESS)
@@ -104,18 +96,12 @@ def job_main(args: JobArgs) -> None:
 
 
 class _JobProc:
-    """A job process's (or job thread's) job. The core decides what ends the job and runs the
-    shutdown in order and within its bounds (``_core.JobRun``); the ``_core_*`` methods are the
-    steps it runs, each in the span it opened."""
-
     def __init__(self, args: JobArgs, executor_type: JobExecutorType) -> None:
         self._args = args
         self._executor_type = executor_type
         self._server_env = dict(args.env)
         self._job_task: asyncio.Task[None] | None = None
-        # stamped on the process's log lines
         self.log_fields: dict[str, Any] = {"pid": os.getpid()}
-        # the parent's socket, set once initialized
         self._client: _core.IpcClient
         self._loop_monitor = telemetry._LoopMonitor()
 
@@ -125,30 +111,27 @@ class _JobProc:
             user_arguments=self._args.user_arguments,
             http_proxy=http_proxy,
         )
-        # the framework's warm-up; a no-op under a forkserver, which imported it already
         from . import _preload, load_preload_modules
 
         load_preload_modules(self._args.preload_modules)
-        # after the preloads: an application installing its own tracer provider keeps it
+        # After the preloads, so a tracer provider an application installs there is kept.
         telemetry._install()
         _preload._step("the livekit-rtc runtime", _preload._rtc_runtime)
         _preload._step("the local inference models", _preload._local_inference_models)
 
-    # --- the parent's messages, as the core's IpcClient serves them -------------------------
-
     async def _core_start_job(self, job: StartJob) -> _core.JobRun:
         run = self._start_job(job.info)
-        # the job's root span, before its task can run
+        # The root span must exist before the job task can run.
         run.start_trace(job)
         self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
         self._job_task.add_done_callback(lambda _: self._client.stop())
         return run
 
     async def _core_ping(self) -> None:
-        """Answered once the loop ran it: the pong measures the loop's responsiveness."""
+        # Empty on purpose: the pong measures the loop's responsiveness.
+        ...
 
     async def aclose(self) -> None:
-        # the parent went or the job ended: a job still running is cancelled
         if self._job_task is not None:
             await aio.cancel_and_wait(self._job_task)
 
@@ -180,7 +163,6 @@ class _JobProc:
             run=self._run,
             server_env=self._server_env,
         )
-        # Reachable from the remote session port (via get_job_context) when a simulation finalizes.
         self._job_ctx._simulation_end_fnc = self._args.simulation_end_fnc
 
         return self._run
@@ -191,24 +173,18 @@ class _JobProc:
 
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         http_client._new_session_ctx()
-        # the core calls the steps below from its own tasks: user code gets the job's context
-        # (get_job_context() and its http session) back
+        # The core calls the steps below from its own tasks; _in_job restores this context.
         self._http_session = http_client._ContextVar.get()
 
         try:
-            # the core records the job's spans and runs each step in its span
             await self._run.run(self)
         finally:
-            # whatever happened above (a cancel while waiting, a close that raised), the job
-            # ends: temp dir, per-job telemetry state
             await self._run.close_tasks()
             self._loop_monitor.stop()
 
             await self._job_ctx._on_cleanup()
             await http_client._close_http_ctx()
             _JobContextVar.reset(job_ctx_token)
-
-    # --- the steps the core runs -------------------------------------------------------
 
     def _in_job(self, awaitable: Awaitable[_T], name: str) -> asyncio.Task[_T]:
         ctx = contextvars.copy_context()
@@ -221,14 +197,13 @@ class _JobProc:
         return ctx.run(asyncio.create_task, run(), name=name)
 
     async def _core_start_entrypoint(self) -> asyncio.Task[None]:
-        # the job's stalls, under its entrypoint's span (current here)
+        # Here so stalls are parented under the entrypoint's span, current at this point.
         self._loop_monitor.start(
             self._job_ctx.job.id, whole_process=self._executor_type == JobExecutorType.PROCESS
         )
         return self._in_job(self._args.job_entrypoint_fnc(self._job_ctx), "job_user_entrypoint")
 
     async def _core_close_session(self) -> None:
-        # every session of the job closes, so each one's spans end and reach the exporter
         if sessions := self._job_ctx._sessions:
             await self._in_job(asyncio.gather(*(s.aclose() for s in sessions)), "job_close_session")
             await self._in_job(self._job_ctx._snapshot_session(), "job_snapshot_session")
@@ -251,19 +226,17 @@ class _JobProc:
 
 
 async def _awaited(callback: Callable[..., Awaitable[None]], args: tuple[str, ...]) -> None:
-    # a callback may return any awaitable (a lambda returning a future)
+    # Wraps any awaitable (e.g. a lambda returning a future) in a coroutine for create_task.
     await callback(*args)
 
 
 def thread_main(args: JobArgs) -> None:
-    """A job thread's main: the job runs on a loop of the thread's own, logging as the worker."""
     serve_parent(
         cast("socket.socket | PipeEnd", args.mp_cch), _JobProc(args, JobExecutorType.THREAD)
     )
 
 
 def log_to_stdout(config: LogLevel | None, levels: dict[str, int], fields: dict[str, Any]) -> None:
-    """Write the child's structured logs with the worker's level and process fields."""
     from ..cli import setup_logging
 
     setup_logging(config or "warn").addFilter(_Stamp(fields))
@@ -277,15 +250,13 @@ class _Stamp(logging.Filter):
         self._fields = fields
 
     def filter(self, record: logging.LogRecord) -> bool:
-        # a record's own extra wins
         for key, value in self._fields.items():
             record.__dict__.setdefault(key, value)
         return True
 
 
 class PipeEnd:
-    """The job's end of the parent's named pipe (Windows), duplicated straight into the job
-    process when multiprocessing pickles its arguments."""
+    # Windows named-pipe handle, duplicated into the job process when pickled.
 
     def __init__(self, handle: int) -> None:
         self._handle: int | None = handle
@@ -321,10 +292,6 @@ class PipeEnd:
 
 
 def serve_parent(mp_cch: socket.socket | PipeEnd, host: Any) -> None:
-    """A child process's (or job thread's) side of the parent's socket: the handshake
-    (``host.initialize(http_proxy)``), then a loop of its own on which ``_core.IpcClient.serve``
-    hands the parent's messages to ``host`` until the parent goes or the child is done. A failed
-    initialization raises after notifying the parent."""
     client = _core.IpcClient(
         mp_cch.detach(), host.initialize, process=host._executor_type == JobExecutorType.PROCESS
     )
@@ -333,16 +300,16 @@ def serve_parent(mp_cch: socket.socket | PipeEnd, host: Any) -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.set_debug(client.asyncio_debug)
-    loop.slow_callback_duration = 0.1  # 100ms
+    loop.slow_callback_duration = 0.1
 
     try:
         task = loop.create_task(_serve(client, host), name="proc_client_main")
         while not task.done():
-            # the parent handles the process's shutdown (its ShutdownRequest)
+            # The parent drives shutdown through IPC, not signals.
             with contextlib.suppress(KeyboardInterrupt):
                 loop.run_until_complete(task)
     finally:
-        # shut the loop down the way asyncio.run() does, a thread runner reuses the process
+        # Full asyncio.run()-style teardown: a thread runner reuses the process.
         try:
             pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
             for t in pending:
@@ -362,20 +329,18 @@ async def _serve(client: _core.IpcClient, host: Any) -> None:
         await client.serve(host)
     finally:
         await host.aclose()
-        # a thread runner shares its process's exporter with the server
+        # A thread runner shares the server's exporter.
         if host._executor_type == JobExecutorType.PROCESS:
             await telemetry._shutdown()
         await client.aclose()
 
 
 def _mock_room() -> Any:
-    # only a fake job (the console) builds one; production never imports unittest
     from unittest.mock import AsyncMock, create_autospec
 
     MockRoom = create_autospec(rtc.Room, instance=True)
     MockRoom.local_participant = create_autospec(rtc.LocalParticipant, instance=True)
-    # autospec leaves attributes as truthy mocks; pin sid/identity/kind to real values
-    # so they don't leak into places like inference request headers (see _utils.py).
+    # Autospec attributes are truthy mocks; pin real values so they don't leak into headers.
     MockRoom.local_participant.sid = ""
     MockRoom.local_participant.identity = "agent"
     MockRoom.local_participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_AGENT

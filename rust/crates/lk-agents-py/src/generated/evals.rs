@@ -14,31 +14,26 @@ use pyo3::prelude::*;
 type CoreJudgeRunnerImpl =
     <crate::generated::implementations::Selected as super::Implementations>::JudgeRunner;
 
-/// Runs judges on one model. A model the host implements is offered `tools`, the host's live
-/// judge tools (`judge_tool_schemas`).
+/// Runs judges on one model.
 #[pyclass(frozen, name = "_core_JudgeRunner", module = "livekit.agents._core")]
 pub struct CoreJudgeRunner(pub(crate) ::std::sync::Arc<CoreJudgeRunnerImpl>);
 
 #[pymethods]
 impl CoreJudgeRunner {
     #[new]
-    #[pyo3(signature = (llm, tools, host))]
+    #[pyo3(signature = (llm, host))]
     fn new(
         py: Python<'_>,
         llm: Option<Bound<'_, PyAny>>,
-        tools: Bound<'_, PyAny>,
         host: Bound<'_, PyAny>,
     ) -> PyResult<CoreJudgeRunner> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
         let llm =
             llm.map(|v| crate::generated::llm::LlmProxy::from_host(v.as_any())).transpose()?;
-        let tools = crate::py_objects::object_ref_from_py(tools.as_any())?;
         let host = crate::generated::evals::EvaluationHostProxy::from_host(host.as_any())?;
         let out = py.detach(|| {
-            <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::new(
-                &env, llm, tools, host,
-            )
+            <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::new(&env, llm, host)
         });
         ::pyo3::PyResult::Ok(CoreJudgeRunner(::std::sync::Arc::new(out)))
     }
@@ -157,14 +152,6 @@ pub fn _core_judgment_uncertain(py: Python<'_>, judgment: Bound<'_, PyAny>) -> P
         <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::judgment_uncertain(judgment)
     });
     ::pyo3::PyResult::Ok(out)
-}
-
-/// The judge tools' raw schemas, which the host offers a model it implements.
-#[pyfunction]
-pub fn _core_judge_tool_schemas<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-    crate::py_calls::check_pid()?;
-    let out = py.detach(<EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::tool_schemas);
-    crate::py_values::value_to_py(py, &out)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/evals.rs.

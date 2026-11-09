@@ -133,8 +133,10 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     fn span(&self) -> Option<crate::telemetry::record::SpanContext>;
     #[host(getter)]
     fn storage(&self) -> Option<Arc<Self::Storage>>;
+    /// The host's agent the loop installed last, the task's while a `VoiceTask` holds the
+    /// floor; before `start()`, the one `update_agent` named. Refused when there is none.
     #[host(getter)]
-    fn current_agent(&self) -> Option<crate::HostRef>;
+    fn current_agent(&self) -> Result<crate::HostRef, super::session::SessionRefused>;
     /// The latest state the host's events delivered; before `start()`, an empty history.
     #[host(getter)]
     fn state(&self) -> Arc<Self::State>;
@@ -278,6 +280,9 @@ pub trait VoiceSessionFacade {
     /// The session `start()` started; refused before.
     #[host(delegate)]
     type Running: super::session::VoiceSession;
+    /// The session's settings and providers, held from construction.
+    #[host(delegate)]
+    type Options: super::session::SessionOptions;
 
     /// Close the session and wait for it.
     async fn aclose(&self) -> Result<(), super::session::UnknownCloseReason>;
@@ -290,6 +295,20 @@ pub trait VoiceSessionFacade {
     /// held while inside.
     #[host(via = Running, native = claim_user_turn, exit = release_user_turn)]
     async fn _claim_user_turn(&self) -> Result<(), super::session::SessionRefused>;
+
+    /// The STT the session listens with now: an `override_options` layer's while one holds it,
+    /// else the base's (the constructor's or `update_options`').
+    #[host(getter, via = Options, annotation(ret = "..stt.STT | None"))]
+    fn stt(&self) -> Option<crate::HostRef>;
+    /// The TTS the session speaks with now, resolved as `stt` is.
+    #[host(getter, via = Options, annotation(ret = "..tts.TTS | None"))]
+    fn tts(&self) -> Option<crate::HostRef>;
+    /// The VAD the session runs now, resolved as `stt` is.
+    #[host(getter, via = Options, annotation(ret = ".vad.VAD | None"))]
+    fn vad(&self) -> Option<crate::HostRef>;
+    /// The agent driving the session; refused before `start()` unless `update_agent` named one.
+    #[host(getter, annotation(ret = "..voice.agent.Agent"))]
+    fn current_agent(&self) -> Result<crate::HostRef, super::session::SessionRefused>;
 
     /// Empty before startup; the final snapshot remains readable after close.
     #[host(getter)]

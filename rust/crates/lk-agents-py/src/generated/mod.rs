@@ -80,7 +80,6 @@ pub trait Implementations: 'static {
     type ChatContextDiffs: ::lk_agents_abi::llm::chat_context::ChatContextDiffs;
     type FixedGate: ::lk_agents_abi::llm::duplex::FixedGate;
     type AdaptiveNoiseGate: ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate;
-    type DuplexConfiguration: ::lk_agents_abi::llm::duplex::DuplexConfiguration;
     type DuplexInput: ::lk_agents_abi::llm::duplex::DuplexInput;
     type DuplexRealtimeModel: ::lk_agents_abi::llm::duplex::DuplexRealtimeModel;
     type FallbackLlm: ::lk_agents_abi::llm::fallback::FallbackLlm;
@@ -107,7 +106,6 @@ pub trait Implementations: 'static {
     type AudioEmitter: ::lk_agents_abi::media::emitter::AudioEmitter;
     type AudioDecoder: ::lk_agents_abi::media::codecs::AudioDecoder;
     type RuntimeLoad: ::lk_agents_abi::metrics::RuntimeLoad;
-    type MetricsRecords: ::lk_agents_abi::metrics::MetricsRecords;
     type ProviderMetrics: ::lk_agents_abi::metrics::provider::ProviderMetrics;
     type LlmMetricState: ::lk_agents_abi::metrics::provider::LlmMetricState;
     type TtsMetricState: ::lk_agents_abi::metrics::provider::TtsMetricState;
@@ -285,7 +283,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(evals::_core_judgment_passed, m)?)?;
     m.add_function(wrap_pyfunction!(evals::_core_judgment_failed, m)?)?;
     m.add_function(wrap_pyfunction!(evals::_core_judgment_uncertain, m)?)?;
-    m.add_function(wrap_pyfunction!(evals::_core_judge_tool_schemas, m)?)?;
     m.add_function(wrap_pyfunction!(inference::inference_api_key, m)?)?;
     m.add_function(wrap_pyfunction!(inference::inference_api_secret, m)?)?;
     m.add_function(wrap_pyfunction!(inference::inference_url, m)?)?;
@@ -301,7 +298,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(inference::eot_select, m)?)?;
     m.add_function(wrap_pyfunction!(inference::stt_fallback_capabilities, m)?)?;
     m.add_function(wrap_pyfunction!(inference::tts_fallback_capabilities, m)?)?;
-    m.add_function(wrap_pyfunction!(inference::merge_realtime_capabilities, m)?)?;
     m.add_class::<inference::InferenceAvatar>()?;
     m.add_class::<inference::InferenceTts>()?;
     m.add_function(wrap_pyfunction!(invoke::flush_logs, m)?)?;
@@ -312,7 +308,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(llm::compute_chat_ctx_diff, m)?)?;
     m.add_class::<llm::FixedGate>()?;
     m.add_class::<llm::AdaptiveNoiseGate>()?;
-    m.add_function(wrap_pyfunction!(llm::duplex_realtime_capabilities, m)?)?;
     m.add_class::<llm::DuplexInput>()?;
     m.add_class::<llm::DuplexRealtimeModel>()?;
     m.add_class::<llm::FallbackLlm>()?;
@@ -352,9 +347,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(media::serialize_image_frame, m)?)?;
     m.add_function(wrap_pyfunction!(media::serialize_image_url, m)?)?;
     m.add_class::<media::AudioEmitter>()?;
-    m.add_class::<media::AudioDecoder>()?;
+    m.add_class::<media::AudioStreamDecoder>()?;
     m.add_function(wrap_pyfunction!(metrics::runtime_busy_seconds, m)?)?;
-    m.add_function(wrap_pyfunction!(metrics::metrics_log_fields, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::_core_token_usage_total, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::stt_batch_metrics, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::stt_stream_metrics, m)?)?;

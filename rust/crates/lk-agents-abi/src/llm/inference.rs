@@ -3,9 +3,10 @@
 use std::sync::Arc;
 
 use crate::errors::{ApiError, Invalid};
-use crate::llm::types::{Llm, ToolChoice, ToolSpec};
+use crate::llm::fallback::{HostChatContext, HostTools};
+use crate::llm::types::{Llm, ToolChoice};
 use crate::utils::stream::StreamOutput;
-use crate::{ApiConnectOptions, ChatItem, Extra, LlmChunk};
+use crate::{ApiConnectOptions, Extra, LlmChunk};
 
 /// The gateway LLM behind `inference.LLM`. Its options are shared by every view
 /// (`identified`); each view's requests carry its own job's identification.
@@ -68,21 +69,35 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
         #[host(default = None)] endpoint: Option<ProviderEndpoint>,
     );
 
-    /// Opens a completion of `items`; no I/O until the first pull. `headers` identify the
-    /// caller's job, read in its context.
+    /// Opens a completion of `chat_ctx`; no I/O until the first pull. Its requests carry this
+    /// view's job identification and `inference_class`, else the client's class.
     #[host(call)]
     #[allow(clippy::too_many_arguments)]
     fn chat(
         &self,
-        items: Vec<ChatItem>,
-        #[host(kw)] tools: Vec<ToolSpec>,
-        conn_options: ApiConnectOptions,
+        #[host(kw)] chat_ctx: HostChatContext,
+        #[host(default = None)] tools: Option<HostTools>,
+        #[host(default = None)] conn_options: Option<ApiConnectOptions>,
         #[host(default = None)] parallel_tool_calls: Option<bool>,
         #[host(default = None)] tool_choice: Option<ToolChoice>,
-        #[host(default = None)] response_format: Option<serde_json::Value>,
+        #[host(default = None)] response_format: Option<ResponseFormat>,
+        #[host(default = None)] inference_class: Option<String>,
         #[host(default = None)] extra_kwargs: Option<Extra>,
-        #[host(default = None)] headers: Option<crate::Headers>,
     ) -> Result<Self::Chunks, ApiError>;
+}
+
+/// A host `response_format` (a pydantic model, a `TypeAdapter`'s type or a JSON schema) as the
+/// OpenAI `response_format` parameter, converted by `llm.utils.to_openai_response_format`.
+#[crate::host(record(
+    module = "llm_provider_options",
+    host_type = "builtins.object",
+    boundary,
+    extract
+))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResponseFormat {
+    #[host(own_value, extract_with = "py_values::response_format")]
+    pub param: serde_json::Value,
 }
 
 /// An OpenAI-compatible provider the client calls directly with the provider's own key, in place
@@ -171,6 +186,32 @@ pub trait InferenceLlmFacade {
         #[host(default = None)] extra_kwargs: Option<Extra>,
     );
 }
+
+/// `inference.LLM.chat()`: one gateway completion; the client retries it under its
+/// ``conn_options``.
+#[crate::host(facade(
+    path = "livekit.agents.inference.llm",
+    base = "llm.LLMStream",
+    native = InferenceLlm,
+    stream(
+        op = chat,
+        owner = "_llm",
+        native_retries,
+        method = "chat",
+        base_args(chat_ctx, tools, conn_options),
+        default(tools = "builtins.None", conn_options = "..types.DEFAULT_API_CONNECT_OPTIONS"),
+        annotation(
+            chat_ctx = "livekit.agents.llm.ChatContext",
+            tools = "list[livekit.agents.llm.Tool] | None",
+            tool_choice = "livekit.agents.llm.ToolChoice",
+            response_format = "Any",
+            inference_class = ".inference_models.InferenceClass",
+            extra_kwargs = "dict[str, Any]"
+        ),
+        not_given
+    )
+))]
+pub trait GatewayLLMStream {}
 
 /// Accumulates the streamed choices of one OpenAI-compatible completion into chunks, filtering
 /// the model's thinking tags: `inference.LLMStream` over a plugin's own client.

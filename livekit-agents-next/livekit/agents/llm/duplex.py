@@ -2,25 +2,22 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, Callable
+from collections.abc import AsyncIterable, Callable, Sequence
 from types import TracebackType
-from typing import TYPE_CHECKING, Generic, Literal, Never, Protocol
+from typing import Generic, Literal, Never, Protocol
 
 from typing_extensions import TypeVar
 
 from livekit import rtc
 
 from .. import _bindings, _core
+from .._generated import facades_llm_duplex as _facades
 from .._generated.public_llm_duplex import *  # noqa: F403
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .chat_context import ChatContext, ChatItem
-from .realtime import RealtimeError, RealtimeModel, RealtimeSession
-from .tool_context import Tool, ToolChoice, ToolContext
-
-if TYPE_CHECKING:
-    pass
-
+from .realtime import RealtimeError, RealtimeSession
+from .tool_context import Tool, ToolChoice, ToolContext, Toolset
 
 DuplexEventTypes = Literal[
     "transcript_delta",  # the model's transcript of its own speech
@@ -72,6 +69,13 @@ class DuplexModel(ABC):
 
     @abstractmethod
     async def aclose(self) -> None: ...
+
+    async def _core_session(
+        self, tools: Callable[[], Sequence[Tool | Toolset]] | None
+    ) -> _bindings._DuplexSession:
+        """A new session as the core drives it, offering the tools ``tools`` answers (the
+        objects the core refers to by name)."""
+        return _bindings._DuplexSession(self.session(), tools or list)
 
     async def __aenter__(self) -> DuplexModel:
         return self
@@ -189,11 +193,6 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         )
 
 
-# a provider may stop sending rather than stream its own silence; waiting out the frame in hand
-# plus this long is the silence the gate never received
-_AUDIO_TIMEOUT = 0.8
-
-
 class AudioGate(Protocol):
     """Decides which frames of the model's output carry speech worth playing."""
 
@@ -206,7 +205,7 @@ class AudioGate(Protocol):
         ...
 
 
-class DuplexRealtimeAdapter(RealtimeModel):
+class DuplexRealtimeAdapter(_facades.DuplexRealtimeAdapter):
     """Runs a :class:`DuplexModel` inside an ``VoiceSession``.
 
     The core (``_core.DuplexRealtimeModel``) gates the model's continuous output, segments it
@@ -214,51 +213,11 @@ class DuplexRealtimeAdapter(RealtimeModel):
     it just has no chat item.
     """
 
-    def __init__(
-        self,
-        duplex_model: DuplexModel,
-        *,
-        gate: Callable[[], AudioGate] | None = None,
-        audio_timeout: float = _AUDIO_TIMEOUT,
-    ) -> None:
-        """Run a duplex model as an ordinary realtime session.
-
-        Args:
-            duplex_model: The model to wrap.
-            gate: Decides which output frames carry speech. Defaults to the model's own gate,
-                or an adaptive one that learns the model's silence.
-            audio_timeout: How long to wait for the next frame before the output counts as
-                finished, for a provider that stops sending rather than streaming its silence.
-        """
-        caps = _core.duplex_realtime_capabilities(duplex_model.capabilities)
-        # This declared field is host-only; all native capability policy comes from the engine.
-        caps.supports_overlapping_speech = True
-        super().__init__(capabilities=caps)
-        self._duplex_model = duplex_model
-        self._gate = gate
-        self._native = _core.DuplexRealtimeModel(
-            _bindings.Duplex(self), audio_timeout=audio_timeout
-        )
-
-    def _core_leg(self) -> _core.DuplexRealtimeModel:
-        return self._native
-
     @property
     def duplex_model(self) -> DuplexModel:
         return self._duplex_model
-
-    @property
-    def model(self) -> str:
-        return self._duplex_model.model
-
-    @property
-    def provider(self) -> str:
-        return self._duplex_model.provider
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         raise NotImplementedError(
             "DuplexRealtimeAdapter sessions run inside a VoiceSession (the core segments them)"
         )
-
-    async def aclose(self) -> None:
-        await self._duplex_model.aclose()

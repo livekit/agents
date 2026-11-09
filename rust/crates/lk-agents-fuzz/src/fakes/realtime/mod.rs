@@ -145,6 +145,7 @@ fn capabilities(vad: Option<Vad>, configured: bool, text_only: bool) -> Realtime
         per_response_tool_choice: true,
         supports_say: false,
         auto_turn_reply_generation: vad.is_some(),
+        supports_overlapping_speech: false,
     }
 }
 

@@ -22,7 +22,7 @@ pub use segmenter::{AUDIO_TIMEOUT, Fragment, Segmenter, Step};
 pub use session::DuplexAdapterModel;
 
 /// The realtime capabilities a duplex model runs under: it detects turns and answers them itself,
-/// speaks only audio, and owns its output timeline.
+/// speaks only audio, owns its output timeline and may talk over the caller.
 pub fn realtime_capabilities(caps: DuplexCapabilities) -> RealtimeCapabilities {
     RealtimeCapabilities {
         message_truncation: false,
@@ -38,13 +38,7 @@ pub fn realtime_capabilities(caps: DuplexCapabilities) -> RealtimeCapabilities {
         mutable_tools: caps.mutable_tools,
         per_response_tool_choice: false,
         supports_say: false,
-    }
-}
-
-pub struct DuplexConfiguration;
-impl lk_agents_abi::llm::duplex::DuplexConfiguration for DuplexConfiguration {
-    fn duplex_realtime_capabilities(caps: DuplexCapabilities) -> RealtimeCapabilities {
-        realtime_capabilities(caps)
+        supports_overlapping_speech: true,
     }
 }
 

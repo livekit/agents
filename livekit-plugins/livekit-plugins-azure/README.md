@@ -44,7 +44,7 @@ session = VoiceSession(
 
 ### Advanced Configuration
 
-Voice Live options are passed as the JSON the service documents:
+Voice Live options are records from `azure.realtime`:
 
 ```python
 import os
@@ -56,13 +56,13 @@ model = azure.realtime.RealtimeModel(
     model="gpt-4.1",
     voice="en-US-AvaMultilingualNeural",
     # azure-speech with text models such as gpt-4.1, whisper-1 with gpt-realtime
-    input_audio_transcription={"model": "azure-speech", "language": "en-US"},
-    turn_detection={
-        "type": "azure_semantic_vad",
-        "silence_duration_ms": 500,
-        "remove_filler_words": True,
-    },
-    input_audio_noise_reduction={"type": "azure_deep_noise_suppression"},
+    input_audio_transcription=azure.realtime.AudioTranscription(
+        model="azure-speech", language="en-US"
+    ),
+    turn_detection=azure.realtime.AzureSemanticVad(
+        silence_duration_ms=500, remove_filler_words=True
+    ),
+    input_audio_noise_reduction=azure.realtime.AzureDeepNoiseSuppression(),
 )
 ```
 
@@ -74,13 +74,13 @@ model = azure.realtime.RealtimeModel(
 | `api_key` | Azure API key | `AZURE_VOICE_LIVE_API_KEY` env var |
 | `entra_token` | Microsoft Entra token, instead of an API key | None |
 | `model` | Model name | `AZURE_VOICE_LIVE_MODEL` env var, or `gpt-realtime` |
-| `voice` | Azure voice name, OpenAI voice name, or a Voice Live voice object | `en-US-AvaMultilingualNeural` |
+| `voice` | Azure voice name, OpenAI voice name, or an `AzureVoice` | `en-US-AvaMultilingualNeural` |
 | `modalities` | `["text"]` for text-only responses | audio |
-| `input_audio_transcription` | Transcription config (model, language), `None` to disable | `azure-speech` for text models and `phi4-mm-realtime`, `whisper-1` otherwise |
-| `turn_detection` | Turn detection config, e.g. `server_vad`, `azure_semantic_vad`, `azure_semantic_vad_multilingual` | `server_vad` |
-| `input_audio_noise_reduction` | Noise suppression config | None |
+| `input_audio_transcription` | `AudioTranscription(model=, language=)`, `None` to disable | `azure-speech` for text models and `phi4-mm-realtime`, `whisper-1` otherwise |
+| `turn_detection` | `ServerVad(...)` or `AzureSemanticVad(type=...)` (`azure_semantic_vad`, `azure_semantic_vad_en`, `azure_semantic_vad_multilingual`) | server VAD |
+| `input_audio_noise_reduction` | `AzureDeepNoiseSuppression()`, `"near_field"` or `"far_field"` | None |
 | `tool_choice` | Function calling mode | `"auto"` |
-| `max_output_tokens` | Maximum output tokens per response | `4096` |
+| `max_output_tokens` | Maximum output tokens per response, `None` for unlimited | `4096` |
 
 See [How to use the Voice Live API](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live-how-to) for every turn detection, noise suppression and voice option.
 

@@ -105,7 +105,7 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> FallbackRecognizeStream:
+    ) -> RecognizeStream:
         return FallbackRecognizeStream(
             stt=cast("stt.FallbackAdapter", self),
             language=language if is_given(language) else None,
@@ -127,7 +127,7 @@ class FallbackRecognizeStream(RecognizeStream):
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options)
-        self._language = language
+        self._language: str | None = language
 
     async def _core_open(self) -> _core.FallbackRecognizeStream:
         return await self._stt._native.stream(
@@ -165,7 +165,7 @@ class StreamAdapter(STT):
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> StreamAdapterWrapper:
+    ) -> RecognizeStream:
         return StreamAdapterWrapper(
             stt=cast("stt.StreamAdapter", self),
             language=language if is_given(language) else None,
@@ -189,7 +189,7 @@ class StreamAdapterWrapper(RecognizeStream):
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options)
-        self._language = language
+        self._language: str | None = language
 
     async def _core_open(self) -> _core.SttAdapterStream:
         return await self._stt._native.stream(

@@ -378,21 +378,6 @@ inventory::submit! {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
-type DuplexConfigurationImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::DuplexConfiguration;
-
-#[pyfunction]
-#[pyo3(signature = (caps))]
-pub fn duplex_realtime_capabilities<'py>(
-    py: Python<'py>,
-    caps: Bound<'_, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let caps = crate::generated::records::duplex::duplex_capabilities_from_py(caps.as_any())?;
-    let out = py.detach(|| <DuplexConfigurationImpl as ::lk_agents_abi::llm::duplex::DuplexConfiguration>::duplex_realtime_capabilities(caps));
-    crate::generated::records::realtime::realtime_capabilities_to_py(py, out)
-}
-
-// Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
 type DuplexInputImpl =
     <crate::generated::implementations::Selected as super::Implementations>::DuplexInput;
 
@@ -492,23 +477,30 @@ pub struct DuplexRealtimeModel(pub(crate) ::std::sync::Arc<DuplexRealtimeModelIm
 
 #[pymethods]
 impl DuplexRealtimeModel {
+    /// Each session's gate is `gate`'s, else the model's own, else the adaptive gate.
     /// `audio_timeout`: how long to wait for the next frame before the output counts as finished.
     #[new]
-    #[pyo3(signature = (host, *, audio_timeout = 0.8))]
+    #[pyo3(signature = (duplex_model, *, gate = None, audio_timeout = 0.8))]
     fn new(
         py: Python<'_>,
-        host: Bound<'_, PyAny>,
+        duplex_model: Bound<'_, PyAny>,
+        gate: Option<Bound<'_, PyAny>>,
         #[pyo3(from_py_with = _extract_duplex_realtime_model_new_audio_timeout)]
         audio_timeout: DuplexRealtimeModelNewAudioTimeoutInput,
     ) -> PyResult<DuplexRealtimeModel> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let host = crate::generated::llm::DuplexHostProxy::from_host(host.as_any())?;
+        let duplex_model =
+            crate::generated::llm::DuplexHostProxy::from_host(duplex_model.as_any())?;
+        let gate = gate
+            .map(|v| crate::generated::llm::AudioGateFactoryProxy::from_host(v.as_any()))
+            .transpose()?;
         let out = py
             .detach(|| {
                 <DuplexRealtimeModelImpl as ::lk_agents_abi::llm::duplex::DuplexRealtimeModel>::new(
                     &env,
-                    host,
+                    duplex_model,
+                    gate,
                     audio_timeout,
                 )
             })
@@ -521,6 +513,7 @@ impl DuplexRealtimeModel {
     }
 
     /// The realtime capabilities the model runs under.
+    #[getter]
     fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| <DuplexRealtimeModelImpl as ::lk_agents_abi::llm::duplex::DuplexRealtimeModel>::capabilities(&self.0));
@@ -651,7 +644,8 @@ impl FallbackLlm {
         conn_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let chat_ctx = crate::py_objects::object_ref_from_py(chat_ctx.as_any())?;
+        let chat_ctx =
+            crate::generated::records::llm_fallback::host_chat_context_from_py(chat_ctx.as_any())?;
         let tools = tools
             .map(|v| crate::generated::records::llm_fallback::host_tools_from_py(v.as_any()))
             .transpose()?;
@@ -976,6 +970,8 @@ impl RealtimeFallbackModel {
         ::pyo3::PyResult::Ok(out)
     }
 
+    /// The members' capabilities, merged: the pipeline-shaping ones agree, the others are ANDed.
+    #[getter]
     fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::fallback::RealtimeFallbackModel>::capabilities(&self.0));
@@ -1196,40 +1192,30 @@ impl InferenceLlm {
         Ok(())
     }
 
-    /// Opens a completion of `items`; no I/O until the first pull. `headers` identify the
-    /// caller's job, read in its context.
-    #[pyo3(signature = (items, *, tools, conn_options, parallel_tool_calls = None, tool_choice = None, response_format = None, extra_kwargs = None, headers = None))]
+    /// Opens a completion of `chat_ctx`; no I/O until the first pull. Its requests carry this
+    /// view's job identification and `inference_class`, else the client's class.
+    #[pyo3(signature = (*, chat_ctx, tools = None, conn_options = None, parallel_tool_calls = None, tool_choice = None, response_format = None, inference_class = None, extra_kwargs = None))]
     fn chat(
         &self,
         py: Python<'_>,
-        items: Bound<'_, PyAny>,
-        tools: Bound<'_, PyAny>,
-        conn_options: Bound<'_, PyAny>,
+        chat_ctx: Bound<'_, PyAny>,
+        tools: Option<Bound<'_, PyAny>>,
+        conn_options: Option<Bound<'_, PyAny>>,
         parallel_tool_calls: ::std::option::Option<bool>,
         tool_choice: Option<Bound<'_, PyAny>>,
         response_format: Option<Bound<'_, PyAny>>,
+        inference_class: ::std::option::Option<::std::string::String>,
         extra_kwargs: Option<Bound<'_, PyAny>>,
-        headers: Option<Bound<'_, PyAny>>,
     ) -> PyResult<InferenceLlmChunks> {
         crate::py_calls::check_pid()?;
-        let items = items.try_iter().and_then(|items| {
-            items
-                .map(|item| {
-                    let item = item?;
-                    crate::generated::records::chat_items::chat_item_from_py(item.as_any())
-                })
-                .collect::<PyResult<Vec<_>>>()
-        })?;
-        let tools = tools.try_iter().and_then(|items| {
-            items
-                .map(|item| {
-                    let item = item?;
-                    crate::generated::records::tool_options::tool_spec_from_py(item.as_any())
-                })
-                .collect::<PyResult<Vec<_>>>()
-        })?;
-        let conn_options =
-            crate::generated::records::connect::api_connect_options_from_py(conn_options.as_any())?;
+        let chat_ctx =
+            crate::generated::records::llm_fallback::host_chat_context_from_py(chat_ctx.as_any())?;
+        let tools = tools
+            .map(|v| crate::generated::records::llm_fallback::host_tools_from_py(v.as_any()))
+            .transpose()?;
+        let conn_options = conn_options
+            .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
+            .transpose()?;
         let tool_choice = tool_choice
             .map(|v| {
                 crate::generated::records::from_representation::<
@@ -1239,7 +1225,9 @@ impl InferenceLlm {
             })
             .transpose()?;
         let response_format = response_format
-            .map(|v| crate::py_values::value_from_py(v.as_any(), "response_format"))
+            .map(|v| {
+                crate::generated::records::llm_provider_options::response_format_from_py(v.as_any())
+            })
             .transpose()?;
         let extra_kwargs = extra_kwargs
             .map(|v| match crate::py_values::value_from_py(v.as_any(), "extra_kwargs")? {
@@ -1250,54 +1238,18 @@ impl InferenceLlm {
                 ))),
             })
             .transpose()?;
-        let headers = headers
-            .map(|v| {
-                crate::generated::records::from_representation::<
-                    ::lk_agents_abi::Headers,
-                    ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
-                >(if v.as_any().is_instance_of::<::pyo3::types::PyList>()
-                    || v.as_any().is_instance_of::<::pyo3::types::PyTuple>()
-                {
-                    v.as_any()
-                        .try_iter()?
-                        .map(|item| {
-                            let item = &item?;
-                            (|| -> ::pyo3::PyResult<_> {
-                                let tuple = item.cast::<::pyo3::types::PyTuple>()?;
-                                if tuple.len() != 2 {
-                                    return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "{}: expected a tuple of 2 items",
-                                        "headers"
-                                    )));
-                                }
-                                let item_0 = tuple.get_item(0)?;
-                                let item_1 = tuple.get_item(1)?;
-                                Ok((
-                                    (item_0.extract::<::std::string::String>())?,
-                                    (item_1.extract::<::std::string::String>())?,
-                                ))
-                            })()
-                        })
-                        .collect::<PyResult<Vec<_>>>()
-                } else {
-                    Err(::pyo3::exceptions::PyTypeError::new_err(
-                        "headers: expected a list or tuple",
-                    ))
-                }?)
-            })
-            .transpose()?;
         let out = py
             .detach(|| {
                 <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::chat(
                     &self.0,
-                    items,
+                    chat_ctx,
                     tools,
                     conn_options,
                     parallel_tool_calls,
                     tool_choice,
                     response_format,
+                    inference_class,
                     extra_kwargs,
-                    headers,
                 )
             })
             .map_err(|e: ::lk_agents_abi::errors::ApiError| {
@@ -2117,15 +2069,160 @@ pub struct OpenAIRealtimeModel(pub(crate) ::std::sync::Arc<OpenAIRealtimeModelIm
 
 #[pymethods]
 impl OpenAIRealtimeModel {
+    /// Not given, `model`, `voice` and the session options are the dialect's defaults. The key
+    /// and base URL fall back to the dialect's environment: for Azure (`azure_deployment` or
+    /// `entra_token`), `AZURE_OPENAI_API_KEY` and `{azure_endpoint}/openai`, `azure_endpoint`
+    /// else `AZURE_OPENAI_ENDPOINT`; for OpenAI, `OPENAI_API_KEY` and `OPENAI_BASE_URL`, else
+    /// OpenAI's. `dialect`, `label` and `gateway` are the provider class's own.
     #[new]
-    #[pyo3(signature = (config))]
-    fn new(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<OpenAIRealtimeModel> {
+    #[pyo3(signature = (*, model = None, voice = None, modalities = None, tool_choice = crate::py_values::Omittable::NOT_GIVEN, base_url = None, input_audio_transcription = crate::py_values::Omittable::NOT_GIVEN, input_audio_noise_reduction = crate::py_values::Omittable::NOT_GIVEN, turn_detection = crate::py_values::Omittable::NOT_GIVEN, speed = crate::py_values::Omittable::NOT_GIVEN, tracing = crate::py_values::Omittable::NOT_GIVEN, truncation = crate::py_values::Omittable::NOT_GIVEN, reasoning = crate::py_values::Omittable::NOT_GIVEN, max_response_output_tokens = crate::py_values::Omittable::NOT_GIVEN, api_key = None, azure_deployment = None, azure_endpoint = None, entra_token = None, max_session_duration = crate::py_values::Omittable::NOT_GIVEN, conn_options = None, dialect = None, label = None, gateway = None))]
+    fn new(
+        py: Python<'_>,
+        model: ::std::option::Option<::std::string::String>,
+        voice: Option<Bound<'_, PyAny>>,
+        modalities: Option<Bound<'_, PyAny>>,
+        tool_choice: crate::py_values::Omittable<'_>,
+        base_url: ::std::option::Option<::std::string::String>,
+        input_audio_transcription: crate::py_values::Omittable<'_>,
+        input_audio_noise_reduction: crate::py_values::Omittable<'_>,
+        turn_detection: crate::py_values::Omittable<'_>,
+        speed: crate::py_values::Omittable<'_>,
+        tracing: crate::py_values::Omittable<'_>,
+        truncation: crate::py_values::Omittable<'_>,
+        reasoning: crate::py_values::Omittable<'_>,
+        max_response_output_tokens: crate::py_values::Omittable<'_>,
+        api_key: ::std::option::Option<::std::string::String>,
+        azure_deployment: ::std::option::Option<::std::string::String>,
+        azure_endpoint: ::std::option::Option<::std::string::String>,
+        entra_token: ::std::option::Option<::std::string::String>,
+        max_session_duration: crate::py_values::Omittable<'_>,
+        conn_options: Option<Bound<'_, PyAny>>,
+        dialect: Option<Bound<'_, PyAny>>,
+        label: ::std::option::Option<::std::string::String>,
+        gateway: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<OpenAIRealtimeModel> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let config = crate::generated::records::realtime_options::open_ai_realtime_config_from_py(
-            config.as_any(),
-        )?;
-        let out = py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::new(&env, config)).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let voice = voice
+            .map(|v| crate::generated::records::realtime_options::voice_from_py(v.as_any()))
+            .transpose()?;
+        let modalities = modalities
+            .map(|v| {
+                v.try_iter().and_then(|items| {
+                    items
+                        .map(|item| {
+                            let item = item?;
+                            crate::generated::records::realtime_wire::modalities_from_py(
+                                item.as_any(),
+                            )
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                })
+            })
+            .transpose()?;
+        let tool_choice = tool_choice.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::from_representation::<
+                    ::lk_agents_abi::ToolChoice,
+                    ::serde_json::Value,
+                >(crate::py_values::value_from_py(value.as_any(), "tool_choice")?))
+                .map(Some)
+            }
+        })?;
+        let input_audio_transcription = input_audio_transcription.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::realtime_options::audio_transcription_from_py(
+                    value.as_any(),
+                ))
+                .map(Some)
+            }
+        })?;
+        let input_audio_noise_reduction = input_audio_noise_reduction.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::realtime_options::noise_reduction_from_py(
+                    value.as_any(),
+                ))
+                .map(Some)
+            }
+        })?;
+        let turn_detection = turn_detection.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::realtime_options::turn_detection_from_py(
+                    value.as_any(),
+                ))
+                .map(Some)
+            }
+        })?;
+        let speed =
+            speed.map(|value| crate::py_values::number_from_py::<f64>(value.as_any(), "speed"))?;
+        let tracing = tracing.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::realtime_options::tracing_from_py(value.as_any()))
+                    .map(Some)
+            }
+        })?;
+        let truncation = truncation.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::realtime_options::truncation_from_py(value.as_any()))
+                    .map(Some)
+            }
+        })?;
+        let reasoning = reasoning.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::realtime_options::reasoning_from_py(value.as_any()))
+                    .map(Some)
+            }
+        })?;
+        let max_response_output_tokens = max_response_output_tokens.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::py_values::number_from_py::<u32>(
+                    value.as_any(),
+                    "max_response_output_tokens",
+                ))
+                .map(Some)
+            }
+        })?;
+        let max_session_duration = max_session_duration.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::py_values::extract_at::<::std::time::Duration>(
+                    value.as_any(),
+                    "max_session_duration",
+                ))
+                .map(Some)
+            }
+        })?;
+        let conn_options = conn_options
+            .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
+            .transpose()?;
+        let dialect = dialect
+            .map(|v| {
+                crate::generated::records::realtime_options::realtime_provider_from_py(v.as_any())
+            })
+            .transpose()?;
+        let gateway = gateway
+            .map(|v| {
+                crate::generated::records::realtime_options::inference_gateway_from_py(v.as_any())
+            })
+            .transpose()?;
+        let out = py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::new(&env, model, voice, modalities, tool_choice, base_url, input_audio_transcription, input_audio_noise_reduction, turn_detection, speed, tracing, truncation, reasoning, max_response_output_tokens, api_key, azure_deployment, azure_endpoint, entra_token, max_session_duration, conn_options, dialect, label, gateway)).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(OpenAIRealtimeModel(::std::sync::Arc::new(out)))
     }
 
@@ -2158,19 +2255,112 @@ impl OpenAIRealtimeModel {
         ::pyo3::PyResult::Ok(out)
     }
 
+    #[getter]
     fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::capabilities(&self.0));
         crate::generated::records::realtime::realtime_capabilities_to_py(py, out)
     }
 
-    #[pyo3(signature = (options))]
-    fn update_options(&self, py: Python<'_>, options: Bound<'_, PyAny>) -> PyResult<()> {
+    /// The given options; every live session sends what changed.
+    #[pyo3(signature = (*, voice = crate::py_values::Omittable::NOT_GIVEN, turn_detection = crate::py_values::Omittable::NOT_GIVEN, tool_choice = crate::py_values::Omittable::NOT_GIVEN, input_audio_transcription = crate::py_values::Omittable::NOT_GIVEN, input_audio_noise_reduction = crate::py_values::Omittable::NOT_GIVEN, max_response_output_tokens = crate::py_values::Omittable::NOT_GIVEN, speed = crate::py_values::Omittable::NOT_GIVEN, tracing = crate::py_values::Omittable::NOT_GIVEN, truncation = crate::py_values::Omittable::NOT_GIVEN, reasoning = crate::py_values::Omittable::NOT_GIVEN))]
+    fn update_options(
+        &self,
+        py: Python<'_>,
+        voice: crate::py_values::Omittable<'_>,
+        turn_detection: crate::py_values::Omittable<'_>,
+        tool_choice: crate::py_values::Omittable<'_>,
+        input_audio_transcription: crate::py_values::Omittable<'_>,
+        input_audio_noise_reduction: crate::py_values::Omittable<'_>,
+        max_response_output_tokens: crate::py_values::Omittable<'_>,
+        speed: crate::py_values::Omittable<'_>,
+        tracing: crate::py_values::Omittable<'_>,
+        truncation: crate::py_values::Omittable<'_>,
+        reasoning: crate::py_values::Omittable<'_>,
+    ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        let options = crate::generated::records::realtime_options::realtime_options_from_py(
-            options.as_any(),
-        )?;
-        py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::update_options(&self.0, options));
+        let voice = voice.map(|value| {
+            crate::generated::records::realtime_options::voice_from_py(value.as_any())
+        })?;
+        let turn_detection = turn_detection.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::realtime_options::turn_detection_from_py(
+                    value.as_any(),
+                ))
+                .map(Some)
+            }
+        })?;
+        let tool_choice = tool_choice.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::from_representation::<
+                    ::lk_agents_abi::ToolChoice,
+                    ::serde_json::Value,
+                >(crate::py_values::value_from_py(value.as_any(), "tool_choice")?))
+                .map(Some)
+            }
+        })?;
+        let input_audio_transcription = input_audio_transcription.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::realtime_options::audio_transcription_from_py(
+                    value.as_any(),
+                ))
+                .map(Some)
+            }
+        })?;
+        let input_audio_noise_reduction = input_audio_noise_reduction.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::realtime_options::noise_reduction_from_py(
+                    value.as_any(),
+                ))
+                .map(Some)
+            }
+        })?;
+        let max_response_output_tokens = max_response_output_tokens.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::py_values::number_from_py::<u32>(
+                    value.as_any(),
+                    "max_response_output_tokens",
+                ))
+                .map(Some)
+            }
+        })?;
+        let speed =
+            speed.map(|value| crate::py_values::number_from_py::<f64>(value.as_any(), "speed"))?;
+        let tracing = tracing.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::realtime_options::tracing_from_py(value.as_any()))
+                    .map(Some)
+            }
+        })?;
+        let truncation = truncation.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::realtime_options::truncation_from_py(value.as_any()))
+                    .map(Some)
+            }
+        })?;
+        let reasoning = reasoning.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::realtime_options::reasoning_from_py(value.as_any()))
+                    .map(Some)
+            }
+        })?;
+        py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::update_options(&self.0, voice, turn_detection, tool_choice, input_audio_transcription, input_audio_noise_reduction, max_response_output_tokens, speed, tracing, truncation, reasoning));
         Ok(())
     }
 
@@ -2770,7 +2960,7 @@ impl ::lk_agents_abi::llm::duplex::AudioGate for AudioGateProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
 
-/// [`::lk_agents_abi::llm::duplex::DuplexHost`] over a host `livekit.agents._bindings.Duplex`.
+/// [`::lk_agents_abi::llm::duplex::DuplexHost`] over a host `livekit.agents.llm.duplex.DuplexModel`.
 #[derive(Clone)]
 pub struct DuplexHostProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
@@ -2832,10 +3022,8 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    host.bind(py).getattr("adapter")?.getattr("duplex_model")?,
-                    ::pyo3::types::PyString::new(py, "label").into_any(),
-                ];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] =
+                    [host.bind(py).clone(), ::pyo3::types::PyString::new(py, "label").into_any()];
                 Ok((
                     py.import("builtins")?.getattr("getattr")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
@@ -2871,7 +3059,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    host.bind(py).getattr("adapter")?.getattr("duplex_model")?,
+                    host.bind(py).clone(),
                     ::pyo3::types::PyString::new(py, "capabilities").into_any(),
                 ];
                 Ok((
@@ -2910,7 +3098,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_gate")?,
+                    host.bind(py).getattr("audio_gate")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -2924,7 +3112,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
                 }
             };
             let Some(context) = context.as_ref() else {
-                return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("DuplexHost._core_gate: the call captured no host context")));
+                return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("DuplexHost.audio_gate: the call captured no host context")));
             };
             let context = &out.returned_context(py, context).map_err(|e| {
                 <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
@@ -3463,6 +3651,89 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
             if let Err(e) = started.await {
                 log::warn!("DuplexSession._core_aclose failed: {e}");
             }
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+
+/// [`::lk_agents_abi::llm::duplex::AudioGateFactory`] over a host `collections.abc.Callable`.
+#[derive(Clone)]
+pub struct AudioGateFactoryProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+}
+
+impl AudioGateFactoryProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGateFactory>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::AudioGateFactory>(obj)
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGateFactory>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::AudioGateFactory>(obj)
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::duplex::AudioGateFactory>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    fn take(
+        obj: &Bound<'_, PyAny>,
+        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+    ) -> PyResult<Self> {
+        let _ = context;
+        Ok(AudioGateFactoryProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+    }
+}
+
+impl ::lk_agents_abi::llm::duplex::AudioGateFactory for AudioGateFactoryProxy {
+    fn create(
+        &self,
+    ) -> ::std::result::Result<
+        ::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGate>,
+        ::lk_agents_abi::errors::HostError,
+    > {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("__call__")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (crate::generated::llm::AudioGateProxy::from_host(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
         })
     }
 }

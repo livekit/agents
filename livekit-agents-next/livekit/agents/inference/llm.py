@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import dataclasses
 from typing import TYPE_CHECKING, Any, cast, get_args
 
 from .. import _core, llm
 from .._bindings import APIConnectionError, APIStatusError, APITimeoutError
 from .._generated import facades_inference_llm as _facades, public_inference_llm as _public
 from .._generated.public_inference_llm import *  # noqa: F403
-from ..llm import ToolChoice, utils as llm_utils
-from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from ..utils import is_given
+from ..types import APIConnectOptions
 from . import (
     HEADER_INFERENCE_PROVIDER,
     InferenceClass,
@@ -22,8 +18,6 @@ from . import (
 
 if TYPE_CHECKING:
     import openai
-
-    from ..llm import ToolChoice
 
 
 __all__ = [
@@ -89,63 +83,6 @@ class LLM(_facades.LLM):
     @property
     def provider(self) -> str:
         return "livekit"
-
-    def chat(
-        self,
-        *,
-        chat_ctx: ChatContext,
-        tools: list[Tool] | None = None,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        response_format: NotGivenOr[Any] = NOT_GIVEN,
-        inference_class: NotGivenOr[InferenceClass] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> llm.LLMStream:
-        cls = inference_class if is_given(inference_class) else self._native.inference_class
-        return _GatewayStream(
-            self,
-            chat_ctx=chat_ctx,
-            tools=tools or [],
-            conn_options=conn_options,
-            request={
-                "parallel_tool_calls": parallel_tool_calls
-                if is_given(parallel_tool_calls)
-                else None,
-                "tool_choice": tool_choice if is_given(tool_choice) else None,
-                "response_format": llm_utils.to_openai_response_format(response_format)
-                if is_given(response_format)
-                else None,
-                "extra_kwargs": extra_kwargs if is_given(extra_kwargs) else None,
-                "headers": list(get_inference_headers(inference_class=cls).items()),
-            },
-        )
-
-
-class _GatewayStream(llm.LLMStream):
-    def __init__(
-        self, llm: LLM, *, request: dict[str, Any], conn_options: APIConnectOptions, **kwargs: Any
-    ) -> None:
-        # The native request retries per `conn_options`; the base's loop runs `_run` once.
-        super().__init__(llm, conn_options=dataclasses.replace(conn_options, max_retry=0), **kwargs)
-        self._native_llm = llm._native
-        self._request_conn_options = conn_options
-        self._request = request
-
-    async def _run(self) -> None:
-        from .._bindings import tool_specs
-
-        native = self._native_llm.chat(
-            self._chat_ctx.items,
-            tools=tool_specs(self._tools),
-            conn_options=self._request_conn_options,
-            **self._request,
-        )
-        try:
-            while (chunk := await native.recv()) is not None:
-                self.send(chunk)
-        finally:
-            await native.aclose()
 
 
 class LLMStream(llm.LLMStream):

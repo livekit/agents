@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Literal
 
 import pytest
-from pydantic import BaseModel, Field
 
 from livekit.agents import NOT_GIVEN, _core
-from livekit.agents.llm._realtime import RealtimeModel
+from livekit.agents.llm._realtime import AudioTranscription, RealtimeModel, ServerVad
 from livekit.agents.llm.realtime import RealtimeModel as HostRealtimeModel, RealtimeSession
 
 pytestmark = pytest.mark.unit
@@ -23,10 +21,12 @@ def test_omitted_and_null_options_preserve_or_disable_transcription() -> None:
     model.update_options(voice="marin")
     assert not model.capabilities.user_transcription
 
-    model.update_options(input_audio_transcription={"model": "gpt-4o-mini-transcribe"})
+    model.update_options(
+        input_audio_transcription=AudioTranscription(model="gpt-4o-mini-transcribe")
+    )
     assert model.capabilities.user_transcription
 
-    # Through `realtime_options(...)` into the core: an explicit NOT_GIVEN is omitted, not None.
+    # An explicit NOT_GIVEN is omitted, not None.
     model.update_options(input_audio_transcription=NOT_GIVEN)
     assert model.capabilities.user_transcription
 
@@ -34,16 +34,18 @@ def test_omitted_and_null_options_preserve_or_disable_transcription() -> None:
     assert not disabled.capabilities.user_transcription
 
 
-def test_pydantic_turn_detection_uses_aliases_and_explicit_values() -> None:
-    class TurnDetection(BaseModel):
-        type: Literal["server_vad"] = "server_vad"
-        create: bool = Field(alias="create_response")
-        interrupt_response: bool = False
-
-    model = RealtimeModel(api_key="test", turn_detection=TurnDetection(create_response=False))
+def test_turn_detection_records_reach_the_core() -> None:
+    model = RealtimeModel(
+        api_key="test", turn_detection=ServerVad(create_response=False, interrupt_response=False)
+    )
     assert not model.capabilities.turn_detection
-    model.update_options(turn_detection=TurnDetection(create_response=True))
+    model.update_options(turn_detection=ServerVad())
     assert model.capabilities.turn_detection
+
+
+def test_option_dicts_are_refused() -> None:
+    with pytest.raises(TypeError):
+        RealtimeModel(api_key="test", turn_detection={"type": "server_vad"})  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -55,7 +57,7 @@ async def test_fallback_accepts_native_and_host_models_and_rejects_capability_mi
     native = RealtimeModel(api_key="test")
     host = HostModel(capabilities=native.capabilities)
     fallback = _core.RealtimeFallbackModel([native._core_leg(), host])
-    assert fallback.capabilities().audio_output
+    assert fallback.capabilities.audio_output
     await fallback.restart(switch_model=True)
 
     incompatible = HostModel(capabilities=replace(native.capabilities, audio_output=False))

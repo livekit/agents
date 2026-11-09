@@ -546,6 +546,11 @@ impl LlmUtilsModule {
     ) -> PyResult<Bound<'py, PyAny>> {
         obj.as_any().getattr("_value_text")
     }
+    pub fn to_openai_response_format<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("to_openai_response_format")
+    }
 }
 
 /// Python interface: `livekit.agents._bindings`.

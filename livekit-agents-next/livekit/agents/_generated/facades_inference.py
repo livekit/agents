@@ -90,7 +90,7 @@ class VAD(BaseVAD):
             deactivation_threshold=deactivation_threshold,
         )
 
-    def stream(self) -> _VADStream:
+    def stream(self) -> VADStream:
         return _VADStream(vad=cast("inference.VAD", self))
 
 

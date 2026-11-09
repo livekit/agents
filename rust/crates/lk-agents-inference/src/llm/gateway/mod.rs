@@ -16,12 +16,13 @@ use crate::llm::machine::{LlmRequest, LlmRequestEvent, LlmRequestId, Policy};
 use crate::llm::request::ChatArgs;
 use crate::llm::{Auth, BodyEncoding, LlmOptions, models};
 use lk_agents_abi::errors::{ApiError, Invalid, ProviderError};
-use lk_agents_abi::llm::inference::ProviderEndpoint;
+use lk_agents_abi::llm::fallback::{HostChatContext, HostTools};
+use lk_agents_abi::llm::inference::{ProviderEndpoint, ResponseFormat};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::{
-    ApiConnectOptions, ChatContext, ChatItem, ChatRequest, Clock, Closed, Extra, Llm, LlmChunk,
-    LlmStream, StreamOutput, ToolChoice, ToolSpec, Ts,
+    ApiConnectOptions, ChatContext, ChatRequest, Clock, Closed, Extra, Llm, LlmChunk, LlmStream,
+    StreamOutput, ToolChoice, ToolSpec, Ts,
 };
 use lk_agents_core::llm::provider_format::PreResolved;
 mod request;
@@ -239,33 +240,27 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
 
     fn chat(
         &self,
-        items: Vec<ChatItem>,
-        tools: Vec<ToolSpec>,
-        conn_options: ApiConnectOptions,
+        chat_ctx: HostChatContext,
+        tools: Option<HostTools>,
+        conn_options: Option<ApiConnectOptions>,
         parallel_tool_calls: Option<bool>,
         tool_choice: Option<ToolChoice>,
-        response_format: Option<serde_json::Value>,
+        response_format: Option<ResponseFormat>,
+        inference_class: Option<String>,
         extra_kwargs: Option<Extra>,
-        headers: Option<Headers>,
     ) -> Result<LlmChunks, ApiError> {
+        let conn_options = conn_options.unwrap_or_default();
         conn_options.validate().map_err(|e| ApiError::new(e.to_string()).with_retryable(false))?;
         let args = ChatArgs {
             extra_kwargs,
             parallel_tool_calls,
             tool_choice,
-            response_format: response_format.filter(|f| !f.is_null()),
-            inference_class: None,
+            response_format: response_format.map(|f| f.param).filter(|f| !f.is_null()),
+            inference_class,
         };
-        let identification = headers;
+        let specs = tools.map(|t| t.specs).unwrap_or_default();
         let policy = Policy::from_options(&conn_options);
-        GatewayLlm::chat(
-            self,
-            &ChatContext::new(items),
-            &tools,
-            args,
-            policy,
-            identification.as_ref(),
-        )
+        GatewayLlm::chat(self, &ChatContext::new(chat_ctx.items), &specs, args, policy, None)
     }
 }
 

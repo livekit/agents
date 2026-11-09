@@ -3,7 +3,6 @@
 
 use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::inference::InferenceModels;
-use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 use lk_agents_abi::{SttCapabilities, TtsCapabilities};
 
 pub struct Models;
@@ -15,13 +14,6 @@ impl InferenceModels for Models {
 
     fn tts_fallback_capabilities(entries: Vec<TtsCapabilities>) -> TtsCapabilities {
         crate::fallback::merge_tts_capabilities(&entries)
-    }
-
-    fn merge_realtime_capabilities(
-        caps: Vec<RealtimeCapabilities>,
-    ) -> Result<RealtimeCapabilities, Invalid> {
-        crate::fallback::merge_realtime_capabilities(&caps)
-            .map_err(|mismatch| Invalid(mismatch.to_string()))
     }
 
     fn inference_quota_usage(headers: crate::headers::Headers) -> Vec<(String, String)> {

@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from livekit.agents import _core
-from livekit.plugins.azure.realtime import RealtimeModel
+from livekit.plugins.azure.realtime import AudioTranscription, AzureVoice, RealtimeModel
 
 pytestmark = pytest.mark.unit
 
@@ -15,52 +15,52 @@ _ENDPOINT = "https://res.services.ai.azure.com/"
 
 
 @pytest.fixture
-def configs(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
-    seen: list[Any] = []
+def configs(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    seen: list[dict[str, Any]] = []
     native = _core.OpenAIRealtimeModel
 
-    def record(config: Any) -> Any:
+    def record(**config: Any) -> Any:
         seen.append(config)
-        return native(config)
+        return native(**config)
 
     monkeypatch.setattr(_core, "OpenAIRealtimeModel", record)
     return seen
 
 
-def test_connects_to_the_voice_live_endpoint_with_its_model(configs: list[Any]) -> None:
+def test_connects_to_the_voice_live_endpoint_with_its_model(configs: list[dict[str, Any]]) -> None:
     model = RealtimeModel(endpoint=_ENDPOINT, api_key="key", model="gpt-realtime")
 
     (config,) = configs
-    assert config.dialect == "voice_live"
-    assert config.base_url == (
+    assert config["dialect"] == "voice_live"
+    assert config["base_url"] == (
         "https://res.services.ai.azure.com/voice-live/realtime?api-version=2026-04-10"
     )
-    assert config.azure_deployment == "gpt-realtime"
-    assert config.api_key == "key"
+    assert config["azure_deployment"] == "gpt-realtime"
+    assert config["api_key"] == "key"
     # Voice Live has no conversation.item.truncate
     assert not model.capabilities.message_truncation
 
 
 def test_azure_voice_names_become_voice_objects_pinned_to_one_language(
-    configs: list[Any],
+    configs: list[dict[str, Any]],
 ) -> None:
     RealtimeModel(
         endpoint=_ENDPOINT,
         api_key="key",
         voice="en-US-AvaNeural",
-        input_audio_transcription={"model": "azure-speech", "language": "en-US"},
+        input_audio_transcription=AudioTranscription(model="azure-speech", language="en-US"),
     )
     RealtimeModel(
         endpoint=_ENDPOINT,
         api_key="key",
         voice="en-US-AvaNeural",
-        input_audio_transcription={"model": "azure-speech", "language": "en-US,fr-FR"},
+        input_audio_transcription=AudioTranscription(model="azure-speech", language="en-US,fr-FR"),
     )
     RealtimeModel(endpoint=_ENDPOINT, api_key="key", voice="alloy")
 
-    assert [c.voice for c in configs] == [
-        {"type": "azure-standard", "name": "en-US-AvaNeural", "locale": "en-US"},
-        {"type": "azure-standard", "name": "en-US-AvaNeural"},
+    assert [c["voice"] for c in configs] == [
+        AzureVoice(name="en-US-AvaNeural", locale="en-US"),
+        AzureVoice(name="en-US-AvaNeural"),
         "alloy",
     ]
 
@@ -74,10 +74,10 @@ def test_azure_voice_names_become_voice_objects_pinned_to_one_language(
     ],
 )
 def test_the_transcription_default_follows_the_model(
-    configs: list[Any], model: str, transcription: str
+    configs: list[dict[str, Any]], model: str, transcription: str
 ) -> None:
     RealtimeModel(endpoint=_ENDPOINT, api_key="key", model=model)
-    assert configs[0].options.input_audio_transcription == {"model": transcription}
+    assert configs[0]["input_audio_transcription"] == AudioTranscription(model=transcription)
 
 
 def test_requires_an_endpoint_and_a_credential(monkeypatch: pytest.MonkeyPatch) -> None:

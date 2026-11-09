@@ -57,7 +57,7 @@ pub trait FallbackLlm: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn chat(
         &self,
-        #[host(kw)] chat_ctx: crate::HostRef,
+        #[host(kw)] chat_ctx: HostChatContext,
         #[host(default = None)] tools: Option<HostTools>,
         #[host(default = None)] parallel_tool_calls: Option<bool>,
         #[host(default = None)] tool_choice: Option<serde_json::Value>,
@@ -73,6 +73,16 @@ pub trait FallbackLlm: Send + Sync + Sized + 'static {
 pub struct HostTools {
     #[host(own_value, extract_with = "py_values::tool_specs")]
     pub specs: Vec<crate::ToolSpec>,
+    #[host(own_value, extract_with = "py_values::host_ref")]
+    pub host: crate::HostRef,
+}
+
+/// A host `llm.ChatContext` as a native chat takes it: its items, and the context itself, which a
+/// host model is handed.
+#[crate::host(record(module = "llm_fallback", host_type = "builtins.object", boundary, extract))]
+#[derive(Debug, Clone)]
+pub struct HostChatContext {
+    pub items: Vec<crate::ChatItem>,
     #[host(own_value, extract_with = "py_values::host_ref")]
     pub host: crate::HostRef,
 }
@@ -286,10 +296,59 @@ pub trait RealtimeFallbackModel: Send + Sync + Sized + 'static {
     ) -> Result<Self, crate::llm::realtime::RealtimeConfigurationError>;
     #[host(getter)]
     fn active_index(&self) -> usize;
-    #[host(call)]
+    /// The members' capabilities, merged: the pipeline-shaping ones agree, the others are ANDed.
+    #[host(getter)]
     fn capabilities(&self) -> crate::llm::realtime::RealtimeCapabilities;
     #[host(await)]
     async fn restart(&self, #[host(kw, default = false)] switch_model: bool);
+}
+
+/// `llm.RealtimeModelFallbackAdapter`: falls back between realtime models (or restarts one),
+/// preserving chat context and handlers. A failed model is skipped until its cooldown ends, the
+/// conversation is replayed onto the next one, and a reply cut by the swap is asked for again.
+#[crate::host(facade(
+    path = "livekit.agents.llm.realtime",
+    extended,
+    name = "RealtimeModelFallbackAdapter",
+    base = "llm.realtime.RealtimeModel",
+    native = RealtimeFallbackModel,
+    base_args(capabilities),
+    availability(
+        observer = "on_availability",
+        members = "models",
+        kind = "RealtimeModel",
+        event = "realtime_availability_changed",
+        record = ".realtime_availability.RealtimeAvailabilityChangedEvent"
+    )
+))]
+pub trait RealtimeFallbackAdapter {
+    /// Fall back between realtime models while preserving chat context.
+    ///
+    /// Args:
+    ///     models: Ordered models; the first is primary, the rest fallbacks. All must agree on
+    ///         the ``audio_output`` and ``turn_detection`` capabilities.
+    ///     cooldown: Seconds a failed model stays unavailable before it can be preferred again.
+    ///     regenerate_on_swap: Re-issue the reply on the new session if one was in progress.
+    ///     attempt_timeout: Seconds one model's session may take to open before the next is
+    ///         tried; ``None`` waits for the model's own connection limits.
+    ///
+    /// Raises:
+    ///     ValueError: If no models are given or their hard capabilities disagree.
+    #[host(new, resolve(models = ".._bindings.core_legs"))]
+    fn new(
+        models: Vec<std::sync::Arc<dyn crate::llm::realtime::HostRealtime>>,
+        #[host(kw, default = 10.0)] cooldown: f64,
+        #[host(default = true)] regenerate_on_swap: bool,
+        #[host(default = None)] attempt_timeout: Option<f64>,
+    ) -> Self;
+
+    /// Bring up a fresh underlying session, preserving chat context and bound handlers.
+    ///
+    /// Args:
+    ///     switch_model: Bring the new session up on the next available model instead of the
+    ///         current one.
+    #[host(native = restart)]
+    async fn restart_session(&self, #[host(kw, default = false)] switch_model: bool);
 }
 
 // Public data contracts. Python behavior remains in its adapters.

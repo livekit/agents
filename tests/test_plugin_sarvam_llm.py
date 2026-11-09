@@ -22,7 +22,7 @@ pytestmark = pytest.mark.unit
 
 def _sent_kwargs(llm: SarvamLLM, stream: Any) -> dict[str, Any]:
     """The kwargs a chat sends: the call's, with the instance's over them."""
-    return {**(stream._request["extra_kwargs"] or {}), **llm._native.extra_kwargs}
+    return {**(stream._extra_kwargs or {}), **llm._native.extra_kwargs}
 
 
 def _chat_ctx(text: str = "hello") -> ChatContext:

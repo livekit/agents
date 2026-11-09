@@ -99,7 +99,7 @@ impl TurnAccumulator {
                 // with audio of its own (1.8.10's `wait_for_playout()` event), however the
                 // interruption reaches the step: on the cut segment, or later, through the
                 // words leg, after a segment played out.
-                if heard.frames > 0 || (interrupted && !self.has_played()) {
+                if heard.frames > 0 || (interrupted && self.played_at().is_none()) {
                     self.played_to(heard.position);
                 }
                 if interrupted {

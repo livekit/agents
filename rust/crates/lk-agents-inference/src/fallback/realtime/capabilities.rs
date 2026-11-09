@@ -61,6 +61,7 @@ pub fn merge_capabilities(
         supports_say: all(|c| c.supports_say),
         can_disable_turn_detection: all(|c| c.can_disable_turn_detection),
         auto_turn_reply_generation: all(|c| c.auto_turn_reply_generation),
+        supports_overlapping_speech: all(|c| c.supports_overlapping_speech),
     })
 }
 

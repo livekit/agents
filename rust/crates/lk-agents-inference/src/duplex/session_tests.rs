@@ -117,6 +117,7 @@ async fn session_on(
 ) -> Arc<dyn RealtimeSession> {
     let model = DuplexAdapterModel {
         host: Arc::new(FakeHost(Arc::new(FakeSession(Mutex::new(script), input)))),
+        gate: None,
         label: "fake".into(),
         caps: crate::duplex::realtime_capabilities(DuplexCapabilities::default()),
         audio_timeout: crate::duplex::AUDIO_TIMEOUT,

@@ -1425,8 +1425,10 @@ base binds the base as `Base<Name>`, and a `base` with no module names a top-lev
 `livekit.agents` class (`VAD`). A facade with no `#[host(new)]` declares `_native`, which its
 handwritten subclass sets. A chain
 facade declares `availability(observer, members, kind, event, record)`: it is its chain's
-observer, keeps `members` as `_members`, emits each availability change as `record`, and names
-the serving member's `model`, `provider` and `metrics_metadata`. Method adaptations
+observer, keeps `members` (as its `#[host(new)]` takes them) as `_members`, emits each
+availability change as `record`, names the serving member's `model`, `provider` and
+`metrics_metadata`, and closes its native object, or its members when the native declares no
+`aclose`. Method adaptations
 are a fixed vocabulary: `none_ends_iteration` (a native `None` raises `StopAsyncIteration`),
 `wrap` (the result becomes a record), `native = m` (another native method), `future`,
 `discard`, `not_given`, `origin`, `returns`, `annotation`, `resolve`, and the context-manager

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from .facades_inference_llm import GatewayLLMStream as GatewayLLMStream
 from .inference_llm import (
     DeepSeekModels as DeepSeekModels,
     GoogleModels as GoogleModels,
@@ -35,4 +36,5 @@ __all__: list[str] = [
     "RealtimeModels",
     "ProviderEndpoint",
     "ChatCompletionOptions",
+    "GatewayLLMStream",
 ]

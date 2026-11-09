@@ -89,3 +89,40 @@ def test_a_rate_limit_logs_the_quota_the_gateway_stamped() -> None:
 
     headers = httpx.Headers({"x-livekit-inference-rpm-limit": "60", "content-type": "text/plain"})
     assert {**extract_quota_usage(headers)} == {"rpm_limit": "60"}
+
+
+# Catches: the generated gateway stream dropping the context's items, the pydantic
+# ``response_format`` conversion, or the call's ``inference_class`` (which overrides the client's).
+async def test_a_gateway_completion_sends_its_context_format_and_class() -> None:
+    import json
+
+    from pydantic import BaseModel
+
+    from livekit.agents import inference
+
+    class Answer(BaseModel):
+        value: int
+
+    async with serve(_STREAM_WITH_NULL_USAGE) as (base_url, received):
+        model = inference.LLM(
+            "openai/gpt-4.1-mini",
+            base_url=base_url,
+            api_key="key",
+            api_secret="secret",
+            inference_class="high",
+        )
+        chat_ctx = llm.ChatContext()
+        chat_ctx.add_message(role="user", content="hi")
+        try:
+            async with model.chat(
+                chat_ctx=chat_ctx, response_format=Answer, inference_class="low"
+            ) as completion:
+                async for _ in completion:
+                    pass
+        finally:
+            await model.aclose()
+    (request,) = received
+    body = json.loads(request.body)
+    assert body["messages"][-1]["content"] == "hi"
+    assert body["response_format"]["json_schema"]["name"] == "Answer"
+    assert request.headers["x-livekit-inference-priority"] == "low"

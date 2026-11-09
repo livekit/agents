@@ -8,6 +8,7 @@ import time
 
 import pytest
 
+from livekit.agents.utils import media
 from livekit.agents.utils.media import AudioStreamDecoder, audio_frames_from_file
 
 # Decodes audio on background threads / executors with blocking waits; it deadlocks when forced
@@ -155,23 +156,31 @@ async def test_aborted_read_does_not_signal_end_of_input(monkeypatch: pytest.Mon
     Signalling the end of input hands the partial file to PyAV as a complete container, which
     it then reports as invalid data.
     """
-    real_push, real_end_input = AudioStreamDecoder.push, AudioStreamDecoder.end_input
     pushes: list[None] = []
     started = asyncio.Event()
     ends: list[None] = []
 
-    def slow_push(self: AudioStreamDecoder, chunk: bytes) -> None:
-        pushes.append(None)
-        started.set()
-        time.sleep(0.005)  # hold the reader mid-file for the whole test
-        real_push(self, chunk)
+    class SpyDecoder:
+        def __init__(self, *, sample_rate: int, num_channels: int) -> None:
+            self._decoder = AudioStreamDecoder(sample_rate=sample_rate, num_channels=num_channels)
 
-    def spy_end_input(self: AudioStreamDecoder) -> None:
-        ends.append(None)
-        real_end_input(self)
+        def push(self, chunk: bytes) -> None:
+            pushes.append(None)
+            started.set()
+            time.sleep(0.005)  # hold the reader mid-file for the whole test
+            self._decoder.push(chunk)
 
-    monkeypatch.setattr(AudioStreamDecoder, "push", slow_push)
-    monkeypatch.setattr(AudioStreamDecoder, "end_input", spy_end_input)
+        def end_input(self) -> None:
+            ends.append(None)
+            self._decoder.end_input()
+
+        def __aiter__(self) -> AudioStreamDecoder:
+            return self._decoder
+
+        async def aclose(self) -> None:
+            await self._decoder.aclose()
+
+    monkeypatch.setattr(media, "AudioStreamDecoder", SpyDecoder)
 
     gen = audio_frames_from_file(TEST_AUDIO_FILEPATH)
 
@@ -191,9 +200,9 @@ async def test_aborted_read_does_not_signal_end_of_input(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
-async def test_closing_partial_decoders_releases_admission_while_wrappers_remain_alive() -> None:
-    from livekit.agents import _core
-
+async def test_closing_partial_decoders_releases_admission_while_wrappers_remain_alive(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     with open(TEST_AUDIO_FILEPATH, "rb") as source:
         head = source.read(16)
     closed = []
@@ -203,7 +212,9 @@ async def test_closing_partial_decoders_releases_admission_while_wrappers_remain
         await decoder.aclose()
         closed.append(decoder)
 
-    # A direct native push raises admission failures; the public stream catches them as EOF.
-    replacement = _core.AudioDecoder("audio/ogg")
-    replacement.push(head)
-    await replacement.aclose()
+    # Every closed decoder released its worker admission: a new one still opens.
+    with caplog.at_level(logging.ERROR, logger="livekit.agents"):
+        replacement = AudioStreamDecoder(format="audio/ogg")
+        replacement.push(head)
+        await replacement.aclose()
+    assert [r.getMessage() for r in caplog.records if "error decoding" in r.getMessage()] == []

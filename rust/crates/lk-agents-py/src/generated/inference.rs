@@ -344,26 +344,6 @@ pub fn tts_fallback_capabilities<'py>(
     crate::generated::records::tts::tts_capabilities_to_py(py, out)
 }
 
-/// The realtime fallback's capabilities: `audio_output` and `turn_detection` must agree (a
-/// `ValueError` naming the capability and both values), the rest are ANDed.
-#[pyfunction]
-#[pyo3(signature = (caps))]
-pub fn merge_realtime_capabilities<'py>(
-    py: Python<'py>,
-    caps: Bound<'_, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let caps = caps.try_iter().and_then(|items| {
-        items
-            .map(|item| {
-                let item = item?;
-                crate::generated::records::realtime::realtime_capabilities_from_py(item.as_any())
-            })
-            .collect::<PyResult<Vec<_>>>()
-    })?;
-    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::merge_realtime_capabilities(caps)).map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
-    crate::generated::records::realtime::realtime_capabilities_to_py(py, out)
-}
-
 // Declared in rust/crates/lk-agents-abi/src/inference/avatar_session.rs.
 type InferenceAvatarImpl =
     <crate::generated::implementations::Selected as super::Implementations>::InferenceAvatar;

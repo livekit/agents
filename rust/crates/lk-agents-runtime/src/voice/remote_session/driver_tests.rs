@@ -444,5 +444,5 @@ async fn the_client_times_out_mints_distinct_ids_and_cancels_at_close() {
         })
         .collect();
     assert_ne!(ids[0], ids[1]);
-    assert!(ids.iter().all(|i| i.starts_with("req_") && i.len() == 15), "{ids:?}");
+    assert!(ids.iter().all(|i| lk_agents_net::strings::is_valid_id("req_", i)), "{ids:?}");
 }

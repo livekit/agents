@@ -19,7 +19,6 @@ pub use chain::{
 use lk_agents_abi::ApiConnectOptions;
 pub use llm::{FallbackLlm, LlmBackend};
 pub use machine::{ChainPolicy, FallbackPolicy};
-pub use realtime::{CapabilityMismatch, merge_capabilities as merge_realtime_capabilities};
 pub use stt::{
     FallbackStt, InputTee, SttBackend, SttReq, SttSession,
     merge_capabilities as merge_stt_capabilities,

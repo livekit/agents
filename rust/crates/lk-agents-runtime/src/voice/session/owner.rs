@@ -549,9 +549,11 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         self.0.startup.get().map(|startup| startup.storage.clone())
     }
 
-    fn current_agent(&self) -> Option<lk_agents_abi::HostRef> {
+    fn current_agent(&self) -> Result<lk_agents_abi::HostRef, SessionRefused> {
         let pending = self.0.selection.lock().pending.clone();
-        pending.or_else(|| self.0.session.get().and_then(|session| session.current_agent()))
+        pending
+            .or_else(|| self.0.session.get().and_then(|session| session.current_agent()))
+            .ok_or(SessionRefused::NotStarted)
     }
 
     fn state(&self) -> Arc<super::delivered::SessionState> {

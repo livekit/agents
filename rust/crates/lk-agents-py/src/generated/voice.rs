@@ -2603,19 +2603,33 @@ impl SessionOptions {
         })
     }
 
-    /// `session.stt` / `tts` / `vad`: the host provider `slot` runs on now, the topmost held
-    /// override's, else the base's; `None` when the slot has none or it was removed.
-    #[pyo3(signature = (slot))]
-    fn provider<'py>(
-        &self,
-        py: Python<'py>,
-        slot: ::std::string::String,
-    ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+    /// The STT the session listens with now: the topmost held override's, else the base's;
+    /// `None` when there is none or it was removed.
+    #[getter]
+    fn stt<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| {
-            <SessionOptionsImpl as ::lk_agents_abi::voice::session::SessionOptions>::provider(
-                &self.0, slot,
-            )
+            <SessionOptionsImpl as ::lk_agents_abi::voice::session::SessionOptions>::stt(&self.0)
+        });
+        out.map(|value| crate::py_objects::object_ref_to_py(py, value)).transpose()
+    }
+
+    /// The TTS the session speaks with now, resolved as `stt` is.
+    #[getter]
+    fn tts<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <SessionOptionsImpl as ::lk_agents_abi::voice::session::SessionOptions>::tts(&self.0)
+        });
+        out.map(|value| crate::py_objects::object_ref_to_py(py, value)).transpose()
+    }
+
+    /// The VAD the session runs now, resolved as `stt` is.
+    #[getter]
+    fn vad<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <SessionOptionsImpl as ::lk_agents_abi::voice::session::SessionOptions>::vad(&self.0)
         });
         out.map(|value| crate::py_objects::object_ref_to_py(py, value)).transpose()
     }
@@ -4119,14 +4133,13 @@ impl CoreSessionOwner {
         out.map(|value| ::pyo3::PyResult::Ok(super::voice::CoreSessionStorage(value))).transpose()
     }
 
+    /// The host's agent the loop installed last, the task's while a `VoiceTask` holds the
+    /// floor; before `start()`, the one `update_agent` named. Refused when there is none.
     #[getter]
-    fn current_agent<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+    fn current_agent<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::current_agent(&self.0));
-        out.map(|value| crate::py_objects::object_ref_to_py(py, value)).transpose()
+        let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::current_agent(&self.0)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        crate::py_objects::object_ref_to_py(py, out)
     }
 
     /// The latest state the host's events delivered; before `start()`, an empty history.

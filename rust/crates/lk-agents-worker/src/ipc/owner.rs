@@ -352,7 +352,8 @@ impl SupervisorCallbacks for JobLogger {
             pid: state.pid,
             job_id: job.map(|job| job.id.clone()),
             room: room.map(|room| room.name.clone()),
-            room_id: room.map(|room| room.sid.clone()),
+            // empty until the job joins the room
+            room_id: room.map(|room| room.sid.clone()).filter(|sid| !sid.is_empty()),
         }
     }
 }

@@ -86,22 +86,28 @@ class AudioEmitter:
     @property
     def output_closed(self) -> bool: ...
 
-class AudioDecoder:
-    """Container bytes decoded on one admitted native worker: input is queued without waiting for
-    the decoder, and decoded frames are awaited.
+class AudioStreamDecoder:
+    """`utils.media.AudioStreamDecoder`: container bytes decoded on one admitted native worker into
+    PCM frames, which come out as soon as they are decoded. Input is queued without waiting for
+    the decoder. One decoder decodes one stream. A failure (an unknown format, no worker admitted,
+    invalid audio) is logged and ends the stream.
     """
     def __new__(
         cls,
-        mime: str,
         *,
         sample_rate: int | None = 48000,
         num_channels: int = 1,
-    ) -> Self: ...
-    def push(self, data: bytes | bytearray | memoryview | list[int]) -> None:
-        """Refused after `end_input`, `aclose` or a decode failure."""
+        format: str | None = None,
+    ) -> Self:
+        """`sample_rate` is the output rate (the source's when `None`), `format` the input's media
+        type (`"audio/mpeg"`), probed when `None`.
+        """
+    def push(self, chunk: bytes | bytearray | memoryview | list[int]) -> None:
+        """Queue `chunk`; ignored after `end_input`, `aclose` or the end of the stream."""
     def end_input(self) -> None:
-        """No more input: `next` returns `None` once everything pushed is decoded."""
-    async def next(self) -> AudioFrame | None:
-        """The next decoded frame, at the requested format; `None` at the end of input."""
+        """No more input: the stream ends once everything pushed is decoded."""
+    def __aiter__(self) -> Self: ...
+    async def __anext__(self) -> AudioFrame:
+        """The next decoded frame, at the requested format; `None` ends the stream."""
     async def aclose(self) -> None:
         """Cancel decoding and observe release of the native decoder's worker admission."""

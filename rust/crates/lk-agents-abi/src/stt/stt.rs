@@ -159,7 +159,8 @@ pub trait Stt: Send + Sync {
     }
 
     // The connection policy this provider was given at construction, which applies to the
-    // calls of a session or run that supplies none (models.md); `None`: the defaults.
+    // calls of a session or run that supplies none (models.md); a bound view's is its binding;
+    // `None`: the defaults.
     #[host(read_once, name = "_core_conn_options")]
     fn conn_options(&self) -> Option<ApiConnectOptions> {
         None

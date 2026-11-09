@@ -86,6 +86,10 @@ pub fn build_request(
         {
             headers.insert(name, value);
         }
+        // The call's own class overrides the one the identification was read with.
+        if let Some(class) = args.inference_class.as_deref().filter(|class| !class.is_empty()) {
+            headers.insert(crate::headers::HEADER_INFERENCE_PRIORITY, class);
+        }
         headers.remove(crate::headers::HEADER_SESSION_ID);
     }
     headers.insert("Authorization", format!("Bearer {bearer}"));

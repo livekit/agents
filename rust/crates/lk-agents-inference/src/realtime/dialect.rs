@@ -344,39 +344,21 @@ pub const VOICE_LIVE: Dialect = Dialect {
     ..OPENAI
 };
 
-/// A dialect name this build does not speak; the message lists the ones it does.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnknownDialect(pub String);
-
-impl std::fmt::Display for UnknownDialect {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "unknown realtime dialect {:?}; this port speaks \"openai\", \"xai\", \"voice_live\" and \"inference\"",
-            self.0
-        )
-    }
-}
-
-impl std::error::Error for UnknownDialect {}
-
-/// The name [`std::str::FromStr`] reads.
+/// The provider's name.
 impl std::fmt::Display for Dialect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.provider, f)
     }
 }
 
-impl std::str::FromStr for Dialect {
-    type Err = UnknownDialect;
-
-    fn from_str(name: &str) -> Result<Self, UnknownDialect> {
-        match RealtimeProvider::from_wire(name) {
-            Some(RealtimeProvider::Openai) => Ok(OPENAI),
-            Some(RealtimeProvider::Xai) => Ok(XAI),
-            Some(RealtimeProvider::Inference) => Ok(INFERENCE),
-            Some(RealtimeProvider::VoiceLive) => Ok(VOICE_LIVE),
-            None => Err(UnknownDialect(name.to_owned())),
+impl Dialect {
+    /// The dialect a provider speaks.
+    pub fn of(provider: RealtimeProvider) -> Dialect {
+        match provider {
+            RealtimeProvider::Openai => OPENAI,
+            RealtimeProvider::Xai => XAI,
+            RealtimeProvider::Inference => INFERENCE,
+            RealtimeProvider::VoiceLive => VOICE_LIVE,
         }
     }
 }
@@ -422,6 +404,7 @@ impl Dialect {
             mutable_tools: true,
             per_response_tool_choice: c.per_response_tool_choice.unwrap_or(true),
             supports_say: c.supports_say.unwrap_or(false),
+            supports_overlapping_speech: false,
         }
     }
 }
@@ -438,7 +421,7 @@ mod tests {
             ("inference", RealtimeProvider::Inference),
             ("voice_live", RealtimeProvider::VoiceLive),
         ] {
-            let dialect: Dialect = name.parse().unwrap();
+            let dialect = Dialect::of(RealtimeProvider::from_wire(name).unwrap());
             assert_eq!(dialect.provider, provider);
             assert_eq!(dialect.to_string(), name);
         }

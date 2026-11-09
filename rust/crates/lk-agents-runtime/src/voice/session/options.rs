@@ -12,7 +12,7 @@ use lk_agents_voice::agent_session::options::{
     ConfigStack, OverrideLayer, resolved_session_options, session_layer, update_layer,
 };
 use lk_agents_voice::provider_layers::{
-    ProviderLayers, ProviderObjectId, ProviderOverrideId, ProviderSlot,
+    ModelSlot, ProviderLayers, ProviderObjectId, ProviderOverrideId, ProviderSlot,
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::collections::BTreeMap;
@@ -116,8 +116,16 @@ impl lk_agents_abi::voice::session::SessionOptions for SessionOptions {
         changed
     }
 
-    fn provider(&self, slot: String) -> Option<HostRef> {
-        self.state().providers.effective(slot)
+    fn stt(&self) -> Option<HostRef> {
+        self.state().providers.effective(ModelSlot::Stt)
+    }
+
+    fn tts(&self) -> Option<HostRef> {
+        self.state().providers.effective(ModelSlot::Tts)
+    }
+
+    fn vad(&self) -> Option<HostRef> {
+        self.state().providers.effective(ModelSlot::Vad)
     }
 
     fn resolved(&self, legs: SessionLegs) -> ResolvedSessionOptions {
@@ -174,8 +182,8 @@ impl ProviderRegistry {
         self.collect(changed)
     }
 
-    fn effective(&self, slot: String) -> Option<HostRef> {
-        let id = self.layers.effective(&ProviderSlot::from(slot))?;
+    fn effective(&self, slot: ModelSlot) -> Option<HostRef> {
+        let id = self.layers.effective(&ProviderSlot::Model(slot))?;
         self.objects.get(&id).cloned().flatten()
     }
 

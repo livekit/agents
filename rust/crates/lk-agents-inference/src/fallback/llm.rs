@@ -2,8 +2,8 @@
 //! `chat()` returns at once and the chain runs as a task feeding an `mpsc`
 //! (`FallbackLLMStream._run`), so its failure surfaces on the first `next()`.
 
-use lk_agents_abi::llm::fallback::HostTools;
-use lk_agents_abi::{Extra, HostRef};
+use lk_agents_abi::llm::fallback::{HostChatContext, HostTools};
+use lk_agents_abi::{ChatContext, Extra};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -216,7 +216,7 @@ impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
     /// is handed, §1.11); the chain picks an entry on the first `recv()`.
     async fn chat(
         &self,
-        chat_ctx: HostRef,
+        chat_ctx: HostChatContext,
         tools: Option<HostTools>,
         parallel_tool_calls: Option<bool>,
         tool_choice: Option<serde_json::Value>,
@@ -228,7 +228,8 @@ impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
             None => (Vec::new(), None),
         };
         let req = ChatRequest {
-            chat_ctx_host: Some(chat_ctx),
+            chat_ctx: ChatContext::new(chat_ctx.items),
+            chat_ctx_host: Some(chat_ctx.host),
             tools,
             tools_host,
             conn_options: conn_options.unwrap_or_else(crate::fallback::caller_default),

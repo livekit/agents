@@ -5,6 +5,11 @@ use crate::errors::{ApiError, HostError};
 use crate::{ApiConnectOptions, AudioFrame, Maybe, ToolChoice, ToolSpec, Ts};
 use crate::{ChatItem, FunctionCall};
 
+use super::realtime_options::{
+    AudioTranscription, InferenceGateway, NoiseReduction, Reasoning, Tracing, Truncation,
+    TurnDetection, Voice,
+};
+
 #[crate::host(file(module = "realtime_options"))]
 const _: () = ();
 
@@ -34,6 +39,7 @@ pub trait RealtimeReports {
 }
 
 /// The realtime provider selected at configuration time, including gateway model prefixes.
+#[crate::host(record(module = "realtime_options", extract))]
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RealtimeProvider {
@@ -49,12 +55,6 @@ pub enum RealtimeProvider {
     path = "livekit.agents.llm.realtime",
     name = "RealtimeCapabilities",
     dataclass,
-    // The host's alone: the core neither holds the model's speech back nor cuts it by itself.
-    host_fields(supports_overlapping_speech(
-        ty = "bool",
-        default = "False",
-        doc = "Whether the model and the caller may speak at once, the model deciding when to yield"
-    )),
     extract,
     emit,
 ))]
@@ -97,6 +97,10 @@ pub struct RealtimeCapabilities {
     // Last: the reference has no such field, and positional arguments must keep its order.
     #[host(default = false)]
     pub auto_turn_reply_generation: bool,
+    /// Whether the model and the caller may speak at once, the model deciding when to yield.
+    // The core neither holds the model's speech back nor cuts it by itself on it.
+    #[host(default = false)]
+    pub supports_overlapping_speech: bool,
 }
 
 /// `RealtimeError` (`llm/realtime.py:88`): the failure a request reports.
@@ -792,67 +796,7 @@ pub trait HostRealtimeModel: Send + Sync + Sized + 'static {
     ) -> Result<Self, crate::errors::HostError>;
 }
 
-// The OpenAI-protocol realtime client (OpenAI/Azure, xAI, LiveKit Inference) and its
-// presence-aware option boundary.
-
-/// A session update: an omitted option (`NOT_GIVEN`) keeps its setting, an explicit `None`
-/// clears it.
-#[crate::host(record(module = "realtime_options", extract))]
-#[derive(Clone, Default)]
-pub struct RealtimeOptions {
-    pub input_audio_transcription: Maybe<Option<serde_json::Value>>,
-    pub input_audio_noise_reduction: Maybe<Option<serde_json::Value>>,
-    pub turn_detection: Maybe<Option<serde_json::Value>>,
-    pub tool_choice: Maybe<Option<ToolChoice>>,
-    pub speed: Maybe<f64>,
-    pub tracing: Maybe<Option<serde_json::Value>>,
-    pub truncation: Maybe<Option<serde_json::Value>>,
-    pub reasoning: Maybe<Option<serde_json::Value>>,
-    pub max_session_duration: Maybe<Option<f64>>,
-    /// A voice name, or the provider's voice object.
-    pub voice: Maybe<serde_json::Value>,
-    pub max_response_output_tokens: Maybe<Option<serde_json::Value>>,
-}
-
-#[crate::host(record(module = "realtime_options", extract))]
-#[derive(Clone)]
-pub struct OpenAIRealtimeConfig {
-    /// The caller's key. Outside the gateway and Azure, `OPENAI_API_KEY` when not given; for
-    /// `azure_defaults` (`with_azure`), `AZURE_OPENAI_API_KEY`.
-    pub api_key: Option<String>,
-    pub conn_options: ApiConnectOptions,
-    pub options: RealtimeOptions,
-    #[host(default = None)]
-    pub dialect: Option<String>,
-    #[host(default = None)]
-    pub model: Option<String>,
-    #[host(default = None)]
-    pub voice: Option<serde_json::Value>,
-    #[host(default = None)]
-    pub modalities: Option<Vec<String>>,
-    #[host(default = None)]
-    pub azure_deployment: Option<String>,
-    #[host(default = None)]
-    pub entra_token: Option<String>,
-    /// Azure's defaults and credential rules (`with_azure`).
-    #[host(default = false)]
-    pub azure_defaults: bool,
-    /// The caller's base URL. Not given: for Azure, `{azure_endpoint}/openai` with
-    /// `azure_endpoint` else `AZURE_OPENAI_ENDPOINT`; otherwise `OPENAI_BASE_URL`, else OpenAI's.
-    #[host(default = None)]
-    pub base_url: Option<String>,
-    /// `with_azure`'s endpoint; exclusive with `base_url`.
-    #[host(default = None)]
-    pub azure_endpoint: Option<String>,
-    #[host(default = None)]
-    pub api_secret: Option<String>,
-    #[host(default = None)]
-    pub inference_provider: Option<String>,
-    #[host(default = None)]
-    pub inference_class: Option<String>,
-    #[host(default = None)]
-    pub label: Option<String>,
-}
+// The OpenAI-protocol realtime client (OpenAI/Azure, xAI, Voice Live, LiveKit Inference).
 
 #[crate::host(error(kind = "ValueError"))]
 #[derive(Debug, Clone, thiserror::Error)]
@@ -873,10 +817,37 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
     #[host(env)]
     type Env;
 
+    /// Not given, `model`, `voice` and the session options are the dialect's defaults. The key
+    /// and base URL fall back to the dialect's environment: for Azure (`azure_deployment` or
+    /// `entra_token`), `AZURE_OPENAI_API_KEY` and `{azure_endpoint}/openai`, `azure_endpoint`
+    /// else `AZURE_OPENAI_ENDPOINT`; for OpenAI, `OPENAI_API_KEY` and `OPENAI_BASE_URL`, else
+    /// OpenAI's. `dialect`, `label` and `gateway` are the provider class's own.
     #[host(new)]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         env: &Self::Env,
-        config: OpenAIRealtimeConfig,
+        #[host(kw, default = None)] model: Option<String>,
+        #[host(default = None)] voice: Option<Voice>,
+        #[host(default = None)] modalities: Option<Vec<Modalities>>,
+        tool_choice: Maybe<Option<ToolChoice>>,
+        #[host(default = None)] base_url: Option<String>,
+        input_audio_transcription: Maybe<Option<AudioTranscription>>,
+        input_audio_noise_reduction: Maybe<Option<NoiseReduction>>,
+        turn_detection: Maybe<Option<TurnDetection>>,
+        speed: Maybe<f64>,
+        tracing: Maybe<Option<Tracing>>,
+        truncation: Maybe<Option<Truncation>>,
+        reasoning: Maybe<Option<Reasoning>>,
+        max_response_output_tokens: Maybe<Option<u32>>,
+        #[host(default = None)] api_key: Option<String>,
+        #[host(default = None)] azure_deployment: Option<String>,
+        #[host(default = None)] azure_endpoint: Option<String>,
+        #[host(default = None)] entra_token: Option<String>,
+        max_session_duration: Maybe<Option<std::time::Duration>>,
+        #[host(default = None)] conn_options: Option<ApiConnectOptions>,
+        #[host(default = None)] dialect: Option<RealtimeProvider>,
+        #[host(default = None)] label: Option<String>,
+        #[host(default = None)] gateway: Option<InferenceGateway>,
     ) -> Result<Self, RealtimeConfigurationError>;
     #[host(getter)]
     fn provider(&self) -> String;
@@ -884,12 +855,120 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
     fn model(&self) -> String;
     #[host(getter)]
     fn label(&self) -> String;
-    #[host(call)]
+    #[host(getter)]
     fn capabilities(&self) -> RealtimeCapabilities;
+    /// The given options; every live session sends what changed.
     #[host(call)]
-    fn update_options(&self, options: RealtimeOptions);
+    #[allow(clippy::too_many_arguments)]
+    fn update_options(
+        &self,
+        #[host(kw)] voice: Maybe<Voice>,
+        turn_detection: Maybe<Option<TurnDetection>>,
+        tool_choice: Maybe<Option<ToolChoice>>,
+        input_audio_transcription: Maybe<Option<AudioTranscription>>,
+        input_audio_noise_reduction: Maybe<Option<NoiseReduction>>,
+        max_response_output_tokens: Maybe<Option<u32>>,
+        speed: Maybe<f64>,
+        tracing: Maybe<Option<Tracing>>,
+        truncation: Maybe<Option<Truncation>>,
+        reasoning: Maybe<Option<Reasoning>>,
+    );
     #[host(call)]
     fn bind_identification(&self, headers: crate::Headers);
+}
+
+/// `RealtimeModel` over the OpenAI Realtime protocol: OpenAI, Azure OpenAI and every provider
+/// speaking it. A provider subclass sets `_dialect`, `_provider_label` (the name logs and metrics
+/// give it) and, for LiveKit Inference, `_gateway`.
+#[crate::host(facade(
+    path = "livekit.agents.llm._realtime",
+    extended,
+    name = "RealtimeModel",
+    base = "llm.realtime.RealtimeModel",
+    native = OpenAIRealtimeModel,
+    base_args(capabilities),
+    host_args(dialect = "self._dialect", label = "self._provider_label", gateway = "self._gateway")
+))]
+pub trait OpenAIRealtimeModelFacade {
+    /// A realtime model over the OpenAI Realtime protocol.
+    ///
+    /// Args:
+    ///     model: The realtime model; the provider's default when not given.
+    ///     voice: The voice of its audio, a name or a voice object; the provider's default
+    ///         when not given.
+    ///     modalities: ``["text"]`` for text-only replies; audio by default.
+    ///     tool_choice: The tool selection policy.
+    ///     base_url: The API's base URL; ``OPENAI_BASE_URL`` for OpenAI, from ``azure_endpoint``
+    ///         for Azure.
+    ///     input_audio_transcription: The caller's transcription; ``None`` turns it off.
+    ///     input_audio_noise_reduction: Noise reduction of the caller's audio.
+    ///     turn_detection: Server turn detection; ``None`` leaves the turns to the framework.
+    ///     speed: The playback speed of its audio.
+    ///     tracing: OpenAI's tracing of the session.
+    ///     truncation: How the conversation is truncated over the input token limit.
+    ///     reasoning: A reasoning model's reasoning, e.g. ``Reasoning(effort="low")``.
+    ///     max_response_output_tokens: The tokens of one reply; ``None`` is unlimited.
+    ///     api_key: ``OPENAI_API_KEY`` by default, ``AZURE_OPENAI_API_KEY`` on Azure.
+    ///     azure_deployment: The Azure OpenAI deployment; giving it selects Azure.
+    ///     azure_endpoint: The Azure endpoint; ``AZURE_OPENAI_ENDPOINT`` by default. Exclusive
+    ///         with ``base_url``.
+    ///     entra_token: A Microsoft Entra token, in place of ``api_key``; selects Azure.
+    ///     max_session_duration: How long one connection serves before it is recycled; ``None``
+    ///         never recycles.
+    ///     conn_options: The connection's retry and timeout options.
+    ///
+    /// Raises:
+    ///     ValueError: If the credentials or the Azure endpoint are missing.
+    #[host(new, annotation(model = ".realtime_options.RealtimeModels | str | None"))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        #[host(kw, default = None)] model: Option<String>,
+        #[host(default = None)] voice: Option<Voice>,
+        #[host(default = None)] modalities: Option<Vec<Modalities>>,
+        tool_choice: Maybe<Option<ToolChoice>>,
+        #[host(default = None)] base_url: Option<String>,
+        input_audio_transcription: Maybe<Option<AudioTranscription>>,
+        input_audio_noise_reduction: Maybe<Option<NoiseReduction>>,
+        turn_detection: Maybe<Option<TurnDetection>>,
+        speed: Maybe<f64>,
+        tracing: Maybe<Option<Tracing>>,
+        truncation: Maybe<Option<Truncation>>,
+        reasoning: Maybe<Option<Reasoning>>,
+        max_response_output_tokens: Maybe<Option<u32>>,
+        #[host(default = None)] api_key: Option<String>,
+        #[host(default = None)] azure_deployment: Option<String>,
+        #[host(default = None)] azure_endpoint: Option<String>,
+        #[host(default = None)] entra_token: Option<String>,
+        max_session_duration: Maybe<Option<std::time::Duration>>,
+        #[host(default = None)] conn_options: Option<ApiConnectOptions>,
+    ) -> Self;
+
+    #[host(getter)]
+    fn model(&self) -> String;
+    #[host(getter)]
+    fn provider(&self) -> String;
+    /// The name logs and metrics give this instance.
+    #[host(getter)]
+    fn label(&self) -> String;
+    /// What its sessions support; options set later may change it.
+    #[host(getter)]
+    fn capabilities(&self) -> RealtimeCapabilities;
+
+    /// Change the model's options; every live session sends what changed.
+    #[allow(clippy::too_many_arguments)]
+    fn update_options(
+        &self,
+        #[host(kw)] voice: Maybe<Voice>,
+        turn_detection: Maybe<Option<TurnDetection>>,
+        tool_choice: Maybe<Option<ToolChoice>>,
+        input_audio_transcription: Maybe<Option<AudioTranscription>>,
+        input_audio_noise_reduction: Maybe<Option<NoiseReduction>>,
+        max_response_output_tokens: Maybe<Option<u32>>,
+        speed: Maybe<f64>,
+        tracing: Maybe<Option<Tracing>>,
+        truncation: Maybe<Option<Truncation>>,
+        reasoning: Maybe<Option<Reasoning>>,
+    );
 }
 
 // Public data contracts. Python behavior remains in its adapters.

@@ -11,17 +11,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from inspect import get_annotations
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
+    from builtins import object as _HostResponseFormat
+
     from openai.types.chat import ChatCompletionPredictionContentParam
     from openai.types.chat.completion_create_params import WebSearchOptions
     from openai.types.shared.reasoning_effort import ReasoningEffort
     from openai.types.shared_params import Metadata
 
     from livekit.agents.llm import ToolChoice
+
+ResponseFormat: TypeAlias = "_HostResponseFormat"
 
 
 @dataclass(frozen=True)

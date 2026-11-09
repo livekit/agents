@@ -89,6 +89,7 @@ fn capabilities() -> RealtimeCapabilities {
         per_response_tool_choice: false,
         supports_say: false,
         auto_turn_reply_generation: true,
+        supports_overlapping_speech: true,
     }
 }
 

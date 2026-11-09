@@ -256,11 +256,13 @@ impl SessionExecutor for Executor {
             let mut legs = OpeningLegs::default();
             let mut opening = Vec::new();
             if let Some(stt) = stt {
-                let (sink, source) = stt
-                    .stream(&cx, None, None)
-                    .await?
-                    .ok_or(DriverError::Missing("a streaming STT"))?
-                    .split();
+                let options = stt.conn_options().unwrap_or_default();
+                let clock = time.clock();
+                let (sink, source) =
+                    lk_agents_inference::stt::stream(stt, options, clock, &cx, None, None)
+                        .await?
+                        .ok_or(DriverError::Missing("a streaming STT"))?
+                        .split();
                 let leg = OpeningLeg::new(
                     AudioChannel::Stt,
                     Arc::from(sink),

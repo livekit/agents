@@ -488,10 +488,17 @@ class SessionOptions:
         """Attach providers to the same override id used by turn settings, before or after start."""
     def release_providers(self, layer: int) -> dict[str, object | None]:
         """Release provider references and return the providers to restore. Idempotent."""
-    def provider(self, slot: str) -> object | None:
-        """`session.stt` / `tts` / `vad`: the host provider `slot` runs on now, the topmost held
-        override's, else the base's; `None` when the slot has none or it was removed.
+    @property
+    def stt(self) -> object | None:
+        """The STT the session listens with now: the topmost held override's, else the base's;
+        `None` when there is none or it was removed.
         """
+    @property
+    def tts(self) -> object | None:
+        """The TTS the session speaks with now, resolved as `stt` is."""
+    @property
+    def vad(self) -> object | None:
+        """The VAD the session runs now, resolved as `stt` is."""
     def resolved(self, legs: SessionLegs) -> ResolvedSessionOptions:
         """The resolved configuration over the host-supplied legs, as the dict `session.options` reads
         before `start()`.
@@ -887,7 +894,10 @@ class _core_SessionOwner:
     @property
     def storage(self) -> _core_SessionStorage | None: ...
     @property
-    def current_agent(self) -> object | None: ...
+    def current_agent(self) -> object:
+        """The host's agent the loop installed last, the task's while a `VoiceTask` holds the
+        floor; before `start()`, the one `update_agent` named. Refused when there is none.
+        """
     @property
     def state(self) -> _core_SessionState:
         """The latest state the host's events delivered; before `start()`, an empty history."""

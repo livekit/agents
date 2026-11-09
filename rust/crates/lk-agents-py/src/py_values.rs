@@ -27,7 +27,10 @@ pub mod interfaces {
     #[lk_agents_abi::host(interface(module = "pydantic_core", attrs(to_jsonable_python)))]
     pub struct PydanticCoreModule;
 
-    #[lk_agents_abi::host(interface(module = "livekit.agents.llm.utils", attrs(_value_text)))]
+    #[lk_agents_abi::host(interface(
+        module = "livekit.agents.llm.utils",
+        attrs(_value_text, to_openai_response_format)
+    ))]
     pub struct LlmUtilsModule;
 
     #[lk_agents_abi::host(interface(module = "livekit.agents._bindings", attrs(tool_specs)))]
@@ -562,6 +565,14 @@ pub fn tool_specs(tools: &Bound<'_, PyAny>, _path: &str) -> PyResult<Vec<lk_agen
         .try_iter()?
         .map(|spec| crate::generated::records::tool_options::tool_spec_from_py(&spec?))
         .collect()
+}
+
+/// A host `response_format` as OpenAI's parameter, as `llm.utils.to_openai_response_format`
+/// converts it.
+pub fn response_format(value: &Bound<'_, PyAny>, path: &str) -> PyResult<Value> {
+    let module = access::LlmUtilsModule::import(value.py())?;
+    let convert = access::LlmUtilsModule::to_openai_response_format(&module)?;
+    value_from_py(&crate::py_calls::call(&convert, (value,), None)?, path)
 }
 
 /// The host object itself, retained (a record read from the object it refers to).

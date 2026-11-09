@@ -29,61 +29,6 @@ from .types import APIConnectOptions
 from .voice.events import RunContext
 
 
-class A2AService:
-    def __init__(
-        self,
-        endpoint: A2AEndpoint,
-        *,
-        storage: Storage,
-        agent_name: Callable[[], str],
-        lane: Callable[[], str] | None = None,
-    ) -> None:
-        self._endpoint = endpoint
-        self._storage = storage
-        self._agent_name = agent_name
-        self._lane = lane
-        self._door: _core._core_A2ADoor | None = None
-
-    @property
-    def agent_name(self) -> str:
-        return self._agent_name()
-
-    @property
-    def lane(self) -> str:
-        return (self._lane() if self._lane is not None else None) or self.agent_name
-
-    def _open(self) -> _core._core_A2ADoor:
-        endpoint = self._endpoint
-        host = _TurnHost(
-            endpoint.handler,
-            thread=Thread(self._storage, "", agent_name=self.lane),
-        )
-        return _core._core_A2ADoor(
-            self._storage._core,
-            DoorConfig(
-                lane=self.lane,
-                holder=self._storage.holder,
-                endpoint=EndpointDescriptor(
-                    name=endpoint.name,
-                    description=endpoint.description,
-                    version=endpoint.version,
-                    url=endpoint.url or f"/{endpoint.name}/v1",
-                ),
-                options=endpoint.turn_options,
-            ),
-            host,
-        )
-
-    async def native(self) -> _core._core_A2ADoor:
-        if self._door is None:
-            self._door = self._open()
-        return self._door
-
-    async def aclose(self) -> None:
-        if self._door is not None:
-            await self._door.aclose()
-
-
 class RemoteAgent:
     """An A2A endpoint as a delegation tool: an endpoint in this codebase, or a URL with the
     tool's name and description."""
@@ -281,32 +226,41 @@ class A2AEndpoint:
         self.version = version or ""
         self.lane = lane
         self._storage = storage
-        self._service: A2AService | None = None
+        self._native: _core._core_A2ADoor | None = None
         self._url: str | None = None
         self._config: ServerConfig | None = None
 
     # -- binding to a server --
 
-    def bind(self, *, storage: Storage, config: ServerConfig) -> A2AService:
+    def bind(self, *, storage: Storage, config: ServerConfig) -> None:
         """Attach the endpoint to a server's storage and options: its agent name (the lane,
         unless the door writes its own) and URL."""
-        chosen = self._storage or storage
+        self._storage = self._storage or storage
         self.version = self.version or config.card_version
-        own = self.lane
-        self._service = A2AService(
-            self,
-            storage=chosen,
-            agent_name=lambda: config.agent_name,
-            lane=(lambda: own) if own else None,
-        )
         self._config = config
-        return self._service
 
-    @property
-    def service(self) -> A2AService:
-        if self._service is None:
+    def _door(self) -> _core._core_A2ADoor:
+        """The native door the worker serves, opened once over the handler."""
+        if self._config is None or self._storage is None:
             raise RuntimeError(f"endpoint {self.name!r} is not attached to a server yet")
-        return self._service
+        if self._native is None:
+            lane = self.lane or self._config.agent_name
+            self._native = _core._core_A2ADoor(
+                self._storage._core,
+                DoorConfig(
+                    lane=lane,
+                    holder=self._storage.holder,
+                    endpoint=EndpointDescriptor(
+                        name=self.name,
+                        description=self.description,
+                        version=self.version,
+                        url=self.url or f"/{self.name}/v1",
+                    ),
+                    options=self.turn_options,
+                ),
+                _TurnHost(self.handler, thread=Thread(self._storage, "", agent_name=lane)),
+            )
+        return self._native
 
     @property
     def url(self) -> str | None:

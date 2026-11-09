@@ -321,7 +321,7 @@ impl Generation<'_> {
                 model: id.model,
             });
             let expressive = self.ctx.plan.request.expressive;
-            let observer = super::llm::retry_observer(
+            let observer = super::llm::give_up_observer(
                 self.shared,
                 self.handle,
                 lk_agents_voice::trace::ProviderKind::Tts,
@@ -338,7 +338,12 @@ impl Generation<'_> {
             .map_err(DriverError::from)?
             .split()
         };
-        super::tts::report_retries(self.shared, self.handle, &mut source);
+        super::llm::report_retries(
+            self.shared,
+            self.handle,
+            lk_agents_voice::trace::ProviderKind::Tts,
+            &mut source,
+        );
         let shared = self.shared;
         let mut transforms = (!shared.tts_transforms.is_empty())
             .then(|| lk_agents_voice::transcription::Pipeline::new(&shared.tts_transforms));

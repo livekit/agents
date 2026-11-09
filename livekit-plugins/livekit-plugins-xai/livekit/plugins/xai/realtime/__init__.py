@@ -1,14 +1,17 @@
-from openai.types.beta.realtime.session import TurnDetection
+from livekit.agents.llm._realtime import AudioTranscription, Reasoning, SemanticVad, ServerVad
 
 from ..tools import FileSearch, WebSearch, XSearch
 from ..types import GrokVoices
 from .realtime_model import RealtimeModel, RealtimeSession
 
 __all__ = [
+    "AudioTranscription",
     "GrokVoices",
     "RealtimeModel",
     "RealtimeSession",
-    "TurnDetection",
+    "Reasoning",
+    "SemanticVad",
+    "ServerVad",
     "WebSearch",
     "FileSearch",
     "XSearch",

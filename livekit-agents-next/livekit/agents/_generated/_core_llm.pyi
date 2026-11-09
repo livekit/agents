@@ -5,11 +5,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from datetime import timedelta
 from typing import Any, Self
 
-from livekit.agents._bindings import Duplex, FallbackListener
-from livekit.agents.llm import LLM, Toolset
+from livekit.agents._bindings import FallbackListener
+from livekit.agents.llm import LLM, AudioGate, Toolset
+from livekit.agents.llm.duplex import DuplexModel
 from livekit.agents.llm.mcp import MCPToolset
 from livekit.agents.llm.realtime import RealtimeModel
 from livekit.agents.llm.tool_context import ToolChoice
@@ -17,22 +19,33 @@ from livekit.agents.tts import TTS
 from livekit.agents.voice.events import RunContext
 
 from .._core import TtsStream
+from ..types import NotGivenOr
 from .chat_diff import DiffOps, MergeInsertion
 from .chat_items import ChatItem, ChatRole
 from .connect import APIConnectOptions
-from .duplex import DuplexCapabilities, DuplexInputItem
+from .duplex import DuplexInputItem
 from .llm import ChatChunk, SerializedImage
-from .llm_fallback import HostTools, RealtimeLeg
-from .llm_provider_options import ProviderEndpoint
+from .llm_fallback import HostChatContext, HostTools, RealtimeLeg
+from .llm_provider_options import ProviderEndpoint, ResponseFormat
 from .mcp import MCPToolOptions, ResolvedToolOptions
 from .metrics import RealtimeModelMetrics
 from .provider_data import TOOL_BEHAVIOR, ProviderFormat, ToolSchema
 from .provider_format import ConvertedItem
 from .realtime import RealtimeCapabilities
-from .realtime_options import OpenAIRealtimeConfig, RealtimeOptions
+from .realtime_options import (
+    AudioTranscription,
+    InferenceGateway,
+    NoiseReduction,
+    RealtimeProvider,
+    Reasoning,
+    Tracing,
+    Truncation,
+    TurnDetection,
+    Voice,
+)
+from .realtime_wire import Modalities
 from .rtc_frames import AudioFrame
 from .tool_context import RawFunctionDescription
-from .tool_options import ToolSpec
 from .tool_report import ToolReport, ToolReturn
 from .tts import TTSCapabilities
 
@@ -101,8 +114,6 @@ class AdaptiveNoiseGate:
     def deactivate(self) -> None:
         """End the open burst, keeping whatever has been learned about the model."""
 
-def duplex_realtime_capabilities(caps: DuplexCapabilities) -> RealtimeCapabilities: ...
-
 class DuplexInput:
     """`_core.DuplexInput`: a duplex session's input. The engine pushes the caller's audio, the plugin
     pulls it; a plugin more than 250 ms behind skips to the newest audio after a gap.
@@ -118,8 +129,17 @@ class DuplexInput:
 
 class DuplexRealtimeModel:
     """`DuplexRealtimeAdapter`'s engine, the session's realtime model when handed to it."""
-    def __new__(cls, host: Duplex, *, audio_timeout: float = 0.8) -> Self:
-        """`audio_timeout`: how long to wait for the next frame before the output counts as finished."""
+    def __new__(
+        cls,
+        duplex_model: DuplexModel,
+        *,
+        gate: Callable[[], AudioGate] | None = None,
+        audio_timeout: float = 0.8,
+    ) -> Self:
+        """Each session's gate is `gate`'s, else the model's own, else the adaptive gate.
+        `audio_timeout`: how long to wait for the next frame before the output counts as finished.
+        """
+    @property
     def capabilities(self) -> RealtimeCapabilities:
         """The realtime capabilities the model runs under."""
 
@@ -142,7 +162,7 @@ class FallbackLlm:
     async def chat(
         self,
         *,
-        chat_ctx: object,
+        chat_ctx: HostChatContext,
         tools: HostTools | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: object | None = None,
@@ -206,7 +226,9 @@ class RealtimeFallbackModel:
     ) -> Self: ...
     @property
     def active_index(self) -> int: ...
-    def capabilities(self) -> RealtimeCapabilities: ...
+    @property
+    def capabilities(self) -> RealtimeCapabilities:
+        """The members' capabilities, merged: the pipeline-shaping ones agree, the others are ANDed."""
     async def restart(self, *, switch_model: bool = False) -> None: ...
 
 class InferenceLlm:
@@ -259,18 +281,18 @@ class InferenceLlm:
         """
     def chat(
         self,
-        items: Sequence[ChatItem],
         *,
-        tools: Sequence[ToolSpec],
-        conn_options: APIConnectOptions,
+        chat_ctx: HostChatContext,
+        tools: HostTools | None = None,
+        conn_options: APIConnectOptions | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        response_format: object | None = None,
+        response_format: ResponseFormat | None = None,
+        inference_class: str | None = None,
         extra_kwargs: dict[str, object] | None = None,
-        headers: list[tuple[str, str]] | None = None,
     ) -> InferenceLlmChunks:
-        """Opens a completion of `items`; no I/O until the first pull. `headers` identify the
-        caller's job, read in its context.
+        """Opens a completion of `chat_ctx`; no I/O until the first pull. Its requests carry this
+        view's job identification and `inference_class`, else the client's class.
         """
 
 class InferenceLlmChunks:
@@ -428,15 +450,61 @@ class HostRealtimeModel:
     def __new__(cls, model: RealtimeModel) -> Self: ...
 
 class OpenAIRealtimeModel:
-    def __new__(cls, config: OpenAIRealtimeConfig) -> Self: ...
+    def __new__(
+        cls,
+        *,
+        model: str | None = None,
+        voice: Voice | None = None,
+        modalities: Sequence[Modalities] | None = None,
+        tool_choice: NotGivenOr[ToolChoice | None] = ...,
+        base_url: str | None = None,
+        input_audio_transcription: NotGivenOr[AudioTranscription | None] = ...,
+        input_audio_noise_reduction: NotGivenOr[NoiseReduction | None] = ...,
+        turn_detection: NotGivenOr[TurnDetection | None] = ...,
+        speed: NotGivenOr[float] = ...,
+        tracing: NotGivenOr[Tracing | None] = ...,
+        truncation: NotGivenOr[Truncation | None] = ...,
+        reasoning: NotGivenOr[Reasoning | None] = ...,
+        max_response_output_tokens: NotGivenOr[int | None] = ...,
+        api_key: str | None = None,
+        azure_deployment: str | None = None,
+        azure_endpoint: str | None = None,
+        entra_token: str | None = None,
+        max_session_duration: NotGivenOr[timedelta | None] = ...,
+        conn_options: APIConnectOptions | None = None,
+        dialect: RealtimeProvider | None = None,
+        label: str | None = None,
+        gateway: InferenceGateway | None = None,
+    ) -> Self:
+        """Not given, `model`, `voice` and the session options are the dialect's defaults. The key
+        and base URL fall back to the dialect's environment: for Azure (`azure_deployment` or
+        `entra_token`), `AZURE_OPENAI_API_KEY` and `{azure_endpoint}/openai`, `azure_endpoint`
+        else `AZURE_OPENAI_ENDPOINT`; for OpenAI, `OPENAI_API_KEY` and `OPENAI_BASE_URL`, else
+        OpenAI's. `dialect`, `label` and `gateway` are the provider class's own.
+        """
     @property
     def provider(self) -> str: ...
     @property
     def model(self) -> str: ...
     @property
     def label(self) -> str: ...
+    @property
     def capabilities(self) -> RealtimeCapabilities: ...
-    def update_options(self, options: RealtimeOptions) -> None: ...
+    def update_options(
+        self,
+        *,
+        voice: NotGivenOr[Voice] = ...,
+        turn_detection: NotGivenOr[TurnDetection | None] = ...,
+        tool_choice: NotGivenOr[ToolChoice | None] = ...,
+        input_audio_transcription: NotGivenOr[AudioTranscription | None] = ...,
+        input_audio_noise_reduction: NotGivenOr[NoiseReduction | None] = ...,
+        max_response_output_tokens: NotGivenOr[int | None] = ...,
+        speed: NotGivenOr[float] = ...,
+        tracing: NotGivenOr[Tracing | None] = ...,
+        truncation: NotGivenOr[Truncation | None] = ...,
+        reasoning: NotGivenOr[Reasoning | None] = ...,
+    ) -> None:
+        """The given options; every live session sends what changed."""
     def bind_identification(self, headers: list[tuple[str, str]]) -> None: ...
 
 def chat_ctx_to_dict(

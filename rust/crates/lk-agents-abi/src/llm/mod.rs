@@ -9,6 +9,7 @@ pub mod inference;
 pub mod mcp;
 pub mod provider_format;
 pub mod realtime;
+pub mod realtime_options;
 pub mod schema;
 pub mod to_dict;
 pub mod tool_executor;

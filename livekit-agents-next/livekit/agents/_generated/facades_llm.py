@@ -104,7 +104,7 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> FallbackLLMStream:
+    ) -> LLMStream:
         return FallbackLLMStream(
             llm=cast("llm.FallbackAdapter", self),
             chat_ctx=chat_ctx,
@@ -134,9 +134,9 @@ class FallbackLLMStream(LLMStream):
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(llm=llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
-        self._parallel_tool_calls = parallel_tool_calls
-        self._tool_choice = tool_choice
-        self._extra_kwargs = extra_kwargs
+        self._parallel_tool_calls: bool | None = parallel_tool_calls
+        self._tool_choice: ToolChoice | None = tool_choice
+        self._extra_kwargs: dict[str, Any] | None = extra_kwargs
 
     async def _core_open(self) -> _core.FallbackLlmChunks:
         return await self._llm._native.chat(

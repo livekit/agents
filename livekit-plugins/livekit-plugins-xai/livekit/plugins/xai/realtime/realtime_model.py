@@ -2,34 +2,19 @@
 
 from __future__ import annotations
 
-import os
+from datetime import timedelta
 
-from openai.types.beta.realtime.session import TurnDetection
-from openai.types.realtime import AudioTranscription, RealtimeReasoning
-from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
-
-from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    NOT_GIVEN,
-    APIConnectOptions,
-    NotGivenOr,
+from livekit.agents.llm._realtime import (
+    AudioTranscription,
+    Reasoning,
+    SemanticVad,
+    ServerVad,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from livekit.plugins import openai
 
 from ..types import GrokRealtimeModels, GrokVoices
 
-XAI_BASE_URL = "wss://api.x.ai/v1/realtime"
-XAI_DEFAULT_MODEL: GrokRealtimeModels = "grok-voice-latest"
-XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(model="grok-transcribe")
-XAI_DEFAULT_TURN_DETECTION = ServerVad(
-    type="server_vad",
-    threshold=0.5,
-    prefix_padding_ms=300,
-    silence_duration_ms=200,
-    create_response=True,
-    interrupt_response=True,
-)
 RealtimeSession = openai.realtime.RealtimeSession
 
 
@@ -40,50 +25,41 @@ class RealtimeModel(openai.realtime.RealtimeModel):
     def __init__(
         self,
         *,
-        model: NotGivenOr[GrokRealtimeModels | str] = NOT_GIVEN,
-        voice: NotGivenOr[GrokVoices | str | None] = "Ara",
+        model: GrokRealtimeModels | str | None = None,
+        voice: GrokVoices | str | None = None,
         api_key: str | None = None,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        base_url: str | None = None,
+        turn_detection: NotGivenOr[ServerVad | SemanticVad | None] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
-        reasoning: NotGivenOr[RealtimeReasoning | None] = NOT_GIVEN,
+        reasoning: NotGivenOr[Reasoning | None] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
-        max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        max_session_duration: NotGivenOr[timedelta | None] = NOT_GIVEN,
+        conn_options: APIConnectOptions | None = None,
     ) -> None:
-        api_key = api_key or os.environ.get("XAI_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "The api_key client option must be set either by passing api_key "
-                "to the client or by setting the XAI_API_KEY environment variable"
-            )
+        """An xAI Grok voice model.
 
-        # resolve NotGivenOr values before super().__init__ so mypy does not explode
-        # on the OpenAI overload union combinations
-        resolved_base_url = base_url if is_given(base_url) else XAI_BASE_URL
-        resolved_model = model if is_given(model) else XAI_DEFAULT_MODEL
-        resolved_voice = voice if is_given(voice) else "Ara"
-        resolved_transcription = (
-            input_audio_transcription
-            if is_given(input_audio_transcription)
-            else XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION
-        )
-        resolved_turn_detection = (
-            turn_detection if is_given(turn_detection) else XAI_DEFAULT_TURN_DETECTION
-        )
-        resolved_max_session_duration = (
-            max_session_duration if is_given(max_session_duration) else None
-        )
+        Args:
+            model: ``grok-voice-latest`` by default.
+            voice: ``Ara`` by default.
+            api_key: ``XAI_API_KEY`` by default.
+            base_url: xAI's realtime endpoint by default.
+            turn_detection: Server VAD by default; ``None`` leaves the turns to the framework.
+            input_audio_transcription: ``grok-transcribe`` by default; ``None`` turns it off.
+            reasoning: The model's reasoning, e.g. ``Reasoning(effort="low")``.
+            speed: The playback speed of its audio.
+            max_session_duration: How long one connection serves before it is recycled; never
+                by default.
+            conn_options: The connection's retry and timeout options.
+        """
         super().__init__(
-            base_url=resolved_base_url,
-            model=resolved_model,
-            voice=resolved_voice or "Ara",
+            model=model,
+            voice=voice,
             api_key=api_key,
-            modalities=["audio", "text"],
-            input_audio_transcription=resolved_transcription,
-            turn_detection=resolved_turn_detection,
-            max_session_duration=resolved_max_session_duration,
-            conn_options=conn_options,
+            base_url=base_url,
+            turn_detection=turn_detection,
+            input_audio_transcription=input_audio_transcription,
             reasoning=reasoning,
             speed=speed,
+            max_session_duration=max_session_duration,
+            conn_options=conn_options,
         )

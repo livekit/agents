@@ -21,7 +21,7 @@ from livekit.agents._core import (
 from livekit.agents.llm.realtime import RealtimeModel
 
 if TYPE_CHECKING:
-    from builtins import object as _HostHostTools
+    from builtins import object as _HostHostChatContext, object as _HostHostTools
 
 
 @dataclass(kw_only=True, slots=True)
@@ -36,6 +36,9 @@ class AvailabilityChanged:
 
 
 HostTools: TypeAlias = "_HostHostTools"
+
+
+HostChatContext: TypeAlias = "_HostHostChatContext"
 
 
 RealtimeLeg: TypeAlias = (

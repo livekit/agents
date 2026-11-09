@@ -337,13 +337,15 @@ impl abi::DuplexRealtimeModel for DuplexAdapterModel {
 
     fn new(
         env: &ProcessEnv,
-        host: Arc<dyn abi::DuplexHost>,
+        duplex_model: Arc<dyn abi::DuplexHost>,
+        gate: Option<Arc<dyn abi::AudioGateFactory>>,
         audio_timeout: f64,
     ) -> Result<Self, HostError> {
         Ok(DuplexAdapterModel {
-            label: host.label()?,
-            caps: super::realtime_capabilities(host.capabilities()?),
-            host,
+            label: duplex_model.label()?,
+            caps: super::realtime_capabilities(duplex_model.capabilities()?),
+            host: duplex_model,
+            gate,
             audio_timeout: Duration::from_secs_f64(audio_timeout.max(0.0)),
             clock: env.clock.clone(),
             anchor: WallAnchor::of(&*env.clock),

@@ -15,7 +15,6 @@ from .connect import APIConnectOptions
 from .inference_credentials import Credentials
 from .inference_models import EotSelection
 from .inference_tts import FallbackModels
-from .realtime import RealtimeCapabilities
 from .stt import STTCapabilities
 from .tts import TTSCapabilities
 
@@ -103,11 +102,6 @@ def stt_fallback_capabilities(entries: Sequence[STTCapabilities]) -> STTCapabili
 
 def tts_fallback_capabilities(entries: Sequence[TTSCapabilities]) -> TTSCapabilities:
     """`tts.FallbackAdapter`'s capabilities, merged from its members' before any chain is built."""
-
-def merge_realtime_capabilities(caps: Sequence[RealtimeCapabilities]) -> RealtimeCapabilities:
-    """The realtime fallback's capabilities: `audio_output` and `turn_detection` must agree (a
-    `ValueError` naming the capability and both values), the rest are ANDed.
-    """
 
 class InferenceAvatar:
     """One avatar provisioned through LiveKit Inference: at most one provider session per instance,

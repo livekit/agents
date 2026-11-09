@@ -183,6 +183,7 @@ impl Module<'_> {
         if crate::python::docstring(&mut body, &facade.doc, 4) {
             body.push('\n');
         }
+        body.push_str(&self.host_attributes(facade, &native)?);
         let new = facade.methods.iter().find(|m| m.method.kind == MethodKind::New);
         let mut declared = Vec::new();
         if let Some(stream) = &facade.stream {
@@ -238,6 +239,34 @@ impl Module<'_> {
             body.push_str("    pass\n");
         }
         text.push_str(&body);
+        Ok(text)
+    }
+
+    /// `host_args(p = "self._x")`: the class attribute a subclass sets, `None` until it does,
+    /// typed as the native constructor's optional parameter.
+    fn host_attributes(&mut self, facade: &FacadeClass, native: &Class) -> Result<String, String> {
+        let mut text = String::new();
+        for (param, object) in &facade.host_args {
+            let Some(attribute) = object.strip_prefix("self.") else { continue };
+            let p = native
+                .methods
+                .iter()
+                .find(|m| m.kind == MethodKind::New)
+                .and_then(|new| new.params.iter().find(|p| &p.name == param))
+                .ok_or_else(|| {
+                    format!("host_args({param}) names no native constructor parameter")
+                })?;
+            if !matches!(p.ty, Ty::Optional(_)) {
+                return Err(format!(
+                    "host_args({param} = \"{object}\") fills an optional parameter"
+                ));
+            }
+            let ty = annotation(&p.ty, Dir::In, &mut self.typing);
+            text.push_str(&format!("    {attribute}: {ty} = None\n"));
+        }
+        if !text.is_empty() {
+            text.push('\n');
+        }
         Ok(text)
     }
 
@@ -297,10 +326,11 @@ impl Module<'_> {
             .iter()
             .find(|p| p.name == availability.observer)
             .ok_or_else(|| "availability observes through no parameter".to_owned())?;
-        let entries = constructor
-            .params
-            .iter()
-            .find(|p| p.name == availability.members)
+        // The members as the facade takes them, else as its native does.
+        let facade_new = facade.methods.iter().find(|m| m.method.kind == MethodKind::New);
+        let entries = facade_new
+            .and_then(|n| n.method.params.iter().find(|p| p.name == availability.members))
+            .or_else(|| constructor.params.iter().find(|p| p.name == availability.members))
             .ok_or_else(|| format!("_core.{name}() takes no {}", availability.members))?;
         let Ty::List(entry) = &entries.ty else {
             return Err(format!("availability members `{}` is a list", availability.members));
@@ -347,13 +377,18 @@ impl Module<'_> {
                 "    @property\n    def {property}(self) -> {ty}:\n        return self._active.{property}\n"
             ));
         }
-        let close = match facade.base {
-            Some(_) => "        await super().aclose()\n",
-            None => "",
+        let mut close = match facade.base {
+            Some(_) => "        await super().aclose()\n".to_owned(),
+            None => String::new(),
         };
-        members.push(format!(
-            "    async def aclose(self) -> None:\n{close}        await self._native.aclose()\n"
-        ));
+        // A chain holding no native resources closes its members.
+        match native.methods.iter().any(|m| m.name == "aclose") {
+            true => close.push_str("        await self._native.aclose()\n"),
+            false => close.push_str(
+                "        for member in self._members:\n            await member.aclose()\n",
+            ),
+        }
+        members.push(format!("    async def aclose(self) -> None:\n{close}"));
         Ok(members)
     }
 
@@ -411,7 +446,9 @@ impl Module<'_> {
             .ok_or_else(|| format!("_core.{} has no #[host(new)]", native.name))?;
         let mut facade = facade.clone();
         for (_, object) in &mut facade.host_args {
-            *object = self.callable(object)?;
+            if !object.starts_with("self.") {
+                *object = self.callable(object)?;
+            }
         }
         let facade = &facade;
         let observer = facade.availability.as_ref().map(|a| a.observer.as_str());
@@ -807,7 +844,10 @@ impl Module<'_> {
             arguments.push(format!("{}={}", p.name, p.value));
         }
         let name = stream.method.as_deref().unwrap_or_default();
-        let mut text = def(name, false, &params, &opened.name);
+        // Annotated as the provider stream, which a plugin overriding the method returns.
+        let base = opened.base.as_deref().ok_or("a stream names its provider stream `base`")?;
+        let returned = self.runtime_name(base)?;
+        let mut text = def(name, false, &params, &returned);
         text.push_str(&call(&format!("return {}", opened.name), &arguments, 8));
         Ok(text)
     }
@@ -877,7 +917,10 @@ impl Module<'_> {
                 params.push(format!("{}: {}", p.name, p.stored));
                 match stream.base_args.contains(&p.name) {
                     true => base.push(format!("{0}={0}", p.name)),
-                    false => kept.push_str(&format!("        self._{0} = {0}\n", p.name)),
+                    // Declared, so a checker does not widen a literal it holds.
+                    false => {
+                        kept.push_str(&format!("        self._{0}: {1} = {0}\n", p.name, p.stored))
+                    }
                 }
             }
             text.push_str(&def("__init__", false, &params, "None"));
@@ -1128,10 +1171,10 @@ mod tests {
         "#;
         let text = emit(&source).unwrap();
         assert!(text.contains(
-            "    def listen(\n        self,\n        *,\n        language: NotGivenOr[str] = NOT_GIVEN,\n        conn_options: int = DEFAULT,\n    ) -> Listening:\n        return Listening(\n            tts=cast(\"tts.Adapter\", self),\n            language=language if is_given(language) else None,\n            conn_options=conn_options,\n        )\n"
+            "    def listen(\n        self,\n        *,\n        language: NotGivenOr[str] = NOT_GIVEN,\n        conn_options: int = DEFAULT,\n    ) -> ChunkedStream:\n        return Listening(\n            tts=cast(\"tts.Adapter\", self),\n            language=language if is_given(language) else None,\n            conn_options=conn_options,\n        )\n"
         ));
         assert!(text.contains(
-            "    def __init__(self, *, tts: tts.Adapter, language: str | None, conn_options: int) -> None:\n        super().__init__(tts=tts, conn_options=conn_options)\n        self._language = language\n"
+            "    def __init__(self, *, tts: tts.Adapter, language: str | None, conn_options: int) -> None:\n        super().__init__(tts=tts, conn_options=conn_options)\n        self._language: str | None = language\n"
         ));
         assert!(text.contains(
             "return await self._tts._native.listen(\n            language=self._language,\n            offset=self._offset,\n            conn_options=self._conn_options,\n        )\n"
@@ -1153,7 +1196,7 @@ mod tests {
         let text = emit(&source).unwrap();
         assert!(text.contains("class TTS(BaseTTS):\n"));
         assert!(text.contains(
-            "    def synthesize(self, text: str, conn_options: NotGivenOr[int] = NOT_GIVEN) -> AdapterStream:\n        return AdapterStream(\n            tts=cast(\"tts.TTS\", self),\n            input_text=text,\n            conn_options=conn_options if is_given(conn_options) else self._native.conn_options,\n        )\n"
+            "    def synthesize(self, text: str, conn_options: NotGivenOr[int] = NOT_GIVEN) -> ChunkedStream:\n        return AdapterStream(\n            tts=cast(\"tts.TTS\", self),\n            input_text=text,\n            conn_options=conn_options if is_given(conn_options) else self._native.conn_options,\n        )\n"
         ));
     }
 }

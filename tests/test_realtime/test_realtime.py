@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 from dotenv import load_dotenv
-from openai.types import realtime
 
 from livekit import rtc
 from livekit.agents import RunContext, function_tool, llm, utils
@@ -28,16 +27,17 @@ def load_env():
 def _openai_model() -> openai.realtime.RealtimeModel:
     return openai.realtime.RealtimeModel(
         voice="alloy",
-        input_audio_transcription=realtime.AudioTranscription(model="gpt-4o-mini-transcribe"),
+        input_audio_transcription=openai.realtime.AudioTranscription(
+            model="gpt-4o-mini-transcribe"
+        ),
     )
 
 
 def _azure_model() -> openai.realtime.RealtimeModel:
-    return openai.realtime.RealtimeModel(
+    return openai.realtime.RealtimeModel.with_azure(
         azure_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT"],
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
-        api_version=os.environ["AZURE_OPENAI_API_VERSION"],
-        base_url=os.environ["AZURE_OPENAI_ENDPOINT"] + "/openai",
+        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
         voice="alloy",
     )
 

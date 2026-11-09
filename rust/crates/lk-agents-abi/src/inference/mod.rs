@@ -141,13 +141,6 @@ pub trait InferenceModels {
     /// `tts.FallbackAdapter`'s capabilities, merged from its members' before any chain is built.
     #[host(function)]
     fn tts_fallback_capabilities(entries: Vec<crate::TtsCapabilities>) -> crate::TtsCapabilities;
-
-    /// The realtime fallback's capabilities: `audio_output` and `turn_detection` must agree (a
-    /// `ValueError` naming the capability and both values), the rest are ANDed.
-    #[host(function)]
-    fn merge_realtime_capabilities(
-        caps: Vec<crate::llm::realtime::RealtimeCapabilities>,
-    ) -> Result<crate::llm::realtime::RealtimeCapabilities, Invalid>;
 }
 
 pub mod tts_client;

@@ -104,7 +104,7 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> FallbackChunkedStream:
+    ) -> ChunkedStream:
         return FallbackChunkedStream(
             tts=cast("tts.FallbackAdapter", self),
             input_text=text,
@@ -115,7 +115,7 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
         self,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> FallbackSynthesizeStream:
+    ) -> SynthesizeStream:
         return FallbackSynthesizeStream(
             tts=cast("tts.FallbackAdapter", self),
             conn_options=conn_options,
@@ -201,7 +201,7 @@ class StreamAdapter(TTS):
         self,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> StreamAdapterWrapper:
+    ) -> SynthesizeStream:
         return StreamAdapterWrapper(tts=cast("tts.StreamAdapter", self), conn_options=conn_options)
 
 

@@ -21,10 +21,8 @@ from .evals import (
 )
 
 class _core_JudgeRunner:
-    """Runs judges on one model. A model the host implements is offered `tools`, the host's live
-    judge tools (`judge_tool_schemas`).
-    """
-    def __new__(cls, llm: LLM[Any] | None, tools: object, host: _Evaluation) -> Self: ...
+    """Runs judges on one model."""
+    def __new__(cls, llm: LLM[Any] | None, host: _Evaluation) -> Self: ...
     async def evaluate(self, judges: Sequence[JudgeSpec]) -> list[JudgeOutcome]:
         """Runs `judges` concurrently: their outcomes in judge order."""
     async def judge_intent(self, intent: str, message: str) -> IntentJudgment:
@@ -41,6 +39,3 @@ def _core_judgment_failed(judgment: JudgmentResult) -> bool:
 
 def _core_judgment_uncertain(judgment: JudgmentResult) -> bool:
     """`JudgmentResult.uncertain`: the verdict is maybe."""
-
-def _core_judge_tool_schemas() -> object:
-    """The judge tools' raw schemas, which the host offers a model it implements."""

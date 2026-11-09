@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use lk_agents_abi::AudioFrame;
-use lk_agents_abi::media::codecs::CodecFailure;
 use lk_agents_media::audio_decoder::DecodeLimits;
 use lk_agents_media::pool::{Job, JobClass, MediaPool, MediaPoolError};
 use lk_agents_media::source::{self, Source};
@@ -378,15 +377,18 @@ impl DecoderInput {
     }
 }
 
-/// `_core.AudioDecoder`, the native half of `utils.media.AudioStreamDecoder`: input is queued
-/// without waiting, frames are awaited, and EOF never blocks the host loop.
-pub struct StreamDecoder {
+/// `utils.media.AudioStreamDecoder`: input is queued without waiting, frames are awaited, and
+/// EOF never blocks the host loop. A failure is logged and ends the stream; `None` is a decoder
+/// that failed to open.
+pub struct StreamDecoder(Option<OpenDecoder>);
+
+struct OpenDecoder {
     input: DecoderInput,
     output: tokio::sync::Mutex<AudioDecoder>,
 }
 
-fn failure(error: impl std::fmt::Display) -> CodecFailure {
-    CodecFailure(error.to_string())
+fn log_failure(error: &dyn std::fmt::Display) {
+    log::error!(target: lk_agents_abi::LOG_TARGET, "error decoding audio: {error}");
 }
 
 impl lk_agents_abi::media::codecs::AudioDecoder for StreamDecoder {
@@ -394,35 +396,61 @@ impl lk_agents_abi::media::codecs::AudioDecoder for StreamDecoder {
 
     fn new(
         _env: &ProcessEnv,
-        mime: String,
         sample_rate: Option<u32>,
         num_channels: u16,
-    ) -> Result<Self, CodecFailure> {
+        format: Option<String>,
+    ) -> Self {
         let media_pool = lk_agents_media::pool::media_pool();
         let limits = decoder_limits(sample_rate.unwrap_or(48_000), num_channels);
-        let container = source::check_stream(&mime).map_err(failure)?;
-        let (output, input) =
-            AudioDecoder::open_stream(&media_pool, container, sample_rate, num_channels, limits)
-                .map_err(failure)?;
-        Ok(Self { input, output: tokio::sync::Mutex::new(output) })
+        let mime = format.unwrap_or_default().to_lowercase();
+        let opened =
+            source::check_stream(&mime).map_err(DecoderError::from).and_then(|container| {
+                AudioDecoder::open_stream(&media_pool, container, sample_rate, num_channels, limits)
+            });
+        match opened {
+            Ok((output, input)) => {
+                Self(Some(OpenDecoder { input, output: tokio::sync::Mutex::new(output) }))
+            }
+            Err(error) => {
+                log_failure(&error);
+                Self(None)
+            }
+        }
     }
 
-    fn push(&self, data: &[u8]) -> Result<(), CodecFailure> {
-        self.input.push(data).map_err(failure)
+    fn push(&self, chunk: &[u8]) {
+        let Some(decoder) = &self.0 else { return };
+        match decoder.input.push(chunk) {
+            // Closed input: ended, cancelled, or a decode failure the output side reports.
+            Ok(()) | Err(DecoderError::InputClosed) => {}
+            Err(error) => {
+                log_failure(&error);
+                decoder.input.end_input();
+            }
+        }
     }
 
     fn end_input(&self) {
-        self.input.end_input();
+        if let Some(decoder) = &self.0 {
+            decoder.input.end_input();
+        }
     }
 
-    async fn next(&self) -> Result<Option<AudioFrame>, CodecFailure> {
-        self.output.lock().await.next().await.map_err(failure)
+    async fn next(&self) -> Option<AudioFrame> {
+        let decoder = self.0.as_ref()?;
+        decoder.output.lock().await.next().await.unwrap_or_else(|error| {
+            log_failure(&error);
+            None
+        })
     }
 
-    async fn aclose(&self) -> Result<(), CodecFailure> {
+    async fn aclose(&self) {
+        let Some(decoder) = &self.0 else { return };
         // Cancelling first ends a pending `next`, which releases the output to close it.
-        self.input.cancel();
-        self.output.lock().await.close().await.map_err(failure)
+        decoder.input.cancel();
+        if let Err(error) = decoder.output.lock().await.close().await {
+            log_failure(&error);
+        }
     }
 }
 
