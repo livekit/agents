@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from livekit.agents.inference import OverlappingSpeechEvent
+from livekit.agents.voice.events import OverlappingSpeechEvent
 
 pytestmark = pytest.mark.unit
 

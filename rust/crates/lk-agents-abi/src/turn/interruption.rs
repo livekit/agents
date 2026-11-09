@@ -16,7 +16,7 @@ pub enum InterruptionSignal {
     OverlapEnded { ended_at: Ts, agent_ended: bool },
 }
 
-/// `inference.OverlappingSpeechEvent`.
+/// `voice.events.OverlappingSpeechEvent`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OverlapVerdict {
     pub is_interruption: bool,

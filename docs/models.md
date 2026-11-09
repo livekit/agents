@@ -35,7 +35,7 @@ have no `update_options` of their own. Their typed forms:
 
 `inference.TurnDetector()` is an end-of-turn model for `VoiceSession(turn_detection=)`.
 On a call with adaptive interruption, the session runs an
-`inference.AdaptiveInterruptionDetector`, which reports `OverlappingSpeechEvent`s and fails
+`inference.AdaptiveInterruptionDetector`, which reports `voice.events.OverlappingSpeechEvent`s and fails
 with `InterruptionDetectionError`. A realtime model's `inference_class` is an
 `InferenceClass`: `"priority"`, `"standard"` or `"low"`.
 

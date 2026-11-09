@@ -11,13 +11,13 @@ from pydantic import Field
 from .events import (
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
+    OverlappingSpeechEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
     _AgentBackchannelOpportunityEvent,
 )
-from .overlap import OverlappingSpeechEvent
 from .session_events import (
     CloseEvent,
     ConversationItemAddedEvent,

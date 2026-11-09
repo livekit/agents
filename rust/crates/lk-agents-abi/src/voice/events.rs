@@ -693,9 +693,8 @@ pub struct SessionErrorWire {
 
 /// `OverlappingSpeechEvent` (`inference/interruption.py:120`), the detector's only public verdict.
 #[crate::host(record(
-    module = "overlap",
+    module = "events",
     name = "OverlappingSpeechEvent",
-    path = "livekit.agents.inference",
     pydantic,
     arbitrary_types,
     serializer = "overlapping_speech_serialize",

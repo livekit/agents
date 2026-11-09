@@ -453,8 +453,8 @@ async def test_generated_connect_options_total_deadline_keeps_timeout_classifica
 def test_generated_overlap_event_retains_arrays_but_serializes_them_as_null() -> None:
     import numpy as np
 
-    from livekit.agents._generated.overlap import OverlappingSpeechEvent as GeneratedEvent
-    from livekit.agents.inference import OverlappingSpeechEvent
+    from livekit.agents._generated.events import OverlappingSpeechEvent as GeneratedEvent
+    from livekit.agents.voice.events import OverlappingSpeechEvent
 
     assert OverlappingSpeechEvent is GeneratedEvent
     audio = np.array([1, -2], dtype=np.int16)

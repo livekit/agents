@@ -15,6 +15,10 @@ from datetime import timedelta
 from enum import StrEnum, unique
 from typing import Literal, TypeAlias
 
+from numpy import float32, int16
+from numpy.typing import NDArray
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
+
 UserState: TypeAlias = Literal["speaking", "listening", "away"]
 """Whether the user is speaking, listening, or has gone away."""
 
@@ -180,6 +184,40 @@ class CloseReason(StrEnum):
     TASK_COMPLETED = "task_completed"
 
 
+class OverlappingSpeechEvent(BaseModel):
+    """`OverlappingSpeechEvent` (`inference/interruption.py:120`), the detector's only public verdict."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    type: Literal["overlapping_speech"] = "overlapping_speech"
+    created_at: float = Field(default_factory=time.time)
+    """Wall clock seconds at construction."""
+    detected_at: float = Field(default_factory=time.time)
+    """Wall clock seconds at which the overlap was resolved."""
+    is_interruption: bool = False
+    """The verdict. `false` is only a *backchannel* verdict when `agent_ended` is also false."""
+    agent_ended: bool = False
+    """The overlap ended because the agent stopped talking; `is_interruption == false` is then
+    inconclusive.
+    """
+    total_duration: float = 0.0
+    prediction_duration: float = 0.0
+    detection_delay: float = 0.0
+    overlap_started_at: float | None = None
+    """Wall clock seconds at which the overlap began."""
+    speech_input: NDArray[int16] | None = None
+    probabilities: NDArray[float32] | None = None
+    probability: float = 0.0
+    num_requests: int = 0
+    """Requests sent for this overlap. Reset to zero as it is read."""
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> object:
+        from .. import _bindings
+
+        return _bindings.overlapping_speech_serialize(self, handler)
+
+
 UserStateChangedEvent.__module__ = "livekit.agents.voice.events"
 AgentStateChangedEvent.__module__ = "livekit.agents.voice.events"
 UserInputTranscribedEvent.__module__ = "livekit.agents.voice.events"
@@ -192,3 +230,4 @@ ToolCallEnded.__module__ = "livekit.agents.voice.events"
 ToolReplyUpdated.__module__ = "livekit.agents.voice.events"
 UserTurnExceededEvent.__module__ = "livekit.agents.voice.events"
 CloseReason.__module__ = "livekit.agents.voice.events"
+OverlappingSpeechEvent.__module__ = "livekit.agents.voice.events"

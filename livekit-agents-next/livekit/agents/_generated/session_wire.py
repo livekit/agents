@@ -16,13 +16,13 @@ from .events import (
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
     EotPredictionEvent,
+    OverlappingSpeechEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
     _AgentBackchannelOpportunityEvent,
 )
-from .overlap import OverlappingSpeechEvent
 
 if TYPE_CHECKING:
     from typing import Annotated

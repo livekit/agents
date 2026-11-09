@@ -20,7 +20,6 @@ from .inference_models import (
     VADModels as VADModels,
 )
 from .interruption_errors import InterruptionDetectionError as InterruptionDetectionError
-from .overlap import OverlappingSpeechEvent as OverlappingSpeechEvent
 
 __all__: list[str] = [
     "Credentials",
@@ -29,7 +28,6 @@ __all__: list[str] = [
     "TurnDetectorVersions",
     "InferenceClass",
     "InterruptionDetectionError",
-    "OverlappingSpeechEvent",
     "HEADER_SESSION_ID",
     "HEADER_INFERENCE_PROVIDER",
     "HEADER_INFERENCE_PRIORITY",

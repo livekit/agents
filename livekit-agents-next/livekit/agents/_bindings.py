@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     )
     from ._generated.llm import ChatChunk
     from ._generated.llm_fallback import AvailabilityChanged
-    from ._generated.overlap import OverlappingSpeechEvent
+    from ._generated.events import OverlappingSpeechEvent
     from ._generated.run_result import _Settled
     from ._generated.session_events import ErrorEvent, FunctionToolsExecutedEvent
     from ._generated.stt import STT, SpeechData, SpeechEvent

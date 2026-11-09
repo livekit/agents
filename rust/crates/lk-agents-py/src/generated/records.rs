@@ -6858,6 +6858,75 @@ pub mod events {
             None,
         )
     }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    pub fn overlapping_speech_event_to_py<'py>(
+        py: pyo3::Python<'py>,
+        value: ::lk_agents_abi::voice::events::OverlappingSpeechEvent,
+    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "created_at",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.created_at, py)?,
+        )?;
+        kwargs.set_item(
+            "detected_at",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.detected_at, py)?,
+        )?;
+        kwargs.set_item(
+            "is_interruption",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.is_interruption, py)?,
+        )?;
+        kwargs.set_item(
+            "agent_ended",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.agent_ended, py)?,
+        )?;
+        kwargs.set_item(
+            "total_duration",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.total_duration, py)?,
+        )?;
+        kwargs.set_item(
+            "prediction_duration",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.prediction_duration, py)?,
+        )?;
+        kwargs.set_item(
+            "detection_delay",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.detection_delay, py)?,
+        )?;
+        kwargs.set_item(
+            "overlap_started_at",
+            match value.overlap_started_at {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        if let Some(x) = value.speech_input {
+            kwargs.set_item("speech_input", crate::py_values::numpy_i16(py, x)?)?;
+        }
+        if let Some(x) = value.probabilities {
+            kwargs.set_item("probabilities", crate::py_values::numpy_f32(py, x)?)?;
+        }
+        kwargs.set_item(
+            "probability",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.probability, py)?,
+        )?;
+        kwargs.set_item(
+            "num_requests",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.num_requests, py)?,
+        )?;
+
+        crate::py_calls::call(
+            {
+                static CLASS: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> =
+                    pyo3::sync::PyOnceLock::new();
+                CLASS
+                    .import(py, "livekit.agents._generated.events", "OverlappingSpeechEvent")?
+                    .as_any()
+            },
+            (),
+            Some(&kwargs),
+        )
+    }
 }
 
 pub mod expressive {
@@ -10023,79 +10092,6 @@ pub mod metrics {
                 crate::generated::records::metrics::avatar_metrics_to_py(py, x)?
             }
         })
-    }
-}
-
-pub mod overlap {
-    use pyo3::prelude::*;
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
-    pub fn overlapping_speech_event_to_py<'py>(
-        py: pyo3::Python<'py>,
-        value: ::lk_agents_abi::voice::events::OverlappingSpeechEvent,
-    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        let kwargs = pyo3::types::PyDict::new(py);
-        kwargs.set_item(
-            "created_at",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.created_at, py)?,
-        )?;
-        kwargs.set_item(
-            "detected_at",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.detected_at, py)?,
-        )?;
-        kwargs.set_item(
-            "is_interruption",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.is_interruption, py)?,
-        )?;
-        kwargs.set_item(
-            "agent_ended",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.agent_ended, py)?,
-        )?;
-        kwargs.set_item(
-            "total_duration",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.total_duration, py)?,
-        )?;
-        kwargs.set_item(
-            "prediction_duration",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.prediction_duration, py)?,
-        )?;
-        kwargs.set_item(
-            "detection_delay",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.detection_delay, py)?,
-        )?;
-        kwargs.set_item(
-            "overlap_started_at",
-            match value.overlap_started_at {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        if let Some(x) = value.speech_input {
-            kwargs.set_item("speech_input", crate::py_values::numpy_i16(py, x)?)?;
-        }
-        if let Some(x) = value.probabilities {
-            kwargs.set_item("probabilities", crate::py_values::numpy_f32(py, x)?)?;
-        }
-        kwargs.set_item(
-            "probability",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.probability, py)?,
-        )?;
-        kwargs.set_item(
-            "num_requests",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(value.num_requests, py)?,
-        )?;
-
-        crate::py_calls::call(
-            {
-                static CLASS: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> =
-                    pyo3::sync::PyOnceLock::new();
-                CLASS
-                    .import(py, "livekit.agents._generated.overlap", "OverlappingSpeechEvent")?
-                    .as_any()
-            },
-            (),
-            Some(&kwargs),
-        )
     }
 }
 
@@ -16002,7 +15998,7 @@ pub mod session_wire {
                 crate::generated::records::session_wire::metrics_collected_wire_to_py(py, x)?
             }
             ::lk_agents_abi::voice::events::HostWire::OverlappingSpeech(x) => {
-                crate::generated::records::overlap::overlapping_speech_event_to_py(py, x)?
+                crate::generated::records::events::overlapping_speech_event_to_py(py, x)?
             }
             ::lk_agents_abi::voice::events::HostWire::Error(x) => {
                 crate::generated::records::session_wire::session_error_wire_to_py(py, x)?
