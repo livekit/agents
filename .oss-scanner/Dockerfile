@@ -24,7 +24,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONPATH=/src \
     CMAKE_POLICY_VERSION_MINIMUM=3.5
 
-RUN apt-get update && apt-get install -y --no-install-recommends git-lfs \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git-lfs libasound2 libcups2 libgbm1 libgtk-3-0 libnss3 \
     && rm -rf /var/lib/apt/lists/*
 
 # CI takes the latest uv; pin one that reads this uv.lock.
@@ -40,6 +41,14 @@ RUN (git lfs install --local --force && git lfs pull) || echo 'WARNING: git lfs 
 RUN uv sync --locked --all-extras --dev
 RUN uv run --no-sync python -c "import nltk; nltk.download('punkt_tab', download_dir='/usr/share/nltk_data')" \
     && uv run --no-sync python -c "import tiktoken; [tiktoken.get_encoding(e) for e in ('o200k_base', 'cl100k_base')]"
+RUN uv run --no-sync python - <<'PY'
+from livekit.agents import Plugin
+from livekit.plugins import browser, turn_detector
+
+for plugin in Plugin.registered_plugins:
+    if plugin.package in (browser.__package__, turn_detector.__package__):
+        plugin.download_files()
+PY
 
 ENV UV_OFFLINE=1 \
     UV_NO_SYNC=1 \

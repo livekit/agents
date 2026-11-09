@@ -24,8 +24,8 @@ the representative plugins listed below. Prioritise:
   playback/clear-buffer RPCs, which filter on caller identity.
 - `llm/utils.py`, `llm/tool_context.py`, `voice/tool_executor.py`,
   `voice/generation.py`, `llm/_provider_format/`: parsing LLM tool-call
-  arguments (strict JSON, then `json_repair`, then pydantic validation) and
-  binding them to tool functions. `llm/mcp.py`: MCP tool results.
+  arguments (strict JSON, then `json_repair`, then pydantic validation for
+  typed tools) and binding them to tool functions. `llm/mcp.py`: MCP tool results.
 - `worker.py`: the worker protocol (`register`, `availability`, `assignment`,
   `termination`), job-token handling, and the HTTP servers. The health server
   (`/`, `/worker`) binds to all interfaces without authentication, on port
@@ -93,9 +93,13 @@ handles what participants send here.
   behaviour. Requests must not reach more than their documented effect, for
   example by leaking secrets or API keys or reading another session's state.
 - **Tool boundaries:** the LLM can call only the tools registered on the
-  current agent, with arguments that pass the tool's schema. Repaired or
-  malformed arguments must not bypass validation, select an unregistered
-  tool, or inject a `RunContext` or other framework-only parameter.
+  current agent. Typed `FunctionTool` arguments must pass pydantic validation.
+  `RawFunctionTool`, including MCP tools, receives parsed `raw_arguments`
+  without framework schema validation by design. The developer's raw-tool
+  handler or the MCP server is responsible for validating those arguments.
+  Repaired or malformed arguments must not bypass typed-tool validation,
+  select an unregistered tool, or inject a `RunContext` or other framework-only
+  parameter.
 - **Parsing:** protobuf, JSON, audio, and image input from participants or
   providers must not crash the worker process, hang the event loop, or
   allocate without bound. Watch byte streams that are buffered in full before
@@ -116,16 +120,16 @@ handles what participants send here.
 
 Prompt injection is inherent to LLMs. "The LLM can be talked into calling a
 tool or saying something" is not a finding. It becomes one when the framework
-itself mishandles the boundary: running a tool that isn't registered, passing
-unvalidated arguments, leaking secrets into the prompt or the room, or
+itself mishandles the boundary: running a tool that isn't registered, bypassing
+typed-tool argument validation, leaking secrets into the prompt or the room, or
 treating LLM output as trusted code or paths.
 
 - **Critical:** remote code execution or arbitrary file read/write in the
   worker or a job process from a room participant or provider response.
 - **High:** a room participant drives or reads a session the framework says it
   can't (an identity-filter bypass); tool-call handling that runs an
-  unregistered tool or skips argument validation; API secrets or provider keys
-  leaked to the room, logs, or health output; a crash or hang of the worker
+  unregistered tool or skips typed-tool argument validation; API secrets or
+  provider keys leaked to the room, logs, or health output; a crash or hang of the worker
   process (not just one job) reachable from a participant or provider; SSRF to
   internal addresses or local files from participant input.
 - **Medium:** a crash, hang, or unbounded memory in one job process from a
@@ -133,7 +137,8 @@ treating LLM output as trusted code or paths.
   while redaction is on; unauthenticated health endpoints exposing more than
   status and worker info.
 - **Low / not a finding:** prompt injection that stays within the registered
-  tools and their schemas; information the session host returns to
+  tools and their schemas; raw/MCP tools receiving arguments without framework
+  schema validation; information the session host returns to
   participants by design; issues that need the developer's code, config, or
   secrets; malformed messages only the LiveKit server can send; examples and
   tests; provider-side bugs.
@@ -144,7 +149,9 @@ The checkout is at `/src`, with its virtualenv at `/src/.venv` (on `PATH`).
 `uv sync --all-extras --dev` ran during the build. `UV_OFFLINE=1` and
 `UV_NO_SYNC=1` keep `uv run` from downloading or re-syncing. NLTK `punkt_tab`
 is in `/usr/share/nltk_data`, and the `o200k_base` and `cl100k_base` tiktoken
-encodings are in `/usr/share/tiktoken`. No provider API keys are present. Tests marked
+encodings are in `/usr/share/tiktoken`. CEF binaries and the English and
+multilingual turn-detector models and tokenizers are cached under `/root/.cache`.
+No provider API keys are present. Tests marked
 `plugin`, `stt`, `tts`, `realtime`, or `evals` need provider keys or network
 access and won't run here.
 
