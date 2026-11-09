@@ -23,28 +23,6 @@ pub fn runtime_busy_seconds(py: Python<'_>) -> PyResult<RuntimeLoadRuntimeBusySe
     ::pyo3::PyResult::Ok(out)
 }
 
-// Declared in rust/crates/lk-agents-abi/src/metrics/mod.rs.
-type MetricsRecordsImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::MetricsRecords;
-
-/// `log_metrics(metrics)` minus the logging, or `None` for do not log (`VADMetrics` and
-/// `EOTInferenceMetrics` have no branch in the reference).
-#[pyfunction]
-#[pyo3(signature = (metrics))]
-pub fn metrics_log_fields<'py>(
-    py: Python<'py>,
-    metrics: Bound<'_, PyAny>,
-) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
-    crate::py_calls::check_pid()?;
-    let metrics = crate::generated::records::metrics::agent_metrics_from_py(metrics.as_any())?;
-    let out = py.detach(|| {
-        <MetricsRecordsImpl as ::lk_agents_abi::metrics::MetricsRecords>::metrics_log_fields(
-            metrics,
-        )
-    });
-    out.map(|value| crate::generated::records::metrics::metrics_log_to_py(py, value)).transpose()
-}
-
 // Declared in rust/crates/lk-agents-abi/src/metrics/provider.rs.
 type ProviderMetricsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ProviderMetrics;

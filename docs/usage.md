@@ -286,9 +286,6 @@ union. Each carries `metadata`, the model and provider that produced it when kno
 | `InterruptionMetrics` | Adaptive interruption detection: inference timing and detection counts | the session's telemetry |
 | `AvatarMetrics` | Avatar startup: playback latency and join times | the avatar |
 
-`log_metrics(metrics, logger=None)` logs a record at info level with its fields as
-`extra`; VAD and end-of-turn inference records are not logged.
-
 Unavailable timings use `None`, including time to first token/audio when none
 arrived. A measured zero is zero. Timestamps specify their clock domain and unit;
 duration calculations use the injected monotonic clock. A cancelled or failed
