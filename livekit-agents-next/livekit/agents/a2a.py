@@ -223,8 +223,10 @@ class A2AEndpoint:
     def bind(self, *, storage: Storage, config: ServerConfig) -> None:
         """Attach the endpoint to a server's storage and configuration."""
         self._storage = self._storage or storage
-        self.version = self.version or config.card_version
         self._config = config
+
+    def _card_version(self) -> str:
+        return self.version or (self._config.card_version if self._config is not None else "")
 
     def _door(self) -> _core._core_A2ADoor:
         if self._config is None or self._storage is None:
@@ -239,7 +241,7 @@ class A2AEndpoint:
                     endpoint=EndpointDescriptor(
                         name=self.name,
                         description=self.description,
-                        version=self.version,
+                        version=self._card_version(),
                         url=self.url or f"/{self.name}/v1",
                     ),
                     options=self.turn_options,
@@ -280,7 +282,10 @@ class A2AEndpoint:
         cloud = url if url and not url.startswith("/") else None
         root = (cloud or base_url or f"/{self.name}").rstrip("/")
         descriptor = EndpointDescriptor(
-            name=self.name, description=self.description, version=self.version, url=root + RPC_PATH
+            name=self.name,
+            description=self.description,
+            version=self._card_version(),
+            url=root + RPC_PATH,
         )
         return cast("dict[str, JsonValue]", json.loads(_core_a2a_agent_card(descriptor)))
 

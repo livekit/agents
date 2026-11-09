@@ -231,6 +231,18 @@ async def test_the_card_lists_the_http_interface_and_offers_the_extension(
     )
 
 
+def test_the_card_version_is_read_when_the_card_is_served(
+    thread_storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LIVEKIT_AGENT_DEPLOYMENT", raising=False)
+    monkeypatch.delenv("LIVEKIT_AGENT_VERSION", raising=False)
+    _, endpoint = make_server(thread_storage)
+    monkeypatch.setenv("LIVEKIT_AGENT_VERSION", "2.3.4")
+    assert endpoint.card()["version"] == "2.3.4"
+    _, pinned = make_server(thread_storage, version="9.9.9")
+    assert pinned.card()["version"] == "9.9.9"
+
+
 async def test_a_stock_client_without_the_header_gets_a_plain_text_agent(
     thread_storage: Storage,
 ) -> None:
