@@ -38,31 +38,28 @@ def _calls(*inputs: str) -> FakeLLM:
     return FakeLLM(fake_responses=responses)
 
 
-async def test_a_call_without_storage_runs_on_a_local_thread() -> None:
-    from livekit.agents.storage import SQLiteStorage, Thread
-
+# Catches: a tool on a call without a thread reading a thread the call never has; the call runs
+# in memory (test_voice_storage covers that nothing is written).
+async def test_a_tool_on_a_call_without_a_thread_reads_none() -> None:
     agent = Agent(instructions="Check.", name="desk")
-    seen: list[str] = []
+    checked: list[bool] = []
 
     @agent.tool
     async def check(ctx: RunContext) -> str:
         """Check the thread."""
-        assert ctx.thread is ctx.live_session.thread
-        seen.append(ctx.thread.id)
+        assert ctx.live_session.thread is None
+        with pytest.raises(RuntimeError, match="thread access requires"):
+            _ = ctx.thread
+        checked.append(True)
         return "checked 0"
 
     async with VoiceSession(
         llm=_calls("hello"), vad=None, turn_handling={"turn_detection": "manual"}
     ) as session:
         await session.start(agent)
-        await session._run(user_input="hello")
-    (thread_id,) = seen
-    # the call's history is committed to the local SQLite storage, where a later call finds it
-    local = SQLiteStorage()
-    history = await Thread(local, thread_id, agent_name="desk").chat_history()
-    said = [item.text_content for item in history.items if item.type == "message"]
-    assert said[0] == "hello" and said[-1] == "done"
-    await local.aclose()
+        result = await session._run(user_input="hello")
+    assert checked == [True]
+    assert result.new_messages()[-1].text_content == "done"
 
 
 # Catches: a voice run's `new_messages()` leaving out the input it was run on, which a text run's
