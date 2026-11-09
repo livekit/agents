@@ -285,7 +285,7 @@ both set at construction.
 | `tracing` | `Tracing(workflow_name=, group_id=, metadata=)`; nothing set is the server's defaults | xAI |
 | `truncation` | `"auto"`, `"disabled"`, `RetentionRatio(retention_ratio=, post_instructions_token_limit=)` | xAI, Voice Live |
 | `reasoning` | `Reasoning(effort=)` | Voice Live |
-| `max_response_output_tokens` | a count; `None` is unlimited | xAI |
+| `max_response_output_tokens` | a count; `None` is unlimited; Voice Live's `max_output_tokens` | xAI |
 | `max_session_duration` | a `timedelta` after which the connection is recycled; `None` never; constructor only | |
 
 ```python

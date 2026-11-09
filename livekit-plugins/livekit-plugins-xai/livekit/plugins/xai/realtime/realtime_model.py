@@ -63,3 +63,22 @@ class RealtimeModel(openai.realtime.RealtimeModel):
             max_session_duration=max_session_duration,
             conn_options=conn_options,
         )
+
+    # xAI's session carries no tool choice, output limit, noise reduction, tracing or truncation
+    def update_options(  # type: ignore[override]
+        self,
+        *,
+        voice: NotGivenOr[GrokVoices | str] = NOT_GIVEN,
+        turn_detection: NotGivenOr[ServerVad | SemanticVad | None] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
+        reasoning: NotGivenOr[Reasoning | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+    ) -> None:
+        """Change the model's options; every live session sends what changed."""
+        super().update_options(
+            voice=voice,
+            turn_detection=turn_detection,
+            input_audio_transcription=input_audio_transcription,
+            reasoning=reasoning,
+            speed=speed,
+        )

@@ -11,6 +11,7 @@ from livekit.agents.llm._realtime import (
     AzureVoice,
     NoiseReductionType,
     ServerVad,
+    Tracing,
 )
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from livekit.agents.utils import is_given
@@ -40,6 +41,8 @@ class RealtimeModel(openai.realtime.RealtimeModel):
             AzureDeepNoiseSuppression | NoiseReductionType | None
         ] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         max_output_tokens: int | None = DEFAULT_MAX_OUTPUT_TOKENS,
         api_key: str | None = None,
         entra_token: str | None = None,
@@ -64,6 +67,8 @@ class RealtimeModel(openai.realtime.RealtimeModel):
                 server VAD.
             input_audio_noise_reduction: e.g. ``AzureDeepNoiseSuppression()``.
             tool_choice: Tool selection policy.
+            speed: The playback speed of its audio.
+            tracing: Tracing configuration for the session.
             max_output_tokens: Maximum output tokens per response; ``None`` is unlimited.
             api_key: Defaults to ``AZURE_VOICE_LIVE_API_KEY``. Omit when using ``entra_token``.
             entra_token: A Microsoft Entra token (``https://ai.azure.com/.default`` scope).
@@ -96,12 +101,41 @@ class RealtimeModel(openai.realtime.RealtimeModel):
             input_audio_noise_reduction=input_audio_noise_reduction,
             turn_detection=turn_detection,
             tool_choice=tool_choice,
+            speed=speed,
+            tracing=tracing,
             max_response_output_tokens=max_output_tokens,
             api_key=api_key,
             entra_token=entra_token,
             # Voice Live selects the model with the `model` query parameter, Azure's deployment
             azure_deployment=model,
             conn_options=conn_options,
+        )
+
+    # Voice Live's session carries no truncation or reasoning
+    def update_options(  # type: ignore[override]
+        self,
+        *,
+        voice: NotGivenOr[str | AzureVoice] = NOT_GIVEN,
+        turn_detection: NotGivenOr[ServerVad | AzureSemanticVad | None] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[
+            AzureDeepNoiseSuppression | NoiseReductionType | None
+        ] = NOT_GIVEN,
+        max_output_tokens: NotGivenOr[int | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
+    ) -> None:
+        """Change the model's options; every live session sends what changed."""
+        super().update_options(
+            voice=voice,
+            turn_detection=turn_detection,
+            tool_choice=tool_choice,
+            input_audio_transcription=input_audio_transcription,
+            input_audio_noise_reduction=input_audio_noise_reduction,
+            max_response_output_tokens=max_output_tokens,
+            speed=speed,
+            tracing=tracing,
         )
 
 

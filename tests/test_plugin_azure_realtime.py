@@ -88,3 +88,17 @@ def test_requires_an_endpoint_and_a_credential(monkeypatch: pytest.MonkeyPatch) 
     with pytest.raises(ValueError, match="credentials"):
         RealtimeModel(endpoint=_ENDPOINT)
     RealtimeModel(endpoint=_ENDPOINT, entra_token="token")
+
+
+def test_speed_and_tracing_reach_the_core_and_unsupported_updates_are_refused(
+    configs: list[dict[str, Any]],
+) -> None:
+    from livekit.plugins.azure.realtime import Tracing
+
+    model = RealtimeModel(endpoint=_ENDPOINT, api_key="key", speed=1.2, tracing=Tracing())
+    (config,) = configs
+    assert config["speed"] == 1.2
+    assert config["tracing"] is not None
+    model.update_options(speed=1.0, max_output_tokens=None)
+    with pytest.raises(TypeError):
+        model.update_options(truncation="auto")  # type: ignore[call-arg]

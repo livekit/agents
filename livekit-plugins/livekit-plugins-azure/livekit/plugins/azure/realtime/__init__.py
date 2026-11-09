@@ -8,6 +8,7 @@ from livekit.agents.llm._realtime import (
     AzureVoice,
     AzureVoiceType,
     ServerVad,
+    Tracing,
 )
 
 from .realtime_model import RealtimeModel, RealtimeSession
@@ -22,4 +23,5 @@ __all__ = [
     "RealtimeModel",
     "RealtimeSession",
     "ServerVad",
+    "Tracing",
 ]
