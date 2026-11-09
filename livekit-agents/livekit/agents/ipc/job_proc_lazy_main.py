@@ -34,6 +34,7 @@ from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
 from ..telemetry.traces import _resource
 from ..types import ATTRIBUTE_SIMULATOR
 from ..utils import aio, http_context, log_exceptions, shortuuid
+from ..voice.events import CloseReason
 from .channel import Message
 from .inference_executor import InferenceExecutor
 from .proc_client import _dump_stack_traces_impl, _ProcClient
@@ -144,6 +145,8 @@ def proc_main(args: ProcStartArgs) -> None:
             logger.warning("stack for `%s`:\n%s", t.name, "".join(traceback.format_stack(frame)))
 
     log_handler.close()
+    if job_proc.failed:
+        raise SystemExit(1)
 
 
 class _InfClient(InferenceExecutor):
@@ -220,6 +223,7 @@ class _JobProc:
         # used to warn users if both connect and shutdown are not called inside the job_entry
         self._ctx_connect_called = False
         self._ctx_shutdown_called = False
+        self.failed = False
 
     @property
     def has_running_job(self) -> bool:
@@ -402,6 +406,10 @@ class _JobProc:
                     "unhandled exception while running the job task",
                     exc_info=t.exception(),
                 )
+                # Errors while unwinding an already requested shutdown do not
+                # turn that shutdown into a failed job.
+                if not self._shutdown_fut.done():
+                    self.failed = True
                 # if the process crashes before ctx.connect(), shutdown_fut will never resolve
                 # we'll force it to trigger shutdown so _on_cleanup can flush crash logs
                 with contextlib.suppress(asyncio.InvalidStateError):
@@ -459,7 +467,10 @@ class _JobProc:
 
         if session := self._job_ctx._primary_agent_session:
             try:
-                await asyncio.wait_for(session.aclose(), timeout=_SESSION_ACLOSE_TIMEOUT)
+                await asyncio.wait_for(
+                    session._aclose_impl(reason=CloseReason.JOB_SHUTDOWN),
+                    timeout=_SESSION_ACLOSE_TIMEOUT,
+                )
             except asyncio.TimeoutError:
                 logger.error(
                     "AgentSession.aclose() timed out after %.1fs; "
@@ -509,7 +520,13 @@ class _JobProc:
         )
         await self._client.send(Exiting(reason=shutdown_info.reason))
         with tracer.start_as_current_span("room_disconnect"):
-            await self._room.disconnect()
+            await self._room.disconnect(
+                reason=(
+                    rtc.DisconnectReason.AGENT_ERROR
+                    if self.failed
+                    else rtc.DisconnectReason.CLIENT_INITIATED
+                )
+            )
 
         async def _traced_shutdown_callback(
             callback: Callable[[str], Awaitable[None]],
@@ -687,7 +704,7 @@ class ThreadStartArgs:
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
     session_end_timeout: float
-    join_fnc: Callable[[], None]
+    join_fnc: Callable[[int], None]
     mp_cch: socket.socket
     user_arguments: Any | None
     simulation_end_fnc: Callable[[Any], Any] | None = None
@@ -697,6 +714,7 @@ def thread_main(
     args: ThreadStartArgs,
 ) -> None:
     """main function for the job process when using the ThreadedJobRunner"""
+    exitcode = 1
     try:
         from .proc_client import _ProcClient
 
@@ -713,5 +731,6 @@ def thread_main(
         client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc.entrypoint)
         client.initialize()
         client.run()
+        exitcode = int(job_proc.failed)
     finally:
-        args.join_fnc()
+        args.join_fnc(exitcode)

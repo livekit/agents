@@ -190,6 +190,28 @@ async def test_forced_tool_choice_warning_logged_once(caplog: pytest.LogCaptureF
     assert warnings[0].__dict__.get("lk.pii.model") == "us.anthropic.claude-opus-5-5"
 
 
+async def _request_messages(**kwargs: object) -> list[dict]:
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="system", content=["You are a helpful assistant."])
+    chat_ctx.add_message(role="user", content=["What's the weather in Paris?"])
+    stream = BedrockLLM(model="us.anthropic.claude-haiku-4-5", **kwargs).chat(
+        chat_ctx=chat_ctx, tools=[get_weather]
+    )
+    messages = stream._opts["messages"]
+    await stream.aclose()
+    return messages
+
+
+async def test_cache_messages_ends_the_conversation_with_a_cache_point() -> None:
+    cache_point = {"cachePoint": {"type": "default"}}
+    assert await _request_messages(cache_messages=True) == [
+        {"role": "user", "content": [{"text": "What's the weather in Paris?"}, cache_point]}
+    ]
+    assert await _request_messages() == [
+        {"role": "user", "content": [{"text": "What's the weather in Paris?"}]}
+    ]
+
+
 @pytest.mark.parametrize(
     ("code", "status", "attempts"),
     [
