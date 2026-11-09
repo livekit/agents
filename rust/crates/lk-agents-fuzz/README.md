@@ -99,5 +99,4 @@ It needs the repository environment and cargo-nextest.
 For design detail, read [TEST_STRATEGY.md](../lk-agents-voice/TEST_STRATEGY.md).
 [COVERAGE.md](COVERAGE.md) contains dated measurements, not a live capability inventory.
 The [fuzz crate audit](../../../docs/internals/rust-fuzz-inventory.md) inventories simplification
-and onboarding improvements alongside the
-[transition inventory](../../../docs/internals/rust-transition-inventory.md).
+and onboarding improvements.

@@ -64,8 +64,8 @@ acknowledgments, pools and resources, reaching the network through
 `lk-agents-net`. Every failure is a precise typed error: a database failure is
 `Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`,
 `NotFound` or `VersionConflict`; a request the caller made wrongly is `Invalid`,
-`NotSerializable`, `TooLarge` or `Unauthorized`; a cancelled turn is
-`Cancelled`. The A2A task decisions (deduplication, arrival order, inbox
+`NotSerializable`, `TooLarge` or `Unauthorized`; the handler's own save refused
+through its turn is `Refused(HostError)`; a cancelled turn is `Cancelled`. The A2A task decisions (deduplication, arrival order, inbox
 policy, task transitions) live in `lk_agents_core::a2a` over request/result
 records and error types declared in ABI; core does not depend on storage. The
 runtime's A2A door executes core's storage effects by calling storage and feeds
@@ -83,6 +83,8 @@ The crate groups implementation by responsibility:
 | `voice.rs` | Voice-session storage over a thread lane |
 | `http/` | Generated ThreadService contract, request handling and the local listener |
 | `sql.rs` | Bound statements, typed results, row decoding and schema splitting |
+| `cursor.rs` | Opaque page cursors |
+| `testing.rs` | Test support: temporary local storage and thread fixtures |
 
 SQL is declared with `statement!` beside the database it runs on: the thread database's in
 `thread/schema.rs`, the local registry's in `backends/sqlite/mod.rs`.
@@ -113,6 +115,10 @@ pub trait Storage: Send + Sync {
     async fn update_thread(&self, request: UpdateRequest) -> Result<ThreadRecord, StorageError>;
     async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError>;
     async fn open(&self, thread_id: &str, holder: &str) -> Result<Thread, StorageError>;
+    async fn get_thread_items(&self, id: &str, lane: Option<&str>, after: Option<&str>, limit: i64)
+        -> Result<ThreadItemPage, StorageError>;
+    async fn get_thread_tasks(&self, id: &str, status: Option<TaskState>)
+        -> Result<Vec<ThreadTask>, StorageError>;
     async fn close(&self);
 }
 ```
@@ -125,6 +131,7 @@ pub trait Storage: Send + Sync {
 | `update_thread` | Merge attributes (an empty value deletes the key) and apply an idle-TTL update, returning the updated metadata. This is the activity boundary that moves expiry. |
 | `delete_thread` | Make the thread unavailable, coordinate with active handles, and reclaim its metadata and database; repeating deletion is safe. |
 | `open` | Resolve an existing thread and return the shared engine's `Thread` handle, its writes under the worker's `holder` string. Opening alone does not acquire a lane lease. |
+| `get_thread_items`, `get_thread_tasks` | Namespace reads of one thread's items and tasks through the backend's read interface; the default borrows the thread with `open` and releases it on either result. |
 | `close` | Release backend-owned resources after active handles have settled; repeated close is safe. |
 
 Thread creation/deletion spans registry and database resources. Backends must
@@ -136,7 +143,7 @@ expired threads invisible.
 
 ### SQLite execution
 
-`SqliteConnection` is internal to the storage backends. AgentDB executes over its
+`ThreadDbConnection` is internal to the storage backends. AgentDB executes over its
 WebSocket data plane; local SQLite executes against a file without blocking the
 async executor. A `Statement` is SQL with positional `?N` parameters and the
 `SqlValue`s they bind (`Null`, `Int`, `Double`, `Text`, `Blob`); a `Row` is the
@@ -145,7 +152,7 @@ format or driver types.
 
 ```rust
 #[async_trait]
-pub trait SqliteConnection: Send + Sync {
+pub trait ThreadDbConnection: Send + Sync {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError>;
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError>;
     async fn close(&self);
@@ -168,7 +175,7 @@ the same schema compatibility, serialization limits and storage error contract.
 ## Reading thread items and tasks
 
 Opening a thread returns a handle with typed content reads. These are shared
-engine operations implemented using `SqliteConnection`; callers do not write
+engine operations implemented using `ThreadDbConnection`; callers do not write
 SQL and backends do not implement a separate history/task repository.
 
 | Thread operation | Returns |

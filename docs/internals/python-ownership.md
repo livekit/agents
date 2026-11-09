@@ -3,12 +3,11 @@
 This file complements the [Rust core architecture](rust-core.md) with file-level ownership.
 A listed file does not imply that every method or cached Python object belongs in Rust.
 
-For the proposed physical layout, see the [Python file cleanup inventory](python-file-layout-inventory.md).
 Its target groups handwritten implementations while preserving root application exports.
 
 This inventory covers every handwritten `.py` file under `livekit-agents-next/livekit/agents`. Provider plugin packages are intentionally Python and are outside this inventory. Generated implementations, extension stubs and tests are excluded. Line counts are a snapshot, not a measure of remaining framework logic.
 
-Snapshot (2026-11-01): 114 files, 27,609 lines. Native delegation and Python object views are intentional. Completion requires one policy/lifetime owner, not removal of every Python caller.
+Snapshot (2026-11-08): 59 files, 15,834 lines. Native delegation and Python object views are intentional. Completion requires one policy/lifetime owner, not removal of every Python caller.
 
 ## Ownership contract
 
@@ -24,16 +23,15 @@ Keep Python imports, lazy module loading, entrypoint and package metadata. Gener
 
 | File | Lines |
 | --- | ---: |
-| [__init__.py](../../livekit-agents-next/livekit/agents/__init__.py) | 289 |
-| [__main__.py](../../livekit-agents-next/livekit/agents/__main__.py) | 46 |
-| [a2a/__init__.py](../../livekit-agents-next/livekit/agents/a2a/__init__.py) | 42 |
-| [inference/__init__.py](../../livekit-agents-next/livekit/agents/inference/__init__.py) | 65 |
-| [llm/__init__.py](../../livekit-agents-next/livekit/agents/llm/__init__.py) | 152 |
-| [resources/__init__.py](../../livekit-agents-next/livekit/agents/resources/__init__.py) | 1 |
-| [storage/__init__.py](../../livekit-agents-next/livekit/agents/storage/__init__.py) | 44 |
-| [utils/__init__.py](../../livekit-agents-next/livekit/agents/utils/__init__.py) | 23 |
+| [__init__.py](../../livekit-agents-next/livekit/agents/__init__.py) | 254 |
+| [__main__.py](../../livekit-agents-next/livekit/agents/__main__.py) | 43 |
+| [http/__init__.py](../../livekit-agents-next/livekit/agents/http/__init__.py) | 26 |
+| [inference/__init__.py](../../livekit-agents-next/livekit/agents/inference/__init__.py) | 269 |
+| [llm/__init__.py](../../livekit-agents-next/livekit/agents/llm/__init__.py) | 138 |
+| [plugin.py](../../livekit-agents-next/livekit/agents/plugin.py) | 44 |
+| [storage/__init__.py](../../livekit-agents-next/livekit/agents/storage/__init__.py) | 198 |
+| [utils/__init__.py](../../livekit-agents-next/livekit/agents/utils/__init__.py) | 210 |
 | [version.py](../../livekit-agents-next/livekit/agents/version.py) | 15 |
-| [voice/__init__.py](../../livekit-agents-next/livekit/agents/voice/__init__.py) | 52 |
 
 ### Boundary generation
 
@@ -41,17 +39,8 @@ Generate record conversion, callback dispatch, views and forwarding from ABI dec
 
 | File | Lines |
 | --- | ---: |
-| [_core_view.py](../../livekit-agents-next/livekit/agents/_core_view.py) | 439 |
-| [_exceptions.py](../../livekit-agents-next/livekit/agents/_exceptions.py) | 97 |
-| [a2a/_extension.py](../../livekit-agents-next/livekit/agents/a2a/_extension.py) | 97 |
-| [llm/_provider_format.py](../../livekit-agents-next/livekit/agents/llm/_provider_format.py) | 142 |
-| [llm/_realtime_options.py](../../livekit-agents-next/livekit/agents/llm/_realtime_options.py) | 45 |
-| [llm/chat_context.py](../../livekit-agents-next/livekit/agents/llm/chat_context.py) | 461 |
-| [storage/_protocol.py](../../livekit-agents-next/livekit/agents/storage/_protocol.py) | 29 |
-| [storage/errors.py](../../livekit-agents-next/livekit/agents/storage/errors.py) | 23 |
-| [types.py](../../livekit-agents-next/livekit/agents/types.py) | 34 |
-| [voice/_session_types.py](../../livekit-agents-next/livekit/agents/voice/_session_types.py) | 82 |
-| [voice/turn.py](../../livekit-agents-next/livekit/agents/voice/turn.py) | 86 |
+| [llm/chat_context.py](../../livekit-agents-next/livekit/agents/llm/chat_context.py) | 348 |
+| [types.py](../../livekit-agents-next/livekit/agents/types.py) | 15 |
 
 ### Provider execution
 
@@ -59,22 +48,16 @@ Native inference owns attempts, retry/fallback selection and stream admission. `
 
 | File | Lines |
 | --- | ---: |
-| [_bindings.py](../../livekit-agents-next/livekit/agents/_bindings.py) | 641 |
-| [inference/eot.py](../../livekit-agents-next/livekit/agents/inference/eot.py) | 194 |
-| [inference/llm.py](../../livekit-agents-next/livekit/agents/inference/llm.py) | 402 |
-| [inference/realtime.py](../../livekit-agents-next/livekit/agents/inference/realtime.py) | 99 |
-| [inference/stt.py](../../livekit-agents-next/livekit/agents/inference/stt.py) | 330 |
-| [inference/tts.py](../../livekit-agents-next/livekit/agents/inference/tts.py) | 267 |
-| [inference/vad.py](../../livekit-agents-next/livekit/agents/inference/vad.py) | 139 |
-| [llm/_realtime.py](../../livekit-agents-next/livekit/agents/llm/_realtime.py) | 285 |
-| [llm/duplex.py](../../livekit-agents-next/livekit/agents/llm/duplex.py) | 198 |
-| [llm/duplex_adapter.py](../../livekit-agents-next/livekit/agents/llm/duplex_adapter.py) | 87 |
-| [llm/fallback_adapter.py](../../livekit-agents-next/livekit/agents/llm/fallback_adapter.py) | 164 |
-| [llm/realtime.py](../../livekit-agents-next/livekit/agents/llm/realtime.py) | 38 |
-| [llm/realtime_fallback_adapter.py](../../livekit-agents-next/livekit/agents/llm/realtime_fallback_adapter.py) | 117 |
-| [llm/remote_chat_context.py](../../livekit-agents-next/livekit/agents/llm/remote_chat_context.py) | 33 |
-| [stt.py](../../livekit-agents-next/livekit/agents/stt.py) | 297 |
-| [tts.py](../../livekit-agents-next/livekit/agents/tts.py) | 480 |
+| [_bindings.py](../../livekit-agents-next/livekit/agents/_bindings.py) | 654 |
+| [inference/llm.py](../../livekit-agents-next/livekit/agents/inference/llm.py) | 186 |
+| [inference/realtime.py](../../livekit-agents-next/livekit/agents/inference/realtime.py) | 102 |
+| [inference/stt.py](../../livekit-agents-next/livekit/agents/inference/stt.py) | 46 |
+| [inference/tts.py](../../livekit-agents-next/livekit/agents/inference/tts.py) | 44 |
+| [llm/_realtime.py](../../livekit-agents-next/livekit/agents/llm/_realtime.py) | 93 |
+| [llm/duplex.py](../../livekit-agents-next/livekit/agents/llm/duplex.py) | 215 |
+| [llm/realtime.py](../../livekit-agents-next/livekit/agents/llm/realtime.py) | 32 |
+| [stt.py](../../livekit-agents-next/livekit/agents/stt.py) | 73 |
+| [tts.py](../../livekit-agents-next/livekit/agents/tts.py) | 120 |
 
 ### Native inference services
 
@@ -82,9 +65,7 @@ Keep Python SDK object hydration and public authoring options; generate options 
 
 | File | Lines |
 | --- | ---: |
-| [inference/_utils.py](../../livekit-agents-next/livekit/agents/inference/_utils.py) | 122 |
-| [inference/avatar.py](../../livekit-agents-next/livekit/agents/inference/avatar.py) | 186 |
-| [inference/interruption.py](../../livekit-agents-next/livekit/agents/inference/interruption.py) | 38 |
+| [inference/avatar.py](../../livekit-agents-next/livekit/agents/inference/avatar.py) | 153 |
 
 ### Agent configuration and authoring
 
@@ -92,10 +73,8 @@ Core owns configuration validation, freeze checks, hook replacement and retry re
 
 | File | Lines |
 | --- | ---: |
-| [llm/utils.py](../../livekit-agents-next/livekit/agents/llm/utils.py) | 472 |
-| [voice/agent.py](../../livekit-agents-next/livekit/agents/voice/agent.py) | 731 |
-| [voice/agent_host.py](../../livekit-agents-next/livekit/agents/voice/agent_host.py) | 522 |
-| [voice/agent_tool.py](../../livekit-agents-next/livekit/agents/voice/agent_tool.py) | 73 |
+| [llm/utils.py](../../livekit-agents-next/livekit/agents/llm/utils.py) | 483 |
+| [voice/__init__.py](../../livekit-agents-next/livekit/agents/voice/__init__.py) | 693 |
 
 ### Shared toolset lifecycle
 
@@ -103,9 +82,8 @@ Core/runtime own acquisition identity, reference counts, concurrent setup, rollb
 
 | File | Lines |
 | --- | ---: |
-| [a2a/remote.py](../../livekit-agents-next/livekit/agents/a2a/remote.py) | 191 |
-| [llm/mcp.py](../../livekit-agents-next/livekit/agents/llm/mcp.py) | 339 |
-| [llm/tool_context.py](../../livekit-agents-next/livekit/agents/llm/tool_context.py) | 616 |
+| [llm/mcp.py](../../livekit-agents-next/livekit/agents/llm/mcp.py) | 292 |
+| [llm/tool_context.py](../../livekit-agents-next/livekit/agents/llm/tool_context.py) | 592 |
 
 ### Run and text lifecycle
 
@@ -113,9 +91,8 @@ Runtime RunResources owns thread/context/toolset acquisition, rollback and relea
 
 | File | Lines |
 | --- | ---: |
-| [text_session.py](../../livekit-agents-next/livekit/agents/text_session.py) | 227 |
-| [voice/agent_run.py](../../livekit-agents-next/livekit/agents/voice/agent_run.py) | 337 |
-| [voice/run_stream.py](../../livekit-agents-next/livekit/agents/voice/run_stream.py) | 182 |
+| [text_session.py](../../livekit-agents-next/livekit/agents/text_session.py) | 172 |
+| [voice/agent_run.py](../../livekit-agents-next/livekit/agents/voice/agent_run.py) | 742 |
 
 ### Voice session construction and lifecycle
 
@@ -123,12 +100,9 @@ Voice owns decisions; runtime SessionOwner owns startup sequencing, acquisition,
 
 | File | Lines |
 | --- | ---: |
-| [voice/_session_bindings.py](../../livekit-agents-next/livekit/agents/voice/_session_bindings.py) | 528 |
-| [voice/_session_callbacks.py](../../livekit-agents-next/livekit/agents/voice/_session_callbacks.py) | 328 |
-| [voice/_session_events.py](../../livekit-agents-next/livekit/agents/voice/_session_events.py) | 343 |
-| [voice/_session_host.py](../../livekit-agents-next/livekit/agents/voice/_session_host.py) | 170 |
-| [voice/agent_session.py](../../livekit-agents-next/livekit/agents/voice/agent_session.py) | 540 |
-| [voice/voice_task.py](../../livekit-agents-next/livekit/agents/voice/voice_task.py) | 44 |
+| [voice/_session_bindings.py](../../livekit-agents-next/livekit/agents/voice/_session_bindings.py) | 547 |
+| [voice/_session_callbacks.py](../../livekit-agents-next/livekit/agents/voice/_session_callbacks.py) | 514 |
+| [voice/agent_session.py](../../livekit-agents-next/livekit/agents/voice/agent_session.py) | 513 |
 
 ### Voice results and events
 
@@ -136,10 +110,9 @@ Use native authoritative state and generated projections for run/event/playback 
 
 | File | Lines |
 | --- | ---: |
-| [voice/events.py](../../livekit-agents-next/livekit/agents/voice/events.py) | 344 |
-| [voice/io.py](../../livekit-agents-next/livekit/agents/voice/io.py) | 405 |
-| [voice/run_result.py](../../livekit-agents-next/livekit/agents/voice/run_result.py) | 596 |
-| [voice/speech_handle.py](../../livekit-agents-next/livekit/agents/voice/speech_handle.py) | 159 |
+| [voice/events.py](../../livekit-agents-next/livekit/agents/voice/events.py) | 236 |
+| [voice/io.py](../../livekit-agents-next/livekit/agents/voice/io.py) | 471 |
+| [voice/run_result.py](../../livekit-agents-next/livekit/agents/voice/run_result.py) | 500 |
 
 ### RTC SDK boundary
 
@@ -147,8 +120,7 @@ Runtime owns room orchestration and playback accounting through the shared RTC c
 
 | File | Lines |
 | --- | ---: |
-| [utils/participant.py](../../livekit-agents-next/livekit/agents/utils/participant.py) | 136 |
-| [voice/room_io.py](../../livekit-agents-next/livekit/agents/voice/room_io.py) | 538 |
+| [voice/room_io.py](../../livekit-agents-next/livekit/agents/voice/room_io.py) | 356 |
 
 ### Avatar media and transport
 
@@ -156,7 +128,7 @@ Runtime reuses RTC source/publication capabilities and owns pacing, bounded fram
 
 | File | Lines |
 | --- | ---: |
-| [voice/avatar.py](../../livekit-agents-next/livekit/agents/voice/avatar.py) | 454 |
+| [voice/avatar.py](../../livekit-agents-next/livekit/agents/voice/avatar.py) | 351 |
 
 ### Voice auxiliary lifecycle
 
@@ -164,9 +136,8 @@ Native voice/runtime own AMD admission, playback selection and remote-session de
 
 | File | Lines |
 | --- | ---: |
-| [voice/amd.py](../../livekit-agents-next/livekit/agents/voice/amd.py) | 268 |
-| [voice/background_audio.py](../../livekit-agents-next/livekit/agents/voice/background_audio.py) | 285 |
-| [voice/remote_session.py](../../livekit-agents-next/livekit/agents/voice/remote_session.py) | 120 |
+| [voice/amd.py](../../livekit-agents-next/livekit/agents/voice/amd.py) | 248 |
+| [voice/background_audio.py](../../livekit-agents-next/livekit/agents/voice/background_audio.py) | 118 |
 
 ### Workflows and tool discovery
 
@@ -174,9 +145,8 @@ Core/voice own workflow ordering, prompt plans and tool-search ranking. Python r
 
 | File | Lines |
 | --- | ---: |
-| [beta/__init__.py](../../livekit-agents-next/livekit/agents/beta/__init__.py) | 437 |
-| [beta/workflows.py](../../livekit-agents-next/livekit/agents/beta/workflows.py) | 507 |
-| [voice/tool_executor.py](../../livekit-agents-next/livekit/agents/voice/tool_executor.py) | 64 |
+| [beta/__init__.py](../../livekit-agents-next/livekit/agents/beta/__init__.py) | 346 |
+| [beta/workflows.py](../../livekit-agents-next/livekit/agents/beta/workflows.py) | 411 |
 
 ### Storage hydration and execution
 
@@ -184,10 +154,8 @@ Native storage/runtime own transactions, revisions, thread resolution and run-re
 
 | File | Lines |
 | --- | ---: |
-| [storage/backends.py](../../livekit-agents-next/livekit/agents/storage/backends.py) | 165 |
-| [storage/context.py](../../livekit-agents-next/livekit/agents/storage/context.py) | 363 |
-| [storage/context_store.py](../../livekit-agents-next/livekit/agents/storage/context_store.py) | 305 |
-| [storage/resolve.py](../../livekit-agents-next/livekit/agents/storage/resolve.py) | 192 |
+| [storage/context.py](../../livekit-agents-next/livekit/agents/storage/context.py) | 253 |
+| [storage/session.py](../../livekit-agents-next/livekit/agents/storage/session.py) | 161 |
 
 ### A2A and HTTP adapters
 
@@ -195,8 +163,8 @@ Keep ASGI request/response adaptation for the application's HTTP routes and auth
 
 | File | Lines |
 | --- | ---: |
-| [a2a.py](../../livekit-agents-next/livekit/agents/a2a.py) | 506 |
-| [http/server.py](../../livekit-agents-next/livekit/agents/http/server.py) | 281 |
+| [a2a.py](../../livekit-agents-next/livekit/agents/a2a.py) | 330 |
+| [http/server.py](../../livekit-agents-next/livekit/agents/http/server.py) | 126 |
 
 ### Process and worker lifecycle
 
@@ -204,15 +172,13 @@ Worker/runtime own registration, leases, job state, process supervision, shutdow
 
 | File | Lines |
 | --- | ---: |
-| [cli.py](../../livekit-agents-next/livekit/agents/cli.py) | 406 |
-| [ipc/__init__.py](../../livekit-agents-next/livekit/agents/ipc/__init__.py) | 445 |
-| [ipc/_preload.py](../../livekit-agents-next/livekit/agents/ipc/_preload.py) | 102 |
-| [ipc/_preload_forkserver.py](../../livekit-agents-next/livekit/agents/ipc/_preload_forkserver.py) | 15 |
-| [ipc/_preload_freeze.py](../../livekit-agents-next/livekit/agents/ipc/_preload_freeze.py) | 40 |
-| [ipc/child.py](../../livekit-agents-next/livekit/agents/ipc/child.py) | 558 |
-| [ipc/launch.py](../../livekit-agents-next/livekit/agents/ipc/launch.py) | 141 |
-| [job.py](../../livekit-agents-next/livekit/agents/job.py) | 1,110 |
-| [worker.py](../../livekit-agents-next/livekit/agents/worker.py) | 498 |
+| [cli.py](../../livekit-agents-next/livekit/agents/cli.py) | 315 |
+| [ipc/__init__.py](../../livekit-agents-next/livekit/agents/ipc/__init__.py) | 242 |
+| [ipc/_preload.py](../../livekit-agents-next/livekit/agents/ipc/_preload.py) | 80 |
+| [ipc/_preload_forkserver.py](../../livekit-agents-next/livekit/agents/ipc/_preload_forkserver.py) | 49 |
+| [ipc/child.py](../../livekit-agents-next/livekit/agents/ipc/child.py) | 365 |
+| [job.py](../../livekit-agents-next/livekit/agents/job.py) | 684 |
+| [worker.py](../../livekit-agents-next/livekit/agents/worker.py) | 364 |
 
 ### Telemetry host integration
 
@@ -220,9 +186,9 @@ Rust owns spans, metrics, report records, export and the session report: its ass
 
 | File | Lines |
 | --- | ---: |
-| [log.py](../../livekit-agents-next/livekit/agents/log.py) | 108 |
-| [metrics.py](../../livekit-agents-next/livekit/agents/metrics.py) | 45 |
-| [telemetry.py](../../livekit-agents-next/livekit/agents/telemetry.py) | 397 |
+| [log.py](../../livekit-agents-next/livekit/agents/log.py) | 95 |
+| [metrics.py](../../livekit-agents-next/livekit/agents/metrics.py) | 4 |
+| [telemetry.py](../../livekit-agents-next/livekit/agents/telemetry.py) | 204 |
 
 ### Evaluation and simulation
 
@@ -230,8 +196,7 @@ Inference/core own judge execution, aggregation policy and finalize state. Keep 
 
 | File | Lines |
 | --- | ---: |
-| [evals.py](../../livekit-agents-next/livekit/agents/evals.py) | 394 |
-| [simulation.py](../../livekit-agents-next/livekit/agents/simulation.py) | 111 |
+| [evals.py](../../livekit-agents-next/livekit/agents/evals.py) | 316 |
 
 ### Media and tokenization adapters
 
@@ -239,10 +204,8 @@ Keep public Python iterator/callback interfaces. Media/core own buffering, frami
 
 | File | Lines |
 | --- | ---: |
-| [tokenize.py](../../livekit-agents-next/livekit/agents/tokenize.py) | 296 |
-| [utils/audio.py](../../livekit-agents-next/livekit/agents/utils/audio.py) | 200 |
-| [utils/codecs.py](../../livekit-agents-next/livekit/agents/utils/codecs.py) | 83 |
-| [utils/images.py](../../livekit-agents-next/livekit/agents/utils/images.py) | 38 |
+| [tokenize.py](../../livekit-agents-next/livekit/agents/tokenize.py) | 253 |
+| [utils/media.py](../../livekit-agents-next/livekit/agents/utils/media.py) | 75 |
 
 ### Public Python utilities
 
@@ -250,10 +213,8 @@ Python-facing channels, asyncio task references and aiohttp hooks remain host ad
 
 | File | Lines |
 | --- | ---: |
-| [utils/aio/__init__.py](../../livekit-agents-next/livekit/agents/utils/aio/__init__.py) | 371 |
-| [utils/connection_pool.py](../../livekit-agents-next/livekit/agents/utils/connection_pool.py) | 201 |
-| [http/client.py](../../livekit-agents-next/livekit/agents/http/client.py) | 358 |
-| [utils/misc.py](../../livekit-agents-next/livekit/agents/utils/misc.py) | 131 |
+| [http/client.py](../../livekit-agents-next/livekit/agents/http/client.py) | 577 |
+| [utils/aio.py](../../livekit-agents-next/livekit/agents/utils/aio.py) | 478 |
 
 ## Kept handwritten
 

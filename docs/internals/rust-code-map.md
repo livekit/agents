@@ -7,7 +7,7 @@ then the owning component; the [Rust core reference](rust-core.md) defines the f
 
 | Layer | Entry point | Responsibility |
 | --- | --- | --- |
-| Python API | [`voice/agent.py`](../../livekit-agents-next/livekit/agents/voice/agent.py), [`text_session.py`](../../livekit-agents-next/livekit/agents/text_session.py), [`voice/agent_session.py`](../../livekit-agents-next/livekit/agents/voice/agent_session.py) | Developer-facing calls and application callbacks |
+| Python API | [`voice/__init__.py`](../../livekit-agents-next/livekit/agents/voice/__init__.py), [`text_session.py`](../../livekit-agents-next/livekit/agents/text_session.py), [`voice/agent_session.py`](../../livekit-agents-next/livekit/agents/voice/agent_session.py) | Developer-facing calls and application callbacks |
 | ABI | [`agent/run.rs`](../../rust/crates/lk-agents-abi/src/agent/run.rs), [`voice/session.rs`](../../rust/crates/lk-agents-abi/src/voice/session.rs) | Native boundary contracts and typed records |
 | Shared decisions | [`core/agent_run`](../../rust/crates/lk-agents-core/src/agent_run/mod.rs) | One invocation's model/tool progress, approvals, retries and output acceptance |
 | Conversation decisions | [`core/text_session`](../../rust/crates/lk-agents-core/src/text_session/mod.rs), [`voice/agent_session`](../../rust/crates/lk-agents-voice/src/agent_session/mod.rs) | Backend routing, or live floor/recognition/media coordination |
@@ -33,7 +33,7 @@ by reading generated conversions unless investigating a boundary/conversion prob
 
 ## Direct agent invocation
 
-1. [`Agent.run` / `run_stream`](../../livekit-agents-next/livekit/agents/voice/agent.py) calls
+1. [`Agent.run` / `run_stream`](../../livekit-agents-next/livekit/agents/voice/__init__.py) calls
    [`start_run`](../../livekit-agents-next/livekit/agents/voice/agent_run.py), which constructs
    `_core.AgentRunner` with the agent definition, model and host callbacks.
 2. [`AgentRunner`](../../rust/crates/lk-agents-abi/src/agent/run.rs) is implemented by

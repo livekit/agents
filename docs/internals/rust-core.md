@@ -60,12 +60,8 @@ cancelled generation. Room transport owns publication/backpressure and sink obse
 it is not merged into generated-speech playback. Speech/floor scheduling and per-segment
 launch holds remain distinct from generation-step authorization.
 
-See the [implementation inventory](rust-transition-inventory.md#related-lifecycle-groupings-implemented-boundaries)
-for lifecycle evidence, remaining simplifications, and validation.
-
-The [complete current effect map](rust-transition-inventory.md#current-effect-ownership-map)
-records every named effect enum and distinguishes actual nesting from subsystem ownership.
-Most executor protocols are peers; `RoomIo` does not currently expose a `RoomIoEffect` enum.
+Each crate's `effects.rs` index records every named effect enum with its producer and
+executor. Most executor protocols are peers; `RoomIo` exposes no `RoomIoEffect` enum.
 
 ### Effect and machine source layout
 
@@ -126,8 +122,6 @@ The current core/voice source locations are:
 | Workflow templates and rendering | Constants beside their DTMF/transfer owner; common rendering in `voice::workflows` |
 
 These locations describe source organization, not additional crates or wrapper types.
-The [file cleanup inventory](rust-file-layout-inventory.md) records merge decisions and the
-small effect, event, port, machine and test files that deliberately remain separate.
 
 `VoiceDriver` privately owns one runtime outbox and a FIFO of scoped `VoiceCallback`s.
 Domain methods return their own outcomes instead of receiving a shared collector. The
@@ -140,15 +134,12 @@ identity resolution remains deferred privately until that transition installs it
 Run completion queries attributed speech, hook, handoff and hold owners rather than a
 second pending-work registry. A voice run settles into the `RunSettled` record a text run
 settles into: the core records the run's items, counts the requests and tool bodies of the
-speeches it owns in its own usage ledger, and the host builds the caller's `RunResult` with the
-same `settled_result`. `RunResult.input_requirements` preserves every correlated
-request; the singular status/question is a compatibility projection. Supplied history retains
-which request that projection exposed so the next human answer cannot answer other waiting
-calls accidentally. Deadline/event ties preserve deadline-first processing, including a
-receipt queued earlier but processed at its cleanup bound. See the
-[implementation inventory](rust-transition-inventory.md#plan-audit-checkpoint) for the exact
-membership/result and ordering contracts. PR #8256 question/delegation orchestration remains
-the separate later integration.
+speeches it owns in its own usage ledger, and the host receives the caller's `RunResult`, the
+record declared in `lk-agents-abi/src/agent/run.rs`. `RunResult.input_requirements` preserves
+every correlated request; the singular `question` is the first of them. Supplied history
+retains which request that question exposed so the next human answer cannot answer other
+waiting calls accidentally. Deadline/event ties preserve deadline-first processing, including
+a receipt queued earlier but processed at its cleanup bound.
 
 ### RoomIo is the room integration owner
 
@@ -183,7 +174,8 @@ Provider bytes are decoded to PCM when necessary, framed progressively, and emit
 so segment completion can mark the final frame; a flush deadline releases that tail if
 production falls behind. The media owner receives time as input and emits ordinary
 `Vec<AudioEmitterEffect>` requests: `EmitAudio`, `ScheduleFlushAfter`,
-`CancelScheduledFlush`, `ReportDroppedBytes`, and `ReportProviderRequestIds`. There is no
+`CancelScheduledFlush` and `ReportDroppedBytes`; provider request ids ride on the emitted
+`SynthesizedAudio`. There is no
 `Effects` alias or generic `HostEffect` protocol at this boundary.
 
 `ScheduleFlushAfter` carries a relative duration; inference applies it on the injected clock.
@@ -199,9 +191,9 @@ audio; it does not authorize playback, route room tracks, or report what a perso
 | `lk-agents-abi` | Public export declarations and typed boundary records: chat items, events, effects, errors and resource descriptions; contracts and data, plus the hand-written Python plugin bases (`stt.py`, `tts.py`, `llm.py`, `realtime.py`, `vad.py`) beside their proxy traits |
 | `lk-agents-core` | Shared AgentRun, request planning, the attempt machine every retried request shares (connection limits, retry allowance and backoff, total deadline, cleanup), tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification; chat formatting, tool-argument processing, JSON repair, tool search and deterministic run/event assertions; speech tokenization and expressive markup (`lk_agents_core::tokenize`, `lk_agents_core::tts`); telemetry destination policy, metric admission and session report records (`lk_agents_core::telemetry`); no voice lifecycle or transport dependency |
 | `lk-agents-voice` | Frontend/session lifecycle, recognition, speech scheduling, interruption, IVR, AMD and media coordination; transcript pacing decisions; composes agent execution from `lk-agents-core` |
-| `lk-agents-storage` | Async I/O: all database interaction: schema and statements, the AgentDB and SQLite backends, retries, fencing, lease renewal and lost-acknowledgment resolution; every failure is a typed error: the database's `Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound` and `VersionConflict`, the caller's `Invalid`, `NotSerializable`, `TooLarge` and `Unauthorized`, and `Cancelled` |
+| `lk-agents-storage` | Async I/O: all database interaction: schema and statements, the AgentDB and SQLite backends, retries, fencing, lease renewal and lost-acknowledgment resolution; every failure is a typed error: the database's `Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound` and `VersionConflict`, the caller's `Invalid`, `NotSerializable`, `TooLarge` and `Unauthorized`, the handler's `Refused(HostError)`, and `Cancelled` |
 | `lk-agents-media` | Synchronous decoding, encoding, TTS audio framing, image preparation and conversion, resampling, media filters, recording files and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime; the one worker pool primitive (bounded plain threads with per-class admission) and the process's media pool |
-| `lk-agents-net` | Async I/O: the shared transport: HTTP with per-limit deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; telemetry's export (`lk_agents_net::export`): the OTLP exporter for every telemetry destination and the process's exporter slot, the LiveKit Cloud session report and recording upload with its own bounded admission, the host span (`_core.TelemetrySpan`) and `Tagger` classes and event-loop stall recording; the process environment value (`lk_agents_net::env::ProcessEnv`) and the process's blocking I/O pool |
+| `lk-agents-net` | Async I/O: the shared transport: HTTP with per-limit deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; telemetry's export (`lk_agents_net::export`): the OTLP exporter for every telemetry destination and the process's exporter slot, the LiveKit Cloud session report and recording upload with its own bounded admission, the host span (`_core.TelemetrySpan`) and `Tagger` classes, event-loop stall recording, the job's sampled stack profile (`export/profile`, pprof, carried by the recording upload) and the worker's Prometheus exposition (`export/prometheus.rs`); the process environment value (`lk_agents_net::env::ProcessEnv`) and the process's blocking I/O pool |
 | `lk-agents-telemetry` | Span recording: `Trace` and `ManualSpan` for sans-I/O machines; the process `Tracer`, `Cx`'s recorder, `ScopedSpan` and `start`/`end`/`event`/`measure` for async work. Depends only on ABI; no executor or transport |
 | `lk-agents-inference` | Async I/O: provider clients for LLM, STT, TTS, VAD and EOT models, interruption, realtime, duplex and avatars, with their retry, fallback and reconnect execution; provider-side media execution: the TTS audio emitter (decode admission, drift timer, segment finalization), the streaming decoder's bounded output queue and provider image preparation on the media pool; speech stream adapters; evaluation judge orchestration |
 | `lk-agents-worker` | Async I/O: worker registration and job assignment, IPC, process pool and supervision, and endpoint byte-stream dispatch |
@@ -209,13 +201,14 @@ audio; it does not authorize playback, route room tracks, or report what a perso
 | `lk-agents-runtime` | The I/O layer of voice and text: the voice session executor and its effect execution, room I/O, avatar transport, recording ingress and the console port adapter, AgentRun and TextSession drivers, the thin A2A door (executes core's storage effects through `lk-agents-storage` and feeds the typed results back), thin MCP session I/O over the SDK, HostInvoker and the process runtime with its fork guard; wires the async I/O crates and re-exports the implementations generated bindings select |
 | `lk-agents-py` | Python extension registration, generated pyo3 conversions and adapters, HostInvoker's Python entry; the only crate containing pyo3 |
 | `lk-agents-bindgen` | Binding declaration parser and the resolved declaration IR |
-| `lk-agents-host-derive` | Inert `Host`, `host` and `Vocabulary` marker attributes read by codegen |
+| `lk-agents-host-derive` | The `#[host(..)]` attribute, which strips the markers rustc does not know and writes the Rust a declaration implies (a record's `new` and `Default`, a wire enum's `ALL`, `as_str` and `from_wire`, interface helpers); the `Table` and `Vocabulary` derives; telemetry's `Attrs` and `SpanValue` derives and `span`/`event`/`metric`/`record` attributes |
 | `lk-agents-codegen` | Python models, stubs, provider bases, forwarders and architecture checks |
 | `lk-agents-fuzz` | Deterministic simulation of the sans-I/O crates and behavioral contracts, running the runtime's real executors over faked SDK and provider ports |
 
 ```text
 lk-agents-py -> lk-agents-runtime, lk-agents-abi
 lk-agents-runtime -> sans-I/O crates, async I/O crates
+lk-agents-runtime -> lk-agents-cli -> lk-agents-worker, lk-agents-net, lk-agents-abi
 lk-agents-voice -> lk-agents-core -> lk-agents-abi
 lk-agents-voice -> lk-agents-media
 lk-agents-inference -> lk-agents-media
@@ -227,7 +220,11 @@ voice, media, net, inference, worker, runtime, fuzz -> lk-agents-telemetry -> lk
 async I/O crates -> lk-agents-abi
 fuzz -> sans-I/O crates + lk-agents-abi
 lk-agents-fuzz -> lk-agents-runtime (voice and room executors over fake ports)
+abi, storage, py -> lk-agents-host-derive
 ```
+
+The authoritative edge list is `GRAPH` in `rust/check/src/graph.rs`; `make -C rust check`
+fails on any workspace edge it does not list.
 
 The sans-I/O crates are `lk-agents-core`, `lk-agents-voice` and
 `lk-agents-media`. `lk-agents-media` is a synchronous data-plane core with no
@@ -252,16 +249,20 @@ adapters select. Async I/O crates depend on ABI and never on the runtime,
 `lk-agents-py` or pyo3; they reach host code only through ABI-declared proxies
 and HostInvoker's declared port.
 
-The runtime owns the process-wide Tokio runtime, logging writer and fork guard, and lends
+The runtime owns the process-wide Tokio runtime and fork guard, and lends
 them as one value, `lk_agents_net::env::ProcessEnv`, never through a dependency
 on the runtime. It is a plain struct:
 
 | Field | Lends |
 | --- | --- |
-| `runtime`, `caller_runtime()` | The process runtime (started on first read, refused when fork-inherited) and the caller's |
+| `runtime` | The process runtime (started on first read, refused when fork-inherited) |
 | `spawner`, `clock` | The executor the host awaits a chain's futures on and the host `Clock` |
 | `http` | The shared HTTP pool |
-| `logging` | The bounded logging writer, started explicitly and replaced after a fork |
+| `tracer` | The process's span recording, timed by `clock` |
+| `tasks` | The process's own tasks: work no session owns, each bounded and ending on its own |
+
+Log lines never pass through `ProcessEnv`: `log` records are queued without the GIL and
+`lk-agents-py`'s drain thread (`py_logging.rs`) forwards them to Python's `logging`.
 
 Process-wide resources that need no runtime are owned by the crate whose work
 they bound, made on first use in each process (a forked child makes its own):
@@ -294,8 +295,11 @@ class starts nothing. Rust callers and tests build their own value
 the speech text algorithms (`lk_agents_core::tts`) directly; a synthesis's
 sentence splitting is inference's, over media's BlingFire.
 
-The sans-I/O crates and ABI have no runtime, executor, Tokio, futures,
-async-trait or pyo3 dependency. Async I/O crates use Tokio, process and database
+The sans-I/O crates and ABI have no runtime, executor or transport in their resolved
+dependency tree: no Tokio, futures, pyo3, async-trait, async-std, smol, mio, hyper,
+reqwest, tungstenite, rusqlite, `livekit`, `livekit-api` or `livekit-ffi`, checked on
+every wheel target (`BANNED` in `rust/check/src/graph.rs`); `livekit-protocol` records are
+fine. Async I/O crates use Tokio, process and database
 crates directly and reach the network through `lk-agents-net`. Runtime adapters depend on cores; cores never
 depend on adapters. Build tools read declarations without adding runtime
 dependencies to cores.
@@ -345,10 +349,8 @@ recorders.
 The runtime owns the input queue and calls the core one event at a time. It
 executes effects, waits for I/O or deadlines, and returns results as correlated
 events. The current default dispatches a due wake before another input at the same supplied
-instant, in both production and simulation. This is current behavior, not a closed contract
-for every deadline/response tie. Before refactoring advancement, pin or deliberately revise
-before/equal/after-deadline and queued-earlier/processed-later receipts under the
-[plan's ordering gate](rust-transition-inventory.md#plan-audit-checkpoint).
+instant, in both production and simulation. A change to advancement pins or deliberately
+revises before/equal/after-deadline and queued-earlier/processed-later receipts with tests.
 Other independent events remain schedulable.
 Sessions share the runtime; there is no dedicated thread per session.
 
@@ -398,12 +400,26 @@ lk-agents-runtime/src/
   tcp.rs          the console's TCP connector (a boundary adapter outside the executors)
   monotone.rs     a level-triggered cell whose value only moves forward (speech and playout marks)
   host/           HostInvoker: invocation lifecycle, scope admission, owned callback tasks
+  telemetry.rs    the process exporter's install and exit flush, a running session as a stall reaches it
+  output_validation.rs  an accepted output's live value and its persisted form
   agent_run/      AgentRun driver: runs effects (host calls, model streams); the declared AgentRunner
+  run_stream/     a streaming run's host-facing stream and its input
+  toolsets/       shared toolset groups, scopes and lifetimes over core's toolset decisions
   text_session/   TextSession driver over agent_run's execution; the declared runner
   a2a/            turn: executes TaskMachine steps against storage and the handler;
                   door/: decodes, admits, calls storage, publishes response streams
   mcp/            the SDK session, stdio/host/Streamable HTTP transports, the SDK's HTTP client over lk-agents-net
-  voice/          session executor (effects, legs, audio drains, storage, recorder observers)
+  voice/          session executor
+    session/            the host's session handle: builder, owner, calls, options, storage, host drain
+    legs.rs             the production executor: opens the opening streams, runs the cores
+    effects.rs          executes the voice core's effects
+    nodes.rs            the session's registered nodes over the host's `_SessionNodes`
+    default_nodes.rs    the default nodes' pumps
+    audio.rs            provider source drains into the loop
+    playback.rs         output-node playback tracking
+    recorder.rs         recorder observers and their clock anchor
+    resources.rs        registrations held while an operation is prepared or queued
+    speech_handle.rs    the host's speech handle and its refusals
     events.rs           execution envelopes, opened streams and SDK event-to-observation mapping
     io.rs               session output assembly and transcript-wrapper ownership
     transcription/      transcript synchronizer execution and its behavioral contracts
@@ -418,6 +434,8 @@ lk-agents-runtime/src/
   room_io/        RoomIo owner, participant input readers, audio and transcription output, pre-connect receiver
   avatar/         data-stream audio output, receiver and runner, each implementing its ABI class directly
   rtc/            room event fan-out and stream ingress admission, room waits, playout ledger lock
+    synchronizer.rs     the audio/video synchronizer
+    rpc.rs              RPC call and handler interception and their spans
   recording.rs    recorder ingress and its handoff onto the media pool, terminal status
 ```
 
@@ -919,6 +937,12 @@ and the protocols below as async I/O, tested against real peers. Voice and text
 cores receive typed results and resource IDs; the DST replaces these clients with
 fakes calibrated against the same peers.
 
+Four protocols keep sans-I/O machines (inputs in, effects out) inside
+`lk-agents-inference`, outside the purity lints that bind the cores: realtime, VAD,
+the fallback chain and interruption; the media `AudioEmitter` is the fifth. The
+LLM, STT, TTS and avatar protocols are plain async code in their pumps: a phase
+enum and ordinary awaits, tested with the provider fakes.
+
 | Component | Owns | Contract |
 | --- | --- | --- |
 | Request/option resolution | Pure validation and request construction | Explicit environment/configuration inputs; typed known fields; opaque provider extensions stay at their declared boundary |
@@ -1021,7 +1045,7 @@ Persistence stores committed records. It does not restore stack frames or
 establish exactly-once execution of external effects.
 
 Storage uses the Rust `Storage` lifecycle trait and the internal
-`SqliteConnection` execution trait. AgentDB and local SQLite adapters share
+`ThreadDbConnection` execution trait. AgentDB and local SQLite adapters share
 `Thread`, `Lane`, `Run` and `Lease` engine types, including typed content reads
 that require no lane lease. The [storage plan](storage.md#rust-interface)
 defines the interfaces, backend contracts and failure behavior;
@@ -1048,7 +1072,8 @@ acknowledgments. Every failure reaches the caller as a precise typed error.
 A database failure is `Uncertain` (the outcome is unknown), `Rejected { running_task_id }`,
 `LeaseLost`, `Unavailable` (the one retryable error), `NotFound` or
 `VersionConflict`; a request the caller made wrongly is `Invalid`,
-`NotSerializable`, `TooLarge` or `Unauthorized`; a turn the host cancelled is
+`NotSerializable`, `TooLarge` or `Unauthorized`; the handler's own save refused
+through its turn is `Refused(HostError)`; a turn the host cancelled is
 `Cancelled`. The A2A task
 decisions in `lk_agents_core::a2a` are sans-I/O over request/result records and
 error types declared in ABI; core has no dependency on storage. The runtime's
@@ -1283,7 +1308,7 @@ not in exception conversion.
 
 All handwritten API export declarations live in `lk-agents-abi`. Backend-local interpreter
 interface metadata lives beside the Python adapter that uses it; it cannot introduce a public
-native export or provider call. Both resolve into the binding model. Other `#[host(...)]` declarations and export metadata remain ABI-owned. The retired `#[derive(Host)]` record pipeline and
+native export or provider call. Both resolve into the binding model. Other `#[host(...)]` declarations and export metadata remain ABI-owned. There is no `Host` derive, and
 standalone class/binding/export forms are rejected. Neither subject
 cores nor runtime implementations declare a second export surface.
 
@@ -1500,8 +1525,9 @@ generates, as checked-in files:
 - A Rust trait for every declaration, classes and providers alike, which a core,
   the runtime or an async I/O crate implements; the compiler checks completeness.
 - The pyo3 adapters, proxies and record conversions in `lk-agents-py`, which call
-  those traits. The export attributes are inert
-  markers: the macros emit nothing.
+  those traits. The `#[host(..)]` attribute (`lk-agents-host-derive`) strips its markers and
+  writes only the Rust a declaration implies: a record's `new` and `Default`, a wire enum's
+  `ALL`, `as_str` and `from_wire`, interface helpers.
 - The complete `_core.pyi`, `core_names.json` and Python models under `_generated/`.
 - Forwarding modules, and the plugin bases copied verbatim from their hand-written `.py` files.
 - Language emitters consume the same resolved classes, records, enums, constants and errors;
@@ -1548,7 +1574,9 @@ representations and execution. `py_calls.rs` handles interpreter entry, captured
 notifications and future bridging; `py_streams.rs` adapts Python iterators and native sources.
 `py_values.rs` handles scalars, buffers, JSON, union normalization, metadata codecs and missing
 values. `py_objects.rs` retains object references and recovers native capabilities;
-`py_errors.rs` preserves exceptions; `py_logging.rs` forwards Rust log records.
+`py_errors.rs` preserves exceptions; `py_logging.rs` forwards Rust log records;
+`py_stall.rs` is the event-loop stall detector, reading stacks with py-spy over the process's
+own memory, never under the GIL.
 `lib.rs` selects implementations and registers exports.
 Domain classes are declared in ABI and generated into `generated/`; resource ownership and
 feature behavior stay with their native implementations. Colocated Python tests in
@@ -1711,9 +1739,9 @@ Editable installs made by `uv sync` also use the dev Cargo profile, so Rust sour
 changes do not trigger an optimized release rebuild through the packaging backend.
 Published wheels retain Maturin's release default.
 `make rust-check` (or `make -C rust check`) compiles and lints every
-workspace crate and test target with FFmpeg enabled, and enforces boundaries,
-violation baselines and generated output. `make -C rust test-checks` runs the
-checker counterexamples and codegen tests; CI and the launch gate run both.
+workspace crate and test target with FFmpeg enabled, and enforces boundaries and
+generated output ([enforcement](#enforcement)). `make -C rust test-checks` runs the
+`rust/check` and codegen tests; CI and the launch gate run both.
 `MATURIN` and `VIRTUAL_ENV` can select an existing tool and virtual environment.
 Cargo and Maturin use that environment's Python; `PYO3_PYTHON` can override Cargo's
 interpreter explicitly. Unix environments use `bin/python`; Windows uses
@@ -1850,9 +1878,13 @@ benchmarked on this workspace.
 The rules and how each is enforced live in one list: the "Rust architecture rules" section of
 [`AGENTS.md`](../../AGENTS.md). `make -C rust check` runs every automatic one: `cargo fmt`, Clippy
 with `[workspace.lints]` and the two policies in `rust/check/` (`purity/clippy.toml` for ABI, core,
-voice and media; `io/clippy.toml` for the crates beside the host), the `rust/check` crate (crate
-graph, banned dependencies, binding placement, executor modules, file length) and the generated
-drift checks. No rule has a baseline.
+voice and media, where media's thread pool `pool.rs` and `media_queue` are the only exempt
+modules; `io/clippy.toml` for the crates beside the host), the `rust/check` crate (crate
+graph and banned dependencies in `graph.rs`; binding placement, executor modules, `Unacknowledged::sent` callers, `select!`
+order, generated markers and file length in `sources.rs`) and the generated drift checks
+(`lk-agents-codegen --check`, `thread_api.py --check`). No rule has a baseline: a violation is
+fixed, or one site carries `#[allow(lint, reason = "...")]`. Each rule's tag in AGENTS.md says
+which of these enforces it, or that review does.
 
 ## Common runtime primitives
 
@@ -2224,8 +2256,8 @@ effect after a process restart. Protocol-specific ALPN settings do not change th
 roots. Rust `livekit-api` receives the process HTTP client's connection pool and TLS
 configuration. The Python host exports its CA paths when `run_app` starts so the
 shared aiohttp session used by Python `livekit-api` and native clients use the same paths.
-The framework's OTLP Requests transport uses that Python SSL context too, forces server
-certificate and hostname verification, and never follows redirects. The explicit insecure
+There is no Python OTLP transport: the exporter is Rust (`lk-agents-net/src/export/otlp`) on
+the same native TLS configuration. The explicit insecure
 worker WebTransport option is restricted to loopback destinations; `localhost` is pinned
 to a loopback IP for that option so name resolution cannot send unverified traffic elsewhere.
 
@@ -2443,7 +2475,7 @@ is separate from the public [semantic run stream](../agents.md#semantic-events).
 messages, reads, writes, shutdown, exit monitoring, termination, supervision and
 pool policy, in three layers:
 
-- `ipc/channel`: the only code touching the connection's bytes. A typed
+- `ipc/ipc_channel`: the only code touching the connection's bytes. A typed
   `Channel` (`send`/`try_send`/`recv`/`close`) over the platform's best
   transport: an AF_UNIX socketpair on Linux and macOS (close-on-exec, the job's
   end too once adopted; `SO_NOSIGPIPE` on macOS), a single-instance named pipe on
@@ -2739,9 +2771,9 @@ as the SDK room and the console's TCP port are replaced by port fakes. Executors
 spawn and sleep only through the injected `Spawner` and `Clock`
 ([effect execution](#effect-execution)), which the DST binds to its own
 deterministic scheduler and virtual clock; every `select!` is `biased;`, so the
-scheduler alone decides which ready work runs. The architecture check enforces
-these rules on the runtime's `voice/`, `room_io/`, `avatar/` and `rtc/` modules
-against a shrink-only baseline.
+scheduler alone decides which ready work runs. The `rust/check` crate enforces
+these rules on the runtime's `voice/`, `room_io/`, `avatar/` and `rtc/` modules, with no
+baseline.
 
 The scheduler chooses among enabled core event deliveries, executor tasks and
 fake completions. Each core transition remains synchronous and atomic. Advance
@@ -2844,10 +2876,10 @@ every merge. It covers affected subject cores and runtime/binding contracts,
 reports omitted coverage and rejects empty runs. Workspace compilation is not
 behavioral coverage of any component; the worker and the other async I/O crates
 run their real-transport, real-process and controlled-peer suites in the gate.
-Its `KNOWN_FINDINGS` baseline may only shrink. Architecture checks reject new
-core spawns, `select!`, executor dependencies and unbounded channels, and
-runtime executor Tokio runtime uses and unbiased selects, and ratchet existing
-violations down.
+Its `KNOWN_FINDINGS` baseline may only shrink. The purity Clippy policy rejects core
+spawns, `select!`, clocks and unbounded channels; `rust/check` rejects executor
+dependencies in the cores and Tokio runtime uses and unbiased selects in the runtime's
+executor modules, with no baseline.
 
 ### Observations and replay
 
@@ -2937,7 +2969,7 @@ contain conversation text.
   shared completion handling over duplicate per-operation callbacks. Add a mirror event or
   effect only for an actual consumer or ordering obligation, never for naming symmetry alone.
   Keep input EOF, operation results, playout settlement, and resource retirement distinct;
-  document intentional asymmetry beside its owner. See the [lifecycle symmetry audit](rust-lifecycle-symmetry-audit.md).
+  document intentional asymmetry beside its owner.
 - Treat symmetry as a general rule across all Rust crates: methods, events, effects, callbacks,
   states, and ownership lifecycles. Audit operation, result, and state symmetry separately.
   Matching operations
@@ -2946,16 +2978,13 @@ contain conversation text.
   inverse, owner, allowed states, and completion semantics; document irreversible operations
   explicitly. A matching method does not require a matching callback: pause may await a drain
   while resume completes synchronously. Never add a no-op notification just to fill a pair.
-  Apply the [general symmetry checklist](rust-lifecycle-symmetry-audit.md#general-symmetry-rule)
-  to every lifecycle change; scheduling and close are only examples.
+  Apply this to every lifecycle change; scheduling and close are only examples.
 - Name completion callbacks for the obligation that ended, including refused/cancelled results;
   do not imply success with names such as `Paused` when refusal is a valid payload. Separate
   admission pauses from playback/authorization holds. Close's admission pause is terminal and
   must not be lifted by an ordinary resume. Prefer coordinator-owned advancement of close from
   current phase/prerequisite state to a generic progress callback or handler-maintained dirty
-  flag. Preserve deferred ordering before removing any existing notification. The concrete
-  [pause/close review](rust-lifecycle-symmetry-audit.md#scheduling-and-close-symmetry) records
-  the implemented normalization and intentional asymmetries.
+  flag. Preserve deferred ordering before removing any existing notification.
 - Keep internal coordination inside its owner. Do not turn “run my logic again” into a
   cross-component callback or effect such as `CloseProgress`, `Pump`, or `Recheck`. Prefer
   automatic advancement from authoritative state at complete transition boundaries. Callbacks
@@ -2968,8 +2997,7 @@ contain conversation text.
   effects. Clearing a deadline does not cancel the work it bounds. Timer state and necessary
   ordering belong inside their owner; components must not construct generic deferred
   instructions such as `StepOp` or learn a renamed replacement. Resolve runtime requests at
-  their required transition boundary while keeping that bookkeeping private. See the
-  [timer simplification plan](rust-transition-inventory.md#timer-and-deferred-operation-improvements).
+  their required transition boundary while keeping that bookkeeping private.
 - Keep domain modules recognizable (`generation`, `room_io`, `transcription`, `stt`, `tts`,
   `llm`). Put synchronous effect-producing owners in the domain's `machine` module and their
   effect declarations in its category `effects.rs`. For example, `generation::machine::AudioPlayback`
@@ -2977,8 +3005,7 @@ contain conversation text.
   without `_machine.rs` or `StateMachine` suffixes. Link each effect declaration to its producer
   and executor, and map owners in `machine/mod.rs`. Plain data/helpers remain outside; private
   child state stays private. No common base trait or registry is required. Document each
-  machine's states, inputs/time, effects, and terminal behavior. See the
-  [domain source layout](rust-transition-inventory.md#domain-modules-with-visibly-separate-state-machines).
+  machine's states, inputs/time, effects, and terminal behavior.
 - Downstream code must not manually pump accepted work. Starting an operation, submitting
   input, and awaiting/reading results is sufficient; its coordinator/executor processes
   transitions, effects, I/O outcomes, and deadlines automatically until blocked or terminal.
@@ -2992,12 +3019,11 @@ contain conversation text.
   beside their owners, outside declaration files. A crate-level effect index can re-export
   scoped public types and show an ownership map in one place; it adds no wrapper enum and
   exports no private submachine protocol. Distinguish actual nesting from projection and
-  independent execution in that map. See the [layout and migration plan](rust-transition-inventory.md#effect-definition-layout-and-navigation).
+  independent execution in that map.
 - Keep one policy owner for the same domain decision. Coordinators consume canonical outcomes
   and supply their own constraints; they do not independently select terminal outcomes or
   rebuild authoritative records from the same raw inputs. Share ordinary conversion helpers
   where semantics match, while preserving distinct protocol, presentation, and cleanup facts.
-  See the [shared policy audit](rust-shared-policy-audit.md).
 - Keep the invocation loop generic to conversation/delegation question orchestration. Core
   reports correlated input requirements; it does not discard pending expert questions,
   synthesize answers for unselected requests, or decide their presentation order. The live

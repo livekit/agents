@@ -60,6 +60,7 @@ everything to Rust.
 | Framework spans | `lk-agents-voice`, `lk-agents-runtime`, `lk-agents-inference`, `lk-agents-worker` | yes | yes | OTLP traces |
 | Application spans | Python OTel API, through the Rust-backed provider | yes | yes | OTLP traces |
 | Framework metrics | declared instruments, aggregated in `lk_agents_net::export` | yes | yes | OTLP metrics |
+| Worker state | the worker's own gauges, rendered by `lk_agents_net::export::prometheus` | no | no | Prometheus text at `/metrics` on the worker's `prometheus` listener |
 | Report records | `lk_agents_core::telemetry::report` | yes | no | OTLP logs (`chat_history`, `evaluations`) |
 | Session report and recording | `lk_agents_core::telemetry::report`, uploaded by `lk_agents_net::export` | yes | no | report upload |
 | Process logs | `log` facade and Python `logging` | hosted agents, through the sidecar | no | stdout; never OTLP, so self-hosted agents' logs stay out of Cloud |
@@ -99,13 +100,14 @@ through the application's SDK.
 ### What Python keeps
 
 Python holds no telemetry state, policy, queue or exporter. The whole Python
-side is one module, `livekit/agents/telemetry.py`, of about 400 lines:
+side is one module, `livekit/agents/telemetry.py`, of about 200 lines, over the generated
+`_generated/public_telemetry.py`:
 
 | Piece | What it is |
 | --- | --- |
 | Provider | `_Span`, `_Tracer` and `_TracerProvider` implementing `opentelemetry-api` over the generated `_core.TelemetrySpan`, installed as the global provider when the application set none |
 | Bridge | One `SpanProcessor` for an application-installed SDK provider; imported only when `opentelemetry-sdk` is present |
-| Public functions | `configure`, `set_capture_content` and `diagnostics`, forwarding to `_core` |
+| Public functions | `configure`, `set_capture_content` and `diagnostics`, generated forwarding to `_core` (`public_telemetry`) |
 | Host hooks | `_install` and `_shutdown` (the process exporter; the global provider is adopted once per process), `_activate` and `_current` (HostInvoker's span activation in the copied context a host call runs in, and capture), `_LoopMonitor` (the event loop's heartbeat; see [Event-loop stalls](#event-loop-stalls)) |
 | Framework spans | `room_connect` and `wait_for_participant` around `JobContext`'s room calls, `rpc_call` and `rpc_handler`, recorded by room I/O, which intercepts the room's RPC calls and handlers |
 
@@ -127,7 +129,7 @@ Everything else left Python:
 | `capture_traceparent` / `use_traceparent` in the A2A client, endpoint and job dispatch | trace context carried by the native A2A client and endpoint; `start_job` continues the caller's span |
 
 About 2,800 lines of Python telemetry, plus the telemetry parts of `job.py`,
-`ipc/child.py` and the voice bindings, became one module of about 400 lines.
+`ipc/child.py` and the voice bindings, became one module of about 200 lines.
 
 ### Event-loop stalls
 

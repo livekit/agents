@@ -55,14 +55,9 @@ and storage mechanics have separate references below.
 | [Telemetry](internals/telemetry.md) | Data flows, destinations, the span API, user turns, the session report, the naming registry, and how to add telemetry |
 | [Telemetry reference](internals/telemetry-reference.md) | Standard conventions, span trees, the complete emitted inventory, consumers, and the Cloud ingest and redaction contract |
 | [Python ownership inventory](internals/python-ownership.md) | Complete handwritten framework file coverage, ownership targets, migrated responsibilities, and remaining work |
-| [Rust transition inventory](internals/rust-transition-inventory.md) | Python terminology alignment, transition simplification proposals, ordering constraints, and verification |
-| [Python file cleanup inventory](internals/python-file-layout-inventory.md) | Handwritten consolidation from 113 to 63 files, familiar public namespaces, utility cleanup, and complete source coverage |
 | [Python legacy API inventory](internals/python-legacy-api-inventory.md) | Deprecated arguments, no-op settings, compatibility aliases, concrete replacements, and protocol/data retirement prerequisites |
-| [Rust file cleanup inventory](internals/rust-file-layout-inventory.md) | Small-file merge candidates, proposed destinations, and deliberate component boundaries |
-| [Lifecycle symmetry audit](internals/rust-lifecycle-symmetry-audit.md) | Enter/exit hooks, event/effect vocabulary, request/receipt pairs, and intentional lifecycle differences |
-| [Shared policy audit](internals/rust-shared-policy-audit.md) | Competing core/voice decisions, canonical tool history, policy ownership, and SDK terminology comparison |
 | [Rust fuzz crate audit](internals/rust-fuzz-inventory.md) | Simulation structure, contributor navigation, scheduling, contracts, reproduction, and improvement inventory |
-| [Type simplification inventory](internals/rust-type-inventory.md) | Redundant audio and Rust aliases, removal candidates, and distinct types to retain |
+| [TODO](TODO.md) | Designed behavior not built yet, and public API the owner will revisit |
 
 ## Principles
 

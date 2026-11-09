@@ -13,7 +13,6 @@ contains descriptions of earlier layouts and measurements.
 This audit covers all top-level module responsibilities, the voice harness and its submodules,
 room tests, rule infrastructure, diagnostics, documentation, and operational tools. It identifies crate-level improvements rather than auditing every contract's semantic
 correctness. Public behavior remains owned by the feature documents. See also the
-[Rust transition inventory](rust-transition-inventory.md) and
 [Rust core testing contracts](rust-core.md#deterministic-simulation-testing).
 
 ## Working-tree status after the plan audit
@@ -26,8 +25,8 @@ navigation/reporting recommendation or future scheduler redesign in this invento
 
 The structural source pass has also moved production machine owners and effect declarations
 into domain `machine` modules/category `effects.rs` files. Simulation boundary modules remain
-in place; use the [current effect declaration map](rust-transition-inventory.md#current-effect-ownership-map)
-when following a runtime performer back to its producer. Earlier regression counts above do
+in place; follow a runtime performer back to its producer through the effect enums in each
+subject's `effects.rs`. Earlier regression counts above do
 not by themselves validate that subsequent mechanical pass.
 
 Historical measurements below remain historical. Rows R08/P02/P03 track maintaining and
