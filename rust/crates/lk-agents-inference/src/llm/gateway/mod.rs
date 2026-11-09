@@ -1,4 +1,3 @@
-use crate::effects::LlmRequestEffect;
 use crate::telemetry;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
@@ -7,13 +6,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::Mutex;
 
 use crate::headers::{Headers, gateway_headers};
-use crate::llm::machine::{LlmRequest, LlmRequestEvent, LlmRequestId, Policy};
 use crate::llm::request::ChatArgs;
 use crate::llm::{Auth, BodyEncoding, LlmOptions, models};
 use lk_agents_abi::errors::{ApiError, Invalid, ProviderError};
 use lk_agents_abi::llm::fallback::{HostChatContext, HostTools};
 use lk_agents_abi::llm::inference::{ProviderEndpoint, ResponseFormat};
-use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::{
     ApiConnectOptions, ChatContext, ChatRequest, Clock, Closed, Extra, Llm, LlmChunk, LlmStream,
@@ -25,21 +22,22 @@ use lk_agents_net::transport::HttpRequest;
 use request::build_request;
 use tokio::sync::mpsc;
 
-use crate::llm::parse::WireChunk;
+use crate::llm::parse::{ChoiceAccumulator, TagFilter, WireChunk, usage_chunk};
 use futures_util::StreamExt;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
-use lk_agents_core::request::AttemptFailure;
+pub use lk_agents_core::request::Policy;
+use lk_agents_core::request::{AttemptFailure, Request, Step};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, error_chain};
 use lk_agents_net::sse::SseDecoder;
 use lk_agents_net::task::TokioSpawner;
 
 // The request is stepped only while it is pulled or closed, so nothing runs ahead of demand.
+// The read limit runs only while the consumer waits for the next chunk: downstream backpressure
+// is not remote inactivity. A failure is retried only while nothing visible was delivered.
 
 /// Transport observations an attempt may report ahead of the consumer before it stops reading.
 const OBSERVATION_QUEUE: usize = 32;
-
-static NEXT_LLM: AtomicU64 = AtomicU64::new(1);
 
 /// One `inference.LLM` and its views per job identity: the options are shared, each view stamps
 /// its own job's headers on its requests.
@@ -51,7 +49,6 @@ pub struct GatewayLlm {
     runtime: tokio::runtime::Handle,
     clock: Arc<dyn Clock>,
     identity: Option<Headers>,
-    resource: ResourceId,
     requests: Arc<AtomicU64>,
     /// The host provider whose `error` events report the attempts this view retries.
     reporter: Option<Arc<dyn Llm>>,
@@ -72,7 +69,6 @@ impl GatewayLlm {
             runtime,
             clock,
             identity: None,
-            resource: ResourceId(NEXT_LLM.fetch_add(1, Ordering::Relaxed)),
             requests: Arc::new(AtomicU64::new(1)),
             reporter: None,
             prewarm: Mutex::new(None),
@@ -89,7 +85,6 @@ impl GatewayLlm {
             runtime: self.runtime.clone(),
             clock: self.clock.clone(),
             identity: Some(identity),
-            resource: self.resource,
             requests: self.requests.clone(),
             reporter,
             prewarm: Mutex::new(None),
@@ -123,21 +118,16 @@ impl GatewayLlm {
         let bearer = opts.auth.bearer()?;
         let request =
             build_request(&opts, identification, &images, chat_ctx, tools, args, &bearer)?;
-        let id = LlmRequestId(self.requests.fetch_add(1, Ordering::Relaxed));
         let (tx, rx) = mpsc::channel(OBSERVATION_QUEUE);
         Ok(LlmChunks {
-            start: Some(Start {
-                id,
-                llm: self.resource,
-                policy,
-                think_tags: models::think_tags(&opts.model),
-            }),
-            core: None,
+            id: self.requests.fetch_add(1, Ordering::Relaxed),
+            think_tags: models::think_tags(&opts.model),
+            phase: Phase::Pending(policy),
             rx,
             reporter: Reporter { tx, clock: self.clock.clone() },
             exchange: Arc::new(Exchange { http: self.http.clone(), request }),
             runtime: self.runtime.clone(),
-            attempts: BTreeMap::new(),
+            tasks: BTreeMap::new(),
             ready: VecDeque::new(),
             outcome: None,
             ended: false,
@@ -342,29 +332,76 @@ struct Exchange {
     request: HttpRequest,
 }
 
-/// What accepts the request at its first pull.
-struct Start {
-    id: LlmRequestId,
-    llm: ResourceId,
-    policy: Policy,
-    think_tags: (&'static str, &'static str),
+/// What the attempts report, and the consumer's own inputs. Every attempt-scoped event names its
+/// attempt; one from an attempt that is no longer current only settles that attempt's cleanup.
+#[derive(Debug)]
+enum Event {
+    /// A deadline from [`LlmChunks::wake_at`] is due.
+    Wake,
+    /// The consumer started or stopped waiting for the next chunk.
+    DemandStarted,
+    DemandEnded,
+    Connected {
+        attempt: u32,
+    },
+    RequestWritten {
+        attempt: u32,
+    },
+    /// Response bytes that completed no event.
+    Progress {
+        attempt: u32,
+    },
+    /// One decoded completion chunk.
+    Chunk {
+        attempt: u32,
+        chunk: WireChunk,
+    },
+    /// The `[DONE]` sentinel.
+    Ended {
+        attempt: u32,
+    },
+    Failed {
+        attempt: u32,
+        failure: AttemptFailure,
+    },
+    /// The attempt's transport resources are released.
+    AttemptClosed {
+        attempt: u32,
+    },
+    /// The consumer gave up on the request.
+    Cancel,
+}
+
+enum Phase {
+    /// No I/O until the first pull, which accepts the request: its total limit runs from there.
+    Pending(Policy),
+    Accepted(Box<Accepted>),
+}
+
+struct Accepted {
+    attempts: Request,
+    /// The current attempt's response assembly; a retry starts over.
+    choices: ChoiceAccumulator,
+    filter: TagFilter,
+    /// Since when the consumer has been waiting, if it is.
+    demand: Option<Ts>,
 }
 
 /// One request's chunks, in order, then its outcome.
 pub struct LlmChunks {
-    start: Option<Start>,
-    /// The accepted request; `None` until the first pull.
-    core: Option<LlmRequest>,
-    rx: mpsc::Receiver<Stamped<LlmRequestEvent>>,
-    reporter: Reporter<LlmRequestEvent>,
+    id: u64,
+    think_tags: (&'static str, &'static str),
+    phase: Phase,
+    rx: mpsc::Receiver<Stamped<Event>>,
+    reporter: Reporter<Event>,
     exchange: Arc<Exchange>,
     runtime: tokio::runtime::Handle,
-    attempts: BTreeMap<u32, OwnedTask>,
+    tasks: BTreeMap<u32, OwnedTask>,
     ready: VecDeque<LlmChunk>,
     outcome: Option<Result<(), ApiError>>,
     ended: bool,
     cleanup_incomplete: bool,
-    /// The instant the core was last stepped at; supplied time never goes back.
+    /// The instant the request was last stepped at; supplied time never goes back.
     now: Ts,
     host: Option<Arc<dyn Llm>>,
 }
@@ -379,13 +416,9 @@ impl LlmChunks {
         if self.ended {
             return Ok(None);
         }
-        if let Some(start) = self.start.take() {
+        if let Phase::Pending(policy) = self.phase {
             let now = self.reporter.clock.now().max(self.now);
-            let (core, effects) =
-                LlmRequest::start(start.id, start.llm, start.policy, start.think_tags, now);
-            self.core = Some(core);
-            self.now = now;
-            self.apply(effects);
+            self.accept(policy, now);
         }
         let demand = Demand::start(self);
         demand.0.wait().await
@@ -395,8 +428,8 @@ impl LlmChunks {
     /// transport. A missed deadline is reported, never waited on further.
     pub async fn close(mut self, deadline: Ts) -> Closed {
         let now = self.reporter.clock.now();
-        self.step(LlmRequestEvent::Cancel, now);
-        while self.core.as_ref().is_some_and(|core| !core.is_settled()) {
+        self.step(Event::Cancel, now);
+        while matches!(&self.phase, Phase::Accepted(a) if !a.attempts.is_settled()) {
             let wake = self.wake_at().map_or(deadline, |at| at.min(deadline));
             tokio::select! {
                 biased;
@@ -406,7 +439,7 @@ impl LlmChunks {
                         log::error!(target: lk_agents_abi::LOG_TARGET, "LLM request cleanup missed its deadline");
                         return Closed::TimedOut;
                     }
-                    self.step(LlmRequestEvent::Wake, wake);
+                    self.step(Event::Wake, wake);
                 }
             }
         }
@@ -428,59 +461,123 @@ impl LlmChunks {
                 biased;
                 Some(observed) = self.rx.recv() => self.step(observed.event, observed.at),
                 () = async { clock.wait_until(wake.unwrap_or(Ts::from_nanos(u64::MAX))).await }, if wake.is_some() => {
-                    self.step(LlmRequestEvent::Wake, wake.unwrap_or(self.now));
+                    self.step(Event::Wake, wake.unwrap_or(self.now));
                 }
             }
         }
     }
 
+    /// Accepts the request at `now` and launches its first attempt.
+    fn accept(&mut self, policy: Policy, now: Ts) {
+        let mut steps = Vec::new();
+        let attempts = Request::start(policy, now, &mut steps);
+        self.phase = Phase::Accepted(Box::new(Accepted {
+            attempts,
+            choices: ChoiceAccumulator::new(),
+            filter: TagFilter::new(self.think_tags.0, self.think_tags.1),
+            demand: None,
+        }));
+        self.now = now;
+        self.apply(steps);
+    }
+
+    /// The earliest instant an [`Event::Wake`] has work to do.
     fn wake_at(&self) -> Option<Ts> {
-        self.core.as_ref().and_then(LlmRequest::wake_at)
+        match &self.phase {
+            Phase::Pending(_) => None,
+            Phase::Accepted(a) => a.attempts.wake_at(a.demand),
+        }
     }
 
     /// Applies `event` at `at`, after every deadline due by then. Before the first pull there is
     /// no request to apply it to.
-    fn step(&mut self, event: LlmRequestEvent, at: Ts) {
-        let Some(core) = self.core.as_mut() else { return };
+    fn step(&mut self, event: Event, at: Ts) {
+        if matches!(self.phase, Phase::Pending(_)) {
+            return;
+        }
         let at = at.max(self.now);
-        let mut effects = Vec::new();
-        while let Some(due) = core.wake_at().filter(|due| *due <= at) {
+        while let Some(due) = self.wake_at().filter(|due| *due <= at) {
             self.now = due.max(self.now);
-            let woken = core.handle(LlmRequestEvent::Wake, self.now);
-            if woken.is_empty() && core.wake_at() == Some(due) {
+            let mut steps = Vec::new();
+            let Phase::Accepted(a) = &mut self.phase else { return };
+            a.attempts.wake(self.now, a.demand, &mut steps);
+            let idle = steps.iter().all(|step| matches!(step, Step::Unresolved));
+            self.apply(steps);
+            if idle && self.wake_at() == Some(due) {
                 break;
             }
-            effects.extend(woken);
         }
         self.now = at;
-        if let LlmRequestEvent::AttemptClosed { attempt } = &event {
-            self.attempts.remove(attempt);
+        if let Event::AttemptClosed { attempt } = &event {
+            self.tasks.remove(attempt);
         }
-        effects.extend(core.handle(event, at));
-        self.apply(effects);
+        let Phase::Accepted(a) = &mut self.phase else { return };
+        let mut steps = Vec::new();
+        match event {
+            Event::Wake => a.attempts.wake(at, a.demand, &mut steps),
+            Event::DemandStarted => a.demand = Some(at),
+            Event::DemandEnded => a.demand = None,
+            Event::Cancel => a.attempts.cancel(at, &mut steps),
+            Event::AttemptClosed { attempt } => a.attempts.closed(attempt, at, &mut steps),
+            Event::Connected { attempt } => a.attempts.connected(attempt, at),
+            Event::RequestWritten { attempt } => a.attempts.written(attempt, at),
+            Event::Progress { attempt } => a.attempts.progress(attempt, at),
+            Event::Chunk { attempt, chunk } => {
+                a.attempts.progress(attempt, at);
+                if a.attempts.current() == Some(attempt) {
+                    for choice in &chunk.choices {
+                        if let Some(parsed) =
+                            a.choices.parse_choice(&chunk.id, choice, &mut a.filter)
+                        {
+                            if parsed.has_response() {
+                                a.attempts.delivered();
+                            }
+                            self.ready.push_back(parsed);
+                        }
+                    }
+                    self.ready.extend(usage_chunk(&chunk));
+                }
+            }
+            Event::Ended { attempt } => {
+                if a.attempts.succeeded(attempt, at) {
+                    self.outcome = Some(Ok(()));
+                }
+            }
+            Event::Failed { attempt, failure } => {
+                a.attempts.failed(attempt, failure, at, &mut steps)
+            }
+        }
+        self.apply(steps);
     }
 
-    fn apply(&mut self, effects: Vec<LlmRequestEffect>) {
-        for effect in effects {
-            match effect {
-                LlmRequestEffect::LlmRequestStart { attempt, .. } => self.start_attempt(attempt),
-                LlmRequestEffect::LlmRequestCancel { attempt, .. } => {
-                    if let Some(task) = self.attempts.get_mut(&attempt) {
+    fn apply(&mut self, steps: Vec<Step>) {
+        for step in steps {
+            match step {
+                Step::Launch(attempt) => {
+                    if let Phase::Accepted(a) = &mut self.phase {
+                        a.choices = ChoiceAccumulator::new();
+                        a.filter = TagFilter::new(self.think_tags.0, self.think_tags.1);
+                    }
+                    self.start_attempt(attempt);
+                }
+                Step::Stop(attempt) => {
+                    if let Some(task) = self.tasks.get_mut(&attempt) {
                         task.cancel();
                     }
                 }
-                LlmRequestEffect::Deliver(chunk) => self.ready.push_back(chunk),
-                LlmRequestEffect::AttemptFailed { attempt, error } => {
+                Step::Retry { attempt, error } => {
                     log::warn!(target: lk_agents_abi::LOG_TARGET, attempt, error = error.message.as_str(); "LLM request attempt failed, retrying");
                     if let Some(host) = &self.host {
                         host.failed(ProviderError::Local(error), true);
                     }
                 }
-                LlmRequestEffect::Finished(outcome) => self.outcome = Some(outcome),
-                LlmRequestEffect::CleanupIncomplete { request_id, attempt } => {
+                Step::GiveUp(error) => self.outcome = Some(Err(error)),
+                Step::CleanupIncomplete(attempt) => {
                     self.cleanup_incomplete = true;
-                    log::error!(target: lk_agents_abi::LOG_TARGET, request = request_id.0, attempt; "LLM request attempt did not release its transport in time");
+                    log::error!(target: lk_agents_abi::LOG_TARGET, request = self.id, attempt; "LLM request attempt did not release its transport in time");
                 }
+                // A generation is never retired: its consumer's cancel ends it.
+                Step::Unresolved => {}
             }
         }
     }
@@ -496,10 +593,10 @@ impl LlmChunks {
             if outcome == TaskOutcome::Panicked {
                 log::error!(target: lk_agents_abi::LOG_TARGET, attempt; "LLM request attempt panicked");
             }
-            closed.report(LlmRequestEvent::AttemptClosed { attempt }).await;
+            closed.report(Event::AttemptClosed { attempt }).await;
         };
         let task = TokioSpawner::new(self.runtime.clone()).spawn_settled(work, settle);
-        self.attempts.insert(attempt, task);
+        self.tasks.insert(attempt, task);
     }
 }
 
@@ -509,7 +606,7 @@ struct Demand<'a>(&'a mut LlmChunks);
 impl<'a> Demand<'a> {
     fn start(chunks: &'a mut LlmChunks) -> Self {
         let now = chunks.reporter.clock.now();
-        chunks.step(LlmRequestEvent::DemandStarted, now);
+        chunks.step(Event::DemandStarted, now);
         Demand(chunks)
     }
 }
@@ -517,7 +614,7 @@ impl<'a> Demand<'a> {
 impl Drop for Demand<'_> {
     fn drop(&mut self) {
         let now = self.0.reporter.clock.now();
-        self.0.step(LlmRequestEvent::DemandEnded, now);
+        self.0.step(Event::DemandEnded, now);
     }
 }
 
@@ -542,18 +639,18 @@ async fn send_attempt(
     http: &GatewayHttp,
     request: HttpRequest,
     attempt: u32,
-    reporter: Reporter<LlmRequestEvent>,
+    reporter: Reporter<Event>,
 ) {
     let sent = |sent| match sent {
-        Sent::Connected => LlmRequestEvent::Connected { attempt },
-        Sent::RequestWritten => LlmRequestEvent::RequestWritten { attempt },
+        Sent::Connected => Event::Connected { attempt },
+        Sent::RequestWritten => Event::RequestWritten { attempt },
     };
     let failure = match http.send(request, &reporter, sent).await {
         Err(failure) => Some(failure),
         Ok(response) => read_events(response, attempt, &reporter).await,
     };
     if let Some(failure) = failure {
-        reporter.report(LlmRequestEvent::Failed { attempt, failure }).await;
+        reporter.report(Event::Failed { attempt, failure }).await;
     }
 }
 
@@ -562,7 +659,7 @@ async fn send_attempt(
 async fn read_events(
     response: reqwest::Response,
     attempt: u32,
-    reporter: &Reporter<LlmRequestEvent>,
+    reporter: &Reporter<Event>,
 ) -> Option<AttemptFailure> {
     let request_id = response
         .headers()
@@ -587,14 +684,14 @@ async fn read_events(
             return Some(AttemptFailure::Malformed(err.to_string()));
         }
         if events.is_empty() {
-            reporter.report(LlmRequestEvent::Progress { attempt }).await;
+            reporter.report(Event::Progress { attempt }).await;
         }
         for event in events.drain(..) {
             let event = match decode_event(&event.data, attempt, request_id.as_deref()) {
                 Ok(event) => event,
                 Err(failure) => return Some(failure),
             };
-            let ended = matches!(event, LlmRequestEvent::Ended { .. });
+            let ended = matches!(event, Event::Ended { .. });
             reporter.report(event).await;
             if ended {
                 return None;
@@ -608,12 +705,12 @@ fn decode_event(
     data: &str,
     attempt: u32,
     request_id: Option<&str>,
-) -> Result<LlmRequestEvent, AttemptFailure> {
+) -> Result<Event, AttemptFailure> {
     if data == "[DONE]" {
-        return Ok(LlmRequestEvent::Ended { attempt });
+        return Ok(Event::Ended { attempt });
     }
     match serde_json::from_str::<CompletionEvent>(data) {
-        Ok(CompletionEvent::Chunk(chunk)) => Ok(LlmRequestEvent::Chunk { attempt, chunk }),
+        Ok(CompletionEvent::Chunk(chunk)) => Ok(Event::Chunk { attempt, chunk }),
         Ok(CompletionEvent::Error { error }) => Err(AttemptFailure::Rejected {
             status: i64::from(error.code),
             message: error.message,

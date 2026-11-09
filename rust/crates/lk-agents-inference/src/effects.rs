@@ -1,10 +1,9 @@
 use crate::avatar::machine::{AvatarRequestId, CreateFailure, ProviderSession, Retirement};
 use crate::interruption::{OverlappingSpeechEvent, RequestIdentity};
-use crate::llm::machine::LlmRequestId;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::ReqId;
-use lk_agents_abi::{LlmChunk, SpeechEvent, SynthesizedAudio, TranscriptChunk, Ts};
+use lk_agents_abi::{SpeechEvent, SynthesizedAudio, TranscriptChunk, Ts};
 
 /// Recognition stream work from [`SttStream`](crate::stt::machine::SttStream), performed by
 /// the private STT executor (`stt/executor.rs`).
@@ -27,34 +26,6 @@ pub enum TtsSynthesisEffect {
     TtsAudio(SynthesizedAudio),
     Finished(Result<(), ApiError>),
     TtsCancel,
-}
-
-/// LLM request work from [`LlmRequest`](crate::llm::machine::LlmRequest), performed by
-/// [`LlmChunks`](crate::llm::gateway::LlmChunks).
-#[derive(Debug, Clone, PartialEq)]
-pub enum LlmRequestEffect {
-    LlmRequestStart {
-        request_id: LlmRequestId,
-        attempt: u32,
-        llm: ResourceId,
-    },
-    LlmRequestCancel {
-        request_id: LlmRequestId,
-        attempt: u32,
-    },
-    Deliver(LlmChunk),
-    /// A failed attempt that will be retried.
-    AttemptFailed {
-        attempt: u32,
-        error: ApiError,
-    },
-    /// The request's single outcome. Cancellation has none: the consumer asked for it.
-    Finished(Result<(), ApiError>),
-    /// An attempt missed its cleanup deadline; the runtime still owns it.
-    CleanupIncomplete {
-        request_id: LlmRequestId,
-        attempt: u32,
-    },
 }
 
 /// Fallback request work from [`ChainRequest`](crate::fallback::machine::ChainRequest),

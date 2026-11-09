@@ -1,6 +1,5 @@
 pub mod algorithms;
 pub mod gateway;
-pub mod machine;
 pub mod models;
 pub mod parse;
 pub mod request;

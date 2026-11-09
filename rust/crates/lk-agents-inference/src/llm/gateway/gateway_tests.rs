@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use lk_agents_abi::errors::{ApiErrorKind, Timeout};
 use lk_agents_abi::{ChatContext, Clock, Closed};
+use lk_agents_inference::llm::gateway::Policy;
 use lk_agents_inference::llm::gateway::{GatewayLlm, LlmChunks};
-use lk_agents_inference::llm::machine::Policy;
 use lk_agents_inference::llm::{Auth, LlmOptions};
 use lk_agents_net::clock::RealClock;
 use lk_agents_net::http::GatewayHttp;
@@ -30,6 +30,7 @@ enum Reply {
     StatusHeaders(u16, &'static str, &'static str),
 }
 
+#[derive(Default)]
 struct Peer {
     url: String,
     requests: Arc<AtomicUsize>,
@@ -440,7 +441,7 @@ mod live {
 
     use lk_agents_abi::{ChatContext, Role};
     use lk_agents_inference::llm::gateway::GatewayLlm;
-    use lk_agents_inference::llm::machine::Policy;
+    use lk_agents_inference::llm::gateway::Policy;
     use lk_agents_inference::llm::{Auth, LlmOptions};
     use lk_agents_net::clock::RealClock;
     use lk_agents_net::http::GatewayHttp;
@@ -539,5 +540,341 @@ mod live {
         eprintln!("live 4xx: {err:?}");
         assert!(err.status_code.is_some_and(|s| (400..500).contains(&s)), "{err:?}");
         assert!(!err.retryable && !err.message.is_empty());
+    }
+}
+
+/// The request's decisions, stepped by hand at chosen instants. Its attempts are spawned but never
+/// polled (the test never yields), so their reports never arrive.
+mod stepped {
+    use std::time::Duration;
+
+    use super::super::{Event, LlmChunks, Phase};
+    use crate::llm::parse::WireChunk;
+    use lk_agents_abi::errors::{ApiError, ApiErrorKind, Timeout};
+    use lk_agents_abi::{HOST_TEARDOWN_TIMEOUT, LlmChunk, Ts};
+    use lk_agents_core::request::{AttemptFailure, Policy};
+
+    fn at(ms: u64) -> Ts {
+        Ts::from_nanos(ms * 1_000_000)
+    }
+
+    fn policy() -> Policy {
+        Policy {
+            connect_timeout: Some(Duration::from_secs(10)),
+            write_timeout: Some(Duration::from_secs(10)),
+            read_timeout: Some(Duration::from_secs(10)),
+            total_timeout: None,
+            max_retry: 3,
+            retry_interval: Duration::from_secs(2),
+        }
+    }
+
+    fn start(policy: Policy) -> LlmChunks {
+        let peer = super::Peer { url: "http://127.0.0.1:9/v1".into(), ..Default::default() };
+        let mut chunks = super::open(&super::llm(&peer), policy);
+        chunks.accept(policy, at(0));
+        chunks
+    }
+
+    fn launched(chunks: &LlmChunks) -> Vec<u32> {
+        chunks.tasks.keys().copied().collect()
+    }
+
+    fn settled(chunks: &LlmChunks) -> bool {
+        matches!(&chunks.phase, Phase::Accepted(a) if a.attempts.is_settled())
+    }
+
+    fn outcome(chunks: &mut LlmChunks) -> Option<Result<(), ApiError>> {
+        chunks.outcome.take()
+    }
+
+    fn error(chunks: &mut LlmChunks) -> ApiError {
+        outcome(chunks).expect("an outcome").unwrap_err()
+    }
+
+    fn delivered(chunks: &mut LlmChunks) -> Vec<LlmChunk> {
+        chunks.ready.drain(..).collect()
+    }
+
+    fn text(content: &str) -> WireChunk {
+        serde_json::from_value(
+            serde_json::json!({"id": "c", "choices": [{"delta": {"content": content}}]}),
+        )
+        .unwrap()
+    }
+
+    fn failure() -> AttemptFailure {
+        AttemptFailure::Connection("reset".into())
+    }
+
+    /// Brings attempt `n` to the point where a response is expected, with the consumer waiting.
+    fn reading(chunks: &mut LlmChunks, attempt: u32, now: Ts) {
+        chunks.step(Event::DemandStarted, now);
+        chunks.step(Event::Connected { attempt }, now);
+        chunks.step(Event::RequestWritten { attempt }, now);
+    }
+
+    // Catches: retrying without backoff, a first retry on `retry_interval` instead of 100 ms, or
+    // exceeding `max_retry` additional attempts.
+    #[tokio::test]
+    async fn failures_before_output_are_retried_max_retry_times_with_backoff() {
+        let mut chunks = start(policy());
+        let mut now = at(0);
+        for attempt in 0..=3u32 {
+            chunks.step(Event::Failed { attempt, failure: failure() }, now);
+            chunks.step(Event::AttemptClosed { attempt }, now);
+            if attempt == 3 {
+                let err = error(&mut chunks);
+                assert_eq!(err.kind, ApiErrorKind::Connection);
+                assert!(err.retryable, "nothing was delivered: a fallback may still try");
+                assert!(settled(&chunks));
+                return;
+            }
+            assert_eq!(outcome(&mut chunks), None);
+            let backoff = if attempt == 0 { 100 } else { 2_000 };
+            let due = now.saturating_add(Duration::from_millis(backoff));
+            chunks.step(Event::Wake, due.saturating_sub(Duration::from_millis(1)));
+            assert_eq!(launched(&chunks), Vec::<u32>::new());
+            chunks.step(Event::Wake, due);
+            assert_eq!(launched(&chunks), vec![attempt + 1]);
+            now = due;
+        }
+    }
+
+    // Catches: replaying a request whose answer already reached the consumer.
+    #[tokio::test]
+    async fn a_failure_after_visible_output_ends_the_request_unretryable() {
+        let mut chunks = start(policy());
+        reading(&mut chunks, 0, at(0));
+        chunks.step(Event::Chunk { attempt: 0, chunk: text("Hel") }, at(5));
+        assert!(matches!(delivered(&mut chunks).as_slice(), [chunk] if chunk.has_response()));
+        chunks.step(Event::Failed { attempt: 0, failure: failure() }, at(6));
+        assert!(!error(&mut chunks).retryable);
+        chunks.step(Event::AttemptClosed { attempt: 0 }, at(7));
+        chunks.step(Event::Wake, at(60_000));
+        assert_eq!(launched(&chunks), Vec::<u32>::new());
+    }
+
+    // Catches: replay guarded on any chunk instead of on output the consumer can act on: the
+    // gateway's metadata-only leading delta or a tool call whose arguments are still streaming
+    // made a failure final, while a completed tool call must never be issued twice.
+    #[tokio::test]
+    async fn only_actionable_output_blocks_a_retry() {
+        let wire = |delta: serde_json::Value, finish: Option<&str>| -> WireChunk {
+            serde_json::from_value(serde_json::json!({
+                "id": "c",
+                "choices": [{"delta": delta, "finish_reason": finish}],
+            }))
+            .unwrap()
+        };
+        let metadata = wire(
+            serde_json::json!({"extra_content": {"livekit": {"inference_tier_billed": "s"}}}),
+            None,
+        );
+        let call = wire(
+            serde_json::json!({"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "lookup"}}]}),
+            None,
+        );
+        let args = wire(
+            serde_json::json!({"tool_calls": [{"index": 0, "function": {"arguments": "{}"}}]}),
+            None,
+        );
+        let done = wire(serde_json::json!({}), Some("tool_calls"));
+        let attempts: [&[WireChunk]; 3] = [
+            std::slice::from_ref(&metadata),
+            &[metadata.clone(), call.clone(), args.clone()],
+            &[call, args, done],
+        ];
+        let mut chunks = start(policy());
+        let mut now = at(0);
+        for (attempt, wires) in (0u32..).zip(attempts) {
+            reading(&mut chunks, attempt, now);
+            for chunk in wires {
+                chunks.step(Event::Chunk { attempt, chunk: chunk.clone() }, now);
+            }
+            chunks.step(Event::Failed { attempt, failure: failure() }, now);
+            if attempt < 2 {
+                assert_eq!(outcome(&mut chunks), None, "attempt {attempt} is retried");
+                chunks.step(Event::AttemptClosed { attempt }, now);
+                now = chunks.wake_at().unwrap();
+                chunks.step(Event::Wake, now);
+                assert_eq!(launched(&chunks), vec![attempt + 1]);
+            } else {
+                assert!(!error(&mut chunks).retryable);
+            }
+        }
+    }
+
+    // Catches: status retry rules lost in the request: a 401 retried, a 429 not.
+    #[tokio::test]
+    async fn a_rejection_is_retried_only_when_its_status_is_transient() {
+        let reject = |status| AttemptFailure::Rejected {
+            status,
+            message: "no".into(),
+            request_id: None,
+            retryable: None,
+        };
+        let mut chunks = start(policy());
+        chunks.step(Event::Failed { attempt: 0, failure: reject(429) }, at(0));
+        assert_eq!(outcome(&mut chunks), None);
+        chunks.step(Event::Wake, at(100));
+        chunks.step(Event::Failed { attempt: 1, failure: reject(401) }, at(100));
+        let err = error(&mut chunks);
+        assert_eq!(
+            (err.kind, err.status_code, err.retryable),
+            (ApiErrorKind::Status, Some(401), false)
+        );
+    }
+
+    // Catches: a read timer that counts the consumer's own pauses (backpressure) as remote
+    // silence, or one not restarted by progress.
+    #[tokio::test]
+    async fn the_read_limit_counts_remote_silence_only_while_the_consumer_waits() {
+        let mut chunks = start(Policy { max_retry: 0, ..policy() });
+        reading(&mut chunks, 0, at(0));
+        chunks.step(Event::Chunk { attempt: 0, chunk: text("a") }, at(9_000));
+        assert_eq!(chunks.wake_at(), Some(at(19_000)), "progress restarts the limit");
+        // The consumer stops pulling for a minute: no read timer runs meanwhile.
+        chunks.step(Event::DemandEnded, at(9_001));
+        assert_eq!(chunks.wake_at(), None);
+        chunks.step(Event::Wake, at(60_000));
+        assert_eq!(outcome(&mut chunks), None);
+        chunks.step(Event::DemandStarted, at(70_000));
+        assert_eq!(chunks.wake_at(), Some(at(80_000)));
+        chunks.step(Event::Wake, at(80_000));
+        let err = error(&mut chunks);
+        assert_eq!((err.kind, err.timeout), (ApiErrorKind::Timeout, Some(Timeout::Read)));
+    }
+
+    // Catches: one timer for the whole exchange, or a timeout reported without its phase.
+    #[tokio::test]
+    async fn connect_and_write_limits_report_their_own_phase() {
+        let limited =
+            Policy { write_timeout: Some(Duration::from_secs(3)), max_retry: 0, ..policy() };
+        let mut chunks = start(limited);
+        chunks.step(Event::Wake, at(10_000));
+        assert_eq!(error(&mut chunks).timeout, Some(Timeout::Connect));
+        let mut chunks = start(limited);
+        chunks.step(Event::Connected { attempt: 0 }, at(1_000));
+        assert_eq!(chunks.wake_at(), Some(at(4_000)));
+        chunks.step(Event::Wake, at(4_000));
+        assert_eq!(error(&mut chunks).timeout, Some(Timeout::Write));
+    }
+
+    // Catches: a total deadline reset by retries or progress, or an attempt launched after it.
+    #[tokio::test]
+    async fn the_total_limit_spans_every_attempt_and_stops_the_request() {
+        let mut chunks = start(Policy { total_timeout: Some(Duration::from_secs(3)), ..policy() });
+        chunks.step(Event::Failed { attempt: 0, failure: failure() }, at(0));
+        chunks.step(Event::AttemptClosed { attempt: 0 }, at(0));
+        chunks.step(Event::Wake, at(100));
+        reading(&mut chunks, 1, at(100));
+        chunks.step(Event::Progress { attempt: 1 }, at(2_900));
+        assert_eq!(chunks.wake_at(), Some(at(3_000)));
+        chunks.step(Event::Wake, at(3_000));
+        let err = error(&mut chunks);
+        assert_eq!((err.timeout, err.retryable), (Some(Timeout::Total), false));
+        chunks.step(Event::Failed { attempt: 1, failure: failure() }, at(3_001));
+        chunks.step(Event::AttemptClosed { attempt: 1 }, at(3_001));
+        chunks.step(Event::Wake, at(9_000));
+        assert_eq!(launched(&chunks), Vec::<u32>::new());
+        assert_eq!(outcome(&mut chunks), None);
+    }
+
+    // Catches: a cancelled request that still retries, reports an outcome, or forgets the cleanup
+    // of the attempt it stopped.
+    #[tokio::test]
+    async fn cancel_stops_the_attempt_and_waits_for_its_cleanup() {
+        let mut chunks = start(policy());
+        chunks.step(Event::Cancel, at(10));
+        assert!(!settled(&chunks), "the attempt still owes its release");
+        chunks.step(Event::Failed { attempt: 0, failure: failure() }, at(11));
+        chunks.step(Event::AttemptClosed { attempt: 0 }, at(12));
+        assert!(settled(&chunks));
+        assert_eq!(chunks.wake_at(), None);
+        assert_eq!(outcome(&mut chunks), None);
+        assert_eq!(launched(&chunks), Vec::<u32>::new());
+    }
+
+    // Catches: a late chunk from a superseded attempt delivered into the retry's answer.
+    #[tokio::test]
+    async fn a_superseded_attempts_events_are_ignored() {
+        let mut chunks = start(policy());
+        chunks.step(Event::Failed { attempt: 0, failure: failure() }, at(0));
+        chunks.step(Event::Wake, at(100));
+        chunks.step(Event::Chunk { attempt: 0, chunk: text("stale") }, at(101));
+        chunks.step(Event::Ended { attempt: 0 }, at(102));
+        assert!(delivered(&mut chunks).is_empty());
+        assert_eq!(outcome(&mut chunks), None);
+        chunks.step(Event::Chunk { attempt: 1, chunk: text("fresh") }, at(103));
+        assert_eq!(delivered(&mut chunks).len(), 1);
+        chunks.step(Event::Ended { attempt: 1 }, at(104));
+        assert_eq!(outcome(&mut chunks), Some(Ok(())));
+    }
+
+    // Catches: an attempt that never settles reported as clean termination, or reported forever
+    // (one typed observation, ownership stays with the runtime).
+    #[tokio::test]
+    async fn a_missed_cleanup_deadline_is_reported_once() {
+        let mut chunks = start(policy());
+        chunks.step(Event::Cancel, at(0));
+        let due = at(0).saturating_add(HOST_TEARDOWN_TIMEOUT);
+        assert_eq!(chunks.wake_at(), Some(due));
+        chunks.step(Event::Wake, due);
+        assert!(chunks.cleanup_incomplete);
+        assert_eq!(chunks.wake_at(), None);
+    }
+
+    // Catches: a transport that closes an attempt without a terminal report leaving the consumer
+    // waiting forever.
+    #[tokio::test]
+    async fn an_attempt_closed_without_an_outcome_fails() {
+        let mut chunks = start(Policy { max_retry: 0, ..policy() });
+        chunks.step(Event::AttemptClosed { attempt: 0 }, at(5));
+        assert_eq!(error(&mut chunks).kind, ApiErrorKind::Connection);
+        assert!(settled(&chunks));
+    }
+
+    #[tokio::test]
+    async fn an_expired_acceptance_budget_never_authorizes_the_first_exchange() {
+        let chunks = &mut start(Policy { total_timeout: Some(Duration::ZERO), ..policy() });
+        assert_eq!(launched(chunks), Vec::<u32>::new());
+        assert_eq!(error(chunks).timeout, Some(Timeout::Total));
+    }
+
+    // Catches: the time to first token latched on the failed attempt's metadata-only chunk, or
+    // measured from the retry instead of from the request: the caller waited through the failure
+    // and the backoff before the first token.
+    #[tokio::test]
+    async fn time_to_first_token_spans_the_retry() {
+        use lk_agents_core::metrics::provider::LlmMetricState;
+
+        let metadata: WireChunk = serde_json::from_value(serde_json::json!({
+            "id": "c",
+            "choices": [{"delta": {"extra_content": {"livekit": {"inference_tier_billed": "s"}}}}],
+        }))
+        .unwrap();
+        let mut fold = LlmMetricState::new(0.0, String::new(), None);
+        let mut observe = |chunks: Vec<LlmChunk>, now: Ts| {
+            let secs = now.saturating_duration_since(at(0)).as_secs_f64();
+            for chunk in chunks {
+                fold.observe(&chunk, || secs);
+            }
+        };
+        let mut chunks = start(policy());
+        reading(&mut chunks, 0, at(0));
+        chunks.step(Event::Chunk { attempt: 0, chunk: metadata }, at(10));
+        observe(delivered(&mut chunks), at(10));
+        chunks.step(Event::Failed { attempt: 0, failure: failure() }, at(20));
+        chunks.step(Event::AttemptClosed { attempt: 0 }, at(20));
+        let retry = chunks.wake_at().unwrap();
+        chunks.step(Event::Wake, retry);
+        assert_eq!(launched(&chunks), vec![1]);
+        reading(&mut chunks, 1, retry);
+        let first = retry.saturating_add(Duration::from_millis(30));
+        chunks.step(Event::Chunk { attempt: 1, chunk: text("hi") }, first);
+        observe(delivered(&mut chunks), first);
+        let ttft = fold.ttft().expect("the retry answered");
+        assert!((ttft - 0.15).abs() < 1e-9, "ttft {ttft}");
     }
 }
