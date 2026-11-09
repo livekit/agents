@@ -191,6 +191,7 @@ class _Delegation:
         ctx = self._ctx
         assert ctx._session is not None
         ctx._expert_answer = asyncio.get_running_loop().create_future()
+        ctx._session._settled_by_events(ctx._expert_answer)
         outcome = ToolOutcomeInputRequired(question=question, verbatim=verbatim)
         try:
             ctx._tool_update(ToolReport(outcome=outcome))

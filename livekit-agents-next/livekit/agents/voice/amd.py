@@ -205,6 +205,10 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     async def aclose(self) -> None:
         if self._attached:
             self._session._running.amd_close()
+        self._release()
+
+    def _release(self) -> None:
+        """Detached, with no verdict if none came: ``execute()`` stops waiting."""
         self._attached = False
         self._verdict_ready.set()
         if self._session._amd is self:

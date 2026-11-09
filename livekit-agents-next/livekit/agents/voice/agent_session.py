@@ -111,6 +111,8 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     _store: ContextStore | None
     _room: rtc.Room | None
     _amd: AMD | None
+    # what only the core's events settle: failed if they end first
+    _event_settled: set[asyncio.Future[Any]]
     _event_snapshots: deque[dict[str, Any]]
     _root_span_context: Any
     _text_input_cb: TextInputCallback | None
@@ -354,6 +356,7 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         """Reply to typed ``user_input`` now; awaited, the run settles as a text run does (the
         remote session's text input and the voice conformance tests)."""
         settled: asyncio.Future[RunFinished] = asyncio.get_running_loop().create_future()
+        self._settled_by_events(settled)
         self._running.run(user_input=user_input, origin=_origin(), host=settled)
 
         async def result() -> RunResult[Any]:
@@ -430,6 +433,21 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
             dispatch(self, wire)
         finally:
             _delivered.reset(token)
+
+    def _core_events_ended(self) -> None:
+        """The core's events ended, however the session did: whatever only they would settle
+        settles now, so nothing awaits a session that is gone."""
+        ended = RuntimeError("the voice session ended")
+        for future in list(self._event_settled):
+            if not future.done():
+                future.set_exception(ended)
+        if self._amd is not None:
+            self._amd._release()
+
+    def _settled_by_events(self, future: asyncio.Future[Any]) -> None:
+        """Fails ``future`` when the core's events end before one settles it."""
+        self._event_settled.add(future)
+        future.add_done_callback(self._event_settled.discard)
 
     def _core_history_items(self, items: list[ChatItem]) -> list[ChatItem]:
         """The objects the history holds for ``items``: these, as the binding made them."""

@@ -144,6 +144,7 @@ def initialize(
     session._native = _core._core_SessionOwner(session._options)
     session._room = None
     session._amd = None
+    session._event_settled = set()
     # the native options own the providers: `session.stt`, `tts` and `vad` read them
     session._options.update_providers({"stt": stt_model, "tts": tts_model, "vad": vad_model})
     session._input = io.AgentInput(session)

@@ -795,3 +795,29 @@ def test_a_task_started_while_the_loop_shuts_down_is_cancelled_before_it_closes(
     close_loop(loop)
     assert loop.is_closed()
     assert started and started[0].cancelled(), "a task left pending in the closed loop"
+
+
+async def test_the_end_of_the_core_events_settles_what_only_they_would() -> None:
+    import asyncio
+
+    from livekit.agents import Agent, VoiceSession
+    from livekit.agents.voice.amd import AMD
+    from tests.fake_llm import FakeLLM
+
+    async with VoiceSession(llm=FakeLLM(), vad=None, turn_detection="manual") as session:
+        await session.start(Agent(instructions="Welcome the caller.", name="desk"))
+        amd = AMD(session, llm=None, stt=None)
+        await amd.__aenter__()
+        verdict = asyncio.ensure_future(amd.execute())
+        # what `_run` and an expert's question register
+        answer: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        session._settled_by_events(answer)
+        await asyncio.sleep(0)
+        assert not verdict.done()
+
+        session._core_events_ended()
+        with pytest.raises(RuntimeError, match="amd closed before a result"):
+            await verdict
+        with pytest.raises(RuntimeError, match="the voice session ended"):
+            await answer
+        assert not session._event_settled and session._amd is None
