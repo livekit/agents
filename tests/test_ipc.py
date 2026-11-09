@@ -261,6 +261,17 @@ async def _job_entrypoint_raises_after_shutdown(job_ctx: JobContext) -> None:
         trigger_task.cancel()
 
 
+async def _job_entrypoint_raises(job_ctx: JobContext) -> None:
+    start_args: _StartArgs = job_ctx.proc.user_arguments
+
+    async def _job_shutdown() -> None:
+        with start_args.shutdown_counter.get_lock():
+            start_args.shutdown_counter.value += 1
+
+    job_ctx.add_shutdown_callback(_job_shutdown)
+    raise RuntimeError("entrypoint failed before connecting")
+
+
 async def _poll_until(
     condition_fn: Callable[[], bool], *, timeout: float = 10.0, poll_interval: float = 0.05
 ) -> None:
@@ -658,6 +669,35 @@ async def test_shutdown_callback_runs_when_entrypoint_raises():
     assert start_args.shutdown_counter.value == 1, (
         "shutdown callback must run even when entrypoint raises"
     )
+
+
+@pytest.mark.parametrize("executor_type", [job.JobExecutorType.PROCESS, job.JobExecutorType.THREAD])
+async def test_entrypoint_error_reports_failure(executor_type: job.JobExecutorType):
+    if executor_type == job.JobExecutorType.PROCESS:
+        proc, start_args = _create_proc(
+            close_timeout=10.0,
+            mp_ctx=mp.get_context("spawn"),
+            job_entrypoint_fnc=_job_entrypoint_raises,
+        )
+    else:
+        proc, start_args = _create_thread_proc(
+            close_timeout=10.0,
+            job_entrypoint_fnc=_job_entrypoint_raises,
+        )
+
+    try:
+        await proc.start()
+        await proc.initialize()
+        await proc.launch_job(_generate_fake_job())
+        await asyncio.wait_for(proc.join(), timeout=20.0)
+
+        assert start_args.shutdown_counter.value == 1
+        assert proc.status == ipc.job_executor.JobStatus.FAILED
+        if executor_type == job.JobExecutorType.PROCESS:
+            assert proc.exitcode != 0
+            assert not proc.killed
+    finally:
+        await proc.aclose()
 
 
 async def test_job_graceful_shutdown():
