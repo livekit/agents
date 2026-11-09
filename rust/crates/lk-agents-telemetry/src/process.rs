@@ -56,17 +56,22 @@ impl Instruments {
         let index = match instruments.iter().position(|(i, _)| i.name == M::NAME) {
             Some(index) => index,
             None => {
-                let value = match M::KIND {
-                    InstrumentKind::Histogram => {
-                        Value::Histogram { buckets: vec![0; M::BOUNDS.len() + 1], sum: 0.0 }
-                    }
-                    InstrumentKind::Counter | InstrumentKind::Gauge => Value::Gauge(0.0),
-                };
-                instruments.push((Instrument::of::<M>(), value));
+                instruments.push((Instrument::of::<M>(), Value::zero::<M>()));
                 instruments.len() - 1
             }
         };
         update(&mut instruments[index].1);
+    }
+}
+
+impl Value {
+    fn zero<M: MetricDecl>() -> Self {
+        match M::KIND {
+            InstrumentKind::Histogram => {
+                Value::Histogram { buckets: vec![0; M::BOUNDS.len() + 1], sum: 0.0 }
+            }
+            InstrumentKind::Counter | InstrumentKind::Gauge => Value::Gauge(0.0),
+        }
     }
 }
 
