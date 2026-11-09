@@ -831,8 +831,21 @@ class RealtimeModel(llm.RealtimeModel):
 
         return self._http_session
 
-    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
-        sess = RealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
+    def session(
+        self,
+        *,
+        turn_detection_disabled: bool = False,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> RealtimeSession:
+        sess = RealtimeSession(
+            self,
+            turn_detection_disabled=turn_detection_disabled,
+            instructions=instructions,
+            chat_ctx=chat_ctx,
+            tools=tools,
+        )
         self._sessions.add(sess)
         return sess
 
@@ -906,7 +919,13 @@ class RealtimeSession(
     """
 
     def __init__(
-        self, realtime_model: RealtimeModel, *, turn_detection_disabled: bool = False
+        self,
+        realtime_model: RealtimeModel,
+        *,
+        turn_detection_disabled: bool = False,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> None:
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModel = realtime_model
@@ -922,15 +941,17 @@ class RealtimeSession(
             if turn_detection_disabled
             else realtime_model.capabilities.turn_detection,
         )
-        self._tools = llm.ToolContext.empty()
+        self._tools = llm.ToolContext(tools) if is_given(tools) else llm.ToolContext.empty()
         self._msg_ch = utils.aio.Chan[RealtimeClientEvent | dict[str, Any]]()
         self._input_resampler: rtc.AudioResampler | None = None
 
-        self._instructions: str | None = None
+        self._instructions: str | None = instructions if is_given(instructions) else None
         # set on aclose; trailing server events are ignored while it's set
         self._closing = False
         self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
         self.send_event(self._create_session_update_event())
+        if initial_tools := self._tools.flatten():
+            self.send_event(self._create_tools_update_event(initial_tools))
 
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._item_delete_future: dict[str, asyncio.Future] = {}
@@ -954,6 +975,19 @@ class RealtimeSession(
 
         self._update_chat_ctx_lock = asyncio.Lock()
         self._update_fnc_ctx_lock = asyncio.Lock()
+
+        self._initial_chat_ctx_task: asyncio.Task[None] | None = None
+        if is_given(chat_ctx) and chat_ctx.items:
+            self._initial_chat_ctx_task = asyncio.create_task(self.update_chat_ctx(chat_ctx))
+            self._initial_chat_ctx_task.add_done_callback(
+                lambda fut: (
+                    logger.error(
+                        "failed to apply the initial chat context", exc_info=fut.exception()
+                    )
+                    if not fut.cancelled() and fut.exception()
+                    else None
+                )
+            )
 
         # 100ms chunks
         self._bstream = utils.audio.AudioByteStream(
@@ -1850,6 +1884,8 @@ class RealtimeSession(
         self._closing = True
         self._close_current_generation("session closed")
         self._msg_ch.close()
+        if self._initial_chat_ctx_task and not self._initial_chat_ctx_task.done():
+            await utils.aio.cancel_and_wait(self._initial_chat_ctx_task)
         await self._main_atask
 
     def _close_current_generation(self, reason: str | None = None) -> None:

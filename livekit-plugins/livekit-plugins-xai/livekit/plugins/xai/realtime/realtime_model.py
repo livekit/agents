@@ -162,9 +162,21 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         self._capabilities.supports_say = True
         self._provider_label = "xAI Realtime API"
 
-    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+    def session(
+        self,
+        *,
+        turn_detection_disabled: bool = False,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> RealtimeSession:
         # manual turn-taking is unsupported (can_disable_turn_detection=False)
-        sess = RealtimeSession(self)
+        sess = RealtimeSession(
+            self,
+            instructions=instructions,
+            chat_ctx=chat_ctx,
+            tools=tools,
+        )
         self._sessions.add(sess)
         return sess
 
@@ -178,8 +190,20 @@ class RealtimeSession(openai.realtime.RealtimeSession):
     _pending_say_event_ids: deque[str]
     _say_tasks: set[asyncio.Task[None]]
 
-    def __init__(self, realtime_model: RealtimeModel) -> None:
-        super().__init__(realtime_model)
+    def __init__(
+        self,
+        realtime_model: RealtimeModel,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> None:
+        super().__init__(
+            realtime_model,
+            instructions=instructions,
+            chat_ctx=chat_ctx,
+            tools=tools,
+        )
         self._xai_model: RealtimeModel = realtime_model
         self._session_connected_at: float = 0.0
         self._pending_say_event_ids = deque()

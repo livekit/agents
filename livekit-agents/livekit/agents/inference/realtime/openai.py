@@ -170,8 +170,21 @@ class RealtimeModel(_RealtimeModel):
     def provider(self) -> str:
         return "livekit"
 
-    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
-        sess = RealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
+    def session(
+        self,
+        *,
+        turn_detection_disabled: bool = False,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> RealtimeSession:
+        sess = RealtimeSession(
+            self,
+            turn_detection_disabled=turn_detection_disabled,
+            instructions=instructions,
+            chat_ctx=chat_ctx,
+            tools=tools,
+        )
         self._sessions.add(sess)
         return sess
 
@@ -187,10 +200,19 @@ class RealtimeSession(_RealtimeSession):
         realtime_model: RealtimeModel,
         *,
         turn_detection_disabled: bool = False,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> None:
         self._inference_model = realtime_model
         self._is_xai = realtime_model._inference_opts.is_xai
-        super().__init__(realtime_model, turn_detection_disabled=turn_detection_disabled)
+        super().__init__(
+            realtime_model,
+            turn_detection_disabled=turn_detection_disabled,
+            instructions=instructions,
+            chat_ctx=chat_ctx,
+            tools=tools,
+        )
 
     def _reset_input_turn_state(self) -> None:
         if self._is_xai:

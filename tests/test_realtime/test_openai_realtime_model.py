@@ -836,6 +836,71 @@ _REPLAYED_CALL = [
 ]
 
 
+async def _idle_realtime_main(session: RealtimeSession) -> None:
+    await session._msg_ch._close_ev.wait()
+
+
+def _queued_events(session: RealtimeSession) -> list[dict[str, Any]]:
+    return [
+        event if isinstance(event, dict) else event.model_dump(by_alias=True, exclude_unset=True)
+        for event in session._msg_ch._queue
+    ]
+
+
+async def test_initial_session_options_queue_instructions_and_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(RealtimeSession, "_main_task", _idle_realtime_main)
+
+    @llm.function_tool(name="lookup", description="look something up")
+    async def lookup() -> str:
+        return "ok"
+
+    session = RealtimeModel(api_key="fake").session(instructions="be brief", tools=[lookup])
+    try:
+        updates = [event for event in _queued_events(session) if event["type"] == "session.update"]
+        assert len(updates) == 2
+        assert updates[0]["session"]["instructions"] == "be brief"
+        assert [tool["name"] for tool in updates[1]["session"]["tools"]] == ["lookup"]
+        assert session.tools == llm.ToolContext([lookup])
+    finally:
+        await session.aclose()
+
+
+async def test_initial_session_options_queue_chat_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(RealtimeSession, "_main_task", _idle_realtime_main)
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi there")
+    session = RealtimeModel(api_key="fake").session(chat_ctx=chat_ctx)
+    try:
+        for _ in range(100):
+            if any(
+                event["type"] == "conversation.item.create" for event in _queued_events(session)
+            ):
+                break
+            await asyncio.sleep(0)
+        assert any(event["type"] == "conversation.item.create" for event in _queued_events(session))
+    finally:
+        await session.aclose()
+
+
+async def test_initial_session_options_keep_turn_detection_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(RealtimeSession, "_main_task", _idle_realtime_main)
+    session = RealtimeModel(api_key="fake").session(
+        turn_detection_disabled=True, instructions="be brief"
+    )
+    try:
+        update = _queued_events(session)[0]
+        assert update["session"]["audio"]["input"]["turn_detection"] is None
+        assert update["session"]["instructions"] == "be brief"
+    finally:
+        await session.aclose()
+
+
 async def test_reconnect_replays_function_calls_with_their_outputs() -> None:
     # a tool still running across the reconnection sends its output for a call id the
     # new conversation must know, or the server rejects it with invalid_tool_call_id

@@ -13,6 +13,7 @@ from google.genai import types
 
 from livekit.agents import APIConnectOptions, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.plugins.google.realtime import realtime_api
 from livekit.plugins.google.realtime.api_proto import ClientEvents
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
 from livekit.plugins.google.utils import create_function_response
@@ -223,6 +224,173 @@ async def _make_configured_session(
         yield session
     finally:
         await session.aclose()
+
+
+class _FakeLiveSession:
+    def __init__(self) -> None:
+        self._closed = asyncio.Event()
+
+    async def close(self) -> None:
+        self._closed.set()
+
+    async def send_client_content(self, **kwargs: object) -> None:
+        pass
+
+    async def send_realtime_input(self, **kwargs: object) -> None:
+        pass
+
+    async def send_tool_response(self, **kwargs: object) -> None:
+        pass
+
+    async def send_context_update(self, **kwargs: object) -> None:
+        pass
+
+    async def receive(self) -> AsyncIterator[Any]:
+        await self._closed.wait()
+        if False:
+            yield types.LiveServerMessage()
+
+
+def _fake_live_client(
+    monkeypatch: pytest.MonkeyPatch, *, error: Exception | None = None
+) -> list[types.LiveConnectConfig]:
+    configs: list[types.LiveConnectConfig] = []
+
+    class _Connect:
+        def __init__(self, config: types.LiveConnectConfig) -> None:
+            self._config = config
+            self._session = _FakeLiveSession()
+
+        async def __aenter__(self) -> _FakeLiveSession:
+            configs.append(self._config)
+            if error:
+                raise error
+            return self._session
+
+        async def __aexit__(self, *args: object) -> None:
+            await self._session.close()
+
+    class _Live:
+        def connect(self, *, model: str, config: types.LiveConnectConfig) -> _Connect:
+            return _Connect(config)
+
+    class _Aio:
+        def __init__(self) -> None:
+            self.live = _Live()
+
+        async def aclose(self) -> None:
+            pass
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            self.aio = _Aio()
+
+    monkeypatch.setattr(realtime_api, "GenAIClient", _Client)
+    return configs
+
+
+@llm.function_tool(name="lookup", description="look something up")
+async def _lookup() -> str:
+    return "ok"
+
+
+def _initial_session_config() -> tuple[str, llm.ChatContext, list[llm.Tool]]:
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi there")
+    return "be brief", chat_ctx, [_lookup]
+
+
+async def test_initial_session_options_connect_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    configs = _fake_live_client(monkeypatch)
+    instructions, chat_ctx, tools = _initial_session_config()
+    session = RealtimeModel(api_key="test-key").session(
+        instructions=instructions, chat_ctx=chat_ctx, tools=tools
+    )
+    try:
+        await session._update_session(
+            instructions=instructions, chat_ctx=chat_ctx, tools=tools.copy()
+        )
+        for _ in range(100):
+            if configs:
+                break
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.02)
+        assert len(configs) == 1
+        assert configs[0].system_instruction == types.Content(parts=[types.Part(text="be brief")])
+        assert "lookup" in configs[0].model_dump_json()
+        assert session.tools == llm.ToolContext(tools)
+        assert [item.id for item in session.chat_ctx.items] == [item.id for item in chat_ctx.items]
+    finally:
+        await session.aclose()
+
+
+async def test_config_after_session_creation_reconnects(monkeypatch: pytest.MonkeyPatch) -> None:
+    configs = _fake_live_client(monkeypatch)
+    session = RealtimeModel(api_key="test-key").session()
+    try:
+        while not configs:
+            await asyncio.sleep(0)
+        instructions, chat_ctx, tools = _initial_session_config()
+        await session._update_session(instructions=instructions, chat_ctx=chat_ctx, tools=tools)
+        for _ in range(100):
+            if len(configs) == 2:
+                break
+            await asyncio.sleep(0.01)
+        assert len(configs) == 2
+    finally:
+        await session.aclose()
+
+
+async def test_instructions_and_options_are_per_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_live_client(monkeypatch)
+    model = RealtimeModel(api_key="test-key", instructions="model default")
+    first = model.session(instructions="first agent")
+    second = model.session()
+    try:
+        await first.update_instructions("first agent, updated")
+        first.update_options(voice="Kore")
+        assert model._opts.instructions == "model default"
+        assert model._opts.voice != "Kore"
+        assert second._opts.instructions == "model default"
+        assert second._opts.voice == model._opts.voice
+    finally:
+        await asyncio.gather(first.aclose(), second.aclose())
+
+
+async def test_model_options_update_open_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
+    configs = _fake_live_client(monkeypatch)
+    model = RealtimeModel(api_key="test-key")
+    session = model.session()
+    closed = model.session()
+    try:
+        while len(configs) < 2:
+            await asyncio.sleep(0)
+        await closed.aclose()
+        model.update_options(voice="Kore")
+        assert session._opts.voice == "Kore"
+        assert closed._opts.voice != "Kore"
+        for _ in range(100):
+            if len(configs) == 3:
+                break
+            await asyncio.sleep(0.01)
+        assert len(configs) == 3
+    finally:
+        await session.aclose()
+
+
+async def test_model_stops_updating_failed_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
+    configs = _fake_live_client(monkeypatch, error=RuntimeError("refused"))
+    model = RealtimeModel(api_key="test-key", conn_options=APIConnectOptions(max_retry=0))
+    session = model.session()
+    while not session._main_atask.done():
+        await asyncio.sleep(0)
+    session._main_atask.exception()
+    await asyncio.sleep(0)
+
+    model.update_options(voice="Kore")
+    assert session._opts.voice != "Kore"
+    assert len(configs) == 1
+    await session.aclose()
 
 
 def _audio_content(**kwargs: object) -> types.LiveServerContent:

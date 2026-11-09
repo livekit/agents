@@ -283,7 +283,14 @@ class RealtimeModel(llm.RealtimeModel):
     def provider(self) -> str:
         return "rime"
 
-    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+    def session(
+        self,
+        *,
+        turn_detection_disabled: bool = False,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> RealtimeSession:
         if turn_detection_disabled:
             raise llm.RealtimeError("Prism requires server turn detection")
         if self._session is not None and (

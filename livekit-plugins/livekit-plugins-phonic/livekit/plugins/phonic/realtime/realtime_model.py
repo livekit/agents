@@ -411,9 +411,21 @@ class RealtimeModel(llm.RealtimeModel):
     def provider(self) -> str:
         return "phonic"
 
-    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+    def session(
+        self,
+        *,
+        turn_detection_disabled: bool = False,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> RealtimeSession:
         # disabling server-side turn detection is unsupported (can_disable_turn_detection=False)
-        sess = RealtimeSession(self)
+        sess = RealtimeSession(
+            self,
+            instructions=instructions,
+            chat_ctx=chat_ctx,
+            tools=tools,
+        )
         self._sessions.add(sess)
         return sess
 
@@ -509,9 +521,17 @@ class RealtimeModel(llm.RealtimeModel):
 
 
 class RealtimeSession(llm.RealtimeSession):
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(
+        self,
+        realtime_model: RealtimeModel,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> None:
         super().__init__(realtime_model)
         self._opts = realtime_model._opts
+        self._instructions: str | None = None
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
 
@@ -530,8 +550,6 @@ class RealtimeSession(llm.RealtimeSession):
         self._socket: AsyncConversationsSocketClient | None = None
         self._socket_ctx: typing.AsyncContextManager[AsyncConversationsSocketClient] | None = None
         self._send_ch = utils.aio.Chan[AudioChunkPayload]()
-        self._main_atask = asyncio.create_task(self._main_task(), name="phonic-realtime-session")
-
         self._current_generation: _ResponseGeneration | None = None
         self._conversation_id: str | None = None
 
@@ -550,6 +568,21 @@ class RealtimeSession(llm.RealtimeSession):
         self._configs_for_tools: dict[str, PhonicToolConfig] = {}
         self._system_prompt_postfix: str = ""
         self._pending_user_text: str | None = None
+
+        if is_given(instructions) or is_given(chat_ctx) or is_given(tools):
+            if is_given(instructions):
+                self._instructions = instructions
+                self._instructions_ready.set()
+            if is_given(chat_ctx):
+                self._chat_ctx = chat_ctx.copy()
+                history = self._build_turn_history(chat_ctx)
+                if history:
+                    self._system_prompt_postfix = CONVERSATION_HISTORY_PREFIX + history
+            self._tools = llm.ToolContext(tools) if is_given(tools) else llm.ToolContext.empty()
+            self._rebuild_tool_definitions()
+            self._tools_ready.set()
+
+        self._main_atask = asyncio.create_task(self._main_task(), name="phonic-realtime-session")
 
     async def _close_active_session(self) -> None:
         async with self._session_lock:
@@ -577,7 +610,7 @@ class RealtimeSession(llm.RealtimeSession):
                 "Phonic does not support updating instructions mid-session."
             )
             return
-        self._opts.instructions = instructions
+        self._instructions = instructions
         self._instructions_ready.set()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
@@ -762,7 +795,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._pending_user_text = None
 
         if is_given(instructions):
-            self._opts.instructions = instructions
+            self._instructions = instructions
         if is_given(tools):
             self._tools = llm.ToolContext(tools)
             self._tool_definitions = self._serialize_tools()
@@ -776,7 +809,7 @@ class RealtimeSession(llm.RealtimeSession):
         history and send a ``reset`` so a mid-session change (an Agent handoff via
         :meth:`_update_session` or a config change via :meth:`update_options`) takes effect. No-op if
         the socket isn't open yet."""
-        system_prompt = self._opts.instructions if is_given(self._opts.instructions) else ""
+        system_prompt = self._instructions or ""
         turn_history = self._build_turn_history(self._chat_ctx)
         if turn_history:
             system_prompt += CONVERSATION_HISTORY_PREFIX + turn_history
@@ -1231,12 +1264,12 @@ class RealtimeSession(llm.RealtimeSession):
 
             self._config_sent = True
 
-            if not is_given(self._opts.instructions):
+            if self._instructions is None:
                 logger.warning("Instructions are not set. Phonic will not start a conversation.")
                 return
 
             config_options = self._build_config_options(
-                system_prompt=self._opts.instructions + self._system_prompt_postfix,
+                system_prompt=self._instructions + self._system_prompt_postfix,
                 tools_payload=self._build_tools_payload(),
             )
             await self._socket.send_config(ConfigPayload(type="config", **config_options))
