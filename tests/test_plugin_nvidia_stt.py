@@ -114,3 +114,12 @@ def test_provider_result_resets_retries_without_transcript():
         SimpleNamespace(results=[SimpleNamespace(alternatives=[SimpleNamespace(transcript="")])])
     )
     assert stream._num_retries == 0
+
+
+def test_reports_model_and_provider():
+    from livekit.plugins.nvidia import TTS
+
+    provider = nvidia_stt.STT(api_key="test", model="parakeet-test")
+    assert provider.model == "parakeet-test"
+    assert provider.provider == "nvidia"
+    assert TTS(api_key="test").provider == "nvidia"

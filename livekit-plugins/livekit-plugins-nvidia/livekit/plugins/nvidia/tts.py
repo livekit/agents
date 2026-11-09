@@ -70,6 +70,10 @@ class TTS(tts.TTS):
         )
         self._tts_service = None
 
+    @property
+    def provider(self) -> str:
+        return "nvidia"
+
     def _ensure_session(self) -> riva.client.SpeechSynthesisService:
         if not self._tts_service:
             riva_auth = auth.create_riva_auth(
