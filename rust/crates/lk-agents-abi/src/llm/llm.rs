@@ -68,7 +68,8 @@ pub struct ChatRequest {
     /// The host's canonical `llm.ChatContext`; a host LLM rebuilds one from `chat_ctx` when absent.
     pub chat_ctx_host: Option<HostRef>,
     pub tools: Vec<ToolSpec>,
-    /// The host's live `list[Tool]`; required whenever `tools` is non-empty.
+    /// The host's live `list[Tool]`. A tool in `tools` with no callable here (one the core runs)
+    /// reaches a host model as a placeholder built from `function_schemas`.
     pub tools_host: Option<HostRef>,
     /// Further pools of host tools the session added on top of the agent's (the IVR navigator's
     /// `send_dtmf_events`); narrowed with `tools_host` to `tools`, first name wins.

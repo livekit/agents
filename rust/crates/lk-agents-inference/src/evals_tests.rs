@@ -8,6 +8,7 @@ use parking_lot::Mutex;
 use tokio::sync::Barrier;
 
 use super::*;
+use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_net::env::ProcessEnv;
 
 // Catches: the aggregates written as variations of one another, maybe counted as a pass, or
@@ -59,9 +60,8 @@ fn booked() -> Judgment {
 }
 
 fn judges(env: &ProcessEnv, requests: usize) -> Judges {
-    let registry: Arc<dyn RefRegistry> = Arc::new(Registry);
     let host = Host { judgment: booked(), barrier: Barrier::new(requests) };
-    Judges::new(env, None, HostRef::new(0, &registry), Arc::new(host))
+    Judges::new(env, None, Arc::new(host))
 }
 
 /// A judge whose evaluator answers (`HostRef` 1), or raises (any other).
@@ -171,8 +171,7 @@ async fn a_host_judge_runs_in_its_span_and_its_explanation_follows_capture() {
             instructions: String::new(),
         };
         let host = Arc::new(Seen(judgment, Mutex::default()));
-        let registry: Arc<dyn RefRegistry> = Arc::new(Registry);
-        let runner = Judges::new(&env, None, HostRef::new(0, &registry), host.clone());
+        let runner = Judges::new(&env, None, host.clone());
         runner.evaluate(vec![judge("private", true)], Default::default(), env.tracer.root()).await;
         let spans = spans.0.lock().clone();
         let judge = spans.iter().find(|s| s.name == "judge_evaluation").expect("{spans:?}");

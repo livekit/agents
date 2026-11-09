@@ -122,8 +122,7 @@ pub trait EvaluationHost: Send + Sync {
     ) -> crate::BoxFuture<'a, Result<Judgment, HostError>>;
 }
 
-/// Runs judges on one model. A model the host implements is offered `tools`, the host's live
-/// judge tools (`judge_tool_schemas`).
+/// Runs judges on one model.
 #[crate::host(class(name = "_core_JudgeRunner"))]
 pub trait JudgeRunner: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
@@ -131,12 +130,7 @@ pub trait JudgeRunner: Send + Sync + Sized + 'static {
     type Env;
 
     #[host(new)]
-    fn new(
-        env: &Self::Env,
-        llm: Option<Arc<dyn Llm>>,
-        tools: HostRef,
-        host: Arc<dyn EvaluationHost>,
-    ) -> Self;
+    fn new(env: &Self::Env, llm: Option<Arc<dyn Llm>>, host: Arc<dyn EvaluationHost>) -> Self;
 
     /// Runs `judges` concurrently: their outcomes in judge order.
     #[host(await)]
@@ -187,10 +181,6 @@ pub trait Evaluations {
     /// `JudgmentResult.uncertain`: the verdict is maybe.
     #[host(function, name = "_core_judgment_uncertain")]
     fn judgment_uncertain(judgment: Judgment) -> bool;
-
-    /// The judge tools' raw schemas, which the host offers a model it implements.
-    #[host(function, name = "_core_judge_tool_schemas")]
-    fn tool_schemas() -> serde_json::Value;
 }
 
 /// Result of evaluating a conversation with a group of judges.

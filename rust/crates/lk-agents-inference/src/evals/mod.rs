@@ -18,7 +18,6 @@ use lk_agents_abi::evals::{
     JudgeOutcome, JudgeRunner, JudgeSpec, JudgeVerdict, Judgment,
 };
 use lk_agents_abi::usage::TokenUsage;
-use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{
     ChatContext, ChatMessage, ChatRequest, Clock, DEFAULT_API_CONNECT_OPTIONS,
     HOST_TEARDOWN_TIMEOUT, Llm, LlmChunk, Role, StreamOutput, ToolChoice,
@@ -34,8 +33,6 @@ const INFERENCE_CLASS: &str = "low";
 /// The judges of evaluations on one model, and the host that runs the application's.
 pub struct Judges {
     llm: Option<Arc<dyn Llm>>,
-    /// The host's live judge tools, offered to a model the host implements.
-    tools: HostRef,
     host: Arc<dyn EvaluationHost>,
     clock: Arc<dyn Clock>,
 }
@@ -43,13 +40,8 @@ pub struct Judges {
 impl JudgeRunner for Judges {
     type Env = ProcessEnv;
 
-    fn new(
-        env: &ProcessEnv,
-        llm: Option<Arc<dyn Llm>>,
-        tools: HostRef,
-        host: Arc<dyn EvaluationHost>,
-    ) -> Self {
-        Judges { llm, tools, host, clock: env.clock.clone() }
+    fn new(env: &ProcessEnv, llm: Option<Arc<dyn Llm>>, host: Arc<dyn EvaluationHost>) -> Self {
+        Judges { llm, host, clock: env.clock.clone() }
     }
 
     async fn evaluate(
@@ -178,8 +170,9 @@ impl Judges {
                 ChatMessage::text("lk.judge.prompt", Role::User, prompt, at).into(),
             ]),
             chat_ctx_host: None,
+            // a host model gets a placeholder for it from the request's function schemas
             tools: vec![prompts::check_intent_tool()],
-            tools_host: Some(self.tools.clone()),
+            tools_host: None,
             tools_host_extra: Vec::new(),
             conn_options: DEFAULT_API_CONNECT_OPTIONS,
             parallel_tool_calls: None,
@@ -247,14 +240,5 @@ impl Evaluations for Rules {
 
     fn judgment_uncertain(judgment: Judgment) -> bool {
         judgment.verdict == JudgeVerdict::Maybe
-    }
-
-    fn tool_schemas() -> serde_json::Value {
-        let tool = prompts::check_intent_tool();
-        serde_json::json!([{
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.json_schema,
-        }])
     }
 }
