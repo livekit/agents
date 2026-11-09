@@ -70,7 +70,10 @@ AssemblyAIModels = Literal[
     "assemblyai/universal-3-5-pro",
     "assemblyai/universal-3-6-pro",
 ]
-XaiModels = Literal["xai/stt-1",]
+XaiModels = Literal[
+    "xai/stt-1",
+    "xai/stt-2",
+]
 SpeechmaticsModels = Literal[
     "speechmatics/enhanced",
     "speechmatics/standard",
@@ -355,6 +358,7 @@ _WORD_ALIGNED_MODELS = frozenset(
         "assemblyai/universal-3-5-pro",
         "assemblyai/universal-3-6-pro",
         "xai/stt-1",
+        "xai/stt-2",
         "speechmatics/enhanced",
         "speechmatics/standard",
     }
@@ -948,6 +952,11 @@ class STT(stt.STT):
             stream._on_session_keyterms_changed()
 
     def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        # a FallbackAdapter forwards every item to each STT it wraps, and the session's
+        # subscription outlives a model switch: skip models that cannot read agent_context
+        if not self._capabilities.chat_context:
+            super()._push_conversation_item(ev)  # warns once, then ignores
+            return
         if (
             (chat_item := ev.item).type == "message"
             and chat_item.role == "assistant"

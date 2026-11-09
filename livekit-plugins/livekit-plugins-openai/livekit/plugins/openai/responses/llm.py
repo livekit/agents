@@ -22,7 +22,7 @@ from livekit.agents.llm._responses_engine import (
     ResponsesWebsocket as _ResponsesWebsocket,
     check_idle_timeout as _check_idle_timeout,
 )
-from livekit.agents.llm.chat_context import ChatContext, ChatItem
+from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import (
     Tool,
 )
@@ -158,8 +158,8 @@ class LLM(llm.LLM):
         self._active_streams: int = 0
         self._parallel_generation: bool = False
         self._prev_resp_id = ""
-        self._prev_chat_ctx: ChatContext | None = None
-        self._pending_tool_calls = set[str]()  # tool call ids that are pending for a response
+        # the input and output the server holds under _prev_resp_id, as wire items
+        self._prev_resp_items: list[dict[str, Any]] | None = None
 
         if use_websocket:
             resolved_api_key = api_key if is_given(api_key) else os.environ.get("OPENAI_API_KEY")
@@ -282,31 +282,25 @@ class LLM(llm.LLM):
                 oai_tool_choice = tool_choice
                 extra["tool_choice"] = oai_tool_choice
 
-        input_chat_ctx = chat_ctx
+        # snapshot now: another stream may complete before this one is serialized
+        prev_resp = None
         if (
             self._opts.store is not False
             and self._active_streams == 0
-            and self._prev_chat_ctx is not None
+            and self._prev_resp_items is not None
             and self._prev_resp_id
         ):
-            n = len(self._prev_chat_ctx.items)
-            if ChatContext(items=chat_ctx.items[:n]).is_equivalent(
-                self._prev_chat_ctx
-            ) and self._pending_tool_calls_completed(chat_ctx.items[n:]):
-                # send only the new items appended since the last response
-                input_chat_ctx = ChatContext(items=chat_ctx.items[n:])
-                extra["previous_response_id"] = self._prev_resp_id
-            # if the context was modified otherwise, resend the whole context and omit previous response id
+            prev_resp = (self._prev_resp_id, self._prev_resp_items)
         return LLMStream(
             self,
             model=self._opts.model,
             strict_tool_schema=True,
             client=self._client if self._client else None,
-            chat_ctx=input_chat_ctx,
+            chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
-            full_chat_ctx=chat_ctx,
+            prev_resp=prev_resp,
             prompt_cache_breakpoints=self._resolve_prompt_cache_breakpoints(),
         )
 
@@ -328,12 +322,3 @@ class LLM(llm.LLM):
         else:
             host = None
         return (host or "").rstrip(".").lower()
-
-    def _pending_tool_calls_completed(self, items: list[ChatItem]) -> bool:
-        if not self._pending_tool_calls:
-            return True
-
-        completed_tool_calls = {
-            item.call_id for item in items if item.type == "function_call_output"
-        }
-        return all(call_id in completed_tool_calls for call_id in self._pending_tool_calls)

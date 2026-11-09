@@ -65,6 +65,13 @@ class STTOptions:
     # When set, we flush the stt state on the first time the VAD triggers
     # in order to recover the text currently being processed as soon as possible.
     vad_flush: bool = True
+    # When set, a VAD inactivity probability below this threshold signals the start of
+    # speech before any text is transcribed, which allows a faster barge-in.
+    vad_start_threshold: float | None = None
+    # Words or phrases to favor in the transcript, such as product names or jargon.
+    keywords: list[str] | None = None
+    # How strongly to favor the keywords, the server defaults to 2.0.
+    keyword_boost: float | None = None
 
 
 class STT(stt.STT):
@@ -81,8 +88,11 @@ class STT(stt.STT):
         vad_threshold: float = 0.9,
         vad_bucket: int | None = 2,
         vad_flush: bool = True,
+        vad_start_threshold: float | None = None,
         temperature: float | None = None,
         language: str = "en",
+        keywords: list[str] | None = None,
+        keyword_boost: float | None = None,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -122,8 +132,11 @@ class STT(stt.STT):
             vad_threshold=vad_threshold,
             vad_bucket=vad_bucket,
             vad_flush=vad_flush,
+            vad_start_threshold=vad_start_threshold,
             temperature=temperature,
             language=LanguageCode(language),
+            keywords=list(keywords) if keywords is not None else None,
+            keyword_boost=keyword_boost,
         )
 
         if is_given(encoding):
@@ -399,9 +412,23 @@ class SpeechStream(stt.SpeechStream):
 
                     elif type_ == "step":
                         if not speaking:
+                            start_threshold = self._opts.vad_start_threshold
+                            vad_bucket = self._opts.vad_bucket
+                            # steps sent before any audio was processed carry a warm-up
+                            # estimate that reads as activity, ignore them
+                            if (
+                                vad_bucket is not None
+                                and start_threshold is not None
+                                and data.get("total_duration_s", 0.0) > 0
+                                and data["vad"][vad_bucket]["inactivity_prob"] < start_threshold
+                            ):
+                                speaking = True
+                                self._event_ch.send_nowait(
+                                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                                )
                             self._mark_provider_progress()
                             continue
-                        if vad_bucket := self._opts.vad_bucket:
+                        if (vad_bucket := self._opts.vad_bucket) is not None:
                             positive_vad = (
                                 data["vad"][vad_bucket]["inactivity_prob"]
                                 > self._opts.vad_threshold
@@ -509,6 +536,11 @@ class SpeechStream(stt.SpeechStream):
         json_config: dict[str, Any] = {"language": self._opts.language.language}
         if self._opts.temperature is not None:
             json_config["temp"] = self._opts.temperature
+        if self._opts.keywords:
+            keywords: dict[str, Any] = {"words": self._opts.keywords}
+            if self._opts.keyword_boost is not None:
+                keywords["boost"] = self._opts.keyword_boost
+            json_config["keywords"] = keywords
         setup_msg["json_config"] = json_config
 
         await ws.send_str(json.dumps(setup_msg))
