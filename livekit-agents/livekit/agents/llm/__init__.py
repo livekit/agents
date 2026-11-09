@@ -53,7 +53,6 @@ from .llm import (
     LLMStream,
 )
 from .realtime import (
-    BackgroundWorkChangedEvent,
     GenerationCreatedEvent,
     InputSpeechStartedEvent,
     InputSpeechStoppedEvent,
@@ -168,7 +167,6 @@ __all__ = [
     "GenerationCreatedEvent",
     "MessageGeneration",
     "RealtimeSessionReconnectedEvent",
-    "BackgroundWorkChangedEvent",
     "LLMError",
     "RemoteItemAddedEvent",
 ]

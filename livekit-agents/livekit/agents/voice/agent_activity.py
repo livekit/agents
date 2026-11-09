@@ -480,8 +480,6 @@ class AgentActivity(RecognitionHooks):
 
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
-        # whether the realtime model's background work holds the user-away timer
-        self._background_work_held = False
 
         # placeholder used to hold a RunResult open while waiting for a realtime
         # model to auto-generate a tool reply (auto_tool_reply_generation=True).
@@ -1163,11 +1161,6 @@ class AgentActivity(RecognitionHooks):
                 if reusable:
                     # detach: remove event listeners but don't close the session
                     self._rt_session.off("generation_created", self._on_generation_created)
-                    self._rt_session.off(
-                        "background_work_changed", self._on_background_work_changed
-                    )
-                    self._rt_session.off("session_reconnected", self._on_rt_session_reconnected)
-                    self._hold_for_background_work(False)
                     self._rt_session.off("input_speech_started", self._on_input_speech_started)
                     self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
                     self._rt_session.off(
@@ -1289,10 +1282,6 @@ class AgentActivity(RecognitionHooks):
                 logger.debug("created new realtime session for activity, id=%s", self._rt_session)
 
             self._rt_session.on("generation_created", self._on_generation_created)
-            self._rt_session.on("background_work_changed", self._on_background_work_changed)
-            self._rt_session.on("session_reconnected", self._on_rt_session_reconnected)
-            # a reused session may already be busy, and its change event does not repeat
-            self._hold_for_background_work(self._rt_session.background_work_running)
             self._rt_session.on("input_speech_started", self._on_input_speech_started)
             self._rt_session.on("input_speech_stopped", self._on_input_speech_stopped)
             self._rt_session.on(
@@ -1623,9 +1612,6 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self.llm, llm.RealtimeModel) and self._rt_session is not None:
             self._rt_session.off("generation_created", self._on_generation_created)
-            self._rt_session.off("background_work_changed", self._on_background_work_changed)
-            self._rt_session.off("session_reconnected", self._on_rt_session_reconnected)
-            self._hold_for_background_work(False)
             self._rt_session.off("input_speech_started", self._on_input_speech_started)
             self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
             self._rt_session.off(
@@ -3222,24 +3208,6 @@ class AgentActivity(RecognitionHooks):
             if isinstance(ts, AsyncToolset)
         ]
         return any(e._pending_updates for e in executors)
-
-    def _on_background_work_changed(self, ev: llm.BackgroundWorkChangedEvent) -> None:
-        self._hold_for_background_work(ev.running)
-
-    def _on_rt_session_reconnected(self, _: llm.RealtimeSessionReconnectedEvent) -> None:
-        # a new connection (or a fallback swap) reports its own background work
-        self._hold_for_background_work(
-            self._rt_session.background_work_running if self._rt_session else False
-        )
-
-    def _hold_for_background_work(self, running: bool) -> None:
-        if running == self._background_work_held:
-            return
-        self._background_work_held = running
-        if running:
-            self._session._hold_user_away(self)
-        else:
-            self._session._release_user_away(self)
 
     def _on_pipeline_reply_done(self, _: asyncio.Task[None]) -> None:
         if self._no_pending_speech:

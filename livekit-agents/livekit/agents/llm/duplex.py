@@ -61,7 +61,6 @@ DuplexEventTypes = Literal[
     "input_speech_started",  # the user's turns, as the plugin detects them
     "input_speech_stopped",
     "input_audio_transcription_completed",
-    "background_work_changed",  # a BackgroundWorkChangedEvent, as on RealtimeSession
     "session_reconnected",
     "metrics_collected",
     "error",
@@ -147,7 +146,7 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
 
     @property
     def background_work_running(self) -> bool:
-        """Whether background work is running, as the last ``background_work_changed`` said."""
+        """Whether the model works on something it will speak about when done."""
         return False
 
     @abstractmethod

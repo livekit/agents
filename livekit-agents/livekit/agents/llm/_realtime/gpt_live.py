@@ -473,8 +473,6 @@ class GPTLiveSession(
 
         # a response.create was sent and its response.created has not arrived yet
         self._backend_response_requested = False
-        # the backend state last reported as background_work_changed
-        self._background_work_running = False
 
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
@@ -669,7 +667,6 @@ class GPTLiveSession(
         self._backend_open_calls.clear()
         self._backend_response_pending = False
         self._backend_response_requested = False
-        self._update_backend_state()
         self._usage_total = types.Usage()
         self._session_id = None
 
@@ -842,7 +839,6 @@ class GPTLiveSession(
             self.emit("decision_event", types.DecisionEventEnvelope.construct(**event))
         elif etype == "response.event":
             self._handle_response_event(types.ResponseEventEnvelope.construct(**event))
-            self._update_backend_state()
         elif etype == "session.usage.updated":
             self._handle_session_usage_updated(types.SessionUsageUpdatedEvent.construct(**event))
         elif etype == "session.closed":
@@ -1087,12 +1083,7 @@ class GPTLiveSession(
 
     @property
     def background_work_running(self) -> bool:
-        return self._background_work_running
-
-    def _update_backend_state(self) -> None:
-        if (busy := self._backend_busy) != self._background_work_running:
-            self._background_work_running = busy
-            self.emit("background_work_changed", llm.BackgroundWorkChangedEvent(running=busy))
+        return self._backend_busy
 
     # metrics and errors
 

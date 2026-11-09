@@ -2126,6 +2126,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # a paused agent's work can't speak now, so it doesn't hold the window (#6883)
             return
 
+        if (
+            self._activity is not None
+            and (rt_session := self._activity.realtime_llm_session) is not None
+            and rt_session.background_work_running
+        ):
+            # the answer speaks when the work lands, and that speech restarts the window
+            return
+
         if (room_io := self._room_io) and (
             room_io.linked_participant is None
             or (room_io.subscribed_fut is not None and not room_io.subscribed_fut.done())

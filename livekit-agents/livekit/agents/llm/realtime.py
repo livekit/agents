@@ -47,16 +47,6 @@ class GenerationCreatedEvent:
     """The response ID associated with this generation, used for metrics attribution"""
 
 
-@dataclass
-class BackgroundWorkChangedEvent:
-    """The model started or finished work it will speak about when done, without new input.
-
-    Speech the user can already hear is not background work. A reconnect drops it.
-    """
-
-    running: bool
-
-
 class RealtimeModelError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["realtime_model_error"] = "realtime_model_error"
@@ -175,7 +165,6 @@ EventTypes = Literal[
     "session_reconnected",
     "metrics_collected",
     "remote_item_added",
-    "background_work_changed",  # a BackgroundWorkChangedEvent, for a model that reports it
     "error",
 ]
 
@@ -260,7 +249,11 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
 
     @property
     def background_work_running(self) -> bool:
-        """Whether background work is running, as the last ``background_work_changed`` said."""
+        """Whether the model works on something it will speak about when done, without new input.
+
+        Speech the user can already hear is not background work. The user-away timer does not
+        start while it runs.
+        """
         return False
 
     @abstractmethod
