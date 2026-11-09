@@ -42,7 +42,7 @@ async def test_local_console_job_needs_no_livekit_credentials(
     running = asyncio.create_task(server._run(devmode=True, unregistered=True))
     try:
         await asyncio.wait_for(started.wait(), timeout=5)
-        assert server.thread_service_url is None
+        assert server._thread_server is None
         await server._simulate_job("console-without-keys", fake_job=True)
         assert await asyncio.to_thread(ran.wait, 5)
     finally:

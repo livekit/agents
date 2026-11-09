@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import multiprocessing as mp
+import os
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypedDict, TypeVar
@@ -133,15 +134,14 @@ class AgentServer(AgentHandler):
 
     Options left out default from the environment where one applies (``LIVEKIT_URL``,
     ``LIVEKIT_AGENT_NAME``, ...); ``load_threshold``, ``num_idle_processes`` and the listeners
-    default differently in development.
+    default differently in development. A local ``SQLiteStorage`` serves the thread API in
+    development, and on the port ``LIVEKIT_THREAD_API_PORT`` names otherwise.
     """
 
     def __init__(
         self,
         *,
         storage: Storage | None = None,
-        project_id: str = "default",
-        thread_api_port: int | None = None,
         preload_modules: Sequence[str] = (),
         _load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         **options: Unpack[ServerOptionsKwargs],
@@ -149,8 +149,6 @@ class AgentServer(AgentHandler):
         AgentHandler.__init__(self)
         self._config = _core.ServerConfig(ServerOptions(**options), ProcessOptions(), __version__)
         self._storage = storage
-        self._project_id = project_id
-        self._thread_api_port = thread_api_port
         self._thread_server: _core._core_ThreadServer | None = None
         self._preload_modules = preload_module_names(preload_modules)
         self._load_fnc = _load_fnc
@@ -169,13 +167,8 @@ class AgentServer(AgentHandler):
         if self._storage is None:
             from .storage import SQLiteStorage
 
-            self._storage = SQLiteStorage(project_id=self._project_id)
+            self._storage = SQLiteStorage()
         return self._storage
-
-    @property
-    def thread_service_url(self) -> str | None:
-        """Local ThreadService base URL while the development listener is running."""
-        return f"http://127.0.0.1:{self._thread_server.port}" if self._thread_server else None
 
     @property
     def http(self) -> AgentRoutes:
@@ -223,19 +216,18 @@ class AgentServer(AgentHandler):
         runtime = self._ensure_runtime()
         from .storage import SQLiteStorage
 
+        thread_api_port = os.environ.get("LIVEKIT_THREAD_API_PORT")
         try:
             if isinstance(storage, SQLiteStorage) and (
-                (devmode and not unregistered) or self._thread_api_port is not None
+                (devmode and not unregistered) or thread_api_port
             ):
                 self._thread_server = await storage.threads._core_serve_threads(
-                    self._config.api_key,
-                    self._config.api_secret,
-                    self._thread_api_port or 0,
+                    self._config.api_key, self._config.api_secret, int(thread_api_port or 0)
                 )
                 logger.info(
                     "local thread service",
                     extra={
-                        "url": self.thread_service_url,
+                        "url": f"http://127.0.0.1:{self._thread_server.port}",
                         "project_id": storage.threads.project_id,
                     },
                 )
