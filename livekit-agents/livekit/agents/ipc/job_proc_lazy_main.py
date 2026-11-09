@@ -183,7 +183,12 @@ class _InfClient(InferenceExecutor):
     def _on_inference_response(self, resp: InferenceResponse) -> None:
         fut = self._active_requests.pop(resp.request_id, None)
         if fut is None:
-            logger.warning("received unexpected inference response", extra={"resp": resp})
+            # A cancelled request can still finish in the inference process. Only log its
+            # request ID: the response payload can contain unredacted conversation text.
+            logger.debug(
+                "discarding inference response without a pending request",
+                extra={"request_id": resp.request_id},
+            )
             return
 
         with contextlib.suppress(asyncio.InvalidStateError):

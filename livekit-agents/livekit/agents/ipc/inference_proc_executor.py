@@ -70,8 +70,8 @@ class InferenceProcExecutor(SupervisedProc):
             if isinstance(msg, proto.InferenceResponse):
                 fut = self._active_requests.pop(msg.request_id, None)
                 if fut is None:
-                    logger.warning(
-                        "received unexpected inference response",
+                    logger.debug(
+                        "discarding inference response without a pending request",
                         extra={"request_id": msg.request_id},
                     )
                     continue

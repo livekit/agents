@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from typing import ClassVar
 
@@ -45,6 +46,31 @@ async def test_job_inference_client_cleans_up_cancelled_request() -> None:
         await task
 
     assert not inf_client._active_requests
+
+
+async def test_late_job_inference_response_does_not_log_payload(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = _SendRecorder()
+    inf_client = _InfClient(client)  # type: ignore[arg-type]
+
+    task = asyncio.create_task(inf_client.do_inference("test", b"private chat text"))
+    await asyncio.wait_for(client.sent.wait(), timeout=1.0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    request = client.messages[0]
+    assert isinstance(request, proto.InferenceRequest)
+    response = proto.InferenceResponse(request_id=request.request_id, data=b"private chat text")
+    with caplog.at_level(logging.DEBUG, logger="livekit.agents"):
+        inf_client._on_inference_response(response)
+
+    record = caplog.records[-1]
+    assert record.levelno == logging.DEBUG
+    assert record.request_id == request.request_id  # type: ignore[attr-defined]
+    assert not hasattr(record, "resp")
+    assert "private chat text" not in repr(vars(record))
 
 
 async def test_worker_inference_client_cleans_up_cancelled_request() -> None:
