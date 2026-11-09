@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
-use lk_agents_abi::telemetry::record::{JobKey, Record, RecordSink, SpanRecord};
+use lk_agents_abi::telemetry::record::{JobKey, KeyValues, Record, RecordSink, SpanRecord};
 use lk_agents_abi::telemetry::report::CloudAgent;
 use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt as _, Ts, before, timeout};
 use parking_lot::Mutex;
@@ -338,9 +338,10 @@ impl Shared {
             (state.process.clone(), state.cloud.clone())
         };
         match batch {
-            Batch::Cloud { identity, recording, payload, .. } => {
+            Batch::Cloud { identity, recording, metadata, payload, .. } => {
                 let Some(cloud) = cloud else { return Ok(()) };
-                let (signal, body) = cloud_request(&process, &identity, &recording, payload);
+                let (signal, body) =
+                    cloud_request(&process, &identity, &recording, &metadata, payload);
                 let path = format!("{}/otlp/v0", signal.path());
                 cloud.post(&path, |request| body.attach(request)).await
             }
@@ -349,12 +350,13 @@ impl Shared {
     }
 }
 
-/// One job's Cloud request, under Cloud's content policy and the job's identity stamp, and
-/// the signal it is posted as.
+/// One job's Cloud request, under Cloud's content policy, the application's span metadata and
+/// the job's identity stamp, and the signal it is posted as.
 fn cloud_request(
     process: &ProcessIdentity,
     identity: &SessionIdentity,
     recording: &CloudRecording,
+    metadata: &KeyValues,
     payload: Cloud,
 ) -> (Signal, encode::Body) {
     let resource = encode::cloud_resource(process, identity);
@@ -364,6 +366,7 @@ fn cloud_request(
         Cloud::Spans(mut spans) => {
             for span in &mut spans {
                 policy.span(span);
+                encode::stamp(&mut span.attributes, metadata);
                 encode::stamp(&mut span.attributes, &stamp);
             }
             (Signal::Traces, encode::body(&encode::traces_request(resource, &spans), true))

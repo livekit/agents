@@ -357,8 +357,9 @@ fn only_span(request: &Received) -> super::proto::trace::v1::Span {
 }
 
 // Catches: Cloud stripping `lk.pii.*` itself (ingest does), Cloud keeping GenAI content or
-// exception text for a redacted session, or the application endpoint receiving PII without
-// `allow_pii`, at any depth.
+// exception text for a redacted session, the application endpoint receiving PII without
+// `allow_pii`, at any depth, or `configure(metadata=)` missing from Cloud's copy or overriding
+// its identity stamp.
 #[tokio::test]
 async fn each_destination_applies_its_own_content_policy() {
     for (redaction, allow_pii) in [(true, false), (false, true)] {
@@ -368,7 +369,10 @@ async fn each_destination_applies_its_own_content_policy() {
         exporter.configure_cloud(cloud(&cloud_url));
         let mut app = AppConfig::with_endpoint(&app_url);
         app.allow_pii = allow_pii;
-        app.metadata = vec![("deployment.environment".into(), "prod".into())];
+        app.metadata = vec![
+            ("deployment.environment".into(), "prod".into()),
+            ("lk.job_id".into(), "forged".into()),
+        ];
         exporter.configure_app(Some(app));
         exporter.open_job(key("AJ_1"), identity("AJ_1"));
         exporter.register_job(&key("AJ_1"), CloudRecording { redaction, ..recording() });
@@ -381,6 +385,8 @@ async fn each_destination_applies_its_own_content_policy() {
         assert_eq!(attr(a, "lk.redaction.enabled"), Some(&Any::BoolValue(redaction)));
         assert_eq!(attr(a, "gen_ai.input.messages").is_some(), !redaction);
         assert_eq!(attr(a, "gen_ai.request.model").cloned(), string("gpt"));
+        assert_eq!(attr(a, "deployment.environment").cloned(), string("prod"));
+        assert_eq!(attr(a, "lk.job_id").cloned(), string("AJ_1"));
         let event = &cloud.events[0].attributes;
         let message = if redaction { REDACTED_EXCEPTION } else { "secret failure" };
         assert_eq!(attr(event, "exception.message").cloned(), string(message));

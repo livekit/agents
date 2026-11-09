@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
 use super::proto::metrics::v1::Metric;
-use lk_agents_abi::telemetry::record::{JobKey, LogRecord, Record, SpanRecord};
+use lk_agents_abi::telemetry::record::{JobKey, KeyValues, LogRecord, Record, SpanRecord};
 
 use super::config::{AppConfig, CloudEndpoint, CloudRecording, ProcessIdentity, SessionIdentity};
 use super::metrics::Aggregator;
@@ -93,8 +93,18 @@ pub(crate) struct AppSpan {
 
 /// One request's worth of records, taken from the queues; encoded outside the lock.
 pub(crate) enum Batch {
-    Cloud { job: JobKey, identity: Arc<SessionIdentity>, recording: CloudRecording, payload: Cloud },
-    App { config: Arc<AppConfig>, payload: App },
+    Cloud {
+        job: JobKey,
+        identity: Arc<SessionIdentity>,
+        recording: CloudRecording,
+        /// The application's `configure(metadata=)`, stamped on Cloud's spans too.
+        metadata: KeyValues,
+        payload: Cloud,
+    },
+    App {
+        config: Arc<AppConfig>,
+        payload: App,
+    },
 }
 
 /// A Cloud request: one job's spans, report records or metrics.
@@ -355,6 +365,7 @@ impl State {
         let mut batches = Vec::new();
         let due = |n: usize| take.all && n > 0 || n >= BATCH_RECORDS;
         if self.cloud.is_some() {
+            let metadata = self.app.as_ref().map(|app| app.config.metadata.clone());
             for (key, job) in &mut self.jobs {
                 if take.job.is_some_and(|k| k != key) {
                     continue;
@@ -364,6 +375,7 @@ impl State {
                     job: key.clone(),
                     identity: job.identity.clone(),
                     recording: recording.clone(),
+                    metadata: metadata.clone().unwrap_or_default(),
                     payload,
                 };
                 while due(job.spans.len()) {

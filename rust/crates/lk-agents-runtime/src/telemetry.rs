@@ -226,7 +226,10 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
         if let Some(allow_pii) = allow_pii {
             config.allow_pii = allow_pii;
         }
-        let config = (config.traces.is_some() || config.metrics.is_some()).then_some(config);
+        // Metadata alone still stamps Cloud's copy of the spans.
+        let config =
+            (config.traces.is_some() || config.metrics.is_some() || !config.metadata.is_empty())
+                .then_some(config);
         *PROCESS.app.lock() = config.clone();
         if let Some(exporter) = PROCESS.slot.get() {
             exporter.configure_app(config);
