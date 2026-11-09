@@ -155,8 +155,10 @@ class STT(stt.STT):
                 spoken language. Leave unset to enable MiniMax's mixed-language recognition, which
                 is required for code-switched speech. Defaults to unset.
             response_format (ASRResponseFormat, optional): "json" returns the text and duration;
-                "verbose_json" additionally asks for speaker diarization and timestamps, which
-                MiniMax cannot combine with `stream=True`. Defaults to "json".
+                "verbose_json" additionally asks MiniMax for speaker diarization and timestamps,
+                which cannot be combined with `stream=True`. The verbose fields are not parsed
+                yet, so they do not reach `SpeechData` and `capabilities.diarization` stays
+                False. Defaults to "json".
             stream (bool, optional): Ask MiniMax to push the transcript incrementally over SSE.
                 Note that the whole segment still has to be uploaded before transcription starts.
                 Defaults to False.
@@ -169,7 +171,12 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=False,
                 interim_results=False,
-                diarization=response_format == "verbose_json",
+                # `verbose_json` asks MiniMax for diarization and word timings, but the
+                # response parsing keeps only the text, so no speaker- or time-attributed
+                # data reaches `SpeechData`. Advertising the capability would promise
+                # consumers fields they never receive, so it stays off until the verbose
+                # payload is actually parsed.
+                diarization=False,
             )
         )
 
@@ -269,7 +276,7 @@ class STT(stt.STT):
             )
 
         try:
-            text = await self._transcribe(wav_bytes, requested_language, conn_options)
+            text = await self._transcribe(wav_bytes, duration, requested_language, conn_options)
         except APITimeoutError:
             raise
         except APIStatusError:
@@ -295,6 +302,7 @@ class STT(stt.STT):
     async def _transcribe(
         self,
         wav_bytes: bytes,
+        duration: float,
         language: str | None,
         conn_options: APIConnectOptions,
     ) -> str:
@@ -316,12 +324,19 @@ class STT(stt.STT):
         form.add_field("response_format", self._opts.response_format)
         form.add_field("stream", "true" if self._stream else "false")
 
+        # `total` covers the whole request: the multipart upload plus MiniMax's transcription.
+        # Both scale with the segment, and this plugin accepts up to MAX_AUDIO_SECONDS, so the
+        # connect timeout alone is far too short (a long utterance would time out every
+        # attempt and the base retry loop would re-upload it max_retry more times). Budget the
+        # connect timeout, one second per second of audio, and one second per MB uploaded.
+        total_timeout = conn_options.timeout + duration + len(wav_bytes) / (1024 * 1024)
+
         async with session.post(
             url,
             headers=headers,
             data=form,
             timeout=aiohttp.ClientTimeout(
-                total=conn_options.timeout,
+                total=total_timeout,
                 sock_connect=conn_options.timeout,
             ),
         ) as res:
@@ -358,16 +373,24 @@ class STT(stt.STT):
         """Concatenate the `delta` values from MiniMax's SSE transcription stream.
 
         Events arrive as `data: {"index":0,"delta":"...","finish":false}`, separated by
-        blank lines, with the terminating event carrying `finish: true`.
+        blank lines, with the terminating event carrying `finish: true`. A stream that ends
+        before that event is a truncated transcript, not a short one, so it is reported as a
+        retryable failure rather than returned as final.
         """
         parts: list[tuple[int, str]] = []
+        finished = False
         async for raw_line in res.content:
             line = raw_line.decode("utf-8").strip()
             if not line or line.startswith(":"):
                 # blank separators and keepalive comments
                 continue
             if not line.startswith("data:"):
-                logger.debug("ignoring unexpected MiniMax SSE line: %s", line)
+                # the line can carry recognised speech, so it is a structured `lk.pii` field
+                # rather than part of the message body (see REVIEW.md)
+                logger.debug(
+                    "ignoring unexpected MiniMax SSE line",
+                    extra={"lk.pii.line": line},
+                )
                 continue
 
             payload = line[len("data:") :].strip()
@@ -377,7 +400,12 @@ class STT(stt.STT):
             try:
                 event: dict[str, Any] = json.loads(payload)
             except json.JSONDecodeError:
-                logger.warning("failed to decode MiniMax SSE event: %s", payload)
+                # the payload holds the transcript delta, so it must not reach the message
+                # body: emit a static message and let redaction handle the attribute
+                logger.warning(
+                    "failed to decode MiniMax SSE event",
+                    extra={"lk.pii.payload": payload},
+                )
                 continue
 
             # a failure can also be reported mid-stream
@@ -396,7 +424,13 @@ class STT(stt.STT):
                 parts.append((event.get("index", len(parts)), event["delta"]))
 
             if event.get("finish"):
+                finished = True
                 break
+
+        if not finished:
+            # a clean EOF can still cut the transcript short; returning the deltas collected
+            # so far would report half a sentence as a finished transcription
+            raise APIConnectionError("MiniMax SSE stream ended before the transcript was complete")
 
         # `index` restarts at 0 per request; sort defensively rather than trusting arrival order
         return "".join(text for _, text in sorted(parts, key=lambda item: item[0]))

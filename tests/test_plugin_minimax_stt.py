@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.utils import AudioBuffer
 from livekit.plugins import minimax
@@ -82,11 +82,13 @@ class _FakeSession:
         self.headers: dict[str, str] | None = None
         self.data: bytes | None = None
         self.content_type: str | None = None
+        self.timeout: Any = None
 
     def post(self, url: str, *, headers: dict[str, str], data: Any, timeout: Any) -> _FakeResponse:
         self.url = url
         self.headers = headers
         self.data = _encode_form(data)
+        self.timeout = timeout
         # aiohttp derives this from the writer's boundary; FormData exposes no content_type
         self.content_type = f"multipart/form-data; boundary={data._writer.boundary}"
         return self._response
@@ -175,9 +177,14 @@ def test_capabilities_report_non_streaming() -> None:
     assert stt.capabilities.diarization is False
 
 
-def test_verbose_json_enables_diarization() -> None:
+def test_verbose_json_does_not_advertise_diarization() -> None:
+    """`verbose_json` requests speaker and word data, but the parsing keeps only the text.
+
+    Advertising the capability would promise `SpeechData.speaker_id` that consumers never
+    receive, so it stays False until those fields are surfaced.
+    """
     stt = minimax.STT(api_key=FAKE_KEY, response_format="verbose_json")
-    assert stt.capabilities.diarization is True
+    assert stt.capabilities.diarization is False
 
 
 def test_rejects_streaming_with_diarization() -> None:
@@ -418,3 +425,87 @@ def test_sse_json_payload_is_serializable() -> None:
     """Guard the contract the SSE parser assumes."""
     payload = {"index": 0, "delta": "x", "finish": False}
     assert json.loads(json.dumps(payload)) == payload
+
+
+# --- request deadline ----------------------------------------------------------------
+
+
+async def test_request_timeout_covers_upload_and_transcription() -> None:
+    """`total` must budget the whole request, not just the connect.
+
+    The connect timeout alone (10s by default) is shorter than the upload plus transcription
+    of a long segment, and the base retry loop re-uploads the audio on every attempt.
+    """
+    stt = minimax.STT(api_key=FAKE_KEY)
+    _, session = await _recognize_with(stt, _FakeResponse(payload={"text": "ok"}), seconds=30.0)
+
+    assert session.timeout.sock_connect == APIConnectOptions().timeout
+    assert session.timeout.total >= APIConnectOptions().timeout + 30.0
+
+
+async def test_request_timeout_scales_with_segment_length() -> None:
+    """A fixed ceiling would either truncate long segments or be needlessly long for short ones."""
+    stt = minimax.STT(api_key=FAKE_KEY)
+    _, short = await _recognize_with(stt, _FakeResponse(payload={"text": "ok"}), seconds=1.0)
+    _, long = await _recognize_with(stt, _FakeResponse(payload={"text": "ok"}), seconds=30.0)
+
+    assert long.timeout.total > short.timeout.total
+
+
+# --- truncated streams ---------------------------------------------------------------
+
+
+async def test_sse_stream_ending_without_finish_is_a_retryable_error() -> None:
+    """A clean EOF mid-transcript must not be reported as a complete transcription."""
+    stt = minimax.STT(api_key=FAKE_KEY, stream=True)
+    lines = ['data: {"index":0,"delta":"Turn left","finish":false}']
+    stt._session = _FakeSession(_FakeStreamResponse(lines))  # type: ignore[assignment]
+
+    with pytest.raises(APIConnectionError) as exc:
+        await stt.recognize(_make_audio(), conn_options=APIConnectOptions(max_retry=0))
+    assert exc.value.retryable is True
+
+
+async def test_sse_stream_ending_with_no_deltas_is_a_retryable_error() -> None:
+    stt = minimax.STT(api_key=FAKE_KEY, stream=True)
+    stt._session = _FakeSession(_FakeStreamResponse([": keepalive"]))  # type: ignore[assignment]
+
+    with pytest.raises(APIConnectionError):
+        await stt.recognize(_make_audio(), conn_options=APIConnectOptions(max_retry=0))
+
+
+# --- log redaction -------------------------------------------------------------------
+
+
+async def test_malformed_sse_payload_stays_out_of_log_bodies(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A malformed payload can hold recognised speech, and a message body cannot be redacted."""
+    smuggled = '{"index":0,"delta":"my card number is'
+    stt = minimax.STT(api_key=FAKE_KEY, stream=True)
+    lines = [f"data: {smuggled}", 'data: {"index":0,"delta":"ok","finish":true}']
+
+    with caplog.at_level("DEBUG", logger="livekit.plugins.minimax"):
+        event, _ = await _recognize_with(stt, _FakeStreamResponse(lines))
+
+    assert event.alternatives[0].text == "ok"
+    assert smuggled not in caplog.text
+    for record in caplog.records:
+        for key, value in record.__dict__.items():
+            if value == smuggled:
+                assert key.startswith("lk.pii."), f"{key} is not a redactable key"
+    assert any(getattr(r, "lk.pii.payload", None) == smuggled for r in caplog.records)
+
+
+async def test_unexpected_sse_line_stays_out_of_log_bodies(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    smuggled = "event: my card number is"
+    stt = minimax.STT(api_key=FAKE_KEY, stream=True)
+    lines = [smuggled, 'data: {"index":0,"delta":"ok","finish":true}']
+
+    with caplog.at_level("DEBUG", logger="livekit.plugins.minimax"):
+        await _recognize_with(stt, _FakeStreamResponse(lines))
+
+    assert smuggled not in caplog.text
+    assert any(getattr(r, "lk.pii.line", None) == smuggled for r in caplog.records)

@@ -36,16 +36,15 @@ session = AgentSession(
 )
 ```
 
-Hint the primary spoken language with a BCP-47 primary subtag, or ask for speaker
-diarization and timestamps:
+Hint the primary spoken language with a BCP-47 primary subtag:
 
 ```python
 # hint the primary language; omit it for mixed zh/en speech
 stt = minimax.STT(language="zh")
-
-# diarization and timestamps
-stt = minimax.STT(response_format="verbose_json")
 ```
+
+`response_format="verbose_json"` makes MiniMax return speaker and word-level data, but those
+fields are not parsed yet, so `capabilities.diarization` stays `False`.
 
 The transcript can also be delivered incrementally with SSE by passing `stream=True`, which is
 supported with `response_format="json"` only — diarization requires the complete audio.
