@@ -2998,7 +2998,9 @@ class AgentActivity(RecognitionHooks):
             # (We still create the SpeechHandle and the generate_reply coroutine, otherwise we may
             # lose data like the beginning of a user speech).
             # await the interrupt to make sure user message is added to the chat context before the new task starts
-            await speech_handle.interrupt(source="user_turn")
+            # force it: this reply is dropped, not interrupted by the user, so it must be cancelled
+            # even if the speech disallows interruptions
+            await speech_handle.interrupt(force=True, source="user_turn")
 
         metadata: Metadata | None = None
         if isinstance(self._turn_detection, str):

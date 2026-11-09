@@ -48,7 +48,12 @@ from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity, _transcripts_equivalent
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
 from livekit.agents.voice.endpointing import BaseEndpointing
-from livekit.agents.voice.events import AgentState, FunctionToolsExecutedEvent, UserState
+from livekit.agents.voice.events import (
+    AgentState,
+    ErrorEvent,
+    FunctionToolsExecutedEvent,
+    UserState,
+)
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 
@@ -699,6 +704,41 @@ async def test_interruption_options() -> None:
     assert len(playback_finished_events) == 1
     assert playback_finished_events[0].interrupted is False
     check_timestamp(playback_finished_events[0].playback_position, 5.0, speed_factor=speed)
+
+
+async def test_outdated_reply_is_dropped_when_interruptions_are_disabled() -> None:
+    # the second turn ends while the first on_user_turn_completed is still running, so the
+    # first reply is outdated and must be dropped even though its speech is not interruptible
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 1.5, "first")
+    actions.add_llm("reply to first")
+    actions.add_tts(1.0)
+    actions.add_user_speech(3.0, 4.0, "second")
+    actions.add_llm("reply to second")
+    actions.add_tts(1.0)
+
+    session = create_session(
+        actions,
+        speed_factor=1,
+        turn_handling={"interruption": {"enabled": False}},
+    )
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+    errors: list[ErrorEvent] = []
+    session.on("error", errors.append)
+
+    agent = MyAgent(on_user_turn_completed_delay=3.0)
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert not errors
+    assert len(playback_finished_events) == 1
+    assert playback_finished_events[0].interrupted is False
+    replies = [
+        item.text_content
+        for item in agent.chat_ctx.items
+        if item.type == "message" and item.role == "assistant"
+    ]
+    assert replies == ["reply to second"]
 
 
 async def test_interruption_by_text_input() -> None:
