@@ -1,11 +1,11 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use lk_agents_net::clock::unix_now_ms;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;
-use tokio::sync::{mpsc, oneshot, watch};
+use lk_agents_net::signal;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 
 use super::executor::{Connection, Exit, Runner, RunnerExecutor};
@@ -213,7 +213,7 @@ enum AfterExit {
     Dropped,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq)]
 struct Control {
     shutdown: bool,
     kill: bool,
@@ -234,8 +234,9 @@ struct Status {
 #[derive(Clone)]
 pub struct RunnerSupervisor {
     commands: mpsc::Sender<Command>,
-    control: watch::Sender<Control>,
-    status: watch::Receiver<Status>,
+    control: Arc<signal::Shared<Control>>,
+    /// Its producer moves into the actor: the actor's end, however it ends, ends every wait.
+    status: signal::Cell<Status>,
     /// The actor's owner; dropping the supervisor does not cancel it.
     _driver: Arc<TaskSet>,
 }
@@ -250,8 +251,9 @@ impl RunnerSupervisor {
     ) -> Self {
         let spawner = TokioSpawner::current();
         let (commands, commands_rx) = mpsc::channel(QUEUE);
-        let (control, control_rx) = watch::channel(Control::default());
-        let (status_tx, status) = watch::channel(Status::default());
+        let control = Arc::new(signal::Shared::new(Control::default()));
+        let control_rx = control.clone();
+        let (status_tx, status) = signal::signal(Status::default());
         let host: Arc<dyn SupervisorCallbacks> = Arc::new(host);
         // Self-owned: it ends once the runner ended and its channel settled.
         let driving = Arc::new(TaskSet::default());
@@ -259,7 +261,7 @@ impl RunnerSupervisor {
             match executor.launch().await {
                 Ok((runner, channel)) => {
                     drop(executor);
-                    status_tx.send_modify(|status| status.launched = Some(Ok(())));
+                    status_tx.modify(|status| status.launched = Some(Ok(())));
                     let driver = Driver::new(opts, host, blocking_io, runner, channel, status_tx);
                     driver.run(commands_rx, control_rx).await;
                 }
@@ -272,30 +274,27 @@ impl RunnerSupervisor {
 
     /// Once the launch settled: whether a runner was launched, with why not.
     pub async fn launched(&self) -> Result<(), HostError> {
-        let mut status = self.status.clone();
-        match status.wait_for(|status| status.launched.is_some()).await {
-            Ok(status) => status.launched.clone().unwrap_or(Ok(())),
+        match self.status.wait_map(|status| status.launched.clone()).await {
+            Ok(launched) => launched,
             Err(_) => Err(HostError::new("the supervisor ended before the launch settled")),
         }
     }
 
     /// Whether `stop()` killed the runner.
     pub fn killed(&self) -> bool {
-        self.status.borrow().exit.is_some_and(|exit| exit.killed)
+        self.status.with(|status| status.exit.is_some_and(|exit| exit.killed))
     }
 
     pub fn completion(&self) -> lk_agents_abi::worker::ipc::JobCompletion {
-        let status = self.status.borrow();
-        lk_agents_abi::worker::ipc::JobCompletion {
+        self.status.with(|status| lk_agents_abi::worker::ipc::JobCompletion {
             exit_code: status.exit.and_then(|exit| i32::try_from(exit.code).ok()),
             failure: status.failure.clone(),
-        }
+        })
     }
 
     /// Until the supervision is over, or its cleanup was reported incomplete.
     async fn settled(&self) {
-        let mut status = self.status.clone();
-        let _ = status.wait_for(|s| s.cleaned || s.incomplete).await;
+        let _ = self.status.wait_for(|s| s.cleaned || s.incomplete).await;
     }
 
     pub async fn initialize(&self, hello: Hello) -> Result<Duration, InitError> {
@@ -320,30 +319,26 @@ impl RunnerSupervisor {
 
     /// Asks the runner to shut down, stops it when late, and waits for its cleanup.
     pub async fn shutdown(&self) {
-        self.control.send_modify(|c| c.shutdown = true);
+        self.control.modify(|c| c.shutdown = true);
         self.settled().await;
     }
 
     /// Asks the runner to shut down and stops it at once, then waits for its cleanup.
     pub async fn kill(&self) {
-        self.control.send_modify(|c| c.kill = true);
+        self.control.modify(|c| c.kill = true);
         self.settled().await;
     }
 
     /// Whether a launched runner ended (`false`: none was launched).
     pub async fn wait_exit(&self) -> bool {
-        let mut status = self.status.clone();
-        let _ = status.wait_for(|state| state.exit.is_some() || state.cleaned).await;
-
-        status.borrow().exit.is_some()
+        let _ = self.status.wait_for(|state| state.exit.is_some() || state.cleaned).await;
+        self.status.with(|status| status.exit.is_some())
     }
 
     /// Waits for the supervision's end: whether a launched runner ended.
     pub async fn wait_cleaned(&self) -> bool {
-        let mut status = self.status.clone();
-        let _ = status.wait_for(|state| state.cleaned).await;
-
-        status.borrow().exit.is_some()
+        let _ = self.status.wait_for(|state| state.cleaned).await;
+        self.status.with(|status| status.exit.is_some())
     }
 }
 
@@ -352,10 +347,10 @@ async fn refuse(
     cause: HostError,
     host: Arc<dyn SupervisorCallbacks>,
     mut commands: mpsc::Receiver<Command>,
-    status: watch::Sender<Status>,
+    status: signal::Producer<Status>,
 ) {
     runner_log!(host.runner(), log::Level::Error; "launch failed before starting a runner: {cause}");
-    status.send_modify(|status| status.launched = Some(Err(cause.clone())));
+    status.modify(|status| status.launched = Some(Err(cause.clone())));
     commands.close();
     while let Some(command) = commands.recv().await {
         match command {
@@ -369,7 +364,7 @@ async fn refuse(
         }
     }
     host.release();
-    status.send_modify(|status| status.cleaned = true);
+    status.modify(|status| status.cleaned = true);
 }
 
 /// The host's memory sample, off the runtime.
@@ -386,7 +381,7 @@ struct Driver {
     init_reply: Option<oneshot::Sender<Result<Duration, InitError>>>,
     job_reply: Option<(u64, oneshot::Sender<Result<(), StartJobError>>)>,
     next_job_id: u64,
-    status: watch::Sender<Status>,
+    status: signal::Producer<Status>,
     sampling: Sampling,
     lifecycle: Lifecycle,
     baseline_mb: Option<f64>,
@@ -401,7 +396,7 @@ impl Driver {
         blocking_io: lk_agents_net::blocking_io::BlockingIo,
         runner: Box<dyn Runner>,
         channel: Connection,
-        status: watch::Sender<Status>,
+        status: signal::Producer<Status>,
     ) -> Self {
         let origin = Instant::now();
         Self {
@@ -429,13 +424,12 @@ impl Driver {
     async fn run(
         mut self,
         mut commands: mpsc::Receiver<Command>,
-        mut control: watch::Receiver<Control>,
+        control: Arc<signal::Shared<Control>>,
     ) {
         let channel = self.channel.clone();
         let runner = self.runner.clone();
         let mut reader_open = true;
         let mut commands_open = true;
-        let mut control_open = true;
         let mut seen = Control::default();
         while !self.cleaned() {
             if self.wake_at().is_some_and(|at| at <= self.now()) {
@@ -450,14 +444,10 @@ impl Driver {
                     Some(at) => tokio::time::sleep_until(at).await,
                     None => std::future::pending().await,
                 } } => continue,
-                exit = runner.finished(), if !self.exited() => self.input(AfterExit::Read, |d| d.on_finished(exit)),
-                changed = control.changed(), if control_open => match changed {
-                    Ok(()) => self.on_control(*control.borrow_and_update(), &mut seen),
-                    Err(_) => {
-                        control_open = false;
-                        self.input(AfterExit::Dropped, Self::end);
-                    }
-                },
+                exit = runner.finished(), if !self.exited() => self.input(AfterExit::Read, |d| d.on_finished(exit.unwrap_or_else(|_| d.lost()))),
+                next = control.wait_until(|control| (*control != seen).then_some(*control)) => {
+                    self.on_control(next, &mut seen)
+                }
                 msg = channel.recv(), if reader_open => match msg {
                     Ok(msg) => self.input(AfterExit::Read, |d| d.on_message(msg)),
                     Err(reason) => {
@@ -487,7 +477,7 @@ impl Driver {
             && tokio::time::timeout(secs(self.opts.close_timeout), &mut sample).await.is_err()
         {
             runner_log!(self.host.runner(), log::Level::Error; "memory sample did not settle; retaining the runner's host");
-            self.status.send_modify(|s| s.incomplete = true);
+            self.status.modify(|s| s.incomplete = true);
             let _ = sample.await;
         }
         if let Some(init) = self.init_reply.take() {
@@ -497,7 +487,7 @@ impl Driver {
             let _ = job.send(Err(StartJobError::Closed));
         }
         self.host.release();
-        self.status.send_modify(|status| status.cleaned = true);
+        self.status.modify(|status| status.cleaned = true);
     }
 
     /// The handle's control changed to `next`: each of kill and shutdown acts once.
@@ -573,7 +563,7 @@ impl Driver {
     fn publish(&self) {
         let failure = self.protocol_failure.as_deref().map(Into::into);
         let exit = self.lifecycle.exit();
-        self.status.send_modify(|s| {
+        self.status.modify(|s| {
             s.failure = failure;
             s.exit = exit;
         });
@@ -723,6 +713,13 @@ impl Driver {
         }
     }
 
+    /// Nothing can report the runner's end any more (its watcher or launch is gone): it is
+    /// counted as ended, failed.
+    fn lost(&self) -> Exit {
+        runner_log!(self.host.runner(), log::Level::Error; "{} was lost: nothing reports its end", runner_name(&self.opts));
+        Exit::LOST
+    }
+
     fn on_finished(&mut self, exit: Exit) {
         let now = self.now();
         let work = self.lifecycle.work();
@@ -763,7 +760,7 @@ impl Driver {
         {
             *cleanup = Cleanup::Reported;
             runner_log!(self.host.runner(), log::Level::Error; "incomplete {} cleanup; retaining ownership", runner_name(&self.opts));
-            self.status.send_modify(|s| s.incomplete = true);
+            self.status.modify(|s| s.incomplete = true);
         }
         if matches!(self.lifecycle, Lifecycle::Active { phase: Active::Starting { deadline }, .. } if deadline <= now)
         {

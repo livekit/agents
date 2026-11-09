@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 mod backlog;
 mod capabilities;
 mod session;
@@ -241,7 +240,6 @@ impl Realtime for RealtimeFallbackModel {
                     self.attempt_timeout,
                 )
                 .await?;
-            let (restart_tx, restart_rx) = tokio::sync::watch::channel(false);
             self.active.store(0, std::sync::atomic::Ordering::Relaxed);
             let session = Arc::new(FallbackSession {
                 children: self.children.clone(),
@@ -267,10 +265,10 @@ impl Realtime for RealtimeFallbackModel {
                     events: VecDeque::new(),
                     generation: None,
                     closed: false,
+                    restart: None,
                 }),
-                restart_tx,
-                changed: tokio::sync::Notify::new(),
-                restart_rx: tokio::sync::Mutex::new(restart_rx),
+                changed: lk_agents_net::signal::Shared::new(0),
+                consumer: tokio::sync::Mutex::new(()),
             });
             let mut sessions = self.sessions.lock();
             sessions.retain(|w| w.strong_count() > 0);

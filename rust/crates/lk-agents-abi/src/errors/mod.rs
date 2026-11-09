@@ -15,13 +15,14 @@ pub use host_capture::{
 pub use provider::{ProviderError, PullError};
 pub use side_table::RefRegistry;
 
-/// A blocking job unwound before it could return its result.
+/// A blocking job ended without its result: it unwound, or was dropped unrun (a forked child
+/// never runs its parent's queue).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("worker job panicked")]
-pub struct JobPanicked;
+#[error("worker job ended without a result")]
+pub struct JobLost;
 
-impl From<JobPanicked> for std::io::Error {
-    fn from(error: JobPanicked) -> Self {
+impl From<JobLost> for std::io::Error {
+    fn from(error: JobLost) -> Self {
         std::io::Error::other(error)
     }
 }

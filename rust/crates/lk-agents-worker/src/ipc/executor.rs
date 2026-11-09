@@ -1,11 +1,10 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::ipc::telemetry;
 use std::sync::Arc;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host;
-use tokio::sync::watch;
+use lk_agents_net::signal;
 
 use super::ipc_channel::{self, Channel};
 use super::owner::ThreadLaunch;
@@ -30,9 +29,9 @@ pub trait RunnerExecutor: Send + Sync + 'static {
 /// One launched runner.
 #[async_trait::async_trait]
 pub trait Runner: Send + Sync {
-    /// Resolves once it ended and nothing of it is left (a process reaped, a thread returned).
-    /// Cancel safe.
-    async fn finished(&self) -> Exit;
+    /// Resolves once it ended and nothing of it is left (a process reaped, a thread returned);
+    /// `Err(Ended)` once nothing can report its end any more. Cancel safe.
+    async fn finished(&self) -> Result<Exit, signal::Ended>;
     /// Ends it where it can be forced: a process is killed; a thread cannot be, it ends once it
     /// did what it was asked. Returns whether it forced the end. Idempotent.
     fn stop(&self) -> bool;
@@ -49,17 +48,21 @@ pub struct Exit {
     pub killed: bool,
 }
 
+impl Exit {
+    /// A runner nothing can report the end of any more: failed.
+    pub const LOST: Exit = Exit { code: -1, killed: false };
+}
+
 /// A job thread of the worker's own process: the launcher starts it on the job's end of the
 /// channel and reports its return on the launch.
 pub struct ThreadExecutor {
     launcher: Arc<dyn ipc_host::JobLauncher>,
     context: CallContext,
-    exited: Arc<watch::Sender<bool>>,
 }
 
 impl ThreadExecutor {
     pub fn new(launcher: Arc<dyn ipc_host::JobLauncher>, context: CallContext) -> Self {
-        Self { launcher, context, exited: Arc::new(watch::channel(false).0) }
+        Self { launcher, context }
     }
 }
 
@@ -68,22 +71,21 @@ impl RunnerExecutor for ThreadExecutor {
     async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), HostError> {
         let (parent, child) = ipc_channel::pair().map_err(host_error)?;
         let connection = Channel::from_endpoint(parent).map_err(host_error)?;
-        let launch = Arc::new(ThreadLaunch(self.exited.clone()));
+        // The host holds the producer: dropping the launch unreported ends the wait.
+        let (exited, returned) = signal::signal(false);
+        let launch = Arc::new(ThreadLaunch(exited));
         self.launcher.launch(&telemetry::Cx::NONE, &self.context, child, launch).await?;
-        Ok((Box::new(JobThread(self.exited.subscribe())), connection))
+        Ok((Box::new(JobThread(returned)), connection))
     }
 }
 
-struct JobThread(watch::Receiver<bool>);
+struct JobThread(signal::Cell<bool>);
 
 #[async_trait::async_trait]
 impl Runner for JobThread {
-    async fn finished(&self) -> Exit {
-        // Without its executor nobody can report the return: the thread stays unaccounted for.
-        if self.0.clone().wait_for(|exited| *exited).await.is_err() {
-            std::future::pending::<()>().await;
-        }
-        Exit { code: 0, killed: false }
+    async fn finished(&self) -> Result<Exit, signal::Ended> {
+        self.0.wait_for(|exited| *exited).await?;
+        Ok(Exit { code: 0, killed: false })
     }
 
     fn stop(&self) -> bool {

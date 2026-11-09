@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::telemetry;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::rtc::{
@@ -9,6 +8,7 @@ use lk_agents_inference::codecs::{AudioDecoder, DecoderError, decoder_limits};
 use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy};
 use lk_agents_media::{Mixer, StreamId};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::signal::{self, Shared};
 use lk_agents_net::task::TaskSet;
 use parking_lot::Mutex;
 use std::collections::BTreeMap;
@@ -30,12 +30,17 @@ pub use lk_agents_abi::voice::background_audio::{
 };
 
 /// Completion and stop notification owned by voice, shared with the caller's handle
-/// (`PlayHandle`'s two write-once futures).
+/// (`PlayHandle`'s two write-once futures). Done once marked, or once the sound's source is gone.
 pub struct PlaybackDone {
     fade_out: f64,
 
     stopped: CancellationToken,
-    done: tokio::sync::watch::Sender<bool>,
+    /// A stop without fade-out or `mark_playout_done`.
+    marked: Shared<bool>,
+    /// Ends when the source playing the sound is gone, however it went: the source holds the
+    /// producer, taken once from `source` when it is queued.
+    playing: signal::Cell<Option<()>>,
+    source: Mutex<Option<signal::Producer<Option<()>>>>,
 }
 
 /// `_core.PlayState`: what `PlayHandle` wraps.
@@ -49,11 +54,21 @@ impl PlaybackDone {
     }
 
     fn with(fade_out: f64, done: bool) -> Self {
-        let (done, _) = tokio::sync::watch::channel(done);
-        Self { fade_out, stopped: CancellationToken::new(), done }
+        let (source, playing) = signal::once();
+        Self {
+            fade_out,
+            stopped: CancellationToken::new(),
+            marked: Shared::new(done),
+            playing,
+            source: Mutex::new(Some(source)),
+        }
+    }
+    /// The producer the playing source holds.
+    fn play(&self) -> Option<signal::Producer<Option<()>>> {
+        self.source.lock().take()
     }
     pub fn done(&self) -> bool {
-        *self.done.borrow()
+        self.marked.with(|marked| *marked) || self.playing.ended()
     }
     pub fn stop_requested(&self) -> bool {
         self.stopped.is_cancelled()
@@ -61,25 +76,25 @@ impl PlaybackDone {
     /// Ask playback to stop; `true` if done now. With a fade-out the handle is not done yet, or
     /// the generator would be closed mid-fade.
     pub fn stop(&self) -> bool {
-        self.done.send_if_modified(|done| {
-            if *done {
+        self.marked.modify(|marked| {
+            if *marked || self.playing.ended() {
                 return false;
             }
             self.stopped.cancel();
-            *done = self.fade_out <= 0.0;
-            *done
+            *marked = self.fade_out <= 0.0;
+            *marked
         })
     }
     /// `_mark_playout_done`. Idempotent, and called from several places for exactly that reason.
     pub fn finish(&self) -> bool {
-        self.done.send_if_modified(|done| !std::mem::replace(done, true))
+        let ended = self.playing.ended();
+        self.marked.modify(|marked| !std::mem::replace(marked, true) && !ended)
     }
     pub async fn wait(&self) {
-        let mut done = self.done.subscribe();
-        while !*done.borrow_and_update() {
-            if done.changed().await.is_err() {
-                break;
-            }
+        tokio::select! {
+            biased;
+            _ = self.playing.wait() => {}
+            () = self.marked.wait_until(|marked| marked.then_some(())) => {}
         }
     }
 }
@@ -104,8 +119,8 @@ pub struct BackgroundAudioPlayer {
     closing: AtomicBool,
 
     started: AtomicBool,
-    /// Woken by `play` and `close`: an idle mixer waits on it rather than polling.
-    wake: tokio::sync::Notify,
+    /// Written by `play` and `close`: an idle mixer waits on it rather than polling.
+    wake: signal::Producer<()>,
     pub sample_rate: u32,
     pub num_channels: u16,
     pub blocksize: usize,
@@ -171,7 +186,7 @@ impl BackgroundAudioPlayer {
             closed: AtomicBool::new(false),
             closing: AtomicBool::new(false),
             started: AtomicBool::new(false),
-            wake: tokio::sync::Notify::new(),
+            wake: signal::signal(()).0,
             sample_rate,
             num_channels,
             blocksize,
@@ -202,6 +217,7 @@ impl BackgroundAudioPlayer {
         };
         let sound = sounds.into_iter().nth(index).expect("the plan names one of the sounds");
         let handle = PlaybackDone::new(sound.fade_out);
+        let playing = handle.play();
         let playback = Playback::new(&sound);
         let input = match sound.source {
             SoundSource::Stream(stream) => Input::Stream(stream),
@@ -215,16 +231,18 @@ impl BackgroundAudioPlayer {
             cancel: None,
             playback,
             handle: handle.clone(),
+            _playing: playing,
             spawner: self.spawner.clone(),
             tasks: self.tasks.clone(),
         });
-        self.wake.notify_one();
+        self.wake.set(());
         Ok(handle)
     }
 
     pub async fn next_block(&self) -> Option<Vec<i16>> {
         while !self.closed.load(Ordering::Acquire) {
-            let woken = self.wake.notified();
+            // Subscribed before taking the queue, so a `play` after it wakes the wait.
+            let mut woken = self.wake.cell();
             let queued = std::mem::take(&mut *self.queued.lock());
             let sources: Vec<_> =
                 queued.into_iter().map(|source| self.start_source(source)).collect();
@@ -238,7 +256,7 @@ impl BackgroundAudioPlayer {
             let round = std::future::poll_fn(|cx| self.state.lock().poll_round(cx));
             let block = tokio::select! {
                 biased;
-                _ = woken => continue,
+                _ = woken.changed() => continue,
                 block = round => block,
             };
             std::future::poll_fn(|cx| self.state.lock().poll_retired(cx)).await;
@@ -255,9 +273,9 @@ impl BackgroundAudioPlayer {
             telemetry::AudioConsumer::BackgroundAudio,
             self.clock.clone(),
         );
-        let request = Arc::new(tokio::sync::Notify::new());
+        let (request, mut requested) = signal::signal(());
         let stop = CancellationToken::new();
-        let (requested, stopped) = (request.clone(), stop.clone());
+        let stopped = stop.clone();
         let clock = self.clock.clone();
         let timeout = self.timeout;
         let (rate, channels) = (self.sample_rate, self.num_channels);
@@ -269,7 +287,8 @@ impl BackgroundAudioPlayer {
                     biased;
                     _ = stopped.cancelled() => break,
                     _ = playing.wait() => break,
-                    _ = requested.notified() => {},
+                    // Ended: the mixer dropped the reader.
+                    asked = requested.changed() => if asked.is_err() { break },
                 }
                 let fetched = tokio::select! {
                     biased;
@@ -345,7 +364,7 @@ impl BackgroundAudioPlayer {
             .await;
         reopen.1 = true;
         self.closed.store(true, Ordering::Release);
-        self.wake.notify_one();
+        self.wake.set(());
         let this = self.clone();
         let _ = spawn_owned((&self.tasks, self.spawner.as_ref()), async move {
             let mut output = this.output.lock().await;
@@ -399,7 +418,8 @@ struct MixerState {
 
 struct SourceReader {
     frames: AudioReceiver<FetchedState>,
-    request: Arc<tokio::sync::Notify>,
+    /// Asks the reader task for the next block; the reader's end ends that task.
+    request: signal::Producer<()>,
     stop: CancellationToken,
     cancel_on_drop: tokio_util::sync::DropGuard,
     done: tokio::sync::oneshot::Receiver<()>,
@@ -428,6 +448,8 @@ struct Source {
     cancel: Option<Arc<crate::host::Cancellation>>,
     playback: Playback,
     handle: Arc<PlaybackDone>,
+    /// Ends the handle's `playing` when the source is gone.
+    _playing: Option<signal::Producer<Option<()>>>,
     spawner: Arc<dyn Spawner>,
     tasks: Arc<TaskSet>,
 }
@@ -492,7 +514,7 @@ impl MixerState {
                     source.phase = ReadPhase::Ready;
                     break;
                 }
-                source.request.notify_one();
+                source.request.set(());
                 source.phase = ReadPhase::Reading;
             }
             let received = std::pin::pin!(source.frames.recv()).as_mut().poll(cx);
@@ -620,7 +642,6 @@ impl Source {
 
 impl Drop for Source {
     fn drop(&mut self) {
-        self.handle.finish();
         if !matches!(self.input, Input::Closed) {
             drop(self.teardown());
         }

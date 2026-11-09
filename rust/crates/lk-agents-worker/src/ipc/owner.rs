@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::ipc::telemetry;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use parking_lot::Mutex;
@@ -11,7 +10,7 @@ use lk_agents_abi::worker::ipc_host::{
     self, JobLauncher, LaunchReport, SupervisedJob, WorkerError,
 };
 use lk_agents_abi::worker::job::{RunningJobInfo, StartJob};
-use tokio::sync::watch;
+use lk_agents_net::signal;
 
 use super::executor::{RunnerExecutor, ThreadExecutor};
 use super::process::{ProcessExecutor, ProcessReceipt};
@@ -44,9 +43,10 @@ pub struct JobSupervisor {
     /// Set by `start()`.
     sup: Mutex<Option<RunnerSupervisor>>,
     /// Whether the runner initialized, once that settled (answered, failed, timed out, killed).
-    initialized: watch::Sender<Settlement>,
-    /// Whether a runner ran, once its supervision is over and the launcher heard of it.
-    ran: watch::Sender<Settlement>,
+    initialized: Mutex<Settlement>,
+    /// Set by `start()`: whether a runner ran, once its supervision is over and the launcher
+    /// heard of it.
+    ran: Mutex<Option<signal::Cell<Option<bool>>>>,
     /// The completion report; it ends with the runner, and dropping this object does not cancel
     /// it.
     tasks: Arc<TaskSet>,
@@ -67,13 +67,10 @@ impl JobSupervisor {
     }
 
     fn settle(&self, initialized: bool) {
-        self.initialized.send_if_modified(|state| {
-            if *state != Settlement::Pending {
-                return false;
-            }
+        let mut state = self.initialized.lock();
+        if *state == Settlement::Pending {
             *state = if initialized { Settlement::Succeeded } else { Settlement::Failed };
-            true
-        });
+        }
     }
 
     pub(crate) fn logger(&self) -> &JobLogger {
@@ -119,8 +116,8 @@ impl ipc_host::JobSupervisor for JobSupervisor {
             ),
             state,
             sup: Mutex::new(None),
-            initialized: watch::channel(Settlement::Pending).0,
-            ran: watch::channel(Settlement::Pending).0,
+            initialized: Mutex::new(Settlement::Pending),
+            ran: Mutex::new(None),
             tasks: Arc::new(TaskSet::default()),
         })
     }
@@ -138,7 +135,7 @@ impl ipc_host::JobSupervisor for JobSupervisor {
     }
 
     fn initialized(&self) -> bool {
-        *self.initialized.borrow() == Settlement::Succeeded
+        *self.initialized.lock() == Settlement::Succeeded
     }
 
     fn closing(&self) -> bool {
@@ -176,7 +173,7 @@ impl ipc_host::JobSupervisor for JobSupervisor {
     }
 
     async fn start(&self) -> Result<(), WorkerError> {
-        let sup = {
+        let (sup, ran) = {
             let mut slot = self.sup.lock();
             if self.state.lock().closing {
                 return Err(WorkerError::Failed("process is closed".into()));
@@ -198,18 +195,21 @@ impl ipc_host::JobSupervisor for JobSupervisor {
                 lk_agents_net::blocking_io::blocking_io(),
             );
             *slot = Some(sup.clone());
-            sup
+            let (ran, cell) = signal::once();
+            *self.ran.lock() = Some(cell);
+            (sup, ran)
         };
-        let (supervised, state, ran) = (sup.clone(), self.state.clone(), self.ran.clone());
+        let (supervised, state) = (sup.clone(), self.state.clone());
         let (launcher, context) = (self.launcher.clone(), self.context.clone());
-        self.tasks.spawn(&self.spawner, "job runner completion", async move {
+        let name = "job runner completion";
+        self.tasks.spawn_settling(&self.spawner, name, ran, async move {
             let launched = supervised.wait_cleaned().await;
             if launched {
                 let completion = supervised.completion();
                 state.lock().completion = Some(completion.clone());
                 let _ = launcher.completed(&telemetry::Cx::NONE, &context, completion).await;
             }
-            ran.send_replace(if launched { Settlement::Succeeded } else { Settlement::Failed });
+            launched
         });
         // The launcher's own failure is raised as it was.
         self.spawner.run(async move { sup.launched().await }).await.map_err(WorkerError::Host)
@@ -295,13 +295,9 @@ impl ipc_host::JobSupervisor for JobSupervisor {
     }
 
     async fn join(&self) -> bool {
-        if !ipc_host::JobSupervisor::started(self) {
-            return false;
-        }
-        let mut ran = self.ran.subscribe();
-        ran.wait_for(|state| *state != Settlement::Pending)
-            .await
-            .is_ok_and(|done| *done == Settlement::Succeeded)
+        let Some(ran) = self.ran.lock().clone() else { return false };
+        // Ended: the completion report died before the launcher heard of the run.
+        ran.wait().await.unwrap_or(false)
     }
 }
 
@@ -325,13 +321,13 @@ impl ipc_host::ProcessLaunch for ProcessLaunch {
 }
 
 /// The return of a thread launch.
-pub struct ThreadLaunch(pub(crate) Arc<watch::Sender<bool>>);
+pub struct ThreadLaunch(pub(crate) signal::Producer<bool>);
 
 impl LaunchReport for ThreadLaunch {}
 
 impl ipc_host::ThreadLaunch for ThreadLaunch {
     fn thread_exited(&self) {
-        self.0.send_replace(true);
+        self.0.set(true);
     }
 }
 

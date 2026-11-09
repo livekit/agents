@@ -7,10 +7,11 @@ use lk_agents_voice::trace::{GenerationStep, SpeechStep, Step};
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
-    record::{Detail, Id, Kind, Recording},
+    record::{Detail, Id, Kind, Recording, StorageOperation, StorageStep},
 };
 
-/// How long a reply may go without its model request.
+/// How long a reply may go without its model request, besides the slow answers the fake
+/// database held its lane acquire on.
 pub const BOUND_MS: u64 = 15_000;
 
 /// What the case owes the driver before a reply can be planned: an answer to the turn hook, or
@@ -24,9 +25,9 @@ pub struct ReplyReachesItsModel;
 impl Rule for ReplyReachesItsModel {
     const CONTRACT: Contract = Contract {
         id: "reply_reaches_its_model",
-        guarantee: "A requested reply makes its model request or settles within a bound of its creation, whatever is playing; only an unanswered hook or tool, or the close, holds it.",
-        examples: &[requested_during_playout],
-        counterexamples: &[waits_for_the_playing_speech],
+        guarantee: "A requested reply makes its model request or settles within a bound of its creation, whatever is playing; only an unanswered hook or tool, the close, or slow storage answers its acquire waited on hold it.",
+        examples: &[requested_during_playout, waits_out_slow_storage_answers],
+        counterexamples: &[waits_for_the_playing_speech, waits_after_its_storage_answered],
         probe: None,
     };
 
@@ -70,7 +71,7 @@ impl Rule for ReplyReachesItsModel {
             }
         }
         for (&speech, &at) in created.iter().filter(|(speech, _)| replies.contains(speech)) {
-            let deadline = at + BOUND_MS;
+            let deadline = deadline(r, speech, at);
             if end <= deadline || closing.is_some_and(|c| c <= deadline) {
                 continue;
             }
@@ -90,6 +91,44 @@ impl Rule for ReplyReachesItsModel {
             );
         }
     }
+}
+
+/// `BOUND_MS` after `at`, extended by the time the fake database held slow answers while the
+/// reply's lane acquire waited on them.
+fn deadline(r: &Recording, speech: u64, at: u64) -> u64 {
+    let acquire = |step: &StorageStep, answered: bool| match step {
+        StorageStep::Requested { speech: s, operation: StorageOperation::Acquire } => {
+            !answered && *s == speech
+        }
+        StorageStep::Answered { speech: s, operation: StorageOperation::Acquire, .. } => {
+            answered && *s == speech
+        }
+        _ => false,
+    };
+    let storage = r.host_view().storage();
+    let mut deadline = at + BOUND_MS;
+    let Some(requested) =
+        storage.iter().find(|(o, step)| o.at_ms >= at && acquire(step, false)).map(|(o, _)| o.at_ms)
+    else {
+        return deadline;
+    };
+    let answered = storage
+        .iter()
+        .find(|(o, step)| o.at_ms >= requested && acquire(step, true))
+        .map_or(u64::MAX, |(o, _)| o.at_ms);
+    let mut covered = requested;
+    for (o, step) in storage {
+        let StorageStep::Slowed { ms } = step else { continue };
+        if o.at_ms < requested || o.at_ms > answered.min(deadline) {
+            continue;
+        }
+        let (start, end) = (o.at_ms.max(covered), (o.at_ms + ms).min(answered));
+        if end > start {
+            deadline += end - start;
+            covered = end;
+        }
+    }
+    deadline
 }
 
 fn reply_created(speech: u64) -> Step {
@@ -129,6 +168,45 @@ fn waits_for_the_playing_speech() -> Recording {
         .journal(Step::Emitted(SessionEvent::FloorChanged { holder: Some(SpeechId(1)) }))
         .speech_created(2, SpeechKind::GenerateReply)
         .journal(reply_created(2))
+        .later(20_000)
+        .done()
+}
+
+fn acquire(speech: u64, answered: bool) -> StorageStep {
+    let operation = StorageOperation::Acquire;
+    if answered {
+        StorageStep::Answered { speech, operation, result: Ok(()), delivered: true }
+    } else {
+        StorageStep::Requested { speech, operation }
+    }
+}
+
+/// The reply's acquire meets two slow lease takes back to back: its request comes 15.5 s after
+/// its creation, 2.5 s of it its own.
+fn waits_out_slow_storage_answers() -> Recording {
+    Authored::new()
+        .speech_created(2, SpeechKind::GenerateReply)
+        .journal(reply_created(2))
+        .storage(acquire(2, false))
+        .storage(StorageStep::Slowed { ms: 6_300 })
+        .later(6_300)
+        .storage(StorageStep::Slowed { ms: 6_700 })
+        .later(9_200)
+        .storage(acquire(2, true))
+        .journal(chat_requested(2))
+        .later(20_000)
+        .done()
+}
+
+/// The acquire's slow answer is excused, but not the twenty seconds after it.
+fn waits_after_its_storage_answered() -> Recording {
+    Authored::new()
+        .speech_created(2, SpeechKind::GenerateReply)
+        .journal(reply_created(2))
+        .storage(acquire(2, false))
+        .storage(StorageStep::Slowed { ms: 6_000 })
+        .later(6_000)
+        .storage(acquire(2, true))
         .later(20_000)
         .done()
 }

@@ -1076,3 +1076,49 @@ async fn mutated_requests_settle_and_free_their_connections() {
     }
     assert!(answered > 0 && answered < CASES, "mutations both pass and fail: {answered}");
 }
+
+/// Where an app hands its exchange to the test.
+pub(crate) type Slot = parking_lot::Mutex<Option<Arc<Exchange>>>;
+
+/// An app that hands its exchange to the test and never returns.
+fn holding() -> (Arc<EndpointServer>, Arc<Slot>) {
+    let held = Arc::new(parking_lot::Mutex::new(None));
+    let slot = held.clone();
+    let server = default_server(move |exchange| {
+        *slot.lock() = Some(exchange);
+        std::future::pending()
+    });
+    (server, held)
+}
+
+pub(crate) async fn held(slot: &Slot) -> Arc<Exchange> {
+    let taken = async {
+        loop {
+            if let Some(exchange) = slot.lock().clone() {
+                return exchange;
+            }
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), taken).await.expect("the app ran")
+}
+
+// Catches: an exchange whose serving future was dropped (its connection cancelled) leaving the
+// host's receive waiting on a response end only that future could mark.
+#[tokio::test]
+async fn a_dropped_exchange_ends_the_hosts_receive() {
+    let (server, slot) = holding();
+    let (wire, mut client, _end) = wire();
+    client.write_all(&get("/")).await.unwrap();
+    let serving = tokio::spawn({
+        let server = server.clone();
+        async move { server.serve(wire, Origin::Node(preamble())).await }
+    });
+    let exchange = held(&slot).await;
+    assert_eq!(read_body(&exchange).await.unwrap(), b"");
+    serving.abort();
+    let _ = serving.await;
+    let event = tokio::time::timeout(Duration::from_secs(5), exchange.receive()).await;
+    assert!(matches!(event.expect("receive hung"), Ok(ExchangeEvent::Disconnected)));
+    assert!(exchange.send(start(200, &[])).await.is_err(), "a dropped exchange took a response");
+}

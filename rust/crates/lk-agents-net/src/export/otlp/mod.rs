@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 pub(crate) mod cloud;
 pub mod config;
 mod destination;
@@ -7,15 +6,15 @@ mod metrics;
 pub mod proto;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use lk_agents_abi::telemetry::record::{JobKey, KeyValues, Record, RecordSink, SpanRecord};
 use lk_agents_abi::telemetry::report::CloudAgent;
 use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt as _, Ts, before, timeout};
 use parking_lot::Mutex;
-use tokio::sync::Notify;
 
+use crate::signal;
 use cloud::PostError;
 pub use config::{
     AppConfig, CloudEndpoint, CloudRecording, ProcessIdentity, SdkName, SessionIdentity, Target,
@@ -86,11 +85,10 @@ struct Shared {
     state: Mutex<State>,
     clock: Arc<dyn Clock>,
     counters: Counters,
-    /// A queue filled a batch.
-    wake: Notify,
-    /// Exports in progress, and their settling.
-    in_flight: AtomicUsize,
-    idle: Notify,
+    /// Bumped when a queue fills a batch.
+    wake: signal::Producer<()>,
+    /// Exports in progress.
+    in_flight: signal::Producer<usize>,
 }
 
 /// The process's telemetry exporter.
@@ -111,9 +109,8 @@ impl Exporter {
             state: Mutex::new(State::new(process, limits)),
             clock,
             counters: Counters::default(),
-            wake: Notify::new(),
-            in_flight: AtomicUsize::new(0),
-            idle: Notify::new(),
+            wake: signal::signal(()).0,
+            in_flight: signal::signal(0).0,
         });
         let task = spawner.spawn(run(shared.clone()));
         Exporter { shared, task: Mutex::new(Some(task)) }
@@ -229,7 +226,7 @@ impl RecordSink for Exporter {
         let admitted = self.shared.state.lock().record(record, bytes);
         add(&self.shared.counters.dropped, admitted.dropped as usize);
         if admitted.batch_ready {
-            self.shared.wake.notify_one();
+            self.shared.wake.set(());
         }
     }
 }
@@ -238,11 +235,13 @@ impl RecordSink for Exporter {
 async fn run(shared: Arc<Shared>) {
     let clock = shared.clock.clone();
     let mut next_metrics = clock.now().saturating_add(METRIC_INTERVAL);
+    // `shared` holds the producer, so the wake never ends under this loop.
+    let mut wake = shared.wake.cell();
     loop {
         let at = clock.now().saturating_add(SPAN_INTERVAL).min(next_metrics);
         let woken = tokio::select! {
             biased;
-            _ = shared.wake.notified() => true,
+            _ = wake.changed() => true,
             _ = clock.wait_until(at) => false,
         };
         let now = clock.now();
@@ -261,9 +260,7 @@ struct InFlight<'a>(&'a Shared);
 
 impl Drop for InFlight<'_> {
     fn drop(&mut self) {
-        if self.0.in_flight.fetch_sub(1, Ordering::AcqRel) == 1 {
-            self.0.idle.notify_waiters();
-        }
+        self.0.in_flight.modify(|n| *n -= 1);
     }
 }
 
@@ -278,7 +275,7 @@ impl Shared {
         if batches.is_empty() {
             return true;
         }
-        self.in_flight.fetch_add(1, Ordering::AcqRel);
+        self.in_flight.modify(|n| *n += 1);
         let _in_flight = InFlight(self);
         let mut complete = true;
         for batch in batches {
@@ -320,17 +317,8 @@ impl Shared {
 
     /// Waits until no export is in progress. False when `deadline` passed first.
     async fn settled(&self, deadline: Ts) -> bool {
-        loop {
-            let idle = self.idle.notified();
-            tokio::pin!(idle);
-            idle.as_mut().enable();
-            if self.in_flight.load(Ordering::Acquire) == 0 {
-                return true;
-            }
-            if before(&*self.clock, Some(deadline), idle).await.is_err() {
-                return false;
-            }
-        }
+        let in_flight = self.in_flight.cell();
+        before(&*self.clock, Some(deadline), in_flight.wait_for(|n| *n == 0)).await.is_ok()
     }
 
     async fn export(&self, batch: Batch) -> Result<(), PostError> {

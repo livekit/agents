@@ -236,3 +236,20 @@ async fn dropping_the_owner_still_settles_its_ready_resources() {
     assert!(activation.closed());
     assert_eq!(hooks.closes.load(Ordering::SeqCst), 1);
 }
+
+// Catches: open and close waiters parked forever on writers the resources keep when the task
+// opening them is dropped (a cancel or runtime shutdown) before it reports.
+#[tokio::test]
+async fn waiters_resolve_when_the_opening_task_is_dropped() {
+    let hooks = Arc::new(Hooks { hold_setup: true, ..Hooks::new() });
+    let owner = resources(vec![hooks.clone()]);
+    let opening = owner.open().unwrap();
+    hooks.entered.notified().await;
+    owner.0.tasks.cancel_all();
+    let limit = std::time::Duration::from_secs(5);
+    let opened = tokio::time::timeout(limit, opening).await;
+    assert!(matches!(opened, Ok(Err(_))), "the open waiter outlived its task: {opened:?}");
+    let closed = tokio::time::timeout(limit, owner.aclose()).await;
+    assert!(closed.is_ok(), "the close waiter outlived its task");
+    hooks.release.notify_one();
+}

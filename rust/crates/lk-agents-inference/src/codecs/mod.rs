@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -9,9 +8,9 @@ use lk_agents_media::pool::{Job, JobClass, MediaPool, MediaPoolError};
 use lk_agents_media::source::{self, Source};
 use lk_agents_media::{AudioFormat, CodecError, Container};
 use parking_lot::Mutex;
-use tokio::sync::Notify;
 
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::signal::{self, Cell, Producer};
 
 // Cancellation retains native ownership until the decode worker settles.
 
@@ -66,7 +65,6 @@ struct Shared {
     state: Mutex<State>,
     reader: OnceLock<std::thread::Thread>,
     cancelled: AtomicBool,
-    ready: Notify,
     limits: DecoderLimits,
     /// A streaming decoder's input; cancellation closes it so a blocked read returns.
     input: Option<Arc<StreamBuffer>>,
@@ -79,7 +77,6 @@ impl Shared {
             input.close();
         }
         self.wake_reader();
-        self.ready.notify_one();
     }
 
     fn fail(state: &mut State, error: DecoderError) {
@@ -110,7 +107,12 @@ impl Shared {
     }
 
     /// Queues decoded PCM as frames, parking the worker while the queue is full.
-    fn output(&self, format: AudioFormat, samples: &[i16]) -> Result<(), DecoderError> {
+    fn output(
+        &self,
+        ready: &Producer<()>,
+        format: AudioFormat,
+        samples: &[i16],
+    ) -> Result<(), DecoderError> {
         if samples.is_empty() {
             return Ok(());
         }
@@ -139,8 +141,8 @@ impl Shared {
             }
             let error = DecoderError::Overflow("PCM output");
             Self::fail(&mut state, error.clone());
-            self.wake_reader();
-            self.ready.notify_one();
+            drop(state);
+            ready.set(());
             return Err(error);
         }
         let prepared = source::frames(format, samples, self.limits.output_chunk_samples);
@@ -155,7 +157,7 @@ impl Shared {
         }
         state.output.extend(prepared);
         drop(state);
-        self.ready.notify_one();
+        ready.set(());
         // Give the host and controls scheduling opportunities between native decode chunks.
         std::thread::yield_now();
         Ok(())
@@ -165,6 +167,8 @@ impl Shared {
 /// One admitted decoder. EOF follows native completion and delivery of all decoded PCM.
 pub struct AudioDecoder {
     shared: Arc<Shared>,
+    /// Written by the worker on new output and at the end; ends when the worker does.
+    ready: Cell<()>,
     worker: Option<Job<Result<(), DecoderError>>>,
 }
 
@@ -238,12 +242,13 @@ impl AudioDecoder {
             }),
             reader: OnceLock::new(),
             cancelled: AtomicBool::new(false),
-            ready: Notify::new(),
             limits,
             input,
         });
         let resource = shared.clone();
+        let (ready_tx, ready) = signal::signal(());
         let worker = media_pool.try_spawn(JobClass::Decoder, move || {
+            let ready_tx = ready_tx;
             let _ = resource.reader.set(std::thread::current());
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 source::decode(
@@ -252,7 +257,7 @@ impl AudioDecoder {
                     num_channels,
                     resource.limits.format,
                     &|| resource.cancelled.load(Ordering::Acquire),
-                    &mut |format, samples| resource.output(format, samples),
+                    &mut |format, samples| resource.output(&ready_tx, format, samples),
                 )
             }))
             .unwrap_or_else(|_| Err(DecoderError::WorkerFailed("native decode panicked".into())));
@@ -265,7 +270,7 @@ impl AudioDecoder {
                     Shared::fail(&mut state, error.clone());
                 }
             }
-            resource.ready.notify_one();
+            ready_tx.set(());
             // Retain the worker's ownership until accepted PCM transfers or cancellation retires
             // it. Large queue deallocation therefore happens here, never in a host-loop drop.
             loop {
@@ -283,28 +288,29 @@ impl AudioDecoder {
             }
             result
         })?;
-        Ok(Self { shared, worker: Some(worker) })
+        Ok(Self { shared, ready, worker: Some(worker) })
     }
 
     pub async fn next(&mut self) -> Result<Option<AudioFrame>, DecoderError> {
         // Each ready pull is its own dispatch; a large decoded backlog must not monopolize controls.
         tokio::task::yield_now().await;
+        let mut worker_gone = false;
         loop {
-            let ready = self.shared.ready.notified();
             match self.shared.poll_output() {
                 DecoderPoll::Audio(audio) => return Ok(Some(audio)),
-                DecoderPoll::Busy => {
-                    drop(ready);
-                    tokio::task::yield_now().await;
-                }
+                DecoderPoll::Busy => tokio::task::yield_now().await,
                 DecoderPoll::Finished(outcome) => {
-                    drop(ready);
                     let settled = self.settle().await;
                     outcome?;
                     settled?;
                     return Ok(None);
                 }
-                DecoderPoll::Pending => ready.await,
+                DecoderPoll::Pending if worker_gone => {
+                    return Err(DecoderError::WorkerFailed(
+                        "the decode job ended unsettled".into(),
+                    ));
+                }
+                DecoderPoll::Pending => worker_gone = self.ready.changed().await.is_err(),
             }
         }
     }
@@ -339,7 +345,8 @@ impl Drop for AudioDecoder {
     }
 }
 
-/// A streaming decoder's encoded input. Pushing never waits for the native decoder.
+/// A streaming decoder's encoded input. Pushing never waits for the native decoder; dropping it
+/// ends the input.
 pub struct DecoderInput {
     shared: Arc<Shared>,
     pipe: Arc<StreamBuffer>,
@@ -372,6 +379,12 @@ impl DecoderInput {
     /// Stop decoding now; the output side still observes settlement.
     pub fn cancel(&self) {
         self.shared.cancel();
+    }
+}
+
+impl Drop for DecoderInput {
+    fn drop(&mut self) {
+        self.pipe.end_input();
     }
 }
 

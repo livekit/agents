@@ -1,8 +1,6 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use tokio::sync::watch;
 
 use lk_agents_abi::a2a::client::{
     self as port, AgentClientError, Message, MessageInput, MessagePart, TaskUpdate,
@@ -22,14 +20,18 @@ use serde_json::{Map, Value};
 use super::host::message_from_wire;
 use super::{AgentClient, Reply};
 use crate::env::ProcessEnv;
+use crate::signal;
 use crate::task::Cancellation;
 use lk_agents_telemetry as telemetry;
 
 pub struct RemoteInteraction {
     inner: Interaction,
     /// The running delegation's stop and settlement.
-    running: Mutex<Option<(Arc<Cancellation>, watch::Receiver<bool>)>>,
+    running: Mutex<Option<(Arc<Cancellation>, Settled)>>,
 }
+
+/// Ends with the delegation's task, however it ends.
+type Settled = signal::Cell<Option<()>>;
 
 /// The interaction's decisions, shared with its running delegation.
 #[derive(Clone)]
@@ -114,15 +116,14 @@ impl Port for RemoteInteraction {
             live,
         };
         let stop = Arc::new(Cancellation::default());
-        let (done, settled) = watch::channel(false);
+        let (done, settled) = signal::once::<()>();
         *self.running.lock() = Some((stop.clone(), settled));
         let delegation = Delegation { interaction: self.inner.clone(), client, host, context, cx };
         // Its own task: a dropped `run` leaves it to the host, which stops it in the same turn
         // (`cancelled()`), and `settled()` waits for its cleanup.
         let task = (env.runtime)().map_err(unavailable)?.spawn(async move {
-            let result = delegation.run(request, &stop).await;
-            done.send_replace(true);
-            result
+            let _done = done;
+            delegation.run(request, &stop).await
         });
         task.await.unwrap_or_else(|error| Err(AgentClientError::Protocol(error.to_string())))
     }
@@ -139,10 +140,8 @@ impl Port for RemoteInteraction {
 
     async fn settled(&self) {
         let running = self.running.lock().as_ref().map(|(_, settled)| settled.clone());
-        if let Some(mut settled) = running
-            && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, settled.wait_for(|done| *done))
-                .await
-                .is_err()
+        if let Some(settled) = running
+            && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, settled.wait()).await.is_err()
         {
             log::error!(target: lk_agents_abi::LOG_TARGET, "delegation cleanup incomplete");
         }

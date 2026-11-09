@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 pub(crate) mod input;
 
 #[cfg(test)]
@@ -10,7 +9,7 @@ use input::{Input, Message};
 use lk_agents_abi::agent::resources::RunResources as _;
 use lk_agents_abi::agent::stream::PresentedEvent;
 use lk_agents_abi::agent::stream::{self, StreamError, StreamOutcome, StreamRefused};
-use lk_agents_abi::errors::Invalid;
+use lk_agents_abi::errors::{HostError, Invalid};
 use lk_agents_abi::text_session::TextSessionDelivery;
 use lk_agents_abi::usage::Usage;
 use lk_agents_abi::{BoxFuture, Spawner};
@@ -18,10 +17,10 @@ use lk_agents_core::run_stream::{
     Stream as Policy, View,
     projection::{Item, Projection},
 };
-use lk_agents_net::{env::ProcessEnv, task::TaskSet};
+use lk_agents_net::{env::ProcessEnv, signal, task::TaskSet};
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock};
-use tokio::sync::{Mutex as AsyncMutex, watch};
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
 type Outcome = Result<StreamOutcome, StreamError>;
@@ -34,10 +33,12 @@ struct Inner {
     source: AsyncMutex<Option<Box<dyn Input>>>,
     resources: OnceLock<Arc<RunResources>>,
     spawner: OnceLock<Arc<dyn Spawner>>,
-    usage: Mutex<Option<watch::Receiver<Usage>>>,
+    usage: Mutex<Option<signal::Cell<Usage>>>,
     terminal: Mutex<Option<Outcome>>,
     closing: CancellationToken,
-    closed: watch::Sender<bool>,
+    /// The settlement's writer, moved into the settlement task by the first `finish`.
+    settle: Mutex<Option<signal::Producer<Option<()>>>>,
+    closed: signal::Cell<Option<()>>,
     tasks: Arc<TaskSet>,
 }
 
@@ -75,9 +76,10 @@ impl Inner {
             return;
         }
         self.closing.cancel();
+        let Some(settle) = self.settle.lock().take() else { return };
         let inner = self.clone();
         let spawner = self.spawner.get().expect("bound stream owns its spawner");
-        self.tasks.spawn(&**spawner, "run stream settlement", async move {
+        self.tasks.spawn_settling(&**spawner, "run stream settlement", settle, async move {
             let source = inner.source.lock().await.take();
             if let Some(source) = source {
                 let deadline =
@@ -88,7 +90,17 @@ impl Inner {
                 }
             }
             let cleanup = match inner.resources.get() {
-                Some(resources) => resources.aclose().await.map_err(StreamError::Resources),
+                Some(resources) => {
+                    let clock = &inner.env.clock;
+                    let deadline = clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+                    tokio::select! {
+                        biased;
+                        closed = resources.aclose() => closed.map_err(StreamError::Resources),
+                        () = clock.wait_until(deadline) => Err(StreamError::Resources(
+                            HostError::new("the run's resources missed their close deadline").into(),
+                        )),
+                    }
+                }
                 None => Ok(()),
             };
             let projection = std::mem::take(&mut *inner.projection.lock());
@@ -97,12 +109,11 @@ impl Inner {
             let retired = inner.terminal.lock().replace(result);
             drop(retired);
             inner.policy.lock().settled();
-            inner.closed.send_replace(true);
         });
     }
     async fn settled(&self) -> Outcome {
-        let mut closed = self.closed.subscribe();
-        let _ = closed.wait_for(|done| *done).await;
+        // Ended unset: the settlement was dropped before it recorded an outcome.
+        self.closed.wait().await.map_err(|_| StreamError::Cancelled)?;
         self.terminal.lock().as_ref().cloned().ok_or(StreamError::OutcomeTaken)?
     }
     async fn exhausted(&self) -> Result<(), StreamError> {
@@ -144,7 +155,7 @@ impl Inner {
             };
             let next = tokio::select! {
                 biased;
-                _ = signal(cursor_closed) => return Ok(None),
+                _ = closed_cursor(cursor_closed) => return Ok(None),
                 () = self.closing.cancelled() => { drop(input); self.exhausted().await?; return Ok(None); },
                 next = source.next() => next,
             };
@@ -188,7 +199,7 @@ impl Inner {
     }
 }
 
-async fn signal(closed: Option<&CancellationToken>) {
+async fn closed_cursor(closed: Option<&CancellationToken>) {
     match closed {
         Some(closed) => closed.cancelled().await,
         None => std::future::pending::<()>().await,
@@ -214,6 +225,7 @@ impl stream::RunStream for RunStream {
     type Events = Events;
     type Text = Text;
     fn new(env: &ProcessEnv) -> Self {
+        let (settle, closed) = signal::once();
         Self(Arc::new(Inner {
             env: env.clone(),
             policy: Mutex::default(),
@@ -224,7 +236,8 @@ impl stream::RunStream for RunStream {
             usage: Mutex::default(),
             terminal: Mutex::default(),
             closing: CancellationToken::new(),
-            closed: watch::channel(false).0,
+            settle: Mutex::new(Some(settle)),
+            closed,
             tasks: Arc::default(),
         }))
     }
@@ -287,7 +300,7 @@ impl stream::RunStream for RunStream {
         matches!(&*self.0.terminal.lock(), Some(Err(StreamError::Cancelled)))
     }
     fn usage(&self) -> Usage {
-        self.0.usage.lock().as_ref().map(|u| u.borrow().clone()).unwrap_or_default()
+        self.0.usage.lock().as_ref().map(signal::Cell::get).unwrap_or_default()
     }
 }
 

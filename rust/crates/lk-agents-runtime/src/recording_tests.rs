@@ -792,3 +792,21 @@ mod never_block {
         }
     }
 }
+
+// Catches: a finish waiter parked forever on the status writer the recording keeps when the
+// worker's supervisor is dropped (a cancel or runtime shutdown) before it publishes the outcome.
+#[tokio::test]
+async fn a_finish_waiter_resolves_when_the_supervisor_is_dropped() {
+    let media_pool = media_pool(1);
+    let (sink, _started, _release) = Sink::new(false, false);
+    let encoder = Encoder(sink.trace.clone());
+    let writer = sink.writer;
+    let recorder = SessionRecorder::open_with(&media_pool, 10, Some(0.0), limits(), move || {
+        Ok((encoder, writer))
+    })
+    .await
+    .unwrap();
+    recorder.tasks.cancel_all();
+    let finished = tokio::time::timeout(Duration::from_secs(5), recorder.finish(0.1)).await;
+    assert!(matches!(finished, Ok(Err(_))), "the finish outlived the supervisor: {finished:?}");
+}

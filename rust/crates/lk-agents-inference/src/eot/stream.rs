@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::telemetry;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,7 +10,7 @@ use lk_agents_abi::{AudioFrame, EotInferenceMetrics, EotPrediction, ProviderId};
 use lk_agents_media::pool::{JobClass, MediaPoolError};
 use lk_agents_media::{Quality, Resampler};
 use parking_lot::Mutex;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
 
 use crate::eot::{
     AudioRingBuffer, CLIENT_BUFFER_SAMPLES, CancelReason, EotAction, EotRequestId, EotResolve,
@@ -76,8 +75,8 @@ pub struct EotStream {
     /// Where the local model is constructed.
     media_pool: lk_agents_media::pool::MediaPool,
     on_metrics: Option<MetricsCallback>,
-    /// A swap or prediction wakes a driver whose local construction was refused.
-    swaps: watch::Sender<u64>,
+    /// Counts swaps and predictions: one wakes a driver whose local construction was refused.
+    swaps: lk_agents_net::signal::Shared<u64>,
     /// Cancelled once the run loop is gone, a panic or an abort included.
     settled: tokio_util::sync::CancellationToken,
     id: ProviderId,
@@ -118,7 +117,7 @@ impl EotStream {
             make,
             media_pool,
             on_metrics,
-            swaps: watch::channel(0).0,
+            swaps: lk_agents_net::signal::Shared::new(0),
             settled: tokio_util::sync::CancellationToken::new(),
             id,
             runner: std::sync::OnceLock::new(),
@@ -173,7 +172,7 @@ impl EotStream {
                     // Keep the old shell alive in the run loop until after this lock is released.
                     // Its replacement is constructed there, never on the host's calling thread.
                     inner.retired = inner.shell.take();
-                    self.swaps.send_modify(|n| *n += 1);
+                    self.swaps.modify(|n| *n += 1);
                 }
                 EotAction::Degrade(_) => inner.degraded = true,
                 EotAction::Warn(w) => warnings.push(w),
@@ -233,9 +232,8 @@ impl EotStream {
 
     /// `_run`: the mounted transport for its lifetime, remounted after a swap.
     async fn run(&self) {
-        let mut swaps = self.swaps.subscribe();
         loop {
-            swaps.borrow_and_update();
+            let mut seen = self.swaps.with(|n| *n);
             let (shell, retired, closed, model) = {
                 let mut inner = self.lock();
                 (
@@ -252,8 +250,8 @@ impl EotStream {
                 return;
             }
             let next = match shell {
-                None => self.build_replacement(&mut swaps, model).await,
-                Some(shell) => self.serve(shell, &mut swaps).await,
+                None => self.build_replacement(&mut seen, model).await,
+                Some(shell) => self.serve(shell, seen).await,
             };
             if matches!(next, Next::Stop) {
                 return;
@@ -262,11 +260,7 @@ impl EotStream {
     }
 
     /// Constructs the local model on the media pool and mounts it.
-    async fn build_replacement(
-        &self,
-        swaps: &mut watch::Receiver<u64>,
-        model: TurnDetectorModel,
-    ) -> Next {
+    async fn build_replacement(&self, seen: &mut u64, model: TurnDetectorModel) -> Next {
         let make = self.make.clone();
         let (send, receive) = oneshot::channel();
         let admitted = self.media_pool.try_spawn(JobClass::EotModel, move || {
@@ -278,7 +272,7 @@ impl EotStream {
                 Err(error) => Err(error.to_string()),
             },
             Err(error @ MediaPoolError::Exhausted(_)) => {
-                return self.construction_refused(swaps, &error).await;
+                return self.construction_refused(seen, &error).await;
             }
             Err(error) => Err(error.to_string()),
         };
@@ -295,11 +289,7 @@ impl EotStream {
     }
 
     /// The pool had no room: warn, then wait for a swap or prediction to try again.
-    async fn construction_refused(
-        &self,
-        swaps: &mut watch::Receiver<u64>,
-        error: &MediaPoolError,
-    ) -> Next {
+    async fn construction_refused(&self, seen: &mut u64, error: &MediaPoolError) -> Next {
         let warnings = {
             let mut inner = self.lock();
             if inner.session.is_closed() {
@@ -307,14 +297,13 @@ impl EotStream {
             }
             let actions = inner.session.construction_refused(now(), &error.to_string());
             let warnings = self.apply(&mut inner, actions);
-            swaps.borrow_and_update();
+            *seen = self.swaps.with(|n| *n);
             warnings
         };
         Self::warn(warnings);
-        // Another prediction retries; returning capacity alone queues no work.
-        if swaps.changed().await.is_err() {
-            return Next::Stop;
-        }
+        // Another prediction, or the end of input, retries; returning capacity alone queues no
+        // work.
+        self.swaps.wait_until(|n| (*n != *seen).then_some(())).await;
         Next::Remount
     }
 
@@ -341,7 +330,7 @@ impl EotStream {
     }
 
     /// Runs the mounted transport until it ends, fails or is swapped.
-    async fn serve(&self, shell: Arc<MountedTransport>, swaps: &mut watch::Receiver<u64>) -> Next {
+    async fn serve(&self, shell: Arc<MountedTransport>, seen: u64) -> Next {
         let events = async {
             while let Some(ev) = shell.next_event().await {
                 self.on_event(&shell, ev);
@@ -351,7 +340,7 @@ impl EotStream {
         let outcome = tokio::select! {
             biased;
             () = events => None,
-            _ = swaps.changed() => None,
+            () = self.swaps.wait_until(|n| (*n != seen).then_some(())) => None,
             r = shell.run() => Some(r),
         };
         if outcome.is_some() {
@@ -366,7 +355,7 @@ impl EotStream {
                 shell.detach();
                 Next::Remount
             }
-            Some(Ok(())) if swaps.has_changed().unwrap_or(false) => Next::Remount,
+            Some(Ok(())) if self.swaps.with(|n| *n != seen) => Next::Remount,
             Some(Ok(())) => Next::Stop,
             Some(Err(ApiError { message, .. })) => self.on_transport_error(&shell, &message),
         }
@@ -415,6 +404,13 @@ enum Next {
 /// `_core.EotStream`: a stream the detector opened, shared with its run loop.
 pub struct DetectorStream(Arc<EotStream>);
 
+/// A dropped stream closes as `aclose` does; its run loop, which holds it, settles on its own.
+impl Drop for DetectorStream {
+    fn drop(&mut self) {
+        drop(lk_agents_abi::EotDetector::aclose(self, &telemetry::Cx::NONE));
+    }
+}
+
 impl lk_agents_abi::turn::inference::EotStream for DetectorStream {
     fn model(&self) -> TurnDetectorModel {
         self.0.lock().session.model()
@@ -439,7 +435,7 @@ impl lk_agents_abi::turn::inference::EotStream for DetectorStream {
         if let Some(shell) = &inner.shell {
             shell.transport.end_input();
         }
-        self.0.swaps.send_modify(|n| *n += 1);
+        self.0.swaps.modify(|n| *n += 1);
         drop(inner);
         EotStream::warn(warnings);
     }
@@ -556,7 +552,7 @@ impl lk_agents_abi::EotDetector for DetectorStream {
             let actions = inner.session.start(now(), EotRequestId::from_string(request_id));
             let warnings = self.0.apply(&mut inner, actions);
             if inner.shell.is_none() && !inner.session.is_closed() {
-                self.0.swaps.send_modify(|n| *n += 1);
+                self.0.swaps.modify(|n| *n += 1);
             }
             drop(inner);
             EotStream::warn(warnings);

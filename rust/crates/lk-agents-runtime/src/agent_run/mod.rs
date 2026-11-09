@@ -1,4 +1,4 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
+use lk_agents_net::signal;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -19,7 +19,7 @@ use lk_agents_core::agent_run::{
 };
 use lk_agents_core::tool_calls::PrepareFailure;
 use lk_agents_core::{AgentError, AgentRun, RunInput};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) mod execution;
@@ -49,7 +49,7 @@ pub struct RunSetup {
 pub struct ActiveRun {
     cancel: CancellationToken,
     progress: Progress,
-    usage: watch::Receiver<Usage>,
+    usage: signal::Cell<Usage>,
     /// Each accepted output the host serialized, by its validation.
     accepted: Accepted,
     /// The driver's owner: dropping the handle cancels the run through `cancel`, and the driver
@@ -87,7 +87,7 @@ impl ActiveRun {
     }
 
     /// The core's latest usage snapshot of the run, kept after it ended.
-    pub fn usage(&self) -> watch::Receiver<Usage> {
+    pub fn usage(&self) -> signal::Cell<Usage> {
         self.usage.clone()
     }
 
@@ -125,7 +125,7 @@ pub fn start(
     let (update_tx, update_rx) = mpsc::channel(updates.max(1));
     let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
     let (progress_tx, progress) = mpsc::channel(PROGRESS_QUEUE);
-    let (usage_tx, usage) = watch::channel(run.usage());
+    let (usage_tx, usage) = signal::signal(run.usage());
     let accepted = Accepted::default();
     let driver = Driver {
         usage: usage_tx,
@@ -152,7 +152,7 @@ pub fn start(
 struct Driver {
     run: AgentRun,
     /// Republished whenever the core's ledger moved.
-    usage: watch::Sender<Usage>,
+    usage: signal::Producer<Usage>,
     accepted: Accepted,
     work: Execution,
     updates: mpsc::Sender<RunUpdate>,
@@ -173,7 +173,7 @@ impl Driver {
         loop {
             if self.run.ledger().revision() != self.published {
                 self.published = self.run.ledger().revision();
-                self.usage.send_replace(self.run.usage());
+                self.usage.set(self.run.usage());
             }
             for effect in effects.drain(..) {
                 if let Some(update) = self.work.execute(effect).await {

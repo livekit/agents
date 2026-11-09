@@ -345,7 +345,7 @@ mod gil {
     /// A host TTS as the fallback chain sees it: its stream opens once `opened` fires, and its sink
     /// takes the GIL on every push, as a host sink scheduling its drain does.
     struct HostLikeTts {
-        opened: tokio::sync::watch::Receiver<bool>,
+        opened: lk_agents_runtime::net::signal::Cell<bool>,
         pushing: mpsc::SyncSender<()>,
     }
 
@@ -402,7 +402,7 @@ mod gil {
             _expressive: bool,
         ) -> BoxFuture<'_, Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>>
         {
-            let mut opened = self.opened.clone();
+            let opened = self.opened.clone();
             let pushing = self.pushing.clone();
             Box::pin(async move {
                 opened.wait_for(|opened| *opened).await.unwrap();
@@ -420,7 +420,7 @@ mod gil {
     #[test]
     fn pushing_text_while_the_fallback_replays_into_a_host_tts_does_not_deadlock() {
         Python::initialize();
-        let (open, opened) = tokio::sync::watch::channel(false);
+        let (open, opened) = lk_agents_runtime::net::signal::signal(false);
         let (pushing, pushed) = mpsc::sync_channel(1);
         let child: Arc<dyn Tts> = Arc::new(HostLikeTts { opened, pushing });
         let runtime = lk_agents_runtime::process::handle().unwrap();
@@ -454,7 +454,7 @@ mod gil {
             done.send(()).unwrap();
         });
         attaching.recv().unwrap();
-        open.send_replace(true);
+        open.set(true);
         assert!(finished.recv_timeout(Duration::from_secs(10)).is_ok(), "deadlocked");
     }
 }

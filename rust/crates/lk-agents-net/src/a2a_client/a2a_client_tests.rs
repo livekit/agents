@@ -964,3 +964,28 @@ async fn remote_redirect_cannot_leave_the_configured_origin() {
     target.await.unwrap();
     assert!(!contacted.load(Ordering::SeqCst), "redirect crossed the authority boundary");
 }
+
+// Catches: a call whose task the runtime drops (no settle hook run) leaving send and aclose
+// waiting on a state its own reply still holds open.
+#[tokio::test]
+async fn a_call_dropped_with_its_runtime_ends_send_and_close() {
+    let peer = Peer::start(Scenario::DelayedAck).await;
+    let clock = Arc::new(RealClock::new());
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build();
+    let rt = rt.unwrap();
+    let client = {
+        let _entered = rt.enter();
+        Arc::new(client(&peer, &clock))
+    };
+    let sending = tokio::spawn({
+        let client = client.clone();
+        async move {
+            client.send(message("dropped-with-runtime", "Work"), None, None, None, &Cx::NONE).await
+        }
+    });
+    tokio::time::timeout(LIMIT, peer.ack_gate.waiting.notified()).await.unwrap();
+    rt.shutdown_background();
+    let sent = tokio::time::timeout(LIMIT, sending).await.expect("send hung").unwrap();
+    assert!(sent.is_err());
+    tokio::time::timeout(LIMIT, client.aclose()).await.expect("aclose hung");
+}

@@ -332,6 +332,8 @@ fn campaign(window: &Window) {
         "{} storage workers died with requests queued",
         lk_agents_fuzz::fakes::worker_deaths()
     );
+    let (uncertain, resent) = lk_agents_fuzz::fakes::death_resends();
+    println!("{uncertain} batches a worker death left uncertain, {resent} answered on a resend");
     let (panics, hangs) = lk_agents_fuzz::fakes::hazard::struck();
     println!("{panics} injected panics, {hangs} injected hangs");
     let [sqlite, clock, crash, held, stolen] = lk_agents_fuzz::fakes::storage_faults();

@@ -33,6 +33,10 @@ pub enum StorageStep {
         held: bool,
         faulted: bool,
     },
+    /// The fake database holds a request's answer this long on purpose (a slow lease take).
+    Slowed {
+        ms: u64,
+    },
     /// A storage-layer fault was injected.
     Fault {
         fault: StorageFault,

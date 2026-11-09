@@ -6,6 +6,7 @@
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use tokio::sync::watch;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
@@ -420,9 +421,9 @@ struct FakeRunner(Arc<FakeHost>);
 
 #[async_trait::async_trait]
 impl Runner for FakeRunner {
-    async fn finished(&self) -> Exit {
+    async fn finished(&self) -> Result<Exit, lk_agents_net::signal::Ended> {
         let exit = self.0.exit.subscribe().wait_for(Option::is_some).await.ok().and_then(|e| *e);
-        exit.unwrap()
+        Ok(exit.unwrap())
     }
 
     fn stop(&self) -> bool {

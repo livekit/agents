@@ -1043,3 +1043,30 @@ async fn a_run_loop_that_panics_settles_the_pending_prediction_and_close() {
     assert_eq!(pending.end_of_turn_probability, 1.0);
     within("close", stream.aclose(&cx)).await;
 }
+
+// Catches: a stream dropped without `aclose` while its local model waits for a pool slot,
+// leaving its run loop parked forever and holding it.
+#[tokio::test]
+async fn a_dropped_stream_waiting_for_a_model_slot_is_released() {
+    let pool = test_pool();
+    let _occupied = pool.try_admit(lk_agents_media::pool::JobClass::EotModel).unwrap();
+    let model = TurnDetectorModel::V1Mini;
+    let thresholds = Arc::new(Mutex::new(ThresholdOptions::new(model, None, None)));
+    let session = EotSession::new(model, Arc::clone(&thresholds), false);
+    let held = Arc::new(());
+    let released = Arc::downgrade(&held);
+    let make: crate::eot::TransportFactory = Arc::new(move |_| {
+        let _held = &held;
+        unreachable!("the pool is full")
+    });
+    let spawner = lk_agents_net::task::TokioSpawner::current();
+    let stream = crate::eot::EotStream::open(session, 16_000, make, pool.clone(), None, &spawner);
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    drop(stream);
+    within("the run loop to release the stream", async {
+        while released.strong_count() > 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+}

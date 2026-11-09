@@ -614,9 +614,10 @@ impl TurnContract for Turn {
         host: Arc<dyn TurnHost>,
         options: Option<TurnOptions>,
     ) -> Self {
+        let holder = thread.holder().map_or_else(|| env.lease_holder(), str::to_owned);
         Self::new(
             thread.as_ref().clone(),
-            &env.lease_holder(),
+            &holder,
             &lane,
             host,
             env.clock.clone(),

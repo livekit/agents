@@ -16,12 +16,16 @@ enum Child {
     Obedient,
     /// It vanishes once it took its job, without saying it is shutting down.
     Vanishes,
+    /// It shuts down when asked, but the host drops its launch without reporting the return.
+    Unreported,
 }
 
 /// Starts a job thread the script answers for, and records its completions.
 struct Launcher {
     child: Child,
     completions: Mutex<Vec<JobCompletion>>,
+    /// The host's completion handler panics.
+    panics: bool,
 }
 
 impl JobLauncher for Launcher {
@@ -46,7 +50,11 @@ impl JobLauncher for Launcher {
         completion: JobCompletion,
     ) -> BoxFuture<'a, Result<(), HostError>> {
         self.completions.lock().push(completion);
-        Box::pin(async { Ok(()) })
+        let panics = self.panics;
+        Box::pin(async move {
+            assert!(!panics, "the host's completion handler panicked");
+            Ok(())
+        })
     }
 }
 
@@ -73,13 +81,20 @@ async fn serve(endpoint: i64, launch: Arc<dyn LaunchReport>, child: Child) {
         channel.send(reply).await.unwrap();
     }
     channel.close().await;
+    if child == Child::Unreported {
+        return;
+    }
     let launch: Arc<dyn Any + Send + Sync> = launch;
     let launch = launch.downcast::<ThreadLaunch>().unwrap();
     ipc_host::ThreadLaunch::thread_exited(&*launch);
 }
 
 fn thread(child: Child) -> (JobSupervisor, Arc<Launcher>) {
-    let launcher = Arc::new(Launcher { child, completions: Mutex::new(Vec::new()) });
+    thread_with(child, false)
+}
+
+fn thread_with(child: Child, panics: bool) -> (JobSupervisor, Arc<Launcher>) {
+    let launcher = Arc::new(Launcher { child, completions: Mutex::new(Vec::new()), panics });
     let options = JobRunnerOptions {
         thread: true,
         initialize_timeout: 5.0,
@@ -161,4 +176,30 @@ async fn killing_a_thread_waits_for_its_return() {
     assert!(within(sup.join()).await);
     assert!(!sup.killed(), "a thread cannot be killed");
     assert!(sup.status().is_none(), "no job ran");
+}
+
+// Catches: a thread whose launch the host dropped without reporting its return leaving join
+// waiting forever instead of ending the runner as failed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_thread_launch_dropped_unreported_ends_as_failed() {
+    let (sup, launcher) = thread(Child::Unreported);
+    within(sup.start()).await.unwrap();
+    within(sup.initialize()).await.unwrap();
+    within(sup.launch_job(job("j1"), CallContext::default(), telemetry::Cx::NONE)).await.unwrap();
+    within(sup.aclose()).await;
+    assert!(within(sup.join()).await);
+    assert_eq!(sup.status(), Some(JobStatus::Failed));
+    assert_eq!(launcher.completions.lock().len(), 1);
+}
+
+// Catches: a panic in the host's completion handler leaving join waiting on a completion
+// report that can no longer come.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_panicking_completion_handler_still_ends_join() {
+    let (sup, launcher) = thread_with(Child::Obedient, true);
+    within(sup.start()).await.unwrap();
+    within(sup.initialize()).await.unwrap();
+    within(sup.aclose()).await;
+    assert!(!within(sup.join()).await, "the launcher never heard of the run");
+    assert_eq!(launcher.completions.lock().len(), 1);
 }

@@ -23,6 +23,8 @@ struct Host {
     /// Holds the host's start until released.
     start_gate: Option<Arc<tokio::sync::Semaphore>>,
     fail_start: bool,
+    /// The host's start panics.
+    panic_start: bool,
 }
 
 impl Host {
@@ -34,6 +36,7 @@ impl Host {
             release_close: Arc::new(tokio::sync::Semaphore::new(0)),
             start_gate: None,
             fail_start: false,
+            panic_start: false,
         }
     }
 }
@@ -58,11 +61,12 @@ impl ServerHost for Host {
         _cx: &lk_agents_abi::telemetry::Cx,
         _: ProcessStartOptions,
     ) -> BoxFuture<'_, Result<Option<Arc<dyn JobLaunchers>>, HostError>> {
-        let (fail, gate) = (self.fail_start, self.start_gate.clone());
+        let (fail, gate, panics) = (self.fail_start, self.start_gate.clone(), self.panic_start);
         async move {
             if let Some(gate) = gate {
                 let _permit = gate.acquire().await.unwrap();
             }
+            assert!(!panics, "the host's start panicked");
             if fail {
                 Err("pool warmup timed out".into())
             } else {
@@ -193,6 +197,28 @@ async fn a_drain_asked_during_startup_starts_once_the_server_runs() {
     assert_eq!(run.await, Ok(()));
 }
 
+// Catches: a panic in the lifecycle task leaving run, drain and close waiting on outcomes only
+// that task could settle.
+#[tokio::test]
+async fn a_panicking_startup_still_ends_run_drain_and_close() {
+    let mut host = Host::new();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    host.start_gate = Some(gate.clone());
+    host.panic_start = true;
+    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()));
+    let run = runtime.run(options());
+    tokio::pin!(run);
+    assert!(futures_util::poll!(&mut run).is_pending());
+    let drain = runtime.drain(None);
+    tokio::pin!(drain);
+    assert!(futures_util::poll!(&mut drain).is_pending());
+    gate.add_permits(1);
+    let limit = Duration::from_secs(5);
+    assert!(tokio::time::timeout(limit, run).await.expect("run hung").is_err());
+    assert!(tokio::time::timeout(limit, drain).await.expect("drain hung").is_err());
+    assert!(tokio::time::timeout(limit, runtime.close()).await.expect("close hung").is_err());
+}
+
 #[tokio::test]
 async fn failed_registration_is_reported_by_run_and_close_joins_cleanup() {
     let host = Host::new();
@@ -243,14 +269,8 @@ async fn server_cleanup_deadline_returns_while_the_actor_retains_the_pool() {
     assert_eq!(snapshot.incomplete_cleanup, vec![ServerResource::Processes]);
     assert_eq!(run.await, Ok(()));
     host.release_close.add_permits(1);
-    let mut snapshots = runtime.snapshot.subscribe();
-    tokio::time::timeout(
-        Duration::from_secs(1),
-        snapshots.wait_for(|snapshot| snapshot.phase == ServerPhase::Closed),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let closed = runtime.snapshot.wait_until(|s| (s.phase == ServerPhase::Closed).then_some(()));
+    tokio::time::timeout(Duration::from_secs(1), closed).await.unwrap();
 }
 #[tokio::test(start_paused = true)]
 async fn server_startup_waits_for_sampling_capacity() {

@@ -97,7 +97,7 @@ fn a_queued_job_never_waits_behind_a_long_lived_one() {
 fn a_panicking_job_reports_and_releases_its_capacity() {
     let media_pool = media_pool(1);
     let receipt = media_pool.try_spawn(JobClass::Decoder, || panic!("decoder")).unwrap();
-    assert_eq!(block_on(receipt), Err::<(), _>(JobPanicked));
+    assert_eq!(block_on(receipt), Err::<(), _>(JobLost));
     block_on(media_pool.try_spawn(JobClass::Decoder, || ()).unwrap()).unwrap();
 }
 
@@ -117,4 +117,49 @@ fn models_and_decoders_share_the_total_ceiling() {
     block_on(media_pool.try_spawn(JobClass::Image, || ()).unwrap()).unwrap();
     release_model.send(()).unwrap();
     block_on(model).unwrap().unwrap();
+}
+
+/// A pool no thread serves: made by `pid`, counting `used` of its one slot and an idle thread
+/// that is gone, as a forked child inherits its parent's.
+fn threadless(pid: u32, used: usize) -> MediaPool {
+    let state = State {
+        used: vec![used; 6].into(),
+        total: used,
+        tasks: VecDeque::new(),
+        idle: 1,
+        capacity_waiters: Vec::new(),
+    };
+    let shared = Shared {
+        pid,
+        thread_name: "lk-media-test",
+        total: 1,
+        limits: vec![1; 6].into(),
+        state: Mutex::new(state),
+        work: Condvar::new(),
+    };
+    Pool { shared: Arc::new(shared), class: PhantomData }
+}
+
+fn settled<T: Send + 'static>(job: impl Future<Output = T> + Send + 'static) -> T {
+    let (done, settled) = mpsc::channel();
+    std::thread::spawn(move || done.send(block_on(job)));
+    settled.recv_timeout(Duration::from_secs(5)).expect("the waiter never resolved")
+}
+
+#[test]
+fn a_job_dropped_unrun_settles_lost() {
+    let pool = threadless(std::process::id(), 0);
+    let job = pool.try_spawn(JobClass::Decoder, || 1).unwrap();
+    let unrun = std::mem::take(&mut pool.shared.lock().tasks);
+    drop(unrun);
+    assert_eq!(settled(job), Err(JobLost));
+}
+
+#[test]
+fn a_forked_child_never_waits_on_its_parents_pool() {
+    let parent = std::process::id().wrapping_add(1);
+    let queued = threadless(parent, 0).try_spawn(JobClass::Decoder, || 1).unwrap();
+    assert_eq!(settled(queued), Err(JobLost));
+    let full = threadless(parent, 1);
+    assert_eq!(settled(async move { full.run(JobClass::Decoder, || 1).await }), Err(JobLost));
 }

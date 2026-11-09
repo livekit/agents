@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 pub mod machine;
 pub mod plugin;
 mod stream;
@@ -31,14 +30,14 @@ pub trait VadModelFactory: Send + Sync {
 /// `env` lends the media workers that run the model and the runtime the stream tasks run on.
 pub struct LocalVad {
     /// Watched by every running stream: `update_options` reaches them before their next frame.
-    opts: tokio::sync::watch::Sender<VadOptions>,
+    opts: lk_agents_net::signal::Producer<VadOptions>,
     models: Arc<dyn VadModelFactory>,
     env: ProcessEnv,
 }
 
 impl LocalVad {
     pub fn new(opts: VadOptions, models: Arc<dyn VadModelFactory>, env: &ProcessEnv) -> Self {
-        LocalVad { opts: tokio::sync::watch::Sender::new(opts), models, env: env.clone() }
+        LocalVad { opts: lk_agents_net::signal::signal(opts).0, models, env: env.clone() }
     }
 
     /// A detector whose model is the linked native one, else one `models` builds per stream.
@@ -63,7 +62,7 @@ impl LocalVad {
         };
         let runtime = self.env.caller_runtime().map_err(unavailable)?;
         let (sink, source) = stream::open(
-            self.opts.subscribe(),
+            self.opts.cell(),
             self.models.clone(),
             self.env.clock.clone(),
             lk_agents_media::pool::media_pool(),
@@ -126,7 +125,7 @@ impl lk_agents_abi::vad::inference::InferenceVad for LocalVad {
         activation_threshold: Maybe<f64>,
         deactivation_threshold: Maybe<f64>,
     ) {
-        self.opts.send_modify(|opts| {
+        self.opts.modify(|opts| {
             let given = [
                 (&mut opts.min_speech_duration, min_speech_duration),
                 (&mut opts.min_silence_duration, min_silence_duration),
@@ -144,7 +143,7 @@ impl lk_agents_abi::vad::inference::InferenceVad for LocalVad {
     }
 
     fn min_silence_duration(&self) -> f64 {
-        self.opts.borrow().min_silence_duration
+        self.opts.with(|opts| opts.min_silence_duration)
     }
 
     fn stream(

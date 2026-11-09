@@ -12,7 +12,7 @@ use lk_agents_runtime::storage::testing::{Dying, TempDir, Wrapped, lessee};
 use lk_agents_runtime::storage::thread::LeaseTiming;
 use lk_agents_runtime::storage::{Storage, Thread, ThreadDbConnection};
 
-// The production SQLite backend in a directory of the run's own, its workers tasks on the run's
+// The text DST's thread database: the production SQLite backend in a directory of the run's own, its workers tasks on the run's
 // runtime and its `unixepoch()` the run's clock, as the voice lane runs it. Each turn's
 // connection is wrapped: it answers late, loses writes and answers, goes down, and kills its
 // database worker with requests queued.

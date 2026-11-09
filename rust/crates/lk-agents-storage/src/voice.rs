@@ -1,5 +1,5 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use lk_agents_net::clock::RealClock;
+use lk_agents_net::signal::{self, Producer};
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -32,7 +32,8 @@ pub struct VoiceStore {
     initial: Option<Vec<ChatItem>>,
     state: tokio::sync::Mutex<State>,
     lease: Mutex<Option<Lease>>,
-    generation: tokio::sync::watch::Sender<u64>,
+    /// Bumped as each turn releases its lease, ending that lease's loss observation.
+    generation: Producer<u64>,
     lost: Arc<AtomicBool>,
     /// Settles, aborts and loss observations, which `aclose` waits out.
     tasks: Arc<TaskSet>,
@@ -98,7 +99,7 @@ impl VoiceStore {
                 uncertain_fields: None,
             }),
             lease: Mutex::new(None),
-            generation: tokio::sync::watch::channel(0).0,
+            generation: signal::signal(0).0,
             lost: Arc::new(AtomicBool::new(false)),
             tasks: Arc::default(),
             closing: Mutex::new(false),
@@ -107,7 +108,7 @@ impl VoiceStore {
 
     fn released(&self) {
         *self.lease.lock() = None;
-        self.generation.send_modify(|generation| *generation += 1);
+        self.generation.modify(|generation| *generation += 1);
     }
 
     async fn begin(
@@ -285,7 +286,7 @@ impl VoiceStore {
     fn observe_loss(
         &self,
     ) -> impl std::future::Future<Output = Result<bool, StorageError>> + Send + 'static {
-        let mut generation = self.generation.subscribe();
+        let mut generation = self.generation.cell();
         let lease = self.lease.lock().clone();
         let lost = self.lost.clone();
         async move {

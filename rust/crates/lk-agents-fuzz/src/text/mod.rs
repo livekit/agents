@@ -5,7 +5,6 @@
 
 mod drive;
 mod fakes;
-mod store;
 
 pub use drive::{Outcome, Scenario, TurnPlan, run};
 pub use fakes::{Callback, Fault};

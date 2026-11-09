@@ -8,9 +8,12 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
+import sys
+from asyncio.subprocess import PIPE
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -28,11 +31,17 @@ from livekit.agents._generated.storage_options import TurnOptions
 from livekit.agents._generated.storage_turn import TurnResult
 from livekit.agents.llm import ChatItem, FunctionToolCall
 from livekit.agents.llm.utils import build_legacy_openai_schema
-from livekit.agents.storage import RunRejected, Storage, Thread, TooLarge
+from livekit.agents.storage import RunRejected, SQLiteStorage, Storage, Thread, TooLarge
 from livekit.agents.storage.session import A2ASessionContext, _Handler, _TurnHost
 
 from .fake_llm import FakeLLM, FakeLLMResponse
-from .storage_fixture import lease_ttl, let_the_lease_lapse, new_session
+from .storage_fixture import (
+    LOCAL_LEASE_TTL,
+    lease_ttl,
+    let_the_lease_lapse,
+    new_session,
+    project_storage,
+)
 
 pytestmark = [pytest.mark.unit]
 
@@ -466,29 +475,49 @@ async def test_a_lapsed_lease_fails_the_orphan_worker_lost(thread_storages: Work
     assert lost.data.status_message["metadata"][REASON] == "worker-lost"
 
 
+async def _dying_worker(kind: str, location: str, thread_id: str) -> None:
+    """Worker ``wa`` in its own process: it takes the turn, says so, and hangs until killed."""
+    if kind == "sqlite":
+        ttl = timedelta(seconds=LOCAL_LEASE_TTL)
+        storage: Storage = SQLiteStorage(
+            directory=location, lease_ttl=ttl, renew_interval=ttl / 4, holder="wa"
+        )
+    else:
+        storage = project_storage("wa")
+
+    async def stuck(ctx: A2ASessionContext) -> str:
+        print("entered", flush=True)
+        await asyncio.Event().wait()
+        return "late"
+
+    await run_turn(
+        storage, thread_id, LANE, a2a("hello", "m1"), "interrupt", stuck, task_id="AST_x"
+    )
+
+
 async def test_a_resend_after_the_holder_died_fails_worker_lost(
     thread_storage_worker: Callable[[str], Storage],
 ) -> None:
-    """Under ``interrupt``: the holder dies mid-turn (its turn is cancelled, so the run is
-    dropped without a commit and its lease lapses); a resend of the same messageId on another
-    worker fails the orphaned ``working`` row ``worker-lost``, nothing runs again, and the
-    message sent under a new messageId runs as a new task."""
+    """Under ``interrupt``: the holder's process dies mid-turn (no cleanup runs, its lease
+    lapses); a resend of the same messageId on another worker fails the orphaned ``working`` row
+    ``worker-lost``, nothing runs again, and the message sent under a new messageId runs as a new
+    task. A turn cancelled in-process instead cancels its task."""
     a, b = (thread_storage_worker(h) for h in ("wa", "wb"))
     sid = await new_session(a, LANE)
-    entered = asyncio.Event()
-    never = asyncio.Event()
-
-    async def stuck(ctx: A2ASessionContext) -> str:
-        entered.set()
-        await never.wait()
-        return "late"
-
-    dead = asyncio.create_task(
-        run_turn(a, sid, LANE, a2a("hello", "m1"), "interrupt", stuck, task_id="AST_x")
+    kind = "sqlite" if isinstance(a, SQLiteStorage) else "agentdb"
+    root = Path(__file__).resolve().parents[1]
+    script = "import asyncio, sys; from tests.test_storage import _dying_worker; "
+    script += "asyncio.run(_dying_worker(*sys.argv[1:]))"
+    location = a._core.location if isinstance(a, SQLiteStorage) else ""
+    dying = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", script, kind, location, sid, cwd=root, stdout=PIPE
     )
-    await entered.wait()
-    dead.cancel()
-    await asyncio.gather(dead, return_exceptions=True)
+    assert dying.stdout is not None
+    try:
+        assert await asyncio.wait_for(dying.stdout.readline(), 60) == b"entered\n"
+    finally:
+        dying.kill()
+        await dying.wait()
     await let_the_lease_lapse(a)  # the lease lapses with no renewal
 
     lost = await run_turn(b, sid, LANE, a2a("hello", "m1"), "interrupt", echo)

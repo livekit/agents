@@ -351,6 +351,22 @@ async fn dropping_the_last_handle_closes_the_connection() {
     assert!(inner.upgrade().is_none(), "its tasks no longer hold it");
 }
 
+// Catches: a supervisor that dies while redialing leaving later requests waiting on a ready
+// gate nobody will open.
+#[tokio::test]
+async fn a_supervisor_that_dies_mid_redial_fails_later_requests() {
+    let (url, _) = serve(script, true).await;
+    let mut opts = Options::new(&url, "DB_1");
+    // The redial's deadline overflows: the supervisor panics while connecting.
+    opts.reconnect.budget = Duration::MAX;
+    let conn = Conn::dial(opts, minter(), tokio::runtime::Handle::current()).await.unwrap();
+    assert!(conn.exec(&st("drop", vec![])).await.is_err());
+    let insert = st("INSERT", vec![]);
+    let next = tokio::time::timeout(Duration::from_secs(5), conn.exec(&insert));
+    assert!(matches!(next.await, Ok(Err(_))), "a request after the supervisor died hung");
+    assert!(conn.is_closed());
+}
+
 #[test]
 fn a_column_cannot_hide_unannounced_values() {
     let mut batch = encode_batch(&[vec![SqlValue::Int(1)]], 1);

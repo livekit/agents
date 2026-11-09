@@ -6,9 +6,10 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{AudioFrame, Clock, Closed, StreamInput, StreamOutput, Ts};
 use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy};
 use lk_agents_media::pool::{Job, JobClass, MediaPool};
+use lk_agents_net::signal::Cell;
 use lk_agents_telemetry as telemetry;
 use parking_lot::Mutex;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::machine::{VadMachine, VadOptions, VadOutput, VadPredict, VadResult};
@@ -146,7 +147,9 @@ async fn emit(
 struct Detection {
     machine: VadMachine,
     model: Box<dyn VadModel>,
-    options: watch::Receiver<VadOptions>,
+    options: Cell<VadOptions>,
+    /// The options the machine runs under.
+    applied: VadOptions,
     input: AudioReceiver<Flush>,
     output: mpsc::Sender<VadOutput>,
     stop: CancellationToken,
@@ -174,8 +177,10 @@ impl Detection {
         &mut self,
         item: Item<AudioFrame, Flush>,
     ) -> ControlFlow<(), Option<VadPredict>> {
-        if self.options.has_changed().unwrap_or(false) {
-            self.machine.update_options(*self.options.borrow_and_update());
+        let latest = self.options.get();
+        if latest != self.applied {
+            self.applied = latest;
+            self.machine.update_options(latest);
         }
         match item {
             Item::Media(frame) => match self.machine.push(frame) {
@@ -226,7 +231,7 @@ type DetectionStream =
 /// model from construction to settlement. `runtime` runs the worker's channel waits; drops are
 /// measured under `cx`'s job.
 pub(super) fn open(
-    mut options: watch::Receiver<VadOptions>,
+    options: Cell<VadOptions>,
     models: Arc<dyn VadModelFactory>,
     clock: Arc<dyn Clock>,
     media_pool: MediaPool,
@@ -241,9 +246,10 @@ pub(super) fn open(
     // queued audio. The same worker owns the recurrent state until settlement.
     let worker = media_pool
         .try_spawn(JobClass::VadModel, move || {
-            let machine = VadMachine::new(*options.borrow_and_update());
+            let applied = options.get();
+            let machine = VadMachine::new(applied);
             let model = models.create();
-            let detection = Detection { machine, model, options, input, output, stop };
+            let detection = Detection { machine, model, options, applied, input, output, stop };
             runtime.block_on(detection.run())
         })
         .map_err(|error| failed(error.to_string()))?;

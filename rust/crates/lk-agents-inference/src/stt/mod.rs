@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 mod executor;
 pub(crate) mod gaps;
 pub(crate) mod input;
@@ -378,11 +377,11 @@ impl GatewayStt {
         let (update_tx, update_rx) = mpsc::unbounded_channel::<serde_json::Value>();
         let stop = tokio_util::sync::CancellationToken::new();
         let stop_guard = Arc::new(stop.clone().drop_guard());
-        let (failure, failure_rx) = tokio::sync::watch::channel(None);
+        let failure = Arc::new(Mutex::new(None));
         let (done, done_rx) = tokio::sync::oneshot::channel();
         let control = Arc::new(StreamControl {
             stop: Arc::clone(&stop_guard),
-            failure,
+            failure: Arc::clone(&failure),
             updates: update_tx.clone(),
             deferred: Arc::new(DeferredExtra {
                 options: Mutex::new(stream::LiveOptions {
@@ -424,7 +423,7 @@ impl GatewayStt {
                 done: false,
                 stop: stop_guard,
                 joined: done_rx,
-                failure: failure_rx,
+                failure,
                 clock: self.shared.clock.clone(),
             },
         ))

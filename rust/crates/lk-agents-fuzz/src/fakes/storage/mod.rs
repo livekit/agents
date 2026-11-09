@@ -34,6 +34,7 @@ use lk_agents_runtime::storage::{
 // refusals, clock jumps, crashes and another worker on the lane.
 
 mod layer;
+pub(crate) mod text;
 pub use layer::storage_faults;
 
 const LANE: &str = "voice";
@@ -43,6 +44,15 @@ static WORKER_DEATHS: AtomicU64 = AtomicU64::new(0);
 
 pub fn worker_deaths() -> u64 {
     WORKER_DEATHS.load(Ordering::Relaxed)
+}
+
+/// Batches a worker death left `Uncertain`, and those a resend of the same batch then answered.
+static DEATHS_UNCERTAIN: AtomicU64 = AtomicU64::new(0);
+static DEATHS_RESENT: AtomicU64 = AtomicU64::new(0);
+
+/// `(uncertain, resolved by a resend)` over this process's runs.
+pub fn death_resends() -> (u64, u64) {
+    (DEATHS_UNCERTAIN.load(Ordering::Relaxed), DEATHS_RESENT.load(Ordering::Relaxed))
 }
 
 /// The call's lane: the production store, the recording port the session is handed, and the
@@ -146,6 +156,8 @@ struct State {
     intruders: u32,
     /// The call's lease tokens another worker overwrote.
     stolen: Vec<String>,
+    /// Batches a worker death left `Uncertain`, until a resend of one is answered.
+    uncertain: Vec<Vec<Statement>>,
 }
 
 /// What one request meets: its latency on either side of the apply, and how it fails.
@@ -156,6 +168,8 @@ struct Plan {
     answer_lost: bool,
     /// The database's worker dies with this write queued.
     worker_dies: bool,
+    /// `after` is the deliberate slow answer, recorded as it starts.
+    slowed: bool,
 }
 
 impl FakeDatabase {
@@ -184,6 +198,7 @@ impl FakeDatabase {
             intruding: false,
             intruders: 0,
             stolen: Vec::new(),
+            uncertain: Vec::new(),
         };
         let state = Mutex::new(state);
         Self { storage, thread_id, observer, dying, clock, skew, registry, setup, state }
@@ -202,6 +217,7 @@ impl FakeDatabase {
             refused: None,
             answer_lost: false,
             worker_dies: false,
+            slowed: false,
         };
         if !state.armed {
             return plan;
@@ -220,6 +236,7 @@ impl FakeDatabase {
             // Answered after an interruption's watchdog gave up on the speech waiting for it.
             if take && rng.u32(0..4) == 0 {
                 plan.after = ms(rng.u64(5_500..=8_000));
+                plan.slowed = true;
             }
             if now >= *down_until && rng.u32(0..128) == 0 {
                 // Mostly a blip; a quarter outlast the lease's TTL.
@@ -249,6 +266,29 @@ impl FakeDatabase {
         }
         state.faulted |= plan.refused.is_some();
         plan
+    }
+
+    /// Notes a batch a worker death left `Uncertain`, and a later identical batch answered.
+    fn count_resend(
+        &self,
+        died: bool,
+        sent: Vec<Statement>,
+        result: &Result<BatchResult, StorageError>,
+    ) {
+        let mut state = self.state.lock();
+        match result {
+            Err(StorageError::Uncertain(_)) if died => {
+                DEATHS_UNCERTAIN.fetch_add(1, Ordering::Relaxed);
+                state.uncertain.push(sent);
+            }
+            Ok(_) => {
+                if let Some(at) = state.uncertain.iter().position(|batch| *batch == sent) {
+                    state.uncertain.swap_remove(at);
+                    DEATHS_RESENT.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            Err(_) => {}
+        }
     }
 
     async fn wait(&self, latency: Duration) {
@@ -400,11 +440,13 @@ impl ThreadDbConnection for FakeConnection {
         if plan.worker_dies {
             db.dying.die_next_poll();
         }
+        let sent = statements.clone();
         let result = if db.carries_stolen(&statements) {
             db.fenced(self.inner.batch(statements)).await
         } else {
             self.inner.batch(statements).await
         };
+        db.count_resend(plan.worker_dies, sent, &result);
         if layer.crash && result.is_ok() {
             return Err(db.crash());
         }
@@ -415,6 +457,10 @@ impl ThreadDbConnection for FakeConnection {
             db.state.lock().taking += 1;
             Some(Taking(&db.state))
         };
+        if plan.slowed {
+            let ms = plan.after.as_millis() as u64;
+            db.registry.record_storage(StorageStep::Slowed { ms });
+        }
         db.wait(plan.after).await;
         if plan.answer_lost && result.is_ok() {
             return Err(StorageError::Uncertain(Unacknowledged::sent("the answer was lost")));

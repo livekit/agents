@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -18,7 +17,7 @@ use crate::thread::schema::{RecordAppliedWrite, SelectAppliedWrite};
 use crate::{CommitOptions, Holder, RunOptions, Storage, StorageError, Thread, shortuuid};
 use lk_agents_abi::storage::Unacknowledged;
 use lk_agents_abi::storage::thread::AbandonReason;
-use tokio::sync::watch;
+use lk_agents_net::signal;
 
 #[derive(Clone)]
 pub struct ContextStore {
@@ -32,7 +31,7 @@ pub struct ContextStore {
     /// What managed transactions staged for the turn's commit.
     statements: Arc<Mutex<Vec<AppStatement>>>,
     /// A direct save whose acknowledgment was lost, resolving before the next load or save.
-    lost_save: Arc<Mutex<Option<watch::Receiver<Option<SaveOutcome>>>>>,
+    lost_save: Arc<Mutex<Option<signal::Cell<Option<SaveOutcome>>>>>,
 }
 
 /// The lane's thread database: direct saves outside a managed turn, and application SQL.
@@ -111,19 +110,23 @@ impl Database {
         };
         match run.commit(CommitOptions::default()).await {
             Err(StorageError::Uncertain(why)) => {
-                let (resolved, resolving) = watch::channel(None);
+                let (resolved, resolving) = signal::once();
                 let lost = why.clone();
-                self.holder.spawn_cleanup("context save resolution", async move {
-                    let outcome = match run.resolve_later().await {
-                        Some(Ok(_)) => SaveOutcome::Committed,
-                        Some(Err(StorageError::Uncertain(why))) => SaveOutcome::Unknown(why),
-                        // refused or rejected: the save cannot apply any more
-                        Some(Err(_)) => SaveOutcome::NeverApplied,
-                        None => SaveOutcome::Unknown(lost),
-                    };
-                    thread.close().await;
-                    resolved.send_replace(Some(outcome));
-                });
+                self.holder.spawn_settling_cleanup(
+                    "context save resolution",
+                    resolved,
+                    async move {
+                        let outcome = match run.resolve_later().await {
+                            Some(Ok(_)) => SaveOutcome::Committed,
+                            Some(Err(StorageError::Uncertain(why))) => SaveOutcome::Unknown(why),
+                            // refused or rejected: the save cannot apply any more
+                            Some(Err(_)) => SaveOutcome::NeverApplied,
+                            None => SaveOutcome::Unknown(lost),
+                        };
+                        thread.close().await;
+                        outcome
+                    },
+                );
                 Err(Unsaved::Lost(why, resolving))
             }
             out => {
@@ -169,7 +172,7 @@ impl Database {
 /// in flight.
 enum Unsaved {
     Refused(StorageError),
-    Lost(Unacknowledged, watch::Receiver<Option<SaveOutcome>>),
+    Lost(Unacknowledged, signal::Cell<Option<SaveOutcome>>),
 }
 
 impl From<StorageError> for Unsaved {
@@ -239,8 +242,8 @@ impl ContextStore {
     /// committed, its writes are acknowledged; never applied, they are dropped. `Uncertain`
     /// while nobody can tell, and its writes stay pending.
     async fn settle_lost_save(&self, database: &Database) -> Result<(), StorageError> {
-        let Some(mut resolving) = self.lost_save.lock().clone() else { return Ok(()) };
-        let outcome = resolving.wait_for(Option::is_some).await.ok().and_then(|o| o.clone());
+        let Some(resolving) = self.lost_save.lock().clone() else { return Ok(()) };
+        let outcome = resolving.wait().await.ok();
         match outcome {
             Some(SaveOutcome::Committed) => self.activation.lock().acknowledge(),
             Some(SaveOutcome::NeverApplied) => self.activation.lock().abandon(),

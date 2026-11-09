@@ -52,8 +52,8 @@ fn pump() -> (Pump, Arc<Shared>, queue::EventReceiver) {
         closing: tokio_util::sync::CancellationToken::new(),
         cleanup: parking_lot::Mutex::new(None),
         retirement: parking_lot::Mutex::new(None),
-        retirement_wake: Arc::new(tokio::sync::Notify::new()),
-        context_ready: tokio::sync::Notify::new(),
+        retirement_wake: lk_agents_net::signal::signal(0).0,
+        context_ready: lk_agents_net::signal::Shared::new(0),
         retirement_closing: std::sync::atomic::AtomicBool::new(false),
         disposal: Arc::default(),
     });
@@ -87,11 +87,10 @@ async fn cancelling_close_keeps_the_runtime_owner_until_context_retirement_settl
     ));
     closing.abort();
     let _ = closing.await;
-    let mut done = shared.retirement.lock().clone().expect("runtime cleanup owner");
-    tokio::time::timeout(Duration::from_secs(5), done.wait_for(|settled| *settled))
+    let done = shared.retirement.lock().clone().expect("runtime cleanup owner");
+    let _ = tokio::time::timeout(Duration::from_secs(5), done.wait())
         .await
-        .expect("cancelling close abandoned the remaining context retirement")
-        .expect("runtime cleanup lost its completion receipt");
+        .expect("cancelling close abandoned the remaining context retirement");
     assert!(!shared.machine.lock().await.has_context_retirement());
 }
 
@@ -105,11 +104,11 @@ async fn refused_admission_retains_all_owners_after_the_last_caller_leaves() {
     shared.machine.lock().await.close(pump.clock.now());
     shared.retirement_closing.store(true, std::sync::atomic::Ordering::Release);
     let weak = Arc::downgrade(&shared);
-    let (settled, mut done) = tokio::sync::watch::channel(false);
+    let (settled, done) = lk_agents_net::signal::once();
     *shared.retirement.lock() = Some(done.clone());
     let cleanup = tokio::spawn(super::run(
         weak.clone(),
-        shared.retirement_wake.clone(),
+        shared.retirement_wake.cell(),
         pump.label.clone(),
         settled,
         media_pool,
@@ -125,10 +124,7 @@ async fn refused_admission_retains_all_owners_after_the_last_caller_leaves() {
     drop(shared);
     assert!(weak.upgrade().is_some(), "the runtime abandoned the blocked cleanup owner");
     drop(held);
-    tokio::time::timeout(Duration::from_secs(5), done.wait_for(|settled| *settled))
-        .await
-        .unwrap()
-        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), done.wait()).await.unwrap().unwrap_err();
     cleanup.await.unwrap();
     assert!(weak.upgrade().is_none(), "settled cleanup retained the session");
 }
@@ -150,11 +146,11 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
         .command(pump.clock.now(), Command::CancelReply(CancelReply { req_id: "closing".into() }));
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     pump.transport = ws.clone();
-    let (settled, done) = tokio::sync::watch::channel(false);
+    let (settled, done) = lk_agents_net::signal::once();
     *shared.retirement.lock() = Some(done);
     let cleanup = tokio::spawn(super::run(
         Arc::downgrade(&shared),
-        shared.retirement_wake.clone(),
+        shared.retirement_wake.cell(),
         pump.label.clone(),
         settled,
         media_pool.clone(),

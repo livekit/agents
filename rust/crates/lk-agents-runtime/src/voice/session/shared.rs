@@ -293,9 +293,9 @@ pub struct SessionHandle {
     /// Every event, in the order the driver emitted it.
     pub(crate) events: HostEvents,
     /// The last keyterm list pushed to the recogniser; `None` before any push.
-    pub keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
+    pub keyterms: lk_agents_net::signal::Cell<Option<Vec<String>>>,
     /// The driving agent's context and state, as last published.
-    pub chat_ctx: tokio::sync::watch::Receiver<Arc<lk_agents_abi::ChatContext>>,
+    pub chat_ctx: lk_agents_net::signal::Cell<Arc<lk_agents_abi::ChatContext>>,
     /// What a system runs on; the host starts the systems it configures on this after `start()`.
     pub peer: PeerHandle,
     pub ivr_detection: bool,
@@ -317,13 +317,13 @@ pub struct SessionShared {
     pub(in crate::voice) realtime_spans:
         crate::voice::generation::realtime_generation::RealtimeSpans,
     pub(in crate::voice) time: Timebase,
-    pub(in crate::voice) view: tokio::sync::watch::Receiver<Arc<SessionView>>,
+    pub(in crate::voice) view: lk_agents_net::signal::Cell<Arc<SessionView>>,
     /// `conn_options=`: the budgets the engine retries the LLM and the TTS on.
     pub(in crate::voice) conn: lk_agents_abi::voice::session_options::SessionConnOptions,
     /// `session.output` as the core last published it.
-    pub(in crate::voice) output: tokio::sync::watch::Receiver<Outputs>,
+    pub(in crate::voice) output: lk_agents_net::signal::Cell<Outputs>,
     pub(in crate::voice) recorder:
-        tokio::sync::watch::Receiver<Option<crate::voice::recorder::RecorderTap>>,
+        lk_agents_net::signal::Cell<Option<crate::voice::recorder::RecorderTap>>,
     /// A pipeline is built per segment, so a half-open `**` cannot leak into the next utterance.
     pub(in crate::voice) tts_transforms: Vec<lk_agents_abi::voice::session_options::TextTransform>,
     /// The loop's queue: a task's reports, and the commands of the speech handle a host tool
@@ -342,10 +342,10 @@ pub struct SessionShared {
     /// A task cannot reach `AgentSession::mint`; the `g` prefix keeps the id spaces apart.
     pub(in crate::voice) gen_ids: std::sync::atomic::AtomicU64,
     pub(in crate::voice) session_id: String,
-    pub(in crate::voice) chat_ctx: tokio::sync::watch::Receiver<Arc<lk_agents_abi::ChatContext>>,
+    pub(in crate::voice) chat_ctx: lk_agents_net::signal::Cell<Arc<lk_agents_abi::ChatContext>>,
     pub(in crate::voice) resources: crate::voice::resources::Resources,
     /// `session.keyterms`: the last list pushed to the recogniser.
-    pub(in crate::voice) keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
+    pub(in crate::voice) keyterms: lk_agents_net::signal::Cell<Option<Vec<String>>>,
     /// A task's steps reach the loop's journal only when one is observed.
     pub(in crate::voice) journal: Journal,
 }
@@ -398,18 +398,18 @@ impl SessionShared {
     }
 
     pub fn recorder_tap(&self) -> Option<crate::voice::recorder::RecorderTap> {
-        self.recorder.borrow().clone()
+        self.recorder.get()
     }
 
     /// The audio sink the core installed, switched on or not.
     pub fn audio_output(&self) -> Option<Arc<dyn AudioOutput>> {
-        let id = self.output.borrow().audio.as_ref()?.id;
+        let id = self.output.with(|o| Some(o.audio.as_ref()?.id))?;
         self.resources.audio_output(id)
     }
 
     /// `output.audio_enabled`: the switch, which a speech freezes at its voice leg.
     pub fn audio_enabled(&self) -> bool {
-        self.output.borrow().audio_enabled
+        self.output.with(|o| o.audio_enabled)
     }
 }
 
@@ -417,9 +417,9 @@ impl SessionShared {
 pub(crate) struct Publications {
     /// Dropping the publications cancels it too.
     pub closing: tokio_util::sync::DropGuard,
-    pub recorder: tokio::sync::watch::Sender<Option<crate::voice::recorder::RecorderTap>>,
-    pub view: tokio::sync::watch::Sender<Arc<SessionView>>,
-    pub output: tokio::sync::watch::Sender<Outputs>,
-    pub chat_ctx: tokio::sync::watch::Sender<Arc<lk_agents_abi::ChatContext>>,
-    pub keyterms: tokio::sync::watch::Sender<Option<Vec<String>>>,
+    pub recorder: lk_agents_net::signal::Producer<Option<crate::voice::recorder::RecorderTap>>,
+    pub view: lk_agents_net::signal::Producer<Arc<SessionView>>,
+    pub output: lk_agents_net::signal::Producer<Outputs>,
+    pub chat_ctx: lk_agents_net::signal::Producer<Arc<lk_agents_abi::ChatContext>>,
+    pub keyterms: lk_agents_net::signal::Producer<Option<Vec<String>>>,
 }

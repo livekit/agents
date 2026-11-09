@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 #[cfg(any(test, feature = "media-ffmpeg"))]
 use std::io::Write;
 #[cfg(feature = "media-ffmpeg")]
@@ -18,8 +17,9 @@ use lk_agents_media::pool::{JobClass, MediaPool};
 use lk_agents_media::recorder::{FileLimits, OggOpusEncoder, RecordingFile};
 use lk_agents_media::recorder::{RESYNC_TOLERANCE, RecordingCommand, RecordingLimits};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::signal;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
-use tokio::sync::{RwLock, mpsc, oneshot, watch};
+use tokio::sync::{RwLock, mpsc, oneshot};
 
 pub use lk_agents_abi::recorder::{RecordingFailure, RecordingStatus, RecordingSummary};
 
@@ -63,9 +63,14 @@ struct Shared {
     #[cfg(any(test, feature = "media-ffmpeg"))]
     retained_bytes: AtomicUsize,
     failure: OnceLock<RecordingFailure>,
-    status: watch::Sender<RecordingStatus>,
-    ready: watch::Sender<Option<Result<(), RecordingFailure>>>,
-    summary: watch::Sender<RecordingSummary>,
+    /// Open, Finishing or Failing; the terminal status is `terminal`.
+    status: parking_lot::Mutex<RecordingStatus>,
+    /// Written by the worker supervisor, which owns its producer: its end, however it ends, ends
+    /// every wait.
+    terminal: signal::Cell<Option<Outcome>>,
+    /// Written by the open on the media pool, which owns its producer.
+    ready: signal::Cell<Option<Result<(), RecordingFailure>>>,
+    summary: parking_lot::Mutex<RecordingSummary>,
     limits: RecordingLimits,
 }
 
@@ -99,14 +104,10 @@ impl Shared {
     fn fail(&self, error: RecordingFailure) -> RecordingFailure {
         let _ = self.failure.set(error.clone());
         let error = self.failure.get().cloned().unwrap_or(error);
-        self.status.send_if_modified(|status| {
-            if matches!(status, RecordingStatus::Open | RecordingStatus::Finishing) {
-                *status = RecordingStatus::Failing(error.clone());
-                true
-            } else {
-                false
-            }
-        });
+        let mut status = self.status.lock();
+        if matches!(*status, RecordingStatus::Open | RecordingStatus::Finishing) {
+            *status = RecordingStatus::Failing(error.clone());
+        }
         error
     }
 }
@@ -172,10 +173,8 @@ impl SessionRecorder {
         if limits.queued_commands >= tokio::sync::Semaphore::MAX_PERMITS {
             return Err(RecordingFailure::Invalid("recording format or limits"));
         }
-        let (status, _) = watch::channel(RecordingStatus::Open);
-        let (ready, _) = watch::channel(None);
-        let (summary, _) =
-            watch::channel(RecordingSummary { started_at: t0, ..Default::default() });
+        let ((ready_tx, ready), (terminal_tx, terminal)) = (signal::once(), signal::once());
+        let summary = RecordingSummary { started_at: t0, ..Default::default() };
         let shared = Arc::new(Shared {
             admission: RwLock::new(()),
             finishing: AtomicBool::new(false),
@@ -184,9 +183,10 @@ impl SessionRecorder {
             queued_bytes: AtomicUsize::new(0),
             retained_bytes: AtomicUsize::new(0),
             failure: OnceLock::new(),
-            status,
+            status: parking_lot::Mutex::new(RecordingStatus::Open),
+            terminal,
             ready,
-            summary,
+            summary: parking_lot::Mutex::new(summary),
             limits,
         });
         let (tx, rx) = mpsc::channel(limits.queued_commands + 1);
@@ -207,31 +207,24 @@ impl SessionRecorder {
                 let file = match open(file) {
                     Ok(file) => file,
                     Err(error) => {
-                        worker_shared.ready.send_replace(Some(Err(error.clone())));
+                        ready_tx.resolve(Err(error.clone()));
                         return Err(error);
                     }
                 };
-                worker_shared.ready.send_replace(Some(Ok(())));
+                ready_tx.resolve(Ok(()));
                 run(file, rx, input, worker_shared, &worker_runtime)
             })
             .map_err(|error| RecordingFailure::Worker(error.to_string()))?;
         let spawner = TokioSpawner::new(runtime.clone());
-        recorder.tasks.spawn(&spawner, "recording worker", async move {
+        let supervise = async move {
             let outcome = worker
                 .await
                 .unwrap_or_else(|error| Err(RecordingFailure::Worker(error.to_string())));
-            if let Err(error) = &outcome {
-                shared.fail(error.clone());
-                shared.ready.send_if_modified(|ready| {
-                    if ready.is_none() {
-                        *ready = Some(Err(error.clone()));
-                        true
-                    } else {
-                        false
-                    }
-                });
-            } else if let Ok(summary) = &outcome {
-                shared.summary.send_replace(summary.clone());
+            match &outcome {
+                Err(error) => {
+                    shared.fail(error.clone());
+                }
+                Ok(summary) => *shared.summary.lock() = summary.clone(),
             }
             shared.finishing.store(true, Ordering::Release);
             // Let any producer that already claimed ingress capacity finish before clearing
@@ -240,37 +233,31 @@ impl SessionRecorder {
             shared.retained_bytes.store(0, Ordering::Release);
             shared.queued_bytes.store(0, Ordering::Release);
             shared.commands.store(0, Ordering::Release);
-            shared.status.send_replace(match outcome {
-                Ok(summary) => RecordingStatus::Finished(summary),
-                Err(error) => {
-                    let _ = shared.failure.set(error.clone());
-                    RecordingStatus::Failed(error)
-                }
-            });
-        });
+            if let Err(error) = &outcome {
+                let _ = shared.failure.set(error.clone());
+            }
+            outcome
+        };
+        recorder.tasks.spawn_settling(&spawner, "recording worker", terminal_tx, supervise);
         Ok(recorder)
     }
 
     pub async fn ready(&self) -> Result<(), RecordingFailure> {
-        let mut ready = self.shared.ready.subscribe();
-        loop {
-            if let Some(result) = ready.borrow_and_update().clone() {
-                return result;
-            }
-            ready
-                .changed()
-                .await
-                .map_err(|_| RecordingFailure::Worker("open worker disappeared".into()))?;
+        if let Ok(ready) = self.shared.ready.wait().await {
+            return ready;
         }
+        // The open ended unanswered: the worker's outcome says why.
+        self.terminal().await?;
+        Err(RecordingFailure::Worker("open worker disappeared".into()))
     }
 
     #[cfg(test)]
     fn status(&self) -> RecordingStatus {
-        self.shared.status.borrow().clone()
-    }
-
-    fn subscribe(&self) -> watch::Receiver<RecordingStatus> {
-        self.shared.status.subscribe()
+        match self.shared.terminal.get() {
+            Some(Ok(summary)) => RecordingStatus::Finished(summary),
+            Some(Err(error)) => RecordingStatus::Failed(error),
+            None => self.shared.status.lock().clone(),
+        }
     }
 
     #[cfg(test)]
@@ -395,20 +382,15 @@ impl SessionRecorder {
             let spawner = TokioSpawner::new(self.runtime.clone());
             self.tasks.spawn(&spawner, "recording finalization", async move {
                 let _admission = shared.admission.write().await;
-                if matches!(
-                    *shared.status.borrow(),
-                    RecordingStatus::Finished(_) | RecordingStatus::Failed(_)
-                ) {
+                if shared.terminal.ended() {
                     return;
                 }
-                shared.status.send_if_modified(|status| {
-                    if matches!(status, RecordingStatus::Open) {
+                {
+                    let mut status = shared.status.lock();
+                    if matches!(*status, RecordingStatus::Open) {
                         *status = RecordingStatus::Finishing;
-                        true
-                    } else {
-                        false
                     }
-                });
+                }
                 if tx
                     .try_send(Queued {
                         command: Command::Record(RecordingCommand::FinishRecording(now)),
@@ -440,20 +422,11 @@ impl SessionRecorder {
     }
 
     async fn terminal(&self) -> Outcome {
-        let mut status = self.subscribe();
-        loop {
-            match status.borrow_and_update().clone() {
-                RecordingStatus::Finished(summary) => return Ok(summary),
-                RecordingStatus::Failed(error) => return Err(error),
-                RecordingStatus::Open
-                | RecordingStatus::Finishing
-                | RecordingStatus::Failing(_) => {}
-            }
-            status
-                .changed()
-                .await
-                .map_err(|_| RecordingFailure::Worker("recording status closed".into()))?;
-        }
+        self.shared
+            .terminal
+            .wait()
+            .await
+            .unwrap_or_else(|_| Err(RecordingFailure::Worker("recording worker ended".into())))
     }
 }
 
@@ -614,7 +587,7 @@ fn publish_progress<E: OggOpusEncoder, W: Write>(
     shared: &Shared,
 ) -> Result<(), RecordingFailure> {
     let retained = file.retained_bytes();
-    shared.summary.send_replace(file.summary().clone());
+    *shared.summary.lock() = file.summary().clone();
     shared.retained_bytes.store(retained, Ordering::Release);
     shared.limits.check_retained(retained)
 }
@@ -728,10 +701,10 @@ impl lk_agents_abi::recorder::SessionRecorder for SessionRecorder {
         Self::ready(self).await
     }
     fn bytes_written(&self) -> u64 {
-        self.shared.summary.borrow().bytes_written
+        self.shared.summary.lock().bytes_written
     }
     fn started_at(&self) -> Option<f64> {
-        self.shared.summary.borrow().started_at
+        self.shared.summary.lock().started_at
     }
     async fn flush(&self, now: f64) -> Result<RecordingSummary, RecordingFailure> {
         Self::flush(self, now).await

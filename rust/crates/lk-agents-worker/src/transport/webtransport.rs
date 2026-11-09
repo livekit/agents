@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -45,7 +44,7 @@ fn stream_code(code: HttpStreamResetCode) -> u32 {
 
 /// Control admission never waits for the data-plane owner or flow control.
 #[derive(Clone)]
-pub struct EndpointControl(tokio::sync::watch::Sender<EndpointControlState>);
+pub struct EndpointControl(Arc<lk_agents_net::signal::Shared<EndpointControlState>>);
 
 #[derive(Clone, Copy, Default)]
 struct EndpointControlState {
@@ -56,20 +55,24 @@ struct EndpointControlState {
 
 impl EndpointControl {
     pub fn finish(&self) {
-        self.0.send_modify(|state| state.finish = true);
+        self.0.modify(|state| state.finish = true);
     }
 
     pub fn reset(&self, code: HttpStreamResetCode) {
-        self.0.send_modify(|state| {
+        self.0.modify(|state| {
             state.reset.get_or_insert(code);
             state.stop.get_or_insert(code);
         });
     }
 
     pub fn stop(&self, code: HttpStreamResetCode) {
-        self.0.send_modify(|state| {
+        self.0.modify(|state| {
             state.stop.get_or_insert(code);
         });
+    }
+
+    fn state(&self) -> EndpointControlState {
+        self.0.with(|state| *state)
     }
 }
 
@@ -156,7 +159,9 @@ pub fn tcp_exchange(
 }
 
 fn halves(send: SendHalf, recv: RecvHalf) -> (EndpointWriter, EndpointReader) {
-    let control = EndpointControl(tokio::sync::watch::channel(EndpointControlState::default()).0);
+    let control = EndpointControl(Arc::new(lk_agents_net::signal::Shared::new(
+        EndpointControlState::default(),
+    )));
     (
         EndpointWriter { stream: send, control: control.clone(), finished: false },
         EndpointReader { stream: recv, control },
@@ -171,14 +176,14 @@ pub struct EndpointReader {
 
 impl EndpointReader {
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>, TransportError> {
-        if self.control.0.borrow().stop.is_some() {
+        if self.control.state().stop.is_some() {
             self.apply_control();
             return Err(TransportError::Failed("endpoint request stopped".into()));
         }
-        let mut control = self.control.0.subscribe();
+        let control = self.control.0.clone();
         let result = {
             let read = Box::pin(self.stream.read(buf));
-            let stopped = Box::pin(control.wait_for(|state| state.stop.is_some()));
+            let stopped = Box::pin(control.wait_until(|state| state.stop.map(drop)));
             match futures_util::future::select(read, stopped).await {
                 futures_util::future::Either::Left((result, stopped)) => {
                     drop(stopped);
@@ -203,7 +208,7 @@ impl EndpointReader {
     }
 
     pub fn apply_control(&mut self) {
-        if let Some(code) = self.control.0.borrow().stop {
+        if let Some(code) = self.control.state().stop {
             self.stream.stop(code);
         }
     }
@@ -221,18 +226,15 @@ impl EndpointWriter {
     }
 
     pub async fn write_all(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
-        let res = {
-            let state = self.control.0.borrow();
-            state.reset.is_some() || state.finish
-        };
-        if res {
+        let ended = |state: &EndpointControlState| state.reset.is_some() || state.finish;
+        if ended(&self.control.state()) {
             self.apply_control()?;
             return Err(TransportError::Failed("endpoint response stopped".into()));
         }
-        let mut control = self.control.0.subscribe();
+        let control = self.control.0.clone();
         let result = {
             let write = Box::pin(self.stream.write_all(bytes));
-            let stopped = Box::pin(control.wait_for(|state| state.reset.is_some() || state.finish));
+            let stopped = Box::pin(control.wait_until(|state| ended(state).then_some(())));
             match futures_util::future::select(write, stopped).await {
                 futures_util::future::Either::Left((result, stopped)) => {
                     drop(stopped);
@@ -257,7 +259,7 @@ impl EndpointWriter {
     }
 
     pub fn apply_control(&mut self) -> Result<(), TransportError> {
-        let control = *self.control.0.borrow();
+        let control = self.control.state();
         if let Some(code) = control.reset {
             self.stream.reset(code);
         } else if control.finish && !self.finished {

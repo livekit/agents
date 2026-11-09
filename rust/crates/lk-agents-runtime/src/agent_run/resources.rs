@@ -1,18 +1,17 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use lk_agents_abi::agent::resources::{ContextHydration, ResourceError};
 use lk_agents_abi::llm::toolsets::{ToolsetGroup as _, ToolsetHooks};
 use lk_agents_abi::storage::Storage as _;
 use lk_agents_abi::storage::context::ContextActivation as _;
 use lk_agents_abi::{BoxFuture, errors::HostError};
 use lk_agents_core::resource_lifecycle::{CloseOwner, OwnerLifecycle, StartOwner, StoragePlan};
-use lk_agents_net::{env::ProcessEnv, task::TaskSet};
+use lk_agents_net::{env::ProcessEnv, signal, task::TaskSet};
 use lk_agents_storage::{context::store::ContextStore, storage::Namespace};
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock};
-use tokio::sync::watch;
 
 type Outcome = Result<(), ResourceError>;
-type Reply = watch::Sender<Option<Outcome>>;
+type Reply = signal::Cell<Option<Outcome>>;
+type Settle = signal::Producer<Option<Outcome>>;
 
 #[cfg(test)]
 #[path = "resources_tests.rs"]
@@ -30,6 +29,9 @@ struct Inner {
     hydration: Mutex<Hydration>,
     tasks: Arc<TaskSet>,
     closing: tokio_util::sync::CancellationToken,
+    /// The opening and closing writers, taken once by the task that settles them: its end, however
+    /// it ends, ends every wait.
+    settle: Mutex<Option<(Settle, Settle)>>,
     started: Reply,
     closed: Reply,
 }
@@ -115,7 +117,8 @@ impl Inner {
         }
     }
 
-    async fn run(self: Arc<Self>) {
+    async fn run(self: Arc<Self>, started: Settle, closed: Settle) {
+        let mut started = Some(started);
         let mut result = if self.closing.is_cancelled() {
             Err(ResourceError::Cancelled)
         } else {
@@ -133,43 +136,49 @@ impl Inner {
             }
         }
         if result.is_ok() {
-            self.started.send_replace(Some(Ok(())));
+            if let Some(started) = started.take() {
+                started.resolve(Ok(()));
+            }
             self.closing.cancelled().await;
         } else {
             let _ = self.lifecycle.lock().close();
             self.closing.cancel();
         }
         let cleanup = self.cleanup().await;
-        if self.started.borrow().is_none() {
+        if let Some(started) = started {
             // Startup reports its original failure only after partial acquisition settles.
-            self.started.send_replace(Some(result));
+            started.resolve(result);
         }
-        self.closed.send_replace(Some(cleanup));
+        closed.resolve(cleanup);
     }
 
     fn request_close(self: &Arc<Self>) {
         let action = self.lifecycle.lock().close();
         self.closing.cancel();
         if let CloseOwner::Close { wait_start: false } = action {
+            let Some((started, closed)) = self.settle.lock().take() else { return };
+            drop(started);
             match (self.env.spawner)() {
                 Ok(spawner) => {
                     let inner = self.clone();
-                    self.tasks.spawn(&*spawner, "unopened run resources close", async move {
-                        let result = inner.cleanup().await;
-                        inner.closed.send_replace(Some(result));
-                    });
+                    let close = async move { inner.cleanup().await };
+                    self.tasks.spawn_settling(
+                        &*spawner,
+                        "unopened run resources close",
+                        closed,
+                        close,
+                    );
                 }
-                Err(error) => {
-                    self.closed.send_replace(Some(Err(HostError::new(error.to_string()).into())));
-                }
+                Err(error) => closed.resolve(Err(HostError::new(error.to_string()).into())),
             }
         }
     }
 
     fn ready(&self) -> Result<&Opened, ResourceError> {
-        match self.started.borrow().as_ref() {
-            Some(Ok(())) => self.opened.get().ok_or(ResourceError::NotReady),
-            _ => Err(ResourceError::NotReady),
+        if self.started.with(|started| matches!(started, Some(Ok(())))) {
+            self.opened.get().ok_or(ResourceError::NotReady)
+        } else {
+            Err(ResourceError::NotReady)
         }
     }
 }
@@ -198,15 +207,7 @@ impl Drop for OpeningWait {
 }
 
 async fn wait(reply: &Reply) -> Outcome {
-    let mut reply = reply.subscribe();
-    loop {
-        if let Some(result) = reply.borrow_and_update().clone() {
-            return result;
-        }
-        if reply.changed().await.is_err() {
-            return Err(ResourceError::Closed);
-        }
-    }
+    reply.wait().await.unwrap_or(Err(ResourceError::Closed))
 }
 
 impl lk_agents_abi::agent::resources::RunResources for RunResources {
@@ -224,6 +225,7 @@ impl lk_agents_abi::agent::resources::RunResources for RunResources {
     ) -> Result<Self, ResourceError> {
         let plan = StoragePlan::new(namespace.is_some(), thread_id.is_some(), activation.is_some())
             .ok_or(ResourceError::ThreadStorage)?;
+        let ((started_tx, started), (closed_tx, closed)) = (signal::once(), signal::once());
         Ok(Self(Arc::new(Inner {
             env: env.clone(),
             lifecycle: Mutex::default(),
@@ -234,8 +236,9 @@ impl lk_agents_abi::agent::resources::RunResources for RunResources {
             hydration: Mutex::default(),
             tasks: Arc::default(),
             closing: tokio_util::sync::CancellationToken::new(),
-            started: watch::channel(None).0,
-            closed: watch::channel(None).0,
+            settle: Mutex::new(Some((started_tx, closed_tx))),
+            started,
+            closed,
         })))
     }
 
@@ -246,8 +249,9 @@ impl lk_agents_abi::agent::resources::RunResources for RunResources {
             StartOwner::Closed => return Err(ResourceError::Closed),
             StartOwner::Join => {}
             StartOwner::Start => {
+                let (started, closed) = self.0.settle.lock().take().expect("started once");
                 let inner = self.0.clone();
-                self.0.tasks.spawn(&*spawner, "text run resources", inner.run());
+                self.0.tasks.spawn(&*spawner, "text run resources", inner.run(started, closed));
             }
         }
         let mut guard = OpeningWait { inner: self.0.clone(), armed: true };
@@ -268,7 +272,7 @@ impl lk_agents_abi::agent::resources::RunResources for RunResources {
         self.0.ready()?.activation.clone().ok_or(ResourceError::NotReady)
     }
     fn closed(&self) -> bool {
-        self.0.closed.borrow().is_some()
+        self.0.closed.ended()
     }
     fn retain_hydration(&self, view: Arc<dyn ContextHydration>) {
         if !self.0.plan.own_activation {

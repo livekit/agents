@@ -172,8 +172,14 @@ impl Shared {
         state.used[class] < self.limits[class] && state.total < self.total
     }
 
+    /// A forked child's copy of its parent's pool: no thread serves it and a parent's thread may
+    /// have held its lock at the fork, so the child never locks it.
+    fn inherited(&self) -> bool {
+        self.pid != std::process::id()
+    }
+
     fn release(&self, class: usize) {
-        if self.pid != std::process::id() {
+        if self.inherited() {
             return;
         }
         let waiters = {
@@ -198,10 +204,13 @@ impl Shared {
         // One thread per queued job beyond the idle ones, so no job waits behind a long-lived
         // one; every job holds a permit, so threads never outnumber the total ceiling.
         let shared = self.clone();
-        std::thread::Builder::new()
-            .name(self.thread_name.into())
-            .spawn(move || work(shared))
-            .expect("spawning a pool thread");
+        let spawned =
+            std::thread::Builder::new().name(self.thread_name.into()).spawn(move || work(shared));
+        if spawned.is_err() {
+            // No thread will run it: the job settles lost instead of waiting on one.
+            let task = self.lock().tasks.pop_back();
+            drop(task);
+        }
     }
 }
 
@@ -230,24 +239,74 @@ impl<C: Class> Drop for Permit<C> {
     }
 }
 
-pub use lk_agents_abi::errors::JobPanicked;
+pub use lk_agents_abi::errors::JobLost;
 
 struct Slot<T> {
-    result: Option<Result<T, JobPanicked>>,
+    result: Option<Result<T, JobLost>>,
     waker: Option<Waker>,
+}
+
+/// One job's result, written once by its [`Settle`].
+struct JobCell<T> {
+    /// The process whose pool queued the job: a forked child never sees it settle.
+    pid: u32,
+    slot: Mutex<Slot<T>>,
+    ready: Condvar,
+}
+
+impl<T> JobCell<T> {
+    /// The slot, or none in a forked child, whose copy of the job will never settle.
+    fn lock(&self) -> Option<MutexGuard<'_, Slot<T>>> {
+        (self.pid == std::process::id())
+            .then(|| self.slot.lock().unwrap_or_else(|p| p.into_inner()))
+    }
+}
+
+/// A job's producer side, owned by its queued closure: it releases the job's capacity, then
+/// settles the job with its result or, dropped without one (never run, unwound), with
+/// [`JobLost`].
+struct Settle<T, C: Class> {
+    cell: Arc<JobCell<T>>,
+    permit: Option<Permit<C>>,
+}
+
+impl<T, C: Class> Settle<T, C> {
+    fn finish(mut self, result: T) {
+        self.settle(Ok(result));
+    }
+
+    fn settle(&mut self, result: Result<T, JobLost>) {
+        // The permit is present until the first settlement.
+        let Some(permit) = self.permit.take() else { return };
+        drop(permit);
+        let Some(mut slot) = self.cell.lock() else { return };
+        slot.result = Some(result);
+        let waker = slot.waker.take();
+        drop(slot);
+        self.cell.ready.notify_all();
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+impl<T, C: Class> Drop for Settle<T, C> {
+    fn drop(&mut self) {
+        self.settle(Err(JobLost));
+    }
 }
 
 /// The completion of one admitted job. Awaiting it observes the result; dropping it leaves the
 /// job running with its capacity.
 pub struct Job<T> {
-    slot: Arc<(Mutex<Slot<T>>, Condvar)>,
+    cell: Arc<JobCell<T>>,
 }
 
 impl<T> Future for Job<T> {
-    type Output = Result<T, JobPanicked>;
+    type Output = Result<T, JobLost>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut slot = self.slot.0.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(mut slot) = self.cell.lock() else { return Poll::Ready(Err(JobLost)) };
         match slot.result.take() {
             Some(result) => Poll::Ready(result),
             None => {
@@ -261,14 +320,13 @@ impl<T> Future for Job<T> {
 impl<T> Job<T> {
     /// Observe settlement from another worker or a synchronous caller.
     /// Async callers must await the receipt instead of blocking their executor.
-    pub fn wait(self) -> Result<T, JobPanicked> {
-        let (slot, ready) = &*self.slot;
-        let mut slot = slot.lock().unwrap_or_else(|p| p.into_inner());
+    pub fn wait(self) -> Result<T, JobLost> {
+        let Some(mut slot) = self.cell.lock() else { return Err(JobLost) };
         loop {
             if let Some(result) = slot.result.take() {
                 return result;
             }
-            slot = ready.wait(slot).unwrap_or_else(|p| p.into_inner());
+            slot = self.cell.ready.wait(slot).unwrap_or_else(|p| p.into_inner());
         }
     }
 }
@@ -283,6 +341,10 @@ impl Future for CapacityAvailable {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        // A forked child admits without counting; see `Pool::try_admit`.
+        if self.shared.inherited() {
+            return Poll::Ready(());
+        }
         let mut state = self.shared.lock();
         if self.shared.fits(&state, self.class) {
             return Poll::Ready(());
@@ -327,6 +389,10 @@ impl<C: Class> Pool<C> {
 
     /// Refuse overload synchronously without retaining a job or an admission waiter.
     pub fn try_admit(&self, class: C) -> Result<Permit<C>, PoolError<C>> {
+        // A forked child admits without counting: the job it spawns settles lost.
+        if self.shared.inherited() {
+            return Ok(Permit { shared: self.shared.clone(), class });
+        }
         let mut state = self.shared.lock();
         if !self.shared.fits(&state, class.index()) {
             return Err(PoolError::Exhausted(class));
@@ -355,7 +421,7 @@ impl<C: Class> Pool<C> {
         &self,
         class: C,
         work: impl FnOnce() -> T + Send + 'static,
-    ) -> Result<T, JobPanicked> {
+    ) -> Result<T, JobLost> {
         loop {
             match self.try_admit(class) {
                 Ok(permit) => return self.spawn_admitted(permit, work).await,
@@ -365,7 +431,7 @@ impl<C: Class> Pool<C> {
     }
 
     /// [`Pool::run`] for fallible work: a panic is the work's own failure.
-    pub async fn try_run<T: Send + 'static, E: From<JobPanicked> + Send + 'static>(
+    pub async fn try_run<T: Send + 'static, E: From<JobLost> + Send + 'static>(
         &self,
         class: C,
         work: impl FnOnce() -> Result<T, E> + Send + 'static,
@@ -380,23 +446,22 @@ impl<C: Class> Pool<C> {
         permit: Permit<C>,
         work: impl FnOnce() -> T + Send + 'static,
     ) -> Job<T> {
-        let slot = Arc::new((Mutex::new(Slot { result: None, waker: None }), Condvar::new()));
-        let settled = slot.clone();
+        let cell = Arc::new(JobCell {
+            pid: self.shared.pid,
+            slot: Mutex::new(Slot { result: None, waker: None }),
+            ready: Condvar::new(),
+        });
+        if self.shared.inherited() {
+            return Job { cell };
+        }
+        let settle = Settle { cell: cell.clone(), permit: Some(permit) };
         self.shared.run(Box::new(move || {
-            let result = std::panic::catch_unwind(AssertUnwindSafe(work)).map_err(|_| JobPanicked);
-            // Capacity is released by settlement, before the caller observes the result.
-            drop(permit);
-            let waker = {
-                let mut slot = settled.0.lock().unwrap_or_else(|p| p.into_inner());
-                slot.result = Some(result);
-                slot.waker.take()
-            };
-            settled.1.notify_all();
-            if let Some(waker) = waker {
-                waker.wake();
+            // A panic drops `settle` unfinished, which settles the job lost.
+            if let Ok(result) = std::panic::catch_unwind(AssertUnwindSafe(work)) {
+                settle.finish(result);
             }
         }));
-        Job { slot }
+        Job { cell }
     }
 }
 

@@ -10,7 +10,7 @@ pub(super) struct HostDrain {
     pub(super) remote: Option<Arc<dyn SessionHosting>>,
     pub(super) job_run: Option<Arc<dyn lk_agents_abi::worker::ipc_host::JobExecution>>,
     /// The session's view, whose usage a remote client is told of as it moves.
-    pub(super) view: tokio::sync::watch::Receiver<Arc<lk_agents_voice::agent_session::SessionView>>,
+    pub(super) view: lk_agents_net::signal::Cell<Arc<lk_agents_voice::agent_session::SessionView>>,
     pub(super) anchor: lk_agents_abi::WallAnchor,
     pub(super) agents: HostAgents,
     pub(super) spawner: Arc<dyn Spawner>,
@@ -93,7 +93,7 @@ impl HostDrain {
     /// moved (`session_usage_updated`).
     fn forward_usage(&self, forwarded: &mut u64) {
         let Some(remote) = &self.remote else { return };
-        let view = Arc::clone(&self.view.borrow());
+        let view = self.view.get();
         if view.usage_revision != *forwarded {
             *forwarded = view.usage_revision;
             remote.forward_usage(&view.usage);

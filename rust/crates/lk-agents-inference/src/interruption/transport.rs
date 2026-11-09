@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::effects::InterruptionEffect;
 use crate::headers::{HeaderProvider, Headers, gateway_headers};
 use crate::interruption::event::OverlappingSpeechEvent;
@@ -18,6 +17,7 @@ use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_core::request::{Request, Retry};
 use lk_agents_media::media_queue::{self, AudioSender, Item, Policy};
+use lk_agents_net::signal;
 use lk_agents_net::task::TokioSpawner;
 use lk_agents_net::token::{INFERENCE_TOKEN_TTL, inference_bearer_with_ttl};
 use lk_agents_net::transport::{
@@ -28,7 +28,7 @@ use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, UNIX_EPOCH};
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::sync::mpsc;
 
 // The `Mutex<InterruptionMachine>` is never held across an `.await`.
 
@@ -68,7 +68,7 @@ pub struct AdaptiveInterruptionDetector {
     clock: Arc<dyn Clock>,
     /// `weakref.WeakSet[InterruptionWebSocketStream]`, so `update_options` reaches live streams
     /// without keeping dead ones alive.
-    streams: Mutex<Vec<Weak<Notify>>>,
+    streams: Mutex<Vec<Weak<Reconnect>>>,
 }
 
 impl AdaptiveInterruptionDetector {
@@ -88,7 +88,7 @@ impl AdaptiveInterruptionDetector {
         let mut streams = self.streams.lock();
         streams.retain(|s| match s.upgrade() {
             Some(reconnect) => {
-                reconnect.notify_one();
+                reconnect.request();
                 true
             }
             None => false,
@@ -97,7 +97,7 @@ impl AdaptiveInterruptionDetector {
 
     /// `stream(conn_options=...)`: its verdicts and errors reach only this stream's reader.
     pub fn stream(&self) -> InterruptionStream {
-        let reconnect = Arc::new(Notify::new());
+        let reconnect = Arc::new(Reconnect(signal::Shared::new(0)));
         self.streams.lock().push(Arc::downgrade(&reconnect));
 
         let (queue, input_rx) = media_queue::audio(
@@ -105,7 +105,7 @@ impl AdaptiveInterruptionDetector {
             telemetry::AudioConsumer::Interruption,
             self.clock.clone(),
         );
-        let (input_failure, _) = watch::channel(None);
+        let input_failure = Arc::new(signal::Shared::new(None));
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let closed = Arc::new(AtomicBool::new(false));
 
@@ -141,20 +141,28 @@ struct StreamContext {
     config: ConnectionConfig,
     clock: Arc<dyn Clock>,
     stream_events: mpsc::UnboundedSender<StreamEvent>,
-    reconnect: Arc<Notify>,
+    reconnect: Arc<Reconnect>,
     closed: Arc<AtomicBool>,
-    input_failure: watch::Sender<Option<ApiError>>,
+    input_failure: Arc<signal::Shared<Option<ApiError>>>,
+}
+
+/// Reconnect requests, counted; a connection ends once one arrives after the last it served.
+struct Reconnect(signal::Shared<u64>);
+
+impl Reconnect {
+    fn request(&self) {
+        self.0.modify(|n| *n += 1);
+    }
+
+    /// The next request after `served`, which becomes the latest served.
+    async fn after(&self, served: &mut u64) {
+        *served = self.0.wait_until(|n| (*n != *served).then_some(*n)).await;
+    }
 }
 
 impl StreamContext {
     async fn input_failed(&self) -> StreamError {
-        let mut failure = self.input_failure.subscribe();
-        loop {
-            if let Some(error) = failure.borrow_and_update().clone() {
-                return error.into();
-            }
-            let _ = failure.changed().await;
-        }
+        self.input_failure.wait_until(|failure| failure.clone()).await.into()
     }
 
     fn wall(&self) -> f64 {
@@ -199,7 +207,7 @@ pub struct InterruptionInput(Arc<InputShared>);
 struct InputShared {
     /// `None` once the input ended.
     queue: Mutex<Option<AudioSender<InputEvent>>>,
-    failure: watch::Sender<Option<ApiError>>,
+    failure: Arc<signal::Shared<Option<ApiError>>>,
 }
 
 impl InterruptionInput {
@@ -210,7 +218,7 @@ impl InterruptionInput {
                 queue.push(frame);
             }
             event => queue.event(event).map_err(|stuck| {
-                self.0.failure.send_replace(Some(ApiError::new(stuck.to_string())));
+                self.0.failure.modify(|failure| *failure = Some(ApiError::new(stuck.to_string())));
                 StreamClosed::Stuck
             })?,
         }
@@ -225,7 +233,7 @@ impl InterruptionInput {
 
     /// The open queue: `Stuck` once a sentinel was refused, `InputEnded` once the input ended.
     fn open(&self) -> Result<MappedMutexGuard<'_, AudioSender<InputEvent>>, StreamClosed> {
-        if self.0.failure.borrow().is_some() {
+        if self.0.failure.with(|failure| failure.is_some()) {
             return Err(StreamClosed::Stuck);
         }
         MutexGuard::try_map(self.0.queue.lock(), |queue| {
@@ -263,7 +271,7 @@ pub struct InterruptionStream {
     /// `Option` so `end_input()` can drop the sender (`self._input_ch.close()`).
     input_tx: Option<InterruptionInput>,
     event_rx: mpsc::UnboundedReceiver<StreamEvent>,
-    reconnect: Arc<Notify>,
+    reconnect: Arc<Reconnect>,
     closed: Arc<AtomicBool>,
     task: OwnedTask<Result<(), ApiError>>,
 }
@@ -331,7 +339,7 @@ impl InterruptionStream {
 
     /// The options are shared, so this only forces a reconnect.
     pub fn request_reconnect(&self) {
-        self.reconnect.notify_one();
+        self.reconnect.request();
     }
 
     /// `__anext__`'s tail (`inference/interruption.py:527`): once the events are exhausted, the
@@ -408,9 +416,10 @@ async fn run(ctx: &StreamContext, input_rx: &mut InputRx) -> Result<(), StreamEr
         let opts = ctx.opts.lock().clone();
         Arc::new(Mutex::new(InterruptionMachine::new(opts)))
     };
+    let mut served = 0;
     loop {
         let socket = connect_ws(ctx).await?;
-        if run_once(ctx, input_rx, &core, socket).await? == ConnectionEnd::InputEnded {
+        if run_once(ctx, input_rx, &core, socket, &mut served).await? == ConnectionEnd::InputEnded {
             return Ok(());
         }
     }
@@ -422,6 +431,7 @@ async fn run_once(
     input_rx: &mut InputRx,
     core: &Arc<Mutex<InterruptionMachine>>,
     socket: Socket,
+    served: &mut u64,
 ) -> Result<ConnectionEnd, StreamError> {
     let Socket { sender: sink, receiver: mut source } = socket;
     let opened =
@@ -479,7 +489,7 @@ async fn run_once(
                 send_finished = true;
                 break send_outcome(joined);
             }
-            _ = ctx.reconnect.notified() => break Ok(ConnectionEnd::Reconnect),
+            () = ctx.reconnect.after(served) => break Ok(ConnectionEnd::Reconnect),
             ev = input_rx.recv(), if input_open => match ev {
                 Some(item) => if let Err(error) = forward_input(ctx, core, item, data_tx.as_ref()) {
                     break Err(error);

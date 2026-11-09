@@ -147,8 +147,8 @@ async fn drain_without_sink<S: Segment>(
 /// `false` when interrupted while parked. Every source and every sink goes through here.
 async fn wait_launch(shared: &Arc<SessionShared>, handle: &SpeechHandle) -> bool {
     let speech = handle.id();
-    let mut level = shared.view.clone();
-    if !level.borrow_and_update().launch_holds.contains(&speech) {
+    let level = &shared.view;
+    if !level.with(|v| v.launch_holds.contains(&speech)) {
         return true;
     }
     shared.trace(lk_agents_voice::trace::InterruptStep::PlayoutGate {
@@ -156,18 +156,14 @@ async fn wait_launch(shared: &Arc<SessionShared>, handle: &SpeechHandle) -> bool
         op: lk_agents_voice::agent_session::effects::GateOp::Pause,
         cause: lk_agents_voice::agent_session::effects::GateCause::Launch,
     });
-    loop {
-        let changed = tokio::select! {
-            biased;
-            () = handle.wait_for_interrupted() => return false,
-            changed = level.changed() => changed,
-        };
-        // A closed level (the loop is gone) holds nothing.
-        if changed.is_err() || !level.borrow_and_update().launch_holds.contains(&speech) {
-            shared.report(GenEvent::LaunchReleased { speech });
-            return true;
-        }
+    tokio::select! {
+        biased;
+        () = handle.wait_for_interrupted() => return false,
+        // An ended level (the loop is gone) holds nothing.
+        _ = level.wait_map(|v| (!v.launch_holds.contains(&speech)).then_some(())) => {}
     }
+    shared.report(GenEvent::LaunchReleased { speech });
+    true
 }
 
 /// `flush()` then `clear_buffer()`: a cut segment reports `Clear`, never `Flush`+`End`. With

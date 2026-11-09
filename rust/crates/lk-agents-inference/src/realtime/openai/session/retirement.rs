@@ -1,8 +1,7 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use super::{Pump, Shared};
+use lk_agents_net::signal::{self, Cell, Producer};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
-use tokio::sync::{Notify, watch};
 
 impl Pump {
     pub(super) fn wake_retirement(&self) {
@@ -11,49 +10,44 @@ impl Pump {
             if retirement.is_some() {
                 None
             } else {
-                let (settled, done) = watch::channel(false);
+                let (settled, done) = signal::once();
                 *retirement = Some(done);
                 Some(settled)
             }
         };
         if let Some(settled) = start {
             let shared = Arc::downgrade(&self.shared);
-            let wake = self.shared.retirement_wake.clone();
+            let wake = self.shared.retirement_wake.cell();
             let label = self.label.clone();
             self.shared.disposal.spawn(self.spawner.as_ref(), "realtime retirement", async move {
                 run(shared, wake, label, settled, lk_agents_media::pool::media_pool()).await;
             });
         }
-        self.shared.retirement_wake.notify_one();
+        self.shared.retirement_wake.modify(|n| *n += 1);
     }
 }
 
+/// Drops the session's retired context on the media pool until the session closes or is gone;
+/// `settled` ends with it. `wake` ends with the session.
 pub(super) async fn run(
     shared: Weak<Shared>,
-    wake: Arc<Notify>,
+    mut wake: Cell<u64>,
     label: String,
-    settled: watch::Sender<bool>,
+    settled: Producer<Option<()>>,
     media_pool: lk_agents_media::pool::MediaPool,
 ) {
+    let _settled = settled;
     let mut retained = None;
     loop {
-        let notified = wake.notified();
-        tokio::pin!(notified);
-        notified.as_mut().enable();
-        let Some(shared) = retained.take().or_else(|| shared.upgrade()) else {
-            settled.send_replace(true);
-            return;
-        };
+        let Some(shared) = retained.take().or_else(|| shared.upgrade()) else { return };
         let needed = shared.machine.lock().await.has_context_retirement();
         if !needed {
             if shared.retirement_closing.load(Ordering::Acquire) {
-                settled.send_replace(true);
                 return;
             }
             drop(shared);
-            tokio::select! {
-                () = notified => {},
-                () = settled.closed() => return,
+            if wake.changed().await.is_err() {
+                return;
             }
             continue;
         }
@@ -71,7 +65,7 @@ pub(super) async fn run(
             retained = Some(shared);
             continue;
         };
-        shared.context_ready.notify_one();
+        shared.context_ready.modify(|n| *n += 1);
         if media_pool.spawn_admitted(permit, move || drop(retirement)).await.is_err() {
             let generation = shared.machine.lock().await.connection_generation();
             shared.incomplete_cleanup(generation, &label);

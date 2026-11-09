@@ -135,7 +135,7 @@ impl VoiceRuntime {
             E::AttachRecorder { recorder, output: _ } => self.attach_recorder(recorder),
             E::DetachRecorder(_) => {
                 self.recorder_observers.detach(&self.shared, None);
-                self.publications.recorder.send_replace(None);
+                self.publications.recorder.set(None);
             }
             E::FlushRecorder(at) => self.flush_recorder(at),
             E::PushKeyterms { stt, terms, warn_unsupported } => {
@@ -179,14 +179,14 @@ impl VoiceRuntime {
                 self.storage_command(VoiceStorageCommand::Settle { speech: speech.0, history })
             }
             E::ChatContext(snapshot) => {
-                self.publications.chat_ctx.send_replace(snapshot);
+                self.publications.chat_ctx.set(snapshot);
             }
             E::Outputs(outputs) => {
-                self.publications.output.send_replace(outputs);
+                self.publications.output.set(outputs);
             }
             E::Tap(tap) => self.peer.publish(tap),
             E::SessionView(view) => {
-                self.publications.view.send_replace(view);
+                self.publications.view.set(view);
             }
             E::Closing => {
                 self.publications.closing.token().cancel();
@@ -304,7 +304,7 @@ impl VoiceRuntime {
         let Some(recorder) = self.shared.resources.recorder(recorder.0) else { return };
         recorder.observe(&self.peer.session);
         let tap = crate::voice::recorder::RecorderTap::new(recorder, self.shared.time.clock());
-        self.publications.recorder.send_replace(Some(tap));
+        self.publications.recorder.set(Some(tap));
         for output in self.driver.active_audio_outputs() {
             self.recorder_observers.attach(&self.shared, output);
         }
@@ -324,7 +324,7 @@ impl VoiceRuntime {
             }
             stt.update_keyterms(&terms);
         }
-        self.publications.keyterms.send_replace(Some(terms));
+        self.publications.keyterms.set(Some(terms));
     }
 
     fn request_keyterms(

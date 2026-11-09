@@ -5,7 +5,7 @@ use futures_util::FutureExt;
 use std::time::Duration;
 
 pub(super) type CpuSampleResult =
-    Result<(Box<CpuMonitor>, Option<(f32, Duration)>), lk_agents_net::blocking_io::JobPanicked>;
+    Result<(Box<CpuMonitor>, Option<(f32, Duration)>), lk_agents_net::blocking_io::JobLost>;
 
 impl Worker {
     /// Samples the user's function, else CPU. A hung or invalid custom function cannot report idle.

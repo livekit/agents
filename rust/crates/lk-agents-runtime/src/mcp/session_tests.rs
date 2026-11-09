@@ -389,6 +389,19 @@ async fn a_zero_request_timeout_expires_instead_of_disabling_the_limit() {
     );
 }
 
+// Catches: a call without a limit to a server that never replies outliving the session that
+// made it.
+#[tokio::test]
+async fn an_unlimited_call_ends_with_its_session() {
+    let (session, server) = connected_with_timeout(None).await;
+    let caller = session.clone();
+    let call = tokio::spawn(async move { super::tests::call(&caller, "wait").await });
+    server.peer().called.notified().await;
+    session.close().await;
+    let ended = tokio::time::timeout(Duration::from_secs(1), call).await;
+    assert!(matches!(ended, Ok(Ok(Err(McpError::Cancelled(_))))), "{ended:?}");
+}
+
 mod lifecycle {
     // Uses MCP_TEST_PYTHON (default python3) with the MCP SDK and uvicorn installed.
     use std::error::Error;

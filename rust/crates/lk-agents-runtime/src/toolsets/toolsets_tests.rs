@@ -28,6 +28,8 @@ struct Hooks {
     hold_close: bool,
     fail_setup: bool,
     fail_close: bool,
+    panic_setup: bool,
+    panic_close: bool,
     children: Option<Arc<Group>>,
 }
 impl Hooks {
@@ -44,6 +46,8 @@ impl Hooks {
             hold_close: false,
             fail_setup: false,
             fail_close: false,
+            panic_setup: false,
+            panic_close: false,
             children: None,
         }
     }
@@ -60,6 +64,7 @@ impl toolsets::ToolsetHooks for Hooks {
         Box::pin(async move {
             let setup = async {
                 self.setups.fetch_add(1, Ordering::SeqCst);
+                assert!(!self.panic_setup, "setup panicked");
                 if let Some(children) = &self.children {
                     children.start().await?;
                 }
@@ -79,6 +84,7 @@ impl toolsets::ToolsetHooks for Hooks {
     fn close(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Outcome> {
         Box::pin(async move {
             self.closes.fetch_add(1, Ordering::SeqCst);
+            assert!(!self.panic_close, "close panicked");
             self.close_entered.notify_one();
             if self.hold_close {
                 self.close_release.notified().await;
@@ -220,4 +226,42 @@ async fn failed_admission_does_not_leave_a_slot_before_the_next_activation() {
     scopes.release(Some(9)).await.unwrap();
     assert_eq!(next.closes.load(Ordering::SeqCst), 1);
     scopes.release(None).await.unwrap();
+}
+
+/// A lifetime whose acquisition panics, so the group driver that asks it dies.
+struct PanickingLifetime;
+impl toolsets::Lifetime for PanickingLifetime {
+    fn acquire(&self, _: Arc<dyn toolsets::ToolsetHooks>) -> Arc<dyn toolsets::Acquisition> {
+        panic!("acquire panicked")
+    }
+}
+
+const LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+// Catches: a group's start or close waiter parked forever when its driver dies.
+#[tokio::test]
+async fn group_replies_resolve_when_the_driver_dies() {
+    let hooks = Arc::new(Hooks { lifetime: Arc::new(PanickingLifetime), ..Hooks::new() });
+    let scope = group(vec![hooks]);
+    let started = tokio::time::timeout(LIMIT, scope.start()).await;
+    assert!(matches!(started, Ok(Err(_))), "the start outlived the driver: {started:?}");
+    let closed = tokio::time::timeout(LIMIT, scope.aclose()).await;
+    assert!(closed.is_ok(), "the close outlived the driver");
+}
+
+// Catches: a lifetime's acquisition or release reply parked forever when the setup or close
+// operation answering it dies.
+#[tokio::test]
+async fn lifetime_replies_resolve_when_their_operation_dies() {
+    use toolsets::Lifetime as _;
+    let env = ProcessEnv::current_runtime();
+    let setup = Arc::new(Hooks { panic_setup: true, ..Hooks::new() });
+    let ticket = Lifetime::new(&env).acquire(setup);
+    let acquired = tokio::time::timeout(LIMIT, ticket.result()).await;
+    assert!(matches!(acquired, Ok(Err(_))), "the acquisition outlived its setup");
+    let close = Arc::new(Hooks { panic_close: true, ..Hooks::new() });
+    let ticket = Lifetime::new(&env).acquire(close);
+    let lease = ticket.result().await.unwrap();
+    let released = tokio::time::timeout(LIMIT, lease.close()).await;
+    assert!(released.is_ok(), "the release outlived its close");
 }

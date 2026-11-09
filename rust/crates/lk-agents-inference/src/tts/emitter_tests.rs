@@ -234,3 +234,50 @@ async fn close_settles_a_decoding_segment_and_frames_nothing_after() {
     tokio::task::yield_now().await;
     assert_eq!(output.sent.lock().len(), after);
 }
+
+#[cfg(feature = "ffmpeg")]
+struct Panicking;
+
+#[cfg(feature = "ffmpeg")]
+impl EmitterOutput for Panicking {
+    fn send(
+        &self,
+        _frame: AudioFrame,
+        _request_id: String,
+        _segment_id: String,
+        _is_final: bool,
+        _timed_transcript: Vec<TranscriptChunk>,
+        _usage: Option<TokenUsage>,
+        _characters_count: Option<u64>,
+        _provider_request_ids: Vec<String>,
+    ) {
+        panic!("the host channel failed");
+    }
+
+    fn closed(&self) -> Result<bool, HostError> {
+        Ok(false)
+    }
+}
+
+// Catches: `join` and `aclose` waiting forever on a container queue whose task panicked.
+#[cfg(feature = "ffmpeg")]
+#[tokio::test]
+async fn a_panicked_container_task_still_settles_join_and_close() {
+    let env = EmitterEnv {
+        spawner: Arc::new(TokioSpawner::current()),
+        clock: Arc::new(RealClock::new()),
+    };
+    let emitter = AudioEmitter::with_env("test".into(), Arc::new(Panicking), env);
+    initialize(&emitter, "audio/ogg", 48_000, false);
+    let frame = AudioFrame {
+        data: vec![0; 9600].into(),
+        sample_rate: 48_000,
+        num_channels: 1,
+        samples_per_channel: 4800,
+    };
+    emitter.push_frame(frame).unwrap();
+    emitter.end_input().unwrap();
+    let wait = std::time::Duration::from_secs(5);
+    assert!(tokio::time::timeout(wait, emitter.join()).await.is_ok(), "join settles");
+    assert!(tokio::time::timeout(wait, emitter.aclose()).await.is_ok(), "close settles");
+}

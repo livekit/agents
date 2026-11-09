@@ -8,8 +8,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 use super::fakes::{Callback, FakeHandler, FakeHost, FakeLlm, Fault, RunFakes, tool};
-use super::store::Store;
 use super::*;
+use crate::fakes::storage::text::Store;
 use lk_agents_abi::a2a::options::{Policy, PolicySpec, TurnOptions};
 use lk_agents_abi::a2a::turn::HandlerPort;
 use lk_agents_abi::agent::run::RunUpdate;

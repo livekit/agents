@@ -6,8 +6,8 @@ use lk_agents_abi::text_session::{TextSessionDelivery, TextSessionUpdate};
 use lk_agents_abi::usage::Usage;
 use lk_agents_abi::{BoxFuture, Closed, StreamOutput, Ts};
 use lk_agents_core::run_stream::projection::Envelope;
+use lk_agents_net::signal;
 use std::sync::Arc;
-use tokio::sync::watch;
 
 pub enum Message {
     Event(Envelope),
@@ -19,13 +19,13 @@ pub enum Message {
 pub trait Input: Send {
     fn next(&mut self) -> BoxFuture<'_, Result<Option<Message>, ProviderError>>;
     fn release(&self, delivery: TextSessionDelivery) -> Result<(), Invalid>;
-    fn usage(&self) -> watch::Receiver<Usage>;
+    fn usage(&self) -> signal::Cell<Usage>;
     fn close(self: Box<Self>, deadline: Ts) -> BoxFuture<'static, Closed>;
 }
 
 pub struct Direct {
     pub source: Box<dyn StreamOutput<RunUpdate>>,
-    pub usage: watch::Receiver<Usage>,
+    pub usage: signal::Cell<Usage>,
     pub agent: String,
     pub invocation: String,
 }
@@ -48,7 +48,7 @@ impl Input for Direct {
     fn release(&self, _: TextSessionDelivery) -> Result<(), Invalid> {
         Ok(())
     }
-    fn usage(&self) -> watch::Receiver<Usage> {
+    fn usage(&self) -> signal::Cell<Usage> {
         self.usage.clone()
     }
     fn close(self: Box<Self>, deadline: Ts) -> BoxFuture<'static, Closed> {
@@ -58,7 +58,7 @@ impl Input for Direct {
 
 pub struct Session {
     pub source: Box<dyn StreamOutput<TextSessionUpdate>>,
-    pub usage: watch::Receiver<Usage>,
+    pub usage: signal::Cell<Usage>,
     pub release: Arc<dyn Fn(TextSessionDelivery) -> Result<(), Invalid> + Send + Sync>,
 }
 impl Input for Session {
@@ -89,7 +89,7 @@ impl Input for Session {
     fn release(&self, delivery: TextSessionDelivery) -> Result<(), Invalid> {
         (self.release)(delivery)
     }
-    fn usage(&self) -> watch::Receiver<Usage> {
+    fn usage(&self) -> signal::Cell<Usage> {
         self.usage.clone()
     }
     fn close(self: Box<Self>, deadline: Ts) -> BoxFuture<'static, Closed> {

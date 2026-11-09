@@ -18,7 +18,8 @@ use lk_agents_core::agent_run;
 use lk_agents_core::text_session::{
     TextSession, TextSessionConfig, TextSessionEffect, TextSessionEvent, TextSessionInput,
 };
-use tokio::sync::{mpsc, watch};
+use lk_agents_net::signal;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent_run::RunSetup;
@@ -44,7 +45,7 @@ struct InvocationStart {
 pub(super) struct Driver {
     session: TextSession,
     /// Republished whenever the turn's usage moved.
-    usage: watch::Sender<Usage>,
+    usage: signal::Producer<Usage>,
     published: (u64, u64),
     agents: BTreeMap<String, TextSessionAgent>,
     request: TextSessionRequest,
@@ -120,7 +121,7 @@ impl Driver {
     fn publish_usage(&mut self) {
         if self.session.usage_revision() != self.published {
             self.published = self.session.usage_revision();
-            self.usage.send_replace(self.session.usage());
+            self.usage.set(self.session.usage());
         }
     }
 

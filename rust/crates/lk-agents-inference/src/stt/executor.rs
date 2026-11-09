@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use super::*;
 use crate::telemetry;
 use gaps::Gaps;
@@ -7,6 +6,7 @@ use lk_agents_abi::errors::Timeout;
 use lk_agents_abi::metrics::base::ConnectionAcquired;
 use lk_agents_media::Frame;
 use lk_agents_media::media_queue::{self, Item};
+use lk_agents_net::signal;
 use std::ops::ControlFlow;
 use transcript::TranscriptMachine;
 use wire::Incoming;
@@ -34,14 +34,14 @@ pub(super) struct SttStreamExecutor {
     pub(super) deferred: Arc<DeferredExtra>,
     pub(super) update_tx: mpsc::UnboundedSender<serde_json::Value>,
     pub(super) event_tx: mpsc::Sender<Result<SpeechEvent, ApiError>>,
-    pub(super) failure: tokio::sync::watch::Sender<Option<ApiError>>,
+    pub(super) failure: Arc<Mutex<Option<ApiError>>>,
     pub(super) stop: tokio_util::sync::CancellationToken,
     pub(super) accepted: lk_agents_abi::Ts,
 }
 
 impl SttStreamExecutor {
     async fn failed(&self, error: ApiError) {
-        self.failure.send_replace(Some(error.clone()));
+        *self.failure.lock() = Some(error.clone());
         let _ = self.event_tx.send(Err(error)).await;
     }
 
@@ -159,7 +159,7 @@ impl SttStreamExecutor {
         let (vad_sink, mut vad_source) = self.open_vad().await;
 
         // Wakes the settlement timer whenever the input or a message moves its deadline.
-        let rearm = Arc::new(tokio::sync::Notify::new());
+        let rearm = Arc::new(signal::Shared::new(0));
         let gaps = Arc::new(Mutex::new(Gaps::starting(self.offset)));
         let sample_rate = self.opts.sample_rate;
         let uplink = AudioUplink {
@@ -199,6 +199,7 @@ impl SttStreamExecutor {
 
         let settle = async {
             loop {
+                let seen = rearm.with(|n| *n);
                 let deadline = progress.lock().wake_at();
                 let wait = async {
                     match deadline {
@@ -208,7 +209,7 @@ impl SttStreamExecutor {
                 };
                 tokio::select! {
                     biased;
-                    _ = rearm.notified() => continue,
+                    () = rearm.wait_until(|n| (*n != seen).then_some(())) => continue,
                     _ = wait => {}
                 }
                 if let Some(Some(result)) = progress.lock().settle(self.clock.now()) {
@@ -452,7 +453,7 @@ struct AudioUplink {
     sample_rate: u32,
     progress: Arc<Mutex<Progress>>,
     clock: Arc<dyn Clock>,
-    rearm: Arc<tokio::sync::Notify>,
+    rearm: Arc<signal::Shared<u64>>,
     bstream: AudioByteStream,
     resampler: AudioResampler,
     /// The base64 buffer each frame is encoded into.
@@ -581,7 +582,7 @@ impl AudioUplink {
                 .await
                 .map_err(|error| connect_error(WHAT, error))?;
         }
-        self.rearm.notify_one();
+        self.rearm.modify(|n| *n += 1);
         std::future::pending().await
     }
 }
@@ -597,7 +598,8 @@ struct RecvCtx {
     offset: f64,
     /// Where this attempt's input dropped audio: its transcripts move past each gap.
     gaps: Arc<Mutex<Gaps>>,
-    rearm: Arc<tokio::sync::Notify>,
+    /// Counts the moves of the settlement deadline.
+    rearm: Arc<signal::Shared<u64>>,
     /// The connection, until the first usage report it delivers carries it.
     connection: Option<ConnectionAcquired>,
     /// Only the first read (the `session.create` ack) is a response the session waits for;
@@ -666,7 +668,7 @@ impl RecvCtx {
                 .store(progress.transcript.is_speaking(), std::sync::atomic::Ordering::SeqCst);
             received
         };
-        self.rearm.notify_one();
+        self.rearm.modify(|n| *n += 1);
         Ok(received)
     }
 

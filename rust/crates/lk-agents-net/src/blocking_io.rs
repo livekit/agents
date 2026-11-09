@@ -1,4 +1,4 @@
-pub use lk_agents_media::pool::{Job, JobPanicked};
+pub use lk_agents_media::pool::{Job, JobLost};
 use lk_agents_media::pool::{PerProcess, Pool};
 
 // Separate from the media pool, so saturated payload work never blocks a lookup or a sample.

@@ -1,12 +1,11 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use std::sync::Arc;
 
 use lk_agents_abi::HostRef;
 use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError};
 use lk_agents_abi::invoke::CallContext;
+use lk_agents_net::signal::{self, Cell};
 use lk_agents_net::task::Cancellation;
 use parking_lot::Mutex;
-use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 
 use crate::telemetry;
@@ -286,16 +285,16 @@ pub struct ProviderAttempts {
     kind: RequestKind,
     epoch: Instant,
     state: Mutex<State>,
-    /// Woken by every observation, so a deadline the host moved is re-read.
-    changed: Notify,
+    /// Counts observations, so a deadline the host moved is re-read.
+    changed: signal::Shared<u64>,
 }
 
 struct State {
     machine: AttemptMachine,
     /// The session owns retries: `run` executes exactly one attempt.
     core: bool,
-    /// The running attempt's settlement: `true` once its host task finished.
-    inflight: Option<watch::Receiver<bool>>,
+    /// The running attempt's settlement: ends with its host task.
+    inflight: Option<Cell<Option<()>>>,
     /// Retries were exhausted.
     exhausted: bool,
 }
@@ -314,7 +313,7 @@ impl Port for ProviderAttempts {
             kind,
             epoch: Instant::now(),
             state: Mutex::new(State { machine, core: false, inflight: None, exhausted: false }),
-            changed: Notify::new(),
+            changed: signal::Shared::new(0),
         })
     }
 
@@ -370,9 +369,9 @@ impl Port for ProviderAttempts {
 
     async fn settled(&self) {
         let inflight = self.state.lock().inflight.clone();
-        if let Some(mut settled) = inflight {
+        if let Some(settled) = inflight {
             let cleanup = std::time::Duration::from_secs_f64(self.cleanup_timeout());
-            if tokio::time::timeout(cleanup, settled.wait_for(|done| *done)).await.is_err() {
+            if tokio::time::timeout(cleanup, settled.wait()).await.is_err() {
                 stalled_cleanup();
             }
         }
@@ -395,7 +394,7 @@ impl ProviderAttempts {
     fn observed(&self, observe: impl FnOnce(&mut AttemptMachine, u64)) {
         let now = self.now();
         observe(&mut self.state.lock().machine, now);
-        self.changed.notify_one();
+        self.changed.modify(|n| *n += 1);
     }
 
     /// The machine's permit for the next attempt, waiting for its backoff.
@@ -474,14 +473,13 @@ impl ProviderAttempts {
         let cancel = Arc::new(Cancellation::default());
         // The attempt runs in its own task: a dropped `run` leaves it to the host, which cancels
         // it in the same turn (`_bindings.run_attempts`), and `settled` waits for its cleanup.
-        let (done, settled) = watch::channel(false);
+        let (done, settled) = signal::once::<()>();
         self.state.lock().inflight = Some(settled);
         let (host, context, signal, cx) =
             (self.host.clone(), self.context.clone(), cancel.clone(), cx.clone());
         let mut attempt = tokio::spawn(async move {
-            let result = host.attempt(&cx, &context, signal, retry).await;
-            done.send_replace(true);
-            result
+            let _settles = done;
+            host.attempt(&cx, &context, signal, retry).await
         });
         let joined = |result: Result<_, tokio::task::JoinError>| {
             result.unwrap_or_else(|error| {
@@ -491,8 +489,8 @@ impl ProviderAttempts {
             })
         };
         let interrupted = loop {
+            let seen = self.changed.with(|n| *n);
             let wake = self.state.lock().machine.wake_at().map(|at| self.at(at));
-            let notified = self.changed.notified();
             tokio::select! {
                 biased;
                 result = &mut attempt => {
@@ -500,7 +498,7 @@ impl ProviderAttempts {
                     self.state.lock().machine.ready(now)?;
                     return joined(result);
                 }
-                () = notified => {}
+                () = self.changed.wait_until(|n| (*n != seen).then_some(())) => {}
                 () = async {
                     match wake {
                         Some(at) => tokio::time::sleep_until(at).await,

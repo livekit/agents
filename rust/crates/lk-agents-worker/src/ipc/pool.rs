@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::sync::Arc;
@@ -6,9 +5,8 @@ use std::time::Duration;
 
 use futures_util::FutureExt;
 use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::signal;
 use lk_agents_net::task::TokioSpawner;
-use parking_lot::Mutex;
-use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 
 use crate::ipc::telemetry;
@@ -206,6 +204,10 @@ struct State<P> {
     tasks: Vec<OwnedTask>,
     /// The close's join of `tasks`, started by the first close.
     cleanup: Option<OwnedTask>,
+    /// Set by the first close: true once the closers may go, ended once the cleanup is over.
+    close_ready: Option<signal::Cell<bool>>,
+    /// Whether the warm processes came up once, or the pool closed.
+    readiness: Readiness,
     /// The processes to report closed once the lock is released: a host call takes the host's
     /// own lock (Python's GIL), which a host thread reading the pool holds while it waits on
     /// this one.
@@ -303,11 +305,8 @@ struct Inner<P> {
     host: Arc<dyn Executors<Process = P>>,
     opts: PoolOptions,
     cleanup_timeout: Duration,
-    state: Mutex<State<P>>,
-    changed: Notify,
-    idle_ready: watch::Sender<Readiness>,
+    state: signal::Shared<State<P>>,
     closed: tokio_util::sync::CancellationToken,
-    close_ready: watch::Sender<bool>,
 }
 
 pub struct ProcPool<P = super::owner::JobSupervisor>(Arc<Inner<P>>);
@@ -337,7 +336,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
             host,
             opts,
             cleanup_timeout: opts.close_timeout * 3,
-            state: Mutex::new(State {
+            state: signal::Shared::new(State {
                 target_idle: opts.num_idle_processes,
                 started: false,
                 draining: false,
@@ -353,25 +352,24 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
                 refill_paused_until: None,
                 tasks: Vec::new(),
                 cleanup: None,
+                close_ready: None,
+                readiness: Readiness::Pending,
                 released: Vec::new(),
             }),
-            changed: Notify::new(),
-            idle_ready: watch::channel(Readiness::Pending).0,
             closed: tokio_util::sync::CancellationToken::new(),
-            close_ready: watch::channel(false).0,
         }))
     }
 
     pub fn processes(&self) -> Vec<Executor<P>> {
-        self.0.state.lock().processes.values().filter_map(|p| p.executor.clone()).collect()
+        self.0.state.with(|st| st.processes.values().filter_map(|p| p.executor.clone()).collect())
     }
 
     pub fn jobs_waiting(&self) -> usize {
-        self.0.state.lock().pending.len()
+        self.0.state.with(|st| st.pending.len())
     }
 
     pub fn target_idle(&self) -> usize {
-        self.0.state.lock().target_idle
+        self.0.state.with(|st| st.target_idle)
     }
 
     pub fn set_target_idle(&self, n: usize) {
@@ -382,26 +380,25 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
     /// Changes the state, then allocates, publishes readiness, tells the host what was released
     /// and wakes the waiters. No host call is made under the lock.
     fn update<R>(&self, f: impl FnOnce(&Self, &mut State<P>) -> R) -> R {
-        let (result, released) = {
-            let mut st = self.0.state.lock();
+        let (result, released) = self.0.state.with(|st| {
             if st.refill_paused_until.is_some_and(|until| Instant::now() >= until) {
                 st.refill_paused_until = None;
             }
-            let result = f(self, &mut st);
-            self.allocate(&mut st);
+            let result = f(self, st);
+            self.allocate(st);
             st.record(self.0.opts.instruments);
             if st.closed {
                 self.0.closed.cancel();
-                self.0.idle_ready.send_replace(Readiness::Closed);
+                st.readiness = Readiness::Closed;
             } else if st.ready.len() >= self.0.opts.num_idle_processes {
-                self.0.idle_ready.send_replace(Readiness::Ready);
+                st.readiness = Readiness::Ready;
             }
             (result, std::mem::take(&mut st.released))
-        };
+        });
         for executor in released {
             self.0.host.emit(ProcessEvent::Closed, &executor);
         }
-        self.0.changed.notify_waiters();
+        self.0.state.modify(|_| ());
         result
     }
 
@@ -420,26 +417,25 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
     }
 
     pub async fn start(&self) -> Result<(), PoolStartError> {
-        let first = {
-            let st = self.0.state.lock();
-            if st.closed {
-                return Err(PoolStartError::Closed);
-            }
-            !st.started
-        };
+        let (closed, first) = self.0.state.with(|st| (st.closed, !st.started));
+        if closed {
+            return Err(PoolStartError::Closed);
+        }
         self.update(|_, st| st.started = true);
         if first {
             let pool = self.clone();
             self.update(|this, st| this.own(st, async move { pool.refill().await }));
         }
-        let mut ready = self.0.idle_ready.subscribe();
         let wait = self.0.opts.initialize_timeout + Duration::from_secs(2);
-        match tokio::time::timeout(wait, ready.wait_for(|state| *state != Readiness::Pending)).await
-        {
-            Ok(Ok(readiness)) if *readiness == Readiness::Ready => Ok(()),
+        let settled = self.0.state.wait_until(|st| match st.readiness {
+            Readiness::Pending => None,
+            readiness => Some(readiness),
+        });
+        match tokio::time::timeout(wait, settled).await {
+            Ok(Readiness::Ready) => Ok(()),
             Ok(_) => Err(PoolStartError::Closed),
             Err(_) => Err(PoolStartError::WarmupTimedOut {
-                ready: self.0.state.lock().ready.len(),
+                ready: self.0.state.with(|st| st.ready.len()),
                 required: self.0.opts.num_idle_processes,
             }),
         }
@@ -448,11 +444,8 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
     /// Tops the warm processes up until the pool closed and released every process.
     async fn refill(&self) {
         loop {
-            {
-                let st = self.0.state.lock();
-                if st.closed && st.processes.is_empty() {
-                    break;
-                }
+            if self.0.state.with(|st| st.closed && st.processes.is_empty()) {
+                break;
             }
             self.update(|_, _| {});
             tokio::time::sleep(REFILL_INTERVAL).await;
@@ -793,16 +786,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
         &self,
         request: ReservationId,
     ) -> Result<(ProcessId, Executor<P>), LaunchError> {
-        loop {
-            let changed = self.0.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            let acquired = self.0.state.lock().acquired(request);
-            if let Some(acquired) = acquired {
-                return acquired;
-            }
-            changed.await;
-        }
+        self.0.state.wait_until(|st| st.acquired(request)).await
     }
 
     pub async fn launch_job(
@@ -844,25 +828,25 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
             st.draining = true;
             st.refill_paused_until = None;
         });
-        loop {
-            let changed = self.0.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            if !self.0.state.lock().has_jobs() {
-                return;
-            }
-            changed.await;
-        }
+        self.0.state.wait_until(|st| (!st.has_jobs()).then_some(())).await;
     }
 
     pub async fn aclose(&self) {
-        if self.update(|pool, st| pool.close_all(st)) {
-            let pool = self.clone();
-            // A caller's cancellation cannot discard the join obligations: the pool owns them.
-            let cleanup = TokioSpawner::current().spawn(async move { pool.finish_close().await });
-            self.0.state.lock().cleanup = Some(cleanup);
+        let close_ready = self.update(|pool, st| {
+            if pool.close_all(st) {
+                let (ready, cell) = signal::signal(false);
+                let pool = pool.clone();
+                // A caller's cancellation cannot discard the join obligations: the pool owns them.
+                let cleanup = async move { pool.finish_close(ready).await };
+                st.cleanup = Some(TokioSpawner::current().spawn(cleanup));
+                st.close_ready = Some(cell);
+            }
+            st.close_ready.clone()
+        });
+        if let Some(ready) = close_ready {
+            // Ok once released at the deadline, Ended once the cleanup is over or died.
+            let _ = ready.wait_for(|ready| *ready).await;
         }
-        let _ = self.0.close_ready.subscribe().wait_for(|done| *done).await;
     }
 
     /// Fails every reservation and retires every process; whether this was the first close.
@@ -889,31 +873,27 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
 
     /// Joins the pool's tasks; past the cleanup deadline it reports the processes left and lets
     /// the closers go, then keeps joining.
-    async fn finish_close(&self) {
+    async fn finish_close(&self, ready: signal::Producer<bool>) {
         let cleanup = self.join_owned_tasks();
         tokio::pin!(cleanup);
         if tokio::time::timeout(self.0.cleanup_timeout, &mut cleanup).await.is_err() {
-            let processes = self.0.state.lock().processes.keys().copied().collect();
+            let processes = self.0.state.with(|st| st.processes.keys().copied().collect());
             self.0.host.cleanup_incomplete(PoolCleanupObservation { processes });
-            self.0.close_ready.send_replace(true);
+            ready.set(true);
             cleanup.await;
         }
-        self.0.close_ready.send_replace(true);
     }
 
     /// The pool's tasks, and those they start, until no process is left.
     async fn join_owned_tasks(&self) {
         loop {
-            let changed = self.0.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            let tasks = std::mem::take(&mut self.0.state.lock().tasks);
+            let tasks = self.0.state.wait_until(|st| {
+                let tasks = std::mem::take(&mut st.tasks);
+                (!tasks.is_empty() || st.processes.is_empty()).then_some(tasks)
+            });
+            let tasks = tasks.await;
             if tasks.is_empty() {
-                if self.0.state.lock().processes.is_empty() {
-                    return;
-                }
-                changed.await;
-                continue;
+                return;
             }
             for task in tasks {
                 if let Err(error) = task.await {

@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::http::IncomingRequest;
 use crate::hw::cpu::CpuMonitor;
 use crate::transport::{
@@ -14,6 +13,7 @@ use livekit_protocol::{
 use lk_agents_abi::{Clock, TimerSet, WallAnchor};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::clock::RealClock;
+use lk_agents_net::signal;
 use lk_agents_net::task::TokioSpawner;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -109,7 +109,7 @@ impl From<DrainError> for lk_agents_abi::worker::ipc_host::WorkerError {
 #[derive(Clone)]
 pub struct WorkerClient {
     tx: tokio::sync::mpsc::Sender<WorkerCommand>,
-    control: tokio::sync::watch::Sender<WorkerControl>,
+    control: Arc<signal::Shared<WorkerControl>>,
     snapshot: Arc<parking_lot::Mutex<Snapshot>>,
     notifications: tokio::sync::broadcast::Sender<WorkerNotification>,
 }
@@ -117,27 +117,17 @@ pub struct WorkerClient {
 impl WorkerClient {
     /// Fails when the worker has stopped or its queue is full; the command is handed back.
     pub fn send(&self, cmd: WorkerCommand) -> Result<(), WorkerCommand> {
-        if self.tx.is_closed() || self.control.is_closed() {
+        if self.tx.is_closed() {
             return Err(cmd);
         }
         match cmd {
             WorkerCommand::Close => {
-                self.control.send_if_modified(|control| {
-                    if control.close {
-                        return false;
-                    }
-                    control.close = true;
-                    true
-                });
+                self.control.modify(|control| control.close = true);
                 Ok(())
             }
             WorkerCommand::Drain { timeout } => {
-                self.control.send_if_modified(|control| {
-                    if control.drain.is_some() {
-                        return false;
-                    }
-                    control.drain = Some(timeout);
-                    true
+                self.control.modify(|control| {
+                    control.drain.get_or_insert(timeout);
                 });
                 Ok(())
             }
@@ -179,7 +169,7 @@ impl WorkerClient {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 struct WorkerControl {
     close: bool,
     drain: Option<Option<Duration>>,
@@ -212,7 +202,7 @@ pub struct Worker {
     starting_jobs: BTreeMap<JobId, lk_agents_abi::Ts>,
     cpu: Option<Box<CpuMonitor>>,
     rx: tokio::sync::mpsc::Receiver<WorkerCommand>,
-    control: tokio::sync::watch::Receiver<WorkerControl>,
+    control: Arc<signal::Shared<WorkerControl>>,
     snapshot: Arc<parking_lot::Mutex<Snapshot>>,
     notifications: tokio::sync::broadcast::Sender<WorkerNotification>,
     operations: FuturesUnordered<BoxFuture<'static, Completion>>,
@@ -583,12 +573,12 @@ impl Worker {
         blocking_io: lk_agents_net::blocking_io::BlockingIo,
     ) -> (Self, WorkerClient) {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
-        let (control_tx, control) = tokio::sync::watch::channel(WorkerControl::default());
+        let control = Arc::new(signal::Shared::new(WorkerControl::default()));
         let (notifications, _) = tokio::sync::broadcast::channel(128);
         let snapshot = Arc::new(parking_lot::Mutex::new(Snapshot::default()));
         let handle = WorkerClient {
             tx,
-            control: control_tx,
+            control: control.clone(),
             snapshot: snapshot.clone(),
             notifications: notifications.clone(),
         };
@@ -687,13 +677,16 @@ impl Worker {
     async fn run_loop(&mut self, connection: &mut ConnectionIo) -> Result<(), RuntimeError> {
         let mut commands_open = true;
         let mut retries: u32 = 0;
-        let mut control_open = true;
+        let control = self.control.clone();
+        let mut seen = WorkerControl::default();
         while !self.closing {
             self.tick(&mut connection.outbox);
             self.publish();
             self.maybe_rollover(connection);
-            if self.control.has_changed().unwrap_or(false) {
-                self.handle_control(&mut connection.outbox);
+            let current = control.with(|control| control.clone());
+            if current != seen {
+                seen = current.clone();
+                self.handle_control(current, &mut connection.outbox);
                 if self.closing {
                     break;
                 }
@@ -704,12 +697,9 @@ impl Worker {
                 .map(|at| at.saturating_duration_since(self.clock.now()))
                 .unwrap_or(IDLE_WAKE);
             let result = tokio::select! {
-                changed = self.control.changed(), if control_open => {
-                    if changed.is_ok() {
-                        self.handle_control(&mut connection.outbox);
-                    } else {
-                        control_open = false;
-                    }
+                request = control.wait_until(|control| (*control != seen).then(|| control.clone())) => {
+                    seen = request.clone();
+                    self.handle_control(request, &mut connection.outbox);
                     Ok(())
                 }
                 command = self.rx.recv(), if commands_open => {
@@ -751,9 +741,8 @@ impl Worker {
         Ok(())
     }
 
-    fn handle_control(&mut self, outbox: &mut Outbox) {
+    fn handle_control(&mut self, control: WorkerControl, outbox: &mut Outbox) {
         self.tick(outbox);
-        let control = self.control.borrow_and_update().clone();
         if let Some(timeout) = control.drain {
             self.drain(timeout, outbox);
         }

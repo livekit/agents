@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 type RpcClosure = dyn Fn(&str, &str) -> String + Send + Sync;
 
 use parking_lot::Mutex;
@@ -14,8 +13,9 @@ use lk_agents_abi::voice::rtc::{
     ParticipantIdentity, RoomEvent, RoomEventSink, RtcError, StreamInfo,
 };
 use lk_agents_abi::{Closed, StreamOutput, Ts};
+use lk_agents_net::signal;
 use lk_agents_voice::room_io::{MAX_INCOMING_STREAMS, StreamBudget};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
 const EVENT_CAPACITY: usize = 128;
 
@@ -25,12 +25,12 @@ fn capacity(resource: &str, limit: usize) -> ProviderError {
 
 struct Subscriber {
     events: mpsc::Sender<RoomEvent>,
-    failure: watch::Sender<Option<ProviderError>>,
+    failure: signal::Producer<Option<ProviderError>>,
 }
 
 struct EventReceiver {
     events: mpsc::Receiver<RoomEvent>,
-    failure: watch::Receiver<Option<ProviderError>>,
+    failure: signal::Cell<Option<ProviderError>>,
     ended: bool,
 }
 
@@ -46,7 +46,7 @@ impl StreamOutput<RoomEvent> for EventReceiver {
                 return Ok(Some(event));
             }
             self.ended = true;
-            self.failure.borrow().clone().map_or(Ok(None), Err)
+            self.failure.get().map_or(Ok(None), Err)
         })
     }
 
@@ -71,7 +71,7 @@ impl RoomEventBus {
 
     pub fn subscribe(&self) -> Receiver<RoomEvent> {
         let (events, receiver) = mpsc::channel(EVENT_CAPACITY);
-        let (failure, outcome) = watch::channel(None);
+        let (failure, outcome) = signal::signal(None);
         let mut subscribers = self.subscribers.lock();
         subscribers.retain(|subscriber| !subscriber.events.is_closed());
         subscribers.push(Subscriber { events, failure });
@@ -85,7 +85,7 @@ impl RoomEventBus {
             Ok(()) => true,
             Err(mpsc::error::TrySendError::Closed(_)) => false,
             Err(mpsc::error::TrySendError::Full(_)) => {
-                subscriber.failure.send_replace(Some(capacity("room events", EVENT_CAPACITY)));
+                subscriber.failure.set(Some(capacity("room events", EVENT_CAPACITY)));
                 false
             }
         });

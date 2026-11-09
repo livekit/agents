@@ -7,6 +7,9 @@ use super::*;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use parking_lot::Mutex;
+use tokio::sync::{Notify, watch};
+
 use lk_agents_abi::telemetry::decl::MetricDecl;
 use lk_agents_abi::worker::job::{AcceptArguments, RunningJobInfo};
 use lk_agents_telemetry::process::{Instruments, Value};
@@ -458,6 +461,18 @@ async fn close_deadline_returns_normally_and_retains_cleanup_ownership() {
     .await
     .unwrap();
     assert_eq!(count(&host, ProcessEvent::Closed), 1);
+}
+
+// Catches: a panic in the host's cleanup report leaving every closer waiting on a release
+// that only the dead task could send.
+#[tokio::test(start_paused = true)]
+async fn a_panicking_cleanup_report_still_releases_close() {
+    let gate = watch::channel(false).0;
+    let host = Arc::new(Host { close_gate: Some(gate.clone()), ..Host::default() });
+    let pool = pool(&host, 1);
+    pool.start().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3600), pool.aclose()).await.expect("aclose hung");
+    gate.send_replace(true);
 }
 
 #[tokio::test(start_paused = true)]

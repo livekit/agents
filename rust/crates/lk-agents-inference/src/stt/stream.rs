@@ -26,7 +26,8 @@ pub struct RecognitionInput {
 pub(super) struct StreamControl {
     /// Shared with the output: the stream stops once both halves are gone.
     pub(super) stop: Arc<tokio_util::sync::DropGuard>,
-    pub(super) failure: tokio::sync::watch::Sender<Option<ApiError>>,
+    /// The stream's failure, once it has one; read by both halves after it ends.
+    pub(super) failure: Arc<Mutex<Option<ApiError>>>,
     /// Unbounded: one update per option change or turn, sent ahead of queued audio.
     pub(super) updates: mpsc::UnboundedSender<serde_json::Value>,
     pub(super) deferred: Arc<DeferredExtra>,
@@ -68,7 +69,7 @@ impl StreamControl {
                 let _ = self.updates.send(frame);
             }
             Err(error) => {
-                self.failure.send_replace(Some(error));
+                *self.failure.lock() = Some(error);
                 self.stop.token().cancel();
             }
             Ok(None) => {}
@@ -123,12 +124,8 @@ impl StreamInput<AudioFrame> for RecognitionInput {
 
 impl RecognitionInput {
     fn closed_error(&self) -> ProviderError {
-        self.control
-            .failure
-            .borrow()
-            .clone()
-            .map(ProviderError::from)
-            .unwrap_or_else(|| stream_closed(WHAT))
+        let failure = self.control.failure.lock().clone();
+        failure.map(ProviderError::from).unwrap_or_else(|| stream_closed(WHAT))
     }
 }
 
@@ -138,7 +135,7 @@ pub struct RecognitionOutput {
     pub(super) done: bool,
     pub(super) stop: Arc<tokio_util::sync::DropGuard>,
     pub(super) joined: tokio::sync::oneshot::Receiver<()>,
-    pub(super) failure: tokio::sync::watch::Receiver<Option<ApiError>>,
+    pub(super) failure: Arc<Mutex<Option<ApiError>>>,
     pub(super) clock: Arc<dyn Clock>,
 }
 
@@ -156,7 +153,8 @@ impl StreamOutput<SpeechEvent> for RecognitionOutput {
                 }
                 None => {
                     self.done = true;
-                    match self.failure.borrow().clone() {
+                    let failure = self.failure.lock().clone();
+                    match failure {
                         Some(error) => Err(error.into()),
                         None => Ok(None),
                     }

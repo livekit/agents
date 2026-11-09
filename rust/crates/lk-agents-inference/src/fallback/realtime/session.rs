@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use super::*;
 use crate::effects::FallbackChainEffect;
 use lk_agents_abi::llm::fallback::{
@@ -47,6 +46,8 @@ pub(super) struct SessionState {
     pub(super) events: VecDeque<Event>,
     pub(super) generation: Option<OpenGeneration>,
     pub(super) closed: bool,
+    /// A restart the driver asked for, `true` to switch models; the latest request wins.
+    pub(super) restart: Option<bool>,
 }
 
 pub struct FallbackSession {
@@ -66,10 +67,10 @@ pub struct FallbackSession {
     pub(super) tools: Option<lk_agents_abi::HostRef>,
     pub(super) model_active: Arc<std::sync::atomic::AtomicUsize>,
     pub(super) state: Mutex<SessionState>,
-    pub(super) restart_tx: tokio::sync::watch::Sender<bool>,
-    pub(super) changed: tokio::sync::Notify,
-    /// Polled by `next_event` only (one consumer).
-    pub(super) restart_rx: tokio::sync::Mutex<tokio::sync::watch::Receiver<bool>>,
+    /// Counts the changes the consumer re-reads `state` for: a queued event, a restart, a close.
+    pub(super) changed: lk_agents_net::signal::Shared<u64>,
+    /// One consumer at a time, held across a restart's swap.
+    pub(super) consumer: tokio::sync::Mutex<()>,
 }
 
 impl FallbackSession {
@@ -78,7 +79,12 @@ impl FallbackSession {
     }
 
     pub(super) fn request_restart(&self, switch_model: bool) {
-        let _ = self.restart_tx.send(switch_model);
+        self.lock().restart = Some(switch_model);
+        self.wake();
+    }
+
+    fn wake(&self) {
+        self.changed.modify(|n| *n += 1);
     }
 
     fn announce(&self, changes: Vec<ResourceId>, available: bool) {
@@ -325,15 +331,7 @@ impl FallbackSession {
 
     /// A restart the driver asked for: a swap to the serving model, or with `switch_model` to the
     /// first other available one.
-    async fn restart(
-        &self,
-        changed: Result<(), tokio::sync::watch::error::RecvError>,
-        restart_rx: &mut tokio::sync::watch::Receiver<bool>,
-    ) {
-        if changed.is_err() {
-            return;
-        }
-        let switch_model = *restart_rx.borrow_and_update();
+    async fn restart(&self, switch_model: bool) {
         let (target, changes) = {
             let mut st = self.lock();
             let changes = st.policy.refresh(&self.priority, self.clock.now());
@@ -452,7 +450,7 @@ impl RealtimeSession for FallbackSession {
         };
         match routed {
             Routed::Dispatch(active, commands) => commands.into_iter().for_each(|c| active.send(c)),
-            Routed::EventQueued => self.changed.notify_one(),
+            Routed::EventQueued => self.wake(),
             Routed::Kept => {}
         }
     }
@@ -471,8 +469,10 @@ impl RealtimeSession for FallbackSession {
 
     fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
         Box::pin(async move {
+            let _consumer = self.consumer.lock().await;
             loop {
-                let active = {
+                let seen = self.changed.with(|n| *n);
+                let (active, restart) = {
                     let mut st = self.lock();
                     if let Some(ev) = st.events.pop_front() {
                         return Some(ev);
@@ -480,17 +480,15 @@ impl RealtimeSession for FallbackSession {
                     if st.closed {
                         return None;
                     }
-                    Arc::clone(&st.active)
+                    (Arc::clone(&st.active), st.restart.take())
                 };
-                let mut restart_rx = self.restart_rx.lock().await;
-                // The consumer's lock on the restart signal stays held across a restart's swap.
+                if let Some(switch_model) = restart {
+                    self.restart(switch_model).await;
+                    continue;
+                }
                 let ev = tokio::select! {
                     biased;
-                    () = self.changed.notified() => continue,
-                    changed = restart_rx.changed() => {
-                        self.restart(changed, &mut restart_rx).await;
-                        continue;
-                    }
+                    () = self.changed.wait_until(|n| (*n != seen).then_some(())) => continue,
                     ev = active.next_event() => ev,
                 };
                 if let Some(out) = self.on_child_event(&active, ev).await {
@@ -515,7 +513,7 @@ impl RealtimeSession for FallbackSession {
                 st.held.clear();
                 Arc::clone(&st.active)
             };
-            self.changed.notify_one();
+            self.wake();
             active.aclose().await;
         })
     }

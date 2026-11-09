@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::fallback::chain::{
     Attempt, Backend, ChainCall, ChainObserver, FallbackChain, RecoveryMode,
 };
@@ -21,9 +20,10 @@ use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
 use lk_agents_abi::{StreamInput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 use lk_agents_media::{AudioFormat, AudioResampler, Quality};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::signal;
 use parking_lot::Mutex;
 use std::sync::Arc;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 // A failure after output remains a failure: delivered audio cannot be replayed.
@@ -48,14 +48,12 @@ pub enum Token {
 /// `self._pushed_tokens` plus the live child sink. The text leg may not drop (§1.2d), so nothing
 /// here is lossy or bounded.
 pub struct TokenLog {
-    inner: Mutex<TokenLogState>,
-    /// Raised once no more text can arrive; what a streamed probe waits for.
-    settled: watch::Sender<bool>,
+    inner: signal::Shared<TokenLogState>,
 }
 
 impl Default for TokenLog {
     fn default() -> Self {
-        TokenLog { inner: Mutex::default(), settled: watch::channel(false).0 }
+        TokenLog { inner: signal::Shared::new(TokenLogState::default()) }
     }
 }
 
@@ -63,6 +61,8 @@ impl Default for TokenLog {
 struct TokenLogState {
     tokens: Vec<Token>,
     ended: bool,
+    /// The request finished (its task's guard dropped): no more text can arrive.
+    finished: bool,
     main: Option<Arc<dyn StreamInput<String>>>,
 }
 
@@ -72,19 +72,17 @@ impl TokenLog {
     }
 
     pub fn snapshot(&self) -> (Vec<Token>, bool) {
-        let s = self.inner.lock();
-        (s.tokens.clone(), s.ended)
+        self.inner.with(|s| (s.tokens.clone(), s.ended))
     }
 
     /// Waits until the input ends or the request finishes, so a probe started early still finds
     /// text (#6678; the reference starts probes after the request, `tts:417-420,490-493`).
     async fn settled_tokens(&self) -> Vec<Token> {
-        let _ = self.settled.subscribe().wait_for(|settled| *settled).await;
-        self.snapshot().0
+        self.inner.wait_until(|s| (s.ended || s.finished).then(|| s.tokens.clone())).await
     }
 
     fn finish(&self) {
-        self.settled.send_replace(true);
+        self.inner.modify(|s| s.finished = true);
     }
 
     /// Catch up a fresh child sink (`tts:428-434`): it is installed once it has every token, so
@@ -94,13 +92,16 @@ impl TokenLog {
         let sink: Arc<dyn StreamInput<String>> = Arc::from(sink);
         let mut sent = 0;
         let ended = loop {
-            let missing = {
-                let mut s = self.inner.lock();
+            let missing = self.inner.with(|s| {
                 if s.tokens.len() == sent {
                     s.main = Some(Arc::clone(&sink));
-                    break s.ended;
+                    return Err(s.ended);
                 }
-                s.tokens[sent..].to_vec()
+                Ok(s.tokens[sent..].to_vec())
+            });
+            let missing = match missing {
+                Ok(missing) => missing,
+                Err(ended) => break ended,
             };
             missing.iter().for_each(|t| send(sink.as_ref(), t));
             sent += missing.len();
@@ -111,30 +112,28 @@ impl TokenLog {
     }
 
     fn clear_main(&self) {
-        self.inner.lock().main = None;
+        let main = self.inner.with(|s| s.main.take());
+        drop(main);
     }
 
     pub fn push(&self, token: Token) {
-        let main = {
-            let mut s = self.inner.lock();
+        let main = self.inner.with(|s| {
             s.tokens.push(token.clone());
             s.main.clone()
-        };
+        });
         if let Some(sink) = main {
             send(sink.as_ref(), &token);
         }
     }
 
     pub fn end(&self) {
-        let main = {
-            let mut s = self.inner.lock();
+        let main = self.inner.modify(|s| {
             s.ended = true;
             s.main.clone()
-        };
+        });
         if let Some(sink) = main {
             sink.end_input();
         }
-        self.settled.send_replace(true);
     }
 }
 
@@ -301,7 +300,11 @@ impl Backend for TtsBackend {
         let source = match req {
             TtsReq::OneShot { text, .. } => tts.synthesize(&cx, text).await?,
             TtsReq::Stream { log, expressive, .. } => {
-                let tokens = log.settled_tokens().await;
+                let tokens = tokio::select! {
+                    biased;
+                    () = stop.cancelled() => return Ok(false),
+                    tokens = log.settled_tokens() => tokens,
+                };
                 if tokens.is_empty() {
                     // `tts:504-506`: a probe needs text, and the request pushed none.
                     return Ok(false);

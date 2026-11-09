@@ -5,6 +5,7 @@ use futures_util::future::{Either, select};
 use lk_agents_abi::Ts;
 use lk_agents_abi::errors::Timeout;
 use lk_agents_abi::metrics::base::ConnectionAcquired;
+use lk_agents_net::owned::{Background, Owned};
 use lk_agents_net::transport::{TransportError, WsMessage, connect_error};
 use std::collections::BTreeSet;
 use std::pin::pin;
@@ -52,39 +53,23 @@ enum Event {
 /// A pooled connection checked out of the pool: dropped unreleased (a stop while opening, a
 /// cancelled pump), it is forgotten by the pool and closed in the background.
 struct Checkout {
-    held: Option<(u64, Connection)>,
+    held: Owned<(u64, Connection)>,
     connections: Arc<Mutex<Connections>>,
-    tasks: Arc<TaskSet>,
-    spawner: Arc<dyn Spawner>,
 }
 
 impl Checkout {
     fn connection(&mut self) -> &mut Connection {
-        &mut self.held.as_mut().expect("a checkout holds its connection until released").1
+        &mut self.held.1
     }
 
     /// Back to the pool for the next synthesis.
-    fn give_back(mut self) {
-        if let Some((id, connection)) = self.held.take() {
-            self.connections.lock().give_back(id, connection);
-        }
+    fn give_back(self) {
+        let (id, connection) = self.held.into_inner();
+        self.connections.lock().give_back(id, connection);
     }
 
-    async fn close(mut self) {
-        if let Some((id, connection)) = self.held.take() {
-            self.connections.lock().forget(id);
-            connection.sender.close().await;
-        }
-    }
-}
-
-impl Drop for Checkout {
-    fn drop(&mut self) {
-        if let Some((id, connection)) = self.held.take() {
-            self.connections.lock().forget(id);
-            let close = async move { connection.sender.close().await };
-            let _ = self.tasks.try_spawn(self.spawner.as_ref(), "tts connection close", close);
-        }
+    async fn close(self) {
+        let _ = self.held.close().await;
     }
 }
 
@@ -347,11 +332,19 @@ impl Pump {
 
     /// Holds a connection checked out of the pool until it is given back or closed.
     fn checkout(&self, id: u64, connection: Connection) -> Checkout {
+        let background =
+            Background::new(self.tasks.clone(), self.spawner.clone(), self.clock.clone());
+        let connections = self.connections.clone();
+        let closer = Box::new(move |(id, connection): (u64, Connection), _deadline| {
+            connections.lock().forget(id);
+            Box::pin(async move {
+                connection.sender.close().await;
+                lk_agents_abi::Closed::Clean
+            }) as lk_agents_abi::BoxFuture<'static, _>
+        });
         Checkout {
-            held: Some((id, connection)),
+            held: Owned::new(&background, (id, connection), closer),
             connections: self.connections.clone(),
-            tasks: self.tasks.clone(),
-            spawner: self.spawner.clone(),
         }
     }
 
@@ -391,12 +384,8 @@ impl Pump {
     }
 
     fn publish_failure(&self, error: &ApiError) {
-        self.failure.send_if_modified(|failure| {
-            if failure.is_some() {
-                return false;
-            }
-            *failure = Some(error.clone());
-            true
+        self.failure.modify(|failure| {
+            failure.get_or_insert_with(|| error.clone());
         });
     }
 

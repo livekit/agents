@@ -1,7 +1,6 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use lk_agents_abi::SpawnerExt;
+use lk_agents_net::signal::Shared;
 use lk_agents_net::task::TokioSpawner;
-use parking_lot::Mutex;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,17 +12,18 @@ use rmcp::service::RoleClient;
 use rmcp::transport::async_rw::AsyncRwTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::{StreamableHttpClientTransport, Transport};
-use tokio::sync::Notify;
 
 use super::http::CleanupClient;
 use super::{McpError, conn};
 use lk_agents_net::env::ProcessEnv;
 
 /// The transport's settlement (`lk_agents_core::mcp::TransportSettlement`) and its waiters.
-#[derive(Default)]
-pub(super) struct TransportReceipt {
-    state: Mutex<TransportSettlement>,
-    changed: Notify,
+pub(super) struct TransportReceipt(Shared<TransportSettlement>);
+
+impl Default for TransportReceipt {
+    fn default() -> Self {
+        Self(Shared::new(TransportSettlement::default()))
+    }
 }
 
 struct Reader(Arc<TransportReceipt>);
@@ -35,12 +35,10 @@ impl Drop for Reader {
 
 impl TransportReceipt {
     pub fn update<T>(&self, change: impl FnOnce(&mut TransportSettlement) -> T) -> T {
-        let out = change(&mut self.state.lock());
-        self.changed.notify_waiters();
-        out
+        self.0.modify(change)
     }
     pub fn read<T>(&self, read: impl FnOnce(&TransportSettlement) -> T) -> T {
-        read(&self.state.lock())
+        self.0.with(|state| read(state))
     }
     fn reader(self: &Arc<Self>) -> Reader {
         self.update(TransportSettlement::reader_opened);
@@ -62,13 +60,7 @@ impl TransportReceipt {
         self.update(|state| state.fail(error));
     }
     pub async fn closed(&self) {
-        loop {
-            let changed = self.changed.notified();
-            if self.read(TransportSettlement::drained) {
-                return;
-            }
-            changed.await;
-        }
+        self.0.wait_until(|state| state.drained().then_some(())).await;
     }
 }
 

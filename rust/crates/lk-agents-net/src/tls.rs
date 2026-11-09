@@ -9,8 +9,8 @@ use rustls::{ClientConfig, RootCertStore};
 #[error("{0}")]
 pub struct TlsError(String);
 
-impl From<crate::blocking_io::JobPanicked> for TlsError {
-    fn from(error: crate::blocking_io::JobPanicked) -> Self {
+impl From<crate::blocking_io::JobLost> for TlsError {
+    fn from(error: crate::blocking_io::JobLost) -> Self {
         TlsError(error.to_string())
     }
 }

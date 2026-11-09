@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,11 +8,12 @@ use lk_agents_abi::worker::http::{
     EndpointExchange, EndpointRequest, ExchangeError, ExchangeEvent, ExchangeKind, ExchangeMessage,
     HttpCompletion, HttpExchange, RequestHead,
 };
+use lk_agents_net::signal;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{Mutex, watch};
+use tokio::sync::Mutex;
 
 use super::websocket::Connection;
-use super::{EndpointServer, READ_SIZE, ReadHalf, ServerState, StreamEnd, Wire, WriteHalf};
+use super::{EndpointServer, READ_SIZE, ReadHalf, StreamEnd, Wire, WriteHalf};
 use crate::server::PublicRoutes;
 use crate::transport::HttpStreamResetCode as Code;
 
@@ -197,7 +197,7 @@ pub(super) async fn serve(server: &EndpointServer, wire: Wire, origin: Origin) {
             let http = Http {
                 request: Mutex::new(request_side),
                 response: Mutex::new(response),
-                phase: watch::Sender::new(Phase::Waiting),
+                phase: signal::Shared::new(Phase::Waiting),
                 end,
                 outcome: outcome.clone(),
             };
@@ -210,7 +210,7 @@ pub(super) async fn serve(server: &EndpointServer, wire: Wire, origin: Origin) {
                 None => server.handler.handle(&cx, native, request),
             };
             let Kind::Http(http) = &exchange.kind else { unreachable!("built as HTTP") };
-            http.run(handled, deadline, server.state.subscribe()).await;
+            http.run(handled, deadline, server.stopping()).await;
         }
         Some(key) => {
             let connection =
@@ -229,7 +229,7 @@ pub(super) async fn serve(server: &EndpointServer, wire: Wire, origin: Origin) {
             };
             // An upgrade is answered within the node's deadline, else the head timeout.
             connection
-                .run(handled, deadline.unwrap_or(limits.head_timeout), server.state.subscribe())
+                .run(handled, deadline.unwrap_or(limits.head_timeout), server.stopping())
                 .await;
         }
     }
@@ -581,17 +581,27 @@ fn chunk_size(line: &[u8]) -> Result<u64, BodyError> {
     u64::from_str_radix(digits, 16).map_err(|_| BodyError::Malformed)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Phase {
     Waiting,
     Started,
     Done,
 }
 
+/// Ends an exchange whose run was dropped before it did; a no-op once it ended.
+struct Unfinished<'a>(&'a Http);
+
+impl Drop for Unfinished<'_> {
+    fn drop(&mut self) {
+        self.0.abort(HttpCompletion::Canceled);
+    }
+}
+
 struct Http {
     request: Mutex<Request>,
     response: Mutex<Response>,
-    phase: watch::Sender<Phase>,
+    /// `Done` is terminal.
+    phase: signal::Shared<Phase>,
     end: Arc<dyn StreamEnd>,
     outcome: Recorded,
 }
@@ -603,16 +613,14 @@ impl Http {
         &self,
         handled: BoxFuture<'_, Result<(), HostError>>,
         deadline: Option<Duration>,
-        mut state: watch::Receiver<ServerState>,
+        stopped: impl std::future::Future<Output = ()>,
     ) {
+        // Dropped unfinished (its connection cancelled), the exchange still ends.
+        let _unfinished = Unfinished(self);
         let mut handled = handled;
-        let stopped = async {
-            let _ = state.wait_for(|state| *state == ServerState::Stopping).await;
-        };
         let head_missed = async {
             let Some(limit) = deadline else { return std::future::pending().await };
-            let mut phase = self.phase.subscribe();
-            let started = phase.wait_for(|p| *p != Phase::Waiting);
+            let started = self.phase.wait_until(|p| (*p != Phase::Waiting).then_some(()));
             if tokio::time::timeout(limit, started).await.is_ok() {
                 std::future::pending::<()>().await;
             }
@@ -644,7 +652,7 @@ impl Http {
         if request.body == Body::Complete {
             drop(request);
             // The end of the request body does not disconnect a response still streaming.
-            let _ = self.phase.subscribe().wait_for(|p| *p == Phase::Done).await;
+            self.phase.wait_until(|p| (*p == Phase::Done).then_some(())).await;
             return Ok(ExchangeEvent::Disconnected);
         }
         if std::mem::take(&mut request.expect_continue) {
@@ -665,21 +673,21 @@ impl Http {
     }
 
     async fn send(&self, message: ExchangeMessage) -> Result<(), ExchangeError> {
-        if *self.phase.borrow() == Phase::Done {
+        if self.phase.with(|p| *p == Phase::Done) {
             return Err(ExchangeError::Closed("the exchange is closed".into()));
         }
         let mut response = self.response.lock().await;
         match message {
             ExchangeMessage::Start { status, headers } => {
                 response.start(status, &headers).await?;
-                self.phase.send_replace(Phase::Started);
+                self.phase.modify(|p| *p = (*p).max(Phase::Started));
             }
             ExchangeMessage::Body { data, more } => {
                 if response.body(&data, more).await? {
                     self.end.finish();
                     // The response is whole: what remains of the request is not read.
                     self.end.stop(Code::HsrAbort);
-                    self.phase.send_replace(Phase::Done);
+                    self.phase.modify(|p| *p = Phase::Done);
                 }
             }
             ExchangeMessage::Trailers => {}
@@ -694,19 +702,19 @@ impl Http {
 
     /// End the exchange without its response; no-op once it ended.
     fn abort(&self, completion: HttpCompletion) {
-        if self.phase.send_replace(Phase::Done) != Phase::Done {
+        if self.phase.modify(|p| std::mem::replace(p, Phase::Done)) != Phase::Done {
             self.outcome.failed(completion);
             self.end.reset(reset_code(completion));
         }
     }
 
     async fn fail(&self, completion: HttpCompletion, reason: &str) {
-        if *self.phase.borrow() == Phase::Done {
+        if self.phase.with(|p| *p == Phase::Done) {
             return;
         }
         self.outcome.failed(completion);
         let ended = self.response.lock().await.fail(completion, reason).await;
-        if self.phase.send_replace(Phase::Done) == Phase::Done {
+        if self.phase.modify(|p| std::mem::replace(p, Phase::Done)) == Phase::Done {
             return;
         }
         match ended {

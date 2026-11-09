@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 /// A realtime session and its registered resource identity.
 pub type RealtimeLeg = (Arc<dyn lk_agents_abi::RealtimeSession>, ResourceId);
 
@@ -130,7 +129,8 @@ pub struct DriverBuilder {
     pub(crate) tool_bodies: super::calls::ToolBodies,
     /// Every speech's live handle, for the session's whole life.
     pub speeches: Arc<crate::voice::speech_handle::Speeches>,
-    pub view: tokio::sync::watch::Sender<Arc<lk_agents_voice::agent_session::SessionView>>,
+    /// The view the queue owner publishes once the session starts.
+    pub view: lk_agents_net::signal::Producer<Arc<lk_agents_voice::agent_session::SessionView>>,
     pub time: Timebase,
     pub spawner: Arc<dyn Spawner>,
     pub config: DriverConfig,
@@ -229,7 +229,7 @@ impl DriverBuilder {
         DriverBuilder {
             tool_bodies: Default::default(),
             speeches: Default::default(),
-            view: tokio::sync::watch::Sender::new(Arc::new(view)),
+            view: lk_agents_net::signal::signal(Arc::new(view)).0,
             time,
             spawner,
             config,
@@ -436,7 +436,7 @@ impl DriverBuilder {
             rt_caps,
             rt_disabled,
             rt_resolved,
-            view: Arc::clone(&self.view.borrow()),
+            view: self.view.get(),
             next_id: {
                 let ids = Arc::clone(&speech_ids);
                 Box::new(move || ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
@@ -493,30 +493,33 @@ impl DriverBuilder {
     }
 
     fn shared(
-        &self,
+        &mut self,
         queue: &Tx,
         closing: tokio_util::sync::CancellationToken,
         outputs: lk_agents_voice::agent_session::Outputs,
         session_id: String,
         tasks: Arc<lk_agents_net::task::TaskSet>,
     ) -> (Arc<SessionShared>, super::shared::Publications) {
+        use lk_agents_net::signal::signal;
+        // The queue owner takes the view's producer; the builder keeps a spent one.
+        let spent = signal(self.view.get()).0;
+        let view = std::mem::replace(&mut self.view, spent);
         let publications = super::shared::Publications {
             closing: closing.clone().drop_guard(),
-            recorder: tokio::sync::watch::channel(None).0,
-            view: self.view.clone(),
-            output: tokio::sync::watch::channel(outputs).0,
-            chat_ctx: tokio::sync::watch::channel(Arc::new(lk_agents_abi::ChatContext::default()))
-                .0,
-            keyterms: tokio::sync::watch::channel(None).0,
+            recorder: signal(None).0,
+            view,
+            output: signal(outputs).0,
+            chat_ctx: signal(Arc::new(lk_agents_abi::ChatContext::default())).0,
+            keyterms: signal(None).0,
         };
         let trace = (self.trace.clone().continuing(None))
             .with_conversation(Some(self.conversation(&session_id).as_str()));
         let shared = Arc::new(SessionShared {
             tool_bodies: self.tool_bodies.clone(),
-            view: publications.view.subscribe(),
+            view: publications.view.cell(),
             time: self.time.clone(),
-            output: publications.output.subscribe(),
-            recorder: publications.recorder.subscribe(),
+            output: publications.output.cell(),
+            recorder: publications.recorder.cell(),
             tts_transforms: self
                 .config
                 .effective()
@@ -533,8 +536,8 @@ impl DriverBuilder {
             gen_ids: std::sync::atomic::AtomicU64::new(0),
             session_id,
             resources: self.resources.clone(),
-            chat_ctx: publications.chat_ctx.subscribe(),
-            keyterms: publications.keyterms.subscribe(),
+            chat_ctx: publications.chat_ctx.cell(),
+            keyterms: publications.keyterms.cell(),
             journal: self.journal.clone(),
             trace,
             realtime_spans: Default::default(),

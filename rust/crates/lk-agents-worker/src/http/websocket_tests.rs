@@ -423,7 +423,8 @@ async fn a_client_gone_without_a_close_frame_is_an_abnormal_closure() {
         let server = server(HttpServerLimits::default(), move |exchange| {
             let code = code.clone();
             async move {
-                let accept = ExchangeMessage::Accept { subprotocol: None, headers: vec![] };
+                let accept =
+                    ExchangeMessage::Accept { subprotocol: Some("chat".into()), headers: vec![] };
                 exchange.send(accept).await.unwrap();
                 loop {
                     if let ExchangeEvent::Closed { code: closed } =
@@ -484,4 +485,33 @@ async fn random_frames_after_an_upgrade_settle_and_free_their_connections() {
         assert_eq!(server.connections.open(), 0, "seed {seed}");
         assert!(server.websockets.lock().open.is_empty(), "seed {seed}");
     }
+}
+
+// Catches: a WebSocket whose serving future was dropped leaving the host's receive waiting on a
+// close only that future (or its reader, which the connection keeps alive) could mark.
+#[tokio::test]
+async fn a_dropped_websocket_ends_the_hosts_receive() {
+    let held = Arc::new(parking_lot::Mutex::new(None));
+    let slot = held.clone();
+    let server = default_server(move |exchange| {
+        let slot = slot.clone();
+        async move {
+            let accept =
+                ExchangeMessage::Accept { subprotocol: Some("chat".into()), headers: vec![] };
+            exchange.send(accept).await.unwrap();
+            *slot.lock() = Some(exchange);
+            std::future::pending().await
+        }
+    });
+    let (wire, client, _end) = wire();
+    let serving = tokio::spawn({
+        let server = server.clone();
+        async move { server.serve(wire, Origin::Node(preamble())).await }
+    });
+    let (_socket, _) = tokio_tungstenite::client_async(upgrade(), client).await.unwrap();
+    let exchange = crate::http::exchange::tests::held(&held).await;
+    serving.abort();
+    let _ = serving.await;
+    let event = tokio::time::timeout(Duration::from_secs(5), exchange.receive()).await;
+    assert!(matches!(event.expect("receive hung"), Ok(ExchangeEvent::Closed { .. })));
 }

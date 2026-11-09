@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -6,13 +5,14 @@ use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 pub use livekit_protocol::agent_db::wire;
+use lk_agents_net::signal::{self, Producer};
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_net::transport::TransportError;
 use lk_agents_net::websocket::{Message, RawWebSocket, connect_with_limit};
 use parking_lot::Mutex;
 use prost::Message as _;
 use tokio::runtime::Handle;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use wire as pb;
 
 use crate::StorageError;
@@ -265,13 +265,6 @@ pub struct ExecResult {
     pub tip: i64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Phase {
-    Connecting,
-    Ready,
-    Closed,
-}
-
 struct State {
     pending: HashMap<u32, mpsc::UnboundedSender<pb::ServerMessage>>,
     /// The live socket's writer; `None` between a drop and the redial.
@@ -287,7 +280,8 @@ struct Inner {
     minter: TokenMinter,
     next_id: AtomicU32,
     state: Mutex<State>,
-    phase: watch::Sender<Phase>,
+    /// Whether a socket is live, published by the supervisor; ended once it is gone.
+    ready: signal::Cell<bool>,
     /// The runtime the connection's supervisor, heartbeat and writer run on.
     runtime: Handle,
     /// The supervisor, heartbeat and socket writers; closing the connection cancels them.
@@ -325,7 +319,6 @@ impl Inner {
             st.pending.clear();
             st.tx = None;
         }
-        self.phase.send_replace(Phase::Closed);
         self.tasks.close();
     }
 }
@@ -363,6 +356,43 @@ impl Socket {
     }
 }
 
+/// The task owning the socket's lifetime and the ready gate. However it ends (a give-up, a
+/// close, a panic, its runtime dropped), it closes the connection, failing every request in
+/// flight, then the gate ends, failing every request waiting on it.
+struct Supervisor {
+    conn: Conn,
+    ready: Producer<bool>,
+}
+
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        self.conn.close();
+    }
+}
+
+impl Supervisor {
+    /// Reads the live socket and redials when it dies.
+    async fn run(self, mut socket: Socket) {
+        let conn = &self.conn;
+        loop {
+            let cause = conn.read_loop(&mut socket).await;
+            if conn.is_closed() {
+                return;
+            }
+            self.ready.set(false);
+            conn.dropped(&cause);
+            if conn.0.opts.reconnect.disable {
+                return;
+            }
+            match conn.redial().await {
+                Some(next) => socket = next,
+                None => return,
+            }
+            self.ready.set(true);
+        }
+    }
+}
+
 impl Conn {
     /// Dials, says `Hello`, and starts the supervisor on `runtime`.
     pub async fn dial(
@@ -370,7 +400,7 @@ impl Conn {
         minter: TokenMinter,
         runtime: Handle,
     ) -> Result<Conn, WsdbError> {
-        let (phase, _) = watch::channel(Phase::Connecting);
+        let (ready, ready_cell) = signal::signal(false);
         let inner = Arc::new(Inner {
             opts,
             minter,
@@ -382,18 +412,19 @@ impl Conn {
                 fatal: None,
                 tip: 0,
             }),
-            phase,
+            ready: ready_cell,
             runtime,
             tasks: Arc::default(),
         });
         let guard = Arc::new(CloseOnDrop(Arc::downgrade(&inner)));
         let conn = Conn(inner, Some(guard));
         let socket = conn.connect().await?;
+        ready.set(true);
         let ping_interval = socket.ping_interval;
-        let owner = conn.unguarded();
+        let supervisor = Supervisor { conn: conn.unguarded(), ready };
         let spawner = TokioSpawner::new(conn.0.runtime.clone());
         // Refused once the connection closed: the work is then dropped unstarted.
-        conn.0.tasks.try_spawn(&spawner, "agentdb supervisor", owner.supervise(socket));
+        conn.0.tasks.try_spawn(&spawner, "agentdb supervisor", supervisor.run(socket));
         if !ping_interval.is_zero() {
             let owner = conn.unguarded();
             conn.0.tasks.try_spawn(&spawner, "agentdb heartbeat", owner.ping_loop(ping_interval));
@@ -506,32 +537,9 @@ impl Conn {
             st.tip = st.tip.max(ok.tip); // a reconnect can only observe a later tip
             st.tx = Some(tx);
         }
-        self.0.phase.send_replace(Phase::Ready);
         let read_deadline = (!ping_interval.is_zero())
             .then(|| ping_interval + ping_timeout + Duration::from_secs(1));
         Ok(Socket { read, writer_gone, read_deadline, ping_interval })
-    }
-
-    /// Reads the live socket and reconnects when it dies: one task owns the socket's lifetime.
-    async fn supervise(self, mut socket: Socket) {
-        loop {
-            let cause = self.read_loop(&mut socket).await;
-            if self.is_closed() {
-                return;
-            }
-            self.dropped(&cause);
-            if self.0.opts.reconnect.disable {
-                self.close();
-                return;
-            }
-            match self.redial().await {
-                Some(next) => socket = next,
-                None => {
-                    self.close();
-                    return;
-                }
-            }
-        }
     }
 
     async fn read_loop(&self, socket: &mut Socket) -> WsdbError {
@@ -562,14 +570,13 @@ impl Conn {
         Ok(())
     }
 
-    /// Fails everything in flight and closes the ready gate. Only after the read loop returned, so
-    /// no response can still be delivered.
+    /// Fails everything in flight. Only after the read loop returned, so no response can still be
+    /// delivered.
     fn dropped(&self, cause: &WsdbError) {
         let mut st = self.0.state.lock();
         st.pending.clear();
         st.tx = None;
         drop(st);
-        self.0.phase.send_replace(Phase::Connecting);
         log::warn!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb connection lost: {cause}");
     }
 
@@ -606,7 +613,7 @@ impl Conn {
         tick.tick().await;
         loop {
             tick.tick().await;
-            if *self.0.phase.borrow() != Phase::Ready {
+            if !self.0.ready.get() {
                 continue; // mid-reconnect: a ping before Hello is a protocol error
             }
             let now = std::time::SystemTime::now()
@@ -652,11 +659,9 @@ impl Conn {
     }
 
     async fn register(&self) -> Result<Request<'_>, WsdbError> {
-        // a request issued mid-reconnect is delayed rather than failed
-        let mut phase = self.0.phase.subscribe();
-        if self.is_closed()
-            || !matches!(phase.wait_for(|p| *p != Phase::Connecting).await, Ok(p) if *p == Phase::Ready)
-        {
+        // a request issued mid-reconnect is delayed rather than failed; the supervisor gone, it
+        // closed the connection first
+        if self.is_closed() || self.0.ready.wait_for(|ready| *ready).await.is_err() {
             return Err(self.closed_error());
         }
         let id = self.next_id();

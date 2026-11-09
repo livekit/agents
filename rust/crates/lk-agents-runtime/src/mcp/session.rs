@@ -1,6 +1,6 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::telemetry;
 use lk_agents_abi::SpawnerExt;
+use lk_agents_net::signal::Shared;
 use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
 use std::collections::BTreeMap;
@@ -31,7 +31,6 @@ use rmcp::service::{
 use rmcp::transport::Transport;
 use rmcp::{ClientHandler, Peer};
 use serde_json::{Map, Value};
-use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use super::transport::{Observed, StdioTransport, TransportReceipt, connect_http};
@@ -116,8 +115,7 @@ struct Connection {
     progress: Progress,
     cancel: CancellationToken,
     service: Mutex<Option<RunningService<RoleClient, Progress>>>,
-    state: Mutex<ConnectionSettlement>,
-    changed: Notify,
+    state: Shared<ConnectionSettlement>,
     receipt: Arc<TransportReceipt>,
     /// The close's settlement, which holds the connection until it ends.
     closing: std::sync::OnceLock<lk_agents_abi::OwnedTask>,
@@ -126,8 +124,7 @@ struct Connection {
 struct Call(Arc<Connection>);
 impl Drop for Call {
     fn drop(&mut self) {
-        self.0.state.lock().release();
-        self.0.changed.notify_waiters();
+        self.0.state.modify(ConnectionSettlement::release);
     }
 }
 
@@ -157,12 +154,12 @@ impl Connection {
     }
 
     fn borrow(self: &Arc<Self>) -> Result<Call, McpError> {
-        self.state.lock().borrow()?;
+        self.state.with(ConnectionSettlement::borrow)?;
         Ok(Call(self.clone()))
     }
 
     fn close(self: &Arc<Self>) {
-        self.state.lock().close();
+        self.state.modify(ConnectionSettlement::close);
         self.cancel.cancel();
         let Some(service) = self.service.lock().take() else { return };
         let owner = self.clone();
@@ -170,26 +167,13 @@ impl Connection {
         let closing = TokioSpawner::current().spawn(async move {
             let _ = service.waiting().await;
             owner.receipt.closed().await;
-            loop {
-                let changed = owner.changed.notified();
-                if owner.state.lock().settle_when_idle() {
-                    break;
-                }
-                changed.await;
-            }
-            owner.changed.notify_waiters();
+            owner.state.wait_until(|state| state.settle_when_idle().then_some(())).await;
         });
         let _ = self.closing.set(closing);
     }
 
     async fn settled(&self) {
-        loop {
-            let changed = self.changed.notified();
-            if self.state.lock().settled() {
-                return;
-            }
-            changed.await;
-        }
+        self.state.wait_until(|state| state.settled().then_some(())).await;
     }
 
     fn error(&self, error: ServiceError) -> McpError {
@@ -543,8 +527,7 @@ impl McpSession {
             progress,
             cancel,
             service: Mutex::new(Some(service)),
-            state: Mutex::default(),
-            changed: Notify::new(),
+            state: Shared::new(ConnectionSettlement::default()),
             receipt,
             closing: std::sync::OnceLock::new(),
         });

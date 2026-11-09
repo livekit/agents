@@ -11,8 +11,9 @@ use lk_agents_abi::utils::stream::StreamOutput;
 use lk_agents_abi::{ChatItem, Clock, Closed, Llm, Ts, WallAnchor};
 use lk_agents_core::tool_outcome::Mode;
 use lk_agents_core::{Opening, RunInput};
+use lk_agents_net::signal;
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::{mpsc, watch};
 
 use super::{ActiveRun, PROGRESS_QUEUE, Progress, RunSetup, start};
 use crate::telemetry;
@@ -28,7 +29,7 @@ pub struct Runner {
     clock: Arc<dyn Clock>,
     /// Each running invocation's progress port and usage, by invocation id; ended ones are pruned
     /// when the next one starts.
-    running: Mutex<Vec<(String, Progress, watch::Receiver<Usage>)>>,
+    running: Mutex<Vec<(String, Progress, signal::Cell<Usage>)>>,
     runtime: fn() -> Result<tokio::runtime::Handle, lk_agents_net::env::ProcessError>,
     tracer: telemetry::Tracer,
 }
@@ -144,7 +145,7 @@ impl AgentRunner for Runner {
         let running = self.running.lock();
         let usage = running.iter().find(|(id, ..)| id == invocation_id).map(|(.., u)| u);
         let usage = usage.ok_or_else(|| Invalid(format!("no invocation {invocation_id}")))?;
-        Ok(usage.borrow().clone())
+        Ok(usage.get())
     }
 
     fn progress(

@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use super::*;
 use crate::telemetry;
 use lk_agents_abi::errors::Invalid;
@@ -15,7 +14,7 @@ use parking_lot::Mutex;
 struct Control {
     release: mpsc::Sender<Release>,
     progress: mpsc::Sender<(String, u64, String)>,
-    usage: watch::Receiver<Usage>,
+    usage: signal::Cell<Usage>,
 }
 
 pub struct Runner {
@@ -102,7 +101,7 @@ impl TextSessionRunner for Runner {
 
     fn usage(&self) -> Usage {
         let current = self.control.lock();
-        current.as_ref().map(|c| c.usage.borrow().clone()).unwrap_or_default()
+        current.as_ref().map(|c| c.usage.get()).unwrap_or_default()
     }
 
     fn release(&self, delivery: TextSessionDelivery) -> Result<(), Invalid> {
@@ -164,7 +163,7 @@ fn start(
     let (events_tx, events) = mpsc::channel(64);
     let (progress_tx, progress) = mpsc::channel(32);
     let (release_tx, releases) = mpsc::channel(1);
-    let (usage_tx, usage) = watch::channel(session.usage());
+    let (usage_tx, usage) = signal::signal(session.usage());
     let driver = Driver {
         usage: usage_tx,
         published: session.usage_revision(),

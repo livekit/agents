@@ -33,7 +33,7 @@ mod nodes;
 mod output;
 pub mod realtime;
 pub mod room;
-mod storage;
+pub(crate) mod storage;
 mod stt;
 pub(crate) mod tools;
 mod tts;
@@ -50,7 +50,7 @@ pub use output::{
     HALF, room_camera,
 };
 pub use realtime::{FakeDuplex, FakeRealtime, RealtimeDelays, ServerSetup, Vad as RealtimeVad};
-pub use storage::{FakeStore, storage_faults, worker_deaths};
+pub use storage::{FakeStore, death_resends, storage_faults, worker_deaths};
 pub use stt::FakeStt;
 pub use tools::{FakeTools, TEMPLATED_REPLY, TEMPLATED_TOOL, completion_value, frame};
 pub use tts::{FakeTts, MS_PER_WORD, TtsOptions};

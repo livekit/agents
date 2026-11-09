@@ -98,18 +98,16 @@ async fn accepted_views_are_published_before_receipts() {
     use lk_agents_voice::agent_session::effects::VoiceEffect;
     let (mut runtime, handle, _steps) = session("view-before-receipt").await;
     let view = runtime.shared.view.clone();
-    let mut accepted = (**view.borrow()).clone();
+    let mut accepted = (*view.get()).clone();
     accepted
         .config
         .configure(&lk_agents_voice::agent_session::options::aec_warmup_layer(Some(9.0)));
     // The receipt's waker reads the view at the instant the answer is sent.
-    struct ReadsView(
-        tokio::sync::watch::Receiver<Arc<lk_agents_voice::agent_session::SessionView>>,
-    );
+    struct ReadsView(lk_agents_net::signal::Cell<Arc<lk_agents_voice::agent_session::SessionView>>);
     impl std::task::Wake for ReadsView {
         fn wake(self: Arc<Self>) {
             assert_eq!(
-                self.0.borrow().config.effective().timers.aec_warmup(),
+                self.0.with(|v| v.config.effective().timers.aec_warmup()),
                 Some(Duration::from_secs(9)),
                 "receipt observed options from before acceptance"
             );

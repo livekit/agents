@@ -1,13 +1,11 @@
 //! An agent tool's child, run in process as its call's delegate outside a TextSession. Core's
 //! `agent_tool` decides what the child starts from and what it is to the call; this runs it on
 //! the driver `agent.run()` uses.
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde_json::{Map, Value};
-use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use lk_agents_abi::a2a::remote::DelegationHost;
@@ -28,6 +26,7 @@ use lk_agents_core::tool_outcome::Mode;
 use lk_agents_core::usage::Ledger;
 use lk_agents_core::{Opening, RunInput};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::signal;
 
 use crate::agent_run::{Progress, RunSetup};
 use crate::telemetry;
@@ -43,7 +42,7 @@ pub struct LocalInteraction {
     clock: Arc<dyn Clock>,
     shared: Arc<Mutex<Shared>>,
     /// The running delegation's stop and settlement.
-    running: Mutex<Option<(CancellationToken, watch::Receiver<bool>)>>,
+    running: Mutex<Option<(CancellationToken, signal::Cell<Option<()>>)>>,
 }
 
 #[derive(Default)]
@@ -52,7 +51,7 @@ struct Shared {
     /// The child's ended invocations.
     usage: Ledger,
     /// The running invocation: its id, progress port and usage.
-    live: Option<(String, Progress, watch::Receiver<Usage>)>,
+    live: Option<(String, Progress, signal::Cell<Usage>)>,
 }
 
 impl Port for LocalInteraction {
@@ -96,7 +95,7 @@ impl Port for LocalInteraction {
         }
         let runtime = (env.runtime)().map_err(|e| Invalid(e.to_string()))?;
         let stop = CancellationToken::new();
-        let (done, settled) = watch::channel(false);
+        let (done, settled) = signal::once();
         *self.running.lock() = Some((stop.clone(), settled));
         let delegate = Delegate {
             child: self.child.clone(),
@@ -112,11 +111,11 @@ impl Port for LocalInteraction {
             stop,
         };
         // Its own task: a dropped `run` leaves it to the host, which stops it in the same turn
-        // (`cancelled()`), and `settled()` waits for the child's settlement.
+        // (`cancelled()`), and `settled()` waits for the child's settlement: the task's end, however
+        // it ends, drops `done`.
         let task = runtime.spawn(async move {
-            let outcome = delegate.drive(arguments, history, live).await;
-            done.send_replace(true);
-            outcome
+            let _done: signal::Producer<Option<()>> = done;
+            delegate.drive(arguments, history, live).await
         });
         task.await.map_err(|e| Invalid(e.to_string()))
     }
@@ -129,10 +128,8 @@ impl Port for LocalInteraction {
 
     async fn settled(&self) {
         let running = self.running.lock().as_ref().map(|(_, settled)| settled.clone());
-        if let Some(mut settled) = running
-            && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, settled.wait_for(|done| *done))
-                .await
-                .is_err()
+        if let Some(settled) = running
+            && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, settled.wait()).await.is_err()
         {
             log::error!(target: lk_agents_abi::LOG_TARGET, "agent tool cleanup incomplete");
         }
@@ -146,7 +143,7 @@ impl Port for LocalInteraction {
         let shared = self.shared.lock();
         let mut usage = shared.usage.clone();
         if let Some((_, _, live)) = &shared.live {
-            usage.add(&live.borrow());
+            usage.add(&live.get());
         }
         usage.snapshot()
     }
@@ -317,7 +314,7 @@ impl Delegate {
         };
         let usage = match &settled {
             Ok(settled) => settled.result.usage.clone(),
-            Err(_) => active.usage().borrow().clone(),
+            Err(_) => active.usage().get(),
         };
         let mut shared = self.shared.lock();
         shared.live = None;

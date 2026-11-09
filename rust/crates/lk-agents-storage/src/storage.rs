@@ -482,7 +482,7 @@ impl HostStorageClass for Namespace {
     }
 
     async fn open(&self, thread_id: String) -> Result<Thread, StorageError> {
-        self.storage().await?.open(&thread_id).await
+        Ok(self.storage().await?.open(&thread_id).await?.with_holder(&self.holder))
     }
 
     async fn _core_context_store(

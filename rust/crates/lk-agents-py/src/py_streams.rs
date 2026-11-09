@@ -44,6 +44,7 @@ use lk_agents_abi::utils::clock::Clock;
 use lk_agents_abi::utils::clock::Ts;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::utils::stream::Entry;
+use lk_agents_runtime::net::signal::Shared;
 use lk_agents_runtime::net::source::Pulled;
 use lk_agents_runtime::net::source::SharedStream;
 use parking_lot::Mutex;
@@ -70,7 +71,8 @@ pub struct HostStream<T> {
     pending: Option<Started>,
     ended: bool,
     input_stopped: Arc<AtomicBool>,
-    failure: tokio::sync::watch::Sender<Option<ProviderError>>,
+    /// The input half's failure, which ends the output too.
+    failure: Arc<Shared<Option<ProviderError>>>,
 }
 
 /// A host async iterator, the loop it runs on and its own context: a copy taken once, at open.
@@ -117,7 +119,7 @@ impl<T> HostStream<T> {
             pending: None,
             ended: false,
             input_stopped: Arc::new(AtomicBool::new(false)),
-            failure: tokio::sync::watch::channel(None).0,
+            failure: Arc::new(Shared::new(None)),
         })
     }
 
@@ -173,8 +175,8 @@ impl<T: Send + 'static> StreamOutput<T> for HostStream<T> {
             if self.ended {
                 return Ok(None);
             }
-            let mut failure = self.failure.subscribe();
-            if let Some(error) = failure.borrow().clone() {
+            let failure = self.failure.clone();
+            if let Some(error) = failure.with(|failed| failed.clone()) {
                 self.ended = true;
                 self.input_stopped.store(true, Ordering::Release);
                 return Err(error);
@@ -185,8 +187,7 @@ impl<T: Send + 'static> StreamOutput<T> for HostStream<T> {
             };
             let pulled = tokio::select! {
                 biased;
-                failed = failure.wait_for(|error| error.is_some()) => {
-                    let error = failed.expect("the stream owns its failure sender").clone().expect("waited for failure");
+                error = failure.wait_until(|failed| failed.clone()) => {
                     self.ended = true;
                     self.input_stopped.store(true, Ordering::Release);
                     return Err(error);
@@ -412,7 +413,7 @@ struct SinkShared<I> {
     ctx: Py<PyAny>,
     to_host: ToHost<I>,
     stopped: Arc<AtomicBool>,
-    failure: tokio::sync::watch::Sender<Option<ProviderError>>,
+    failure: Arc<Shared<Option<ProviderError>>>,
     queue: Mutex<SinkQueue<I>>,
 }
 
@@ -427,7 +428,7 @@ impl<I: Send + 'static> HostSink<I> {
     fn admit(&self, entry: Entry<I>) -> Result<(), ProviderError> {
         let schedule = {
             let mut queue = self.shared.queue.lock();
-            if let Some(failed) = self.shared.failure.borrow().clone() {
+            if let Some(failed) = self.shared.failure.with(|failed| failed.clone()) {
                 return Err(failed);
             }
             if self.shared.stopped.load(Ordering::Acquire) || queue.ended {
@@ -445,7 +446,7 @@ impl<I: Send + 'static> HostSink<I> {
         };
         if schedule && let Err(e) = Python::attach(|py| self.schedule(py)) {
             let e = captured(e);
-            self.shared.failure.send_replace(Some(e.clone()));
+            fail(&self.shared.failure, e.clone());
             return Err(e);
         }
         Ok(())
@@ -455,7 +456,7 @@ impl<I: Send + 'static> HostSink<I> {
         let (shared, lost) = (self.shared.clone(), self.shared.clone());
         let release = move || {
             let closed = lk_agents_abi::errors::ApiError::new("the host event loop closed");
-            lost.failure.send_replace(Some(closed.into()));
+            fail(&lost.failure, closed.into());
             // Dropped after the guard: an item's host objects may run Python finalizers.
             let _dropped = {
                 let mut queue = lost.queue.lock();
@@ -472,6 +473,10 @@ impl<I: Send + 'static> HostSink<I> {
             release,
         )
     }
+}
+
+fn fail(failure: &Shared<Option<ProviderError>>, error: ProviderError) {
+    failure.modify(|failed| *failed = Some(error));
 }
 
 /// On the loop, inside the stream's context: everything queued, in order, until the queue is
@@ -508,7 +513,7 @@ fn drain<I>(py: Python<'_>, shared: &SinkShared<I>) {
                 // Capturing reads the exception's attributes: Python code, run before the lock.
                 let failed = crate::py_errors::capture(py, &e);
                 // Dropped after the guard: an item's host objects may run Python finalizers.
-                shared.failure.send_replace(Some(failed));
+                fail(&shared.failure, failed);
                 let _dropped = {
                     let mut queue = shared.queue.lock();
                     queue.scheduled = false;
@@ -542,7 +547,7 @@ impl<I: Send + Sync + 'static> StreamInput<I> for HostSink<I> {
     ) -> lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>> {
         let shared = self.shared.clone();
         Box::pin(async move {
-            if let Some(failed) = shared.failure.borrow().clone() {
+            if let Some(failed) = shared.failure.with(|failed| failed.clone()) {
                 return Err(failed);
             }
             if shared.stopped.load(Ordering::Acquire) {
@@ -560,7 +565,7 @@ impl<I: Send + Sync + 'static> StreamInput<I> for HostSink<I> {
             };
             sent.map_err(|e| {
                 let e = captured(e);
-                shared.failure.send_replace(Some(e.clone()));
+                fail(&shared.failure, e.clone());
                 e
             })
         })

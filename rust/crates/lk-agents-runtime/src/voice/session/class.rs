@@ -152,7 +152,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             spawner.clone(),
             DriverConfig::new(stack, legs),
         );
-        let view = builder.view.subscribe();
+        let view = builder.view.cell();
         let resources = builder.resources.clone();
         let tool_bodies = builder.tool_bodies.clone();
         let speeches = Arc::clone(&builder.speeches);
@@ -255,12 +255,11 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     }
 
     fn usage(&self) -> lk_agents_abi::usage::Usage {
-        self.view.borrow().usage.clone()
+        self.view.with(|v| v.usage.clone())
     }
 
     fn current_agent(&self) -> Option<HostRef> {
-        let view = self.view.borrow();
-        self.agents.get(&view.agent, view.agent_scope)
+        self.view.with(|view| self.agents.get(&view.agent, view.agent_scope))
     }
 
     fn audio_input(&self) -> Option<crate::room_io::RoomAudioInput> {
@@ -493,7 +492,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
 
     fn resolved_options(&self) -> Option<ResolvedSessionOptions> {
         self.host.options.as_ref()?;
-        let view = Arc::clone(&self.view.borrow());
+        let view = self.view.get();
         Some(lk_agents_voice::agent_session::options::resolved_session_options(
             view.config.effective(),
             &view.config.stack.session,
@@ -846,14 +845,14 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
 
     fn keyterms(&self) -> Option<Vec<String>> {
         match &*self.stage.lock() {
-            Stage::Running(r) => r.keyterms.borrow().clone(),
+            Stage::Running(r) => r.keyterms.get(),
             _ => None,
         }
     }
 
     fn agent_chat_ctx(&self) -> Vec<ChatItem> {
         let context = match &*self.stage.lock() {
-            Stage::Running(r) => Some(Arc::clone(&r.chat_ctx.borrow())),
+            Stage::Running(r) => Some(r.chat_ctx.get()),
             _ => None,
         };
         context.map(|context| context.items.clone()).unwrap_or_default()

@@ -593,3 +593,23 @@ mod tts {
         source.close(NO_DEADLINE).await;
     }
 }
+
+// Catches: a streaming probe stopped by the chain still waiting for its request's text, which
+// settles only when the request ends.
+#[tokio::test]
+async fn a_stopped_streaming_probe_does_not_wait_for_unsettled_text() {
+    use crate::fallback::chain::{Backend, RecoveryMode};
+    let (tts, _) = built("a", 24_000, 1, 1, 0, false);
+    let backend = super::TtsBackend::new(&(tts as Arc<dyn Tts>), Arc::new(VirtualClock::new()));
+    let req = super::TtsReq::Stream {
+        log: super::TokenLog::new(),
+        expressive: false,
+        cx: crate::telemetry::Cx::NONE,
+    };
+    let stop = tokio_util::sync::CancellationToken::new();
+    stop.cancel();
+    let conn = ApiConnectOptions::default();
+    let probe = backend.recover(&req, &conn, RecoveryMode::Streaming, stop);
+    let recovered = tokio::time::timeout(Duration::from_secs(5), probe).await;
+    assert!(matches!(recovered, Ok(Ok(false))), "the stop ends the probe");
+}

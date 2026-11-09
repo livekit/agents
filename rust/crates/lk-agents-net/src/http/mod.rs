@@ -1,18 +1,17 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 pub mod exchange;
 
 /// The HTTP vocabulary of [`GatewayHttp`]'s callers.
 pub use reqwest::{Method, StatusCode, header::HeaderMap};
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::task::{Context, Poll};
 
+use crate::signal;
 use crate::transport::{Headers, HttpRequest};
 use futures_util::StreamExt;
 use lk_agents_abi::{Clock, Ts};
 use lk_agents_core::request::AttemptFailure;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::mpsc;
 
 /// `bytes` as one gzip member (RFC 1952), for a `Content-Encoding: gzip` body or a `.gz` file.
 /// The fastest deflate level: every body is small and the network dominates. Compressing in
@@ -197,8 +196,8 @@ impl GatewayHttp {
         // Hyper otherwise suppresses an unknown-length GET body without polling it. Explicit
         // empty chunked framing preserves its real connection/write observations without a payload.
         let empty_get = method == reqwest::Method::GET && request.body.is_empty();
-        let progress = Arc::new(BodyProgress::default());
-        let body = ReportingBody { bytes: Some(request.body.into()), progress: progress.clone() };
+        let (stage, mut progress) = signal::signal(0u8);
+        let body = ReportingBody { bytes: Some(request.body.into()), stage };
         let mut builder =
             self.client.request(method, request.url).body(reqwest::Body::wrap_stream(body));
         if empty_get {
@@ -209,14 +208,18 @@ impl GatewayHttp {
         }
         let mut send = std::pin::pin!(builder.send());
         let mut reported = 0;
+        let mut body_live = true;
         let response = loop {
             tokio::select! {
                 biased;
                 response = &mut send => break response,
-                () = progress.changed.notified() => progress.report(&mut reported, reporter, &sent).await,
+                changed = progress.changed(), if body_live => {
+                    body_live = changed.is_ok();
+                    report(progress.get(), &mut reported, reporter, &sent).await;
+                }
             }
         };
-        progress.report(&mut reported, reporter, &sent).await;
+        report(progress.get(), &mut reported, reporter, &sent).await;
         response.map_err(|err| AttemptFailure::Connection(error_chain(&err)))
     }
 }
@@ -347,43 +350,29 @@ pub fn error_chain(err: &dyn std::error::Error) -> String {
     message
 }
 
-/// How far the transport has taken the request body: hyper polls it only on a ready
-/// connection, and polls it to its end once every byte is handed to the connection.
-#[derive(Default)]
-struct BodyProgress {
-    stage: AtomicU8,
-    changed: Notify,
-}
-
+// How far the transport has taken the request body: hyper polls it only on a ready connection,
+// and polls it to its end once every byte is handed to the connection.
 const CONNECTED: u8 = 1;
 const WRITTEN: u8 = 2;
 
-impl BodyProgress {
-    fn reach(&self, stage: u8) {
-        self.stage.fetch_max(stage, Ordering::SeqCst);
-        self.changed.notify_one();
+async fn report<E>(
+    stage: u8,
+    reported: &mut u8,
+    reporter: &Reporter<E>,
+    sent: &impl Fn(Sent) -> E,
+) {
+    if *reported < CONNECTED && stage >= CONNECTED {
+        reporter.report(sent(Sent::Connected)).await;
     }
-
-    async fn report<E>(
-        &self,
-        reported: &mut u8,
-        reporter: &Reporter<E>,
-        sent: &impl Fn(Sent) -> E,
-    ) {
-        let stage = self.stage.load(Ordering::SeqCst);
-        if *reported < CONNECTED && stage >= CONNECTED {
-            reporter.report(sent(Sent::Connected)).await;
-        }
-        if *reported < WRITTEN && stage >= WRITTEN {
-            reporter.report(sent(Sent::RequestWritten)).await;
-        }
-        *reported = (*reported).max(stage);
+    if *reported < WRITTEN && stage >= WRITTEN {
+        reporter.report(sent(Sent::RequestWritten)).await;
     }
+    *reported = (*reported).max(stage);
 }
 
 struct ReportingBody {
     bytes: Option<bytes::Bytes>,
-    progress: Arc<BodyProgress>,
+    stage: signal::Producer<u8>,
 }
 
 impl futures_util::Stream for ReportingBody {
@@ -395,11 +384,11 @@ impl futures_util::Stream for ReportingBody {
     ) -> Poll<Option<Self::Item>> {
         match self.bytes.take() {
             Some(bytes) => {
-                self.progress.reach(CONNECTED);
+                self.stage.advance(CONNECTED);
                 Poll::Ready(Some(Ok(bytes)))
             }
             None => {
-                self.progress.reach(WRITTEN);
+                self.stage.advance(WRITTEN);
                 Poll::Ready(None)
             }
         }

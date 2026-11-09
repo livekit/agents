@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use std::sync::Arc;
 
 use futures_util::stream::{SplitSink, SplitStream};
@@ -6,9 +5,10 @@ use futures_util::{SinkExt, StreamExt};
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::http::{ExchangeError, ExchangeEvent, ExchangeMessage, HttpCompletion};
 use lk_agents_abi::{BoxFuture, OwnedTask, SpawnerExt};
+use lk_agents_net::signal;
 use lk_agents_net::task::TokioSpawner;
 use tokio::io::{BufReader, Join};
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::{Mutex, mpsc};
 use tokio::time::Instant;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::error::{CapacityError, ProtocolError};
@@ -17,7 +17,7 @@ use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Role, WebSocketConfig
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
 use super::exchange::{Recorded, Response};
-use super::{HttpServerLimits, ReadHalf, ServerState, StreamEnd, WriteHalf};
+use super::{HttpServerLimits, ReadHalf, StreamEnd, WriteHalf};
 use crate::transport::HttpStreamResetCode as Code;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -94,6 +94,8 @@ impl Drop for Queued {
 #[derive(Default)]
 struct Tasks {
     reader: Option<OwnedTask>,
+    /// Ends with the reader, however it ends.
+    reader_ended: Option<signal::Cell<Option<()>>>,
     close: Option<OwnedTask>,
 }
 
@@ -109,13 +111,27 @@ struct Shared {
     inbox: Mutex<mpsc::Receiver<Inbound>>,
     /// Handed to the reader on accept.
     inbox_tx: parking_lot::Mutex<Option<mpsc::Sender<Inbound>>>,
-    phase: watch::Sender<Phase>,
-    reader_done: watch::Sender<bool>,
+    /// `Closed` is terminal.
+    phase: signal::Shared<Phase>,
     tasks: parking_lot::Mutex<Tasks>,
 }
 
 #[derive(Clone)]
 pub(super) struct Connection(Arc<Shared>);
+
+/// Closes a connection whose run ended, dropped before it closed included, and ends its tasks,
+/// which hold the connection.
+struct Unfinished<'a>(&'a Connection);
+
+impl Drop for Unfinished<'_> {
+    fn drop(&mut self) {
+        if !matches!(self.0.phase(), Phase::Closed(_)) {
+            self.0.0.end.reset(Code::HsrAbort);
+            self.0.mark_closed(code(CloseCode::Abnormal));
+        }
+        self.0.shutdown();
+    }
+}
 
 impl Connection {
     pub(super) fn new(
@@ -136,8 +152,7 @@ impl Connection {
             state: Mutex::new(State::Handshake { read, response }),
             inbox: Mutex::new(inbox),
             inbox_tx: parking_lot::Mutex::new(Some(inbox_tx)),
-            phase: watch::Sender::new(Phase::Handshake),
-            reader_done: watch::Sender::new(false),
+            phase: signal::Shared::new(Phase::Handshake),
             tasks: Default::default(),
         }))
     }
@@ -148,15 +163,14 @@ impl Connection {
         &self,
         handled: BoxFuture<'_, Result<(), HostError>>,
         answer_by: std::time::Duration,
-        mut server: watch::Receiver<ServerState>,
+        stopped: impl std::future::Future<Output = ()>,
     ) {
+        // However the run ends, dropped included, the connection is closed and its tasks end.
+        let _unfinished = Unfinished(self);
         let mut handled = handled;
-        let stopped = async {
-            let _ = server.wait_for(|state| *state == ServerState::Stopping).await;
-        };
         let unanswered = async {
-            let mut phase = self.0.phase.subscribe();
-            let answered = phase.wait_for(|phase| *phase != Phase::Handshake);
+            let answered =
+                self.0.phase.wait_until(|phase| (*phase != Phase::Handshake).then_some(()));
             if tokio::time::timeout(answer_by, answered).await.is_ok() {
                 std::future::pending::<()>().await;
             }
@@ -166,16 +180,14 @@ impl Connection {
             () = stopped => {
                 drop(handled);
                 self.0.outcome.failed(HttpCompletion::Canceled);
-                self.close(GOING_AWAY, "worker stopped").await;
-                return self.shutdown();
+                return self.close(GOING_AWAY, "worker stopped").await;
             }
             () = unanswered => {
                 drop(handled);
                 self.0.outcome.failed(HttpCompletion::Timeout);
                 self.0.end.reset(Code::HsrTimeout);
                 *self.0.state.lock().await = State::Ended;
-                self.mark_closed(code(CloseCode::Abnormal));
-                return self.shutdown();
+                return self.mark_closed(code(CloseCode::Abnormal));
             }
             result = &mut handled => result,
         };
@@ -186,7 +198,6 @@ impl Connection {
                 self.close(code(CloseCode::Error), "application failed").await;
             }
         }
-        self.shutdown();
     }
 
     /// Refuse the upgrade before the application saw it.
@@ -202,11 +213,11 @@ impl Connection {
     }
 
     pub(super) async fn receive(&self) -> Result<ExchangeEvent, ExchangeError> {
-        let _ = self.0.phase.subscribe().wait_for(|phase| *phase != Phase::Handshake).await;
+        self.0.phase.wait_until(|phase| (*phase != Phase::Handshake).then_some(())).await;
         let mut inbox = self.0.inbox.lock().await;
-        if *self.0.phase.borrow() == Phase::Open
+        if self.phase() == Phase::Open
             && let Some(inbound) = inbox.recv().await
-            && *self.0.phase.borrow() == Phase::Open
+            && self.phase() == Phase::Open
         {
             return Ok(inbound.event);
         }
@@ -249,7 +260,7 @@ impl Connection {
                     unreachable!("checked above")
                 };
                 *state = State::Denying(response);
-                self.0.phase.send_replace(Phase::Closing);
+                self.0.phase.modify(|phase| *phase = Phase::Closing);
                 Ok(())
             }
             ExchangeMessage::Body { data, more } => {
@@ -296,9 +307,16 @@ impl Connection {
             WebSocketStream::from_raw_socket(io, Role::Server, Some(config)).await.split();
         *state = State::Open(sink);
         let inbox = self.0.inbox_tx.lock().take().expect("accepted once");
-        let reader = TokioSpawner::current().spawn(self.clone().read_frames(stream, inbox));
-        self.0.tasks.lock().reader = Some(reader);
-        self.0.phase.send_replace(Phase::Open);
+        let (ended, reader_ended) = signal::once();
+        let reader = TokioSpawner::current().spawn(self.clone().read_frames(stream, inbox, ended));
+        let mut tasks = self.0.tasks.lock();
+        (tasks.reader, tasks.reader_ended) = (Some(reader), Some(reader_ended));
+        drop(tasks);
+        self.0.phase.modify(|phase| {
+            if !matches!(phase, Phase::Closed(_)) {
+                *phase = Phase::Open;
+            }
+        });
         Ok(())
     }
 
@@ -306,7 +324,7 @@ impl Connection {
         if size > self.0.limits.websocket_message_bytes {
             return Err(ExchangeError::Protocol("the WebSocket message exceeds its limit".into()));
         }
-        match *self.0.phase.borrow() {
+        match self.phase() {
             Phase::Handshake => {
                 return Err(ExchangeError::Protocol("a WebSocket message before accept".into()));
             }
@@ -337,7 +355,7 @@ impl Connection {
 
     fn begin_close(&self, code: u16, reason: &str) {
         let mut tasks = self.0.tasks.lock();
-        let closed = matches!(*self.0.phase.borrow(), Phase::Closed(_));
+        let closed = matches!(self.phase(), Phase::Closed(_));
         if tasks.close.is_none() && !closed {
             let reason = reason.to_owned();
             let this = self.clone();
@@ -348,12 +366,10 @@ impl Connection {
     }
 
     async fn finish_close(self, close_code: u16, reason: String) {
-        self.0.phase.send_if_modified(|phase| {
-            let open = !matches!(phase, Phase::Closed(_));
-            if open {
+        self.0.phase.modify(|phase| {
+            if !matches!(phase, Phase::Closed(_)) {
                 *phase = Phase::Closing;
             }
-            open
         });
         let limit = self.0.limits.close_flush_timeout;
         let Ok(mut state) = tokio::time::timeout(limit, self.0.state.lock()).await else {
@@ -371,9 +387,13 @@ impl Connection {
                 if matches!(sent, Ok(Ok(()))) {
                     self.0.end.finish();
                     // Wait for the peer's close reply, which ends the reader.
-                    let mut done = self.0.reader_done.subscribe();
-                    let replied = tokio::time::timeout(limit, done.wait_for(|done| *done)).await;
-                    if replied.map(drop).is_err() {
+                    let ended = self.0.tasks.lock().reader_ended.clone();
+                    let replied = async {
+                        if let Some(ended) = ended {
+                            let _ = ended.wait().await;
+                        }
+                    };
+                    if tokio::time::timeout(limit, replied).await.is_err() {
                         self.0.end.stop(Code::HsrAbort);
                     }
                 } else {
@@ -400,24 +420,26 @@ impl Connection {
     }
 
     fn mark_closed(&self, close_code: u16) {
-        self.0.phase.send_if_modified(|phase| {
-            let open = !matches!(phase, Phase::Closed(_));
-            if open {
+        self.0.phase.modify(|phase| {
+            if !matches!(phase, Phase::Closed(_)) {
                 *phase = Phase::Closed(close_code);
             }
-            open
         });
         if let Some(reader) = self.0.tasks.lock().reader.as_ref() {
             reader.cancel();
         }
     }
 
+    fn phase(&self) -> Phase {
+        self.0.phase.with(|phase| *phase)
+    }
+
     async fn wait_closed(&self) -> u16 {
-        let mut phase = self.0.phase.subscribe();
-        match phase.wait_for(|phase| matches!(phase, Phase::Closed(_))).await.as_deref() {
-            Ok(Phase::Closed(code)) => *code,
-            _ => code(CloseCode::Abnormal),
-        }
+        let closed = |phase: &mut Phase| match phase {
+            Phase::Closed(code) => Some(*code),
+            _ => None,
+        };
+        self.0.phase.wait_until(closed).await
     }
 
     /// Read frames until the connection ends: queue messages, answer pings (tungstenite replies
@@ -426,6 +448,7 @@ impl Connection {
         self,
         mut stream: SplitStream<WebSocketStream<Io>>,
         inbox: mpsc::Sender<Inbound>,
+        ended: signal::Producer<Option<()>>,
     ) {
         let (interval, patience) =
             (self.0.limits.websocket_ping_interval, self.0.limits.websocket_ping_timeout);
@@ -438,7 +461,7 @@ impl Connection {
                 biased;
                 next = stream.next() => next,
                 () = tokio::time::sleep_until(wake) => {
-                    if *self.0.phase.borrow() != Phase::Open {
+                    if self.phase() != Phase::Open {
                         // Closing: the close handshake bounds the wait.
                         (heard, pinged) = (Instant::now(), None);
                         continue;
@@ -484,7 +507,7 @@ impl Connection {
             }
         };
         drop(inbox);
-        self.0.reader_done.send_replace(true);
+        drop(ended);
         match ending {
             Ending::Failed(close_code, reason) => self.begin_close(close_code, reason),
             Ending::Unresponsive => {
@@ -493,7 +516,7 @@ impl Connection {
                 *self.0.state.lock().await = State::Ended;
                 self.mark_closed(code(CloseCode::Abnormal));
             }
-            Ending::Peer if *self.0.phase.borrow() == Phase::Open => {
+            Ending::Peer if self.phase() == Phase::Open => {
                 // The peer ended the connection: its close was answered, or it went away.
                 *self.0.state.lock().await = State::Ended;
                 self.0.end.finish();

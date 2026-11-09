@@ -19,7 +19,7 @@ struct State {
     closes: AtomicUsize,
     held: bool,
     deliveries: Mutex<Vec<TextSessionDelivery>>,
-    usage: watch::Sender<Usage>,
+    usage: lk_agents_net::signal::Producer<Usage>,
 }
 struct Fake {
     state: Arc<State>,
@@ -34,8 +34,8 @@ impl Input for Fake {
             Ok(self.messages.recv().await)
         })
     }
-    fn usage(&self) -> watch::Receiver<Usage> {
-        self.state.usage.subscribe()
+    fn usage(&self) -> lk_agents_net::signal::Cell<Usage> {
+        self.state.usage.cell()
     }
     fn release(&self, delivery: TextSessionDelivery) -> Result<(), Invalid> {
         self.state.deliveries.lock().push(delivery);
@@ -66,7 +66,7 @@ async fn owner(held: bool) -> (RunStream, Arc<RunResources>, Arc<State>, mpsc::S
         closes: AtomicUsize::new(0),
         held,
         deliveries: Mutex::default(),
-        usage: watch::channel(Usage::default()).0,
+        usage: lk_agents_net::signal::signal(Usage::default()).0,
     });
     let (send, messages) = mpsc::channel(8);
     stream
@@ -217,4 +217,74 @@ async fn a_native_read_not_received_by_the_language_is_retried_and_acknowledged_
     stream.result(consumer).await.unwrap();
     stream.end_result(consumer, true);
     assert_eq!(state.deliveries.lock()[0].messages.get("message").unwrap(), "visible");
+}
+
+// Catches: a close waiter parked forever on a writer the stream keeps when its settlement task is
+// dropped (a cancel or runtime shutdown) before it records the outcome.
+#[tokio::test]
+async fn a_close_waiter_resolves_when_the_settlement_is_dropped() {
+    let (stream, _resources, state, _send) = owner(true).await;
+    let closing = stream.aclose();
+    state.closing.notified().await;
+    stream.0.tasks.cancel_all();
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(5), closing).await;
+    state.release.notify_one();
+    assert!(closed.is_ok(), "the close waiter outlived the settlement");
+}
+
+/// A toolset whose authored close never returns.
+struct HungClose(Arc<dyn lk_agents_abi::llm::toolsets::Lifetime>);
+impl lk_agents_abi::llm::toolsets::ToolsetHooks for HungClose {
+    fn lifetime(&self) -> &Arc<dyn lk_agents_abi::llm::toolsets::Lifetime> {
+        &self.0
+    }
+    fn setup(
+        &self,
+        _: &lk_agents_abi::telemetry::Cx,
+        _: Arc<dyn lk_agents_abi::invoke::Cancellation>,
+    ) -> BoxFuture<'_, Result<(), lk_agents_abi::errors::HostError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn close(
+        &self,
+        _: &lk_agents_abi::telemetry::Cx,
+    ) -> BoxFuture<'_, Result<(), lk_agents_abi::errors::HostError>> {
+        Box::pin(std::future::pending())
+    }
+    fn children(
+        &self,
+    ) -> Result<
+        Option<Arc<dyn lk_agents_abi::llm::toolsets::LeaseGroup>>,
+        lk_agents_abi::errors::HostError,
+    > {
+        Ok(None)
+    }
+}
+
+// Catches: a run stream's close waiting forever on its resources when a toolset's close hangs.
+#[tokio::test(start_paused = true)]
+async fn a_hung_resource_close_is_bounded_by_the_teardown_deadline() {
+    use lk_agents_abi::llm::toolsets::ToolsetLifetime as _;
+    let env = ProcessEnv::current_runtime();
+    let lifetime = Arc::new(crate::toolsets::lifetime::Lifetime::new(&env));
+    let hooks = vec![Arc::new(HungClose(lifetime)) as _];
+    let resources =
+        Arc::new(RunResources::new(&env, None, None, None, "agent".into(), hooks).unwrap());
+    resources.open().unwrap().await.unwrap();
+    let stream = RunStream::new(&env);
+    stream.enter().unwrap();
+    let (_send, messages) = mpsc::channel(8);
+    let state = Arc::new(State {
+        reading: Notify::new(),
+        closing: Notify::new(),
+        release: Notify::new(),
+        closes: AtomicUsize::new(0),
+        held: false,
+        deliveries: Mutex::default(),
+        usage: lk_agents_net::signal::signal(Usage::default()).0,
+    });
+    stream.bind(resources, || Ok(Box::new(Fake { state, messages }))).unwrap();
+    let limit = lk_agents_abi::HOST_TEARDOWN_TIMEOUT * 3;
+    let closed = tokio::time::timeout(limit, stream.aclose()).await;
+    assert!(matches!(closed, Ok(Err(_))), "the close outlived its deadline: {closed:?}");
 }

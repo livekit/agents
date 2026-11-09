@@ -192,12 +192,8 @@ async fn ready_file_pcm_yields_to_control_without_dropping_audio() {
     let limits = DecoderLimits { output_chunk_samples: 1, ..limits() };
     let mut decoder =
         AudioDecoder::open_file(&media_pool(), file.path(), false, 24_000, 1, limits).unwrap();
-    loop {
-        let ready = decoder.shared.ready.notified();
-        if decoder.shared.state.try_lock().is_some_and(|state| state.done) {
-            break;
-        }
-        ready.await;
+    while !decoder.shared.state.try_lock().is_some_and(|state| state.done) {
+        decoder.ready.changed().await.unwrap();
     }
     let (ready, mut control) = tokio::sync::oneshot::channel();
     let started = thread_cpu();
@@ -222,4 +218,23 @@ async fn ready_file_pcm_yields_to_control_without_dropping_audio() {
     assert_eq!(delivered, 16_000);
     decoder.close().await.unwrap();
     control_task.await.unwrap();
+}
+
+// Catches: a dropped input leaving the decode worker parked on a read forever, holding its
+// admission, and `next` waiting on it.
+#[tokio::test]
+async fn a_dropped_input_ends_the_stream() {
+    let media_pool = media_pool();
+    let (mut decoder, input) =
+        AudioDecoder::open_stream(&media_pool, Some(Container::Wav), Some(24_000), 1, limits())
+            .unwrap();
+    input.push(&wav(1, &[3; 480])).unwrap();
+    drop(input);
+    let drained = tokio::time::timeout(Duration::from_secs(5), async {
+        while decoder.next().await.unwrap().is_some() {}
+    })
+    .await;
+    assert!(drained.is_ok(), "the decoder ends once its input is gone");
+    decoder.close().await.unwrap();
+    assert!(media_pool.try_admit(JobClass::Decoder).is_ok(), "the admission is released");
 }

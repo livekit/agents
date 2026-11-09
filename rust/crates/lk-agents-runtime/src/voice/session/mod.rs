@@ -61,7 +61,7 @@ pub struct VoiceSession {
     tool_bodies: calls::ToolBodies,
     /// `Arc`, so `open`'s future can write the running loop back after the borrow ended.
     stage: Arc<Mutex<Stage>>,
-    view: tokio::sync::watch::Receiver<Arc<SessionView>>,
+    view: lk_agents_net::signal::Cell<Arc<SessionView>>,
     /// Every speech's live handle, from its host call or creation to the session's end.
     speeches: Arc<Speeches>,
     room_io: Arc<dyn RoomIo>,
@@ -156,9 +156,9 @@ struct Running {
     remote: Option<Arc<dyn SessionHosting>>,
     api: Tx,
     /// `session.keyterms`, as the driver last pushed them.
-    keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
+    keyterms: lk_agents_net::signal::Cell<Option<Vec<String>>>,
     /// `Agent.chat_ctx`: the driving agent's view, as the driver last published it.
-    chat_ctx: tokio::sync::watch::Receiver<Arc<lk_agents_abi::ChatContext>>,
+    chat_ctx: lk_agents_net::signal::Cell<Arc<lk_agents_abi::ChatContext>>,
     peer: PeerHandle,
     amd: Option<Arc<dyn lk_agents_abi::voice::amd::AmdPort>>,
     /// The loop and the host event drain, cancelled once the close has drained.
@@ -238,11 +238,11 @@ impl VoiceSession {
     }
 
     pub fn legs(&self) -> SessionLegs {
-        self.view.borrow().config.legs
+        self.view.with(|v| v.config.legs)
     }
 
     pub fn stack(&self) -> ConfigStack {
-        self.view.borrow().config.stack.clone()
+        self.view.with(|v| v.config.stack.clone())
     }
 
     /// Every provider and leg the session still holds.
@@ -708,7 +708,7 @@ impl VoiceSession {
         let vad_now = match &vad {
             Maybe::Given(given) => given.clone(),
             Maybe::NotGiven => {
-                let id = self.view.borrow().vad.as_ref().map(|v| v.id);
+                let id = self.view.with(|view| view.vad.as_ref().map(|v| v.id));
                 id.and_then(|id| self.resources.vad(id))
             }
         };

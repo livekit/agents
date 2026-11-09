@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use self::stream::TtsStream;
 use crate::abi::{
     StreamInput, StreamOutput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
@@ -30,7 +29,7 @@ use std::collections::HashMap;
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use wire::FallbackModel;
 
@@ -330,7 +329,7 @@ impl GatewayTts {
             mpsc::channel::<Result<SynthesizedAudio, ApiError>>(AUDIO_QUEUE_CAPACITY);
         let stop = CancellationToken::new();
         let (done, settled) = oneshot::channel();
-        let (failure, failed) = watch::channel(None);
+        let (failure, failed) = lk_agents_net::signal::signal(None);
         let clock = self.clock.clone();
         let accepted_at = clock.now();
 
@@ -565,7 +564,7 @@ pub struct SynthesisOutput {
     done: bool,
     stop: CancellationToken,
     settled: Option<oneshot::Receiver<Result<(), ApiError>>>,
-    failed: watch::Receiver<Option<ApiError>>,
+    failed: lk_agents_net::signal::Cell<Option<ApiError>>,
     clock: Arc<dyn Clock>,
 }
 
@@ -580,7 +579,7 @@ impl SynthesisOutput {
             Either::Left((next, _)) => Some(next),
             Either::Right(_) => None,
         };
-        audio.unwrap_or_else(|| self.failed.borrow().clone().map(Err))
+        audio.unwrap_or_else(|| self.failed.get().map(Err))
     }
 
     /// The pump's terminal outcome once the audio ended.
@@ -664,7 +663,7 @@ struct Pump {
     accepted_at: Ts,
     stopped: CancellationToken,
     done: Option<oneshot::Sender<Result<(), ApiError>>>,
-    failure: watch::Sender<Option<ApiError>>,
+    failure: lk_agents_net::signal::Producer<Option<ApiError>>,
     create_frame: serde_json::Value,
     opts: TtsOptions,
     provider: Option<InferenceProvider>,

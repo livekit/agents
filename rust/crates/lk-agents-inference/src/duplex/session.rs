@@ -1,9 +1,8 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::realtime::openai::queue::{self, Delivery, EventReceiver};
 use crate::telemetry;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use tokio::sync::{Mutex as AsyncMutex, Notify};
+use tokio::sync::Mutex as AsyncMutex;
 
 use parking_lot::Mutex;
 
@@ -70,7 +69,7 @@ impl Realtime for DuplexAdapterModel {
                 label: self.label.clone(),
                 delivery,
                 events: AsyncMutex::new(events),
-                changed: Notify::new(),
+                changed: lk_agents_net::signal::Shared::new(0),
                 gate,
                 caps: self.caps,
                 clock: Arc::clone(&self.clock),
@@ -103,7 +102,8 @@ pub struct DuplexSession {
     label: String,
     delivery: Delivery,
     events: AsyncMutex<EventReceiver>,
-    changed: Notify,
+    /// Counts the changes that move the segmenter's deadline.
+    changed: lk_agents_net::signal::Shared<u64>,
     gate: SessionGate,
     caps: RealtimeCapabilities,
     clock: Arc<dyn Clock>,
@@ -114,6 +114,10 @@ pub struct DuplexSession {
 impl DuplexSession {
     fn lock(&self) -> parking_lot::MutexGuard<'_, State> {
         self.state.lock()
+    }
+
+    fn wake(&self) {
+        self.changed.modify(|n| *n += 1);
     }
 
     fn publish(&self, events: Vec<Event>) -> bool {
@@ -130,7 +134,7 @@ impl DuplexSession {
                 if tail.deactivate_gate {
                     self.gate.deactivate();
                 }
-                self.changed.notify_one();
+                self.wake();
                 return false;
             }
         }
@@ -158,7 +162,7 @@ impl DuplexSession {
         };
         self.apply(step);
         self.delivery.finish();
-        self.changed.notify_one();
+        self.wake();
     }
 
     fn on_host_event(&self, ev: DuplexEvent) {
@@ -290,7 +294,7 @@ impl RealtimeSession for DuplexSession {
         if !self.publish(events) {
             return;
         }
-        self.changed.notify_one();
+        self.wake();
         for command in commands {
             self.host.send(command);
         }
@@ -307,6 +311,7 @@ impl RealtimeSession for DuplexSession {
         Box::pin(async move {
             let mut events = self.events.lock().await;
             loop {
+                let seen = self.changed.with(|n| *n);
                 let deadline = self.lock().seg.next_deadline();
                 let timer = async {
                     match deadline {
@@ -317,7 +322,7 @@ impl RealtimeSession for DuplexSession {
                 tokio::select! {
                     biased;
                     event = events.next() => return event,
-                    () = self.changed.notified() => {},
+                    () = self.changed.wait_until(|n| (*n != seen).then_some(())) => {},
                     () = timer => {
                         let events = self.lock().seg.tick(self.clock.now());
                         self.apply(events);

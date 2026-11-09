@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::effects::RealtimeConnectionEffect;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -308,8 +307,8 @@ impl OpenAIRealtime {
             closing: tokio_util::sync::CancellationToken::new(),
             cleanup: parking_lot::Mutex::new(None),
             retirement: parking_lot::Mutex::new(None),
-            retirement_wake: Arc::new(tokio::sync::Notify::new()),
-            context_ready: tokio::sync::Notify::new(),
+            retirement_wake: lk_agents_net::signal::signal(0).0,
+            context_ready: lk_agents_net::signal::Shared::new(0),
             retirement_closing: std::sync::atomic::AtomicBool::new(false),
             disposal: Arc::default(),
         });
@@ -352,9 +351,12 @@ pub(super) struct Shared {
     pub(super) closing: tokio_util::sync::CancellationToken,
     cleanup: parking_lot::Mutex<Option<crate::effects::RealtimeConnectionEffect>>,
     machine: Mutex<RealtimeMachine>,
-    retirement: parking_lot::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
-    retirement_wake: Arc<tokio::sync::Notify>,
-    context_ready: tokio::sync::Notify,
+    /// Ends with the retirement task.
+    retirement: parking_lot::Mutex<Option<lk_agents_net::signal::Cell<Option<()>>>>,
+    /// Counts the wakes of the retirement task, which ends once this is dropped.
+    retirement_wake: lk_agents_net::signal::Producer<u64>,
+    /// Counts the context retirements taken, which may let a held continuation proceed.
+    context_ready: lk_agents_net::signal::Shared<u64>,
     retirement_closing: std::sync::atomic::AtomicBool,
     /// The machine's, mirrored where a synchronous read reaches it; `update_options` moves it.
     caps: parking_lot::Mutex<RealtimeCapabilities>,
@@ -665,6 +667,7 @@ impl Pump {
             record_receipts(&mut *self.shared.machine.lock().await, &mut receipts);
 
             // The machine owns every deadline; the driver only asks how long to sleep.
+            let context_seen = self.shared.context_ready.with(|n| *n);
             let (deadline, pages_pending, continuation_ready) = {
                 let machine = self.shared.machine.lock().await;
                 let deadline =
@@ -672,9 +675,9 @@ impl Pump {
                 (deadline, machine.context_pages_pending(), machine.context_continuation_ready())
             };
             let sleep = deadline.map(|at| self.clock.wait_until(at));
-            let context_wake = self.shared.context_ready.notified();
+            let context_wake =
+                self.shared.context_ready.wait_until(|n| (*n != context_seen).then_some(()));
             tokio::pin!(context_wake);
-            context_wake.as_mut().enable();
             let writable = permit.is_some();
             let can_continue = continuation_ready && writable;
             if can_continue {
@@ -810,8 +813,8 @@ impl Pump {
 
     async fn wait_for_retirement(&self) {
         let done = self.shared.retirement.lock().clone();
-        if let Some(mut done) = done {
-            let _ = done.wait_for(|settled| *settled).await;
+        if let Some(done) = done {
+            let _ = done.wait().await;
         }
     }
 

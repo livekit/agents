@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 /// A server lifecycle failure, raised to the host as its message (`RuntimeError`): nothing
 /// branches on it.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -47,13 +46,13 @@ use host::ServerCallbacks;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::ipc_host::WorkerError;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
+use lk_agents_net::signal;
 use lk_agents_net::task::TokioSpawner;
 use std::future::Future;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
-use tokio::sync::{Mutex, watch};
 use tokio_util::sync::CancellationToken;
 mod health;
 mod http;
@@ -222,21 +221,41 @@ pub struct ServerSnapshot {
     pub incomplete_cleanup: Vec<ServerResource>,
 }
 
-#[derive(Clone, Default)]
+/// What the callers asked of the lifecycle; a close is terminal.
+#[derive(Clone, Default, PartialEq)]
 struct Control {
     close: bool,
     drain: Option<Option<Duration>>,
 }
 
-type Outcome<E = ServerError> = watch::Sender<Option<Result<(), E>>>;
+type Outcome<E = ServerError> = signal::Cell<Option<Result<(), E>>>;
+type Settle<E = ServerError> = signal::Producer<Option<Result<(), E>>>;
+
+/// The lifecycle's outcomes, written only by the task `run` starts: its end, however it ends,
+/// settles every waiter.
+struct Settles {
+    outcome: Settle,
+    cleanup: Settle,
+    drain: Settle<DrainError>,
+}
+
+impl Settles {
+    /// The first outcome sent wins; later ones are no-ops.
+    fn settle<E>(outcome: &Settle<E>, result: Result<(), E>) {
+        outcome.modify(|outcome| {
+            outcome.get_or_insert(result);
+        });
+    }
+}
 
 #[derive(Clone)]
 pub struct ServerRuntime {
     host: ServerCallbacks,
     blocking_io: Option<lk_agents_net::blocking_io::BlockingIo>,
-    control: watch::Sender<Control>,
-    receiver: Arc<Mutex<Option<watch::Receiver<Control>>>>,
-    snapshot: watch::Sender<ServerSnapshot>,
+    control: Arc<signal::Shared<Control>>,
+    /// Taken by the first `run`, which moves them into its lifecycle task.
+    settles: Arc<parking_lot::Mutex<Option<Settles>>>,
+    snapshot: Arc<signal::Shared<ServerSnapshot>>,
     outcome: Outcome,
     cleanup_outcome: Outcome,
     drain_outcome: Outcome<DrainError>,
@@ -250,47 +269,48 @@ impl ServerRuntime {
         host: ServerCallbacks,
         blocking_io: Option<lk_agents_net::blocking_io::BlockingIo>,
     ) -> Self {
-        let (control, receiver) = watch::channel(Control::default());
+        let (outcome, outcome_cell) = signal::once();
+        let (cleanup, cleanup_cell) = signal::once();
+        let (drain, drain_cell) = signal::once();
         Self {
             host,
             blocking_io,
-            control,
-            receiver: Arc::new(Mutex::new(Some(receiver))),
-            snapshot: watch::channel(ServerSnapshot {
+            control: Arc::new(signal::Shared::new(Control::default())),
+            settles: Arc::new(parking_lot::Mutex::new(Some(Settles { outcome, cleanup, drain }))),
+            snapshot: Arc::new(signal::Shared::new(ServerSnapshot {
                 phase: ServerPhase::Idle,
                 worker_id: "unregistered".into(),
                 http_port: 0,
                 worker: None,
                 has_rtc: false,
                 incomplete_cleanup: Vec::new(),
-            })
-            .0,
-            outcome: watch::channel(None).0,
-            cleanup_outcome: watch::channel(None).0,
-            drain_outcome: watch::channel(None).0,
+            })),
+            outcome: outcome_cell,
+            cleanup_outcome: cleanup_cell,
+            drain_outcome: drain_cell,
             serving: Arc::default(),
         }
     }
 
     pub fn snapshot(&self) -> ServerSnapshot {
-        self.snapshot.borrow().clone()
+        self.snapshot.with(|snapshot| snapshot.clone())
     }
 
     pub async fn run(&self, start: ServerStart) -> Result<(), ServerError> {
-        let receiver = self.receiver.lock().await.take().ok_or("worker is already running")?;
         let timeout = Duration::try_from_secs_f64(start.settings.shutdown_process_timeout)
             .map_err(|_| "shutdown timeout must be finite and nonnegative")?;
+        let settles = self.settles.lock().take().ok_or("worker is already running")?;
         let process_cleanup = timeout * 3;
         let connection_cleanup =
             if start.unregistered { Duration::ZERO } else { crate::config::CONNECTION_TIMEOUT };
         let cleanup_timeout = process_cleanup.max(connection_cleanup);
-        self.snapshot.send_modify(|snapshot| {
+        self.snapshot.modify(|snapshot| {
             snapshot.phase = ServerPhase::Starting;
             snapshot.has_rtc = start.has_rtc;
         });
         let runtime = self.clone();
         let serving = TokioSpawner::current()
-            .spawn(async move { runtime.serve(start, receiver, cleanup_timeout).await });
+            .spawn(async move { runtime.serve(start, settles, cleanup_timeout).await });
         *self.serving.lock() = Some(serving);
         wait_outcome(&self.outcome).await
     }
@@ -310,12 +330,8 @@ impl ServerRuntime {
             }
             _ => {}
         }
-        self.control.send_if_modified(|control| {
-            if control.drain.is_some() {
-                return false;
-            }
-            control.drain = Some(timeout);
-            true
+        self.control.modify(|control| {
+            control.drain.get_or_insert(timeout);
         });
         wait_drain_outcome(&self.drain_outcome).await
     }
@@ -324,13 +340,7 @@ impl ServerRuntime {
         if self.snapshot().phase == ServerPhase::Idle {
             return Ok(());
         }
-        self.control.send_if_modified(|control| {
-            if control.close {
-                return false;
-            }
-            control.close = true;
-            true
-        });
+        self.control.modify(|control| control.close = true);
         let result = wait_outcome(&self.cleanup_outcome).await;
         if self.snapshot().incomplete_cleanup.is_empty() {
             let serving = self.serving.lock().take();
@@ -342,58 +352,50 @@ impl ServerRuntime {
     }
 
     fn set_phase(&self, phase: ServerPhase) {
-        self.snapshot.send_modify(|snapshot| snapshot.phase = phase);
+        self.snapshot.modify(|snapshot| snapshot.phase = phase);
     }
 
-    /// The first outcome sent wins; later ones are no-ops.
-    fn settle<E>(outcome: &Outcome<E>, result: Result<(), E>) {
-        outcome.send_if_modified(|outcome| {
-            if outcome.is_some() {
-                return false;
-            }
-            *outcome = Some(result);
-            true
-        });
+    /// The next control request unlike `seen`; cancel-safe.
+    async fn next_control(&self, seen: &mut Control) -> Control {
+        let request =
+            self.control.wait_until(|control| (*control != *seen).then(|| control.clone()));
+        *seen = request.await;
+        seen.clone()
     }
 
-    async fn serve(
-        self,
-        start: ServerStart,
-        mut control: watch::Receiver<Control>,
-        cleanup_timeout: Duration,
-    ) {
+    async fn serve(self, start: ServerStart, settles: Settles, cleanup_timeout: Duration) {
         let stop = CancellationToken::new();
         let mut resources = Resources::default();
-        let (started, drain_requested) =
-            Self::await_startup(self.start(&start, &stop, &mut resources), &mut control).await;
+        let mut seen = Control::default();
+        let startup = self.start(&start, &stop, &mut resources);
+        let (started, drain_requested) = self.await_startup(startup, &mut seen).await;
         let mut running = RunningServer { drain_requested, ..RunningServer::default() };
         match started {
             Some(Ok(status)) => {
-                running.started(&self, status, &control, &resources.worker);
-                running.run(&self, &mut control, &mut resources).await;
+                running.started(&self, status, &resources.worker);
+                running.run(&self, &settles, &mut seen, &mut resources).await;
             }
             Some(Err(error)) => running.failure = Some(error),
             None => {}
         }
-        let failure = running.close(&self);
+        let failure = running.close(&self, &settles);
         stop.cancel();
-        self.close_resources(resources, failure, cleanup_timeout).await;
+        self.close_resources(&settles, resources, failure, cleanup_timeout).await;
     }
 
-    /// Startup's result, or `None` when a close (or the end of control) comes first; and
-    /// whether a drain was requested meanwhile.
+    /// Startup's result, or `None` when a close comes first; and whether a drain was requested
+    /// meanwhile.
     async fn await_startup(
+        &self,
         startup: impl Future<Output = Result<Arc<ServerStatus>, ServerError>>,
-        control: &mut watch::Receiver<Control>,
+        seen: &mut Control,
     ) -> (Option<Result<Arc<ServerStatus>, ServerError>>, bool) {
         tokio::pin!(startup);
         let mut drain_requested = false;
         loop {
             tokio::select! {
                 biased;
-                changed = control.changed() => {
-                    if changed.is_err() { return (None, drain_requested); }
-                    let request = control.borrow_and_update().clone();
+                request = self.next_control(seen) => {
                     drain_requested |= request.drain.is_some();
                     if request.close { return (None, drain_requested); }
                 }
@@ -406,6 +408,7 @@ impl ServerRuntime {
     /// deadline, whichever comes first.
     async fn close_resources(
         &self,
+        settles: &Settles,
         resources: Resources,
         mut failure: Option<ServerError>,
         cleanup_timeout: Duration,
@@ -433,8 +436,8 @@ impl ServerRuntime {
                     reported = true;
                     let resources: Vec<_> = remaining.iter().copied().collect();
                     log::error!(target: lk_agents_abi::LOG_TARGET, resources:? = resources; "server cleanup deadline missed; runtime retains ownership");
-                    self.snapshot.send_modify(|snapshot| snapshot.incomplete_cleanup = resources);
-                    self.finish(&failure, &cleanup_failure);
+                    self.snapshot.modify(|snapshot| snapshot.incomplete_cleanup = resources);
+                    Self::finish(settles, &failure, &cleanup_failure);
                 }
                 Some((resource, result)) = closing.next() => {
                     remaining.remove(&resource);
@@ -449,13 +452,16 @@ impl ServerRuntime {
         }
         self.set_phase(ServerPhase::Closed);
         if !reported {
-            self.finish(&failure, &cleanup_failure);
+            Self::finish(settles, &failure, &cleanup_failure);
         }
     }
 
-    fn finish(&self, failure: &Option<ServerError>, cleanup_failure: &Option<ServerError>) {
-        Self::settle(&self.cleanup_outcome, cleanup_failure.clone().map_or(Ok(()), Err));
-        Self::settle(&self.outcome, failure.clone().map_or(Ok(()), Err));
+    /// Settles every outcome: a drain still waiting (asked after the run stopped reading
+    /// control) fails as closed.
+    fn finish(settles: &Settles, failure: &Option<ServerError>, cleanup: &Option<ServerError>) {
+        Settles::settle(&settles.drain, Err(DrainError::Closed));
+        Settles::settle(&settles.cleanup, cleanup.clone().map_or(Ok(()), Err));
+        Settles::settle(&settles.outcome, failure.clone().map_or(Ok(()), Err));
     }
 
     async fn start(
@@ -505,7 +511,7 @@ impl ServerRuntime {
         if settings.multiprocessing_fallback {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "the forkserver is used on Linux only, job processes are spawned");
         }
-        let snapshot = self.snapshot.clone();
+        let snapshot = Arc::clone(&self.snapshot);
         let launch = host::PoolLaunch {
             context: start.context.clone(),
             asyncio_debug: start.asyncio_debug,
@@ -519,10 +525,10 @@ impl ServerRuntime {
         } else {
             let (worker, handle) = new_worker(&settings, start, host, &blocking_io);
             resources.worker = Some(handle.clone());
-            self.snapshot.send_modify(|snapshot| snapshot.worker = Some(handle.clone()));
+            self.snapshot.modify(|snapshot| snapshot.worker = Some(handle.clone()));
             let registration = Registration {
                 notifications: handle.subscribe(),
-                snapshots: self.snapshot.clone(),
+                snapshots: Arc::clone(&self.snapshot),
                 status: status.clone(),
                 has_routes: !start.endpoints.is_empty(),
                 cloud_routed,
@@ -589,9 +595,8 @@ impl ServerRuntime {
             return Ok(None);
         }
         let (listener, url) = bind(&Bind::health(&settings.listeners, local)).await?;
-        self.snapshot.send_modify(|snapshot| {
-            snapshot.http_port = listener.local_addr().map_or(0, |a| a.port())
-        });
+        self.snapshot
+            .modify(|snapshot| snapshot.http_port = listener.local_addr().map_or(0, |a| a.port()));
         log::info!(target: lk_agents_abi::LOG_TARGET, url:% = url, paths = "/,/ready,/worker"; "health listener");
         Ok(Some(TokioSpawner::current().spawn(serve_health(
             listener,
@@ -705,41 +710,37 @@ impl<'a> RunningServer<'a> {
         &mut self,
         server: &'a ServerRuntime,
         status: Arc<ServerStatus>,
-        control: &watch::Receiver<Control>,
         worker: &Option<WorkerClient>,
     ) {
         server.set_phase(ServerPhase::Running);
         self.health = Some(status.clone());
         if self.drain_requested {
-            let timeout = control.borrow().drain.flatten();
+            let timeout = server.control.with(|control| control.drain.flatten());
             self.begin_drain(server, worker, timeout);
         }
         self.started_notification = Some((server.host.proxy.started(&telemetry::Cx::NONE), status));
     }
 
-    /// Runs until a close, the end of control, a failed `started` notification or the loss of
-    /// the worker connection.
+    /// Runs until a close, a failed `started` notification or the loss of the worker
+    /// connection.
     async fn run(
         &mut self,
         server: &'a ServerRuntime,
-        control: &mut watch::Receiver<Control>,
+        settles: &Settles,
+        seen: &mut Control,
         resources: &mut Resources,
     ) {
         loop {
             let flow = tokio::select! {
                 biased;
-                changed = control.changed() => match changed {
-                    Ok(()) => {
-                        let request = control.borrow_and_update().clone();
-                        self.on_control(server, request, &resources.worker)
-                    }
-                    Err(_) => ControlFlow::Break(()),
-                },
+                request = server.next_control(seen) => {
+                    self.on_control(server, request, &resources.worker)
+                }
                 result = pending_notification(&mut self.started_notification), if self.started_notification.is_some() => {
                     self.on_started_notified(result)
                 }
                 result = pending_drain(&mut self.drain), if self.drain.is_some() => {
-                    self.on_drained(server, result)
+                    self.on_drained(settles, result)
                 }
                 result = pending_worker(&mut resources.connection), if resources.connection.is_some() => {
                     self.on_connection_lost(resources, result)
@@ -791,14 +792,10 @@ impl<'a> RunningServer<'a> {
         ControlFlow::Continue(())
     }
 
-    fn on_drained(
-        &mut self,
-        server: &ServerRuntime,
-        result: Result<(), DrainError>,
-    ) -> ControlFlow<()> {
+    fn on_drained(&mut self, settles: &Settles, result: Result<(), DrainError>) -> ControlFlow<()> {
         self.drain = None;
         self.drained = true;
-        ServerRuntime::settle(&server.drain_outcome, result);
+        Settles::settle(&settles.drain, result);
         ControlFlow::Continue(())
     }
 
@@ -819,10 +816,10 @@ impl<'a> RunningServer<'a> {
 
     /// Enters Closing: an unfinished drain fails as closed, and the drain and the `started`
     /// notification are dropped. Returns the failure that ended the run.
-    fn close(self, server: &ServerRuntime) -> Option<ServerError> {
+    fn close(self, server: &ServerRuntime, settles: &Settles) -> Option<ServerError> {
         server.set_phase(ServerPhase::Closing);
         if self.drain_requested && !self.drained {
-            ServerRuntime::settle(&server.drain_outcome, Err(DrainError::Closed));
+            Settles::settle(&settles.drain, Err(DrainError::Closed));
         }
         drop(self.drain);
         drop(self.started_notification);
@@ -852,7 +849,7 @@ fn new_worker(
 /// Mirrors the worker's registrations into the snapshot and the health status.
 struct Registration {
     notifications: tokio::sync::broadcast::Receiver<WorkerNotification>,
-    snapshots: watch::Sender<ServerSnapshot>,
+    snapshots: Arc<signal::Shared<ServerSnapshot>>,
     status: Arc<ServerStatus>,
     has_routes: bool,
     cloud_routed: bool,
@@ -874,7 +871,7 @@ impl Registration {
         if self.has_routes && info.cloud != cloud_routed {
             log::warn!(target: lk_agents_abi::LOG_TARGET, cloud = info.cloud, routed_cloud = cloud_routed; "the server's edition differs from its URL; endpoints are routed by the URL");
         }
-        self.snapshots.send_modify(|snapshot| snapshot.worker_id = info.worker_id);
+        self.snapshots.modify(|snapshot| snapshot.worker_id = info.worker_id);
         self.status.registered.store(true, Ordering::Release);
         self.status.connected.store(true, Ordering::Release);
     }
@@ -933,7 +930,7 @@ impl LoadReporter {
 
 /// A job's status to the worker connection, when one is up.
 fn send_job_status(
-    snapshot: &watch::Sender<ServerSnapshot>,
+    snapshot: &signal::Shared<ServerSnapshot>,
     job_id: &str,
     status: lk_agents_abi::worker::ipc::JobStatus,
 ) {
@@ -943,7 +940,7 @@ fn send_job_status(
         JobStatus::Failed => proto::JobStatus::JsFailed,
         JobStatus::Success => proto::JobStatus::JsSuccess,
     };
-    let worker = snapshot.borrow().worker.clone();
+    let worker = snapshot.with(|snapshot| snapshot.worker.clone());
     if let Some(worker) = worker
         && worker.send(WorkerCommand::JobStatus { job_id: job_id.to_owned(), status }).is_err()
     {
@@ -964,23 +961,11 @@ async fn bind(address: &Bind) -> Result<(tokio::net::TcpListener, String), Serve
 }
 
 async fn wait_outcome(outcome: &Outcome) -> Result<(), ServerError> {
-    outcome
-        .subscribe()
-        .wait_for(Option::is_some)
-        .await
-        .map_err(|error| ServerError(error.to_string()))?
-        .clone()
-        .unwrap_or(Ok(()))
+    outcome.wait().await.map_err(|error| ServerError(error.to_string()))?
 }
 
 async fn wait_drain_outcome(outcome: &Outcome<DrainError>) -> Result<(), DrainError> {
-    outcome
-        .subscribe()
-        .wait_for(Option::is_some)
-        .await
-        .map_err(|_| DrainError::OutcomeUnavailable)?
-        .clone()
-        .ok_or(DrainError::OutcomeUnavailable)?
+    outcome.wait().await.map_err(|_| DrainError::OutcomeUnavailable)?
 }
 
 async fn pending_drain(

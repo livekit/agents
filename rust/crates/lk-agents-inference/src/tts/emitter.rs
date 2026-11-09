@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -13,10 +12,10 @@ use lk_agents_media::emitter::effects::AudioEmitterEffect;
 use lk_agents_media::pool::MediaPool;
 use lk_agents_media::{AudioDecoder, AudioDecoding, Container};
 use parking_lot::{Mutex, MutexGuard};
-use tokio::sync::{Notify, watch};
 
 use crate::codecs::{self, DecoderInput, decoder_limits};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::signal::{self, Cell, Producer};
 
 // `EmitterOutput` calls queue in order on the host loop: no host code runs inside an emitter
 // call, so a consumer that calls back into the emitter never nests in it. A segment ends only
@@ -41,7 +40,7 @@ struct Inner {
     decode: OnceLock<Decode>,
     /// When the held-tail flush is due. One timer task follows the replaceable deadline;
     /// the framing machine reschedules it as audio is emitted.
-    flush_deadline: watch::Sender<Option<Ts>>,
+    flush_deadline: Producer<Option<Ts>>,
     timer: Mutex<Option<OwnedTask>>,
     /// The container decoder's queue server; it holds the emitter until the queue drains.
     serving: OnceLock<OwnedTask>,
@@ -69,10 +68,10 @@ enum Decode {
 
 struct Queue {
     container: Option<Container>,
-    ops: Mutex<VecDeque<Op>>,
-    ready: Notify,
-    /// The task has framed everything up to the end of input, or stopped.
-    drained: watch::Sender<bool>,
+    /// Calls not yet applied; a closed emitter ends the wait for them.
+    ops: signal::Shared<VecDeque<Op>>,
+    /// Ends with the task: it framed everything up to the end of input, stopped or panicked.
+    drained: Cell<Option<()>>,
     /// The open segment's decoder input, reachable to cancel it.
     segment: Mutex<Option<Arc<DecoderInput>>>,
 }
@@ -110,7 +109,7 @@ impl AudioEmitter {
             machine: Mutex::default(),
             outbox: Mutex::default(),
             decode: OnceLock::new(),
-            flush_deadline: watch::channel(None).0,
+            flush_deadline: signal::signal(None).0,
             timer: Mutex::new(None),
             serving: OnceLock::new(),
             failure: Mutex::new(None),
@@ -197,17 +196,17 @@ impl Inner {
 
     /// Replace the held-tail flush deadline on the injected clock.
     fn schedule_flush_after(self: &Arc<Self>, delay: Duration) {
-        self.flush_deadline.send_replace(Some(self.env.clock.now().saturating_add(delay)));
+        self.flush_deadline.set(Some(self.env.clock.now().saturating_add(delay)));
         let mut timer = locked(&self.timer);
         if timer.is_none() {
-            let (emitter, due) = (Arc::downgrade(self), self.flush_deadline.subscribe());
+            let (emitter, due) = (Arc::downgrade(self), self.flush_deadline.cell());
             *timer =
                 Some(self.env.spawner.spawn(flush_timer(emitter, due, self.env.clock.clone())));
         }
     }
 
     fn cancel_scheduled_flush(&self) {
-        self.flush_deadline.send_replace(None);
+        self.flush_deadline.set(None);
     }
 
     /// PCM to frame for `data`, from the WAV decoder when there is one.
@@ -252,8 +251,7 @@ impl Inner {
         self.failed()?;
         match self.decode.get() {
             Some(Decode::Container(queue)) => {
-                locked(&queue.ops).push_back(op);
-                queue.ready.notify_one();
+                queue.ops.modify(|ops| ops.push_back(op));
                 Ok(())
             }
             Some(Decode::Wav(wav)) => match op {
@@ -298,7 +296,6 @@ impl Inner {
         {
             self.fail(error);
         }
-        queue.drained.send_replace(true);
     }
 
     async fn serve_ops(
@@ -382,18 +379,37 @@ impl Inner {
     }
 }
 
+impl Inner {
+    /// Ends the container task's wait for calls and cancels its open segment.
+    fn close_queue(&self, queue: &Queue) {
+        self.closed.store(true, Ordering::Release);
+        queue.ops.modify(VecDeque::clear);
+        if let Some(segment) = locked(&queue.segment).take() {
+            segment.cancel();
+        }
+    }
+}
+
+/// A dropped emitter whose input never ended stops its container task, which holds it.
+impl Drop for AudioEmitter {
+    fn drop(&mut self) {
+        if let Some(Decode::Container(queue)) = self.0.decode.get()
+            && !self.0.ended.load(Ordering::Acquire)
+        {
+            self.0.close_queue(queue);
+        }
+    }
+}
+
 /// The next queued call; `None` once the emitter is closed.
 async fn next_op(queue: &Queue, closed: &AtomicBool) -> Option<Op> {
-    loop {
-        let ready = queue.ready.notified();
-        if closed.load(Ordering::Acquire) {
-            return None;
-        }
-        if let Some(op) = locked(&queue.ops).pop_front() {
-            return Some(op);
-        }
-        ready.await;
-    }
+    queue
+        .ops
+        .wait_until(|ops| match closed.load(Ordering::Acquire) {
+            true => Some(None),
+            false => ops.pop_front().map(Some),
+        })
+        .await
 }
 
 fn decode_error(error: impl std::fmt::Display) -> EmitterError {
@@ -447,21 +463,24 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
         stream: bool,
     ) -> Result<(), EmitterError> {
         let me = &self.0;
-        let decode = match lk_agents_media::audio_decoding(&mime_type)
+        let (decode, serving) = match lk_agents_media::audio_decoding(&mime_type)
             .map_err(|e| EmitterError::UnsupportedMime(e.to_string()))?
         {
-            AudioDecoding::Passthrough => Decode::Pcm,
-            AudioDecoding::Decode(Container::Wav) => Decode::Wav(Mutex::new(None)),
+            AudioDecoding::Passthrough => (Decode::Pcm, None),
+            AudioDecoding::Decode(Container::Wav) => (Decode::Wav(Mutex::new(None)), None),
             AudioDecoding::Decode(_) => {
                 let container = lk_agents_media::source::check_stream(&mime_type)
                     .map_err(|e| EmitterError::UnsupportedMime(e.to_string()))?;
-                Decode::Container(Queue {
-                    container,
-                    ops: Mutex::default(),
-                    ready: Notify::new(),
-                    drained: watch::Sender::new(false),
-                    segment: Mutex::new(None),
-                })
+                let (serving, drained) = signal::once();
+                (
+                    Decode::Container(Queue {
+                        container,
+                        ops: signal::Shared::new(VecDeque::new()),
+                        drained,
+                        segment: Mutex::new(None),
+                    }),
+                    Some(serving),
+                )
             }
         };
         me.run(|m, _, _| {
@@ -473,9 +492,10 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
         if me.decode.set(decode).is_err() {
             return Err(EmitterError::AlreadyStarted);
         }
-        if let Some(Decode::Container(_)) = me.decode.get() {
+        if let Some(drained) = serving {
             let emitter = me.clone();
             let serving = me.env.spawner.spawn(async move {
+                let _drained = drained;
                 let Some(Decode::Container(queue)) = emitter.decode.get() else { return };
                 emitter.clone().serve(queue).await;
             });
@@ -532,7 +552,7 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
         if let Some(Decode::Container(queue)) = self.0.decode.get()
             && self.0.ended.load(Ordering::Acquire)
         {
-            let _ = queue.drained.subscribe().wait_for(|drained| *drained).await;
+            let _ = queue.drained.wait().await;
         }
         self.0.failed()
     }
@@ -546,13 +566,9 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
         });
         me.cancel_scheduled_flush();
         if let Some(Decode::Container(queue)) = me.decode.get() {
-            locked(&queue.ops).clear();
-            if let Some(segment) = locked(&queue.segment).take() {
-                segment.cancel();
-            }
-            queue.ready.notify_one();
+            me.close_queue(queue);
             // Closing never reports a synthesis failure, but owns native decoding to settlement.
-            let _ = queue.drained.subscribe().wait_for(|drained| *drained).await;
+            let _ = queue.drained.wait().await;
         }
         Ok(())
     }
@@ -580,11 +596,11 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
 /// Fires the tail flush only if its scheduled deadline is unchanged; ends with the emitter.
 async fn flush_timer(
     emitter: std::sync::Weak<Inner>,
-    mut due: watch::Receiver<Option<Ts>>,
+    mut due: Cell<Option<Ts>>,
     clock: Arc<dyn Clock>,
 ) {
     loop {
-        let Some(at) = *due.borrow_and_update() else {
+        let Some(at) = due.get() else {
             if due.changed().await.is_err() {
                 return;
             }
@@ -602,7 +618,7 @@ async fn flush_timer(
         }
         let Some(emitter) = emitter.upgrade() else { return };
         // Cancelled or rescheduled while the wait ended: not this deadline's flush.
-        if emitter.flush_deadline.send_if_modified(|due| {
+        if emitter.flush_deadline.modify(|due| {
             let fire = *due == Some(at);
             if fire {
                 *due = None;

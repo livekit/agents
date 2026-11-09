@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,9 +8,9 @@ use lk_agents_abi::{Clock as _, HOST_TEARDOWN_TIMEOUT};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::clock::RealClock;
 use lk_agents_net::clock::unix_now_ms;
+use lk_agents_net::signal::{self, Producer};
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use parking_lot::Mutex;
-use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::sql::{Bind, SqlValue, Statement};
@@ -46,13 +45,15 @@ impl Holder {
         &self.id
     }
 
-    /// Runs `cleanup` on the set [`Holder::wait_released`] awaits.
-    pub(crate) fn spawn_cleanup(
+    /// Runs `cleanup` on the set [`Holder::wait_released`] awaits, its result published on
+    /// `producer`: a cancel or a panic ends the signal instead.
+    pub(crate) fn spawn_settling_cleanup<T: Send + Sync + 'static>(
         &self,
         name: &str,
-        cleanup: impl std::future::Future<Output = ()> + Send + 'static,
+        producer: Producer<Option<T>>,
+        cleanup: impl std::future::Future<Output = T> + Send + 'static,
     ) {
-        self.releases.spawn(&TokioSpawner::current(), name, cleanup);
+        self.releases.spawn_settling(&TokioSpawner::current(), name, producer, cleanup);
     }
 
     /// Waits, at most [`HOST_TEARDOWN_TIMEOUT`], for the releases dropped leases left; `false`
@@ -272,7 +273,8 @@ impl Drop for Held {
 struct Ownership {
     lane: String,
     deadline: Mutex<Instant>,
-    lost: watch::Sender<Option<String>>,
+    /// Why ownership was lost, set once. Held with the ownership, which every waiter borrows.
+    lost: Producer<Option<String>>,
 }
 
 impl Ownership {
@@ -280,7 +282,7 @@ impl Ownership {
         if Instant::now() >= deadline {
             self.lose("the ownership deadline elapsed".into());
         }
-        match self.lost.borrow().clone() {
+        match self.lost.get() {
             Some(reason) => Err(StorageError::LeaseLost(reason)),
             None => Ok(()),
         }
@@ -300,13 +302,14 @@ impl Ownership {
 
     fn lose(&self, reason: String) {
         let reason = format!("lease on lane {}: {reason}", self.lane);
-        if self.lost.send_if_modified(|lost| {
-            if lost.is_some() {
-                return false;
+        let first = self.lost.modify(|lost| {
+            let first = lost.is_none();
+            if first {
+                *lost = Some(reason.clone());
             }
-            *lost = Some(reason.clone());
-            true
-        }) {
+            first
+        });
+        if first {
             log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(); "{reason}");
         }
     }
@@ -314,7 +317,7 @@ impl Ownership {
 
 impl Lease {
     fn new(db: Thread, fence: Fence, acquired_at: Instant) -> Self {
-        let (lost, _) = watch::channel(None);
+        let (lost, _) = signal::signal(None);
         let ownership = Arc::new(Ownership {
             lane: fence.lane.clone(),
             deadline: Mutex::new(acquired_at + db.timing.ttl),
@@ -373,18 +376,17 @@ impl Lease {
     /// held, so race it against the run.
     pub async fn lost(&self) -> StorageError {
         let ownership = &self.inner.ownership;
-        let mut rx = ownership.lost.subscribe();
+        let mut lost = ownership.lost.cell();
         loop {
             if let Err(error) = ownership.check() {
                 return error;
             }
             let deadline = *ownership.deadline.lock();
+            // `self` holds the producer for the whole wait.
             tokio::select! {
                 biased;
                 _ = tokio::time::sleep_until(deadline) => {},
-                changed = rx.changed() => {
-                    if changed.is_err() { return StorageError::LeaseLost("lease observer closed".into()); }
-                }
+                _ = lost.changed() => {}
             }
         }
     }

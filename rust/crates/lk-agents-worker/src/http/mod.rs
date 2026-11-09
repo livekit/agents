@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 mod exchange;
 mod websocket;
 
@@ -17,8 +16,9 @@ use lk_agents_abi::a2a::door::{TextEndpoint, TextServing};
 use lk_agents_abi::worker::http::{
     EndpointHandler, EndpointKind, EndpointRequest as RequestMetadata, HttpScheme,
 };
+use lk_agents_net::signal;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::{Mutex, watch};
+use tokio::sync::Mutex;
 use tokio::time::Sleep;
 
 use crate::transport::{
@@ -83,10 +83,15 @@ impl Default for HttpServerLimits {
 }
 
 /// Open connections, bounded; watched so a drain can wait for the last one.
-#[derive(Debug)]
 pub(crate) struct Connections {
     max: usize,
-    open: watch::Sender<usize>,
+    open: signal::Shared<usize>,
+}
+
+impl std::fmt::Debug for Connections {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Connections").field("max", &self.max).finish_non_exhaustive()
+    }
 }
 
 /// One admitted connection, released when dropped.
@@ -95,11 +100,12 @@ pub(crate) struct Admission(Arc<Connections>);
 
 impl Connections {
     fn new(max: usize) -> Arc<Self> {
-        Arc::new(Self { max, open: watch::Sender::new(0) })
+        Arc::new(Self { max, open: signal::Shared::new(0) })
     }
 
     pub(crate) fn admit(self: &Arc<Self>) -> Option<Admission> {
-        let admitted = self.open.send_if_modified(|open| {
+        // An admission wakes nobody: only the last release does.
+        let admitted = self.open.with(|open| {
             let room = *open < self.max;
             if room {
                 *open += 1;
@@ -111,18 +117,18 @@ impl Connections {
 
     /// Until no connection is open.
     async fn idle(&self) {
-        let _ = self.open.subscribe().wait_for(|open| *open == 0).await;
+        self.open.wait_until(|open| (*open == 0).then_some(())).await;
     }
 
     #[cfg(test)]
     pub(crate) fn open(&self) -> usize {
-        *self.open.borrow()
+        self.open.with(|open| *open)
     }
 }
 
 impl Drop for Admission {
     fn drop(&mut self) {
-        self.0.open.send_modify(|open| *open -= 1);
+        self.0.open.modify(|open| *open -= 1);
     }
 }
 
@@ -188,7 +194,8 @@ pub struct EndpointServer {
     limits: HttpServerLimits,
     connections: Arc<Connections>,
     /// Changed only with `websockets` locked, so a drain and a registration never race.
-    state: watch::Sender<ServerState>,
+    /// `Stopping` is terminal.
+    state: signal::Shared<ServerState>,
     websockets: parking_lot::Mutex<WebSockets>,
 }
 
@@ -226,7 +233,7 @@ impl EndpointServer {
         tracer: telemetry::Tracer,
     ) -> Self {
         let connections = Connections::new(limits.max_connections);
-        let state = watch::Sender::new(ServerState::Serving);
+        let state = signal::Shared::new(ServerState::Serving);
         let websockets = Default::default();
         Self { handler, tracer, text: None, limits, connections, state, websockets }
     }
@@ -261,24 +268,23 @@ impl EndpointServer {
     /// Move to `state`, never back; the WebSockets open at that moment.
     fn enter(&self, state: ServerState) -> Vec<Arc<Exchange>> {
         let websockets = self.websockets.lock();
-        self.state.send_if_modified(|current| {
-            let advanced = *current < state;
-            if advanced {
-                *current = state;
-            }
-            advanced
-        });
+        self.state.modify(|current| *current = state.max(*current));
         websockets.open.values().cloned().collect()
     }
 
     fn admitting(&self) -> bool {
-        *self.state.borrow() == ServerState::Serving
+        self.state.with(|state| *state == ServerState::Serving)
+    }
+
+    /// Until the server stops.
+    async fn stopping(&self) {
+        self.state.wait_until(|state| (*state == ServerState::Stopping).then_some(())).await;
     }
 
     /// Track an open WebSocket for drain; `None` once draining.
     fn register(&self, exchange: &Arc<Exchange>) -> Option<Registered<'_>> {
         let mut websockets = self.websockets.lock();
-        if *self.state.borrow() != ServerState::Serving {
+        if !self.admitting() {
             return None;
         }
         let id = websockets.next;

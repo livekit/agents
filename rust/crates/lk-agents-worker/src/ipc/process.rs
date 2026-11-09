@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::ipc::telemetry;
 use std::io;
 use std::sync::Arc;
@@ -8,9 +7,10 @@ use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host;
 use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::signal;
 use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
 
 use super::SupervisorCallbacks;
 use super::executor::{Connection, Exit, Runner, RunnerExecutor, host_error};
@@ -659,9 +659,8 @@ impl Tracked {
 async fn watch(
     process: Arc<Mutex<Tracked>>,
     mut launching: Option<OwnedTask<Result<(), HostError>>>,
-    exit: watch::Sender<Option<Exit>>,
     logger: JobLogger,
-) {
+) -> Exit {
     loop {
         if let Some(launch) = launching.as_mut().filter(|launch| launch.is_finished()) {
             let cause = match launch.await {
@@ -675,9 +674,8 @@ async fn watch(
                 process.lock().stopping = true;
             }
         }
-        if let Some(code) = process.lock().poll(&logger) {
-            exit.send_replace(Some(code));
-            return;
+        if let Some(exit) = process.lock().poll(&logger) {
+            return exit;
         }
         tokio::time::sleep(POLL).await;
     }
@@ -688,7 +686,7 @@ const POLL: Duration = Duration::from_millis(10);
 struct JobProcess {
     logger: JobLogger,
     process: Arc<Mutex<Tracked>>,
-    finished: watch::Receiver<Option<Exit>>,
+    finished: signal::Cell<Option<Exit>>,
     _watching: OwnedTask,
 }
 
@@ -705,23 +703,20 @@ impl JobProcess {
             exited: false,
             failed: false,
         }));
-        let (exit, finished) = watch::channel(None);
-        let watching =
-            TokioSpawner::current().spawn(watch(process.clone(), launching, exit, logger.clone()));
+        // The watcher holds the producer: its panic or cancel ends the wait.
+        let (exit, finished) = signal::once();
+        let watching = TokioSpawner::current().spawn({
+            let (process, logger) = (process.clone(), logger.clone());
+            async move { exit.resolve(watch(process, launching, logger).await) }
+        });
         Self { logger, process, finished, _watching: watching }
     }
 }
 
 #[async_trait::async_trait]
 impl Runner for JobProcess {
-    async fn finished(&self) -> Exit {
-        let exit =
-            self.finished.clone().wait_for(Option::is_some).await.ok().and_then(|exit| *exit);
-        match exit {
-            Some(exit) => exit,
-            // the watcher was dropped with the runner: it never finishes
-            None => std::future::pending().await,
-        }
+    async fn finished(&self) -> Result<Exit, signal::Ended> {
+        self.finished.wait().await
     }
 
     fn stop(&self) -> bool {
@@ -920,7 +915,7 @@ mod tests {
         assert!(pending(&runner).await, "an OS exit alone released the process");
         write_receipt(&mut receipt, 3);
         let exit = tokio::time::timeout(Duration::from_secs(5), runner.finished()).await.unwrap();
-        assert_eq!(exit, Exit { code: 3, killed: false });
+        assert_eq!(exit, Ok(Exit { code: 3, killed: false }));
     }
 
     // Catches: a reaping receipt releasing a process the OS has not seen exit.
@@ -932,14 +927,23 @@ mod tests {
         assert!(pending(&runner).await, "a receipt released a live process");
         child.0.kill().unwrap();
         let exit = tokio::time::timeout(Duration::from_secs(5), runner.finished()).await.unwrap();
-        assert_eq!(exit, Exit { code: 9, killed: false });
+        assert_eq!(exit, Ok(Exit { code: 9, killed: false }));
+    }
+
+    // Catches: a watcher that died (a panic, a cancel) leaving finished() pending forever.
+    #[tokio::test]
+    async fn a_dead_watcher_is_an_error_not_a_hang() {
+        let child = OwnedChild(Command::new("sleep").arg("30").spawn().unwrap());
+        let (runner, _receipt) = forkserver_runner(&child);
+        runner._watching.cancel();
+        let finished = tokio::time::timeout(Duration::from_secs(5), runner.finished()).await;
+        assert!(finished.expect("finished() hung").is_err());
     }
 
     /// Spawns `sleep 30`, reports it, then never finishes the launch.
-    #[derive(Default)]
     struct ReportsThenHangs {
         pid: Mutex<Option<u32>>,
-        reported: tokio::sync::Notify,
+        reported: signal::Shared<bool>,
     }
 
     impl ipc_host::JobLauncher for ReportsThenHangs {
@@ -963,7 +967,7 @@ mod tests {
                     .report(child.id(), sentinel.into_raw_fd().into(), "spawn", vec![])
                     .unwrap();
                 *self.pid.lock() = Some(child.id());
-                self.reported.notify_one();
+                self.reported.modify(|reported| *reported = true);
                 std::future::pending().await
             })
         }
@@ -981,13 +985,16 @@ mod tests {
     // Catches: a launch dropped between the receipt and its take leaving a live child.
     #[tokio::test]
     async fn a_launch_cancelled_at_its_receipt_kills_the_process() {
-        let launcher = Arc::new(ReportsThenHangs::default());
+        let launcher = Arc::new(ReportsThenHangs {
+            pid: Mutex::default(),
+            reported: signal::Shared::new(false),
+        });
         let executor =
             ProcessExecutor::new(launcher.clone(), CallContext::default(), JobLogger::default());
         let mut launch = Box::pin(executor.launch());
         tokio::select! {
             biased;
-            () = launcher.reported.notified() => {}
+            () = launcher.reported.wait_until(|reported| reported.then_some(())) => {}
             _ = &mut launch => panic!("the launch finished before the test cancelled it"),
         }
         drop(launch);

@@ -33,7 +33,7 @@ async fn late_realtime_metrics_become_a_child_of_the_ended_inference() {
     assert!(blob(inferences[0]), "early metrics land on the span: {:?}", inferences[0]);
     let ttft = inferences[0].attributes.iter().find(|(k, _)| *k == "lk.realtime_model_metrics");
     let Some((_, Value::String(json))) = ttft else { panic!() };
-    assert!(json.contains("\"ttft\":-1.0"), "{json}");
+    assert!(!json.contains("\"ttft\""), "an unmeasured ttft is omitted: {json}");
     let late = spans.iter().find(|s| s.name == "realtime_metrics").expect("{spans:?}");
     assert_eq!(late.parent, Some(inferences[1].context.span_id));
     assert!(blob(late));

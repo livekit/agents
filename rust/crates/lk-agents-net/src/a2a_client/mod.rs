@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 pub mod authority;
 pub mod host;
 pub mod remote;
@@ -19,12 +18,13 @@ use lk_agents_core::a2a::client::{
     Client, ClientError, HttpMethod, ReplyState, Request, TaskUpdate,
 };
 use lk_agents_core::a2a::rpc::TaskRef;
-use tokio::sync::{Mutex as AsyncMutex, mpsc, watch};
+use tokio::sync::{Mutex as AsyncMutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::env::{ProcessEnv, ProcessError};
 use crate::http::exchange::{Exchange, HttpEvent};
 use crate::http::{BodyReader, GatewayHttp};
+use crate::signal;
 use crate::source::{Pulled, SharedStream};
 use crate::sse::{SseDecoder, SseEvent};
 use crate::task::TokioSpawner;
@@ -49,20 +49,21 @@ pub enum CleanupObservation {
     },
 }
 
+/// What a call's delivery learned of its remote task.
 #[derive(Clone, Default)]
-struct CallState {
-    admitted: bool,
+struct Progress {
     acknowledgement: Option<Result<TaskRef, ClientError>>,
     identity: Option<TaskRef>,
     terminal: bool,
-    consumed: bool,
-    settled: bool,
 }
+
+/// Resolves, or ends, once the call's task and its cleanup are gone.
+type Settled = signal::Cell<Option<()>>;
 
 struct Operation {
     _task: OwnedTask,
     stop: CancellationToken,
-    state: watch::Receiver<CallState>,
+    settled: Settled,
 }
 
 struct Inner {
@@ -209,50 +210,55 @@ impl AgentClient {
     ) -> Result<(TaskRef, ReplyUpdates), ClientError> {
         self.inner.ensure_open()?;
         let (updates, rx) = mpsc::channel(UPDATE_QUEUE);
-        let (state, mut acknowledged) =
-            watch::channel(CallState { identity: request.task.clone(), ..CallState::default() });
+        // Each producer lives with its writer: the delivery in the call's task, admission here,
+        // consumption in the reply, settlement in the task's settle hook.
+        let (progress, acknowledged) =
+            signal::signal(Progress { identity: request.task.clone(), ..Progress::default() });
+        let (admit, admitted) = signal::once::<()>();
+        let (consume, consumed) = signal::signal(false);
+        let (settle, settled) = signal::once::<()>();
         let stop = CancellationToken::new();
-        let operation = OperationGuard { stop: stop.clone(), state: acknowledged.clone() };
+        let operation = OperationGuard { stop: stop.clone(), settled: settled.clone() };
         let message = OutboundMessage::of(&request);
         let call = RemoteCall {
-            delivery: Delivery { inner: self.inner.clone(), updates, state: state.clone() },
+            delivery: Delivery { inner: self.inner.clone(), updates, progress },
             task: RemoteTask {
                 inner: self.inner.clone(),
                 id,
                 task_response: request.task_response,
                 message: message.clone(),
-                state: acknowledged.clone(),
+                progress: acknowledged.clone(),
             },
+            admitted: admitted.clone(),
+            consumed,
             stop: stop.clone(),
         };
         let inner = self.inner.clone();
-        let done = state.clone();
         let remote = acknowledged.clone();
         let task = TokioSpawner::new(self.inner.runtime.clone()).spawn_settled(
             call.run(request),
             move |outcome| async move {
-                inner.cancel_unfinished_call(id, message.as_ref(), outcome, &remote).await;
+                let admitted = admitted.get().is_some();
+                inner
+                    .cancel_unfinished_call(id, message.as_ref(), outcome, admitted, &remote)
+                    .await;
                 inner.forget_call(id);
                 // The client is released before the call is announced settled.
                 drop(inner);
-                done.send_modify(|state| state.settled = true);
+                settle.resolve(());
             },
         );
         {
             let mut operations = self.inner.operations.lock();
             self.inner.ensure_open()?;
-            operations.insert(id, Operation { _task: task, stop, state: acknowledged.clone() });
+            operations.insert(id, Operation { _task: task, stop, settled });
         }
-        let updates =
-            ReplyUpdates { rx, state: state.clone(), operation, clock: self.inner.clock.clone() };
-        state.send_modify(|state| state.admitted = true);
+        let updates = ReplyUpdates { rx, consume, operation, clock: self.inner.clock.clone() };
+        admit.resolve(());
         let task = acknowledged
-            .wait_for(|state| state.acknowledgement.is_some() || state.settled)
+            .wait_map(|progress| progress.acknowledgement.clone())
             .await
-            .map_err(|_| ClientError::incomplete())?
-            .acknowledgement
-            .clone()
-            .ok_or_else(ClientError::incomplete)??;
+            .map_err(|_| ClientError::incomplete())??;
         Ok((task, updates))
     }
 
@@ -273,8 +279,8 @@ impl AgentClient {
     pub async fn aclose(&self) {
         self.inner.closing.cancel();
         let waiting = self.inner.cancel_all();
-        for mut state in waiting {
-            let _ = state.wait_for(|state| state.settled).await;
+        for settled in waiting {
+            let _ = settled.wait().await;
         }
         let operations = self.inner.operations.lock();
         if operations.is_empty() {
@@ -315,13 +321,13 @@ impl Inner {
         }
     }
 
-    fn cancel_all(&self) -> Vec<watch::Receiver<CallState>> {
+    fn cancel_all(&self) -> Vec<Settled> {
         self.operations
             .lock()
             .values_mut()
             .map(|op| {
                 op.stop.cancel();
-                op.state.clone()
+                op.settled.clone()
             })
             .collect()
     }
@@ -386,10 +392,11 @@ impl Inner {
         id: u64,
         message: Option<&OutboundMessage>,
         outcome: TaskOutcome,
-        remote: &watch::Receiver<CallState>,
+        admitted: bool,
+        remote: &signal::Cell<Progress>,
     ) {
-        let state = remote.borrow().clone();
-        if outcome == TaskOutcome::Completed || state.terminal || !state.admitted {
+        let state = remote.get();
+        if outcome == TaskOutcome::Completed || state.terminal || !admitted {
             return;
         }
         let task = state.identity;
@@ -441,6 +448,10 @@ impl Inner {
 struct RemoteCall {
     delivery: Delivery,
     task: RemoteTask,
+    /// The caller registered the call and holds its reply.
+    admitted: signal::Cell<Option<()>>,
+    /// The caller read the settling update.
+    consumed: signal::Cell<bool>,
     stop: CancellationToken,
 }
 
@@ -449,7 +460,7 @@ impl RemoteCall {
         tokio::select! {
             biased;
             () = self.stop.cancelled() => return,
-            admitted = self.task.state.wait_for(|state| state.admitted) => {
+            admitted = self.admitted.wait() => {
                 if admitted.is_err() {
                     return;
                 }
@@ -479,18 +490,18 @@ impl RemoteCall {
     /// Until the recipient consumes a buffered question, abandoning its reply still owes
     /// cancellation of the nonterminal remote task.
     async fn cancel_unread_question(&mut self) {
-        if self.task.state.borrow().terminal || self.task.state.borrow().consumed {
+        if self.task.progress.with(|p| p.terminal) || self.consumed.get() {
             return;
         }
         tokio::select! {
             biased;
-            _ = self.task.state.wait_for(|state| state.consumed) => {},
+            _ = self.consumed.wait_for(|consumed| *consumed) => {},
             () = self.stop.cancelled() => {},
         }
-        if self.task.state.borrow().consumed {
+        if self.consumed.get() {
             return;
         }
-        let task = self.task.state.borrow().identity.clone();
+        let task = self.task.progress.with(|p| p.identity.clone());
         if let Some(task) = task {
             self.task.inner.cancel_owned(&task).await;
         }
@@ -528,7 +539,7 @@ struct RemoteTask {
     task_response: bool,
     /// How an unacknowledged send learns its task.
     message: Option<OutboundMessage>,
-    state: watch::Receiver<CallState>,
+    progress: signal::Cell<Progress>,
 }
 
 impl RemoteTask {
@@ -538,7 +549,7 @@ impl RemoteTask {
     ) {
         if self.task_response {
             if let Err(error) = exchange.await
-                && let Some(task) = self.state.borrow().identity.clone()
+                && let Some(task) = self.progress.with(|p| p.identity.clone())
             {
                 self.inner.observe(CleanupObservation::CancelUncertain {
                     task,
@@ -548,7 +559,7 @@ impl RemoteTask {
             return;
         }
         match self.await_identity(exchange).await {
-            Some(task) if !self.state.borrow().terminal => {
+            Some(task) if !self.progress.with(|p| p.terminal) => {
                 self.inner.cancel_owned(&task).await;
             }
             Some(_) => {}
@@ -559,27 +570,21 @@ impl RemoteTask {
     /// Keeps the original send alive until its ack, which names the task without a resend.
     async fn await_identity(
         &self,
-        mut exchange: Pin<&mut impl Future<Output = Result<(), ClientError>>>,
+        exchange: Pin<&mut impl Future<Output = Result<(), ClientError>>>,
     ) -> Option<TaskRef> {
-        let mut state = self.state.clone();
-        loop {
-            if let Some(task) = state.borrow_and_update().identity.clone() {
-                return Some(task);
-            }
-            tokio::select! {
-                biased;
-                _ = state.changed() => {},
-                _ = &mut exchange => return state.borrow().identity.clone(),
-            }
+        tokio::select! {
+            biased;
+            task = self.progress.wait_map(|p| p.identity.clone()) => task.ok(),
+            _ = exchange => self.progress.with(|p| p.identity.clone()),
         }
     }
 
     /// A failed exchange cancels its nonterminal remote task, or records why it cannot.
     async fn cancel_after_failure(&self, error: &ClientError) {
-        if self.state.borrow().terminal {
+        if self.progress.with(|p| p.terminal) {
             return;
         }
-        let task = self.state.borrow().identity.clone();
+        let task = self.progress.with(|p| p.identity.clone());
         let Some(task) = task else {
             // a refused RPC created nothing
             if !matches!(error, ClientError::Rpc { .. }) {
@@ -600,32 +605,28 @@ impl RemoteTask {
 struct Delivery {
     inner: Arc<Inner>,
     updates: mpsc::Sender<Result<TaskUpdate, ClientError>>,
-    state: watch::Sender<CallState>,
+    progress: signal::Producer<Progress>,
 }
 
 impl Delivery {
     fn fail_acknowledgement(&self, error: ClientError) {
-        self.state.send_if_modified(|state| {
-            if state.acknowledgement.is_some() {
-                return false;
-            }
-            state.acknowledgement = Some(Err(error));
-            true
+        self.progress.modify(|p| {
+            p.acknowledgement.get_or_insert(Err(error));
         });
     }
 
     async fn deliver(&mut self, update: TaskUpdate) -> Result<(), ClientError> {
         let task = TaskRef { id: update.task_id.clone(), context_id: update.context_id.clone() };
-        let first = self.state.borrow().acknowledgement.is_none();
-        self.state.send_modify(|state| {
+        let first = self.progress.with(|p| p.acknowledgement.is_none());
+        self.progress.modify(|p| {
             if !task.id.is_empty() {
-                state.identity = Some(task.clone());
+                p.identity = Some(task.clone());
             }
-            state.terminal = update.state.is_terminal();
+            p.terminal = update.state.is_terminal();
         });
         if first {
             self.inner.core.lock().acknowledge(&update)?;
-            self.state.send_modify(|state| state.acknowledgement = Some(Ok(task)));
+            self.progress.modify(|p| p.acknowledgement = Some(Ok(task)));
         }
         self.updates.send(Ok(update)).await.map_err(|_| ClientError::closed())
     }
@@ -653,7 +654,7 @@ impl Reply {
 
 struct OperationGuard {
     stop: CancellationToken,
-    state: watch::Receiver<CallState>,
+    settled: Settled,
 }
 
 impl OperationGuard {
@@ -672,14 +673,14 @@ struct ReplyUpdates {
     rx: mpsc::Receiver<Result<TaskUpdate, ClientError>>,
     operation: OperationGuard,
     clock: Arc<dyn Clock>,
-    state: watch::Sender<CallState>,
+    consume: signal::Producer<bool>,
 }
 
 impl ReplyUpdates {
     async fn recv(&mut self) -> Result<Option<TaskUpdate>, ClientError> {
         let update = self.rx.recv().await.transpose()?;
         if update.as_ref().is_some_and(TaskUpdate::is_settled) {
-            self.state.send_modify(|state| state.consumed = true);
+            self.consume.set(true);
         }
         Ok(update)
     }
@@ -697,12 +698,12 @@ impl StreamOutput<TaskUpdate> for ReplyUpdates {
     fn cancel_safe(&self) -> bool {
         true
     }
-    fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+    fn close(self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
         Box::pin(async move {
             self.operation.cancel();
             let clock = self.clock.clone();
             Closed::bounded(&*clock, deadline, async move {
-                let _ = self.operation.state.wait_for(|state| state.settled).await;
+                let _ = self.operation.settled.wait().await;
             })
             .await
         })

@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use crate::{retry, telemetry};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::utils::stream::{Entry, ProviderStream};
@@ -6,9 +5,8 @@ use lk_agents_abi::{
     ApiConnectOptions, BoxFuture, Clock, Closed, DuplexStream, StreamInput, StreamOutput,
     SynthesizedAudio, Ts, Tts, TtsSink, TtsSource,
 };
-use parking_lot::Mutex;
+use lk_agents_net::signal;
 use std::sync::Arc;
-use tokio::sync::Notify;
 
 pub async fn synthesize(
     tts: Arc<dyn Tts>,
@@ -63,8 +61,7 @@ pub async fn stream(
     let provider = tts.with_conn_options(&attempt).unwrap_or_else(|| tts.clone());
     let stop = tokio_util::sync::CancellationToken::new();
     let input = Arc::new(Input {
-        state: Mutex::new(InputState { entries: Vec::new(), sink: None, error: None }),
-        changed: Notify::new(),
+        state: signal::Shared::new(InputState { entries: Vec::new(), sink: None, error: None }),
         stop: stop.clone(),
     });
     let (cx, pending) = (cx.clone(), input.clone());
@@ -90,8 +87,8 @@ fn report(tts: Arc<dyn Tts>, observer: Option<retry::Observer>) -> retry::Observ
 }
 
 struct Input {
-    state: Mutex<InputState>,
-    changed: Notify,
+    /// A failed child sink wakes the attempt reading it.
+    state: signal::Shared<InputState>,
     stop: tokio_util::sync::CancellationToken,
 }
 
@@ -103,15 +100,14 @@ struct InputState {
 
 impl Input {
     fn send(&self, entry: Entry<String>) -> Result<(), ProviderError> {
-        let mut state = self.state.lock();
-        if self.stop.is_cancelled() || matches!(state.entries.last(), Some(Entry::EndInput)) {
-            return Err(lk_agents_abi::errors::ApiError::new("synthesis input is closed")
-                .with_retryable(false)
-                .into());
-        }
-        state.entries.push(entry.clone());
-        let sink = state.sink.clone();
-        drop(state);
+        let sink = self.state.with(|state| {
+            if self.stop.is_cancelled() || matches!(state.entries.last(), Some(Entry::EndInput)) {
+                return Err(lk_agents_abi::errors::ApiError::new("synthesis input is closed")
+                    .with_retryable(false));
+            }
+            state.entries.push(entry.clone());
+            Ok(state.sink.clone())
+        })?;
         let Some(sink) = sink else { return Ok(()) };
         let sent = match entry {
             Entry::Item(text) => sink.push(text),
@@ -122,9 +118,8 @@ impl Input {
             }
         };
         if let Err(error) = sent {
-            let previous = self.state.lock().error.replace(error);
+            let previous = self.state.modify(|state| state.error.replace(error));
             drop(previous);
-            self.changed.notify_one();
         }
         Ok(())
     }
@@ -132,17 +127,18 @@ impl Input {
     async fn install(&self, sink: Arc<dyn StreamInput<String>>) -> Result<(), ProviderError> {
         let mut cursor = 0;
         loop {
-            let entries = {
-                let mut state = self.state.lock();
+            let mut previous = None;
+            let entries = self.state.with(|state| {
                 if cursor == state.entries.len() {
-                    let previous_error = state.error.take();
-                    let previous = state.sink.replace(sink);
-                    drop(state);
-                    drop(previous);
-                    drop(previous_error);
-                    return Ok(());
+                    previous = Some((state.error.take(), state.sink.replace(sink.clone())));
+                    return None;
                 }
-                state.entries[cursor..].to_vec()
+                Some(state.entries[cursor..].to_vec())
+            });
+            let Some(entries) = entries else {
+                // The replaced sink and error drop outside the lock.
+                drop(previous);
+                return Ok(());
             };
             for entry in entries {
                 sink.send(entry).await?;
@@ -152,14 +148,7 @@ impl Input {
     }
 
     async fn failure(&self) -> ProviderError {
-        loop {
-            let changed = self.changed.notified();
-            let error = self.state.lock().error.take();
-            if let Some(error) = error {
-                return error;
-            }
-            changed.await;
-        }
+        self.state.wait_until(|state| state.error.take()).await
     }
 }
 
@@ -199,7 +188,7 @@ impl StreamOutput<SynthesizedAudio> for Attempt {
         })
     }
     fn close(self: Box<Self>, deadline: Ts) -> BoxFuture<'static, Closed> {
-        let previous = self.input.state.lock().sink.take();
+        let previous = self.input.state.with(|state| state.sink.take());
         drop(previous);
         self.sink.end_input();
         self.source.close(deadline)

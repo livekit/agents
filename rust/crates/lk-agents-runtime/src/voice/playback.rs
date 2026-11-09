@@ -1,20 +1,19 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use lk_agents_abi::voice::io::{
     Playback, PlaybackEvent, PlaybackFinished, PlaybackObserver, PlaybackReports, PlaybackSegment,
     PlaybackTracker,
 };
 use lk_agents_abi::{BoxFuture, TranscriptChunk, Ts, WallAnchor};
+use lk_agents_net::signal::Shared;
 use lk_agents_voice::playback::PlaybackSegments;
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tokio::sync::watch;
 
 /// The tracker of one output node, also the observer a child registers with, so a terminal's
 /// event counts at every level.
 pub struct Tracker {
-    /// Notifies waits only when a finish or reset may settle them.
-    segments: watch::Sender<PlaybackSegments>,
+    /// Wakes waits only when a finish or reset may settle them.
+    segments: Shared<PlaybackSegments>,
     observers: Mutex<Vec<Arc<dyn PlaybackObserver>>>,
     /// The session's clock as wall seconds, for a host sink's `time.time()` stamps. Set once.
     anchor: OnceLock<WallAnchor>,
@@ -23,7 +22,7 @@ pub struct Tracker {
 impl Tracker {
     pub fn new() -> Self {
         Tracker {
-            segments: watch::Sender::new(PlaybackSegments::default()),
+            segments: Shared::new(PlaybackSegments::default()),
             observers: Mutex::new(Vec::new()),
             anchor: OnceLock::new(),
         }
@@ -32,12 +31,7 @@ impl Tracker {
     /// A change no wait observes: `change` must leave what `PlaybackSegments::settled` reads
     /// (the finish count, the last event, the reset epoch) as it was, or a parked wait misses it.
     fn update<T>(&self, change: impl FnOnce(&mut PlaybackSegments) -> T) -> T {
-        let mut out = None;
-        self.segments.send_if_modified(|s| {
-            out = Some(change(s));
-            false
-        });
-        out.expect("the change ran")
+        self.segments.with(change)
     }
 
     /// Cloned out: an observer is often a parent tracker that re-enters.
@@ -73,15 +67,15 @@ impl PlaybackTracker for Tracker {
     }
 
     fn has_pending_segment(&self, segment: PlaybackSegment) -> bool {
-        self.segments.borrow().is_pending(segment)
+        self.segments.with(|s| s.is_pending(segment))
     }
 
     fn accepts_report(&self, segment: PlaybackSegment) -> bool {
-        self.segments.borrow().accepts(segment)
+        self.segments.with(|s| s.accepts(segment))
     }
 
     fn current_segment(&self) -> Option<PlaybackSegment> {
-        self.segments.borrow().current()
+        self.segments.with(|s| s.current())
     }
 
     fn note_captured(&self, duration: Duration) -> PlaybackSegment {
@@ -97,12 +91,12 @@ impl PlaybackTracker for Tracker {
     }
 
     fn reset(&self) {
-        self.segments.send_modify(PlaybackSegments::reset);
+        self.segments.modify(PlaybackSegments::reset);
         self.on_playback_reset();
     }
 
     fn position(&self) -> Duration {
-        self.segments.borrow().position()
+        self.segments.with(|s| s.position())
     }
 
     fn playback_started(&self, segment: PlaybackSegment, created_at: Ts) -> bool {
@@ -138,7 +132,7 @@ impl PlaybackTracker for Tracker {
     }
 
     fn playback_finished(&self, segment: PlaybackSegment, ev: PlaybackFinished) -> bool {
-        if !self.segments.send_if_modified(|s| s.finished(segment, ev.clone())) {
+        if !self.segments.modify(|s| s.finished(segment, ev.clone())) {
             return false;
         }
         self.emit(|o| o.on_segment_finished(segment, &ev));
@@ -162,13 +156,8 @@ impl PlaybackTracker for Tracker {
 
     fn wait_for_playout(&self) -> BoxFuture<'_, PlaybackFinished> {
         Box::pin(async move {
-            let mut settled = self.segments.subscribe();
-            let wait = settled.borrow().wait();
-            let s = settled
-                .wait_for(|s| s.settled(wait).is_some())
-                .await
-                .expect("the tracker owns its sender for the whole wait");
-            s.settled(wait).expect("checked").clone()
+            let wait = self.segments.with(|s| s.wait());
+            self.segments.wait_until(|s| s.settled(wait).cloned()).await
         })
     }
 }

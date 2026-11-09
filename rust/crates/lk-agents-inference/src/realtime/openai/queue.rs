@@ -1,4 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods, reason = "migrating to signal")]
 use super::session::Cmd;
 use lk_agents_abi::RealtimeCommand as Command;
 use lk_agents_abi::errors::ApiError;
@@ -7,9 +6,10 @@ use lk_agents_abi::llm::realtime::{
 };
 use lk_agents_abi::{Clock, Ts};
 use lk_agents_media::media_queue;
+use lk_agents_net::signal::{self, Cell, Producer};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 
 pub(crate) const EVENT_BACKLOG: usize = 256;
 /// Queued audio bytes. Text and tool-argument events are bounded only by `EVENT_BACKLOG` times
@@ -27,20 +27,21 @@ enum Ending {
 pub(crate) struct Delivery {
     events: mpsc::Sender<QueuedEvent>,
     retained: Arc<AtomicUsize>,
-    terminal: watch::Sender<Ending>,
+    /// Shared by every clone: the receiver drains once the last is gone.
+    terminal: Arc<Producer<Ending>>,
 }
 
 pub(crate) struct EventReceiver {
     events: mpsc::Receiver<QueuedEvent>,
-    terminal: watch::Receiver<Ending>,
+    terminal: Cell<Ending>,
     ended: bool,
 }
 
 pub(crate) fn events() -> (Delivery, EventReceiver) {
     let (events, receiver) = mpsc::channel(EVENT_BACKLOG);
-    let (terminal, failure) = watch::channel(Ending::Open);
+    let (terminal, failure) = signal::signal(Ending::Open);
     (
-        Delivery { events, terminal, retained: Arc::new(AtomicUsize::new(0)) },
+        Delivery { events, terminal: Arc::new(terminal), retained: Arc::new(AtomicUsize::new(0)) },
         EventReceiver { events: receiver, terminal: failure, ended: false },
     )
 }
@@ -71,11 +72,11 @@ impl Delivery {
         };
         let mut result = Err(ApiError::new("realtime event stream ended").with_retryable(false));
         let mut event = Some(event);
-        // Serialize admission with terminal publication so a producer cannot keep filling
-        // freshly drained capacity and postpone the required completion indefinitely.
-        self.terminal.send_if_modified(|terminal| {
+        // Admission reads the terminal under its lock, so a producer cannot keep filling freshly
+        // drained capacity and postpone the required completion indefinitely.
+        self.terminal.with(|terminal| {
             if !matches!(terminal, Ending::Open) {
-                return false;
+                return;
             }
             result = (|| {
                 self.retained
@@ -91,16 +92,15 @@ impl Delivery {
                     ApiError::new("realtime event backlog exceeded").with_retryable(false)
                 })
             })();
-            false
         });
         result
     }
 
     pub(crate) fn fail(&self, now: Ts, label: &str, error: ApiError) {
         // Keep the first terminal failure even if teardown or a simultaneous overload also fails.
-        self.terminal.send_if_modified(|terminal| {
+        self.terminal.modify(|terminal| {
             if !matches!(terminal, Ending::Open) {
-                return false;
+                return;
             }
             *terminal = Ending::Failed(Event::Error(RealtimeModelError {
                 timestamp: now,
@@ -111,17 +111,14 @@ impl Delivery {
                 code: Some("realtime_backlog_exceeded".into()),
                 provider_error: Some(error.clone()),
             }));
-            true
         });
     }
 
     pub(crate) fn finish(&self) {
-        self.terminal.send_if_modified(|terminal| {
-            if !matches!(terminal, Ending::Open) {
-                return false;
+        self.terminal.modify(|terminal| {
+            if matches!(terminal, Ending::Open) {
+                *terminal = Ending::Closed;
             }
-            *terminal = Ending::Closed;
-            true
         });
     }
 }
@@ -135,7 +132,7 @@ impl EventReceiver {
             if let Ok(event) = self.events.try_recv() {
                 return Some(event.into_event());
             }
-            match self.terminal.borrow_and_update().clone() {
+            match self.terminal.get() {
                 Ending::Failed(event) => {
                     self.ended = true;
                     self.events.close();

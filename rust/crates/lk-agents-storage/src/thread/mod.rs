@@ -184,6 +184,8 @@ pub struct Thread {
     /// The background writes its callers left (a dropped lease's release, a dropped turn's
     /// cleanup): the connection stays open past [`Thread::close`] until they end.
     background: Arc<TaskSet>,
+    /// The lease holder id of the storage that opened it, labelling its turns' leases.
+    holder: Option<Arc<str>>,
 }
 
 impl Thread {
@@ -195,8 +197,9 @@ impl Thread {
         schema: SchemaCell,
     ) -> Result<Self, StorageError> {
         let background = Arc::default();
+        let thread_id = thread_id.into();
         let thread =
-            Self { conn, thread_id: thread_id.into(), timing, schema, cx: Cx::NONE, background };
+            Self { conn, thread_id, timing, schema, cx: Cx::NONE, background, holder: None };
         if thread.schema_missing() {
             let found = db::schema_version(&*thread.conn).await?;
             *thread.schema.lock() = found;
@@ -206,6 +209,16 @@ impl Thread {
 
     pub fn id(&self) -> &str {
         &self.thread_id
+    }
+
+    /// Labels its turns' leases with the storage's lease holder id.
+    pub fn with_holder(mut self, holder: &str) -> Self {
+        self.holder = Some(holder.into());
+        self
+    }
+
+    pub fn holder(&self) -> Option<&str> {
+        self.holder.as_deref()
     }
 
     /// Records its health metrics under `cx`.

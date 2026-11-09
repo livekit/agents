@@ -1094,3 +1094,102 @@ async fn the_rooms_startup_runs_under_session_start() {
     assert!(attr(&audio, "lk.first_frame_delay").is_some());
     assert!(matches!(attr(&publish, "lk.track_id"), Some(Value::String(sid)) if !sid.is_empty()));
 }
+
+/// FakeRoom whose event stream ends, without a `Close`, once `end` is sent.
+struct EndingRoom {
+    room: Arc<FakeRoom>,
+    end: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+}
+
+struct EndingEvents(Option<tokio::sync::oneshot::Receiver<()>>);
+impl StreamOutput<RoomEvent> for EndingEvents {
+    fn next<'a>(
+        &'a mut self,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Option<RoomEvent>, ProviderError>> {
+        Box::pin(async move {
+            if let Some(end) = self.0.take() {
+                let _ = end.await;
+            }
+            Ok(None)
+        })
+    }
+    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move { Closed::Clean })
+    }
+}
+
+impl RtcRoom for EndingRoom {
+    fn name(&self) -> Result<String, RtcError> {
+        self.room.name()
+    }
+    fn connection_state(&self) -> Result<ConnectionState, RtcError> {
+        self.room.connection_state()
+    }
+    fn local(&self) -> &Arc<dyn LocalParticipant> {
+        self.room.local()
+    }
+    fn participant(
+        &self,
+        id: &ParticipantIdentity,
+    ) -> Result<Option<Arc<dyn RemoteParticipant>>, RtcError> {
+        self.room.participant(id)
+    }
+    fn remote_participants(&self) -> Result<Vec<Arc<dyn RemoteParticipant>>, RtcError> {
+        self.room.remote_participants()
+    }
+    fn event_bus(&self) -> &Arc<dyn RoomEventSink> {
+        self.room.event_bus()
+    }
+    fn rpc_router(&self) -> &Arc<dyn lk_agents_abi::voice::rtc::ports::RpcRoutes> {
+        self.room.rpc_router()
+    }
+    fn register_byte_stream_handler(
+        &self,
+        topic: &str,
+        streams: Arc<dyn ByteStreamIngress>,
+    ) -> Result<(), RtcError> {
+        self.room.register_byte_stream_handler(topic, streams)
+    }
+    fn unregister_byte_stream_handler(&self, topic: &str) -> Result<(), RtcError> {
+        self.room.unregister_byte_stream_handler(topic)
+    }
+    fn register_text_stream_handler(
+        &self,
+        topic: &str,
+        streams: Arc<dyn TextStreamIngress>,
+    ) -> Result<(), RtcError> {
+        self.room.register_text_stream_handler(topic, streams)
+    }
+    fn unregister_text_stream_handler(&self, topic: &str) -> Result<(), RtcError> {
+        self.room.unregister_text_stream_handler(topic)
+    }
+    fn events(&self) -> lk_agents_abi::voice::rtc::ports::Receiver<RoomEvent> {
+        Box::new(EndingEvents(self.end.lock().unwrap().take()))
+    }
+}
+
+// Catches: the owner's, the microphone's and the speaker's waits parked forever when the room's
+// events end without a `Close`.
+#[tokio::test]
+async fn every_room_wait_resolves_when_the_events_end_without_close() {
+    let (room, clock) = fake_room("events-end");
+    room.add_participant("person", ParticipantKind::Standard).publish_microphone("TR_mic");
+    let (end, ended) = tokio::sync::oneshot::channel();
+    let room = Arc::new(EndingRoom { room, end: Mutex::new(Some(ended)) });
+    let config =
+        RoomIoConfig { audio_output: Some(AudioOutputConfig::default()), ..microphone_only() };
+    let io = room_io(room, clock, config);
+    io.clone().start(lk_agents_abi::telemetry::Cx::NONE);
+    io.wait_for_ready().await.unwrap();
+    let input = io.audio_input().unwrap();
+    let output = io.audio_output().unwrap();
+    output.capture_frame(&AudioFrame::new(vec![0; 960], 24_000, 1, 480)).await.unwrap();
+    let mut frame = Box::pin(input.next_frame(&lk_agents_abi::telemetry::Cx::NONE));
+    let mut playout = Box::pin(output.tracker().wait_for_playout());
+    pending(frame.as_mut()).await;
+    pending(playout.as_mut()).await;
+    end.send(()).unwrap();
+    assert!(within_a_second(frame).await.is_some(), "the microphone wait outlived the room");
+    assert!(within_a_second(playout).await.is_some(), "the playout wait outlived the room");
+    assert!(within_a_second(io.clone().aclose()).await.is_some(), "the close outlived the room");
+}
