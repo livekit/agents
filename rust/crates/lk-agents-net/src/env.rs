@@ -43,9 +43,18 @@ pub struct ProcessEnv {
     pub http: fn() -> Result<Arc<GatewayHttp>, ProcessError>,
     /// The process's span recording, timed by `clock`.
     pub tracer: lk_agents_telemetry::Tracer,
+    /// The process's own tasks: work no session owns (a node the host calls outside a session,
+    /// a handler span the SDK cancelled), each bounded and ending on its own.
+    pub tasks: Arc<crate::task::TaskSet>,
 }
 
 impl ProcessEnv {
+    /// Where work no session owns runs: the process's tasks, on its executor and clock.
+    pub fn background(&self) -> Result<crate::owned::Background, ProcessError> {
+        let spawner = (self.spawner)()?;
+        Ok(crate::owned::Background::new(Arc::clone(&self.tasks), spawner, Arc::clone(&self.clock)))
+    }
+
     /// `<hostname>-<pid>`: this process's default storage lease holder. Read on each call, so a
     /// job process names itself, not the parent it was forked from.
     pub fn lease_holder(&self) -> String {
@@ -72,6 +81,7 @@ impl ProcessEnv {
             spawner: || Ok(Arc::new(crate::task::TokioSpawner::new(runtime()?))),
             tracer: lk_agents_telemetry::Tracer::disabled(clock.clone()),
             clock,
+            tasks: Arc::default(),
             http: || {
                 GatewayHttp::new().map(Arc::new).map_err(|e| ProcessError::Start(e.to_string()))
             },

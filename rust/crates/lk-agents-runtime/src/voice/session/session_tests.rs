@@ -228,6 +228,10 @@ impl SessionExecutor for Observing {
         self.0.open_realtime(resources, model, disabled, tools, cx)
     }
 
+    fn tasks(&self) -> Arc<lk_agents_net::task::TaskSet> {
+        self.0.tasks()
+    }
+
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner> {
         *self.1.lock() = Some(cores.peer.journal.clone());
         Box::new(self.0).own(cores)

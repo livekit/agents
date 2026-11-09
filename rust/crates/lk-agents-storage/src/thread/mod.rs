@@ -7,6 +7,7 @@ pub mod schema;
 pub use lane::Lane;
 pub use run::{CommitOptions, EventLog, RESOLVE_LATER, RESOLVE_WAIT, Run, RunOptions, Tasks};
 
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,9 +17,11 @@ use crate::StorageError;
 use crate::sql::{Bind, SqlValue, Statement, Table};
 use crate::thread::db::{ItemPage, TaskPage, TaskQuery};
 use crate::thread::schema::*;
+use lk_agents_abi::storage::Unacknowledged;
 use lk_agents_abi::storage::context::ContextScope;
+use lk_agents_abi::storage::thread::Backoff;
 
-use crate::{ThreadDbConnection, shortuuid};
+use crate::ThreadDbConnection;
 
 /// How long a lease lasts and how often its holder renews it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +58,102 @@ impl Default for LeaseTiming {
     }
 }
 
+/// One write's resends after a lost acknowledgment: the resolver every write shares. The write
+/// is idempotent by its key (a lease token, a run, task or message id): sent again it cannot
+/// apply twice. `Uncertain` reaches the caller only once `wait` ran out with the outcome still
+/// unknown.
+pub(crate) struct Resend {
+    epoch: tokio::time::Instant,
+    backoff: Backoff,
+    lost: Option<Unacknowledged>,
+}
+
+impl Resend {
+    pub(crate) fn new(wait: Duration) -> Self {
+        let epoch = tokio::time::Instant::now();
+        Self { epoch, backoff: Backoff::new(epoch.elapsed(), wait), lost: None }
+    }
+
+    /// Resolving a write whose acknowledgment `lost` already reported lost.
+    pub(crate) fn after_lost(wait: Duration, lost: Unacknowledged) -> Self {
+        Self { lost: Some(lost), ..Self::new(wait) }
+    }
+
+    /// Whether an earlier send may have applied.
+    pub(crate) fn lost(&self) -> bool {
+        self.lost.is_some()
+    }
+
+    /// `Break` with the outcome once it is known, else waits out the next backoff step. After a
+    /// lost acknowledgment a refused connection is still no answer.
+    pub(crate) async fn after<T>(
+        &mut self,
+        out: Result<T, StorageError>,
+    ) -> ControlFlow<Result<T, StorageError>> {
+        let lost = match (out, self.lost.take()) {
+            (Err(StorageError::Uncertain(why)), _)
+            | (Err(StorageError::Unavailable(_)), Some(why)) => why,
+            (out, lost) => {
+                self.lost = lost;
+                return ControlFlow::Break(out);
+            }
+        };
+        let Some(at) = self.backoff.next(self.epoch.elapsed()) else {
+            return ControlFlow::Break(Err(StorageError::Uncertain(lost)));
+        };
+        log::debug!(target: lk_agents_abi::LOG_TARGET, "write acknowledgment lost, sending it again: {lost}");
+        self.lost = Some(lost);
+        tokio::time::sleep_until(self.epoch + at).await;
+        ControlFlow::Continue(())
+    }
+
+    /// `write` until its outcome is known: one that already applied answers as applied.
+    pub(crate) async fn send<T, W>(self, write: impl FnMut() -> W) -> Result<T, StorageError>
+    where
+        W: Future<Output = Result<T, StorageError>>,
+    {
+        self.probed(write, || std::future::ready(Ok(None))).await
+    }
+
+    /// [`Resend::send`] for a write whose second apply answers differently: after each lost
+    /// acknowledgment `probe` asks once whether it applied, `Some` with its outcome, `None` to
+    /// send it again.
+    pub(crate) async fn probed<T, W, P>(
+        mut self,
+        mut write: impl FnMut() -> W,
+        mut probe: impl FnMut() -> P,
+    ) -> Result<T, StorageError>
+    where
+        W: Future<Output = Result<T, StorageError>>,
+        P: Future<Output = Result<Option<T>, StorageError>>,
+    {
+        loop {
+            let out = match self.lost() {
+                true => match probe().await {
+                    Ok(Some(applied)) => Ok(applied),
+                    Ok(None) => write().await,
+                    Err(error) => Err(error),
+                },
+                false => write().await,
+            };
+            if let ControlFlow::Break(out) = self.after(out).await {
+                return out;
+            }
+        }
+    }
+}
+
+/// A read sent as a batch changed nothing, so its lost answer is only retryable.
+pub(crate) async fn read_batch(
+    conn: &dyn ThreadDbConnection,
+    statements: Vec<Statement>,
+) -> Result<crate::sql::BatchResult, StorageError> {
+    conn.batch(statements).await.map_err(|error| match error {
+        StorageError::Uncertain(why) => StorageError::Unavailable(why.to_string()),
+        error => error,
+    })
+}
+
 /// What the engine knows of a database's schema: `None` until a probe or a write found it.
 pub type SchemaCell = Arc<Mutex<Option<i64>>>;
 
@@ -66,23 +165,17 @@ pub struct Thread {
     thread_id: Arc<str>,
     pub(crate) timing: LeaseTiming,
     schema: SchemaCell,
-    /// `<worker holder>/<handle>`: what this handle's leases and waiter marks carry.
-    holder: Arc<str>,
 }
 
 impl Thread {
     /// Over an open connection; `schema` is what is known of its schema, probed when unknown.
-    /// Leases carry this handle as their holder, so a second request of the same worker on a lane
-    /// waits like any other worker's.
     pub async fn new(
         conn: Arc<dyn ThreadDbConnection>,
         thread_id: &str,
         timing: LeaseTiming,
         schema: SchemaCell,
-        holder: &str,
     ) -> Result<Self, StorageError> {
-        let holder = format!("{holder}/{}", shortuuid("")).into();
-        let thread = Self { conn, thread_id: thread_id.into(), timing, schema, holder };
+        let thread = Self { conn, thread_id: thread_id.into(), timing, schema };
         if thread.schema_missing() {
             let found = db::schema_version(&*thread.conn).await?;
             *thread.schema.lock() = found;
@@ -92,10 +185,6 @@ impl Thread {
 
     pub fn id(&self) -> &str {
         &self.thread_id
-    }
-
-    pub fn holder(&self) -> &str {
-        &self.holder
     }
 
     /// Done with the database: the backend releases or parks the connection.
@@ -156,7 +245,8 @@ impl Thread {
         if self.refresh_schema().await? {
             return Ok(());
         }
-        match self.conn.batch(db::bootstrap()).await {
+        // a lost acknowledgment is sent again; a resend refused by its own schema reconciles
+        match Resend::new(RESOLVE_WAIT).send(|| self.conn.batch(db::bootstrap())).await {
             Ok(_) => {}
             Err(error) => self.reconcile_schema(error).await?,
         }
@@ -180,6 +270,15 @@ impl Thread {
     pub(crate) async fn exec<S: Bind>(&self, statement: S) -> Result<i64, StorageError> {
         let out = self.conn.batch(vec![statement.bind()]).await?;
         Ok(out.at(0)?.rows_affected())
+    }
+
+    /// One idempotent write statement, sent again after a lost acknowledgment until its
+    /// outcome is known: the rows it matched.
+    pub(crate) async fn exec_idempotent<S: Bind>(
+        &self,
+        statement: impl Fn() -> S,
+    ) -> Result<i64, StorageError> {
+        Resend::new(RESOLVE_WAIT).send(|| self.exec(statement())).await
     }
 
     /// The journal, every lane, after the event `after_id`, at most `limit` events.
@@ -221,14 +320,11 @@ impl Thread {
     /// A direct field store's committed scope snapshot. Initialization remains runtime-owned.
     pub async fn context_scopes(&self, lane: &str) -> Result<Vec<ContextScope>, StorageError> {
         self.ensure_schema().await?;
-        let result = self
-            .conn
-            .batch(vec![
-                Statement::ddl(crate::thread::schema::CONTEXT_SCHEMA),
-                crate::thread::schema::SelectScopes { lane }.bind(),
-            ])
-            .await?;
-        crate::context::scopes_from_rows(result.at(1)?.rows())
+        let mut statements: Vec<Statement> = db::framework_schema().collect();
+        statements.push(SelectScopes { lane }.bind());
+        let scopes = statements.len() - 1;
+        let result = read_batch(&*self.conn, statements).await?;
+        crate::context::scopes_from_rows(result.at(scopes)?.rows())
     }
 }
 

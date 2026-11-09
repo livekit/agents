@@ -11,7 +11,7 @@ use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::{
-    InboxRow, LanePoll, RunOutcome, TaskData, TaskReason, TaskRow, TaskWrite,
+    Backoff, InboxRow, RunOutcome, TaskData, TaskReason, TaskRow, TaskWrite,
 };
 use serde_json::Value;
 
@@ -373,7 +373,7 @@ pub struct TaskMachine {
     answer: Option<(String, Option<Value>)>,
     error: Option<StorageError>,
     run_id: Option<String>,
-    poll: Option<LanePoll>,
+    poll: Option<Backoff>,
     /// How the turn that raised ended its run, until its tasks failed and it is abandoned.
     ended: Option<(RunOutcome, String)>,
     /// When the watched `submitted` row's own waiter has surely given up the lane: its wait
@@ -596,11 +596,11 @@ impl TaskMachine {
     /// request answers the task as it stands. Any other task still unanswered once the lane could
     /// have taken it is a dead waiter's (`stale`).
     fn poll(&mut self, now: Duration) -> Option<Operation> {
-        let poll = self.poll.get_or_insert_with(|| LanePoll::new(now, self.wait_timeout));
+        let poll = self.poll.get_or_insert_with(|| Backoff::new(now, self.wait_timeout));
         let (at, wake) = match poll.next(now) {
             Some(at) => (at, PollWake::Observe),
             None => {
-                *poll = LanePoll::new(now, self.wait_timeout);
+                *poll = Backoff::new(now, self.wait_timeout);
                 if self.policy == Policy::Concurrent {
                     return Some(self.answer_task(None));
                 }

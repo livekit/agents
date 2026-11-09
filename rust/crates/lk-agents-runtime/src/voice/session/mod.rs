@@ -38,7 +38,7 @@ use lk_agents_abi::worker::remote_session::{SessionHosting, SessionPort};
 use lk_agents_abi::{
     BoxFuture, HOST_TEARDOWN_TIMEOUT, HostRef, Llm, Maybe, Spawner, Stt, Tts, Vad,
 };
-use lk_agents_net::task::{TaskId, TaskSet};
+use lk_agents_net::task::{ScopedTask, TaskSet};
 use lk_agents_voice::agent_session::lifecycle::{CloseAction, RecorderTarget, SessionLifecycle};
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::options::{ConfigStack, SessionLegs};
@@ -164,7 +164,7 @@ struct Running {
     peer: PeerHandle,
     amd: Option<Arc<dyn lk_agents_abi::voice::amd::AmdPort>>,
     /// The loop and the host event drain, cancelled once the close has drained.
-    loop_tasks: Vec<TaskId>,
+    loop_tasks: Vec<ScopedTask>,
     /// Resolves when the host's drain has handed over the last event, so `close` handlers are
     /// queued before the close completes.
     drained: Option<tokio::sync::oneshot::Receiver<()>>,
@@ -622,12 +622,7 @@ impl VoiceSession {
             let mut stage = self.stage.lock();
             match (stage.lifecycle().close(), &mut *stage) {
                 (CloseAction::Running, Stage::Running(running)) => (
-                    Some((
-                        running.api.clone(),
-                        running.drained.take(),
-                        running.loop_tasks.clone(),
-                        running.remote.clone(),
-                    )),
+                    Some((running.api.clone(), running.drained.take(), running.remote.clone())),
                     None,
                 ),
                 (CloseAction::Opening, Stage::Opening { remote, cancelled }) => {
@@ -643,10 +638,10 @@ impl VoiceSession {
             }
         };
         drop(retired);
-        let (stage, tasks) = (Arc::clone(&self.stage), Arc::clone(&self.tasks));
+        let stage = Arc::clone(&self.stage);
         let time = self.time.clone();
         async move {
-            let Some((api, drained, loop_tasks, remote)) = running else { return };
+            let Some((api, drained, remote)) = running else { return };
             // A stopped receiver has already closed the session.
             let _ = api.send(Command::Close(Close { reason, drain: options.drain, error }));
             if time.timeout(CLOSE_WATCHDOG, api.closed()).await.is_err() {
@@ -654,17 +649,19 @@ impl VoiceSession {
             }
             // `Closed` **before** awaiting the drain: `Running` holds the `PeerHandle`, a sender on
             // the host stream, and the drain only ends when every sender is gone.
-            {
-                let mut stage = stage.lock();
-                *stage = Stage::Closed(remote);
-            }
+            let retired = std::mem::replace(&mut *stage.lock(), Stage::Closed(remote));
+            // The loop's tasks outlive the drain; the rest of `Running` goes now.
+            let loop_tasks = match retired {
+                Stage::Running(mut running) => std::mem::take(&mut running.loop_tasks),
+                _ => Vec::new(),
+            };
             // Then the drain: the host's `close` is queued before this future completes.
             if let Some(drained) = drained
                 && time.timeout(HOST_TEARDOWN_TIMEOUT, drained).await.is_err()
             {
                 log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = HOST_TEARDOWN_TIMEOUT.as_millis() as u64; "voice session host drain timed out");
             }
-            loop_tasks.into_iter().for_each(|task| tasks.cancel(task));
+            drop(loop_tasks);
         }
     }
 
@@ -862,7 +859,7 @@ impl VoiceSession {
         };
         self.tasks
             .try_spawn(self.spawner.as_ref(), "handoff", handoff)
-            .map(|_| ())
+            .then_some(())
             .ok_or(SessionRefused::LoopEnded)
     }
 

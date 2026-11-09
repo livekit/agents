@@ -52,7 +52,7 @@ class Storage:
         return self._core
 
     async def _open(self, thread_id: str) -> _core.Thread:
-        return await self._core.open(thread_id, self.holder)
+        return await self._core.open(thread_id)
 
     async def aclose(self) -> None:
         """Releases the backend's resources; repeat-safe."""
@@ -151,9 +151,7 @@ class Thread(_facades.Thread):
     def __init__(self, storage: Storage, thread_id: str, *, agent_name: str) -> None:
         self._storage = storage
         self._agent_name = agent_name
-        self._native = _core._core_ThreadHandle(
-            storage.threads, thread_id, storage.holder, agent_name
-        )
+        self._native = _core._core_ThreadHandle(storage.threads, thread_id, agent_name)
 
     def lane(self, agent: str) -> Lane:
         """An agent's lane of this thread: its history and its tasks."""

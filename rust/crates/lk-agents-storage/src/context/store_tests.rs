@@ -117,7 +117,7 @@ async fn application_transactions_commit_on_exit_or_with_the_turn(backend: Backe
         .unwrap();
     staged.commit().await.unwrap();
     assert_eq!(notes(&direct).await.len(), 1, "staged until the turn commits");
-    let thread = fixture.thread("w1").await;
+    let thread = fixture.thread().await;
     let mut run = thread
         .lane("desk")
         .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
@@ -141,7 +141,7 @@ async fn a_turns_application_writes_never_apply_after_a_takeover(backend: Backen
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    let (s1, s2) = (fixture.thread("w1").await, fixture.thread("w2").await);
+    let (s1, s2) = (fixture.thread().await, fixture.thread().await);
     let mut stale = s1
         .lane("desk")
         .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
@@ -163,6 +163,70 @@ async fn a_turns_application_writes_never_apply_after_a_takeover(backend: Backen
     assert!(matches!(err, StorageError::VersionConflict { .. }), "{err}");
     assert!(notes(&direct).await.is_empty(), "the loser's application SQL wrote nothing");
     fixture.cleanup(&[&s1, &s2]).await;
+}
+
+/// The SQLite backend on paused time, every thread connection under the returned faults: the
+/// store, one thread's id, and the directory it lives in.
+async fn faulty_store() -> (
+    std::sync::Arc<dyn crate::Storage>,
+    std::sync::Arc<crate::testing::Faults>,
+    String,
+    crate::testing::TempDir,
+) {
+    use crate::Storage as _;
+    use crate::testing::{Faults, TempDir, Wrapped, tasks};
+    use std::sync::Arc;
+    let dir = TempDir::new("faulty_store_");
+    let lease = crate::thread::LeaseTiming::default();
+    let storage = crate::backends::sqlite::SqliteStorage::open(&dir.0, lease, tasks());
+    let faults = Arc::<Faults>::default();
+    let shared = faults.clone();
+    let wrap = move |conn: crate::backends::sqlite::FileConnection| {
+        Arc::new(shared.over(Box::new(conn))) as Arc<dyn crate::ThreadDbConnection>
+    };
+    let storage = Wrapped { storage: Arc::new(storage.await.unwrap()), wrap };
+    let thread = storage.create_thread(Default::default()).await.unwrap().thread_id;
+    (Arc::new(storage), faults, thread, dir)
+}
+
+/// A direct save whose acknowledgment stayed lost past the commit's wait resolves before the
+/// next save: it committed, so the next save builds on it instead of failing a stale revision.
+#[tokio::test(start_paused = true)]
+async fn a_lost_direct_save_resolves_before_the_next_save() {
+    use crate::testing::WriteFault;
+    let (storage, faulty, thread, _dir) = faulty_store().await;
+    let store = ContextStore::bound(storage, thread, "desk".into()).await.unwrap();
+    let first = vec![field("draft", json!("first"))];
+    let loaded = store.load("root:desk".into(), "Booking".into(), first.clone()).await.unwrap();
+    faulty.fail_next_commit(WriteFault::LoseAckAfter);
+    faulty.unreachable_after_commit_for(crate::thread::RESOLVE_WAIT * 2);
+    let lost = store.save("root:desk".into(), "Booking".into(), loaded.revision, first).await;
+    assert!(matches!(lost, Err(StorageError::Uncertain(_))), "{lost:?}");
+    let second = vec![field("draft", json!("second"))];
+    let saved = store.save("root:desk".into(), "Booking".into(), loaded.revision + 1, second).await;
+    assert_eq!(saved.expect("the lost save committed; this one builds on it").revision, 2);
+    let fields = vec![field("draft", json!("default"))];
+    let reloaded = store.load("root:desk".into(), "Booking".into(), fields).await.unwrap();
+    assert_eq!(reloaded.fields["draft"], json!("second"));
+}
+
+/// An application transaction whose acknowledgment was lost after it applied is sent again
+/// under its request id: it commits once and reports the commit.
+#[tokio::test(start_paused = true)]
+async fn a_lost_application_transaction_applies_once() {
+    use crate::testing::WriteFault;
+    let (storage, faulty, thread, _dir) = faulty_store().await;
+    let store = ContextStore::bound(storage, thread, "desk".into()).await.unwrap();
+    let tx = store.transaction(true).await.unwrap();
+    tx.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)".into(), None)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let tx = store.transaction(true).await.unwrap();
+    tx.execute("INSERT INTO notes (body) VALUES ('once')".into(), None).await.unwrap();
+    faulty.fail_next_write("INSERT INTO notes", WriteFault::LoseAckAfter);
+    tx.commit().await.expect("the resend finds its own commit");
+    assert_eq!(notes(&store).await, [[json!("once")]]);
 }
 
 crate::contract!(

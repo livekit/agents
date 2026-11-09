@@ -375,6 +375,11 @@ pub enum ToolStep {
         speech: SpeechId,
         step: u32,
     },
+    /// The executor ended a step whose calls the run admitted: its results are owed.
+    StepEnded {
+        speech: SpeechId,
+        step: u32,
+    },
     /// The shared run's tool results were handled; `committed` items reached agent history.
     Finished {
         speech: SpeechId,
@@ -928,6 +933,7 @@ impl Step {
                 | ToolStep::CallAdmitted { speech, .. }
                 | ToolStep::CallEnded { speech, .. }
                 | ToolStep::StepStarted { speech, .. }
+                | ToolStep::StepEnded { speech, .. }
                 | ToolStep::Finished { speech, .. }
                 | ToolStep::ReplyScheduled { speech, .. }
                 | ToolStep::ReplyDone { speech, .. } => Some(*speech),

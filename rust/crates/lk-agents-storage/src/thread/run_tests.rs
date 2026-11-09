@@ -93,8 +93,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     backend: Backend,
 ) {
     let fx = backend.fixture(None).await;
-    let s1 = fx.thread("w1").await;
-    assert!(s1.holder().starts_with("w1/"));
+    let s1 = fx.thread().await;
     assert_eq!(s1.id(), fx.thread_id);
 
     let mut run1 = s1
@@ -104,8 +103,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
         .unwrap();
     // The first acquire applies the DDL; the second handle dials once the first run exists, as a
     // worker reached later would.
-    let s2 = fx.thread("w2").await;
-    assert_ne!(s1.holder(), s2.holder());
+    let s2 = fx.thread().await;
     assert_eq!(run1.version(), 0);
     assert!(!run1.closed() && run1.lease().is_some());
     assert!(run1.history().is_empty());
@@ -145,7 +143,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     assert!(started.elapsed() >= Duration::from_millis(250));
 
     // The waiter under `interrupt`: the holder sees it at its boundary.
-    let holder2 = crate::Holder::new(s2.holder());
+    let holder2 = crate::Holder::new("w2");
     let waiting = tokio::spawn(async move {
         let run = lane2
             .open(
@@ -162,7 +160,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
         (run, Instant::now())
     });
     tokio::time::sleep(Duration::from_millis(400)).await;
-    assert!(waiter(&s1).await.is_some_and(|holder| holder.starts_with(s2.holder())));
+    assert!(waiter(&s1).await.is_some_and(|holder| holder.starts_with("w2/")));
 
     // The first run writes everything a run writes, and releases.
     run1.history_mut().push(message("i1", ChatRole::User, "hi"));
@@ -232,7 +230,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
 
 async fn a_run_that_aborts_writes_run_ended_and_nothing_else(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s = fx.thread("w1").await;
+    let s = fx.thread().await;
     let lane = s.lane(LANE);
     let mut run =
         lane.open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test")).await.unwrap();
@@ -281,7 +279,7 @@ async fn a_run_that_aborts_writes_run_ended_and_nothing_else(backend: Backend) {
 
 async fn a_committed_run_id_yields_a_closed_run(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s = fx.thread("w1").await;
+    let s = fx.thread().await;
     let lane = s.lane(LANE);
     let mut run =
         lane.open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test")).await.unwrap();
@@ -319,13 +317,13 @@ async fn a_committed_run_id_yields_a_closed_run(backend: Backend) {
 
 async fn a_stale_commit_is_a_version_conflict(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s1 = fx.thread("w1").await;
+    let s1 = fx.thread().await;
     let mut stale = s1
         .lane(LANE)
         .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
         .await
         .unwrap();
-    let s2 = fx.thread("w2").await;
+    let s2 = fx.thread().await;
     // The lease lapses under the stalled worker (here: released by hand), and another run moves
     // the lane on.
     stale.lease().unwrap().release(None).await.unwrap();
@@ -353,7 +351,7 @@ async fn a_stale_commit_is_a_version_conflict(backend: Backend) {
 
 async fn concurrent_runs_take_no_lease_and_append(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s1 = fx.thread("w1").await;
+    let s1 = fx.thread().await;
     // The schema and the lane row come from a first exclusive run; the concurrent runs then share
     // a lane at version 1 and never move it.
     let mut first = s1
@@ -362,7 +360,7 @@ async fn concurrent_runs_take_no_lease_and_append(backend: Backend) {
         .await
         .unwrap();
     first.commit(CommitOptions::default()).await.unwrap();
-    let s2 = fx.thread("w2").await;
+    let s2 = fx.thread().await;
     let open = |s: &Thread, run_id: &str, task_id: &str| {
         let lane = s.lane(LANE);
         let opts = RunOptions {
@@ -416,7 +414,7 @@ fn metadata(key: &str) -> serde_json::Map<String, serde_json::Value> {
 /// task as it was.
 async fn a_cancel_never_overwrites_a_terminal_task(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s = fx.thread("w1").await;
+    let s = fx.thread().await;
     let lane = s.lane(LANE);
     let mut run =
         lane.open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test")).await.unwrap();
@@ -434,8 +432,8 @@ async fn a_cancel_never_overwrites_a_terminal_task(backend: Backend) {
 /// move the canceled row, in either race order.
 async fn a_commit_never_overwrites_a_canceled_task(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s1 = fx.thread("w1").await;
-    let s2 = fx.thread("w2").await;
+    let s1 = fx.thread().await;
+    let s2 = fx.thread().await;
     let lane = s1.lane(LANE);
     lane.submit(&submitted("AST_1")).await.unwrap();
     let mut run =
@@ -460,7 +458,7 @@ async fn a_commit_never_overwrites_a_canceled_task(backend: Backend) {
 /// it as the turn answered it rather than failing it as a dead holder's.
 async fn a_pickup_leaves_a_row_answered_working(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s = fx.thread("w1").await;
+    let s = fx.thread().await;
     let lane = s.lane(LANE);
     lane.submit(&submitted("AST_1")).await.unwrap();
     let mut run =
@@ -480,8 +478,8 @@ async fn a_pickup_leaves_a_row_answered_working(backend: Backend) {
 /// The write keeps the client's row, as the commit would, instead of refusing the whole turn.
 async fn a_concurrent_write_keeps_a_row_canceled_mid_turn(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s1 = fx.thread("w1").await;
-    let s2 = fx.thread("w2").await;
+    let s1 = fx.thread().await;
+    let s2 = fx.thread().await;
     let lane = s1.lane(LANE);
     lane.open(RunOptions::new("r0", "AST_0"), &crate::Holder::new("test"))
         .await
@@ -512,7 +510,7 @@ async fn a_concurrent_write_keeps_a_row_canceled_mid_turn(backend: Backend) {
 
 async fn an_item_id_of_another_lane_fails_the_commit_without_mutation(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s = fx.thread("w1").await;
+    let s = fx.thread().await;
     let mut a = s
         .lane("lane-a")
         .open(RunOptions::new("ra", "AST_a"), &crate::Holder::new("test"))
@@ -539,7 +537,7 @@ async fn an_item_id_of_another_lane_fails_the_commit_without_mutation(backend: B
 /// nothing is written.
 async fn a_concurrent_run_refuses_to_edit_or_delete_loaded_history(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s = fx.thread("w1").await;
+    let s = fx.thread().await;
     let lane = s.lane(LANE);
     let mut first =
         lane.open(RunOptions::new("r0", "AST_0"), &crate::Holder::new("test")).await.unwrap();
@@ -570,7 +568,7 @@ async fn a_concurrent_run_refuses_to_edit_or_delete_loaded_history(backend: Back
 /// The acquire loads the whole history in the lease's own batch, past any page size.
 async fn a_run_loads_its_whole_history_in_its_acquire(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s = fx.thread("w1").await;
+    let s = fx.thread().await;
     let lane = s.lane(LANE);
     let mut run =
         lane.open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test")).await.unwrap();
@@ -591,17 +589,17 @@ async fn a_run_loads_its_whole_history_in_its_acquire(backend: Backend) {
 /// the lane only after it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_lost_commit_keeps_its_lease_until_it_resolves() {
-    use crate::testing::CommitFault;
+    use crate::testing::WriteFault;
     let fx =
         Backend::Sqlite.fixture(Some((Duration::from_secs(1), Duration::from_millis(200)))).await;
-    let (thread, faulty) = fx.faulty_thread("w1").await;
+    let (thread, faulty) = fx.faulty_thread().await;
     let lane = thread.lane(LANE);
     let owner = crate::Holder::new("voice");
     let mut run = lane.open(RunOptions::new("r1", ""), &owner).await.unwrap();
     run.history_mut().push(message("i1", ChatRole::User, "hi"));
-    faulty.fail_next_commit(CommitFault::LoseAckBefore);
+    faulty.fail_next_commit(WriteFault::LoseAckBefore);
     faulty.probes_unavailable_for(Duration::from_millis(3000));
-    let rival = fx.thread("w2").await;
+    let rival = fx.thread().await;
     let rival_lane = rival.lane(LANE);
     let rival_owner = crate::Holder::new("other");
     let waiting = async {
@@ -632,14 +630,35 @@ crate::contract!(
     concurrent_runs_take_no_lease_and_append,
 );
 
+/// A commit without a lease sent twice (a resend after a lost acknowledgment while the first
+/// was still in flight) writes its items, tasks and journal once.
+#[tokio::test]
+async fn an_unfenced_commit_applied_twice_writes_once() {
+    let fx = Backend::Sqlite.fixture(None).await;
+    let s = fx.thread().await;
+    s.lane(LANE).submit(&crate::thread::tests::submitted("AST_1")).await.unwrap();
+    let opts = RunOptions { access: LaneAccess::Concurrent, ..RunOptions::new("r1", "AST_1") };
+    let mut run = s.lane(LANE).open(opts, &crate::Holder::new("test")).await.unwrap();
+    run.history_mut().push(message("i1", ChatRole::User, "hi"));
+    run.tasks().write("AST_1", TaskState::Completed, TaskPatch::default()).await.unwrap();
+    let commit = run.writes(CommitOptions::default()).unwrap();
+    db::commit(&**s.conn(), LANE, &commit, None).await.unwrap();
+    let journal = s.journal(0, 100).await.unwrap().len();
+    db::commit(&**s.conn(), LANE, &commit, None).await.unwrap();
+    assert_eq!(s.journal(0, 100).await.unwrap().len(), journal, "no event written twice");
+    assert_eq!(run_ended_count(&s).await, 1);
+    assert_eq!(s.lane(LANE).history().await.unwrap().len(), 1);
+    fx.cleanup(&[&s]).await;
+}
+
 // A lost commit acknowledgment resolves to the original run (SQLite, injected faults).
 
 /// A run that writes one item and completes `AST_1`, committed over a faulty connection.
 async fn commit_through(
-    fault: crate::testing::CommitFault,
+    fault: crate::testing::WriteFault,
 ) -> (Fixture, Thread, Result<i64, StorageError>) {
     let fx = Backend::Sqlite.fixture(None).await;
-    let (s, faults) = fx.faulty_thread("w1").await;
+    let (s, faults) = fx.faulty_thread().await;
     let lane = s.lane(LANE);
     let mut run =
         lane.open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test")).await.unwrap();
@@ -656,7 +675,7 @@ async fn run_ended_count(s: &Thread) -> usize {
 
 #[tokio::test]
 async fn a_commit_whose_ack_was_lost_after_it_applied_resolves_to_that_commit() {
-    let (fx, s, committed) = commit_through(crate::testing::CommitFault::LoseAckAfter).await;
+    let (fx, s, committed) = commit_through(crate::testing::WriteFault::LoseAckAfter).await;
     assert_eq!(committed.unwrap(), 1, "the original run's commit, not a failure");
     assert_eq!(s.lane(LANE).history().await.unwrap().len(), 1);
     assert_eq!(s.lane(LANE).task("AST_1").await.unwrap().unwrap().status, TaskState::Completed);
@@ -666,7 +685,7 @@ async fn a_commit_whose_ack_was_lost_after_it_applied_resolves_to_that_commit() 
 
 #[tokio::test]
 async fn a_commit_whose_ack_was_lost_before_it_applied_is_sent_again_under_its_fence() {
-    let (fx, s, committed) = commit_through(crate::testing::CommitFault::LoseAckBefore).await;
+    let (fx, s, committed) = commit_through(crate::testing::WriteFault::LoseAckBefore).await;
     assert_eq!(committed.unwrap(), 1);
     assert_eq!(s.lane(LANE).history().await.unwrap().len(), 1);
     assert_eq!(run_ended_count(&s).await, 1);
@@ -676,8 +695,8 @@ async fn a_commit_whose_ack_was_lost_before_it_applied_is_sent_again_under_its_f
 #[tokio::test]
 async fn a_lost_ack_after_the_lane_moved_on_is_a_rejection_with_nothing_written() {
     let fx = Backend::Sqlite.fixture(None).await;
-    let (s1, faults) = fx.faulty_thread("w1").await;
-    let s2 = fx.thread("w2").await;
+    let (s1, faults) = fx.faulty_thread().await;
+    let s2 = fx.thread().await;
     let mut stale = s1
         .lane(LANE)
         .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
@@ -692,7 +711,7 @@ async fn a_lost_ack_after_the_lane_moved_on_is_a_rejection_with_nothing_written(
     fresh.commit(CommitOptions::default()).await.unwrap();
 
     stale.history_mut().push(message("i9", ChatRole::Assistant, "late"));
-    faults.fail_next_commit(crate::testing::CommitFault::LoseAckBefore);
+    faults.fail_next_commit(crate::testing::WriteFault::LoseAckBefore);
     let err = stale.commit(CommitOptions::default()).await.expect_err("rejected");
     assert!(matches!(err, StorageError::VersionConflict { .. }), "{err}");
     assert!(s1.lane(LANE).history().await.unwrap().is_empty());

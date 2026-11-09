@@ -809,10 +809,6 @@ inventory::submit! {
 
 impl crate::py_errors::HostException for ::lk_agents_abi::inference::avatar_session::AvatarError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::InvalidModel(..) => {
                 ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))

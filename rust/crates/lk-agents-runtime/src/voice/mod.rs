@@ -27,7 +27,7 @@ use crate::telemetry;
 use crate::voice::session::Tx;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::{AudioInput, InputFrame};
-use lk_agents_net::task::{TaskId, TaskSet};
+use lk_agents_net::task::{ScopedTask, ScopedTasks, TaskSet};
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{
     Now, Sent, SpeechCommand, VoiceCommandOrigin, VoiceDriver, VoiceEvent,
@@ -79,14 +79,11 @@ pub struct VoiceRuntime {
     reports: Tx,
     frames_tx: tokio::sync::mpsc::Sender<InputFrame>,
     /// The microphone, its id and its reader.
-    source: Option<(ResourceId, TaskId)>,
+    source: Option<(ResourceId, ScopedTask)>,
     /// Where each awaited call's answer goes, until the core answers it.
     calls: Arc<Calls>,
     /// The keyterm detection pass in flight, by request.
-    keyterms: Option<(u64, TaskId)>,
-    /// Speech-scoped host callbacks, indexed for exact cancellation and final speech release.
-    /// These are runtime task handles, not another source of run-completion decisions.
-    host_callbacks: std::collections::BTreeMap<(SpeechId, HostCallbackId), TaskId>,
+    keyterms: Option<(u64, ScopedTask)>,
     /// Each realtime speech's player, fed the socket's events (`Effect::RealtimePlayer`).
     realtime_players: std::collections::BTreeMap<
         lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId,
@@ -94,7 +91,7 @@ pub struct VoiceRuntime {
     >,
     /// The camera read now, its forwarder, and what a new forwarder is built from.
     video_parts: audio::VideoForwarding,
-    video_forwarder: Option<TaskId>,
+    video_forwarder: Option<ScopedTask>,
     video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     /// Opened STT and VAD streams the core has neither activated nor discarded yet.
     pending_legs: std::collections::BTreeMap<ResourceId, legs::OpeningLeg>,
@@ -102,13 +99,10 @@ pub struct VoiceRuntime {
     /// The turn and interruption detectors, addressed by the core's effects.
     eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
     /// The turn detector's predictions in flight, aborted at its close.
-    predictions: Vec<TaskId>,
+    predictions: ScopedTasks,
     interruption:
         Option<Arc<dyn lk_agents_voice::agent_session::machine::activity::false_interruption::InterruptionPort>>,
-    /// The executor's tasks: readers, drains, pumps, provider calls and closes. Most end at
-    /// `Closing`; the run drains them within the cleanup bound and cancels the rest.
-    tasks: Arc<TaskSet>,
-    /// The tasks of the set each speech owns: its reply and the tool calls it made.
+    /// The tasks each speech owns: its reply, the tool calls it made and its host callbacks.
     speeches: SpeechTasks,
 }
 
@@ -119,12 +113,18 @@ enum HostCallbackId {
 }
 
 /// Which of the session's tasks each speech owns. Cancelling the speech (its interruption
-/// watchdog) cancels them; a tool call outlives its reply until then.
+/// watchdog) cancels them all; a tool call outlives its reply until then, while its host
+/// callbacks end at its release, or one by one when the core cancels or receives one.
 #[derive(Clone)]
 pub(crate) struct SpeechTasks {
     tasks: Arc<TaskSet>,
     spawner: Arc<dyn lk_agents_abi::Spawner>,
-    owned: Arc<parking_lot::Mutex<std::collections::BTreeMap<SpeechId, Vec<TaskId>>>>,
+    owned: Arc<parking_lot::Mutex<std::collections::BTreeMap<SpeechId, SpeechOwned>>>,
+}
+
+struct SpeechOwned {
+    tasks: ScopedTasks,
+    callbacks: std::collections::BTreeMap<HostCallbackId, ScopedTask>,
 }
 
 impl SpeechTasks {
@@ -133,20 +133,54 @@ impl SpeechTasks {
         speech: SpeechId,
         name: &str,
         work: impl std::future::Future<Output = ()> + Send + 'static,
-    ) -> TaskId {
-        let task = self.tasks.spawn(self.spawner.as_ref(), name, work);
+    ) {
+        let task = self.tasks.scoped(self.spawner.as_ref(), name, work);
         let mut owned = self.owned.lock();
-        owned.retain(|_, tasks| {
-            tasks.retain(|task| self.tasks.contains(*task));
-            !tasks.is_empty()
-        });
-        owned.entry(speech).or_default().push(task);
-        task
+        owned.retain(|_, owned| !owned.tasks.is_empty() || !owned.callbacks.is_empty());
+        self.of(&mut owned, speech).tasks.push(task);
+    }
+
+    /// Runs `work` as `speech`'s callback `id`, replacing (and cancelling) a previous one.
+    fn callback(
+        &self,
+        speech: SpeechId,
+        id: HostCallbackId,
+        name: &str,
+        work: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
+        let task = self.tasks.scoped(self.spawner.as_ref(), name, work);
+        let replaced = self.of(&mut self.owned.lock(), speech).callbacks.insert(id, task);
+        drop(replaced);
+    }
+
+    /// Forgets `speech`'s callback `id`, cancelled unless it ended.
+    fn end_callback(&self, speech: SpeechId, id: HostCallbackId) {
+        let ended =
+            self.owned.lock().get_mut(&speech).and_then(|owned| owned.callbacks.remove(&id));
+        drop(ended);
+    }
+
+    /// Cancels `speech`'s callbacks, not its tool calls.
+    fn release(&self, speech: SpeechId) {
+        let callbacks =
+            self.owned.lock().get_mut(&speech).map(|owned| std::mem::take(&mut owned.callbacks));
+        drop(callbacks);
     }
 
     fn cancel(&self, speech: SpeechId) {
         let owned = self.owned.lock().remove(&speech);
-        owned.into_iter().flatten().for_each(|task| self.tasks.cancel(task));
+        drop(owned);
+    }
+
+    fn of<'a>(
+        &self,
+        owned: &'a mut std::collections::BTreeMap<SpeechId, SpeechOwned>,
+        speech: SpeechId,
+    ) -> &'a mut SpeechOwned {
+        owned.entry(speech).or_insert_with(|| SpeechOwned {
+            tasks: ScopedTasks::new(Arc::clone(&self.tasks)),
+            callbacks: Default::default(),
+        })
     }
 }
 
@@ -176,8 +210,12 @@ impl VoiceRuntime {
         let video_parts =
             audio::VideoForwarding { closing: shared.closing.clone(), queue: reports.clone() };
         let (frames_tx, frames) = tokio::sync::mpsc::channel(READER_HANDOFF_FRAMES);
-        let tasks = Arc::<TaskSet>::default();
-        let shared_spawner = Arc::clone(&shared.spawner);
+        let speeches = SpeechTasks {
+            tasks: Arc::clone(&shared.tasks),
+            spawner: Arc::clone(&shared.spawner),
+            owned: Arc::default(),
+        };
+        let predictions = ScopedTasks::new(Arc::clone(&shared.tasks));
         let calls = Arc::clone(&shared.calls);
         let mut runtime = VoiceRuntime {
             publications,
@@ -197,33 +235,23 @@ impl VoiceRuntime {
             realtime,
             calls,
             keyterms: None,
-            host_callbacks: Default::default(),
             realtime_players: Default::default(),
             video_parts,
             video_forwarder: None,
             video_in,
             eot,
-            predictions: Vec::new(),
+            predictions,
             interruption,
-            speeches: SpeechTasks {
-                tasks: Arc::clone(&tasks),
-                spawner: Arc::clone(&shared_spawner),
-                owned: Arc::default(),
-            },
-            tasks,
+            speeches,
         };
         if let Some(session) = realtime_events {
             runtime.realtime.get_or_insert_with(|| {
-                legs::RealtimeConnection::new(
-                    session.clone(),
-                    runtime.shared.time.clone(),
-                    runtime.shared.spawner.clone(),
-                )
+                legs::RealtimeConnection::new(session.clone(), &runtime.shared.background())
             });
             runtime.pump_realtime(session);
         }
         let ivr_detection = runtime.shared.view.borrow().config.effective().turn.ivr_detection();
-        ivr::start(runtime.peer.clone(), ivr_detection, &runtime.tasks);
+        ivr::start(runtime.peer.clone(), ivr_detection, &runtime.shared.tasks);
         if let Some(room_io) = room_io {
             let io_queue = runtime.reports.clone();
             let rtc_queue = runtime.reports.clone();
@@ -237,10 +265,9 @@ impl VoiceRuntime {
         }
         runtime.start_legs(opening);
         // The camera, one task per source, replaced whole by `SetVideoInput`.
-        runtime.video_forwarder = runtime
-            .video_in
-            .clone()
-            .map(|input| runtime.spawn("video forwarder", runtime.video_parts.clone().pump(input)));
+        runtime.video_forwarder = runtime.video_in.clone().map(|input| {
+            runtime.scoped("video forwarder", runtime.video_parts.clone().pump(input))
+        });
         // The session's first microphone is the host's attached one: nothing to tell it.
         if let Some(source) = source {
             runtime.read(source);
@@ -299,7 +326,7 @@ impl VoiceRuntime {
         let _ = self.shared.report.set(self.driver.report(self.shared.time.wall()));
         let time = self.shared.time.clone();
         let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        let late = self.tasks.drain(time.clock().as_ref(), deadline).await;
+        let late = self.shared.tasks.drain(time.clock().as_ref(), deadline).await;
         self.shared.resources.clear();
         late
     }
@@ -319,8 +346,8 @@ impl VoiceRuntime {
                     ..
                 }) = &input
                 {
-                    self.host_callbacks
-                        .remove(&(*speech, HostCallbackId::OutputValidation(*validation)));
+                    self.speeches
+                        .end_callback(*speech, HostCallbackId::OutputValidation(*validation));
                 }
                 if let VoiceEvent::Gen(
                     lk_agents_voice::generation::GenEvent::ToolHandlingTemplateRendered {
@@ -330,7 +357,7 @@ impl VoiceRuntime {
                     },
                 ) = &input
                 {
-                    self.host_callbacks.remove(&(*speech, HostCallbackId::ToolRefusal(*call)));
+                    self.speeches.end_callback(*speech, HostCallbackId::ToolRefusal(*call));
                 }
                 if let lk_agents_voice::agent_session::VoiceEvent::Stt(_, provider) = &mut input {
                     *provider = self
@@ -470,9 +497,7 @@ impl VoiceRuntime {
         self.perform_voice(effects);
         self.calls.clear();
         self.release();
-        for opened in std::mem::take(&mut self.pending_legs).into_values() {
-            opened.retire(&self.tasks);
-        }
+        drop(std::mem::take(&mut self.pending_legs));
     }
 
     /// The session is over: every sink the data plane still feeds has its input ended, and the
@@ -512,7 +537,7 @@ impl VoiceRuntime {
     fn set_source(&mut self, input: Option<ResourceId>) {
         let resources = self.shared.resources.clone();
         if let Some((old, reader)) = self.source.take() {
-            self.tasks.cancel(reader);
+            drop(reader);
             if let Some(old) = resources.audio_input(old) {
                 old.on_detached();
             }
@@ -528,9 +553,7 @@ impl VoiceRuntime {
     }
 
     fn set_video_input(&mut self, input: Option<ResourceId>) {
-        if let Some(old) = self.video_forwarder.take() {
-            self.tasks.cancel(old);
-        }
+        self.video_forwarder = None;
         if let Some(old) = self.video_in.take() {
             old.on_detached();
         }
@@ -538,18 +561,24 @@ impl VoiceRuntime {
         if let Some(input) = &self.video_in {
             input.on_attached();
             let pump = self.video_parts.clone().pump(Arc::clone(input));
-            self.video_forwarder = Some(self.spawn("video forwarder", pump));
+            self.video_forwarder = Some(self.scoped("video forwarder", pump));
         }
     }
 
     /// Runs `work` as one of the executor's tasks.
     #[track_caller]
-    fn spawn(
+    fn spawn(&self, name: &str, work: impl std::future::Future<Output = ()> + Send + 'static) {
+        self.shared.tasks.spawn(self.shared.spawner.as_ref(), name, work)
+    }
+
+    /// [`spawn`](Self::spawn), with a handle that cancels the task when dropped.
+    #[track_caller]
+    fn scoped(
         &self,
         name: &str,
         work: impl std::future::Future<Output = ()> + Send + 'static,
-    ) -> TaskId {
-        self.tasks.spawn(self.shared.spawner.as_ref(), name, work)
+    ) -> ScopedTask {
+        self.shared.tasks.scoped(self.shared.spawner.as_ref(), name, work)
     }
 
     fn read(&mut self, source: ResourceId) {
@@ -560,7 +589,7 @@ impl VoiceRuntime {
             self.shared.closing.clone(),
             self.reports.clone(),
         );
-        self.source = Some((source, self.spawn("audio reader", reader)));
+        self.source = Some((source, self.scoped("audio reader", reader)));
     }
 
     fn perform(&mut self, effects: Vec<AudioInputRouterEffect>) {

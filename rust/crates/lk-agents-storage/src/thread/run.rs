@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use crate::thread::db::{Commit, Committed, EventWrite, Fenced, Resolution};
-use crate::thread::lease::LanePoll;
 use crate::thread::schema::*;
 use crate::{LaneAccess, LeaseAfterCommit, StorageError, TaskPickup, TaskWrite, WhenHeld};
 use livekit_protocol::agent::chat_context::ChatItem;
@@ -14,7 +13,8 @@ use crate::shortuuid;
 use crate::thread::lease::Lease;
 use lk_agents_net::clock::unix_now_ms;
 
-use super::{Lane, db};
+use super::{Lane, Resend, db};
+use lk_agents_abi::storage::Unacknowledged;
 use std::collections::BTreeMap;
 
 pub use crate::thread::schema::{ItemRow, LaneRow, TaskRow};
@@ -290,8 +290,9 @@ pub struct Run {
     pub(super) outcome: RunOutcome,
     pub(super) reason: Option<String>,
     pub(super) finished: bool,
-    /// The commit [`Run::commit`] could not resolve in its wait, and whether it kept the lease.
-    pub(super) unresolved: Option<(Commit, LeaseAfterCommit)>,
+    /// The commit [`Run::commit`] could not resolve in its wait, whether it kept the lease, and
+    /// why its outcome is unknown.
+    pub(super) unresolved: Option<(Commit, LeaseAfterCommit, Unacknowledged)>,
 }
 
 impl Run {
@@ -402,25 +403,19 @@ impl Run {
         }
         let lease = opts.lease;
         let out = match self.writes(opts) {
-            Ok(commit) => self.send_resolving(commit, lease).await,
+            Ok(commit) => match self.send(&commit, lease).await {
+                Err(StorageError::Uncertain(why)) => {
+                    self.resolve_lost_ack(commit, lease, why).await
+                }
+                Err(StorageError::Invalid(why)) if !commit.app_writes.is_empty() => {
+                    Err(self.refused_commit(&commit, why).await)
+                }
+                out => out,
+            },
             Err(error) => Err(error),
         };
         self.settle(&out, lease);
         out
-    }
-
-    async fn send_resolving(
-        &mut self,
-        commit: Commit,
-        lease: LeaseAfterCommit,
-    ) -> Result<Committed, StorageError> {
-        match self.send(&commit, lease).await {
-            Err(StorageError::Uncertain(why)) => self.resolve_lost_ack(commit, lease, why).await,
-            Err(StorageError::Invalid(why)) if !commit.app_writes.is_empty() => {
-                Err(self.refused_commit(&commit, why).await)
-            }
-            out => out,
-        }
     }
 
     /// The lease renews until the commit's outcome is known; one left unresolved keeps it for
@@ -432,7 +427,7 @@ impl Run {
         }
         lease.stop();
         if out.is_ok() && after == LeaseAfterCommit::Release {
-            lease.released();
+            lease.mark_released();
         }
     }
 
@@ -442,14 +437,16 @@ impl Run {
         &mut self,
         commit: Commit,
         lease: LeaseAfterCommit,
-        why: String,
+        why: Unacknowledged,
     ) -> Result<Committed, StorageError> {
         log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
-        let resolved = self.resolve(&commit, lease, RESOLVE_WAIT).await;
-        if matches!(resolved, Err(StorageError::Uncertain(_))) {
-            self.unresolved = Some((commit, lease));
+        match self.resolve(&commit, lease, RESOLVE_WAIT, why).await {
+            Err(StorageError::Uncertain(why)) => {
+                self.unresolved = Some((commit, lease, why.clone()));
+                Err(StorageError::Uncertain(why))
+            }
+            resolved => resolved,
         }
-        resolved
     }
 
     /// A commit carrying application SQL the database refused: a lane that moved on aborted it
@@ -488,45 +485,31 @@ impl Run {
         commit: &Commit,
         lease: LeaseAfterCommit,
         wait: Duration,
+        lost: Unacknowledged,
     ) -> Result<Committed, StorageError> {
         let fence = self.lease.as_ref().map(Lease::fence);
-        let epoch = tokio::time::Instant::now();
-        let mut poll = LanePoll::new(epoch.elapsed(), wait);
-        let mut last: String;
-        loop {
-            let (conn, read_task) = (&*self.lane.thread.conn, commit.read_task.as_deref());
-            match db::resolve_commit(conn, self.lane.name(), &self.run_id, fence, read_task).await {
-                Ok(Resolution::Committed(committed)) => return Ok(*committed),
-                Ok(Resolution::Rejected) => {
-                    return Err(StorageError::VersionConflict {
-                        lane: self.lane.name().to_owned(),
-                        expected: fence.map_or(0, |f| f.version),
-                    });
-                }
-                Ok(Resolution::NotApplied) => match self.send(commit, lease).await {
-                    Err(StorageError::Uncertain(why) | StorageError::Unavailable(why)) => {
-                        last = why
-                    }
-                    out => return out,
-                },
-                Err(e) => last = e.to_string(),
+        let (conn, read_task) = (&*self.lane.thread.conn, commit.read_task.as_deref());
+        let (lane, run_id) = (self.lane.name(), self.run_id.as_str());
+        let probe = || async move {
+            match db::resolve_commit(conn, lane, run_id, fence, read_task).await {
+                Ok(Resolution::Committed(committed)) => Ok(Some(*committed)),
+                Ok(Resolution::Rejected) => Err(StorageError::VersionConflict {
+                    lane: lane.to_owned(),
+                    expected: fence.map_or(0, |f| f.version),
+                }),
+                Ok(Resolution::NotApplied) => Ok(None),
+                // a probe that could not be read answers nothing
+                Err(e) => Err(StorageError::Unavailable(format!("resolving: {e}"))),
             }
-            let Some(at) = poll.next(epoch.elapsed()) else {
-                return Err(StorageError::Uncertain(format!(
-                    "run {} unresolved after {}s: {last}",
-                    self.run_id,
-                    wait.as_secs_f64()
-                )));
-            };
-            tokio::time::sleep_until(epoch + at).await;
-        }
+        };
+        Resend::after_lost(wait, lost).probed(|| self.send(commit, lease), probe).await
     }
 
     /// Keeps resolving a commit [`Run::commit`] left uncertain, up to [`RESOLVE_LATER`]: the
     /// authoritative outcome, never a guess. `None` when nothing was left unresolved.
     pub async fn resolve_later(mut self) -> Option<Result<Committed, StorageError>> {
-        let (commit, lease) = self.unresolved.take()?;
-        let out = self.resolve(&commit, lease, RESOLVE_LATER).await;
+        let (commit, lease, lost) = self.unresolved.take()?;
+        let out = self.resolve(&commit, lease, RESOLVE_LATER, lost).await;
         self.settle(&out, lease);
         Some(out)
     }

@@ -168,24 +168,64 @@ impl Spawner for TokioSpawner {
     }
 }
 
+/// Each task on a thread of its own, for work that blocks between its awaits (a SQLite worker):
+/// the thread parks while the task waits and ends with it.
+#[derive(Clone, Copy, Debug)]
+pub struct DedicatedThreads;
+
+impl Spawner for DedicatedThreads {
+    fn launch(&self, task: Launch) -> OwnedTask<Box<dyn Any + Send>> {
+        struct Unpark(std::thread::Thread);
+        impl std::task::Wake for Unpark {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        let (run, owned) = launch(task);
+        let thread = std::thread::Builder::new().name("lk-agents-dedicated".into()).spawn(|| {
+            let waker = std::task::Waker::from(Arc::new(Unpark(std::thread::current())));
+            let mut cx = std::task::Context::from_waker(&waker);
+            let mut run = run;
+            while run.as_mut().poll(&mut cx).is_pending() {
+                std::thread::park();
+            }
+        });
+        // A thread refused is a task dropped unrun: its owner sees it cancelled.
+        drop(thread);
+        owned
+    }
+}
+
 /// Named [`OwnedTask`]s and a way to wait for them to be gone. Each task
 /// holds the set until it ends, so dropping the owner's handle cancels nothing: `close`,
-/// `cancel_all` and `drain` do.
+/// `cancel_all` and `drain` do. A task is never addressed by id: work the set joins is spawned
+/// with `spawn`, work an owner may cancel early with `scoped`, whose handle cancels on drop.
 #[derive(Default)]
 pub struct TaskSet {
     inner: Mutex<TaskEntries>,
     changed: Notify,
 }
 
-/// A task's key in its [`TaskSet`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TaskId(u64);
-
 #[derive(Default)]
 struct TaskEntries {
     closed: bool,
     next: u64,
-    tasks: BTreeMap<u64, (String, Option<OwnedTask>)>,
+    tasks: BTreeMap<u64, Entry>,
+}
+
+impl TaskEntries {
+    fn admit(&mut self, name: &str, cleanup: bool) -> u64 {
+        self.next += 1;
+        self.tasks.insert(self.next, Entry { name: name.to_owned(), task: None, cleanup });
+        self.next
+    }
+}
+
+struct Entry {
+    name: String,
+    task: Option<OwnedTask>,
+    /// A bounded teardown: admitted after `close` and never cancelled by the set.
+    cleanup: bool,
 }
 
 /// Owned by the work: leaves the set when the work is dropped, however it ended. Also handed
@@ -203,25 +243,109 @@ impl Drop for Leave {
     }
 }
 
+/// A task of a [`TaskSet`] its owner may end early: dropping the handle requests its
+/// cancellation, and the set still joins the task until it settled.
+#[must_use = "dropping a ScopedTask cancels it"]
+pub struct ScopedTask {
+    /// `None` once released to the set.
+    table: Option<Arc<TaskSet>>,
+    id: u64,
+}
+
+impl ScopedTask {
+    /// Requests cancellation now; the set joins the task until it settled.
+    pub fn cancel(&self) {
+        if let Some(table) = &self.table {
+            table.cancel(self.id);
+        }
+    }
+
+    /// Leaves the task to its set, which still joins and may cancel it: for work that ends on
+    /// its own once its owner is gone (a filler that closes its member on stop).
+    pub fn release(mut self) {
+        self.table = None;
+    }
+}
+
+impl Drop for ScopedTask {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+impl std::fmt::Debug for ScopedTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ScopedTask").field(&self.id).finish()
+    }
+}
+
+/// Scoped tasks of one set its owner ends together: dropping it cancels them all. A push first
+/// forgets the tasks that ended, so it holds only running ones.
+#[must_use = "dropping ScopedTasks cancels them"]
+pub struct ScopedTasks {
+    table: Arc<TaskSet>,
+    ids: Vec<u64>,
+}
+
+impl ScopedTasks {
+    pub fn new(table: Arc<TaskSet>) -> Self {
+        ScopedTasks { table, ids: Vec::new() }
+    }
+
+    /// Adds `task`, a task of this set.
+    pub fn push(&mut self, mut task: ScopedTask) {
+        let table = task.table.take().expect("a scoped task is pushed once");
+        debug_assert!(Arc::ptr_eq(&table, &self.table), "a task of another set");
+        self.prune();
+        self.ids.push(task.id);
+    }
+
+    /// Forgets the tasks that ended.
+    fn prune(&mut self) {
+        let entries = self.table.inner.lock();
+        self.ids.retain(|id| entries.tasks.contains_key(id));
+    }
+
+    /// Whether every task ended.
+    pub fn is_empty(&mut self) -> bool {
+        self.prune();
+        self.ids.is_empty()
+    }
+
+    /// Cancels every task; the set joins them until they settled.
+    pub fn clear(&mut self) {
+        let entries = self.table.inner.lock();
+        for id in self.ids.drain(..) {
+            if let Some(Entry { task: Some(task), .. }) = entries.tasks.get(&id) {
+                task.cancel();
+            }
+        }
+    }
+}
+
+impl Drop for ScopedTasks {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
 impl TaskSet {
     /// Counts work run elsewhere (another set's task) until the guard drops, so this set's
     /// waits include it; it cannot be cancelled from here.
     pub fn track(self: &Arc<Self>, name: &str) -> Leave {
-        let mut g = self.inner.lock();
-        g.next += 1;
-        let id = g.next;
-        g.tasks.insert(id, (name.to_owned(), None));
+        let id = self.inner.lock().admit(name, false);
         Leave { table: Arc::clone(self), id }
     }
 
+    /// Work the set owns until it ends or the set cancels it.
     #[track_caller]
     pub fn spawn(
         self: &Arc<Self>,
         spawner: &dyn Spawner,
         name: &str,
         fut: impl Future<Output = ()> + Send + 'static,
-    ) -> TaskId {
-        self.try_spawn(spawner, name, fut).expect("task admission is closed")
+    ) {
+        assert!(self.try_spawn(spawner, name, fut), "task admission is closed");
     }
 
     /// Admit a task unless its owner has permanently closed this set.
@@ -231,16 +355,59 @@ impl TaskSet {
         spawner: &dyn Spawner,
         name: &str,
         fut: impl Future<Output = ()> + Send + 'static,
-    ) -> Option<TaskId> {
+    ) -> bool {
+        self.launch(spawner, name, false, fut).is_some()
+    }
+
+    /// [`spawn`](Self::spawn), with a handle that cancels the task when dropped.
+    #[track_caller]
+    pub fn scoped(
+        self: &Arc<Self>,
+        spawner: &dyn Spawner,
+        name: &str,
+        fut: impl Future<Output = ()> + Send + 'static,
+    ) -> ScopedTask {
+        self.try_scoped(spawner, name, fut).expect("task admission is closed")
+    }
+
+    /// [`try_spawn`](Self::try_spawn), with a handle that cancels the task when dropped.
+    #[track_caller]
+    pub fn try_scoped(
+        self: &Arc<Self>,
+        spawner: &dyn Spawner,
+        name: &str,
+        fut: impl Future<Output = ()> + Send + 'static,
+    ) -> Option<ScopedTask> {
+        let id = self.launch(spawner, name, false, fut)?;
+        Some(ScopedTask { table: Some(Arc::clone(self)), id })
+    }
+
+    /// A teardown bounded by its own deadline (a resource's close): admitted even after `close`
+    /// and never cancelled by the set, whose waits join it.
+    #[track_caller]
+    pub fn cleanup(
+        self: &Arc<Self>,
+        spawner: &dyn Spawner,
+        name: &str,
+        fut: impl Future<Output = ()> + Send + 'static,
+    ) {
+        self.launch(spawner, name, true, fut);
+    }
+
+    #[track_caller]
+    fn launch(
+        self: &Arc<Self>,
+        spawner: &dyn Spawner,
+        name: &str,
+        cleanup: bool,
+        fut: impl Future<Output = ()> + Send + 'static,
+    ) -> Option<u64> {
         let id = {
             let mut g = self.inner.lock();
-            if g.closed {
+            if g.closed && !cleanup {
                 return None;
             }
-            g.next += 1;
-            let id = g.next;
-            g.tasks.insert(id, (name.to_owned(), None));
-            id
+            g.admit(name, cleanup)
         };
         let leave = Leave { table: Arc::clone(self), id };
         let task = spawner.spawn(async move {
@@ -248,30 +415,24 @@ impl TaskSet {
             fut.await;
         });
         let mut g = self.inner.lock();
-        if g.closed {
+        if g.closed && !cleanup {
             task.cancel();
         }
         // Absent when the work already ended; the task is then dropped finished.
         if let Some(entry) = g.tasks.get_mut(&id) {
-            entry.1 = Some(task);
+            entry.task = Some(task);
         }
-        Some(TaskId(id))
+        Some(id)
     }
 
-    /// Whether the task has not left the set yet.
-    pub fn contains(&self, id: TaskId) -> bool {
-        self.inner.lock().tasks.contains_key(&id.0)
-    }
-
-    /// Cancels one task; a finished one is ignored.
-    pub fn cancel(&self, id: TaskId) {
-        if let Some((_, Some(task))) = self.inner.lock().tasks.get(&id.0) {
+    fn cancel(&self, id: u64) {
+        if let Some(Entry { task: Some(task), .. }) = self.inner.lock().tasks.get(&id) {
             task.cancel();
         }
     }
 
     pub fn names(&self) -> Vec<String> {
-        self.inner.lock().tasks.values().map(|(n, _)| n.clone()).collect()
+        self.inner.lock().tasks.values().map(|entry| entry.name.clone()).collect()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -306,11 +467,14 @@ impl TaskSet {
         self.cancel_all();
     }
 
-    /// Request cancellation of every task currently owned by this set, without waiting.
-    /// This does not close admission or imply that tasks and their cleanup have finished.
+    /// Request cancellation of every task currently owned by this set but its cleanups, without
+    /// waiting. This does not close admission or imply that tasks and their cleanup have finished.
     pub fn cancel_all(&self) {
-        for task in self.inner.lock().tasks.values().filter_map(|(_, t)| t.as_ref()) {
-            task.cancel();
+        let tasks = self.inner.lock();
+        for entry in tasks.tasks.values().filter(|entry| !entry.cleanup) {
+            if let Some(task) = &entry.task {
+                task.cancel();
+            }
         }
     }
 
@@ -363,8 +527,48 @@ mod tests {
         let spawner = TokioSpawner::current();
         tasks.spawn(&spawner, "pending", std::future::pending());
         tasks.close();
-        assert!(tasks.try_spawn(&spawner, "late", async {}).is_none());
+        assert!(!tasks.try_spawn(&spawner, "late", async {}));
         assert!(tasks.wait_empty(&crate::clock::RealClock::new(), None).await);
+    }
+
+    // Catches: a replaced or forgotten handle leaving its task running, or a dropped handle no
+    // longer joined by its set.
+    #[tokio::test]
+    async fn dropping_a_scoped_handle_cancels_its_task_and_the_set_still_joins_it() {
+        let tasks = Arc::new(TaskSet::default());
+        let spawner = TokioSpawner::current();
+        let (tx, rx) = oneshot::channel::<()>();
+        let mut handle = Some(tasks.scoped(&spawner, "first", async move {
+            let _tx = tx;
+            std::future::pending::<()>().await
+        }));
+        assert!(handle.is_some() && !tasks.is_empty());
+        // Overwriting the slot drops the previous handle, which cancels its task.
+        handle = Some(tasks.scoped(&spawner, "second", std::future::pending()));
+        assert!(rx.await.is_err(), "the replaced task was cancelled");
+        drop(handle);
+        assert!(tasks.wait_empty(&crate::clock::RealClock::new(), None).await);
+    }
+
+    // Catches: a collection of handles growing with every ended task, or one dropped without
+    // cancelling the tasks still running.
+    #[tokio::test]
+    async fn scoped_tasks_forget_ended_tasks_and_cancel_the_rest() {
+        let tasks = Arc::new(TaskSet::default());
+        let spawner = TokioSpawner::current();
+        let mut scoped = ScopedTasks::new(tasks.clone());
+        let (done, ended) = oneshot::channel::<()>();
+        scoped.push(tasks.scoped(&spawner, "ends", async move { drop(done) }));
+        let _ = ended.await;
+        assert!(tasks.wait_empty(&crate::clock::RealClock::new(), None).await);
+        let (tx, rx) = oneshot::channel::<()>();
+        scoped.push(tasks.scoped(&spawner, "runs", async move {
+            let _tx = tx;
+            std::future::pending::<()>().await
+        }));
+        assert_eq!(scoped.ids.len(), 1, "the ended task was forgotten");
+        drop(scoped);
+        assert!(rx.await.is_err(), "the running task was cancelled");
     }
 
     async fn outcome_of(

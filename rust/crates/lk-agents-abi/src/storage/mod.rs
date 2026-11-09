@@ -22,10 +22,10 @@ pub use rows::*;
 #[crate::host(error(kind = "livekit.agents.storage.StorageError"))]
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum StorageError {
-    /// A write sent and never answered: it may or may not have committed. Resolved by the run's
-    /// identity before anything is reported or retried; never proof of a rollback.
+    /// A write sent and never answered: it may or may not have committed. Resolved by the
+    /// write's identity before anything is reported or retried; never proof of a rollback.
     #[error("write outcome unknown: {0}")]
-    Uncertain(String),
+    Uncertain(Unacknowledged),
     /// The lane refused the run: another holder has it (`reject`, or a waiter whose wait ran
     /// out). The running task, when the journal names it.
     #[error("the lane is held by another run")]
@@ -73,6 +73,25 @@ pub enum StorageError {
     #[error("invalid: {0}")]
     #[host(kind = "ValueError")]
     Invalid(String),
+}
+
+/// Why a sent write's outcome is unknown. Only a connection that handed the write to its
+/// transport makes one ([`Unacknowledged::sent`], placed by `rust/check`); everything else
+/// passes on the value it was given, so a write that never left cannot be called uncertain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unacknowledged(String);
+
+impl Unacknowledged {
+    /// A write the connection sent whose answer was lost: `why` says how.
+    pub fn sent(why: impl std::fmt::Display) -> Self {
+        Self(why.to_string())
+    }
+}
+
+impl std::fmt::Display for Unacknowledged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 impl StorageError {
@@ -255,9 +274,9 @@ pub trait Storage: Send + Sync + Sized + 'static {
         job: crate::worker::job::Job,
     ) -> Result<Option<ThreadInfo>, StorageError>;
 
-    /// The existing thread's handle, its writes under `holder`. Takes no lease.
+    /// The existing thread's handle. Takes no lease.
     #[host(await)]
-    async fn open(&self, thread_id: String, holder: String) -> Result<Self::Thread, StorageError>;
+    async fn open(&self, thread_id: String) -> Result<Self::Thread, StorageError>;
 
     /// A runtime-supplied field store whose explicit saves commit outside a managed turn.
     #[host(await)]

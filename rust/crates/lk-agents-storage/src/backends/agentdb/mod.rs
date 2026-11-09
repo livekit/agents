@@ -16,17 +16,18 @@ use livekit_api::services::{
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
+use lk_agents_abi::storage::Unacknowledged;
 use lk_agents_abi::storage::wsdb::WsdbCode;
 use lk_agents_net::env::ProcessEnv;
 
-use crate::thread::{LeaseTiming, SchemaCell, Thread};
+use crate::thread::{LeaseTiming, RESOLVE_WAIT, Resend, SchemaCell, Thread};
 use crate::{Storage, ThreadDbConnection};
-pub use connection::{Conn, Options as ConnOptions, TokenMinter, WsdbError};
+pub use connection::{Conn, Options as ConnOptions, TokenMinter, WriteError, WsdbError};
 
 // The threads service owns thread metadata; agent-db holds each thread's database, over `wsdb`.
 
-/// Read failures may be retried when the database is unavailable or backpressured. Batch
-/// failures with an unknown outcome are classified separately by [`Pooled`].
+/// A failure of a request that changed nothing: a read, or a write never sent. A lost
+/// connection or a backpressured database may be retried.
 impl From<WsdbError> for StorageError {
     fn from(e: WsdbError) -> Self {
         match e {
@@ -53,6 +54,23 @@ impl From<WsdbError> for StorageError {
     }
 }
 
+/// A write the server answered was refused and rolled back; one sent and never answered (a
+/// dropped or closed socket, a timeout, a malformed answer, a server going away) may have
+/// committed: `Uncertain`. Only a sent write can be.
+impl From<WriteError> for StorageError {
+    fn from(e: WriteError) -> Self {
+        match e {
+            WriteError::NotSent(e) => e.into(),
+            WriteError::Sent(e @ WsdbError::Server { code, .. })
+                if code != WsdbCode::Unavailable =>
+            {
+                e.into()
+            }
+            WriteError::Sent(e) => StorageError::Uncertain(Unacknowledged::sent(e)),
+        }
+    }
+}
+
 /// A `livekit-api` failure as a storage error: `not_found` is `NotFound`, `unauthenticated` and
 /// `permission_denied` `Unauthorized`, a lost request and the retryable codes `Unavailable`,
 /// anything else `Server` with its code.
@@ -64,14 +82,34 @@ pub fn service_error(e: ServiceError) -> StorageError {
             ServerErrorCode::UNAUTHENTICATED | ServerErrorCode::PERMISSION_DENIED => {
                 StorageError::Unauthorized(c.msg)
             }
-            ServerErrorCode::CANCELED => StorageError::Cancelled(c.msg),
-            ServerErrorCode::UNAVAILABLE
+            // the server's own cancellation, never this caller's: nothing to retry over
+            ServerErrorCode::CANCELED
+            | ServerErrorCode::UNAVAILABLE
             | ServerErrorCode::DEADLINE_EXCEEDED
             | ServerErrorCode::RESOURCE_EXHAUSTED => StorageError::Unavailable(c.msg),
             _ => StorageError::Invalid(format!("{}: {}", c.code, c.msg)),
         },
         ServiceError::Twirp(e) => StorageError::Invalid(e.to_string()),
         other => StorageError::Invalid(other.to_string()),
+    }
+}
+
+/// A thread write's failure: one sent and never answered (a lost response, a deadline, a
+/// server-side cancellation) may have applied, so it is `Uncertain`, never retryable.
+fn service_write_error(e: ServiceError) -> StorageError {
+    match e {
+        ServiceError::Twirp(ServerError::Request(e)) if !e.is_connect() && !e.is_builder() => {
+            StorageError::Uncertain(Unacknowledged::sent(e))
+        }
+        ServiceError::Twirp(ServerError::Twirp(c))
+            if matches!(
+                c.code.as_str(),
+                ServerErrorCode::CANCELED | ServerErrorCode::DEADLINE_EXCEEDED
+            ) =>
+        {
+            StorageError::Uncertain(Unacknowledged::sent(format!("{}: {}", c.code, c.msg)))
+        }
+        e => service_error(e),
     }
 }
 
@@ -148,8 +186,10 @@ impl AgentDbStorage {
 
 #[async_trait]
 impl Storage for AgentDbStorage {
+    /// The create carries no idempotency key yet (the threads service takes none), so a lost
+    /// response is `Uncertain` and is not sent again.
     async fn create_thread(&self, request: CreateRequest) -> Result<ThreadRecord, StorageError> {
-        self.threads().create(request).await.map_err(service_error)
+        self.threads().create(request).await.map_err(service_write_error)
     }
 
     async fn get_thread(&self, thread_id: &str) -> Result<ThreadRecord, StorageError> {
@@ -160,20 +200,31 @@ impl Storage for AgentDbStorage {
         self.threads().list(request).await.map_err(service_error)
     }
 
+    /// The same merge applied twice is one: a lost response is sent again.
     async fn update_thread(&self, request: UpdateRequest) -> Result<ThreadRecord, StorageError> {
-        self.threads().update(request).await.map_err(service_error)
+        let request = &request;
+        Resend::new(RESOLVE_WAIT)
+            .send(|| async move {
+                self.threads().update(request.clone()).await.map_err(service_write_error)
+            })
+            .await
     }
 
+    /// Repeat-safe, so a lost response is sent again.
     async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError> {
-        match self.threads().delete(thread_id).await.map_err(service_error) {
-            Err(StorageError::NotFound(_)) => Ok(()),
-            out => out,
-        }
+        Resend::new(RESOLVE_WAIT)
+            .send(|| async move {
+                match self.threads().delete(thread_id).await.map_err(service_write_error) {
+                    Err(StorageError::NotFound(_)) => Ok(()),
+                    out => out,
+                }
+            })
+            .await
     }
 
     /// One connection to the thread's database, parked for the next open when the thread
     /// closes.
-    async fn open(&self, thread_id: &str, holder: &str) -> Result<Thread, StorageError> {
+    async fn open(&self, thread_id: &str) -> Result<Thread, StorageError> {
         let database_id = self.get_thread(thread_id).await?.database_id;
         let (conn, schema) = match self.pool.take(&database_id) {
             Some(idle) => (idle.conn, idle.schema),
@@ -190,7 +241,7 @@ impl Storage for AgentDbStorage {
             pool: self.pool.clone(),
             closed: AtomicBool::new(false),
         };
-        Thread::new(Arc::new(pooled), thread_id, self.opts.lease, schema, holder).await
+        Thread::new(Arc::new(pooled), thread_id, self.opts.lease, schema).await
     }
 
     async fn get_thread_items(
@@ -286,19 +337,9 @@ impl ThreadDbConnection for Pooled {
         Ok(self.conn.query_all(&statement).await?)
     }
 
-    /// A batch whose socket dropped or timed out after it was sent, or whose answer was
-    /// malformed, may have committed: `Uncertain`, never `Unavailable`.
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         self.live()?;
-        self.conn.batch(&statements).await.map_err(|e| match e {
-            WsdbError::Disconnected
-            | WsdbError::Timeout
-            | WsdbError::Protocol(_)
-            | WsdbError::Server { code: WsdbCode::Unavailable, .. } => {
-                StorageError::Uncertain(e.to_string())
-            }
-            e => e.into(),
-        })
+        Ok(self.conn.batch(&statements).await?)
     }
 
     async fn close(&self) {

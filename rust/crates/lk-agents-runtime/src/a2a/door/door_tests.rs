@@ -196,7 +196,7 @@ async fn streaming_acceptance_precedes_the_lane_wait(backend: Backend) {
         })
         .await
         .unwrap();
-    let thread = store.storage.open(&created.thread_id, "holding-worker").await.unwrap();
+    let thread = store.storage.open(&created.thread_id).await.unwrap();
     let mut held = thread
         .lane("desk")
         .open(
@@ -268,7 +268,7 @@ async fn a_continuation_keeps_one_wire_identity(backend: Backend) {
     assert_eq!(statuses.len(), 2, "progress and final status");
     assert!(statuses.iter().all(|update| update.task_id == task.id));
     assert_eq!(statuses[1].status.state, a2a::TaskState::Completed);
-    let thread = store.storage.open(&task.context_id, "reader").await.unwrap();
+    let thread = store.storage.open(&task.context_id).await.unwrap();
     let saved = thread.task(&task.id).await.unwrap().unwrap();
     assert_eq!(saved.data.history.len(), 2);
     assert!(saved.internal.is_none());
@@ -324,7 +324,7 @@ async fn a_slow_observer_detaches_without_canceling_the_task(backend: Backend) {
     }
     assert!(detached);
     let task = task.unwrap();
-    let thread = store.storage.open(&task.context_id, "reader").await.unwrap();
+    let thread = store.storage.open(&task.context_id).await.unwrap();
     let saved = thread.task(&task.id).await.unwrap().unwrap();
     assert_eq!(saved.status, lk_agents_storage::TaskState::Completed);
     thread.close().await;

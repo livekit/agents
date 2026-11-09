@@ -271,9 +271,17 @@ mod drift {
         sync(&tmp, &outputs, false).expect("writes");
         assert_eq!(sync(&tmp, &outputs, true), Ok(0));
 
+        // One family per output kind: Rust bindings, Python facades, stubs, semconv and OTel.
         let families = [
             "rust/crates/lk-agents-py/src/generated/mod.rs",
+            CORE_NAMES,
             "livekit-agents-next/livekit/agents/_generated/stt.py",
+            "livekit-agents-next/livekit/agents/_generated/__init__.py",
+            "livekit-agents-next/livekit/agents/_core.pyi",
+            "livekit-agents-next/livekit/agents/_generated/_core_voice.pyi",
+            "livekit-agents-next/livekit/agents/_generated/semconv.py",
+            "rust/otel/schema.json",
+            "rust/otel/registry/spans.yaml",
         ];
         for family in families {
             let path = tmp.join(family);

@@ -18,7 +18,7 @@ use serde_json::Value;
 use tokio::sync::OnceCell;
 
 use crate::backends::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter};
-use crate::backends::sqlite::SqliteStorage;
+use crate::backends::sqlite::{SqliteStorage, Workers};
 use crate::backends::with_thread;
 use crate::context::store::ContextStore;
 use crate::thread::LeaseTiming;
@@ -143,7 +143,8 @@ impl Namespace {
             .get_or_try_init(|| async {
                 Ok(match &self.config {
                     Config::Local { directory, lease, .. } => {
-                        let storage = SqliteStorage::open(directory, *lease).await?;
+                        let workers = Workers::threads(self.clock.clone());
+                        let storage = SqliteStorage::open(directory, *lease, workers).await?;
                         log::info!(target: lk_agents_abi::LOG_TARGET, "local thread storage in {}", directory.display());
                         Backend::Local(Arc::new(storage))
                     }
@@ -476,8 +477,8 @@ impl HostStorageClass for Namespace {
         self.storage().await?.get_thread_tasks(&thread_id, status).await
     }
 
-    async fn open(&self, thread_id: String, holder: String) -> Result<Thread, StorageError> {
-        self.storage().await?.open(&thread_id, &holder).await
+    async fn open(&self, thread_id: String) -> Result<Thread, StorageError> {
+        self.storage().await?.open(&thread_id).await
     }
 
     async fn _core_context_store(
@@ -529,9 +530,6 @@ impl host::handles::Thread for Thread {
 
     fn id(&self) -> String {
         self.id().to_owned()
-    }
-    fn holder(&self) -> String {
-        self.holder().to_owned()
     }
     async fn lanes(&self) -> Result<Vec<host::LaneRow>, StorageError> {
         self.lanes().await
@@ -603,8 +601,8 @@ impl host::handles::Thread for Thread {
         if let Some(timeout) = wait_timeout {
             options.wait_timeout = timeout;
         }
-        let holder = crate::Holder::new(self.holder());
-        Ok(RunHandle::new(self.lane(&lane).open(options, &holder).await?))
+        let owner = crate::Holder::new("run");
+        Ok(RunHandle::new(self.lane(&lane).open(options, &owner).await?))
     }
     fn close(&self, env: &ProcessEnv) {
         let thread = self.clone();
@@ -679,7 +677,6 @@ impl host::handles::Run for RunHandle {
 pub struct ThreadHandle {
     namespace: Arc<Namespace>,
     thread_id: String,
-    holder: String,
     agent: String,
 }
 
@@ -690,15 +687,15 @@ impl ThreadHandle {
         read: impl AsyncFnOnce(&Thread) -> Result<T, StorageError>,
     ) -> Result<T, StorageError> {
         let storage = self.namespace.storage().await?;
-        with_thread(&*storage, &self.thread_id, &self.holder, read).await
+        with_thread(&*storage, &self.thread_id, read).await
     }
 }
 
 impl host::handles::ThreadHandle for ThreadHandle {
     type Namespace = Namespace;
 
-    fn new(namespace: Arc<Namespace>, thread_id: String, holder: String, agent: String) -> Self {
-        Self { namespace, thread_id, holder, agent }
+    fn new(namespace: Arc<Namespace>, thread_id: String, agent: String) -> Self {
+        Self { namespace, thread_id, agent }
     }
     fn id(&self) -> String {
         self.thread_id.clone()

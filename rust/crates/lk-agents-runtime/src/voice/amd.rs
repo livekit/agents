@@ -294,7 +294,7 @@ impl AmdSystem {
         while let Some(msg) = msgs.recv().await {
             if let Msg::SttOpened(Ok((opened, _))) = msg {
                 self.peer.journal(Step::Input(InputStep::LegOpenDiscarded { leg: Leg::Amd }));
-                opened.retire(&self.tasks);
+                drop(opened);
             }
         }
     }
@@ -497,8 +497,11 @@ impl AmdSystem {
                             input,
                             PendingLeg::Stt(source),
                             peer.resources.clone(),
-                            peer.time.clone(),
-                            peer.spawner.clone(),
+                            &lk_agents_net::owned::Background::new(
+                                tasks.clone(),
+                                peer.spawner.clone(),
+                                peer.time.clock(),
+                            ),
                         ),
                         gate,
                     ))
@@ -511,7 +514,7 @@ impl AmdSystem {
             if let Err(tokio::sync::mpsc::error::SendError(Msg::SttOpened(Ok((opened, _))))) =
                 tx.send(Msg::SttOpened(outcome))
             {
-                opened.retire(&tasks);
+                drop(opened);
             }
         });
     }
@@ -521,7 +524,7 @@ impl AmdSystem {
         if !matches!(self.stt, SttLeg::Opening) {
             if let Ok((opened, _)) = outcome {
                 self.peer.journal(Step::Input(InputStep::LegOpenDiscarded { leg: Leg::Amd }));
-                opened.retire(&self.tasks);
+                drop(opened);
             }
             return;
         }
@@ -547,7 +550,7 @@ impl AmdSystem {
             .is_err()
         {
             self.stt = SttLeg::Done;
-            opened.retire(&self.tasks);
+            drop(opened);
             return;
         }
         self.stt = SttLeg::Installed { gate, tap };
@@ -637,21 +640,17 @@ fn spawn_tap_drain(
 ) -> bool {
     let closing = peer.closing.clone();
     let spawner = peer.spawner.clone();
-    tasks
-        .try_spawn(spawner.as_ref(), "amd tap drain", async move {
-            let Some(source) = opened.stt_source() else {
-                peer.remove_audio_tap(tap);
-                return;
-            };
-            let cause = forward_transcripts(source, &closing, &tx).await;
+    tasks.try_spawn(spawner.as_ref(), "amd tap drain", async move {
+        let Some(source) = opened.stt_source() else {
             peer.remove_audio_tap(tap);
-            let closed = opened.close().await;
-            peer.journal(Step::Input(InputStep::ChannelEnded { leg: Leg::Amd, cause }));
-            if let Some(how) = closed {
-                peer.journal(Step::Input(InputStep::HostStreamClosed { leg: Leg::Amd, how }));
-            }
-        })
-        .is_some()
+            return;
+        };
+        let cause = forward_transcripts(source, &closing, &tx).await;
+        peer.remove_audio_tap(tap);
+        let how = opened.close().await;
+        peer.journal(Step::Input(InputStep::ChannelEnded { leg: Leg::Amd, cause }));
+        peer.journal(Step::Input(InputStep::HostStreamClosed { leg: Leg::Amd, how }));
+    })
 }
 
 /// Forwards the tap's transcripts to the system until the session closes, the system is gone or
@@ -855,10 +854,11 @@ mod tests {
                 sink.clone(),
                 PendingLeg::Stt(Box::new(Source { input: input.clone(), closed: closed.clone() })),
                 resources.clone(),
-                crate::voice::session::Timebase::from_virtual(Arc::new(
-                    lk_agents_abi::VirtualClock::new(),
-                )),
-                Arc::new(lk_agents_net::task::TokioSpawner::current()),
+                &lk_agents_net::owned::Background::new(
+                    Arc::default(),
+                    Arc::new(lk_agents_net::task::TokioSpawner::current()),
+                    Arc::new(lk_agents_abi::VirtualClock::new()),
+                ),
             );
             let id = opened.resource();
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();

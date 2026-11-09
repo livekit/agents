@@ -18,7 +18,7 @@ use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
-use lk_agents_net::task::{TaskId, TaskSet};
+use lk_agents_net::task::{ScopedTask, TaskSet};
 use tokio::sync::oneshot;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
@@ -105,21 +105,9 @@ struct Probe {
 }
 
 /// A request stream's task in its chain's [`TaskSet`].
-pub(crate) struct StreamTask {
-    streams: Arc<TaskSet>,
-    id: TaskId,
-}
-
-impl StreamTask {
-    #[cfg(test)]
-    pub(crate) fn new(streams: Arc<TaskSet>, id: TaskId) -> Self {
-        StreamTask { streams, id }
-    }
-
-    pub(crate) fn cancel(&self) {
-        self.streams.cancel(self.id);
-    }
-}
+/// A stream's filler task: cancelled by its source's close, left to the chain's set (which
+/// joins it) when the source is dropped, as the filler then closes its member on stop.
+pub(crate) type StreamTask = ScopedTask;
 
 pub struct FallbackChain<B: Backend> {
     entries: Vec<Arc<B>>,
@@ -185,8 +173,7 @@ impl<B: Backend> FallbackChain<B> {
         &self,
         work: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> StreamTask {
-        let id = self.streams.spawn(self.spawner.as_ref(), "fallback stream", work);
-        StreamTask { streams: Arc::clone(&self.streams), id }
+        self.streams.scoped(self.spawner.as_ref(), "fallback stream", work)
     }
 
     pub(crate) fn clock(&self) -> Arc<dyn Clock> {

@@ -67,6 +67,49 @@ async fn close_cancels_a_blocked_pull() {
     });
 }
 
+/// Waits for the host to set its `event` (a `threading.Event`), as `log` then reads `want`.
+fn signalled(g: &Py<PyAny>, event: &str, want: &str) {
+    Python::attach(|py| {
+        let g = g.bind(py);
+        let set = g.getattr(event).unwrap().call_method1("wait", (5.0,)).unwrap();
+        assert!(set.is_truthy().unwrap(), "the host never set {event}");
+        assert_eq!(g.getattr("log").unwrap().str().unwrap().to_string(), want);
+    });
+}
+
+// Catches: a stream its owner leaked (dropped without `close`) left open on the host: unlike
+// an async generator, a stream object has no finalizer that closes it.
+#[tokio::test]
+async fn a_stream_dropped_unclosed_is_closed_on_its_loop() {
+    Python::initialize();
+    let (g, context) = Python::attach(setup);
+    let mut stream = open(&g, &context, "tracked");
+    assert!(tokio::time::timeout(Duration::from_millis(30), stream.next()).await.is_err());
+    drop(stream);
+    signalled(&g, "tracked_closed", "['tracked closed']");
+}
+
+// Catches: a host open whose caller was cancelled before it took the returned stream,
+// discarding that stream unclosed.
+#[tokio::test]
+async fn a_returned_stream_nobody_took_is_closed() {
+    use lk_agents_abi::invoke::HostEntry as _;
+    Python::initialize();
+    let (g, context) = Python::attach(setup);
+    let tracked = Python::attach(|py| g.bind(py).getattr("open_tracked").unwrap().unbind());
+    let mut entered = StreamCall.enter(
+        &context,
+        None,
+        Box::new(move |py| Ok((tracked.bind(py).clone(), pyo3::types::PyTuple::empty(py), None))),
+    );
+    // Started on its loop by the first poll, returned meanwhile, then abandoned unread.
+    let first = std::future::poll_fn(|cx| std::task::Poll::Ready(entered.as_mut().poll(cx))).await;
+    assert!(first.is_pending());
+    signalled(&g, "tracked_returned", "[]");
+    drop(entered);
+    signalled(&g, "tracked_closed", "['tracked closed']");
+}
+
 fn duplex(g: &Py<PyAny>, context: &HostRef) -> (HostSink<String>, HostStream<String>) {
     Python::attach(|py| {
         let obj = g.bind(py).getattr("Duplex").unwrap().call0().unwrap();

@@ -234,7 +234,7 @@ impl Inner {
         let storage = self.namespace.storage().await?;
         let info = storage.get_thread(id).await?;
         authorize(principal, operation, id, Some(&info.scope))?;
-        Ok(storage.open(id, &self.holder).await?)
+        Ok(storage.open(id).await?)
     }
 
     async fn execute(
@@ -369,7 +369,7 @@ impl Inner {
             }
         };
         message.context_id = Some(context.clone());
-        let thread = self.namespace.storage().await?.open(&context, &self.holder).await?;
+        let thread = self.namespace.storage().await?.open(&context).await?;
         let continuing = match message.task_id.clone() {
             None => None,
             Some(task_id) => {
@@ -397,6 +397,7 @@ impl Inner {
             resolvers: self.owner.clone(),
             ..Turn::new(
                 thread.clone(),
+                &self.holder,
                 &self.lane,
                 self.host.clone(),
                 self.clock.clone(),

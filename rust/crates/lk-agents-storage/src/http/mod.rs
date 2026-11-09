@@ -330,8 +330,7 @@ impl generated::ThreadService for ThreadService {
     ) -> Result<GetThreadItemsResponse, ApiError> {
         self.thread(context, &request.project_id, &request.thread_id, AuthOperation::Read).await?;
         let id = request.thread_id.clone();
-        with_thread(&*self.storage, &id, "thread-api", async |thread| items(thread, request).await)
-            .await
+        with_thread(&*self.storage, &id, async |thread| items(thread, request).await).await
     }
 
     async fn get_thread_tasks(
@@ -341,8 +340,7 @@ impl generated::ThreadService for ThreadService {
     ) -> Result<GetThreadTasksResponse, ApiError> {
         self.thread(context, &request.project_id, &request.thread_id, AuthOperation::Read).await?;
         let id = request.thread_id.clone();
-        with_thread(&*self.storage, &id, "thread-api", async |thread| tasks(thread, request).await)
-            .await
+        with_thread(&*self.storage, &id, async |thread| tasks(thread, request).await).await
     }
 }
 

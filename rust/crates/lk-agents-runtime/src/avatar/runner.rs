@@ -81,6 +81,8 @@ struct RunnerLoop<F> {
     events: mpsc::UnboundedSender<AvatarEvent>,
     answers: Answers,
     io_tasks: Arc<TaskSet>,
+    /// The io cancellation in flight: apart from `io_tasks`, which it waits to empty.
+    cancelling: Option<lk_agents_abi::OwnedTask>,
     spawner: Arc<dyn Spawner>,
     clock: Arc<dyn Clock>,
 }
@@ -122,15 +124,13 @@ impl<F: FnMut(&VecDeque<AvatarEvent>) -> usize> RunnerLoop<F> {
         });
     }
 
-    fn cancel_io(&self) {
+    fn cancel_io(&mut self) {
         let (io_tasks, events, clock) =
             (Arc::clone(&self.io_tasks), self.events.clone(), Arc::clone(&self.clock));
-        // Detached: it ends once the cancelled ops settled, and only reports to the loop, which
-        // ignores it once gone.
-        self.spawner.spawn_detached(async move {
+        self.cancelling = Some(self.spawner.spawn(async move {
             io_tasks.cancel_and_wait(&*clock).await;
             let _ = events.send(AvatarEvent::IoCancelled);
-        });
+        }));
     }
 
     fn answer(&self, call: CallId, result: Result<(), RunnerError>) {
@@ -220,6 +220,7 @@ impl Runner {
             events: events.clone(),
             answers: Arc::clone(&answers),
             io_tasks: Arc::clone(&io_tasks),
+            cancelling: None,
             spawner: Arc::clone(&spawner),
             clock,
         };
@@ -272,11 +273,11 @@ impl avatar::AvatarRunner for AvatarRunner {
         lazy_publish: bool,
     ) -> Result<Self, RtcError> {
         let room = room.rtc().ok_or(RtcError::NotConnected)?;
-        let spawner = (env.spawner)().map_err(|e| RtcError::host(e.to_string()))?;
+        let background = env.background().map_err(|e| RtcError::host(e.to_string()))?;
         let plan = lk_agents_voice::av_sync::MediaPlan::new(options, queue_size_ms)
             .map_err(RtcError::host)?;
-        let clock = env.clock.clone();
-        let media = super::media::Media::new(room.clone(), plan, clock.clone(), spawner.clone())?;
+        let (clock, spawner) = (background.clock.clone(), background.spawner.clone());
+        let media = super::media::Media::new(room.clone(), plan, background)?;
         let synchronizer = media.synchronizer.clone();
         let io = AvatarIo { receiver, generator, media };
         let runner = Runner::scheduled(room, io, lazy_publish, clock, spawner, |_| 0);

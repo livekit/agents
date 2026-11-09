@@ -33,7 +33,7 @@ async fn unavailable_after_sending_a_commit_is_uncertain_and_is_not_resent() {
     };
     let result = pooled.batch(vec![Statement::raw("UPDATE lanes SET version = version + 1")]).await;
     assert!(
-        matches!(result, Err(StorageError::Uncertain(ref message)) if message.contains("database is shutting down")),
+        matches!(result, Err(StorageError::Uncertain(ref why)) if why.to_string().contains("database is shutting down")),
         "{result:?}"
     );
     let batches = seen
@@ -43,6 +43,71 @@ async fn unavailable_after_sending_a_commit_is_uncertain_and_is_not_resent() {
         .count();
     assert_eq!(batches, 1, "a commit with an unknown outcome must not be resent");
     pooled.conn.aclose().await;
+}
+
+/// A fake `wsdb` server that answers `Hello`, then closes the socket on the next request it
+/// reads, unanswered: the frame was written and read, the answer never comes.
+async fn closes_after_reading() -> String {
+    use connection::tests::hello_ok;
+    use connection::wire as pb;
+    use futures_util::{SinkExt as _, StreamExt as _};
+    use lk_agents_net::websocket::Message;
+    use prost::Message as _;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/db", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        loop {
+            let (tcp, _) = listener.accept().await.unwrap();
+            tokio::spawn(async move {
+                let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                while let Some(Ok(Message::Binary(b))) = ws.next().await {
+                    let msg = pb::ClientMessage::decode(b.as_ref()).unwrap();
+                    match msg.message {
+                        Some(pb::client_message::Message::Hello(_)) => {
+                            let mut ok = hello_ok();
+                            ok.request_id = msg.request_id;
+                            ws.send(Message::binary(ok.encode_to_vec())).await.unwrap();
+                        }
+                        Some(pb::client_message::Message::Ping(_)) => {}
+                        _ => return, // dropped: the socket closes with the request unanswered
+                    }
+                }
+            });
+        }
+    });
+    url
+}
+
+/// A socket closed between a request's frame and its answer leaves every write uncertain,
+/// whether the client redials (`Disconnected`) or has given up (`Closed`), on every statement
+/// kind; a read changed nothing and is only retryable.
+#[tokio::test]
+async fn a_socket_closed_after_a_write_was_sent_leaves_it_uncertain() {
+    for redial in [true, false] {
+        let url = closes_after_reading().await;
+        let dial = || {
+            let mut opts = connection::Options::new(url.clone(), "DB_1");
+            opts.reconnect.disable = !redial;
+            opts.reconnect.min_backoff = Duration::from_millis(10);
+            opts.reconnect.budget = Duration::from_secs(5);
+            let minter = TokenMinter::new("devkey", "secret").unwrap();
+            Conn::dial(opts, minter, tokio::runtime::Handle::current())
+        };
+        let exec = dial().await.unwrap().exec(&Statement::raw("UPDATE t SET n = 1")).await;
+        let exec = StorageError::from(exec.unwrap_err());
+        assert!(matches!(exec, StorageError::Uncertain(_)), "redial {redial}: {exec:?}");
+        let pooled = Pooled {
+            conn: dial().await.unwrap(),
+            schema: SchemaCell::default(),
+            pool: Arc::default(),
+            closed: AtomicBool::new(false),
+        };
+        let batch = pooled.batch(vec![Statement::raw("UPDATE t SET n = 2")]).await;
+        assert!(matches!(batch, Err(StorageError::Uncertain(_))), "redial {redial}: {batch:?}");
+        let read = pooled.query(Statement::raw("SELECT n FROM t")).await;
+        assert!(matches!(read, Err(StorageError::Unavailable(_))), "redial {redial}: {read:?}");
+        pooled.conn.aclose().await;
+    }
 }
 
 #[tokio::test]

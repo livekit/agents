@@ -4,6 +4,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::StorageError;
+pub use crate::thread::schema::StatementKind;
 
 /// One SQLite storage class, as a bind parameter or a cell.
 #[derive(Debug, Clone, PartialEq)]
@@ -101,23 +102,24 @@ pub fn first_cell(rows: &[Row]) -> Option<&SqlValue> {
 pub struct Statement {
     sql: Cow<'static, str>,
     params: Vec<SqlValue>,
+    kind: Option<StatementKind>,
 }
 
 impl Statement {
     /// A schema's DDL: binds nothing.
     pub fn ddl(sql: &'static str) -> Self {
-        Self { sql: Cow::Borrowed(sql), params: Vec::new() }
+        Self { sql: Cow::Borrowed(sql), params: Vec::new(), kind: None }
     }
 
     /// SQL the application wrote, with its values.
     pub(crate) fn app(sql: String, params: Vec<SqlValue>) -> Self {
-        Self { sql: sql.into(), params }
+        Self { sql: sql.into(), params, kind: None }
     }
 
     /// Any SQL, binding nothing: a test's setup or probe.
     #[cfg(any(test, feature = "testing"))]
     pub fn raw(sql: impl Into<Cow<'static, str>>) -> Self {
-        Self { sql: sql.into(), params: Vec::new() }
+        Self { sql: sql.into(), params: Vec::new(), kind: None }
     }
 
     /// A test's statement with these values.
@@ -132,6 +134,11 @@ impl Statement {
 
     pub fn params(&self) -> &[SqlValue] {
         &self.params
+    }
+
+    /// What a framework statement does, when it is one a connection may tell apart.
+    pub fn kind(&self) -> Option<StatementKind> {
+        self.kind
     }
 }
 
@@ -335,6 +342,7 @@ pub(crate) trait Bind {
     const SQL: &'static str;
     /// The fields, in the order their values are sent.
     const FIELDS: &'static [&'static str];
+    const KIND: Option<StatementKind> = None;
     /// As sent: each `:field` as `?N`.
     fn sql() -> &'static str;
     /// The values, in [`Self::FIELDS`] order.
@@ -344,7 +352,7 @@ pub(crate) trait Bind {
     where
         Self: Sized,
     {
-        Statement { sql: Cow::Borrowed(Self::sql()), params: self.values() }
+        Statement { sql: Cow::Borrowed(Self::sql()), params: self.values(), kind: Self::KIND }
     }
 }
 
@@ -407,12 +415,13 @@ pub(crate) const fn placeholders_are(sql: &str, fields: &[&str]) -> bool {
     true
 }
 
-/// Declares a statement: `Name<'a> { field: Type, .. } => "SQL with :field placeholders"`. A JSON
-/// column's field is a [`SqlValue`] made with [`SqlValue::json`].
+/// Declares a statement: `Name<'a> { field: Type, .. } => "SQL with :field placeholders"`, with
+/// `as Kind` before the `=>` when it is a [`StatementKind`]. A JSON column's field is a
+/// [`SqlValue`] made with [`SqlValue::json`].
 macro_rules! statement {
     (
         $(#[$doc:meta])*
-        $name:ident $(<$lt:lifetime>)? { $($field:ident: $ty:ty),* $(,)? } => $sql:literal
+        $name:ident $(<$lt:lifetime>)? { $($field:ident: $ty:ty),* $(,)? } $(as $kind:ident)? => $sql:literal
     ) => {
         $(#[$doc])*
         pub(crate) struct $name$(<$lt>)? {
@@ -427,6 +436,8 @@ macro_rules! statement {
         impl$(<$lt>)? $crate::sql::Bind for $name$(<$lt>)? {
             const SQL: &'static str = $sql;
             const FIELDS: &'static [&'static str] = &[$(stringify!($field)),*];
+            $(const KIND: Option<$crate::sql::StatementKind> =
+                Some($crate::sql::StatementKind::$kind);)?
             fn sql() -> &'static str {
                 static SENT: std::sync::LazyLock<String> =
                     std::sync::LazyLock::new(|| $crate::sql::numbered(<$name>::SQL, <$name>::FIELDS));

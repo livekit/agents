@@ -228,3 +228,61 @@ fn self_wait_refusal_requires_the_exact_blocking_callback_owner() {
     );
     assert!(handle.self_wait(Some(&VoiceCommandOrigin::Hook { hook: "on_enter".into() })).is_ok());
 }
+
+// Catches: a waiter on scheduling hanging on a speech that will never be scheduled (cut while
+// queued, or refused done), so only a caller racing it against the interrupt got out.
+#[tokio::test]
+async fn wait_scheduled_resolves_for_every_speech() {
+    let mut scheduled = Speech::created(true);
+    scheduled.state.mark_scheduled();
+    scheduled.publish();
+    assert_eq!(scheduled.handle().wait_scheduled().await, Ok(()));
+
+    let mut cut = Speech::created(true);
+    assert!(cut.state.force_interrupt());
+    cut.publish();
+    assert_eq!(cut.handle().wait_scheduled().await, Err(WillNotPlay));
+
+    let mut refused = Speech::created(true);
+    refused.state.mark_done(None);
+    refused.publish();
+    assert_eq!(refused.handle().wait_scheduled().await, Err(WillNotPlay));
+    assert!(!refused.handle().interrupted(), "done unscheduled is not an interruption");
+}
+
+// Catches: a wait on a speech the core never finished outliving its session (closed or dropped).
+#[tokio::test]
+async fn a_session_ending_resolves_every_wait_on_its_speeches() {
+    for drop_session in [false, true] {
+        let speeches = Speeches::default();
+        let unfinished = SpeechHandle::pending(Requests::disconnected(), SpeechId(1), true);
+        speeches.register(Arc::clone(&unfinished));
+        if drop_session {
+            drop(speeches);
+        } else {
+            speeches.end();
+        }
+        assert_eq!(unfinished.wait_scheduled().await, Err(WillNotPlay));
+        unfinished.wait_for_playout().await;
+        assert!(unfinished.interrupted() && unfinished.done());
+    }
+}
+
+// Catches: a generation or authorization wait outliving its session when the speech was closed
+// mid-generation (only the lifecycle cell resolved).
+#[tokio::test]
+async fn a_session_ending_mid_generation_resolves_its_generation_and_authorization_waits() {
+    let mut speech = Speech::created(true);
+    speech.state.mark_scheduled();
+    speech.state.authorize_generation();
+    speech.publish();
+    let handle = speech.handle();
+    speech.speeches.end();
+    let waits = async {
+        handle.wait_for_generation(0).await.unwrap();
+        handle.wait_for_latest_generation().await.unwrap();
+        handle.wait_for_step_authorized(2).await;
+    };
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(1), waits).await;
+    assert!(ended.is_ok(), "a wait on the ended session's speech hung");
+}

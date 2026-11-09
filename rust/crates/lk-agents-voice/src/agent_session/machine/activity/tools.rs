@@ -243,7 +243,7 @@ impl VoiceDriver {
         // stopped by the close) is not the run's to settle.
         match call {
             Some(call) => self.reply_event(speech, AgentRunEvent::ToolSettled { call, outcome }),
-            None => self.activity.reply_call_dropped(speech),
+            None => self.reply_call_lost(speech, &call_id, outcome),
         }
         self.record_trace(TraceToolStep::CallEnded { speech, call_id: call_id.clone(), end });
         // Ending the wrong call leaves one the close would answer twice.
@@ -333,7 +333,6 @@ impl VoiceDriver {
                 (ToolOutcome::Cancelled, ToolEndStatus::Cancelled)
             };
             let execution = answer(&r.call, outcome.clone().into(), wall);
-            self.activity.reply_call_dropped(speech);
             self.record_trace(TraceToolStep::CallEnded {
                 speech,
                 call_id: r.call.call_id.clone(),

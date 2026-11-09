@@ -12,7 +12,7 @@ use lk_agents_abi::voice::rtc::{
     RtcRoom, StreamBytesOptions,
 };
 use lk_agents_abi::{AudioFrame, BoxFuture, Clock, Closed, Spawner, Ts};
-use lk_agents_net::task::{TaskId, TaskSet};
+use lk_agents_net::task::{ScopedTask, TaskSet};
 use lk_agents_voice::avatar::machine::output::{
     AfterClear, Finish, OutputState, Reject, after_clear, check_caller, report_routes,
     unacknowledged_clear,
@@ -71,7 +71,7 @@ struct Inner {
     closing: Arc<TaskSet>,
     close_outcome: watch::Sender<Closed>,
     /// The give-up timer after a clear, and when it fires.
-    clear_timer: Mutex<Option<(TaskId, Ts, PlaybackSegment)>>,
+    clear_timer: Mutex<Option<(ScopedTask, Ts, PlaybackSegment)>>,
 }
 
 #[derive(Default)]
@@ -241,9 +241,7 @@ impl Inner {
                 None
             }
         };
-        if let Some((timer, _, _)) = timer {
-            self.tasks.cancel(timer);
-        }
+        drop(timer);
         self.retire_segment(key);
         Ok(())
     }
@@ -314,18 +312,19 @@ impl Inner {
             }
             AfterClear::AwaitFinish { give_up_after } => give_up_after,
         };
-        if let Some((timer, _, _)) = self.clear_timer.lock().take() {
-            self.tasks.cancel(timer);
-        }
+        let replaced = self.clear_timer.lock().take();
+        drop(replaced);
         let Some(timeout) = give_up_after else { return };
         let me = Arc::clone(&self);
         let at = self.clock.now().saturating_add(timeout);
-        let timer = self.tasks.try_spawn(&*self.spawner, "avatar_clear_timeout", async move {
+        let timer = self.tasks.try_scoped(&*self.spawner, "avatar_clear_timeout", async move {
             me.clock.wait_until(at).await;
             {
                 let mut timer = me.clear_timer.lock();
-                if timer.as_ref().is_some_and(|(_, _, segment)| *segment == key) {
-                    timer.take();
+                if timer.as_ref().is_some_and(|(_, _, segment)| *segment == key)
+                    && let Some((own, _, _)) = timer.take()
+                {
+                    own.release();
                 }
             }
             me.tracker.playback_finished(key, unacknowledged_clear());
@@ -370,9 +369,8 @@ impl Inner {
             self.close_segment(segment);
         }
         self.tracker.reset();
-        if let Some((timer, _, _)) = self.clear_timer.lock().take() {
-            self.tasks.cancel(timer);
-        }
+        let replaced = self.clear_timer.lock().take();
+        drop(replaced);
         self.retire_routes();
         self.tasks.close();
         if !self.tasks.wait_empty(&*self.clock, Some(deadline)).await {

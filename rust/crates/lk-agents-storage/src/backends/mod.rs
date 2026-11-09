@@ -33,9 +33,8 @@ pub trait Storage: Send + Sync {
     async fn update_thread(&self, request: UpdateRequest) -> Result<ThreadRecord, StorageError>;
     /// Makes the thread unavailable and reclaims it; repeat-safe.
     async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError>;
-    /// The shared engine's handle on an existing thread, its writes under `holder`. Opening
-    /// takes no lease.
-    async fn open(&self, thread_id: &str, holder: &str) -> Result<Thread, StorageError>;
+    /// The shared engine's handle on an existing thread. Opening takes no lease.
+    async fn open(&self, thread_id: &str) -> Result<Thread, StorageError>;
     /// Namespace reads use the backend's read interface; the local default borrows a thread.
     async fn get_thread_items(
         &self,
@@ -44,7 +43,7 @@ pub trait Storage: Send + Sync {
         after: Option<&str>,
         limit: i64,
     ) -> Result<lk_agents_abi::storage::ThreadItemPage, StorageError> {
-        with_thread(self, id, "reader", async |thread| {
+        with_thread(self, id, async |thread| {
             crate::storage::thread_item_page(thread.list_items(lane, after, limit).await?)
         })
         .await
@@ -54,10 +53,8 @@ pub trait Storage: Send + Sync {
         id: &str,
         status: Option<crate::TaskState>,
     ) -> Result<Vec<lk_agents_abi::storage::ThreadTask>, StorageError> {
-        with_thread(self, id, "reader", async |thread| {
-            crate::storage::thread_tasks(thread, id, status).await
-        })
-        .await
+        with_thread(self, id, async |thread| crate::storage::thread_tasks(thread, id, status).await)
+            .await
     }
     /// Releases backend resources; repeat-safe.
     async fn close(&self);
@@ -67,10 +64,9 @@ pub trait Storage: Send + Sync {
 pub async fn with_thread<T, E: From<StorageError>>(
     storage: &(impl Storage + ?Sized),
     id: &str,
-    holder: &str,
     f: impl AsyncFnOnce(&Thread) -> Result<T, E>,
 ) -> Result<T, E> {
-    let thread = storage.open(id, holder).await?;
+    let thread = storage.open(id).await?;
     let result = f(&thread).await;
     thread.close().await;
     result

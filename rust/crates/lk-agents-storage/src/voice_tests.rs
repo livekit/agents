@@ -1,9 +1,7 @@
-use crate::ThreadDbConnection;
-use crate::backends::sqlite::FileConnection;
+use crate::StorageError;
 use crate::context::store::ContextStore;
 use crate::testing::Backend;
 use crate::voice::VoiceStore;
-use crate::{StorageError, sql::Statement};
 use lk_agents_abi::storage::context::{ContextActivation as _, ContextField};
 use lk_agents_abi::storage::voice::{
     VoiceStorage as _, VoiceStorageCommand, VoiceStorageEvent, VoiceStore as _,
@@ -43,15 +41,7 @@ async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() 
     };
     let loaded = activation.load("root:desk".into(), "Draft".into(), field(0)).await.unwrap();
     activation.save("root:desk".into(), "Draft".into(), loaded.revision, field(1)).await.unwrap();
-    let file =
-        fixture.dir.as_ref().unwrap().join("threads").join(format!("{}.sqlite", fixture.thread_id));
-    let intruder = FileConnection::open(file, false).await.unwrap();
-    intruder
-        .batch(vec![Statement::raw(
-            "UPDATE lanes SET lease_holder='foreign', lease_token='foreign' WHERE lane='desk'",
-        )])
-        .await
-        .unwrap();
+    fixture.orphan_lease("desk", "foreign").await;
     let (sink, mut events) = Events::new();
     std::sync::Arc::clone(&store)
         .dispatch(VoiceStorageCommand::ObserveLoss { speech: 1 }, sink.clone())
@@ -63,7 +53,7 @@ async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() 
     std::sync::Arc::clone(&store).dispatch(VoiceStorageCommand::Abort { speech: 1 }, sink).unwrap();
     let abandoned = events.recv().await;
     assert!(matches!(abandoned, Some(VoiceStorageEvent::Abandoned { speech: 1, result: Ok(()) })));
-    let thread = fixture.thread("reader").await;
+    let thread = fixture.thread().await;
     assert!(thread.lane("desk").history().await.unwrap().is_empty());
     let restored =
         ContextStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
@@ -79,7 +69,6 @@ async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() 
     );
     store.aclose().await.unwrap();
     restored.close();
-    intruder.close().await;
     fixture.cleanup(&[&thread]).await;
 }
 
@@ -97,19 +86,10 @@ async fn a_turn_reenters_the_lease_a_canceled_turn_left_behind() {
     let (sink, mut events) = Events::new();
     std::sync::Arc::clone(&store).dispatch(VoiceStorageCommand::Abort { speech: 1 }, sink).unwrap();
     assert!(matches!(events.recv().await, Some(VoiceStorageEvent::Abandoned { .. })));
-    let file =
-        fixture.dir.as_ref().unwrap().join("threads").join(format!("{}.sqlite", fixture.thread_id));
-    let intruder = FileConnection::open(file, false).await.unwrap();
-    let orphan = format!(
-        "UPDATE lanes SET lease_holder='{}', lease_token='orphan', lease_until=unixepoch()+60 \
-         WHERE lane='desk'",
-        store.holder.as_str()
-    );
-    intruder.batch(vec![Statement::raw(orphan)]).await.unwrap();
+    fixture.orphan_lease("desk", store.holder.as_str()).await;
     let next = tokio::time::timeout(Duration::from_secs(2), store.acquire(2, Vec::new())).await;
     assert!(matches!(next, Ok(Ok(_))), "the next turn waited for its own orphaned lease");
     store.aclose().await.unwrap();
-    intruder.close().await;
     fixture.cleanup(&[]).await;
 }
 

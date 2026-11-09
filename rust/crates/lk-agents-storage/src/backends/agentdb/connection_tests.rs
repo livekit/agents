@@ -181,10 +181,13 @@ async fn exec_query_and_credits() {
     let r = conn.exec(&st("INSERT", vec!["v".into()])).await.unwrap();
     assert_eq!((r.rows_affected, r.last_insert_id, r.tip), (1, 9, 8));
     let err = conn.exec(&st("boom", vec![])).await.err().unwrap();
-    assert!(matches!(err, WsdbError::Server { code: WsdbCode::Exec, .. }));
+    assert!(matches!(err, WriteError::Sent(WsdbError::Server { code: WsdbCode::Exec, .. })));
     // Backpressure is returned once; the caller owns retry policy.
     let err = conn.exec(&st("busy", vec![])).await.err().unwrap();
-    assert!(matches!(err, WsdbError::Server { code: WsdbCode::ResourceExhausted, .. }));
+    assert!(matches!(
+        err,
+        WriteError::Sent(WsdbError::Server { code: WsdbCode::ResourceExhausted, .. })
+    ));
     let busy = |log: &Served| {
         log.lock()
             .iter()
@@ -235,7 +238,7 @@ async fn a_batch_answer_missing_a_statement_is_malformed_not_a_zero_row_success(
     let (url, _) = serve(script, false).await;
     let conn = dial(&url, "DB_1").await.unwrap();
     let stmts: Vec<Statement> = (0..5).map(|_| st("S", vec![])).collect();
-    assert!(matches!(conn.batch(&stmts).await, Err(WsdbError::Protocol(_))));
+    assert!(matches!(conn.batch(&stmts).await, Err(WriteError::Sent(WsdbError::Protocol(_)))));
     conn.close();
 }
 
@@ -245,7 +248,7 @@ async fn a_dropped_socket_fails_the_request_in_flight_and_redials() {
     let conn = dial(&url, "DB_1").await.unwrap();
     // The fake drops the socket on this exec: the request fails and the client redials.
     let err = conn.exec(&st("drop", vec![])).await.err().unwrap();
-    assert!(matches!(err, WsdbError::Disconnected), "{err}");
+    assert!(matches!(err, WriteError::Sent(WsdbError::Disconnected)), "{err}");
     let r = conn.exec(&st("INSERT", vec![])).await.unwrap();
     assert_eq!(r.rows_affected, 1);
     let hellos = log
@@ -255,7 +258,10 @@ async fn a_dropped_socket_fails_the_request_in_flight_and_redials() {
         .count();
     assert_eq!(hellos, 2, "one Hello per dial: the first and the redial");
     conn.close();
-    assert!(matches!(conn.exec(&st("INSERT", vec![])).await, Err(WsdbError::Closed)));
+    assert!(matches!(
+        conn.exec(&st("INSERT", vec![])).await,
+        Err(WriteError::NotSent(WsdbError::Closed))
+    ));
 }
 
 fn hellos(log: &Served) -> usize {
@@ -307,9 +313,15 @@ async fn a_redial_the_server_refuses_for_good_fails_later_calls_with_its_error()
     }
     let (url, log) = serve(refuses_again, true).await;
     let conn = dial(&url, "DB_1").await.unwrap();
-    assert!(matches!(conn.exec(&st("drop", vec![])).await, Err(WsdbError::Disconnected)));
+    assert!(matches!(
+        conn.exec(&st("drop", vec![])).await,
+        Err(WriteError::Sent(WsdbError::Disconnected))
+    ));
     let err = conn.exec(&st("INSERT", vec![])).await.err().unwrap();
-    assert!(matches!(&err, WsdbError::Server { code: WsdbCode::NotFound, .. }), "{err}");
+    assert!(
+        matches!(&err, WriteError::NotSent(WsdbError::Server { code: WsdbCode::NotFound, .. })),
+        "{err}"
+    );
     assert_eq!(hellos(&log), 2, "no redial after a final refusal");
 }
 
@@ -318,7 +330,10 @@ async fn a_frame_over_the_limit_is_refused_before_it_is_sent() {
     let (url, _) = serve(script, false).await;
     let conn = dial(&url, "DB_1").await.unwrap();
     let big = SqlValue::Text("x".repeat(MAX_FRAME + 1));
-    assert!(matches!(conn.exec(&st("INSERT", vec![big])).await, Err(WsdbError::TooLarge(_))));
+    assert!(matches!(
+        conn.exec(&st("INSERT", vec![big])).await,
+        Err(WriteError::NotSent(WsdbError::TooLarge(_)))
+    ));
     assert_eq!(conn.exec(&st("INSERT", vec![])).await.unwrap().rows_affected, 1, "still open");
     conn.close();
 }
@@ -390,7 +405,10 @@ async fn duplicate_batch_results_cannot_overwrite_an_authoritative_result() {
     }
     let (url, _) = serve(malformed, false).await;
     let conn = dial(&url, "DB_1").await.unwrap();
-    assert!(matches!(conn.batch(&[st("UPDATE", vec![])]).await, Err(WsdbError::Protocol(_))));
+    assert!(matches!(
+        conn.batch(&[st("UPDATE", vec![])]).await,
+        Err(WriteError::Sent(WsdbError::Protocol(_)))
+    ));
     conn.close();
 }
 

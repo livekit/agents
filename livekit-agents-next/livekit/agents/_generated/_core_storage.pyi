@@ -129,8 +129,8 @@ class Storage:
         """A call's thread: the one the job's `thread_id` names, `None` when it names none. Never
         creates a thread.
         """
-    async def open(self, thread_id: str, holder: str) -> Thread:
-        """The existing thread's handle, its writes under `holder`. Takes no lease."""
+    async def open(self, thread_id: str) -> Thread:
+        """The existing thread's handle. Takes no lease."""
     async def _core_context_store(self, thread_id: str, lane: str) -> _core_ContextActivation:
         """A runtime-supplied field store whose explicit saves commit outside a managed turn."""
     async def _core_turn_store(
@@ -210,8 +210,6 @@ class _core_AppTransaction:
 class Thread:
     @property
     def id(self) -> str: ...
-    @property
-    def holder(self) -> str: ...
     async def lanes(self) -> list[LaneRow]: ...
     async def journal(self, after_id: int = 0, limit: int = 100) -> list[EventRow]: ...
     async def history(self, lane: str) -> list[ItemRow]: ...
@@ -275,8 +273,8 @@ class _core_ThreadHandle:
     it. Each read opens the thread's database for the call and releases it after; there is
     nothing to open or close.
     """
-    def __new__(cls, namespace: Storage, thread_id: str, holder: str, agent: str) -> Self:
-        """`holder` signs the handle's writes; reads take no lease."""
+    def __new__(cls, namespace: Storage, thread_id: str, agent: str) -> Self:
+        """Reads take no lease."""
     @property
     def id(self) -> str:
         """The thread id."""

@@ -181,6 +181,9 @@ pub(crate) struct ChannelSource<T> {
 impl<T> Drop for ChannelSource<T> {
     fn drop(&mut self) {
         self.chain.stop.cancel();
+        if let Some(task) = self.task.take() {
+            task.release();
+        }
     }
 }
 

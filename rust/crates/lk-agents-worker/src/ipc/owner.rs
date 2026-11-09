@@ -305,7 +305,7 @@ impl ipc_host::JobSupervisor for JobSupervisor {
 }
 
 /// The receipt of a process launch.
-pub struct ProcessLaunch(pub(crate) Arc<ProcessReceipt>);
+pub struct ProcessLaunch(pub(crate) ProcessReceipt);
 
 impl LaunchReport for ProcessLaunch {}
 

@@ -4,26 +4,23 @@ use lk_agents_abi::voice::rtc::rpc::{
     self, IncomingRpc, OutgoingRpc, RPC_UNSUPPORTED_METHOD, RpcCallInfo, RpcInvocation,
 };
 use lk_agents_abi::worker::ipc_host::JobExecution;
-use lk_agents_abi::{Spawner, SpawnerExt};
-use lk_agents_net::env::{ProcessEnv, ProcessError};
+use lk_agents_net::env::ProcessEnv;
 use std::sync::Arc;
 
 /// The characters of a payload or response a span keeps.
 const CONTENT_CHARS: usize = 1024;
 
-type Spawn = fn() -> Result<Arc<dyn Spawner>, ProcessError>;
-
 pub struct RpcTracing {
     job: Arc<dyn JobExecution>,
-    /// Where a handler span dropped with its chain finishes.
-    spawner: Spawn,
+    /// Where a handler span dropped with its chain finishes: the process's tasks.
+    env: ProcessEnv,
 }
 
 impl rpc::RpcTracing for RpcTracing {
     type Env = ProcessEnv;
 
     fn new(env: &ProcessEnv, job: Arc<dyn JobExecution>) -> Self {
-        Self { job, spawner: env.spawner }
+        Self { job, env: env.clone() }
     }
 
     async fn intercept_outgoing(
@@ -73,7 +70,7 @@ impl rpc::RpcTracing for RpcTracing {
         let mut handling = Handling {
             span: Some(span),
             invocation: Arc::clone(&invocation),
-            spawner: self.spawner,
+            env: self.env.clone(),
         };
         let result = next.call(&cx, invocation).await;
         if let Some(span) = handling.span.take() {
@@ -95,16 +92,17 @@ impl rpc::RpcTracing for RpcTracing {
 struct Handling {
     span: Option<telemetry::ScopedSpan<telemetry::RpcHandler>>,
     invocation: Arc<dyn RpcInvocation>,
-    spawner: Spawn,
+    env: ProcessEnv,
 }
 
 impl Drop for Handling {
     fn drop(&mut self) {
         let Some(span) = self.span.take() else { return };
-        match (self.spawner)() {
-            Ok(spawner) => {
+        match self.env.background() {
+            Ok(background) => {
                 let invocation = Arc::clone(&self.invocation);
-                spawner.spawn_detached(async move { cancelled(span, &*invocation).await });
+                background
+                    .spawn("rpc handler span", async move { cancelled(span, &*invocation).await });
             }
             Err(error) => {
                 log::warn!(target: lk_agents_abi::LOG_TARGET, "rpc_handler span: {error}")

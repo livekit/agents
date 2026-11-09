@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
-use lk_agents_net::clock::unix_now_ms;
 
 use crate::StorageError;
 use crate::cursor::Cursor;
@@ -19,7 +18,7 @@ mod connection;
 mod lifecycle;
 
 use connection::Request;
-pub use connection::{FileConnection, batch, query, sqlite_error};
+pub use connection::{FileConnection, Workers, batch, query, sqlite_error};
 
 // `registry.sqlite` holds metadata and `threads/<AT_id>.sqlite` each thread; processes sharing a
 // directory coordinate through database leases and fences.
@@ -151,7 +150,8 @@ DELETE FROM threads WHERE thread_id = :thread_id
 pub struct SqliteStorage {
     directory: PathBuf,
     registry: FileConnection,
-    lease: LeaseTiming,
+    pub(crate) lease: LeaseTiming,
+    workers: Workers,
 }
 
 impl SqliteStorage {
@@ -160,16 +160,18 @@ impl SqliteStorage {
     pub async fn open(
         directory: impl AsRef<Path>,
         lease: LeaseTiming,
+        workers: Workers,
     ) -> Result<Self, StorageError> {
         let directory = std::path::absolute(directory.as_ref())
             .map_err(|e| StorageError::Invalid(format!("storage directory: {e}")))?;
-        let threads = directory.join("threads");
-        let created = threads.clone();
-        lk_agents_net::blocking_io::blocking_io()
-            .try_run((), move || std::fs::create_dir_all(created))
-            .await
-            .map_err(|e| StorageError::Invalid(format!("{}: {e}", threads.display())))?;
-        let registry = FileConnection::open(directory.join("registry.sqlite"), true).await?;
+        let (threads, path, clock) =
+            (directory.join("threads"), directory.join("registry.sqlite"), workers.clock.clone());
+        let open = move || {
+            std::fs::create_dir_all(&threads)
+                .map_err(|e| StorageError::Invalid(format!("{}: {e}", threads.display())))?;
+            connection::SqliteThread::open(&path, true, None, &clock)
+        };
+        let registry = FileConnection::start(workers.clone(), Arc::new(open)).await?;
         registry
             .batch(vec![
                 Statement::ddl(REGISTRY_SCHEMA),
@@ -183,7 +185,19 @@ impl SqliteStorage {
             registry.close().await;
             return Err(StorageError::Invalid("unsupported registry schema version".into()));
         }
-        Ok(Self { directory, registry, lease })
+        Ok(Self { directory, registry, lease, workers })
+    }
+
+    fn now_ms(&self) -> i64 {
+        (lk_agents_abi::unix_secs(self.workers.clock.wall()) * 1000.0) as i64
+    }
+
+    /// A live thread's own connection, under its lifecycle access.
+    pub async fn connect(&self, thread_id: &str) -> Result<FileConnection, StorageError> {
+        self.live(thread_id).await?;
+        let access = Some((self.directory.clone(), thread_id.to_owned()));
+        FileConnection::open_with_access(self.file(thread_id)?, false, access, self.workers.clone())
+            .await
     }
 
     fn file(&self, thread_id: &str) -> Result<PathBuf, StorageError> {
@@ -197,7 +211,7 @@ impl SqliteStorage {
         let rows = self.registry.query(SelectRegistryThread { thread_id }.bind()).await?;
         let row = rows.first().ok_or_else(|| StorageError::NotFound(thread_id.into()))?;
         let (record, expires_at) = thread_record(row)?;
-        if expires_at != 0 && expires_at <= unix_now_ms() {
+        if expires_at != 0 && expires_at <= self.now_ms() {
             self.delete_thread(thread_id).await?;
             return Err(StorageError::NotFound(thread_id.into()));
         }
@@ -256,8 +270,9 @@ impl Storage for SqliteStorage {
     /// leaves a file no lookup finds.
     async fn create_thread(&self, request: CreateRequest) -> Result<ThreadRecord, StorageError> {
         let thread_id = shortuuid("AT_");
-        let connection = FileConnection::open(self.file(&thread_id)?, true).await?;
-        let now = unix_now_ms();
+        let workers = self.workers.clone();
+        let connection = FileConnection::open(self.file(&thread_id)?, true, workers).await?;
+        let now = self.now_ms();
         let idle_ttl = ttl_millis(request.idle_ttl.as_ref());
         let attributes: HashMap<&String, &String> =
             request.attributes.iter().filter(|(_, v)| !v.is_empty()).collect();
@@ -296,7 +311,7 @@ impl Storage for SqliteStorage {
             Cursor::position(Some(&request.page_token), listing, (i64::MAX, String::new()))?;
         let select = SelectRegistryPage {
             scope: &request.scope,
-            now: unix_now_ms(),
+            now: self.now_ms(),
             before_at,
             before_id: &before_id,
             limit: i64::from(limit + 1),
@@ -325,7 +340,7 @@ impl Storage for SqliteStorage {
         let update = UpdateRegistryThread {
             thread_id: &request.thread_id,
             attributes: SqlValue::json(&request.attributes),
-            now: unix_now_ms(),
+            now: self.now_ms(),
             idle_ttl: request.idle_ttl.as_ref().map(|d| ttl_millis(Some(d))),
         }
         .bind();
@@ -348,16 +363,9 @@ impl Storage for SqliteStorage {
             .await
     }
 
-    async fn open(&self, thread_id: &str, holder: &str) -> Result<Thread, StorageError> {
-        self.live(thread_id).await?;
-        let connection = FileConnection::open_with_access(
-            self.file(thread_id)?,
-            false,
-            Some((self.directory.clone(), thread_id.to_owned())),
-        )
-        .await?;
-        Thread::new(Arc::new(connection), thread_id, self.lease, SchemaCell::default(), holder)
-            .await
+    async fn open(&self, thread_id: &str) -> Result<Thread, StorageError> {
+        let connection = self.connect(thread_id).await?;
+        Thread::new(Arc::new(connection), thread_id, self.lease, SchemaCell::default()).await
     }
 
     async fn close(&self) {
@@ -383,7 +391,9 @@ mod tests {
             .unwrap();
         }
         for _ in 0..2 {
-            let storage = SqliteStorage::open(&directory, LeaseTiming::default()).await.unwrap();
+            let workers = Workers::threads(Arc::new(lk_agents_net::clock::RealClock::new()));
+            let storage = SqliteStorage::open(&directory, LeaseTiming::default(), workers);
+            let storage = storage.await.unwrap();
             let rows = storage
                 .registry
                 .query(SelectRegistryThread { thread_id: "AT_legacy" }.bind())

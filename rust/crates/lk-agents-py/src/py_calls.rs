@@ -115,8 +115,19 @@ impl Started {
 /// The host task of a call in flight, cancelled when the call is dropped before it settles.
 struct InFlight {
     event_loop: Py<PyAny>,
-    state: Arc<Mutex<InFlightState>>,
+    state: Arc<GilMutex<InFlightState>>,
     settled: Arc<AtomicBool>,
+}
+
+/// A lock taken only while attached, so the GIL always comes first: the inverse order, which
+/// deadlocks against the loop thread, cannot be written.
+#[derive(Default)]
+struct GilMutex<T>(Mutex<T>);
+
+impl<T> GilMutex<T> {
+    fn lock<'py>(&'py self, _: Python<'py>) -> parking_lot::MutexGuard<'py, T> {
+        self.0.lock()
+    }
 }
 
 #[derive(Default)]
@@ -130,20 +141,19 @@ impl InFlight {
         if self.settled.load(Ordering::SeqCst) {
             return;
         }
-        // Startup holds the GIL before locking state; release state before acquiring the GIL.
-        let task = {
-            let mut state = self.state.lock();
-            state.cancelled = true;
-            state.task.take()
-        };
-        if let Some(task) = task {
-            Python::attach(|py| {
-                if let Ok(cancel) = access::Task::cancel(task.bind(py)) {
-                    let _ = access::EventLoop::call_soon_threadsafe(self.event_loop.bind(py))
-                        .and_then(|call| call.call1((cancel,)));
-                }
-            });
-        }
+        // A finalizing interpreter runs no more tasks: nothing is left to cancel.
+        let _ = Python::try_attach(|py| {
+            let task = {
+                let mut state = self.state.lock(py);
+                state.cancelled = true;
+                state.task.take()
+            };
+            let Some(task) = task else { return };
+            if let Ok(cancel) = access::Task::cancel(task.bind(py)) {
+                let _ = access::EventLoop::call_soon_threadsafe(self.event_loop.bind(py))
+                    .and_then(|call| call.call1((cancel,)));
+            }
+        });
     }
 }
 
@@ -178,7 +188,7 @@ where
     F: for<'py> FnOnce(Python<'py>) -> PyResult<Bound<'py, PyAny>> + Send + 'static,
 {
     let (sender, receiver) = oneshot::channel::<PyResult<Py<PyAny>>>();
-    let state = Arc::new(Mutex::new(InFlightState::default()));
+    let state = Arc::new(GilMutex::<InFlightState>::default());
     let settled = Arc::new(AtomicBool::new(false));
     let deliver = {
         let sender = Arc::new(Mutex::new(Some(sender)));
@@ -200,7 +210,7 @@ where
         let Some(call) = call.lock().take() else {
             return Ok(());
         };
-        if task_slot.lock().cancelled {
+        if task_slot.lock(py).cancelled {
             deliver(Err(pyo3::exceptions::asyncio::CancelledError::new_err(())));
             return Ok(());
         }
@@ -235,7 +245,7 @@ where
         })?;
         access::Task::add_done_callback(&future)?.call1((done,))?;
         let cancel_now = {
-            let mut state = task_slot.lock();
+            let mut state = task_slot.lock(py);
             if !state.cancelled {
                 state.task = Some(future.clone().unbind());
             }
@@ -310,7 +320,7 @@ fn copy_in_span<'py>(
 /// What an entered host call returned, and the `(loop, contextvars.Context)` it ran in.
 pub struct Called {
     pub value: Py<PyAny>,
-    ran_in: Option<Py<PyAny>>,
+    pub(crate) ran_in: Option<Py<PyAny>>,
 }
 
 impl Called {
@@ -363,7 +373,7 @@ fn current_span(py: Python<'_>) -> Option<telemetry::record::SpanContext> {
 
 /// Starts `call` in a copy of `context` with `span` current; the pair it runs in is returned with
 /// its value.
-fn start_call(
+pub(crate) fn start_call(
     context: &HostRef,
     span: Option<telemetry::record::SpanContext>,
     call: HostCall,

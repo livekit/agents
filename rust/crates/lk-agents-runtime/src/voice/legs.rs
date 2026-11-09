@@ -8,8 +8,9 @@ use lk_agents_abi::llm::realtime::{PushAudio, RealtimeCommand};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::LegEvent;
 use lk_agents_abi::{
-    AudioFrame, BoxFuture, Realtime, RealtimeSession, Spawner, SpawnerExt, StreamInput, Stt, Vad,
+    AudioFrame, BoxFuture, Closed, Realtime, RealtimeSession, Spawner, StreamInput, Stt, Vad,
 };
+use lk_agents_net::owned::{Background, Closer, Owned};
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::agent_session::machine::activity::false_interruption::InterruptionPort;
 use lk_agents_voice::agent_session::{DriverError, VoiceEvent};
@@ -21,115 +22,50 @@ use std::time::Duration;
 /// [`VoiceRuntime`].
 pub struct Executor {
     time: Timebase,
-    spawner: Arc<dyn Spawner>,
+    /// The session's tasks, created here so an abandoned opening stream's close joins them.
+    background: Background,
     /// The opening streams, read once the cores exist.
     opening: Vec<OpeningLeg>,
     realtime: Option<RealtimeConnection>,
 }
 
-/// Owns a source and its registered sink until adoption or retirement.
+/// Owns a source and its registered sink until adoption; dropped unadopted, it closes.
 /// AMD keeps this owner armed throughout its private STT drain.
 pub struct OpeningLeg {
     channel: AudioChannel,
     sink: ResourceId,
-    input: Arc<dyn StreamInput<AudioFrame>>,
-    source: Option<PendingLeg>,
-    resources: Resources,
-    time: Timebase,
-    spawner: Arc<dyn Spawner>,
-}
-
-/// An admitted close must finish even if its awaiting task is cancelled mid-poll.
-/// Transfer the same pinned operation, including its original deadline, to the scheduler.
-struct PendingClose<T: Send + 'static> {
-    future: Option<BoxFuture<'static, T>>,
-    spawner: Arc<dyn Spawner>,
-}
-
-impl<T: Send + 'static> PendingClose<T> {
-    fn new(spawner: Arc<dyn Spawner>, future: BoxFuture<'static, T>) -> Self {
-        Self { future: Some(future), spawner }
-    }
-}
-
-impl<T: Send + 'static> std::future::Future for PendingClose<T> {
-    type Output = T;
-
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<T> {
-        let Some(future) = &mut self.future else { return std::task::Poll::Pending };
-        match future.as_mut().poll(cx) {
-            std::task::Poll::Ready(result) => {
-                drop(self.future.take());
-                std::task::Poll::Ready(result)
-            }
-            std::task::Poll::Pending => std::task::Poll::Pending,
-        }
-    }
-}
-
-impl<T: Send + 'static> Drop for PendingClose<T> {
-    fn drop(&mut self) {
-        if let Some(future) = self.future.take() {
-            self.spawner.spawn_detached(async move {
-                let _ = future.await;
-            });
-        }
-    }
+    source: Owned<PendingLeg>,
 }
 
 /// Owns the socket from successful opening through explicit close or abandoned startup.
 pub(super) struct RealtimeConnection {
-    session: Option<Arc<dyn RealtimeSession>>,
-    time: Timebase,
-    spawner: Arc<dyn Spawner>,
+    session: Option<Owned<Arc<dyn RealtimeSession>>>,
+    background: Background,
 }
 
 impl RealtimeConnection {
-    pub(super) fn new(
-        session: Arc<dyn RealtimeSession>,
-        time: Timebase,
-        spawner: Arc<dyn Spawner>,
-    ) -> Self {
-        Self { session: Some(session), time, spawner }
-    }
-
-    fn take_close(&mut self) -> Option<PendingClose<bool>> {
-        let session = self.session.take()?;
-        let time = self.time.clone();
-        Some(PendingClose::new(
-            self.spawner.clone(),
+    pub(super) fn new(session: Arc<dyn RealtimeSession>, background: &Background) -> Self {
+        let clock = Arc::clone(&background.clock);
+        let closer: Closer<Arc<dyn RealtimeSession>> = Box::new(move |session, deadline| {
             Box::pin(async move {
-                let closed = time
-                    .timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, session.aclose())
-                    .await
-                    .is_ok();
-                if !closed {
-                    log::error!(target: lk_agents_abi::LOG_TARGET, "realtime session cleanup timed out");
+                if lk_agents_abi::before(&*clock, Some(deadline), session.aclose()).await.is_ok() {
+                    return Closed::Clean;
                 }
-                closed
-            }),
-        ))
+                log::error!(target: lk_agents_abi::LOG_TARGET, "realtime session cleanup timed out");
+                Closed::TimedOut
+            })
+        });
+        let session = Some(Owned::new(background, session, closer));
+        Self { session, background: background.clone() }
     }
 
-    pub(super) fn close(&mut self, tasks: &Arc<TaskSet>, tx: crate::voice::session::Tx) {
+    pub(super) fn close(&mut self, tx: crate::voice::session::Tx) {
         let Some(session) = self.session.take() else { return };
-        let mut owner = Self::new(session, self.time.clone(), self.spawner.clone());
-        let _ = tasks.try_spawn(self.spawner.as_ref(), "realtime close", async move {
-            if let Some(close) = owner.take_close()
-                && close.await
-            {
+        self.background.cleanup("realtime close", async move {
+            if session.close().await == Closed::Clean {
                 let _ = tx.send(lk_agents_voice::agent_session::machine::activity::realtime::RealtimeWake::Closed);
             }
         });
-    }
-}
-
-impl Drop for RealtimeConnection {
-    fn drop(&mut self) {
-        drop(self.take_close());
     }
 }
 
@@ -139,16 +75,30 @@ impl OpeningLeg {
         input: Arc<dyn StreamInput<AudioFrame>>,
         source: PendingLeg,
         resources: Resources,
-        time: Timebase,
-        spawner: Arc<dyn Spawner>,
+        background: &Background,
     ) -> Self {
         let sink = resources.register_audio_sink(input.clone());
-        Self { channel, sink, input, source: Some(source), resources, time, spawner }
+        let closer: Closer<PendingLeg> = Box::new(move |source, deadline| {
+            input.end_input();
+            Box::pin(async move {
+                // Held to the end, whatever the registry and the frames do meanwhile.
+                let _input = input;
+                let outcome = match source {
+                    PendingLeg::Stt(source) => source.close(deadline).await,
+                    PendingLeg::Vad(source) => source.close(deadline).await,
+                };
+                if outcome != Closed::Clean {
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "opening {} stream cleanup did not settle cleanly: {outcome:?}", channel.leg());
+                }
+                resources.release(sink);
+                outcome
+            })
+        });
+        Self { channel, sink, source: Owned::new(background, source, closer) }
     }
 
-    pub(super) fn adopt(mut self) -> (AudioChannel, ResourceId, PendingLeg) {
-        let source = self.source.take().expect("an opening stream is adopted once");
-        (self.channel, self.sink, source)
+    pub(super) fn adopt(self) -> (AudioChannel, ResourceId, PendingLeg) {
+        (self.channel, self.sink, self.source.into_inner())
     }
 
     pub(super) fn resource(&self) -> ResourceId {
@@ -156,70 +106,22 @@ impl OpeningLeg {
     }
 
     pub(super) fn stt_source(&mut self) -> Option<&mut lk_agents_abi::SttSource> {
-        match self.source.as_mut() {
-            Some(PendingLeg::Stt(source)) => Some(source),
-            _ => None,
+        match &mut *self.source {
+            PendingLeg::Stt(source) => Some(source),
+            PendingLeg::Vad(_) => None,
         }
     }
 
-    pub(super) async fn close(mut self) -> Option<lk_agents_abi::Closed> {
-        match self.take_close() {
-            Some(close) => Some(close.await),
-            None => None,
-        }
-    }
-
-    /// Explicit retirement is joined by the session's cleanup, unlike abandoned startup.
-    pub(super) fn retire(self, tasks: &Arc<TaskSet>) {
-        let spawner = self.spawner.clone();
-        // The future retains the armed owner until it is polled. Refusal or cancellation
-        // before that poll drops the owner and uses its bounded fallback cleanup.
-        let _ = tasks.try_spawn(spawner.as_ref(), "unadopted leg close", async move {
-            let mut opened = self;
-            if let Some(close) = opened.take_close() {
-                close.await;
-            }
-        });
-    }
-
-    fn take_close(&mut self) -> Option<PendingClose<lk_agents_abi::Closed>> {
-        let source = self.source.take()?;
-        let resources = self.resources.clone();
-        let sink = self.sink;
-        let deadline = self.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        // The owner retains the input independently of registry and async-frame drop order.
-        let input = self.input.clone();
-        input.end_input();
-        let channel = self.channel;
-        Some(PendingClose::new(
-            self.spawner.clone(),
-            Box::pin(async move {
-                let _input = input;
-                let outcome = match source {
-                    PendingLeg::Stt(source) => source.close(deadline).await,
-                    PendingLeg::Vad(source) => source.close(deadline).await,
-                };
-                if outcome != lk_agents_abi::Closed::Clean {
-                    log::error!(target: lk_agents_abi::LOG_TARGET, "opening {} stream cleanup did not settle cleanly: {outcome:?}", channel.leg());
-                }
-                resources.release(sink);
-                outcome
-            }),
-        ))
-    }
-}
-
-impl Drop for OpeningLeg {
-    fn drop(&mut self) {
-        // Startup or the queue owner disappeared: bounded cleanup survives its caller.
-        drop(self.take_close());
+    pub(super) async fn close(self) -> Closed {
+        self.source.close().await
     }
 }
 
 impl Executor {
     /// Preparation and abandoned-stream cleanup use the supplied session clock and scheduler.
     pub fn new(time: Timebase, spawner: Arc<dyn Spawner>) -> Self {
-        Self { time, spawner, opening: Vec::new(), realtime: None }
+        let background = Background::new(Arc::default(), spawner, time.clock());
+        Self { time, background, opening: Vec::new(), realtime: None }
     }
 
     /// Hand the same queue owner to either the native loop or a deterministic caller.
@@ -249,7 +151,7 @@ impl SessionExecutor for Executor {
         cx: telemetry::Cx,
     ) -> BoxFuture<'a, Result<OpeningLegs, DriverError>> {
         Box::pin(async move {
-            let (time, spawner) = (self.time.clone(), self.spawner.clone());
+            let (time, background) = (self.time.clone(), &self.background);
             let mut legs = OpeningLegs::default();
             let mut opening = Vec::new();
             if let Some(stt) = stt {
@@ -265,8 +167,7 @@ impl SessionExecutor for Executor {
                     Arc::from(sink),
                     PendingLeg::Stt(source),
                     resources.clone(),
-                    time.clone(),
-                    Arc::clone(&spawner),
+                    background,
                 );
                 legs.stt = Some(leg.sink);
                 opening.push(leg);
@@ -278,8 +179,7 @@ impl SessionExecutor for Executor {
                     Arc::from(sink),
                     PendingLeg::Vad(source),
                     resources.clone(),
-                    time.clone(),
-                    Arc::clone(&spawner),
+                    background,
                 );
                 legs.vad = Some(leg.sink);
                 opening.push(leg);
@@ -299,15 +199,15 @@ impl SessionExecutor for Executor {
     ) -> BoxFuture<'a, Result<(Arc<dyn RealtimeSession>, ResourceId), DriverError>> {
         Box::pin(async move {
             let session = model.session(cx, disabled, tools).await?;
-            self.realtime = Some(RealtimeConnection::new(
-                session.clone(),
-                self.time.clone(),
-                self.spawner.clone(),
-            ));
+            self.realtime = Some(RealtimeConnection::new(session.clone(), &self.background));
             let sink = resources
                 .register_audio_sink(Arc::new(RealtimeAudioSink { session: session.clone() }));
             Ok((session, sink))
         })
+    }
+
+    fn tasks(&self) -> Arc<TaskSet> {
+        Arc::clone(&self.background.tasks)
     }
 
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner> {
@@ -393,7 +293,7 @@ impl VoiceRuntime {
             PendingLeg::Stt(mut source) => {
                 source.report_retries(super::audio::report_to(self.reports.clone()));
                 super::audio::spawn_drain(
-                    (&self.tasks, shared.spawner.as_ref()),
+                    (&shared.tasks, shared.spawner.as_ref()),
                     time,
                     closing,
                     super::audio::tagged(sink, source),
@@ -402,7 +302,7 @@ impl VoiceRuntime {
                 );
             }
             PendingLeg::Vad(source) => super::audio::spawn_drain(
-                (&self.tasks, shared.spawner.as_ref()),
+                (&shared.tasks, shared.spawner.as_ref()),
                 time,
                 closing,
                 source,
@@ -418,13 +318,12 @@ impl VoiceRuntime {
         let Some(detector) = self.eot.clone() else { return };
         let queue = self.reports.clone();
         let closing = self.shared.closing.clone();
-        let task = self.spawn("turn prediction", async move {
+        let task = self.scoped("turn prediction", async move {
             let outcome = detector.predict(&telemetry::Cx::NONE, timeout).await;
             if !closing.is_cancelled() {
                 let _ = queue.send(VoiceEvent::Eot(req, outcome, None));
             }
         });
-        self.predictions.retain(|task| self.tasks.contains(*task));
         self.predictions.push(task);
     }
 

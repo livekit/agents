@@ -8,12 +8,12 @@ use parking_lot::Mutex;
 
 use crate::thread::run::{ItemRow, RunOutcome};
 use lk_agents_abi::llm::chat_context::protocol::{decode_chat_item, encode_chat_item};
-use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::context::ContextActivation as _;
 use lk_agents_abi::storage::thread::AbandonReason;
 use lk_agents_abi::storage::voice::{
     StorageWork, VoiceStorage, VoiceStorageCommand, VoiceStorageEvent, VoiceStore as HostVoiceStore,
 };
+use lk_agents_abi::storage::{StorageError, Unacknowledged};
 use lk_agents_abi::{ChatContent, ChatItem, Role};
 
 use crate::backends::with_thread;
@@ -42,7 +42,8 @@ struct State {
     known: BTreeSet<String>,
     version: i64,
     active: Option<Active>,
-    uncertain_fields: Option<tokio::sync::OwnedMutexGuard<()>>,
+    /// The frozen staged fields of a commit left unresolved, and why its outcome is unknown.
+    uncertain_fields: Option<(tokio::sync::OwnedMutexGuard<()>, Unacknowledged)>,
 }
 
 struct Active {
@@ -62,7 +63,7 @@ impl VoiceStore {
         lane: String,
         explicit_history: Option<Vec<ChatItem>>,
     ) -> Result<Self, StorageError> {
-        let (history, version) = with_thread(&*backend, &thread_id, "voice-load", async |thread| {
+        let (history, version) = with_thread(&*backend, &thread_id, async |thread| {
             let lane = thread.lane(&lane);
             let history =
                 if explicit_history.is_none() { lane.history().await? } else { Vec::new() };
@@ -126,7 +127,7 @@ impl VoiceStore {
         }
         // Exclude direct saves before taking the lane, avoiding the inverse lock/lease order.
         let fields = self.activation.lock_managed().await;
-        let thread = self.backend.open(&self.thread_id, "voice").await?;
+        let thread = self.backend.open(&self.thread_id).await?;
         let mut options = RunOptions::new(shortuuid("voice_"), "");
         options.channel = Some("voice".into());
         let mut run = match thread.lane(&self.lane).open(options, &self.holder).await {
@@ -232,10 +233,10 @@ impl VoiceStore {
                 Err(error)
             }
         };
-        if matches!(result, Err(StorageError::Uncertain(_))) {
+        if let Err(StorageError::Uncertain(why)) = &result {
             // Retain the resolver and frozen staged fields. Closing observes its real outcome.
             state.active = Some(active);
-            state.uncertain_fields = Some(fields);
+            state.uncertain_fields = Some((fields, why.clone()));
             self.lost.store(true, Ordering::Release);
             return result.map(|_| ());
         }
@@ -266,8 +267,8 @@ impl VoiceStore {
         if !active.speeches.is_empty() {
             return Ok(());
         }
-        if state.uncertain_fields.is_some() {
-            return Err(StorageError::Uncertain("the voice commit is still unresolved".into()));
+        if let Some((_, why)) = &state.uncertain_fields {
+            return Err(StorageError::Uncertain(why.clone()));
         }
         let fields = self.activation.lock_managed().await;
         let mut active = state.active.take().expect("the active voice turn");
@@ -373,7 +374,7 @@ impl HostVoiceStore for VoiceStore {
         let mut state = self.state.lock().await;
         let mut result = Ok(());
         if let Some(mut active) = state.active.take() {
-            let uncertain = state.uncertain_fields.take();
+            let uncertain = state.uncertain_fields.take().map(|(fields, _)| fields);
             let resolving = uncertain.is_some();
             let fields = match uncertain {
                 Some(fields) => fields,
@@ -396,7 +397,8 @@ impl HostVoiceStore for VoiceStore {
         self.activation.close();
         drop(state);
         self.tasks.wait_empty(&RealClock::new(), None).await;
-        let (voice, context) = tokio::join!(self.holder.released(), self.activation.released());
+        let (voice, context) =
+            tokio::join!(self.holder.wait_released(), self.activation.wait_released());
         if !(voice && context) {
             log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(); "the voice store closed with a lease release in flight");
         }

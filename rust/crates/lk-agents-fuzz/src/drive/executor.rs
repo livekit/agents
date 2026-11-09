@@ -63,6 +63,10 @@ impl SessionExecutor for Handover {
         self.factory.open_realtime(resources, model, disabled, tools, cx)
     }
 
+    fn tasks(&self) -> Arc<lk_agents_runtime::net::task::TaskSet> {
+        self.factory.tasks()
+    }
+
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner> {
         let Self { factory, run } = *self;
         Box::new(Running { runtime: Some(factory.into_runtime(cores)), run })

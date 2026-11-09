@@ -9,7 +9,7 @@ use lk_agents_abi::worker::ipc_host;
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
-use tokio::sync::{Notify, watch};
+use tokio::sync::{oneshot, watch};
 
 use super::SupervisorCallbacks;
 use super::executor::{Connection, Exit, Runner, RunnerExecutor, host_error};
@@ -154,6 +154,7 @@ enum ProcessIdentity {
 }
 
 /// Owns the process and the start method's receipt descriptor until reaping is confirmed.
+/// Dropped before that, it kills the process: a job process never outlives its owner.
 pub struct ProcessResource {
     identity: ProcessIdentity,
     method: StartMethod,
@@ -166,6 +167,7 @@ pub struct ProcessResource {
     receipt: [u8; 8],
     received: usize,
     exitcode: Option<i64>,
+    reaped: bool,
 }
 
 impl ProcessResource {
@@ -240,6 +242,7 @@ impl ProcessResource {
             receipt: [0; 8],
             received: 0,
             exitcode: None,
+            reaped: false,
         })
     }
 
@@ -400,6 +403,12 @@ impl ProcessResource {
         if self.control().is_none() {
             return Ok(None);
         }
+        let code = self.reap()?;
+        self.reaped = code.is_some();
+        Ok(code)
+    }
+
+    fn reap(&mut self) -> io::Result<Option<i64>> {
         #[cfg(unix)]
         if self.method == StartMethod::ForkServer {
             let code = self.read_forkserver_signed()?;
@@ -441,6 +450,32 @@ impl ProcessResource {
     }
 }
 
+impl Drop for ProcessResource {
+    fn drop(&mut self) {
+        if self.reaped {
+            return;
+        }
+        // A forkserver child's PID may have arrived; without it the child ends on IPC hangup.
+        let _ = self.poll_identity();
+        let Some(control) = self.control() else { return };
+        if let Err(error) = control.kill() {
+            let pid = control.pid;
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "cannot kill job process {pid}: {error}");
+        }
+        // The worker is a spawned child's only waiter: reap it off the async workers. The
+        // forkserver reaps its own children.
+        #[cfg(unix)]
+        if self.method == StartMethod::Spawn {
+            let pid = control.pid as libc::pid_t;
+            let _ = lk_agents_net::blocking_io::blocking_io().try_spawn((), move || {
+                let mut status = 0;
+                // SAFETY: our killed, unreaped child; the wait ends once SIGKILL lands.
+                unsafe { libc::waitpid(pid, &mut status, 0) };
+            });
+        }
+    }
+}
+
 /// Only installed in an isolated child process, never in a job thread.
 pub fn terminate_current_process() {
     #[cfg(unix)]
@@ -468,6 +503,255 @@ mod windows {
         pub fn GetExitCodeProcess(handle: *mut c_void, code: *mut u32) -> i32;
         pub fn WaitForSingleObject(handle: *mut c_void, timeout: u32) -> u32;
         pub fn GetCurrentProcess() -> *mut c_void;
+    }
+}
+
+/// The process's footprint in MB: its PSS where Linux reports it, else its RSS. Blocking: called
+/// only on the supervisor's bounded sampling workers.
+fn sample_memory(pid: u32) -> io::Result<f64> {
+    #[cfg(target_os = "linux")]
+    if let Ok(rollup) = std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup"))
+        && let Some(pss_kb) = rollup.lines().find_map(|line| {
+            line.strip_prefix("Pss:")?.split_whitespace().next()?.parse::<f64>().ok()
+        })
+    {
+        return Ok(pss_kb / 1024.0);
+    }
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let pid = Pid::from_u32(pid);
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing().with_memory(),
+    );
+    let process = system
+        .process(pid)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "process no longer exists"))?;
+    Ok(process.memory() as f64 / (1024.0 * 1024.0))
+}
+
+/// Where the launcher reports the process it started: once, to the launch awaiting it.
+pub struct ProcessReceipt(Mutex<Option<oneshot::Sender<ProcessResource>>>);
+
+impl ProcessReceipt {
+    fn new() -> (Self, oneshot::Receiver<ProcessResource>) {
+        let (sender, receiver) = oneshot::channel();
+        (Self(Mutex::new(Some(sender))), receiver)
+    }
+
+    /// The launch's receipt, reported on the launch worker right after the OS created the child.
+    /// A launch no longer awaiting it drops the process, which kills it.
+    pub fn report(&self, pid: u32, sentinel: i64, method: &str, owned: Vec<i64>) -> io::Result<()> {
+        let resource = ProcessResource::new(pid, sentinel, StartMethod::parse(method)?, owned)?;
+        let sender = self.0.lock().take();
+        let sender = sender.ok_or_else(|| io::Error::other("launch already reported"))?;
+        drop(sender.send(resource));
+        Ok(())
+    }
+}
+
+/// A job process of the launcher's start method: the launcher spawns it on the job's end of the
+/// channel and reports its receipt on the launch.
+pub struct ProcessExecutor {
+    logger: JobLogger,
+    launcher: Arc<dyn ipc_host::JobLauncher>,
+    context: CallContext,
+}
+
+impl ProcessExecutor {
+    pub(crate) fn new(
+        launcher: Arc<dyn ipc_host::JobLauncher>,
+        context: CallContext,
+        logger: JobLogger,
+    ) -> Self {
+        Self { logger, launcher, context }
+    }
+}
+
+#[async_trait::async_trait]
+impl RunnerExecutor for ProcessExecutor {
+    /// Returns once a process exists to own: a host launch failing after its receipt kills it.
+    async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), HostError> {
+        let (parent, child) = ipc_channel::pair().map_err(host_error)?;
+        let connection = Channel::from_endpoint(parent).map_err(host_error)?;
+        let (launcher, context) = (self.launcher.clone(), self.context.clone());
+        let (receipt, mut reported) = ProcessReceipt::new();
+        let launch = Arc::new(ProcessLaunch(receipt));
+        let mut launching = TokioSpawner::current().spawn(async move {
+            launcher.launch(&telemetry::Cx::NONE, &context, child, launch).await
+        });
+        // Dropping this future drops the receipt, killing a process reported to it.
+        let (resource, launching) = tokio::select! {
+            biased;
+            Ok(resource) = &mut reported => (resource, Some(launching)),
+            launched = &mut launching => match (launched, reported.try_recv()) {
+                (Ok(Ok(())), Ok(resource)) => (resource, None),
+                (Ok(Ok(())), Err(_)) => {
+                    return Err(HostError::new("the launch reported no process"));
+                }
+                (Ok(Err(error)), _) => return Err(error),
+                (Err(error), _) => return Err(host_error(error)),
+            },
+        };
+        // A forkserver child's pid is unknown until the forkserver reports it.
+        self.logger.state.lock().pid = resource.control().map(|control| control.pid);
+        Ok((Box::new(JobProcess::watch(self.logger.clone(), resource, launching)), connection))
+    }
+}
+
+/// The launched process, its termination request and what was observed of it.
+struct Tracked {
+    resource: ProcessResource,
+    stopping: bool,
+    killed: bool,
+    exited: bool,
+    /// An observation or signal failure was reported (once).
+    failed: bool,
+}
+
+impl Tracked {
+    fn poll(&mut self, logger: &JobLogger) -> Option<Exit> {
+        self.observe().unwrap_or_else(|error| {
+            self.report(logger, format!("native process observation failed: {error}"));
+            None
+        })
+    }
+
+    /// The first failure only: the watcher keeps retrying.
+    fn report(&mut self, logger: &JobLogger, message: String) {
+        if !std::mem::replace(&mut self.failed, true) {
+            runner_log!(logger.runner(), log::Level::Error; "{message}");
+        }
+    }
+
+    fn observe(&mut self) -> io::Result<Option<Exit>> {
+        if !self.resource.poll_identity()? {
+            return Ok(None);
+        }
+        if self.stopping {
+            self.kill()?;
+        }
+        if !self.exited {
+            self.exited = self.resource.poll_exit()?;
+            if !self.exited {
+                return Ok(None);
+            }
+        }
+        let killed = self.killed;
+        Ok(self.resource.poll_reaped()?.map(|code| Exit { code, killed }))
+    }
+
+    /// Kills it once its identity is known and until a signal was delivered.
+    fn kill(&mut self) -> io::Result<()> {
+        if self.killed || self.exited {
+            return Ok(());
+        }
+        let Some(control) = self.resource.control() else { return Ok(()) };
+        control.kill()?;
+        self.killed = true;
+        Ok(())
+    }
+}
+
+/// Polls the process until its reaping receipt, finishing the host's launch on the way.
+async fn watch(
+    process: Arc<Mutex<Tracked>>,
+    mut launching: Option<OwnedTask<Result<(), HostError>>>,
+    exit: watch::Sender<Option<Exit>>,
+    logger: JobLogger,
+) {
+    loop {
+        if let Some(launch) = launching.as_mut().filter(|launch| launch.is_finished()) {
+            let cause = match launch.await {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(error.to_string()),
+                Err(error) => Some(error.to_string()),
+            };
+            launching = None;
+            if let Some(cause) = cause {
+                runner_log!(logger.runner(), log::Level::Error; "process launch failed: {cause}");
+                process.lock().stopping = true;
+            }
+        }
+        if let Some(code) = process.lock().poll(&logger) {
+            exit.send_replace(Some(code));
+            return;
+        }
+        tokio::time::sleep(POLL).await;
+    }
+}
+
+const POLL: Duration = Duration::from_millis(10);
+
+struct JobProcess {
+    logger: JobLogger,
+    process: Arc<Mutex<Tracked>>,
+    finished: watch::Receiver<Option<Exit>>,
+    _watching: OwnedTask,
+}
+
+impl JobProcess {
+    fn watch(
+        logger: JobLogger,
+        resource: ProcessResource,
+        launching: Option<OwnedTask<Result<(), HostError>>>,
+    ) -> Self {
+        let process = Arc::new(Mutex::new(Tracked {
+            resource,
+            stopping: false,
+            killed: false,
+            exited: false,
+            failed: false,
+        }));
+        let (exit, finished) = watch::channel(None);
+        let watching =
+            TokioSpawner::current().spawn(watch(process.clone(), launching, exit, logger.clone()));
+        Self { logger, process, finished, _watching: watching }
+    }
+}
+
+#[async_trait::async_trait]
+impl Runner for JobProcess {
+    async fn finished(&self) -> Exit {
+        let exit =
+            self.finished.clone().wait_for(Option::is_some).await.ok().and_then(|exit| *exit);
+        match exit {
+            Some(exit) => exit,
+            // the watcher was dropped with the runner: it never finishes
+            None => std::future::pending().await,
+        }
+    }
+
+    fn stop(&self) -> bool {
+        let mut process = self.process.lock();
+        process.stopping = true;
+        if let Err(error) = process.kill() {
+            process.report(&self.logger, format!("process termination failed: {error}"));
+        }
+        true
+    }
+
+    fn memory_mb(&self) -> Option<f64> {
+        let pid = self.process.lock().resource.control()?.pid;
+        let error = match sample_memory(pid) {
+            Ok(mb) => return Some(mb),
+            Err(error) => error,
+        };
+        if !self.process.lock().exited {
+            runner_log!(self.logger.runner(), log::Level::Warn; "failed to get memory info for process: {error}");
+        }
+        None
+    }
+}
+
+/// Process bootstrap exports; IPC ownership stays with the worker.
+pub struct Bootstrap;
+
+impl lk_agents_abi::worker::ipc_host::ProcessBootstrap for Bootstrap {
+    fn ipc_pair() -> Result<(i64, i64), lk_agents_abi::errors::HostError> {
+        super::ipc_channel::pair()
+            .map_err(|error| lk_agents_abi::errors::HostError::new(error.to_string()))
     }
 }
 
@@ -649,255 +933,71 @@ mod tests {
         let exit = tokio::time::timeout(Duration::from_secs(5), runner.finished()).await.unwrap();
         assert_eq!(exit, Exit { code: 9, killed: false });
     }
-}
 
-/// The process's footprint in MB: its PSS where Linux reports it, else its RSS. Blocking: called
-/// only on the supervisor's bounded sampling workers.
-fn sample_memory(pid: u32) -> io::Result<f64> {
-    #[cfg(target_os = "linux")]
-    if let Ok(rollup) = std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup"))
-        && let Some(pss_kb) = rollup.lines().find_map(|line| {
-            line.strip_prefix("Pss:")?.split_whitespace().next()?.parse::<f64>().ok()
-        })
-    {
-        return Ok(pss_kb / 1024.0);
+    /// Spawns `sleep 30`, reports it, then never finishes the launch.
+    #[derive(Default)]
+    struct ReportsThenHangs {
+        pid: Mutex<Option<u32>>,
+        reported: tokio::sync::Notify,
     }
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-    let pid = Pid::from_u32(pid);
-    let mut system = System::new();
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[pid]),
-        true,
-        ProcessRefreshKind::nothing().with_memory(),
-    );
-    let process = system
-        .process(pid)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "process no longer exists"))?;
-    Ok(process.memory() as f64 / (1024.0 * 1024.0))
-}
 
-/// Where the launcher reports the process it started.
-#[derive(Default)]
-pub struct ProcessReceipt {
-    resource: Mutex<Option<ProcessResource>>,
-    reported: Notify,
-}
-
-impl ProcessReceipt {
-    /// The launch's receipt, reported on the launch worker right after the OS created the child.
-    pub fn report(&self, pid: u32, sentinel: i64, method: &str, owned: Vec<i64>) -> io::Result<()> {
-        let resource = ProcessResource::new(pid, sentinel, StartMethod::parse(method)?, owned)?;
-        let mut receipt = self.resource.lock();
-        if receipt.is_some() {
-            return Err(io::Error::other("launch already reported"));
+    impl ipc_host::JobLauncher for ReportsThenHangs {
+        fn launch<'a>(
+            &'a self,
+            _: &telemetry::Cx,
+            _: &'a CallContext,
+            endpoint: i64,
+            launch: Arc<dyn ipc_host::LaunchReport>,
+        ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
+            Box::pin(async move {
+                // SAFETY: the launch hands over the child's end of the channel.
+                drop(unsafe { OwnedFd::from_raw_fd(endpoint as i32) });
+                #[allow(clippy::zombie_processes, reason = "the dropped receipt reaps it")]
+                let child = Command::new("sleep").arg("30").spawn().unwrap();
+                let (sentinel, _) = UnixStream::pair().unwrap();
+                let launch: Arc<dyn std::any::Any + Send + Sync> = launch;
+                let launch = launch.downcast::<ProcessLaunch>().unwrap();
+                launch
+                    .0
+                    .report(child.id(), sentinel.into_raw_fd().into(), "spawn", vec![])
+                    .unwrap();
+                *self.pid.lock() = Some(child.id());
+                self.reported.notify_one();
+                std::future::pending().await
+            })
         }
-        *receipt = Some(resource);
-        self.reported.notify_one();
-        Ok(())
+
+        fn completed<'a>(
+            &'a self,
+            _: &telemetry::Cx,
+            _: &'a CallContext,
+            _: lk_agents_abi::worker::ipc::JobCompletion,
+        ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
+            Box::pin(async { Ok(()) })
+        }
     }
-}
 
-/// A job process of the launcher's start method: the launcher spawns it on the job's end of the
-/// channel and reports its receipt on the launch.
-pub struct ProcessExecutor {
-    logger: JobLogger,
-    launcher: Arc<dyn ipc_host::JobLauncher>,
-    context: CallContext,
-    receipt: Arc<ProcessReceipt>,
-}
-
-impl ProcessExecutor {
-    pub(crate) fn new(
-        launcher: Arc<dyn ipc_host::JobLauncher>,
-        context: CallContext,
-        logger: JobLogger,
-    ) -> Self {
-        Self { logger, launcher, context, receipt: Arc::default() }
-    }
-}
-
-#[async_trait::async_trait]
-impl RunnerExecutor for ProcessExecutor {
-    /// Returns once a process exists to own: a host launch failing after its receipt kills it.
-    async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), HostError> {
-        let (parent, child) = ipc_channel::pair().map_err(host_error)?;
-        let connection = Channel::from_endpoint(parent).map_err(host_error)?;
-        let (launcher, context) = (self.launcher.clone(), self.context.clone());
-        let launch = Arc::new(ProcessLaunch(self.receipt.clone()));
-        let mut launching = TokioSpawner::current().spawn(async move {
-            launcher.launch(&telemetry::Cx::NONE, &context, child, launch).await
-        });
-        let launch = tokio::select! {
+    // Catches: a launch dropped between the receipt and its take leaving a live child.
+    #[tokio::test]
+    async fn a_launch_cancelled_at_its_receipt_kills_the_process() {
+        let launcher = Arc::new(ReportsThenHangs::default());
+        let executor =
+            ProcessExecutor::new(launcher.clone(), CallContext::default(), JobLogger::default());
+        let mut launch = Box::pin(executor.launch());
+        tokio::select! {
             biased;
-            () = self.receipt.reported.notified() => None,
-            launched = &mut launching => Some(launched),
-        };
-        let Some(resource) = self.receipt.resource.lock().take() else {
-            return Err(match launch {
-                Some(Ok(Ok(()))) => HostError::new("the launch reported no process"),
-                Some(Ok(Err(error))) => error,
-                Some(Err(error)) => host_error(error),
-                None => unreachable!("a receipt was reported"),
-            });
-        };
-        // A forkserver child's pid is unknown until the forkserver reports it.
-        self.logger.state.lock().pid = resource.control().map(|control| control.pid);
-        let launching = launch.is_none().then_some(launching);
-        Ok((Box::new(JobProcess::watch(self.logger.clone(), resource, launching)), connection))
-    }
-}
-
-/// The launched process, its termination request and what was observed of it.
-struct Tracked {
-    resource: ProcessResource,
-    stopping: bool,
-    killed: bool,
-    exited: bool,
-    /// An observation or signal failure was reported (once).
-    failed: bool,
-}
-
-impl Tracked {
-    fn poll(&mut self, logger: &JobLogger) -> Option<Exit> {
-        self.observe().unwrap_or_else(|error| {
-            self.report(logger, format!("native process observation failed: {error}"));
-            None
-        })
-    }
-
-    /// The first failure only: the watcher keeps retrying.
-    fn report(&mut self, logger: &JobLogger, message: String) {
-        if !std::mem::replace(&mut self.failed, true) {
-            runner_log!(logger.runner(), log::Level::Error; "{message}");
+            () = launcher.reported.notified() => {}
+            _ = &mut launch => panic!("the launch finished before the test cancelled it"),
         }
-    }
-
-    fn observe(&mut self) -> io::Result<Option<Exit>> {
-        if !self.resource.poll_identity()? {
-            return Ok(None);
-        }
-        if self.stopping {
-            self.kill()?;
-        }
-        if !self.exited {
-            self.exited = self.resource.poll_exit()?;
-            if !self.exited {
-                return Ok(None);
+        drop(launch);
+        let pid = launcher.pid.lock().expect("reported") as libc::pid_t;
+        for _ in 0..5_000 {
+            // SAFETY: a zero signal only observes whether the PID exists.
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                return;
             }
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
-        let killed = self.killed;
-        Ok(self.resource.poll_reaped()?.map(|code| Exit { code, killed }))
-    }
-
-    /// Kills it once its identity is known and until a signal was delivered.
-    fn kill(&mut self) -> io::Result<()> {
-        if self.killed || self.exited {
-            return Ok(());
-        }
-        let Some(control) = self.resource.control() else { return Ok(()) };
-        control.kill()?;
-        self.killed = true;
-        Ok(())
-    }
-}
-
-/// Polls the process until its reaping receipt, finishing the host's launch on the way.
-async fn watch(
-    process: Arc<Mutex<Tracked>>,
-    mut launching: Option<OwnedTask<Result<(), HostError>>>,
-    exit: watch::Sender<Option<Exit>>,
-    logger: JobLogger,
-) {
-    loop {
-        if let Some(launch) = launching.as_mut().filter(|launch| launch.is_finished()) {
-            let cause = match launch.await {
-                Ok(Ok(())) => None,
-                Ok(Err(error)) => Some(error.to_string()),
-                Err(error) => Some(error.to_string()),
-            };
-            launching = None;
-            if let Some(cause) = cause {
-                runner_log!(logger.runner(), log::Level::Error; "process launch failed: {cause}");
-                process.lock().stopping = true;
-            }
-        }
-        if let Some(code) = process.lock().poll(&logger) {
-            exit.send_replace(Some(code));
-            return;
-        }
-        tokio::time::sleep(POLL).await;
-    }
-}
-
-const POLL: Duration = Duration::from_millis(10);
-
-struct JobProcess {
-    logger: JobLogger,
-    process: Arc<Mutex<Tracked>>,
-    finished: watch::Receiver<Option<Exit>>,
-    _watching: OwnedTask,
-}
-
-impl JobProcess {
-    fn watch(
-        logger: JobLogger,
-        resource: ProcessResource,
-        launching: Option<OwnedTask<Result<(), HostError>>>,
-    ) -> Self {
-        let process = Arc::new(Mutex::new(Tracked {
-            resource,
-            stopping: false,
-            killed: false,
-            exited: false,
-            failed: false,
-        }));
-        let (exit, finished) = watch::channel(None);
-        let watching =
-            TokioSpawner::current().spawn(watch(process.clone(), launching, exit, logger.clone()));
-        Self { logger, process, finished, _watching: watching }
-    }
-}
-
-#[async_trait::async_trait]
-impl Runner for JobProcess {
-    async fn finished(&self) -> Exit {
-        let exit =
-            self.finished.clone().wait_for(Option::is_some).await.ok().and_then(|exit| *exit);
-        match exit {
-            Some(exit) => exit,
-            // the watcher was dropped with the runner: it never finishes
-            None => std::future::pending().await,
-        }
-    }
-
-    fn stop(&self) -> bool {
-        let mut process = self.process.lock();
-        process.stopping = true;
-        if let Err(error) = process.kill() {
-            process.report(&self.logger, format!("process termination failed: {error}"));
-        }
-        true
-    }
-
-    fn memory_mb(&self) -> Option<f64> {
-        let pid = self.process.lock().resource.control()?.pid;
-        let error = match sample_memory(pid) {
-            Ok(mb) => return Some(mb),
-            Err(error) => error,
-        };
-        if !self.process.lock().exited {
-            runner_log!(self.logger.runner(), log::Level::Warn; "failed to get memory info for process: {error}");
-        }
-        None
-    }
-}
-
-/// Process bootstrap exports; IPC ownership stays with the worker.
-pub struct Bootstrap;
-
-impl lk_agents_abi::worker::ipc_host::ProcessBootstrap for Bootstrap {
-    fn ipc_pair() -> Result<(i64, i64), lk_agents_abi::errors::HostError> {
-        super::ipc_channel::pair()
-            .map_err(|error| lk_agents_abi::errors::HostError::new(error.to_string()))
+        panic!("the cancelled launch left its child alive");
     }
 }

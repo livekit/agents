@@ -1629,6 +1629,7 @@ dependencies = [
  "lk-agents-runtime",
  "lk-agents-telemetry",
  "lk-agents-voice",
+ "parking_lot",
  "prost",
  "serde_json",
  "tokio",

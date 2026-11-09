@@ -15,6 +15,16 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Notify;
 
+/// Whether `speech` still holds its callback `id`.
+fn holds(runtime: &VoiceRuntime, speech: SpeechId, id: HostCallbackId) -> bool {
+    let owned = runtime.speeches.owned.lock();
+    owned.get(&speech).is_some_and(|owned| owned.callbacks.contains_key(&id))
+}
+
+fn no_callbacks(runtime: &VoiceRuntime) -> bool {
+    runtime.speeches.owned.lock().values().all(|owned| owned.callbacks.is_empty())
+}
+
 #[derive(Default)]
 struct PendingHost {
     started: Notify,
@@ -192,21 +202,13 @@ async fn cancelling_one_validation_preserves_other_callbacks_until_speech_cancel
         !other.future_dropped.load(Ordering::SeqCst),
         "exact cancellation killed another validator"
     );
-    assert!(
-        !runtime
-            .host_callbacks
-            .contains_key(&(speech, HostCallbackId::OutputValidation(ValidationId(1))))
-    );
-    assert!(
-        runtime
-            .host_callbacks
-            .contains_key(&(speech, HostCallbackId::OutputValidation(ValidationId(2))))
-    );
+    assert!(!holds(&runtime, speech, HostCallbackId::OutputValidation(ValidationId(1))));
+    assert!(holds(&runtime, speech, HostCallbackId::OutputValidation(ValidationId(2))));
     assert!(!runtime.shared.closing.is_cancelled(), "callback cancellation closed the session");
 
     runtime.perform_voice_effect(VoiceEffect::CancelSpeech(speech));
     other.await_drop().await;
-    assert!(runtime.host_callbacks.is_empty());
+    assert!(no_callbacks(&runtime));
     assert!(!runtime.shared.closing.is_cancelled());
 }
 
@@ -240,7 +242,7 @@ async fn speech_cancellation_ends_refusal_rendering_but_preserves_deferred_reply
     );
     assert!(!runtime.shared.closing.is_cancelled());
 
-    runtime.tasks.close();
+    runtime.shared.tasks.close();
     deferred.await_drop().await;
 }
 
@@ -303,7 +305,7 @@ async fn cancelling_one_refusal_reports_its_receipt_and_preserves_other_renderer
         "a call cancellation must not close the session"
     );
 
-    runtime.tasks.close();
+    runtime.shared.tasks.close();
     for host in [&sibling, &another_speech, &deferred] {
         host.await_drop().await;
     }
@@ -352,12 +354,12 @@ async fn releasing_a_speech_cancels_its_callbacks_but_preserves_detached_tool_wo
     ));
     validation.await_drop().await;
     refusal.await_drop().await;
-    assert!(runtime.host_callbacks.is_empty());
+    assert!(no_callbacks(&runtime));
     assert!(!deferred.future_dropped.load(Ordering::SeqCst));
     assert!(!body.future_dropped.load(Ordering::SeqCst), "release cancelled a detached tool body");
     assert!(!runtime.shared.closing.is_cancelled());
 
-    runtime.tasks.close();
+    runtime.shared.tasks.close();
     deferred.await_drop().await;
     tokio::time::timeout(Duration::from_secs(1), body.dropped.notified())
         .await

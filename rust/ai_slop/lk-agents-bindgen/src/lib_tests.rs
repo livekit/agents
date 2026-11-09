@@ -147,7 +147,7 @@ fn a_send_method_is_written_as_a_send_of_its_expression() {
     } })
     .unwrap();
     let text = quote!(#imp).to_string();
-    assert!(text.contains("# [doc = r\" Drop the turn.\"] # [host (method (send = TurnCommand :: Clear))] # [allow (clippy :: needless_question_mark)] pub fn clear (& self) -> Result < () , Refused > { :: core :: result :: Result :: Ok (self . send (TurnCommand :: Clear) ?) }"), "{text}");
+    assert!(text.contains("# [doc = r\" Drop the turn.\"] # [host (method (send = TurnCommand :: Clear))] # [allow (clippy :: needless_question_mark , reason = \"`?` converts the refusal when the error types differ\")] pub fn clear (& self) -> Result < () , Refused > { :: core :: result :: Result :: Ok (self . send (TurnCommand :: Clear) ?) }"), "{text}");
     assert!(text.contains("pub fn release (& self , hold : u64) { let _ = self . send (Hold { id : HoldId (hold) }) ; }"), "{text}");
     assert!(text.contains("pub fn plain (& self) -> u8 { 0 }"), "{text}");
 }

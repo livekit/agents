@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use crate::fallback::chain::StreamTask;
 use async_trait::async_trait;
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::StreamOutput;
@@ -457,18 +456,15 @@ async fn closing_a_channel_source_stops_the_task_and_waits_for_it() {
     let member_closed = Arc::new(AtomicBool::new(false));
     let closed_flag = Arc::clone(&member_closed);
     let streams = Arc::new(TaskSet::default());
-    let filling = streams.spawn(&TokioSpawner::current(), "filling", async move {
+    let filling = streams.scoped(&TokioSpawner::current(), "filling", async move {
         let _tx = tx;
         // The task's loop: serve until the consumer stops it, then close the member.
         stop.cancelled().await;
         closed_flag.store(true, Ordering::SeqCst);
         let _ = done.send(());
     });
-    let source: Box<dyn StreamOutput<u8>> = Box::new(crate::fallback::channel::ChannelSource {
-        rx,
-        task: Some(StreamTask::new(streams, filling)),
-        chain,
-    });
+    let source: Box<dyn StreamOutput<u8>> =
+        Box::new(crate::fallback::channel::ChannelSource { rx, task: Some(filling), chain });
     let closed = within(
         "the close",
         source.close(clock.now().saturating_add(std::time::Duration::from_secs(1))),
@@ -491,16 +487,13 @@ async fn a_task_that_ignores_the_stop_is_aborted_and_reported_timed_out() {
     // Dropped with the task's work, so the receiver sees the abort.
     let (alive, aborted) = tokio::sync::oneshot::channel::<()>();
     let streams = Arc::new(TaskSet::default());
-    let filling = streams.spawn(&TokioSpawner::current(), "filling", async move {
+    let filling = streams.scoped(&TokioSpawner::current(), "filling", async move {
         let _tx = tx;
         let _alive = alive;
         std::future::pending::<()>().await;
     });
-    let source: Box<dyn StreamOutput<u8>> = Box::new(crate::fallback::channel::ChannelSource {
-        rx,
-        task: Some(StreamTask::new(streams, filling)),
-        chain,
-    });
+    let source: Box<dyn StreamOutput<u8>> =
+        Box::new(crate::fallback::channel::ChannelSource { rx, task: Some(filling), chain });
     // A deadline already past gives the task one poll and no more.
     let closed = within("the close", source.close(lk_agents_abi::Ts::ZERO)).await;
     assert_eq!(closed, lk_agents_abi::Closed::TimedOut);

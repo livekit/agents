@@ -148,7 +148,9 @@ impl LlmInference<'_> {
                 self.request_finished(Some(&error));
                 Err(error)
             }
-            Ok(mut stream) => {
+            Ok(stream) => {
+                // Owned before the first read: a cancelled reply still closes it.
+                let mut stream = lk_agents_net::owned::Owned::stream(&shared.background(), stream);
                 report_retries(shared, handle, ProviderKind::Llm, &mut stream);
                 let ended = self.read_stream(&mut stream, &mut data, &mut trace).await;
                 self.settle_attempt(stream, &data, ended).await
@@ -213,15 +215,13 @@ impl LlmInference<'_> {
     /// dispatched no call.
     async fn settle_attempt(
         &self,
-        stream: LlmStream,
+        stream: lk_agents_net::owned::Owned<LlmStream>,
         data: &LlmGenerationData,
         ended: Result<(), ProviderError>,
     ) -> Result<(), ProviderError> {
         self.request_finished(ended.as_ref().err());
         report_llm_metrics(data, ended.is_err(), self.shared, self.handle);
-        // Dropping does not cancel a host stream; `close` must run on every path.
-        let deadline = self.shared.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        let _ = stream.close(deadline).await;
+        let _ = stream.close().await;
         ended
     }
 

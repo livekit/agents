@@ -489,7 +489,8 @@ fn declared_proxies_call_the_host_in_their_context() {
 }
 
 // Catches: a provider identity read per call, a call without its own context left with none, a
-// bound value not reaching awaited calls, or a returned host stream read as a value.
+// bound value not reaching awaited calls, a returned host stream read as a value, or one
+// discarded unclosed when its caller is dropped before taking it.
 #[test]
 fn provider_proxies_read_once_bind_and_pull_host_streams() {
     let decls = read(&proxy(
@@ -526,6 +527,9 @@ fn provider_proxies_read_once_bind_and_pull_host_streams() {
         "Some(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }))",
         "if let Some(bound) = bound {\n                    args.push(",
         "crate::py_streams::HostStream::open(py, o, context, |o| crate::generated::records::llm::chat_chunk_from_py(o.as_any())",
+        // A returned stream is owned from the call's settlement, a value is not.
+        "::lk_agents_runtime::host::call(&crate::py_streams::StreamCall, \"Callbacks.chat\"",
+        "::lk_agents_runtime::host::call(&crate::py_calls::Entry, \"Callbacks.count\"",
     ] {
         assert!(llm.contains(want), "{want}\n{llm}");
     }

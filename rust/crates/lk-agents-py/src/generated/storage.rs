@@ -383,18 +383,17 @@ impl Storage {
         })
     }
 
-    /// The existing thread's handle, its writes under `holder`. Takes no lease.
-    #[pyo3(signature = (thread_id, holder))]
+    /// The existing thread's handle. Takes no lease.
+    #[pyo3(signature = (thread_id))]
     fn open<'py>(
         &self,
         py: Python<'py>,
         thread_id: ::std::string::String,
-        holder: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::open(&this, thread_id, holder)
+            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::open(&this, thread_id)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -865,14 +864,6 @@ impl Thread {
         crate::py_calls::check_pid()?;
         let out =
             py.detach(|| <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::id(&self.0));
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[getter]
-    fn holder(&self, py: Python<'_>) -> PyResult<::std::string::String> {
-        crate::py_calls::check_pid()?;
-        let out = py
-            .detach(|| <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::holder(&self.0));
         ::pyo3::PyResult::Ok(out)
     }
 
@@ -1373,14 +1364,13 @@ pub struct CoreThreadHandle(pub(crate) ::std::sync::Arc<CoreThreadHandleImpl>);
 
 #[pymethods]
 impl CoreThreadHandle {
-    /// `holder` signs the handle's writes; reads take no lease.
+    /// Reads take no lease.
     #[new]
-    #[pyo3(signature = (namespace, thread_id, holder, agent))]
+    #[pyo3(signature = (namespace, thread_id, agent))]
     fn new(
         py: Python<'_>,
         namespace: Bound<'_, PyAny>,
         thread_id: ::std::string::String,
-        holder: ::std::string::String,
         agent: ::std::string::String,
     ) -> PyResult<CoreThreadHandle> {
         crate::py_calls::check_pid()?;
@@ -1390,7 +1380,7 @@ impl CoreThreadHandle {
             .map_err(::pyo3::PyErr::from)?;
         let out = py.detach(|| {
             <CoreThreadHandleImpl as ::lk_agents_abi::storage::handles::ThreadHandle>::new(
-                namespace, thread_id, holder, agent,
+                namespace, thread_id, agent,
             )
         });
         ::pyo3::PyResult::Ok(CoreThreadHandle(::std::sync::Arc::new(out)))
@@ -1764,10 +1754,6 @@ inventory::submit! {
 
 impl crate::py_errors::HostException for ::lk_agents_abi::storage::StorageError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Rejected { running_task_id } => crate::py_errors::host_exception_with(
                 "livekit.agents.storage",

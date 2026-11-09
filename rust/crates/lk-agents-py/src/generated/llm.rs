@@ -4875,7 +4875,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
         let req_arg = ::std::clone::Clone::clone(req);
         let bound = ::std::clone::Clone::clone(&self.conn);
         let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
+            &crate::py_streams::StreamCall,
             "Llm._core_chat",
             &crate::py_calls::calling_context(&self.context),
             &[],
@@ -5129,10 +5129,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::llm::chat_context::Rem
 
 impl crate::py_errors::HostException for ::lk_agents_abi::llm::mcp::McpError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Unavailable => crate::py_errors::host_exception(
                 "livekit.agents.llm.tool_context",
@@ -5168,10 +5164,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::llm::mcp::McpError {
 
 impl crate::py_errors::HostException for ::lk_agents_abi::llm::provider_format::StrictError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::NotAnObject { .. } => {
                 ::pyo3::exceptions::PyTypeError::new_err(::std::string::ToString::to_string(self))
@@ -5196,10 +5188,6 @@ impl crate::py_errors::HostException
     for ::lk_agents_abi::llm::realtime::RealtimeConfigurationError
 {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Api(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Host(inner) => crate::py_errors::HostException::to_py_err(inner),
@@ -5212,10 +5200,6 @@ impl crate::py_errors::HostException
 
 impl crate::py_errors::HostException for ::lk_agents_abi::llm::schema::SchemaError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Strict(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::NotAnObject { .. } => {

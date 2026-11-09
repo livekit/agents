@@ -280,6 +280,31 @@ def streams():
         def aclose(self):
             raise RuntimeError("cannot look up cleanup")
 
+    tracked_returned = threading.Event()
+    tracked_closed = threading.Event()
+
+    class Tracked:
+        """A returned stream that records its close."""
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await gate.wait()
+            return "x"
+
+        async def aclose(self):
+            log.append("tracked closed")
+            tracked_closed.set()
+
+    def tracked():
+        return Tracked()
+
+    async def open_tracked():
+        await asyncio.sleep(0)
+        tracked_returned.set()
+        return Tracked()
+
     class Duplex:
         def __init__(self):
             self.got = []
@@ -315,6 +340,10 @@ def streams():
         cancelled=cancelled,
         unclosable=unclosable,
         BrokenCleanup=BrokenCleanup,
+        tracked=tracked,
+        open_tracked=open_tracked,
+        tracked_returned=tracked_returned,
+        tracked_closed=tracked_closed,
         Duplex=Duplex,
     )
 

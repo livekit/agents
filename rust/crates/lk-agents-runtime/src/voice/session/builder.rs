@@ -104,6 +104,9 @@ pub trait SessionExecutor: Send {
         cx: telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'a, Result<RealtimeLeg, DriverError>>;
 
+    /// The session's tasks: what it runs and every abandoned close, joined at its close.
+    fn tasks(&self) -> Arc<lk_agents_net::task::TaskSet>;
+
     /// Takes the started cores over.
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner>;
 }
@@ -356,7 +359,7 @@ impl DriverBuilder {
             self.text_out.clone().map(|o| resources.register_text_output(o)),
         );
         let (shared, publications) =
-            self.shared(&queue, closing, outputs.clone(), session_id.clone());
+            self.shared(&queue, closing, outputs.clone(), session_id.clone(), executor.tasks());
         let session_cx = self.session_cx(&session_id);
         let shared_calls = Arc::clone(&shared.calls);
         // The session's id sequence: the core's speeches and items, and a host speech call's id.
@@ -495,6 +498,7 @@ impl DriverBuilder {
         closing: tokio_util::sync::CancellationToken,
         outputs: lk_agents_voice::agent_session::Outputs,
         session_id: String,
+        tasks: Arc<lk_agents_net::task::TaskSet>,
     ) -> (Arc<SessionShared>, super::shared::Publications) {
         let publications = super::shared::Publications {
             closing: closing.clone().drop_guard(),
@@ -526,6 +530,7 @@ impl DriverBuilder {
             speeches: Arc::clone(&self.speeches),
             closing,
             spawner: Arc::clone(&self.spawner),
+            tasks,
             gen_ids: std::sync::atomic::AtomicU64::new(0),
             session_id,
             resources: self.resources.clone(),
@@ -726,7 +731,7 @@ pub fn tts_leg(
 pub(super) struct OpeningSession {
     stage: Arc<parking_lot::Mutex<super::Stage>>,
     tasks: Arc<lk_agents_net::task::TaskSet>,
-    loop_tasks: Vec<lk_agents_net::task::TaskId>,
+    loop_tasks: Vec<lk_agents_net::task::ScopedTask>,
     resources: Resources,
     pub(super) cancelled: tokio_util::sync::CancellationToken,
     installed: bool,
@@ -765,7 +770,7 @@ impl OpeningSession {
         name: &str,
         work: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> Result<(), DriverError> {
-        let task = self.tasks.try_spawn(spawner, name, work).ok_or(DriverError::StartupClosed)?;
+        let task = self.tasks.try_scoped(spawner, name, work).ok_or(DriverError::StartupClosed)?;
         self.loop_tasks.push(task);
         Ok(())
     }
@@ -801,13 +806,10 @@ impl Drop for OpeningSession {
             }
         };
         drop(retired);
-        for task in self.loop_tasks.drain(..) {
-            self.tasks.cancel(task);
-        }
+        self.loop_tasks.clear();
         self.resources.clear();
         if let Some(cleanup) = self.cleanup.take() {
-            use lk_agents_abi::SpawnerExt as _;
-            self.spawner.spawn_detached(cleanup);
+            self.tasks.cleanup(self.spawner.as_ref(), "abandoned startup io close", cleanup);
         }
     }
 }

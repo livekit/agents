@@ -1,4 +1,7 @@
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+#[allow(
+    clippy::disallowed_types,
+    reason = "a host reference is dropped on any thread; the flag only stops a double release"
+)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -20,13 +23,19 @@ pub trait RefRegistry: Send + Sync + 'static {
 pub struct Entry {
     id: u64,
     registry: Weak<dyn RefRegistry>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(
+        clippy::disallowed_types,
+        reason = "a host reference is dropped on any thread; the flag only stops a double release"
+    )]
     /// So `Drop` does not release a moved payload.
     taken: AtomicBool,
 }
 
 impl Entry {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(
+        clippy::disallowed_types,
+        reason = "a host reference is dropped on any thread; the flag only stops a double release"
+    )]
     pub fn new(id: u64, registry: &Arc<dyn RefRegistry>) -> Self {
         Entry { id, registry: Arc::downgrade(registry), taken: AtomicBool::new(false) }
     }
@@ -110,19 +119,28 @@ pub(crate) mod testkit {
     //! A stand-in for the binding's table, shared by the `HostRef` and `CapturedError` tests.
 
     use std::collections::BTreeSet;
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(
+        clippy::disallowed_types,
+        reason = "the test table stands in for the binding's shared table"
+    )]
     use std::sync::{Arc, Mutex};
 
     use super::RefRegistry;
 
     /// Holds ids the way the binding does, and answers `outstanding` from what is left.
     pub struct Table {
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+        #[allow(
+            clippy::disallowed_types,
+            reason = "the test table stands in for the binding's shared table"
+        )]
         live: Mutex<BTreeSet<u64>>,
     }
 
     impl Table {
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+        #[allow(
+            clippy::disallowed_types,
+            reason = "the test table stands in for the binding's shared table"
+        )]
         /// A table already holding `ids`, as if the binding had captured them.
         pub fn holding(ids: impl IntoIterator<Item = u64>) -> Arc<Table> {
             Arc::new(Table { live: Mutex::new(ids.into_iter().collect()) })

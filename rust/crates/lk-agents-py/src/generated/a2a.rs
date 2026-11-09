@@ -1201,10 +1201,6 @@ impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
 
 impl crate::py_errors::HostException for ::lk_agents_abi::a2a::auth::AuthError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Unauthorized(..) => crate::py_errors::host_exception(
                 "livekit.agents.a2a",
@@ -1216,19 +1212,12 @@ impl crate::py_errors::HostException for ::lk_agents_abi::a2a::auth::AuthError {
                 "Forbidden",
                 ::std::string::ToString::to_string(self),
             ),
-            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
-                self,
-            )),
         }
     }
 }
 
 impl crate::py_errors::HostException for ::lk_agents_abi::a2a::client::AgentClientError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::InvalidInput(..) => {
                 ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))

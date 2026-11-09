@@ -6,7 +6,7 @@ use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::voice::rtc::{AudioSource, PlaybackInfo, RtcError, RtcRoom, TrackSid};
 use lk_agents_abi::{AudioFrame, Clock, Spawner, Ts};
 use lk_agents_abi::{Closed, HOST_TEARDOWN_TIMEOUT, timeout};
-use lk_agents_net::task::{TaskId, TaskSet};
+use lk_agents_net::task::{ScopedTask, TaskSet};
 use lk_agents_voice::room_io::machine::output::Publication;
 use lk_agents_voice::room_io::machine::output::{
     CaptureAdmission, ClearedAudio, Playback, PlaybackReport, capture_chunks,
@@ -401,7 +401,7 @@ pub struct ParticipantAudioOutput {
     shared: Arc<Shared>,
     /// The pump, the watcher, the progress reporter and the track creation: for the life of the
     /// output, not one per segment. Cancelled by the close.
-    started: Mutex<Vec<TaskId>>,
+    started: Mutex<Vec<ScopedTask>>,
     /// Those, the close's cleanup and the source closes that outlive a close waiter.
     tasks: Arc<TaskSet>,
 }
@@ -443,17 +443,17 @@ impl ParticipantAudioOutput {
         let mut started = self.started.lock();
         if self.shared.lock().publication.begin() {
             let (tasks, spawner) = (&self.tasks, self.spawner.as_ref());
-            started.push(tasks.spawn(
+            started.push(tasks.scoped(
                 spawner,
                 "audio output pump",
                 self.shared.clone().forward_audio(),
             ));
-            started.push(tasks.spawn(
+            started.push(tasks.scoped(
                 spawner,
                 "playout watcher",
                 self.shared.clone().wait_for_playout(),
             ));
-            started.push(tasks.spawn(
+            started.push(tasks.scoped(
                 spawner,
                 "progress reporter",
                 self.shared.clone().report_progress(),
@@ -464,7 +464,7 @@ impl ParticipantAudioOutput {
             let self_spawner = (self.tasks.clone(), self.spawner.clone());
             // Creation belongs to the output, even when the caller abandons start(). Close drains
             // this task before releasing its handles, so a late SID can always be unpublished.
-            started.push(tasks.spawn(spawner, "track creation", async move {
+            started.push(tasks.scoped(spawner, "track creation", async move {
                 let lk_agents_abi::voice::rtc::PublishedAudioTrack { source, publication } =
                     match room.local().publish_audio_track(&telemetry::Cx::NONE, options).await {
                         Ok(published) => published,
@@ -557,11 +557,12 @@ impl ParticipantAudioOutput {
     /// Stops the frame and progress producers before the terminal playback event. Creation keeps
     /// its separate obligation to deliver or retire the track, even if start() was cancelled.
     fn stop_producers(&self) {
-        let mut started = self.started.lock();
-        let producers = started.len().min(PRODUCERS);
-        for task in started.drain(..producers) {
-            self.tasks.cancel(task);
-        }
+        let stopped: Vec<_> = {
+            let mut started = self.started.lock();
+            let producers = started.len().min(PRODUCERS);
+            started.drain(..producers).collect()
+        };
+        drop(stopped);
     }
 
     pub async fn aclose(&self) -> Closed {
@@ -597,11 +598,18 @@ impl ParticipantAudioOutput {
             state.cleanup_outcome.unwrap_or(Closed::TimedOut)
         };
         if settled {
-            for task in self.started.lock().drain(..) {
-                self.tasks.cancel(task);
-            }
+            let started = std::mem::take(&mut *self.started.lock());
+            drop(started);
         }
         outcome
+    }
+}
+
+/// An output dropped unclosed leaves its tasks to their set: track creation must still deliver
+/// or retire the track.
+impl Drop for ParticipantAudioOutput {
+    fn drop(&mut self) {
+        self.started.get_mut().drain(..).for_each(ScopedTask::release);
     }
 }
 

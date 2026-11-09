@@ -1,9 +1,11 @@
 use std::fs::{File, OpenOptions};
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::StorageError;
 
 use crate::sql::{Bind, SqlValue, first_cell};
+use lk_agents_abi::Clock;
 
 use super::connection::{batch, connect, query};
 use super::{DeleteRegistryThread, RegistryThreadIsLive};
@@ -43,9 +45,13 @@ pub(super) struct Access {
 }
 
 impl Access {
-    pub(super) fn open(directory: &Path, thread_id: String) -> Result<Self, StorageError> {
+    pub(super) fn open(
+        directory: &Path,
+        thread_id: String,
+        clock: &Arc<dyn Clock>,
+    ) -> Result<Self, StorageError> {
         let lock = lock_file(directory)?;
-        let registry = connect(&directory.join("registry.sqlite"), false)?;
+        let registry = connect(&directory.join("registry.sqlite"), false, clock)?;
         Ok(Self { lock, registry, thread_id })
     }
 

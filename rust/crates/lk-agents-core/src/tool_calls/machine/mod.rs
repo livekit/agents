@@ -234,10 +234,48 @@ impl ToolCalls {
         self.admit(tools, history, running, fx);
     }
 
+    /// The call's task ended without reporting: a call preparing or reading back settles as an
+    /// internal failure. `true` when its body runs: the caller settles it on the executor's
+    /// answer.
+    pub fn lost<'h, E: From<ToolCallEffect>>(
+        &mut self,
+        id: CallId,
+        tools: &[FunctionToolInfo],
+        history: impl Iterator<Item = &'h ChatItem> + Clone,
+        running: &[RunningToolExecution],
+        fx: &mut Vec<E>,
+    ) -> bool {
+        let Some(call) = self.call_mut(id) else { return false };
+        match call.phase {
+            Phase::Preparing { .. } => {
+                self.prepare_failed(id, PrepareFailure::Internal, tools, history, running, fx)
+            }
+            Phase::ReadingBack { .. } => {
+                self.read_back_settled(id, None, tools, history, running, fx)
+            }
+            Phase::Running { .. } => return true,
+            _ => {}
+        }
+        false
+    }
+
     pub fn read_back<'h, E: From<ToolCallEffect>>(
         &mut self,
         id: CallId,
         answer: Result<ReadBackAnswer, lk_agents_abi::errors::HostError>,
+        tools: &[FunctionToolInfo],
+        history: impl Iterator<Item = &'h ChatItem> + Clone,
+        running: &[RunningToolExecution],
+        fx: &mut Vec<E>,
+    ) {
+        self.read_back_settled(id, answer.ok(), tools, history, running, fx);
+    }
+
+    /// The read-back's answer; `None` when it failed.
+    fn read_back_settled<'h, E: From<ToolCallEffect>>(
+        &mut self,
+        id: CallId,
+        answer: Option<ReadBackAnswer>,
         tools: &[FunctionToolInfo],
         history: impl Iterator<Item = &'h ChatItem> + Clone,
         running: &[RunningToolExecution],
@@ -248,15 +286,15 @@ impl ToolCalls {
         let canonical = approval::canonical(identity);
         fx.push(ToolCallEffect::ReleaseArguments { prepared }.into());
         let outcome = match answer {
-            Ok(ReadBackAnswer::Question(question)) => {
+            Some(ReadBackAnswer::Question(question)) => {
                 approval::set_mark(&mut call.item, Approval::Asked, &canonical);
                 ToolOutcome::InputRequired { question, verbatim: true, tool: None }
             }
             // Something is missing before there is anything to approve: not a read-back.
-            Ok(ReadBackAnswer::InputRequired { question, verbatim }) => {
+            Some(ReadBackAnswer::InputRequired { question, verbatim }) => {
                 ToolOutcome::InputRequired { question, verbatim, tool: None }
             }
-            Err(_) => ToolOutcome::Internal,
+            None => ToolOutcome::Internal,
         };
         settle(call, outcome, false, fx);
         self.admit(tools, history, running, fx);

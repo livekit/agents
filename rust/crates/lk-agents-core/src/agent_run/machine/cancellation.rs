@@ -152,7 +152,8 @@ impl AgentRun {
             | AgentRunEvent::ReadBackRendered { call, .. }
             | AgentRunEvent::ToolHandlingTemplateRendered { call, .. }
             | AgentRunEvent::ToolSettled { call, .. }
-            | AgentRunEvent::ToolLaunchFailed { call, .. } => {
+            | AgentRunEvent::ToolLaunchFailed { call, .. }
+            | AgentRunEvent::CallLost { call, .. } => {
                 owed.calls.remove(&call);
             }
             AgentRunEvent::OutputValidated { validation, .. } => {

@@ -105,7 +105,6 @@ async def test_one_message_through_the_rust_turn(thread_storage: Storage) -> Non
     thread_id = await thread_of(thread_storage)
     session = await thread_storage._open(thread_id)
     assert session.id == thread_id
-    assert session.holder.startswith("worker-a/")
 
     host = Host()
     turn = _core.Turn(session, LANE, host, TurnOptions(inbox="interrupt", debounce=timedelta(0)))

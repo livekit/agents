@@ -229,7 +229,7 @@ pub struct Setup {
     /// The share of provider delays that stray from the measured ones to a deadline or a stall
     /// (`fakes::delay`): the search's randomness, so a pure conversation keeps real timings.
     pub stray: f64,
-    /// The voice lane is stored, by storage's own code over its in-memory database; `None` runs
+    /// The voice lane is stored, by storage's own code over its SQLite backend; `None` runs
     /// the session without storage.
     pub storage: Option<StorageSetup>,
 }

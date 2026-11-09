@@ -28,7 +28,9 @@ generator must not change how the same case is judged.
 
 Standalone A2A and TextSession execution is outside this crate. Their component tests remain
 in the core, runtime and storage crates. Storage is faked at the database connection only: the
-voice lane runs storage's own code over its in-memory SQLite on the run's clock. The voice
+voice lane runs storage's own code over the production SQLite backend (registry, thread files,
+lifecycle lock) in a directory of the run's own, its workers tasks on the run's scheduler and its
+`unixepoch()` the run's clock. The voice
 campaign does not exercise real provider sockets or Python callbacks.
 [boundary.rs](src/boundary.rs) describes the simulation boundary and the separate conformance
 suites. Shared AgentRun behavior remains covered when used by voice.

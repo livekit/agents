@@ -183,6 +183,7 @@ pub async fn stream(
         pump,
         current,
         failed,
+        sink_failed: None,
         attempts,
         began: accepted,
         offset,
@@ -223,6 +224,11 @@ async fn recognize_attempts(
         failure.decide(None)?;
         wait_for_retry(attempts, clock, stt).await?;
     }
+}
+
+/// A context for one poll of what is already queued: nothing waits for its wake.
+fn noop_context() -> std::task::Context<'static> {
+    std::task::Context::from_waker(std::task::Waker::noop())
 }
 
 /// What the caller pushed, handed to the attempt serving one entry at a time, each awaited: a slow
@@ -326,6 +332,8 @@ struct RetrySource {
     current: Option<SttSource>,
     /// The open of the current attempt failed.
     failed: Option<ProviderError>,
+    /// The current attempt's sink failed: what its stream already queued is read first.
+    sink_failed: Option<ProviderError>,
     attempts: Request,
     /// When the current attempt began, on the supplied monotonic clock.
     began: Ts,
@@ -339,6 +347,7 @@ struct RetrySource {
 impl RetrySource {
     async fn close_current(&mut self) {
         self.pump.clear();
+        self.sink_failed = None;
         if let Some(source) = self.current.take() {
             let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
             source.close(deadline).await;
@@ -366,10 +375,23 @@ impl RetrySource {
             (None, Some(source)) => source,
             (None, None) => return Ok(None),
         };
-        let next = tokio::select! {
-            biased;
-            error = self.pump.run() => Err(error),
-            event = source.next() => event,
+        let next = loop {
+            if let Some(error) = self.sink_failed.take() {
+                // What the attempt already queued outlives its failed sink; then the failure.
+                break match std::pin::pin!(source.next()).as_mut().poll(&mut noop_context()) {
+                    std::task::Poll::Ready(Ok(Some(event))) => {
+                        self.sink_failed = Some(error);
+                        Ok(Some(event))
+                    }
+                    std::task::Poll::Ready(Err(failed)) => Err(failed),
+                    std::task::Poll::Ready(Ok(None)) | std::task::Poll::Pending => Err(error),
+                };
+            }
+            tokio::select! {
+                biased;
+                event = source.next() => break event,
+                error = self.pump.run() => self.sink_failed = Some(error),
+            }
         };
         match next {
             Ok(Some(event)) => {

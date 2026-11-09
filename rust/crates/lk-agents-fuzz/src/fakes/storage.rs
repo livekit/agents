@@ -1,34 +1,44 @@
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
+
+use parking_lot::Mutex;
 
 use super::Registry;
 use crate::drive::StorageSetup;
 use crate::record::{StorageOperation, StorageStep};
 use lk_agents_abi::llm::chat_context::protocol::{decode_chat_item, encode_chat_item};
-use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::voice::{
     StorageWork, VoiceStorage, VoiceStorageCommand, VoiceStorageEvent, VoiceStore as _,
 };
+use lk_agents_abi::storage::{StorageError, Unacknowledged};
 use lk_agents_abi::{ChatItem, ChatMessage, Clock, Role, StreamInput, Ts};
-use lk_agents_runtime::storage::sql::{BatchResult, Row, SqlValue, Statement};
-use lk_agents_runtime::storage::testing::{MemoryConnection, MemoryStorage};
+use lk_agents_runtime::storage::backends::sqlite::{FileConnection, SqliteStorage, Workers};
+use lk_agents_runtime::storage::sql::{BatchResult, Row, SqlValue, Statement, StatementKind};
+use lk_agents_runtime::storage::testing::{Dying, TempDir, Wrapped, lessee};
+use lk_agents_runtime::storage::thread::LeaseTiming;
 use lk_agents_runtime::storage::thread::lease::Holder;
-use lk_agents_runtime::storage::thread::{LeaseTiming, SchemaCell};
 use lk_agents_runtime::storage::voice::VoiceStore;
 use lk_agents_runtime::storage::{
-    CommitOptions, ItemRow, LaneAccess, RunOptions, Thread, ThreadDbConnection, WhenHeld,
+    CommitOptions, ItemRow, LaneAccess, RunOptions, Storage as _, Thread, ThreadDbConnection,
+    WhenHeld,
 };
 
 // The voice lane runs on storage's own code (`VoiceStore`, `Lane`, `Lease`, renewal, fenced
-// commit) over its in-memory SQLite, on the run's clock. Only the connection is faked: it answers
-// late, loses answers, refuses and goes down, and observes which lease holds the lane.
+// commit) over the production SQLite backend in a directory of the run's own: its workers are
+// tasks on the run's scheduler, its `unixepoch()` the run's clock. Each thread connection is
+// wrapped: it answers late, loses answers, refuses and goes down, and observes which lease holds
+// the lane. A worker can also die with requests queued, at the scheduler.
 
-const THREAD: &str = "AT_fuzz";
 const LANE: &str = "voice";
 
-/// What an acquire's lease take looks like on the wire: storage's `TakeLease` statements.
-const TAKE: &str = "SET waiter = CASE WHEN lease_holder";
+/// Database workers that died in this process's runs: the survey's evidence the fault is reached.
+static WORKER_DEATHS: AtomicU64 = AtomicU64::new(0);
+
+pub fn worker_deaths() -> u64 {
+    WORKER_DEATHS.load(Ordering::Relaxed)
+}
 
 /// The call's lane: the production store, the recording port the session is handed, and the
 /// database under both.
@@ -36,6 +46,7 @@ pub struct FakeStore {
     voice: Arc<VoiceStore>,
     pub port: Arc<dyn VoiceStorage>,
     database: Arc<FakeDatabase>,
+    _dir: TempDir,
 }
 
 impl FakeStore {
@@ -46,34 +57,59 @@ impl FakeStore {
         registry: Arc<Registry>,
         clock: Arc<dyn Clock>,
     ) -> Self {
-        let database = Arc::new(FakeDatabase::new(setup, seed, registry.clone(), clock));
-        let backend =
-            Arc::new(MemoryStorage { connection: database.clone(), lease: LeaseTiming::default() });
-        let voice = VoiceStore::bound(backend, THREAD.into(), LANE.into(), None)
+        let dir = TempDir::new("lk-agents-fuzz-");
+        let dying = Arc::new(Dying::new(registry.world.clone()));
+        let workers = Workers { spawner: dying.clone(), clock: clock.clone() };
+        let storage = SqliteStorage::open(&dir.0, LeaseTiming::default(), workers);
+        let storage = Arc::new(storage.await.expect("a storage directory"));
+        let thread = storage.create_thread(Default::default()).await.expect("a thread");
+        let observer = storage.connect(&thread.thread_id).await.expect("an observer");
+        let database = Arc::new(FakeDatabase::new(
+            setup,
+            seed,
+            registry.clone(),
+            clock,
+            (storage.clone(), thread.thread_id.clone(), observer),
+            dying,
+        ));
+        let calls = database.clone();
+        let wrap = move |inner: FileConnection| {
+            Arc::new(FakeConnection { inner, db: calls.clone() }) as Arc<dyn ThreadDbConnection>
+        };
+        let backend = Arc::new(Wrapped { storage, wrap });
+        let voice = VoiceStore::bound(backend, thread.thread_id, LANE.into(), None)
             .await
             .expect("a fresh lane loads");
         let voice = Arc::new(voice);
-        database.state.lock().unwrap().armed = true;
+        database.state.lock().armed = true;
         let port = Arc::new(RecordedStore { store: voice.clone(), registry });
-        Self { voice, port, database }
+        Self { voice, port, database, _dir: dir }
     }
 
     /// The host's `aclose()` once the session ended, then what it left in the database.
     pub async fn close(&self) {
         let _ = self.voice.aclose().await;
         self.database.settle().await;
+        WORKER_DEATHS.fetch_add(self.database.dying.deaths(), Ordering::Relaxed);
+        self.database.observer.close().await;
+        self.database.storage.close().await;
     }
 
     /// An acquire's lease take applied and its answer still owed: the instant a dropped caller
     /// leaves the lane taken with no `Lease` to release it.
     pub fn take_unanswered(&self) -> bool {
-        self.database.state.lock().unwrap().taking > 0
+        self.database.state.lock().taking > 0
     }
 }
 
-/// Storage's in-memory database behind seeded latency and faults.
+/// The thread's database as every connection to it meets it: seeded latency and faults, and what
+/// was observed of its leases.
 struct FakeDatabase {
-    inner: MemoryConnection,
+    storage: Arc<SqliteStorage>,
+    thread_id: String,
+    /// A connection of the observer's own, never faulted.
+    observer: FileConnection,
+    dying: Arc<Dying>,
     clock: Arc<dyn Clock>,
     registry: Arc<Registry>,
     setup: StorageSetup,
@@ -102,10 +138,19 @@ struct Plan {
     after: Duration,
     refused: Option<StorageError>,
     answer_lost: bool,
+    /// The database's worker dies with this write queued.
+    worker_dies: bool,
 }
 
 impl FakeDatabase {
-    fn new(setup: StorageSetup, seed: u64, registry: Arc<Registry>, clock: Arc<dyn Clock>) -> Self {
+    fn new(
+        setup: StorageSetup,
+        seed: u64,
+        registry: Arc<Registry>,
+        clock: Arc<dyn Clock>,
+        (storage, thread_id, observer): (Arc<SqliteStorage>, String, FileConnection),
+        dying: Arc<Dying>,
+    ) -> Self {
         // Mixed: neighbouring seeds' streams stay correlated at one position for a while.
         let mut rng =
             fastrand::Rng::with_seed((seed ^ 0x6c61_6e65).wrapping_mul(0x9e37_79b9_7f4a_7c15));
@@ -120,14 +165,14 @@ impl FakeDatabase {
             text_turn_every,
             taking: 0,
         };
-        let inner = MemoryConnection::new(clock.clone()).expect("an in-memory database");
-        Self { inner, clock, registry, setup, state: Mutex::new(state) }
+        let state = Mutex::new(state);
+        Self { storage, thread_id, observer, dying, clock, registry, setup, state }
     }
 
     /// Stress frequencies, not measured rates.
     fn plan(&self, write: bool, take: bool, carried: Option<&str>) -> Plan {
         let now = self.clock.now();
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if let Some(token) = carried {
             state.touched.insert(token.to_owned(), now);
         }
@@ -136,6 +181,7 @@ impl FakeDatabase {
             after: Duration::ZERO,
             refused: None,
             answer_lost: false,
+            worker_dies: false,
         };
         if !state.armed {
             return plan;
@@ -166,7 +212,11 @@ impl FakeDatabase {
             }
             match rng.u32(0..128) {
                 0 if write => plan.answer_lost = true,
-                1 if write => plan.refused = Some(StorageError::Uncertain("lost before".into())),
+                2 if write => plan.worker_dies = true,
+                1 if write => {
+                    plan.refused =
+                        Some(StorageError::Uncertain(Unacknowledged::sent("lost before")))
+                }
                 _ => {}
             }
         }
@@ -192,13 +242,12 @@ impl FakeDatabase {
 
     /// The lease holding the lane now, as `(token, until)` in the database's seconds.
     async fn lessee(&self) -> Option<(String, i64)> {
-        let read = Statement::raw("SELECT lease_token, lease_until FROM lanes WHERE lane = ?1")
-            .with(vec![SqlValue::Text(LANE.into())]);
-        let rows = self.inner.query(read).await.ok()?;
-        match rows.first()?.as_slice() {
-            [SqlValue::Text(token), SqlValue::Int(until)] => Some((token.clone(), *until)),
-            _ => None,
-        }
+        lessee(&self.observer, LANE).await
+    }
+
+    /// Another worker's handle on the same database, beside the call's.
+    async fn thread(&self) -> Option<Thread> {
+        self.storage.open(&self.thread_id).await.ok()
     }
 
     fn unix_secs(&self) -> i64 {
@@ -212,7 +261,7 @@ impl FakeDatabase {
         let now = self.clock.now();
         let taken = SqlValue::Text(token.clone());
         let ours = takes.iter().any(|s| s.params().contains(&taken));
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if ours {
             state.touched.insert(token, now);
         } else if until >= self.unix_secs() {
@@ -226,12 +275,7 @@ impl FakeDatabase {
     /// A text turn between voice turns, by another worker over the same database: it takes the
     /// lane only if free, edits the history and commits.
     async fn text_turn(&self, turn: u32, what: u32) {
-        let conn: Arc<dyn ThreadDbConnection> = Arc::new(self.inner.clone());
-        let lease = LeaseTiming::default();
-        let Ok(thread) = Thread::new(conn, THREAD, lease, SchemaCell::default(), "text").await
-        else {
-            return;
-        };
+        let Some(thread) = self.thread().await else { return };
         let mut options = RunOptions::new(format!("text_{turn}"), "");
         options.access = LaneAccess::Exclusive(WhenHeld::Reject);
         if let Ok(mut run) = thread.lane(LANE).open(options, &Holder::new("text")).await {
@@ -256,19 +300,20 @@ impl FakeDatabase {
 
     /// Once the store closed: runs started and never ended, and a lease still held.
     async fn settle(&self) {
-        let conn: Arc<dyn ThreadDbConnection> = Arc::new(self.inner.clone());
-        let lease = LeaseTiming::default();
-        let Ok(thread) = Thread::new(conn, THREAD, lease, SchemaCell::default(), "audit").await
-        else {
-            return;
-        };
+        let Some(thread) = self.thread().await else { return };
         let lane = thread.lane(LANE);
         let runs = lane.runs(usize::MAX).await.unwrap_or_default();
         let unended = runs.iter().filter(|run| run.interrupted()).count() as u32;
         let held = self.lessee().await.is_some_and(|(_, until)| until >= self.unix_secs());
-        let faulted = self.state.lock().unwrap().faulted;
+        let faulted = self.state.lock().faulted;
         self.registry.record_storage(StorageStep::LaneSettled { unended, held, faulted });
     }
+}
+
+/// One worker's connection to the database, as [`FakeDatabase`] faults it.
+struct FakeConnection {
+    inner: FileConnection,
+    db: Arc<FakeDatabase>,
 }
 
 /// Counts a lease take whose answer is still owed, until it is answered or dropped.
@@ -276,65 +321,75 @@ struct Taking<'a>(&'a Mutex<State>);
 
 impl Drop for Taking<'_> {
     fn drop(&mut self) {
-        self.0.lock().unwrap().taking -= 1;
+        self.0.lock().taking -= 1;
     }
 }
 
 #[async_trait::async_trait]
-impl ThreadDbConnection for FakeDatabase {
+impl ThreadDbConnection for FakeConnection {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
-        let plan = self.plan(false, false, None);
-        self.wait(plan.before).await;
+        let db = &self.db;
+        let plan = db.plan(false, false, None);
+        db.wait(plan.before).await;
         if let Some(error) = plan.refused {
             return Err(error);
         }
         let rows = self.inner.query(statement).await;
-        self.wait(plan.after).await;
+        db.wait(plan.after).await;
         rows
     }
 
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
-        let takes: Vec<Statement> =
-            statements.iter().filter(|s| s.sql().contains(TAKE)).cloned().collect();
+        let db = &self.db;
+        let takes: Vec<Statement> = statements
+            .iter()
+            .filter(|s| s.kind() == Some(StatementKind::LeaseTake))
+            .cloned()
+            .collect();
         if !takes.is_empty() {
             let turn = {
-                let mut state = self.state.lock().unwrap();
+                let mut state = db.state.lock();
                 state.takes += 1;
                 let turn = state.takes;
                 (state.armed && turn.is_multiple_of(state.text_turn_every))
                     .then(|| (turn, state.rng.u32(0..4)))
             };
             if let Some((turn, what)) = turn {
-                self.text_turn(turn, what).await;
+                db.text_turn(turn, what).await;
             }
         }
         // A request carrying the holding lease's token is its owner speaking: a renewal, a
         // commit or a release.
-        let carried = self.lessee().await.map(|(token, _)| token).filter(|token| {
+        let carried = db.lessee().await.map(|(token, _)| token).filter(|token| {
             let token = SqlValue::Text(token.clone());
             statements.iter().any(|s| s.params().contains(&token))
         });
-        let plan = self.plan(true, !takes.is_empty(), carried.as_deref());
-        self.wait(plan.before).await;
+        let plan = db.plan(true, !takes.is_empty(), carried.as_deref());
+        db.wait(plan.before).await;
         if let Some(error) = plan.refused {
             return Err(error);
+        }
+        if plan.worker_dies {
+            db.dying.die_next_poll();
         }
         let result = self.inner.batch(statements).await;
         let _taking = if takes.is_empty() {
             None
         } else {
-            self.observe_take(&takes).await;
-            self.state.lock().unwrap().taking += 1;
-            Some(Taking(&self.state))
+            db.observe_take(&takes).await;
+            db.state.lock().taking += 1;
+            Some(Taking(&db.state))
         };
-        self.wait(plan.after).await;
+        db.wait(plan.after).await;
         if plan.answer_lost && result.is_ok() {
-            return Err(StorageError::Uncertain("the answer was lost".into()));
+            return Err(StorageError::Uncertain(Unacknowledged::sent("the answer was lost")));
         }
         result
     }
 
-    async fn close(&self) {}
+    async fn close(&self) {
+        self.inner.close().await;
+    }
 }
 
 /// The session's storage port: the production store, every request and answer recorded.

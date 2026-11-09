@@ -14,8 +14,6 @@ pub trait Thread: Send + Sync + Sized + 'static {
 
     #[host(getter)]
     fn id(&self) -> String;
-    #[host(getter)]
-    fn holder(&self) -> String;
     #[host(await)]
     async fn lanes(&self) -> Result<Vec<LaneRow>, StorageError>;
     #[host(await)]
@@ -113,14 +111,9 @@ pub trait ThreadHandle: Send + Sync + Sized + 'static {
     #[host(class(name = "Storage"))]
     type Namespace: Send + Sync + 'static;
 
-    /// `holder` signs the handle's writes; reads take no lease.
+    /// Reads take no lease.
     #[host(new)]
-    fn new(
-        namespace: std::sync::Arc<Self::Namespace>,
-        thread_id: String,
-        holder: String,
-        agent: String,
-    ) -> Self;
+    fn new(namespace: std::sync::Arc<Self::Namespace>, thread_id: String, agent: String) -> Self;
 
     /// The thread id.
     #[host(getter)]

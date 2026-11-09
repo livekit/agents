@@ -328,6 +328,10 @@ fn campaign(window: &Window) {
     println!("{both_closed} of {seeds} runs with both a VadEnd and an SttFinal");
     // A call where the agent was never heard reaches nothing that happens while it speaks.
     println!("{heard} of {seeds} runs where the person heard the agent");
+    println!(
+        "{} storage workers died with requests queued",
+        lk_agents_fuzz::fakes::worker_deaths()
+    );
     println!("busiest instant: {} steps of the run's loop (seed {})", busiest.0, busiest.1);
     let endings: Vec<String> =
         endings.iter().map(|(k, (n, seed))| format!("{k} {n} (seed {seed})")).collect();

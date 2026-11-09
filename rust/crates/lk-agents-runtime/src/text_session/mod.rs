@@ -212,13 +212,7 @@ impl Driver {
 
     /// Opens the invocation's `agent_run` span and its execution.
     fn start_invocation(&mut self, start: InvocationStart) {
-        let InvocationStart {
-            frame_id,
-            agent_name,
-            invocation_id,
-            execution_id,
-            history,
-        } = start;
+        let InvocationStart { frame_id, agent_name, invocation_id, execution_id, history } = start;
         let agent = &self.agents[&agent_name];
         let span = telemetry::start(
             &self.cx,

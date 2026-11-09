@@ -167,6 +167,16 @@ pub enum WsdbError {
     TooLarge(usize),
 }
 
+/// A write's failure, by whether its frame reached the socket writer: once it did, the server
+/// may have committed it whatever the answer's fate.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum WriteError {
+    #[error(transparent)]
+    NotSent(WsdbError),
+    #[error(transparent)]
+    Sent(WsdbError),
+}
+
 impl WsdbError {
     /// A `Hello` refusal that redialing cannot repair.
     fn is_final(&self) -> bool {
@@ -702,10 +712,14 @@ impl Conn {
     }
 
     /// One write statement; returns once durable.
-    pub async fn exec(&self, s: &Statement) -> Result<ExecResult, WsdbError> {
+    pub async fn exec(&self, s: &Statement) -> Result<ExecResult, WriteError> {
         let stmt = statement(s);
-        let mut req = self.register().await?;
-        self.write(req.id, pb::client_message::Message::Exec(stmt))?;
+        let mut req = self.register().await.map_err(WriteError::NotSent)?;
+        self.write(req.id, pb::client_message::Message::Exec(stmt)).map_err(WriteError::NotSent)?;
+        self.exec_answer(&mut req).await.map_err(WriteError::Sent)
+    }
+
+    async fn exec_answer(&self, req: &mut Request<'_>) -> Result<ExecResult, WsdbError> {
         let r = match req.next().await?.message {
             Some(pb::server_message::Message::ExecResult(r)) => r,
             other => {
@@ -754,12 +768,21 @@ impl Conn {
     }
 
     /// Statements applied atomically, in order, each answered in order.
-    pub async fn batch(&self, statements: &[Statement]) -> Result<BatchResult, WsdbError> {
+    pub async fn batch(&self, statements: &[Statement]) -> Result<BatchResult, WriteError> {
         let statements: Vec<pb::Statement> = statements.iter().map(statement).collect();
         let n = statements.len();
-        let mut req = self.register().await?;
+        let mut req = self.register().await.map_err(WriteError::NotSent)?;
+        let batch = pb::client_message::Message::Batch(pb::Batch { statements });
+        self.write(req.id, batch).map_err(WriteError::NotSent)?;
+        self.batch_answer(&mut req, n).await.map_err(WriteError::Sent)
+    }
+
+    async fn batch_answer(
+        &self,
+        req: &mut Request<'_>,
+        n: usize,
+    ) -> Result<BatchResult, WsdbError> {
         let id = req.id;
-        self.write(id, pb::client_message::Message::Batch(pb::Batch { statements }))?;
         self.write(
             id,
             pb::client_message::Message::Credit(pb::Credit { batches: self.0.opts.credits }),

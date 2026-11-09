@@ -300,6 +300,9 @@ pub struct SessionShared {
     pub(in crate::voice) closing: tokio_util::sync::CancellationToken,
     /// Never `tokio::spawn`.
     pub(in crate::voice) spawner: Arc<dyn Spawner>,
+    /// The executor's tasks: readers, drains, pumps, provider calls and closes, drained by the
+    /// runtime's close.
+    pub(in crate::voice) tasks: Arc<lk_agents_net::task::TaskSet>,
     /// A task cannot reach `AgentSession::mint`; the `g` prefix keeps the id spaces apart.
     pub(in crate::voice) gen_ids: std::sync::atomic::AtomicU64,
     pub(in crate::voice) session_id: String,
@@ -312,6 +315,16 @@ pub struct SessionShared {
 }
 
 impl SessionShared {
+    /// Where work that outlives its caller runs, and an abandoned resource's close: the
+    /// session's tasks.
+    pub(in crate::voice) fn background(&self) -> lk_agents_net::owned::Background {
+        lk_agents_net::owned::Background::new(
+            Arc::clone(&self.tasks),
+            Arc::clone(&self.spawner),
+            self.time.clock(),
+        )
+    }
+
     /// What a speech's host calls run under: its turn, else the session.
     pub fn turn_cx(&self, turn: Option<telemetry::SpanContext>) -> telemetry::Cx {
         match turn {

@@ -9,7 +9,7 @@ pub struct ProviderStreamsClosed;
 impl Rule for ProviderStreamsClosed {
     const CONTRACT: Contract = Contract {
         id: "provider_streams_closed",
-        guarantee: "Every LLM, TTS and STT stream and every realtime socket opened during the session is closed by the time the session is: a realtime socket with a close frame, not dropped.",
+        guarantee: "Every LLM, TTS, STT and VAD stream and every realtime socket opened during the session is closed by the time the session is: a realtime socket with a close frame, not dropped.",
         examples: &[closed_stream],
         counterexamples: &[dropped_stream],
         probe: None,
@@ -38,7 +38,7 @@ impl Rule for ProviderStreamsClosed {
 
 /// The kinds a provider holds a connection for. Everything else a run opens is the driver's own
 /// bookkeeping and has nobody to leak to.
-const LEGS: [Kind; 4] = [Kind::Chat, Kind::Tts, Kind::Stt, Kind::Realtime];
+const LEGS: [Kind; 5] = [Kind::Chat, Kind::Tts, Kind::Stt, Kind::Vad, Kind::Realtime];
 
 /// A TTS stream was opened and closed.
 fn closed_stream() -> Recording {

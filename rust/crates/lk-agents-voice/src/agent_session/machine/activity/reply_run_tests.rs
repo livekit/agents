@@ -166,38 +166,11 @@ fn shared_run_cleanup_deadline_wakes_voice_without_a_domain_timer() {
     let deadline = run.wake_at().expect("the other validation still owes cleanup");
     let mut driver = crate::agent_session::tests::driver();
     let speech = SpeechId(91);
-    driver.activity.tools.replies.insert(
-        speech,
-        ReplyRun {
-            run,
-            agent: None,
-            plan: PlanSpec {
-                record: None,
-                new_message: None,
-                instructions: None,
-                turn_instructions: None,
-                tools: Vec::new(),
-                on_enter: false,
-                running_tool_calls: Vec::new(),
-                expressive: None,
-            },
-            realtime: false,
-            request: None,
-            calls: Default::default(),
-            acting: false,
-            cut: false,
-            settling: None,
-            settled_items: None,
-            terminal_call: None,
-            tool_end: None,
-            verdict: None,
-            reply_required: Default::default(),
-            waiter: None,
-            next: None,
-            previous_user_metrics: None,
-            accepted: Default::default(),
-        },
-    );
+    driver
+        .activity
+        .tools
+        .replies
+        .insert(speech, ReplyRun::new(run, None, PlanSpec::default(), false, None));
     assert_eq!(driver.wake_at(), Some(deadline));
     driver.handle(
         None,
@@ -251,38 +224,11 @@ fn failed_reply_keeps_correlated_input_requirements_in_the_voice_run_failure() {
         },
     )
     .unwrap();
-    driver.activity.tools.replies.insert(
-        speech,
-        ReplyRun {
-            run,
-            agent: None,
-            plan: PlanSpec {
-                record: None,
-                new_message: None,
-                instructions: None,
-                turn_instructions: None,
-                tools: Vec::new(),
-                on_enter: false,
-                running_tool_calls: Vec::new(),
-                expressive: None,
-            },
-            realtime: false,
-            request: None,
-            calls: Default::default(),
-            acting: false,
-            cut: false,
-            settling: None,
-            settled_items: None,
-            terminal_call: None,
-            tool_end: None,
-            verdict: None,
-            reply_required: Default::default(),
-            waiter: None,
-            next: None,
-            previous_user_metrics: None,
-            accepted: Default::default(),
-        },
-    );
+    driver
+        .activity
+        .tools
+        .replies
+        .insert(speech, ReplyRun::new(run, None, PlanSpec::default(), false, None));
     let requirement = RunInputRequirement {
         invocation_id: "failed-reply".into(),
         call: lk_agents_abi::a2a::turn::PendingCall {
@@ -318,4 +264,183 @@ fn failed_reply_keeps_correlated_input_requirements_in_the_voice_run_failure() {
         .unwrap();
     assert!(matches!(settled.error, RunError::ToolRetriesExceeded { .. }));
     assert_eq!(settled.input_requirements, [requirement]);
+}
+
+/// A reply with one `lookup` tool (read back first with `needs_approval`), its first step
+/// requested and nothing else held.
+fn tool_reply(
+    driver: &mut crate::agent_session::VoiceDriver,
+    speech: super::SpeechId,
+    needs_approval: Option<ReadBack>,
+) {
+    use super::*;
+    let info = FunctionToolInfo {
+        spec: spec("lookup"),
+        raw_schema: needs_approval.is_none(),
+        needs_approval,
+        on_duplicate: DuplicateMode::Allow,
+        duplicate_scope: DuplicateScope::Name,
+        retries: None,
+        remote: None,
+    };
+    let mut run = AgentRun::new(
+        AgentDefinition {
+            name: "agent".into(),
+            instructions: String::new(),
+            dynamic_instructions: false,
+            tools: vec![info],
+            output: OutputSpec::Text { validated: false },
+            retries: Retries::default(),
+        },
+        RunInput {
+            invocation_id: "lost-call".into(),
+            opening: Opening::Coordinated { approval_answers: Default::default() },
+            history: Vec::new(),
+            answer_tool: None,
+            delegated: false,
+            mode: lk_agents_core::tool_outcome::Mode::Voice,
+            llm: None,
+            wall: lk_agents_abi::WallAnchor { wall: 0.0, at: lk_agents_abi::Ts::ZERO },
+            cleanup_timeout: std::time::Duration::from_secs(5),
+        },
+    )
+    .unwrap();
+    let request = run
+        .handle(AgentRunEvent::Start, lk_agents_abi::Ts::ZERO)
+        .into_iter()
+        .find_map(|effect| match effect {
+            AgentRunEffect::PlanRequest { request, .. } => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    let reply = ReplyRun::new(run, None, PlanSpec::default(), false, Some(request));
+    driver.activity.tools.replies.insert(speech, reply);
+}
+
+/// Every answer the driver owes, by request.
+fn answers(
+    driver: &mut crate::agent_session::VoiceDriver,
+) -> Vec<(crate::agent_session::RequestId, crate::agent_session::Answer)> {
+    driver
+        .take_outbox()
+        .into_iter()
+        .filter_map(|effect| match effect {
+            super::VoiceEffect::Answer(request, answer) => Some((request, answer)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Where the call's task is when it dies.
+#[derive(Clone, Copy, PartialEq)]
+enum LostIn {
+    Preparing,
+    ReadingBack,
+    Running,
+}
+
+#[test]
+fn a_call_task_lost_mid_body_still_settles_its_step() {
+    lost_call_settles_its_step(LostIn::Running);
+}
+
+#[test]
+fn a_call_task_lost_while_preparing_still_settles_its_step() {
+    lost_call_settles_its_step(LostIn::Preparing);
+}
+
+#[test]
+fn a_call_task_lost_while_reading_back_still_settles_its_step() {
+    lost_call_settles_its_step(LostIn::ReadingBack);
+}
+
+fn lost_call_settles_its_step(phase: LostIn) {
+    use super::*;
+    use crate::tool_executor::{MISSING_TOOL_OUTPUT, ToolOutcome};
+    use lk_agents_abi::Ts;
+    let mut driver = crate::agent_session::tests::driver();
+    let speech = SpeechId(5);
+    let approval = (phase == LostIn::ReadingBack).then_some(ReadBack::Function);
+    tool_reply(&mut driver, speech, approval);
+    let call = FunctionCall {
+        id: "lookup-item".into(),
+        call_id: "lookup-call".into(),
+        name: "lookup".into(),
+        arguments: "{}".into(),
+        created_at: std::time::UNIX_EPOCH,
+        extra: Default::default(),
+        group_id: None,
+    };
+    let id = driver.reply_call_made(speech, call).expect("the run admits the call");
+    assert!(matches!(driver.activity.reply_call_start(speech, id), ToolGo::Prepare { .. }));
+    if phase != LostIn::Preparing {
+        let prepared = RequestId(900);
+        let identity = lk_agents_abi::agent::ArgumentIdentity::Json(json!({}));
+        driver.on_tool_prepared(speech, id, Ok(identity), prepared);
+        let go = answers(&mut driver).into_iter().find(|(r, _)| *r == prepared);
+        let Some((_, Answer::ToolGo(go))) = go else { panic!("the prepared call moves on") };
+        match phase {
+            LostIn::ReadingBack => assert!(matches!(go, ToolGo::ReadBack { .. })),
+            _ => assert!(matches!(go, ToolGo::Execute { .. })),
+        }
+    }
+    // The call's task dies: the executor answers it for the step, without its run id.
+    let lost = ToolOutcome::ToolError(MISSING_TOOL_OUTPUT.into());
+    let status = Some(crate::events::ToolEndStatus::Error);
+    driver.on_tool_ended(
+        Ts::ZERO,
+        (speech, None),
+        "lookup-call".into(),
+        status,
+        None,
+        lost.clone(),
+    );
+    let reply = &driver.activity.tools.replies[&speech];
+    let (_, settled) = reply.run.step_call(id).expect("the step's call");
+    let expected = if phase == LostIn::Running { lost } else { ToolOutcome::Internal };
+    assert_eq!(settled.map(|s| &s.outcome), Some(&expected), "settled in the phase it waited");
+    let waiter = RequestId(901);
+    driver.on_tools_finished(Ts::ZERO, (speech, 1), step_end(), Some(waiter));
+    assert!(
+        answers(&mut driver).iter().any(|(r, a)| *r == waiter && matches!(a, Answer::ToolStep(_))),
+        "the reply task waiting for its next step is answered"
+    );
+}
+
+fn step_end() -> crate::tool_executor::StepEnd {
+    crate::tool_executor::StepEnd {
+        executions: Vec::new(),
+        interrupted_before_tools: false,
+        interrupted: false,
+        forwarded_text_empty: true,
+        max_tool_steps: 5,
+        user_metrics: None,
+    }
+}
+
+fn settled(step: u64) -> super::Settled {
+    super::Settled { step: super::StepId(step), items: Vec::new(), terminal_call: None }
+}
+
+fn ended(step: u32) -> super::Ended {
+    super::Ended { step, end: Box::new(step_end()) }
+}
+
+#[test]
+fn step_results_hand_on_both_halves_in_either_order() {
+    use super::StepResults;
+    let mut results = StepResults::Open;
+    assert!(results.settled(settled(1)).is_none());
+    assert!(results.verdict().is_none(), "no verdict before the executor ends the step");
+    let (s, e) = results.ended(ended(1)).expect("the second half hands both on");
+    assert_eq!((s.step, e.step), (super::StepId(1), 1));
+    assert_eq!(results.verdict(), Some(super::StepId(1)));
+    assert!(matches!(results, StepResults::Open), "the verdict closes the step");
+
+    assert!(results.ended(ended(2)).is_none());
+    assert!(results.verdict().is_none(), "no verdict before the run settles the step");
+    let (s, e) = results.settled(settled(2)).expect("the second half hands both on");
+    assert_eq!((s.step, e.step), (super::StepId(2), 2));
+    assert_eq!(results.verdict(), Some(super::StepId(2)));
+    assert!(results.verdict().is_none(), "one verdict per step");
 }

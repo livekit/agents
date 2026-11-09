@@ -27,11 +27,11 @@ impl StreamInput<AudioFrame> for Count {
     fn end_input(&self) {}
 }
 
-/// `Fail`s at once, or yields one final transcript then ends.
+/// `Fail`s at once, or yields one final transcript once its sink heard a frame, then ends.
 enum Attempt {
     Fail,
     Cancelled,
-    Final,
+    Final(Arc<Mutex<Vec<usize>>>, usize),
     Done,
 }
 
@@ -45,7 +45,12 @@ impl StreamOutput<SpeechEvent> for Attempt {
                     ..lk_agents_abi::errors::HostError::new("")
                 }
                 .into()),
-                Attempt::Final => Ok(Some(SpeechEvent::new(SpeechEventType::FinalTranscript))),
+                Attempt::Final(heard, at) => {
+                    while heard.lock()[at] == 0 {
+                        tokio::task::yield_now().await;
+                    }
+                    Ok(Some(SpeechEvent::new(SpeechEventType::FinalTranscript)))
+                }
                 Attempt::Done => Ok(None),
             }
         })
@@ -91,7 +96,7 @@ impl Stt for Flaky {
             let attempt = match (opened.len(), self.cancels) {
                 (1, true) => Attempt::Cancelled,
                 (1, false) => Attempt::Fail,
-                _ => Attempt::Final,
+                (n, _) => Attempt::Final(Arc::clone(&self.heard), n - 1),
             };
             let sink = Count(Arc::clone(&self.heard), opened.len() - 1);
             Ok(Some(lk_agents_abi::DuplexStream::new(
@@ -632,4 +637,94 @@ async fn a_slow_attempt_gets_a_gap_and_its_later_words_stay_on_call_time() {
     let (start, word_start, word_end) = times[1];
     assert!((start - 4.0).abs() < 1e-9, "{times:?}");
     assert!((word_start - 4.0).abs() < 1e-9 && (word_end - 4.5).abs() < 1e-9, "{times:?}");
+}
+
+/// An attempt whose sink fails on the first frame, which also queues a final transcript.
+struct SinkFails(Arc<tokio::sync::Notify>);
+
+impl StreamInput<AudioFrame> for SinkFails {
+    fn push(&self, _: AudioFrame) -> Result<(), ProviderError> {
+        self.0.notify_one();
+        Err(ApiError::new("the socket closed").into())
+    }
+    fn flush(&self) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    fn end_input(&self) {}
+}
+
+struct QueuedFinal(Arc<tokio::sync::Notify>, bool);
+
+impl StreamOutput<SpeechEvent> for QueuedFinal {
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
+        Box::pin(async move {
+            if self.1 {
+                return Ok(None);
+            }
+            self.0.notified().await;
+            self.1 = true;
+            Ok(Some(SpeechEvent::new(SpeechEventType::FinalTranscript)))
+        })
+    }
+    fn cancel_safe(&self) -> bool {
+        true
+    }
+    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move { Closed::Clean })
+    }
+}
+
+impl lk_agents_abi::utils::stream::ProviderStream<SpeechEvent> for QueuedFinal {}
+
+struct FailingSink;
+
+impl Stt for FailingSink {
+    fn label(&self) -> String {
+        "failing sink".into()
+    }
+    fn capabilities(&self) -> SttCapabilities {
+        SttCapabilities { streaming: true, ..SttCapabilities::default() }
+    }
+    fn recognize(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: &[AudioFrame],
+        _: Option<&LanguageCode>,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        Box::pin(async move { Err(ApiError::new("down").into()) })
+    }
+    fn stream(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: Option<&LanguageCode>,
+        _: Option<f64>,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
+    > {
+        let queued = Arc::new(tokio::sync::Notify::new());
+        Box::pin(async move {
+            Ok(Some(lk_agents_abi::DuplexStream::new(
+                Box::new(SinkFails(queued.clone())) as SttSink,
+                Box::new(QueuedFinal(queued, false)) as SttSource,
+            )))
+        })
+    }
+}
+
+// Catches: a final transcript the provider queued lost because the next frame's send failed
+// in the same poll, the sink's failure acted on before the queued data was read.
+#[tokio::test(start_paused = true)]
+async fn a_final_transcript_queued_before_the_sink_fails_is_delivered() {
+    let stt = Recognition {
+        inner: Arc::new(FailingSink),
+        options: ApiConnectOptions { max_retry: 0, ..ApiConnectOptions::default() },
+        clock: Arc::new(lk_agents_net::clock::SimClock::new()),
+    };
+    let (sink, mut source) =
+        stt.stream(&lk_agents_abi::telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
+    sink.push(AudioFrame::new(vec![0u8; 4], 16_000, 1, 2)).unwrap();
+    let first = source.next().await.map(|event| event.map(|event| event.kind));
+    assert_eq!(first.ok(), Some(Some(SpeechEventType::FinalTranscript)));
+    assert!(source.next().await.is_err(), "the sink's failure ends the recognition after it");
 }

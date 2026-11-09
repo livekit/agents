@@ -269,7 +269,8 @@ the violation, or allow one site with `#[allow(lint, reason = "...")]`.
 ### Crate graph
 - Each crate depends only on the workspace crates listed for it in `rust/check/src/graph.rs`. [check]
 - Dependencies flow `py -> runtime -> cores and I/O crates -> abi`, never backwards. [check]
-- Only `lk-agents-py` depends on the runtime; core never depends on storage. [check]
+- Only `lk-agents-py` and the DST (`lk-agents-fuzz`) depend on the runtime; core never depends on
+  storage. [check]
 
 ### Sans-I/O cores (abi, core, voice, media)
 - No tokio, futures, pyo3, async-trait, reqwest, hyper, tungstenite, rusqlite or LiveKit SDK in
@@ -284,13 +285,22 @@ the violation, or allow one site with `#[allow(lint, reason = "...")]`.
   (its effect enums). [review]
 - Decisions stay in the core; the runtime only executes effects. Never move a decision-bearing
   module into the runtime. [review]
+- When a machine waits on two inputs that may arrive in either order, hold them in one enum that
+  hands both on exactly once, never in parallel `Option` fields. [review]
+- A machine waiting on a task's result learns that task's death as an input (`call: None`), so a
+  lost task cannot leave it waiting. [review]
 - Media's thread pool (`pool.rs`) and `media_queue` are the only exempt modules. [lint]
 
 ### Runtime executors and the DST
 - Executor modules (`runtime/src/{voice,room_io,avatar,rtc}`) spawn and sleep only through the
   injected `Spawner` and `Clock`: no `tokio::spawn`, `tokio::time`, `tokio::net` or `Handle`. [check]
-- Every `select!` is `biased;`, and a data branch (`next()`, `recv()`) comes before a branch that
-  runs the producer (`run()`), so queued data is read first. [check]
+- Every `select!` in an executor module is `biased;`. [check]
+- In the async crates, a data branch (`next()`, `recv()`) comes before a branch that runs the
+  producer (`run()`), so queued data is read first; the check matches these method names. [check]
+- Executor modules never call `spawn_detached`: work that outlives its caller goes through
+  `owned::Background`, which the session's tasks join. [check]
+- Tasks are held as `ScopedTask` handles, never ids: dropping or replacing a handle cancels its
+  task, and the set still joins it. [review]
 - Sockets live only in boundary adapters, which the DST replaces with port fakes. [review]
 - The DST runs the runtime's real executors over faked ports, never re-implementations. [review]
 - Every bug found in a real room is a DST gap: add the fake or invariant that reproduces it first. [review]
@@ -315,19 +325,33 @@ the violation, or allow one site with `#[allow(lint, reason = "...")]`.
 - After a branch that ends the loop wins, drain what is already queued before acting on it. [review]
 - A future that has acquired something (a lease, a stream, a track, a call) runs to completion or
   holds a drop guard that releases it. [review]
+- A closeable resource is held in `Owned` from the moment it exists, before the next await;
+  dropping it runs its bounded close as a session cleanup task. [review]
 - A timeout never cuts off a call's own cleanup: bound an operation once, not again from outside. [review]
 - Retry or fall back only while nothing has been sent downstream; after the first item, a failure
   is final. [review]
 - Rebuild state on reconnect from the current options, never by replaying old frames. [review]
+- A waiter waits only on a cell whose sender the producer owns: dropping the producer resolves
+  every waiter, with an error when the awaited state can no longer come. No bare `Notify`, no
+  sender held by the waiter's own object, no flag someone must remember to set. [review]
+- Every wait a host can await resolves when its session ends, drained or dropped. [review]
 
 ### Bindings and the host
 - pyo3 appears only in `lk-agents-py`. [check]
-- Handwritten `#[host(...)]` and export declarations live only in `lk-agents-abi`. [check]
+- Handwritten `#[host(...)]` export declarations live only in `lk-agents-abi`; `lk-agents-py`
+  declares only `#[host(interface(..))]`. Only abi, py and storage (`#[table]`) depend on
+  `lk-agents-host-derive`, and ABI does not re-export `host`. [check, review]
 - `#[pyclass]`, `#[pymethods]`, `#[pyfunction]` and `#[pymodule]` appear only in generated code
   and the module registration shell. [check]
 - Rust calls Python only through HostInvoker (`py_calls.rs`, `py_streams.rs`) and log forwarding
   (`py_logging.rs`). [check]
 - Never call the host while holding a lock; drop host objects after the guard. [review]
+- Never hold a lock across `.await`; lock in-flight call state only through `GilMutex`, which
+  takes a `Python` token, so the GIL is always taken first. [lint, review]
+- A host call that returns a stream goes through `py_streams::Owning`, so a stream nobody took
+  is closed with `aclose()`. [check]
+- A type that owns an OS process kills it on drop unless it was reaped; a launch receives its
+  receipt through a oneshot it owns, never a shared slot. [review]
 - Every synchronous Python entry releases the GIL; only a getter may be `attached`. [check]
 - Every awaited host call takes `cx: &telemetry::Cx`. Pass the enclosing span; `Cx::NONE` only
   for per-item stream calls and background loops with no owning operation. [check, review]
@@ -354,8 +378,12 @@ the violation, or allow one site with `#[allow(lint, reason = "...")]`.
 - Shared kinds: `ApiError`, `StorageError`, `HostError` (typed `HostErrorKind`), cancellation,
   and invalid input. A new variant needs a caller that matches on it. [review]
 - No `Result<_, String>`, and never decide anything from an error's message. [review]
-- Any failure after a write was sent is `StorageError::Uncertain`, never `Unavailable`. [review]
-- Writes are idempotent by request id: an uncertain write is retried with the same id. [review]
+- Only a storage connection that sent a write calls `Unacknowledged::sent`; every other
+  `Uncertain` is passed on, never made. [check]
+- Every database write goes through `Resend` with a key that makes resending safe: an uncertain
+  write is retried with the same key. [review]
+- A write without a lease is guarded on its run's `run_ended`, so applying it twice writes
+  nothing more. [review]
 - A re-sent write that finds itself already applied reports success. [review]
 - `Uncertain` reaches the caller only when retries ran out and the outcome is still unknown. [review]
 - Local pressure is never a non-retryable error. [review]

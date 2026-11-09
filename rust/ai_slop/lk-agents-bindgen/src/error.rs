@@ -164,9 +164,12 @@ fn read(attr: TokenStream, item: &syn::Item, to_host: Option<ToHost<'_>>) -> syn
         let default = raise(default_kind, quote!(::std::string::ToString::to_string(self)));
         let mut arms = Vec::new();
         let mut kind_arms = Vec::new();
+        // The default answers a struct, and an enum with a variant that has no arm of its own.
+        let mut fallback = variants.is_none_or(|v| v.is_empty());
         for v in variants.into_iter().flatten() {
             let vm = Metas::of(&v.attrs)?;
             if vm.0.is_empty() {
+                fallback = true;
                 continue;
             }
             vm.only(
@@ -263,18 +266,13 @@ fn read(attr: TokenStream, item: &syn::Item, to_host: Option<ToHost<'_>>) -> syn
                 arms.push(quote!(#pat => #r,));
             }
         }
-        let kind = Some(quote! {
-            #[allow(unreachable_patterns, reason = "the fallback arm is dead when every variant has its own")]
-            match self { #(#kind_arms)* _ => #default_kind, }
-        });
+        let fallback_kind = fallback.then(|| quote!(_ => #default_kind,));
+        let kind = Some(quote!(match self { #(#kind_arms)* #fallback_kind }));
         if arms.is_empty() {
             (default, kind)
         } else {
-            let raise = quote! {
-                #[allow(unreachable_patterns, reason = "the fallback arm is dead when every variant has its own")]
-                match self { #(#arms)* _ => #default, }
-            };
-            (raise, kind)
+            let fallback = fallback.then(|| quote!(_ => #default,));
+            (quote!(match self { #(#arms)* #fallback }), kind)
         }
     };
     // `cause = field`: the `Option<Box<E>>` the exception was raised from, its `__cause__`.

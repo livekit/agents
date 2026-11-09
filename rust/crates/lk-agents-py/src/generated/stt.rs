@@ -1097,7 +1097,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
         let start_time_offset_arg = start_time_offset;
         let bound = ::std::clone::Clone::clone(&self.conn);
         let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
+            &crate::py_streams::StreamCall,
             "Stt._core_stream",
             &crate::py_calls::calling_context(&self.context),
             &[],

@@ -30,6 +30,7 @@ serde_json.workspace = true
 fastrand = "2"
 # The voice lane's fake database implements storage's connection trait.
 async-trait.workspace = true
+parking_lot.workspace = true
 
 [build-dependencies]
 serde_json.workspace = true

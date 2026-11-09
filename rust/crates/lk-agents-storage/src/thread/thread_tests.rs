@@ -96,8 +96,12 @@ async fn initialize(reword_initial: bool, install_race: bool, version: Option<i6
     let store = Backend::Sqlite.store(LeaseTiming::default()).await;
     let file = store.dir.as_ref().unwrap().join("schema-probe.sqlite");
     let diagnostics = Arc::new(Diagnostics {
-        primary: Arc::new(FileConnection::open(file.clone(), true).await.unwrap()),
-        contender: Arc::new(FileConnection::open(file, false).await.unwrap()),
+        primary: Arc::new(
+            FileConnection::open(file.clone(), true, crate::testing::threads()).await.unwrap(),
+        ),
+        contender: Arc::new(
+            FileConnection::open(file, false, crate::testing::threads()).await.unwrap(),
+        ),
         reword: AtomicBool::new(reword_initial),
         install_race: AtomicBool::new(install_race),
         contender_version: version,
@@ -110,7 +114,6 @@ async fn initialize(reword_initial: bool, install_race: bool, version: Option<i6
             "AT_schema_probe",
             LeaseTiming::default(),
             SchemaCell::default(),
-            "schema-worker",
         )
         .await?;
         diagnostics.reword.store(true, Ordering::Relaxed);
@@ -162,8 +165,12 @@ async fn a_lost_install_race_reports_why_the_schema_could_not_be_checked() {
     let store = Backend::Sqlite.store(LeaseTiming::default()).await;
     let file = store.dir.as_ref().unwrap().join("schema-probe.sqlite");
     let diagnostics = Arc::new(Diagnostics {
-        primary: Arc::new(FileConnection::open(file.clone(), true).await.unwrap()),
-        contender: Arc::new(FileConnection::open(file, false).await.unwrap()),
+        primary: Arc::new(
+            FileConnection::open(file.clone(), true, crate::testing::threads()).await.unwrap(),
+        ),
+        contender: Arc::new(
+            FileConnection::open(file, false, crate::testing::threads()).await.unwrap(),
+        ),
         reword: AtomicBool::new(false),
         install_race: AtomicBool::new(true),
         contender_version: None,
@@ -175,7 +182,6 @@ async fn a_lost_install_race_reports_why_the_schema_could_not_be_checked() {
         "AT_schema_probe",
         LeaseTiming::default(),
         SchemaCell::default(),
-        "schema-worker",
     )
     .await
     .unwrap();
@@ -192,7 +198,7 @@ async fn a_lost_install_race_reports_why_the_schema_could_not_be_checked() {
 /// bound to its filter, and pages neither skip nor repeat.
 async fn items_page_by_position_with_a_filter_bound_cursor(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s = fx.thread("w1").await;
+    let s = fx.thread().await;
     for (lane, n) in [("lane-a", 0), ("lane-b", 1), ("lane-a", 2)] {
         let mut run = s
             .lane(lane)
@@ -220,7 +226,7 @@ async fn items_page_by_position_with_a_filter_bound_cursor(backend: Backend) {
 /// repeating, filters by status, and refuses a page token made under other filters.
 async fn tasks_page_by_last_update_with_a_filter_bound_token(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s = fx.thread("w1").await;
+    let s = fx.thread().await;
     let lane = s.lane(LANE);
     for id in ["AST_1", "AST_2", "AST_3", "AST_4", "AST_5"] {
         assert!(lane.submit(&submitted(id)).await.unwrap());
@@ -263,7 +269,7 @@ async fn tasks_page_by_last_update_with_a_filter_bound_token(backend: Backend) {
 /// since; the token is bound to that order and lane.
 async fn tasks_browse_in_insertion_order_by_lane(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s = fx.thread("w1").await;
+    let s = fx.thread().await;
     for (lane, id) in [(LANE, "AST_1"), ("expert", "AST_2"), (LANE, "AST_3"), (LANE, "AST_4")] {
         assert!(s.lane(lane).submit(&submitted(id)).await.unwrap());
     }

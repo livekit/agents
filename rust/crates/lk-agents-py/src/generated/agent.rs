@@ -1680,10 +1680,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::agent::assertions::Ass
 
 impl crate::py_errors::HostException for ::lk_agents_abi::agent::authoring::AuthoringError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Retries(..) => {
                 ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
@@ -1703,10 +1699,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::agent::authoring::Auth
 
 impl crate::py_errors::HostException for ::lk_agents_abi::agent::resources::ResourceError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Storage(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Host(inner) => crate::py_errors::HostException::to_py_err(inner),
@@ -1719,10 +1711,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::agent::resources::Reso
 
 impl crate::py_errors::HostException for ::lk_agents_abi::agent::run::RunError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Cancelled => crate::py_errors::host_exception(
                 "asyncio",
@@ -1768,10 +1756,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::agent::stream::StreamR
 
 impl crate::py_errors::HostException for ::lk_agents_abi::agent::stream::StreamError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Refused(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Start(inner) => crate::py_errors::HostException::to_py_err(inner),

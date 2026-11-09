@@ -14,11 +14,13 @@ struct Started {
 
 struct State {
     started: Option<Started>,
+    /// Work no session owns, on the runtime: inherited across a fork, it is abandoned with it.
+    tasks: Option<Arc<lk_agents_net::task::TaskSet>>,
     /// The process that declared itself the runtime's owner.
     owner: Option<u32>,
 }
 
-static PROCESS: Mutex<State> = Mutex::new(State { started: None, owner: None });
+static PROCESS: Mutex<State> = Mutex::new(State { started: None, tasks: None, owner: None });
 
 fn state() -> parking_lot::MutexGuard<'static, State> {
     PROCESS.lock()
@@ -84,6 +86,7 @@ pub fn reinit() {
     let mut state = state();
     if state.owner.replace(std::process::id()) != Some(std::process::id()) {
         std::mem::forget(state.started.take());
+        state.tasks = None;
         crate::telemetry::reinit();
     }
 }
@@ -107,6 +110,7 @@ pub fn env() -> lk_agents_net::env::ProcessEnv {
         clock: host_clock(),
         http: || with_started(|started| started.http.clone()),
         tracer: crate::telemetry::tracer(),
+        tasks: Arc::clone(state().tasks.get_or_insert_with(Arc::default)),
     }
 }
 

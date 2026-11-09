@@ -1,4 +1,5 @@
 use crate::agent::{Source, Visibility};
+use crate::agent_session::machine::activity::reply_run::{Ended, Settled};
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{HookCall, HookId, RequestId, VoiceDriver};
 use crate::events::{DiagnosticEvent, SessionEvent};
@@ -28,21 +29,22 @@ impl VoiceDriver {
         if !self.reply_step_ended(speech, answer) {
             return;
         }
-        if let Some(reply) = self.activity.tools.replies.get_mut(&speech) {
-            reply.tool_end = Some((step, end));
+        self.record_trace(ToolStep::StepEnded { speech, step });
+        let reply = self.activity.tools.replies.get_mut(&speech);
+        if let Some(both) =
+            reply.and_then(|reply| reply.results.ended(Ended { step, end: Box::new(end) }))
+        {
+            self.handle_reply_tool_results(speech, both);
         }
-        self.handle_reply_tool_results(speech);
     }
 
-    /// Both executor completion and the shared outcome must arrive before results are applied.
-    pub(super) fn handle_reply_tool_results(&mut self, speech: SpeechId) {
-        let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return };
-        if reply.settling.is_none() || reply.settled_items.is_none() || reply.tool_end.is_none() {
-            return;
-        }
-        let (step, end) = reply.tool_end.take().expect("checked above");
-        let items = reply.settled_items.take().expect("checked above");
-        let terminal_call = reply.terminal_call.take();
+    /// The run settled the step and the executor ended it: its results are applied.
+    pub(super) fn handle_reply_tool_results(
+        &mut self,
+        speech: SpeechId,
+        (Settled { items, terminal_call, .. }, Ended { step, end }): (Settled, Ended),
+    ) {
+        let end = *end;
         let mut event = ToolsExecutedEvent {
             function_calls: Vec::new(),
             function_call_outputs: Vec::new(),

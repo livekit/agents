@@ -134,6 +134,8 @@ fn end_run(run: &mut Run, end: RunEnd) {
 #[derive(Clone)]
 pub struct Turn {
     thread: Thread,
+    /// The label of each request's lease owner: this process's lease holder id.
+    holder: String,
     lane: String,
     host: Arc<dyn TurnHost>,
     /// The turn's clock: the machine's waits and the bound on closing the host stream.
@@ -152,6 +154,7 @@ pub struct Turn {
 impl Turn {
     pub fn new(
         thread: Thread,
+        holder: &str,
         lane: &str,
         host: Arc<dyn TurnHost>,
         clock: Arc<dyn Clock>,
@@ -159,6 +162,7 @@ impl Turn {
     ) -> Self {
         Self {
             thread,
+            holder: holder.to_owned(),
             lane: lane.to_owned(),
             host,
             clock,
@@ -213,7 +217,7 @@ impl Turn {
         let task_id = task_id.unwrap_or_else(|| shortuuid("AST_"));
         let mut machine = TaskMachine::new(self.lane.clone(), msg, task_id, &self.opts, wall);
         let lane = self.thread.lane(&self.lane);
-        let holder = Holder::new(self.thread.holder());
+        let holder = Holder::new(&self.holder);
         let mut call = Call { lane, holder, run: None, lease: None, handler: None, caller_history };
         let mut effects = machine.handle(A2aTaskEvent::Start, elapsed());
         loop {
@@ -232,7 +236,7 @@ impl Turn {
                     let now = elapsed();
                     let Call { holder, run, lease, .. } = call;
                     drop((run, lease));
-                    if !holder.released().await {
+                    if !holder.wait_released().await {
                         log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(); "an A2A turn ended with its lease release in flight");
                     }
                     return answer.map(|answer| machine.result(answer, self.thread.id(), now));
@@ -529,6 +533,7 @@ impl TurnContract for Turn {
     ) -> Self {
         Self::new(
             thread.as_ref().clone(),
+            &env.lease_holder(),
             &lane,
             host,
             env.clock.clone(),
@@ -616,12 +621,11 @@ mod lease_tests {
     #[tokio::test(start_paused = true)]
     async fn expired_ownership_precedes_a_ready_handler_event_and_checkpoint_verdict() {
         let clock = Arc::new(lk_agents_net::clock::RealClock::new());
-        let connection =
-            Arc::new(lk_agents_storage::testing::MemoryConnection::new(clock.clone()).unwrap());
-        let thread =
-            Thread::new(connection, "AT_loss", Default::default(), Default::default(), "worker")
-                .await
-                .unwrap();
+        let file = lk_agents_storage::testing::TempDatabase::new();
+        let connection = Arc::new(file.connect().await);
+        let thread = Thread::new(connection, "AT_loss", Default::default(), Default::default())
+            .await
+            .unwrap();
         let lane = thread.lane("desk");
         let holder = Holder::new("worker");
         let run = lane.open(RunOptions::new("run", "task"), &holder).await.unwrap();
@@ -629,7 +633,7 @@ mod lease_tests {
         tokio::time::advance(Duration::from_secs(10)).await;
         let probe = Probe(Arc::default());
         let host: Arc<dyn TurnHost> = Arc::new(probe.clone());
-        let turn = Turn::new(thread, "desk", host.clone(), clock, Default::default());
+        let turn = Turn::new(thread, "worker", "desk", host.clone(), clock, Default::default());
         let handler = Handler::open(host, telemetry::Cx::NONE, context());
         let mut call = Call {
             lane,

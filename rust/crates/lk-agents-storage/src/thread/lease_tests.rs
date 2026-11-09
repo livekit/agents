@@ -8,12 +8,13 @@ use crate::testing::Backend;
 use crate::thread::tests::{LANE, message, submitted};
 use crate::{CommitOptions, LaneAccess, LeaseAfterCommit, RunOptions, RunOutcome, StorageError};
 use crate::{TaskPickup, Thread, WhenHeld};
+use lk_agents_abi::storage::thread::Backoff;
 
 #[test]
 fn the_poll_backs_off_to_a_second_and_stops_at_its_deadline() {
     let t0 = Duration::from_secs(100);
     let ms = Duration::from_millis;
-    let mut p = LanePoll::new(t0, ms(2000));
+    let mut p = Backoff::new(t0, ms(2000));
     assert_eq!(p.next(t0), Some(t0 + ms(100)));
     assert_eq!(p.next(t0 + ms(100)), Some(t0 + ms(300)));
     assert_eq!(p.next(t0 + ms(300)), Some(t0 + ms(700)));
@@ -27,8 +28,8 @@ fn the_poll_backs_off_to_a_second_and_stops_at_its_deadline() {
 /// and another holder takes the lane.
 async fn a_dropped_run_stops_renewing_and_its_lease_lapses(backend: Backend) {
     let fx = backend.fixture(Some((Duration::from_secs(1), Duration::from_millis(300)))).await;
-    let s1 = fx.thread("w1").await;
-    let s2 = fx.thread("w2").await;
+    let s1 = fx.thread().await;
+    let s2 = fx.thread().await;
     let run = s1
         .lane(LANE)
         .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
@@ -55,7 +56,7 @@ async fn a_dropped_run_stops_renewing_and_its_lease_lapses(backend: Backend) {
 /// free lane while an older one still waits for it.
 async fn waiters_take_the_lane_in_the_order_their_rows_were_submitted(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s = fx.thread("w1").await;
+    let s = fx.thread().await;
     let lane = s.lane(LANE);
     lane.open(RunOptions::new("r0", ""), &crate::Holder::new("test"))
         .await
@@ -99,8 +100,8 @@ async fn waiters_take_the_lane_in_the_order_their_rows_were_submitted(backend: B
 /// owner commits, so the old owner's unchanged version is not enough to authorize a write.
 async fn an_expired_owner_cannot_restart_or_commit_after_takeover(backend: Backend) {
     let fx = backend.fixture(Some((Duration::from_secs(1), Duration::from_millis(200)))).await;
-    let first = fx.thread("w1").await;
-    let second = fx.thread("w2").await;
+    let first = fx.thread().await;
+    let second = fx.thread().await;
     let mut stale = first
         .lane(LANE)
         .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
@@ -139,7 +140,7 @@ async fn an_expired_owner_cannot_restart_or_commit_after_takeover(backend: Backe
 
 async fn cloned_handles_do_not_replace_an_active_runs_lease(backend: Backend) {
     let fixture = backend.fixture(None).await;
-    let thread = fixture.thread("worker-a").await;
+    let thread = fixture.thread().await;
     let cloned = thread.clone();
     let lane = thread.lane("front-desk");
     let mut first = lane
@@ -172,7 +173,7 @@ async fn cloned_handles_do_not_replace_an_active_runs_lease(backend: Backend) {
 
 async fn a_dead_waiter_does_not_interrupt_a_new_owner(backend: Backend) {
     let fixture = backend.fixture(None).await;
-    let thread = fixture.thread("worker").await;
+    let thread = fixture.thread().await;
     let lane = thread.lane("desk");
     let mut owner =
         lane.open(RunOptions::new("first", "task1"), &crate::Holder::new("test")).await.unwrap();
@@ -188,7 +189,7 @@ async fn a_dead_waiter_does_not_interrupt_a_new_owner(backend: Backend) {
 async fn canceled_and_timed_out_acquires_withdraw_their_marks(backend: Backend) {
     use std::time::Duration;
     let fixture = backend.fixture(None).await;
-    let thread = fixture.thread("worker").await;
+    let thread = fixture.thread().await;
     let lane = thread.lane("desk");
     let mut owner =
         lane.open(RunOptions::new("owner", "task"), &crate::Holder::new("test")).await.unwrap();
@@ -245,7 +246,7 @@ async fn canceled_and_timed_out_acquires_withdraw_their_marks(backend: Backend) 
 
 async fn a_resumed_drain_keeps_another_waiters_mark(backend: Backend) {
     let fixture = backend.fixture(None).await;
-    let thread = fixture.thread("worker").await;
+    let thread = fixture.thread().await;
     let lane = thread.lane("desk");
     let mut owner =
         lane.open(RunOptions::new("first", "task1"), &crate::Holder::new("test")).await.unwrap();
@@ -286,7 +287,8 @@ fn renewal_timing_reserves_a_full_request_interval_before_expiry() {
 /// Applies a database request immediately, but can delay its acknowledgment or stall renewals.
 /// This models the difference between a durable write and knowing it succeeded.
 struct SlowReplies {
-    database: crate::testing::MemoryConnection,
+    database: crate::backends::sqlite::FileConnection,
+    _file: crate::testing::TempDatabase,
     acquire_delay: std::time::Duration,
     renewal_delay: std::time::Duration,
     stall_after_first: bool,
@@ -336,16 +338,15 @@ impl crate::ThreadDbConnection for SlowReplies {
     }
 }
 
-fn slow_replies(
+async fn slow_replies(
     acquire_delay: u64,
     renewal_delay: u64,
     stall_after_first: bool,
 ) -> std::sync::Arc<SlowReplies> {
+    let file = crate::testing::TempDatabase::new();
     std::sync::Arc::new(SlowReplies {
-        database: crate::testing::MemoryConnection::new(std::sync::Arc::new(
-            lk_agents_net::clock::RealClock::new(),
-        ))
-        .unwrap(),
+        database: file.connect().await,
+        _file: file,
         acquire_delay: std::time::Duration::from_secs(acquire_delay),
         renewal_delay: std::time::Duration::from_secs(renewal_delay),
         stall_after_first,
@@ -354,7 +355,7 @@ fn slow_replies(
 }
 
 async fn slow_thread(connection: std::sync::Arc<SlowReplies>) -> crate::Thread {
-    crate::Thread::new(connection, "AT_timing", Default::default(), Default::default(), "worker")
+    crate::Thread::new(connection, "AT_timing", Default::default(), Default::default())
         .await
         .unwrap()
 }
@@ -362,7 +363,7 @@ async fn slow_thread(connection: std::sync::Arc<SlowReplies>) -> crate::Thread {
 #[tokio::test(start_paused = true)]
 async fn slow_acknowledgments_do_not_shift_the_renewal_cadence() {
     use std::time::Duration;
-    let connection = slow_replies(0, 2, false);
+    let connection = slow_replies(0, 2, false).await;
     let thread = slow_thread(connection.clone()).await;
     let started = tokio::time::Instant::now();
     let run = thread
@@ -380,7 +381,7 @@ async fn slow_acknowledgments_do_not_shift_the_renewal_cadence() {
 #[tokio::test(start_paused = true)]
 async fn acknowledgment_latency_and_stalled_renewals_cannot_extend_the_ownership_budget() {
     use std::time::Duration;
-    let connection = slow_replies(0, 2, true);
+    let connection = slow_replies(0, 2, true).await;
     let thread = slow_thread(connection.clone()).await;
     let started = tokio::time::Instant::now();
     let run = thread
@@ -401,7 +402,7 @@ async fn acknowledgment_latency_and_stalled_renewals_cannot_extend_the_ownership
 
 #[tokio::test(start_paused = true)]
 async fn a_slow_acquisition_cannot_start_work_with_an_expired_ownership_budget() {
-    let thread = slow_thread(slow_replies(11, 0, false)).await;
+    let thread = slow_thread(slow_replies(11, 0, false).await).await;
     let error = thread
         .lane("desk")
         .open(RunOptions::new("run", "task"), &crate::Holder::new("test"))
@@ -414,7 +415,7 @@ async fn a_slow_acquisition_cannot_start_work_with_an_expired_ownership_budget()
 #[tokio::test(start_paused = true)]
 async fn an_inbox_claim_keeps_renewing_while_acceptance_or_debounce_waits() {
     use std::time::Duration;
-    let connection = slow_replies(0, 0, false);
+    let connection = slow_replies(0, 0, false).await;
     let thread = slow_thread(connection.clone()).await;
     let message: a2a::Message = serde_json::from_value(serde_json::json!({
         "messageId": "first", "role": "ROLE_USER", "parts": [{"text": "hello"}]
@@ -444,16 +445,15 @@ async fn an_inbox_claim_keeps_renewing_while_acceptance_or_debounce_waits() {
 /// Failed renewals retry within the confirmed ownership deadline, then stop exactly at it.
 #[tokio::test(start_paused = true)]
 async fn a_failing_renewal_retries_within_the_lease_and_is_lost_after_it() {
-    use crate::testing::{Faulty, MemoryConnection};
+    use crate::testing::{Faulty, TempDatabase};
     use crate::thread::{LeaseTiming, SchemaCell};
     use std::sync::Arc;
 
-    let clock = Arc::new(lk_agents_net::clock::RealClock::new());
-    let faulty = Arc::new(Faulty::new(Box::new(MemoryConnection::new(clock).unwrap())));
+    let file = TempDatabase::new();
+    let faulty = Arc::new(Faulty::new(Box::new(file.connect().await)));
     let timing = LeaseTiming::new(Duration::from_secs(10), Duration::from_secs(3)).unwrap();
-    let thread = Thread::new(faulty.clone(), "AT_renewal", timing, SchemaCell::default(), "w1")
-        .await
-        .unwrap();
+    let thread =
+        Thread::new(faulty.clone(), "AT_renewal", timing, SchemaCell::default()).await.unwrap();
     let run = thread
         .lane(LANE)
         .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))

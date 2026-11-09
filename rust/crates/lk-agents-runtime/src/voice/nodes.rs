@@ -10,8 +10,8 @@ use lk_agents_abi::voice::io::{IoError, TextOutput};
 use lk_agents_abi::voice::nodes::{NodeChunk, NodeFactory, ProviderCalls, SessionNodes, TextNode};
 use lk_agents_abi::{
     AudioFrame, ChatRequest, ChoiceDelta, Clock, Closed, HOST_TEARDOWN_TIMEOUT, LanguageCode, Llm,
-    LlmChunk, LlmStream, Role, Spawner, SpawnerExt as _, SpeechEvent, StreamInput, StreamOutput,
-    Stt, SttCapabilities, SttSink, SttSource, SynthesizedAudio, TranscriptChunk, Ts, Tts,
+    LlmChunk, LlmStream, Role, Spawner, SpeechEvent, StreamInput, StreamOutput, Stt,
+    SttCapabilities, SttSink, SttSource, SynthesizedAudio, TranscriptChunk, Ts, Tts,
     TtsCapabilities, TtsSink, TtsSource,
 };
 use lk_agents_media::media_queue::{self, Item, Policy};
@@ -171,7 +171,7 @@ impl Opener {
         call: O,
         deliver: D,
         done: impl FnOnce(Result<(), IoError>) + Send + 'static,
-        tasks: Option<&Arc<TaskSet>>,
+        tasks: &Arc<TaskSet>,
         cancelled: CancellationToken,
     ) -> ChannelSink<I>
     where
@@ -222,13 +222,7 @@ impl Opener {
                 _ => Err(IoError::Rtc("node output cleanup did not settle".into())),
             }));
         };
-        match tasks {
-            Some(tasks) => {
-                tasks.spawn(self.spawner.as_ref(), name, drain);
-            }
-            // Detached: no segment owns this node; the drain ends with its output.
-            None => self.spawner.spawn_detached(drain),
-        }
+        tasks.spawn(self.spawner.as_ref(), name, drain);
         sink
     }
 }
@@ -286,7 +280,7 @@ impl TranscriptionNode {
                     };
                     drop(owner);
                 },
-                Some(&self.tasks),
+                &self.tasks,
                 self.cancelled.clone(),
             ));
         }

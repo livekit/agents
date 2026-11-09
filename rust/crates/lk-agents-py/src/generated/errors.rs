@@ -223,26 +223,15 @@ impl crate::py_errors::HostException for ::lk_agents_abi::errors::ApiError {
 
 impl crate::py_errors::HostException for ::lk_agents_abi::errors::ProviderError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Host { error, .. } => crate::py_errors::HostException::to_py_err(error),
             Self::Local(inner) => crate::py_errors::HostException::to_py_err(inner),
-            _ => {
-                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
-            }
         }
     }
 }
 
 impl crate::py_errors::HostException for ::lk_agents_abi::errors::PullError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Overlap => crate::py_errors::host_exception(
                 "livekit.agents._bindings",
@@ -250,9 +239,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::errors::PullError {
                 ::std::string::ToString::to_string(self),
             ),
             Self::Failed(inner) => crate::py_errors::HostException::to_py_err(inner),
-            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
-                self,
-            )),
         }
     }
 }

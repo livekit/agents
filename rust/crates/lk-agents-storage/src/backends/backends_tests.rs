@@ -77,7 +77,7 @@ async fn a_deleted_thread_is_gone_and_deleting_again_is_safe(backend: Backend) {
     s.delete_thread(&t.thread_id).await.unwrap();
     s.delete_thread(&t.thread_id).await.unwrap();
     assert!(not_found(s.get_thread(&t.thread_id).await));
-    assert!(not_found(s.open(&t.thread_id, "w1").await.map(|_| ())));
+    assert!(not_found(s.open(&t.thread_id).await.map(|_| ())));
     store.close().await;
 }
 
@@ -101,7 +101,7 @@ async fn a_commit_does_not_extend_expiry(backend: Backend) {
     let t = s.create_thread(CreateRequest { idle_ttl: ttl(3600), ..Default::default() }).await;
     let t = t.unwrap();
     tokio::time::sleep(Duration::from_millis(1100)).await;
-    let thread = s.open(&t.thread_id, "w1").await.unwrap();
+    let thread = s.open(&t.thread_id).await.unwrap();
     let mut run = thread
         .lane("front-desk")
         .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
@@ -131,19 +131,24 @@ async fn sqlite_refuses_unknown_and_unlisted_ids() {
     let s = &store.storage;
     for id in ["AT_../../registry", "AT_a/b", "DB_x", "", "AT_unknown"] {
         assert!(not_found(s.get_thread(id).await), "{id}");
-        assert!(not_found(s.open(id, "w1").await.map(|_| ())), "{id}");
+        assert!(not_found(s.open(id).await.map(|_| ())), "{id}");
     }
     let dir = store.dir.clone().unwrap();
     std::fs::write(dir.join("threads").join("AT_orphan.sqlite"), b"").unwrap();
-    assert!(not_found(s.open("AT_orphan", "w1").await.map(|_| ())));
+    assert!(not_found(s.open("AT_orphan").await.map(|_| ())));
     store.close().await;
 }
 
 #[tokio::test]
 async fn sqlite_metadata_updates_merge_across_storage_instances() {
     let store = Backend::Sqlite.store(LeaseTiming::default()).await;
-    let other =
-        SqliteStorage::open(store.dir.as_ref().unwrap(), LeaseTiming::default()).await.unwrap();
+    let other = SqliteStorage::open(
+        store.dir.as_ref().unwrap(),
+        LeaseTiming::default(),
+        crate::testing::threads(),
+    )
+    .await
+    .unwrap();
     let thread = store
         .storage
         .create_thread(CreateRequest { idle_ttl: ttl(3600), ..Default::default() })
@@ -192,7 +197,7 @@ async fn sqlite_delete_and_expiry_invalidate_open_handles() {
             })
             .await
             .unwrap();
-        let thread = storage.open(&record.thread_id, "reader").await.unwrap();
+        let thread = storage.open(&record.thread_id).await.unwrap();
         let lane = thread.lane("desk");
         let mut run =
             lane.open(RunOptions::new("held", "task"), &crate::Holder::new("test")).await.unwrap();
@@ -268,11 +273,14 @@ mod process {
         let control = PathBuf::from(input("CONTROL"));
         let role = input("ROLE");
         let storage: Arc<dyn Storage> = match input("BACKEND").as_str() {
-            "sqlite" => Arc::new(SqliteStorage::open(input("DIRECTORY"), timing()).await?),
+            "sqlite" => Arc::new(
+                SqliteStorage::open(input("DIRECTORY"), timing(), crate::testing::threads())
+                    .await?,
+            ),
             "agentdb" => Backend::AgentDb.store(timing()).await.storage,
             other => return Err(format!("unknown process backend {other}").into()),
         };
-        let thread = storage.open(&input("THREAD"), &role).await?;
+        let thread = storage.open(&input("THREAD")).await?;
         let mut run = thread
             .lane("desk")
             .open(

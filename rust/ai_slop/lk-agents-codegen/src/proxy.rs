@@ -345,6 +345,10 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             "::lk_agents_runtime::host::call_cancellable(&crate::py_calls::Entry, \"{label}\", {scope}, &[{requires}], {cx}, {}, {host_call})",
             cancel.name
         ),
+        // A returned stream is owned from the call's settlement: a caller dropped first closes it.
+        None if m.ret.ok.holds_host_stream() => format!(
+            "::lk_agents_runtime::host::call(&crate::py_streams::StreamCall, \"{label}\", {scope}, &[{requires}], {cx}, {host_call})"
+        ),
         None => format!(
             "::lk_agents_runtime::host::call(&crate::py_calls::Entry, \"{label}\", {scope}, &[{requires}], {cx}, {host_call})"
         ),
@@ -710,18 +714,24 @@ mod tests {
 
     #[test]
     fn returned_capabilities_inherit_context_inside_containers() {
-        for (call, cx) in [("#[host(await)] async", ", cx: &Cx"), ("#[host(call)]", "")] {
+        let calls = [("#[host(await)] async", ", cx: &Cx"), ("#[host(call)]", "")];
+        let containers = ["Option<{}>", "Vec<{}>", "Vec<Option<{}>>"];
+        for ((call, cx), container) in calls.into_iter().flat_map(|c| containers.map(|k| (c, k))) {
+            let ret = container.replace("{}", "std::sync::Arc<dyn Callbacks>");
             let source = proxy(&format!(
-                "{call} fn acquire(&self{cx}) -> Result<Vec<Option<std::sync::Arc<dyn Callbacks>>>, HostError>; #[host(await)] async fn ping(&self, cx: &Cx) -> Result<(), HostError>;",
+                "{call} fn acquire(&self{cx}) -> Result<{ret}, HostError>; #[host(await)] async fn ping(&self, cx: &Cx) -> Result<(), HostError>;",
             ));
             let decls = crate::decl::tests::read(&source).expect("nested capabilities resolve");
             let p = &decls.proxies[0];
             let emitted = super::method(p, &p.methods[0]).expect("emits");
-            assert_eq!(emitted.matches("CallbacksProxy::in_context").count(), 1);
-            assert!(!emitted.contains("CallbacksProxy::from_host"));
-            assert!(emitted.contains(
-                "host_context(&crate::py_calls::calling_context(&self.context)).cloned()"
-            ));
+            assert_eq!(emitted.matches("CallbacksProxy::in_context").count(), 1, "{ret}");
+            assert!(!emitted.contains("CallbacksProxy::from_host"), "{ret}");
+            assert!(
+                emitted.contains(
+                    "host_context(&crate::py_calls::calling_context(&self.context)).cloned()"
+                ),
+                "{ret}"
+            );
         }
     }
 

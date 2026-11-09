@@ -30,11 +30,10 @@ impl Rule for StorageLaneWaitsOnALiveOwner {
             else {
                 continue;
             };
+            let answered = |step: &StorageStep| matches!(step, StorageStep::Answered { speech: id, operation: StorageOperation::Acquire, .. } if id == speech);
             let idle = storage[i + 1..]
                 .iter()
-                .take_while(|(_, step)| {
-                    !matches!(step, StorageStep::Answered { speech: id, operation: StorageOperation::Acquire, .. } if id == speech)
-                })
+                .take_while(|(_, step)| !answered(step))
                 .filter_map(|(_, step)| match step {
                     StorageStep::LaneHeld { idle_ms } => Some(*idle_ms),
                     _ => None,
@@ -90,11 +89,7 @@ fn waited_on_an_orphan() -> Recording {
 
 pub(crate) fn a_stored_turn() -> Case {
     Case {
-        setup: Setup {
-            tts: false,
-            storage: Some(StorageSetup::default()),
-            ..Setup::default()
-        },
+        setup: Setup { tts: false, storage: Some(StorageSetup::default()), ..Setup::default() },
         inputs: vec![
             Input::GenerateReply { user_input: None, instructions: None, allow: None },
             Input::Advance { ms: Millis(100) },

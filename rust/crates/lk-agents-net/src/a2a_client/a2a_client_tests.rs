@@ -602,8 +602,40 @@ async fn cancel_before_ack_drains_the_original_request_then_cancels_without_rese
     assert_eq!(params["metadata"][REASON_KEY], "caller-canceled");
 }
 
+/// A send whose acknowledgment was lost is resolved by sending the same message again: the
+/// peer answers with the task the first send created, which is cancelled, so no remote task is
+/// left running with nobody listening.
 #[tokio::test]
-async fn a_request_lost_before_ack_is_reported_as_uncertain_and_is_never_resent() {
+async fn a_request_lost_before_ack_is_resent_unchanged_to_cancel_its_task() {
+    let peer = Peer::start(Scenario::RetryOnce).await;
+    let clock = Arc::new(RealClock::new());
+    let client = AgentClient::new(
+        &env(clock.clone()),
+        peer.url.clone(),
+        Some("test-token".into()),
+        ApiConnectOptions { max_retry: 0, ..Default::default() },
+    )
+    .unwrap();
+    let result = tokio::time::timeout(
+        LIMIT,
+        client.send(message("accepted-with-lost-ack", "Work once"), None, None, None, &Cx::NONE),
+    )
+    .await
+    .unwrap();
+    assert!(result.is_err());
+    client.aclose().await;
+    assert!(client.cleanup_observations().is_empty(), "{:?}", client.cleanup_observations());
+    let requests = peer.finish().await;
+    let rpcs: Vec<_> = requests.iter().filter_map(|r| r.rpc.as_ref()).collect();
+    let methods: Vec<_> = rpcs.iter().map(|r| r.method.as_str()).collect();
+    assert_eq!(methods, ["SendStreamingMessage", "SendStreamingMessage", "CancelTask"]);
+    assert_eq!(rpcs[0], rpcs[1], "the resend is the first send, messageId included");
+    assert_eq!(rpcs[2].params.as_ref().unwrap()["id"], "remote-task");
+}
+
+/// A send whose resend cannot learn its task either is observed, never guessed.
+#[tokio::test]
+async fn a_request_whose_resend_is_lost_too_is_reported_unacknowledged() {
     let peer = Peer::start(Scenario::ResetBeforeAck).await;
     let clock = Arc::new(RealClock::new());
     let client = AgentClient::new(
@@ -628,7 +660,7 @@ async fn a_request_lost_before_ack_is_reported_as_uncertain_and_is_never_resent(
     let requests = peer.finish().await;
     let methods: Vec<_> =
         requests.iter().filter_map(|r| r.rpc.as_ref()).map(|r| r.method.as_str()).collect();
-    assert_eq!(methods, ["SendStreamingMessage"]);
+    assert_eq!(methods, ["SendStreamingMessage", "SendStreamingMessage"]);
 }
 
 #[tokio::test]

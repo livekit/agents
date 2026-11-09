@@ -1,11 +1,12 @@
 use crate::rtc::synchronizer::AVSynchronizer;
 use crate::telemetry;
+use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::utils::video::MediaFrame;
 use lk_agents_abi::voice::avatar::AvatarMedia;
 use lk_agents_abi::voice::rtc::media::{AVSynchronizer as _, VideoTrackOptions};
 use lk_agents_abi::voice::rtc::{RtcError, RtcRoom, TrackPublication, TrackPublishOptions};
-use lk_agents_abi::{Clock, Spawner, SpawnerExt};
+use lk_agents_net::owned::Background;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::av_sync::MediaPlan;
 use parking_lot::Mutex;
@@ -28,19 +29,18 @@ pub struct Media {
 }
 
 impl Media {
+    /// `background` runs a rollback no one can await: the process's tasks.
     pub fn new(
         room: Arc<dyn RtcRoom>,
         plan: MediaPlan,
-        clock: Arc<dyn Clock>,
-        spawner: Arc<dyn Spawner>,
+        background: Background,
     ) -> Result<Arc<Self>, RtcError> {
         let video = room.create_video_source(plan.video.clone())?;
         let audio = match room.create_audio_source(plan.audio.clone()) {
             Ok(audio) => audio,
             Err(error) => {
-                // The constructor cannot await. A cleanup operation owns the source until close
-                // settles, including when the caller receives the initialization failure.
-                spawner.spawn_detached(async move {
+                // The constructor cannot await: the close outlives it.
+                background.cleanup("rtc source rollback", async move {
                     if let Err(error) = video.close(&telemetry::Cx::NONE).await {
                         log::warn!(target: lk_agents_abi::LOG_TARGET, "RTC source rollback: {error}");
                     }
@@ -53,8 +53,8 @@ impl Media {
             video.clone(),
             plan.pacer,
             plan.capacity,
-            clock,
-            spawner.clone(),
+            background.clock,
+            background.spawner.clone(),
         );
         Ok(Arc::new(Self {
             room,
@@ -67,7 +67,7 @@ impl Media {
             closing: AtomicBool::new(false),
             closed: watch::channel(None).0,
             close_tasks: Arc::default(),
-            spawner,
+            spawner: background.spawner,
         }))
     }
 

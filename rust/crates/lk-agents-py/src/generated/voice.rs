@@ -7668,7 +7668,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
         let req_arg = ::std::clone::Clone::clone(req);
         let calls_arg = calls;
         let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
+            &crate::py_streams::StreamCall,
             "SessionNodes.llm",
             &crate::py_calls::calling_context(&self.context),
             &[],
@@ -7720,7 +7720,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
         let text_arg = text;
         let calls_arg = calls;
         let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
+            &crate::py_streams::StreamCall,
             "SessionNodes.tts",
             &crate::py_calls::calling_context(&self.context),
             &[],
@@ -7770,7 +7770,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
         let audio_arg = audio;
         let calls_arg = calls;
         let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
+            &crate::py_streams::StreamCall,
             "SessionNodes.stt",
             &crate::py_calls::calling_context(&self.context),
             &[],
@@ -7820,7 +7820,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let text_arg = text;
         let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
+            &crate::py_streams::StreamCall,
             "SessionNodes.transcription",
             &crate::py_calls::calling_context(&self.context),
             &[],
@@ -12608,10 +12608,6 @@ pub fn video_queue_frames(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
 
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::avatar::AvatarOutputError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Provider(inner) => crate::py_errors::HostException::to_py_err(inner),
             _ => {
@@ -12623,10 +12619,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::avatar::AvatarO
 
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::avatar::RunnerError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Closed => crate::py_errors::host_exception(
                 "asyncio",
@@ -12643,10 +12635,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::avatar::RunnerE
 
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::avatar::ReceiverEnd {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Closed => ::pyo3::exceptions::PyStopAsyncIteration::new_err(
                 ::std::string::ToString::to_string(self),
@@ -12663,10 +12651,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::avatar::Receive
 
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::avatar::AvatarJoinError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Timeout(..) => ::pyo3::exceptions::PyTimeoutError::new_err(
                 ::std::string::ToString::to_string(self),
@@ -12677,9 +12661,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::avatar::AvatarJ
                 ::std::string::ToString::to_string(self),
             ),
             Self::Rtc(inner) => crate::py_errors::HostException::to_py_err(inner),
-            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
-                self,
-            )),
         }
     }
 }
@@ -12696,10 +12677,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::avatar_queue::Q
 
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::background_audio::PlaybackError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::LoopingStream(..) => {
                 ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
@@ -12719,10 +12696,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::io::InvalidPlay
 
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::io::IoError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Host(inner) => crate::py_errors::HostException::to_py_err(inner),
             _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
@@ -12748,10 +12721,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::room_io::RoomOp
 
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::rtc::RtcError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Host(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Stream(inner) => crate::py_errors::HostException::to_py_err(inner),
@@ -12772,10 +12741,6 @@ impl crate::py_errors::FromHostErr for ::lk_agents_abi::voice::rtc::RtcError {
 }
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::SessionRefused {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Closed => crate::py_errors::host_exception(
                 "livekit.agents._core",
@@ -12802,10 +12767,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::OpenRe
 
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::CommandRefused {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Session(..) => ::pyo3::exceptions::PyRuntimeError::new_err(
                 ::std::string::ToString::to_string(self),
@@ -12825,10 +12786,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::NotInt
 
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::StartFailed {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Storage(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Host(inner) => crate::py_errors::HostException::to_py_err(inner),
@@ -12853,10 +12810,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::NotAnI
 
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::VoiceTaskEnded {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Setup(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Closing => crate::py_errors::host_exception(
@@ -12905,17 +12858,10 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::Commit
 
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::session_owner::OptionsRefused {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Command(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Session(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Host(inner) => crate::py_errors::HostException::to_py_err(inner),
-            _ => {
-                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
-            }
         }
     }
 }
@@ -12928,10 +12874,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::speech_handle::
 
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::speech_handle::ExceptionRefused {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::NotDone => crate::py_errors::host_exception(
                 "asyncio",
@@ -12939,9 +12881,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::speech_handle::
                 ::std::string::ToString::to_string(self),
             ),
             Self::Refused(inner) => crate::py_errors::HostException::to_py_err(inner),
-            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
-                self,
-            )),
         }
     }
 }
@@ -12970,10 +12909,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::workflows::Unkn
 
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::workflows::dtmf::ReceiveDtmfError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::NoDigits => {
                 ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
@@ -12994,10 +12929,6 @@ impl crate::py_errors::HostException
     for ::lk_agents_abi::voice::workflows::warm_transfer::WarmTransferRefused
 {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Host(inner) => crate::py_errors::HostException::to_py_err(inner),
             _ => {
@@ -13011,10 +12942,6 @@ impl crate::py_errors::HostException
     for ::lk_agents_abi::voice::workflows::warm_transfer::TransferFailed
 {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::NotRunning => ::pyo3::exceptions::PyRuntimeError::new_err(
                 ::std::string::ToString::to_string(self),

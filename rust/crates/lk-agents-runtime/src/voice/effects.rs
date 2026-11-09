@@ -64,20 +64,6 @@ impl Drop for PendingHostCallback {
 }
 
 impl VoiceRuntime {
-    /// Retire only callbacks belonging to this reply. Detached tool bodies and deferred
-    /// tool-reply rendering have their own lifetimes and must not be cancelled here.
-    fn cancel_speech_callbacks(&mut self, speech: SpeechId) {
-        let tasks: Vec<_> = self
-            .host_callbacks
-            .iter()
-            .filter_map(|((owner, _), task)| (*owner == speech).then_some(*task))
-            .collect();
-        self.host_callbacks.retain(|(owner, _), _| *owner != speech);
-        for task in tasks {
-            self.tasks.cancel(task);
-        }
-    }
-
     pub(super) fn prepare_leg(&mut self, opened: StreamOpened) -> VoiceEvent {
         let StreamOpened { open, leg, outcome } = opened;
         let outcome = outcome.map(|opened| {
@@ -137,13 +123,11 @@ impl VoiceRuntime {
                 self.realtime_players.remove(&speech);
             }
             E::CloseRealtimePlayers => self.realtime_players.clear(),
-            E::CancelSpeech(speech) => {
-                self.cancel_speech_callbacks(speech);
-                self.speeches.cancel(speech);
-            }
+            E::CancelSpeech(speech) => self.speeches.cancel(speech),
             E::Speech(speech, update) => {
+                // Detached tool bodies and deferred tool-reply rendering outlive the release.
                 if matches!(&update, lk_agents_voice::speech_handle::SpeechUpdate::Released) {
-                    self.cancel_speech_callbacks(speech);
+                    self.speeches.release(speech);
                 }
                 self.shared.speeches.apply(speech, update, &self.reports);
             }
@@ -168,7 +152,7 @@ impl VoiceRuntime {
                 }
             }
             E::DiscardOpenedInput(sink) => match self.pending_legs.remove(&sink) {
-                Some(opened) => opened.retire(&self.tasks),
+                Some(opened) => drop(opened),
                 None => self.shared.resources.release(sink),
             },
             E::Journal(step) => self.shared.journal.record(*step),
@@ -247,11 +231,7 @@ impl VoiceRuntime {
             E::ProviderPrewarm(id) => self.shared.resources.prewarm(id),
             E::ProviderRelease(id) => self.shared.resources.release(id),
             E::CloseRealtimeSession(id) => self.close_realtime_session(id),
-            E::EotClose => {
-                for task in self.predictions.drain(..) {
-                    self.tasks.cancel(task);
-                }
-            }
+            E::EotClose => self.predictions.clear(),
             E::Audio(AudioOp::Gate { speech: _, op, cause: _, output }) => {
                 self.gate_audio(op, output)
             }
@@ -281,14 +261,14 @@ impl VoiceRuntime {
                 self.validate_output(speech, validation, candidate, hosted, cx)
             }
             E::CancelOutputValidation { speech, validation } => {
-                self.cancel_host_callback((speech, HostCallbackId::OutputValidation(validation)))
+                self.speeches.end_callback(speech, HostCallbackId::OutputValidation(validation))
             }
             E::RenderToolHandlingTemplate { rendering, template, hosted, turn } => {
                 let cx = self.shared.turn_cx(turn);
                 self.render_tool_handling_template(rendering, template, hosted, cx)
             }
             E::CancelToolRefusal { speech, call } => {
-                self.cancel_host_callback((speech, HostCallbackId::ToolRefusal(call)))
+                self.speeches.end_callback(speech, HostCallbackId::ToolRefusal(call))
             }
         }
     }
@@ -357,15 +337,13 @@ impl VoiceRuntime {
             req,
             span,
         );
-        let handle = self.spawn("keyterm detection", task);
+        let handle = self.scoped("keyterm detection", task);
         self.keyterms = Some((req, handle));
     }
 
     fn cancel_keyterms(&mut self, req: u64) {
-        if self.keyterms.as_ref().is_some_and(|(pending, _)| *pending == req)
-            && let Some((_, task)) = self.keyterms.take()
-        {
-            self.tasks.cancel(task);
+        if self.keyterms.as_ref().is_some_and(|(pending, _)| *pending == req) {
+            self.keyterms = None;
         }
     }
 
@@ -476,14 +454,11 @@ impl VoiceRuntime {
     fn close_realtime_session(&mut self, id: ResourceId) {
         if self.realtime.is_none() {
             let Some(session) = self.shared.resources.realtime(id) else { return };
-            self.realtime = Some(super::legs::RealtimeConnection::new(
-                session,
-                self.shared.time.clone(),
-                self.shared.spawner.clone(),
-            ));
+            self.realtime =
+                Some(super::legs::RealtimeConnection::new(session, &self.shared.background()));
         }
         if let Some(connection) = &mut self.realtime {
-            connection.close(&self.tasks, self.reports.clone());
+            connection.close(self.reports.clone());
         }
     }
 
@@ -597,7 +572,8 @@ impl VoiceRuntime {
             value: None,
         };
         let mut callback = PendingHostCallback::bind(&shared, hosted, cancelled);
-        let task = self.speeches.spawn(speech, "output validation", async move {
+        let id = HostCallbackId::OutputValidation(validation);
+        self.speeches.callback(speech, id, "output validation", async move {
             let hosted = callback.hosted.as_ref().expect("callback is pending");
             // The voice run retains its live host value, not a persistence snapshot.
             let (verdict, value, _) = crate::output_validation::project(
@@ -606,10 +582,6 @@ impl VoiceRuntime {
             callback.completed();
             shared.report(GenEvent::OutputValidated { speech, validation, verdict, value });
         });
-        let key = (speech, HostCallbackId::OutputValidation(validation));
-        if let Some(previous) = self.host_callbacks.insert(key, task) {
-            self.tasks.cancel(previous);
-        }
     }
 
     /// A refusal's template runs with its speech; a deferred tool reply's outlives it.
@@ -638,8 +610,8 @@ impl VoiceRuntime {
         };
         match rendering {
             Rendering::Refusal { speech, call } => {
-                let task = self.speeches.spawn(speech, "tool refusal template", work);
-                self.host_callbacks.insert((speech, HostCallbackId::ToolRefusal(call)), task);
+                let id = HostCallbackId::ToolRefusal(call);
+                self.speeches.callback(speech, id, "tool refusal template", work);
             }
             Rendering::ToolReply { .. } => {
                 self.spawn("deferred tool reply template", work);
@@ -647,14 +619,9 @@ impl VoiceRuntime {
         }
     }
 
-    fn cancel_host_callback(&mut self, key: (SpeechId, HostCallbackId)) {
-        if let Some(task) = self.host_callbacks.remove(&key) {
-            self.tasks.cancel(task);
-        }
-    }
-
     /// Opens `provider`'s stream off the loop and reports it, or that the provider is gone, as
-    /// `VoiceEvent::StreamOpened`. A close abandons an open still in flight: nothing would take it.
+    /// `VoiceEvent::StreamOpened`. A close abandons an open still in flight; whatever it opened
+    /// is closed.
     fn open_stream(&mut self, open: u64, leg: StreamKind, provider: Option<PendingOpen>) {
         let Some(pending) = provider else {
             let error = ProviderError::Local(
@@ -666,20 +633,18 @@ impl VoiceRuntime {
         let tx = self.reports.clone();
         let time = self.shared.time.clone();
         let resources = self.shared.resources.clone();
-        let spawner = self.shared.spawner.clone();
-        let tasks = self.tasks.clone();
+        let background = self.shared.background();
         let closing = self.shared.closing.clone();
         self.spawn("stream open", async move {
+            // Abandoning an open is safe: a host open dropped unsettled is cancelled, and a stream
+            // it returned unread is closed (`py_streams::StreamCall`); a native one owns its socket.
             let outcome = tokio::select! {
                 biased;
                 () = closing.cancelled() => return,
-                outcome = pending.open(resources, time, spawner) => outcome,
+                outcome = pending.open(resources, time, background) => outcome,
             };
-            if let Err(opened) = tx.send_opened(StreamOpened { open, leg, outcome })
-                && let StreamOpened { outcome: Ok(stream), .. } = *opened
-            {
-                stream.retire(&tasks);
-            }
+            // A refused send drops the opened stream, which closes it, joined by the session.
+            let _ = tx.send_opened(StreamOpened { open, leg, outcome });
         });
     }
 }
@@ -727,7 +692,7 @@ impl PendingOpen {
         self,
         resources: crate::voice::resources::Resources,
         time: crate::voice::session::Timebase,
-        spawner: Arc<dyn lk_agents_abi::Spawner>,
+        background: lk_agents_net::owned::Background,
     ) -> Result<Opened, ProviderError> {
         let (channel, sink, source) = match self {
             PendingOpen::Stt(stt, cx) => {
@@ -748,6 +713,6 @@ impl PendingOpen {
                 (AudioChannel::Vad, sink, PendingLeg::Vad(source))
             }
         };
-        Ok(Opened::new(channel, Arc::from(sink), source, resources, time, spawner))
+        Ok(Opened::new(channel, Arc::from(sink), source, resources, &background))
     }
 }

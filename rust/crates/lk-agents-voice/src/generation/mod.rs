@@ -588,7 +588,7 @@ pub struct Replan {
     pub spec: PlanSpec,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PlanSpec {
     /// `None` plans against the frame's record.
     pub record: Option<lk_agents_abi::ChatContext>,

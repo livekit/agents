@@ -257,8 +257,11 @@ fn a_lost_commit_acknowledgment_is_resolved_and_never_answered_failed() {
     let mut m = machine(Policy::Queue);
     let commit = turn(&mut m, None, answered("hi"));
     assert!(matches!(commit, Operation::Commit { answer_task: Some(_), .. }));
-    let resolve =
-        operation(at(&mut m, Duration::ZERO, Err(StorageError::Uncertain("lost".into()))));
+    let resolve = operation(at(
+        &mut m,
+        Duration::ZERO,
+        Err(StorageError::Uncertain(lk_agents_abi::storage::Unacknowledged::sent("lost"))),
+    ));
     assert!(matches!(resolve, Operation::ResolveLater { task_id, .. } if task_id == "receipt"));
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(_)));
     // the database is still unreachable: the task as this worker left it, still working
@@ -300,7 +303,7 @@ fn every_typed_storage_error_on_the_lane_claim_has_its_outcome() {
         StorageError::NotFound("AT_x".into()),
         StorageError::LeaseLost("taken".into()),
         StorageError::VersionConflict { lane: "lane".into(), expected: 1 },
-        StorageError::Uncertain("lost".into()),
+        StorageError::Uncertain(lk_agents_abi::storage::Unacknowledged::sent("lost")),
     ] {
         let mut m = machine(Policy::Queue);
         m.phase = Phase::Run { path: Path::Main, step: RunStep::Open };

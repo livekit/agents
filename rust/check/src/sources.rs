@@ -6,13 +6,19 @@
 //! 3. In `lk-agents-py`, Python is called only from [`HOST_ENTRY`] files and tests
 //!    ("Bindings and the host").
 //! 4. The runtime's DST executor modules ([`EXECUTORS`]) use no Tokio runtime (`tokio::spawn`,
-//!    `tokio::time`, `tokio::net`, `tokio::runtime`, `Handle::current`) and every `select!` is
-//!    `biased;` ("Runtime executors and the DST").
+//!    `tokio::time`, `tokio::net`, `tokio::runtime`, `Handle::current`), never detach work
+//!    (`spawn_detached`: work that outlives its caller goes through `owned::Background`, whose
+//!    task set joins it), and every `select!` is `biased;` ("Runtime executors and the
+//!    DST", "Cancellation safety").
 //! 5. In the async crates ([`SELECT_ORDERED`]), no `select!` branch that runs the producer
 //!    (`run()`) precedes a branch reading its data (`next()`, `recv()`), so queued data is read
-//!    before the end is acted on ("Runtime executors and the DST").
+//!    before the end is acted on; branches are matched by method name ("Runtime executors and
+//!    the DST").
+//! 6. `Unacknowledged::sent`, the one way to an uncertain write, is called only where a write
+//!    is handed to its transport: the storage connections and their fakes ([`SENT_WRITES`]);
+//!    everything else passes on the `Uncertain` it was given ("Errors").
 //!
-//! Rules 4 and 5 skip test files and `#[cfg(test)]` items. pyo3 and `#[host]` placement need no
+//! Rules 4 to 6 skip test files and `#[cfg(test)]` items. pyo3 and `#[host]` placement need no
 //! rule here: the crate graph ([`crate::graph`]) leaves the compiler to reject them.
 
 use std::path::Path;
@@ -26,6 +32,13 @@ use crate::tokens::{
 };
 
 const MAX_LINES: usize = 1250;
+/// Where a write is handed to its transport, the only places an outcome becomes uncertain
+/// (rule 6).
+const SENT_WRITES: &[&str] = &[
+    "crates/lk-agents-storage/src/backends/",
+    "crates/lk-agents-storage/src/testing.rs",
+    "crates/lk-agents-fuzz/src/fakes/",
+];
 const GENERATED: &str = "//! GENERATED FILE -- DO NOT EDIT.";
 
 /// Where Rust calls Python: HostInvoker's entry and log forwarding (rule 3).
@@ -114,6 +127,12 @@ fn check_source(source: &Source) -> Vec<String> {
     if crate_name == "lk-agents-py" {
         bindings(source, tokens, &mut errors);
     }
+    if source.text.contains("Unacknowledged::sent")
+        && !source.test()
+        && !SENT_WRITES.iter().any(|path| source.path.starts_with(path))
+    {
+        unacknowledged(source, without_tests(&source.text), &mut errors);
+    }
     if SELECT_ORDERED.contains(&crate_name) && !source.test() {
         let product = without_tests(&source.text);
         if executor(source.path) {
@@ -122,6 +141,24 @@ fn check_source(source: &Source) -> Vec<String> {
         select_order(source, product, &mut errors);
     }
     errors
+}
+
+/// `Unacknowledged::sent` outside a connection: a write called uncertain that no connection
+/// sent. Rule 6.
+fn unacknowledged(source: &Source, tokens: TokenStream, errors: &mut Vec<String>) {
+    levels(tokens, &mut |level| {
+        for (at, token) in level.iter().enumerate() {
+            if ident(Some(token)).as_deref() == Some("Unacknowledged")
+                && path_segment(level, at + 1).as_deref() == Some("sent")
+            {
+                errors.push(source.error(
+                    line(token),
+                    "Unacknowledged::sent outside a storage connection: pass on the Uncertain \
+                     a sent write returned",
+                ));
+            }
+        }
+    });
 }
 
 /// pyo3 and `#[py*]` only in `lk-agents-py`; `#[host]` only in ABI; host calls only in the entry.
@@ -203,6 +240,11 @@ fn executors(source: &Source, tokens: TokenStream, errors: &mut Vec<String>) {
                         "Handle::current in a DST executor: use the injected Spawner",
                     ));
                 }
+                Some("spawn_detached") => errors.push(source.error(
+                    line(token),
+                    "spawn_detached in a DST executor: run it through owned::Background, \
+                     which the session's tasks join",
+                )),
                 Some("select") if punct(level.get(at + 1), '!') => {
                     let body = group(level.get(at + 2), Delimiter::Brace)
                         .map(|g| g.stream().into_iter().collect::<Vec<_>>());
@@ -346,6 +388,28 @@ mod tests {
         assert_eq!(errors(EXECUTOR, "fn f() { tokio::spawn(x); }").len(), 1);
         assert_eq!(errors(EXECUTOR, "use tokio::{sync, time};").len(), 1);
         assert_eq!(errors(EXECUTOR, "fn f() { tokio::task::spawn_local(x); }").len(), 1);
+    }
+
+    // Catches: work that outlives its caller detached from the session's tasks, so nothing
+    // joins it at the close.
+    #[test]
+    fn detached_work_in_an_executor_fails() {
+        assert_eq!(errors(EXECUTOR, "fn f(s: &dyn Spawner) { s.spawn_detached(w); }").len(), 1);
+        assert!(
+            errors("crates/lk-agents-net/src/owned.rs", "fn f() { s.spawn_detached(w); }")
+                .is_empty()
+        );
+    }
+
+    // Catches: a write called uncertain that no connection sent, so a write that never left
+    // could be resolved, or reported, as maybe applied.
+    #[test]
+    fn an_uncertain_write_outside_a_connection_fails() {
+        let text = "fn f() -> E { E::Uncertain(Unacknowledged::sent(\"lost\")) }";
+        assert_eq!(errors("crates/lk-agents-storage/src/thread/run.rs", text).len(), 1);
+        let connection = "crates/lk-agents-storage/src/backends/sqlite/connection.rs";
+        assert!(errors(connection, text).is_empty());
+        assert!(errors("crates/lk-agents-core/src/a2a/x_tests.rs", text).is_empty());
     }
 
     #[test]

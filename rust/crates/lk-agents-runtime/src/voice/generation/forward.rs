@@ -63,8 +63,7 @@ pub(super) async fn voice_leg(
             GenerationPreparationEffect::WaitForReadiness => {
                 let ready = tokio::select! {
                     biased;
-                    () = handle.wait_for_interrupted() => false,
-                    () = handle.wait_for_scheduled() => true,
+                    scheduled = handle.wait_scheduled() => scheduled.is_ok(),
                     () = handle.wait_for_step_authorized(gate.step) => true,
                 };
                 gate.state.handle(GenerationPreparationEvent::ReadinessResolved {

@@ -151,6 +151,12 @@ pub enum AgentRunEvent {
         call: CallId,
         error: HostError,
     },
+    /// The call's task ended without reporting: the call settles in whatever phase it waits, a
+    /// running body on `outcome`.
+    CallLost {
+        call: CallId,
+        outcome: ToolOutcome,
+    },
     OutputValidated {
         validation: ValidationId,
         verdict: OutputVerdict,
@@ -470,19 +476,17 @@ impl AgentRun {
                 }
             }
             AgentRunEvent::ToolSettled { call, outcome } => {
-                // On a call, the body's first update answers its step; the body runs on detached.
-                let detaches = self.input.mode == tool_outcome::Mode::Voice
-                    && matches!(outcome, ToolOutcome::Update { .. });
-                let cancelled = match self.phase.acting() {
-                    Some(a) if detaches => {
-                        a.calls.detached(call, outcome, &mut fx);
-                        false
+                self.tool_settled(call, outcome, now, &mut fx)
+            }
+            AgentRunEvent::CallLost { call, outcome } => {
+                let body = match self.phase.acting() {
+                    Some(a) => {
+                        a.calls.lost(call, &self.agent.tools, self.history.iter(), running, &mut fx)
                     }
-                    Some(a) => a.calls.body_settled(call, outcome, &mut fx),
                     None => false,
                 };
-                if cancelled {
-                    self.abort(RunError::Cancelled, now, &mut fx);
+                if body {
+                    self.tool_settled(call, outcome, now, &mut fx);
                 } else {
                     self.step_settled(now, &mut fx);
                 }
@@ -503,6 +507,31 @@ impl AgentRun {
             AgentRunEvent::Recorded { item } => self.history.push(*item),
         }
         fx
+    }
+
+    fn tool_settled(
+        &mut self,
+        call: CallId,
+        outcome: ToolOutcome,
+        now: Ts,
+        fx: &mut Vec<AgentRunEffect>,
+    ) {
+        // On a call, the body's first update answers its step; the body runs on detached.
+        let detaches = self.input.mode == tool_outcome::Mode::Voice
+            && matches!(outcome, ToolOutcome::Update { .. });
+        let cancelled = match self.phase.acting() {
+            Some(a) if detaches => {
+                a.calls.detached(call, outcome, fx);
+                false
+            }
+            Some(a) => a.calls.body_settled(call, outcome, fx),
+            None => false,
+        };
+        if cancelled {
+            self.abort(RunError::Cancelled, now, fx);
+        } else {
+            self.step_settled(now, fx);
+        }
     }
 
     fn mint(&mut self) -> u64 {

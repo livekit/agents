@@ -6,10 +6,11 @@ use livekit_protocol::agent::agent_thread::CreateRequest;
 
 use crate::StorageError;
 use lk_agents_abi::storage::Storage as _;
+use lk_agents_abi::storage::Unacknowledged;
 use lk_agents_net::env::ProcessEnv;
 
-use crate::backends::sqlite::FileConnection;
-use crate::sql::{BatchResult, Row, Statement};
+use crate::backends::sqlite::{FileConnection, SqliteStorage, Workers};
+use crate::sql::{BatchResult, Bind as _, Row, SqlValue, Statement, StatementKind, statement};
 use crate::storage::Namespace;
 use crate::thread::{LeaseTiming, SchemaCell};
 use crate::{Storage, Thread, ThreadDbConnection, shortuuid};
@@ -90,8 +91,22 @@ impl Backend {
 
 impl Fixture {
     /// One handle over the thread, as one worker holds it: its own connection.
-    pub async fn thread(&self, holder: &str) -> Thread {
-        self.storage.open(&self.thread_id, holder).await.unwrap()
+    pub async fn thread(&self) -> Thread {
+        self.storage.open(&self.thread_id).await.unwrap()
+    }
+
+    /// The SQLite thread's database file.
+    fn file(&self) -> PathBuf {
+        let dir = self.dir.as_ref().expect("a SQLite thread");
+        dir.join("threads").join(format!("{}.sqlite", self.thread_id))
+    }
+
+    /// Hands `lane`'s lease to `holder` under a token no handle has, for a minute, as a dead
+    /// worker or a lost cleanup leaves it.
+    pub async fn orphan_lease(&self, lane: &str, holder: &str) {
+        let conn = FileConnection::open(self.file(), false, threads()).await.unwrap();
+        conn.batch(vec![OrphanLease { lane, holder }.bind()]).await.unwrap();
+        conn.close().await;
     }
 
     pub async fn cleanup(self, threads: &[&Thread]) {
@@ -130,10 +145,27 @@ macro_rules! contract {
     };
 }
 
-/// How the next commit or lease take fails: its acknowledgment lost before or after it applied,
-/// applied with no answer ever, or refused outright, by a disk I/O error or as too large.
+statement! {
+    /// Hands the lane's lease to a holder under a token nobody has.
+    OrphanLease<'a> { lane: &'a str, holder: &'a str } => r#"
+UPDATE lanes SET lease_holder = :holder, lease_token = 'orphan', lease_until = unixepoch() + 60
+WHERE lane = :lane
+"#
+}
+
+/// The lease holding `lane` as `(token, until)`, `until` in the database's seconds.
+pub async fn lessee(conn: &dyn ThreadDbConnection, lane: &str) -> Option<(String, i64)> {
+    let rows = conn.query(crate::thread::schema::SelectFence { lane }.bind()).await.ok()?;
+    match rows.first()?.as_slice() {
+        [_, SqlValue::Text(token), SqlValue::Int(until)] => Some((token.clone(), *until)),
+        _ => None,
+    }
+}
+
+/// How the next write fails: its acknowledgment lost before or after it applied, applied with
+/// no answer ever, or refused outright, by a disk I/O error or as too large.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommitFault {
+pub enum WriteFault {
     LoseAckBefore,
     LoseAckAfter,
     /// Applied, then pending forever: the request outlives whoever awaits it.
@@ -147,23 +179,37 @@ pub enum CommitFault {
 /// frame over its limit is), and an unreachable database for a while.
 pub struct Faulty {
     inner: Box<dyn ThreadDbConnection>,
-    commit: parking_lot::Mutex<Option<CommitFault>>,
-    take: parking_lot::Mutex<Option<CommitFault>>,
+    faults: Arc<Faults>,
+}
+
+/// The faults armed on a [`Faulty`] connection and those sharing them.
+#[derive(Default)]
+pub struct Faults {
+    commit: parking_lot::Mutex<Option<WriteFault>>,
+    take: parking_lot::Mutex<Option<WriteFault>>,
+    write: parking_lot::Mutex<Option<(&'static str, WriteFault)>>,
     probes_until: parking_lot::Mutex<Option<tokio::time::Instant>>,
     unreachable_for: parking_lot::Mutex<Option<Duration>>,
     unreachable_until: parking_lot::Mutex<Option<tokio::time::Instant>>,
 }
 
+impl std::ops::Deref for Faulty {
+    type Target = Faults;
+    fn deref(&self) -> &Faults {
+        &self.faults
+    }
+}
+
 impl Faulty {
     pub fn new(inner: Box<dyn ThreadDbConnection>) -> Self {
-        Self {
-            inner,
-            commit: parking_lot::Mutex::new(None),
-            take: parking_lot::Mutex::new(None),
-            probes_until: parking_lot::Mutex::new(None),
-            unreachable_for: parking_lot::Mutex::new(None),
-            unreachable_until: parking_lot::Mutex::new(None),
-        }
+        Arc::<Faults>::default().over(inner)
+    }
+}
+
+impl Faults {
+    /// `inner` under these faults, armed for every connection sharing them.
+    pub fn over(self: &Arc<Self>, inner: Box<dyn ThreadDbConnection>) -> Faulty {
+        Faulty { inner, faults: self.clone() }
     }
 
     /// Every request fails `Unavailable` for `d` from now.
@@ -171,7 +217,7 @@ impl Faulty {
         *self.unreachable_until.lock() = Some(tokio::time::Instant::now() + d);
     }
 
-    pub fn fail_next_commit(&self, fault: CommitFault) {
+    pub fn fail_next_commit(&self, fault: WriteFault) {
         *self.commit.lock() = Some(fault);
     }
 
@@ -181,8 +227,13 @@ impl Faulty {
         *self.probes_until.lock() = Some(tokio::time::Instant::now() + d);
     }
 
+    /// The next batch with a statement whose SQL contains `sql`: any statement kind.
+    pub fn fail_next_write(&self, sql: &'static str, fault: WriteFault) {
+        *self.write.lock() = Some((sql, fault));
+    }
+
     /// The next batch that takes a lease (an acquire or an inbox receive).
-    pub fn fail_next_lease_take(&self, fault: CommitFault) {
+    pub fn fail_next_lease_take(&self, fault: WriteFault) {
         *self.take.lock() = Some(fault);
     }
 
@@ -209,28 +260,31 @@ impl ThreadDbConnection for Faulty {
 
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         self.reachable()?;
-        let is_commit = statements.iter().any(|s| s.sql().contains("version = version + 1"));
+        let has = |kind| statements.iter().any(|s| s.kind() == Some(kind));
+        let is_commit = has(StatementKind::Commit);
         // only a commit carrying staged writes can outgrow the database's frame: a run closed
         // with nothing of its own writes the lane and its journal, and leaves the fault armed
-        let staged = statements.iter().any(|s| {
-            !["version = version + 1", "INTO events", "INTO lanes"]
-                .iter()
-                .any(|w| s.sql().contains(w))
-        });
-        let probe = statements.iter().any(|s| s.sql().contains("SELECT version, lease_token"));
-        if probe
+        let staged = statements
+            .iter()
+            .any(|s| !matches!(s.kind(), Some(StatementKind::Commit | StatementKind::Bookkeeping)));
+        if has(StatementKind::FenceRead)
             && self.probes_until.lock().is_some_and(|until| tokio::time::Instant::now() < until)
         {
             return Err(StorageError::Unavailable("probe unreachable".into()));
         }
-        let takes =
-            statements.iter().any(|s| s.sql().contains("SET waiter = CASE WHEN lease_holder"));
+        let takes = has(StatementKind::LeaseTake);
         let fault = match *self.commit.lock() {
-            Some(CommitFault::RefuseTooLarge) if !staged => None,
+            Some(WriteFault::RefuseTooLarge) if !staged => None,
             ref mut armed if is_commit => armed.take(),
             _ => None,
         };
         let fault = fault.or_else(|| takes.then(|| self.take.lock().take()).flatten());
+        let fault = fault.or_else(|| {
+            let mut write = self.write.lock();
+            let armed =
+                write.is_some_and(|(sql, _)| statements.iter().any(|s| s.sql().contains(sql)));
+            armed.then(|| write.take().map(|(_, fault)| fault)).flatten()
+        });
         if fault.is_some()
             && let Some(d) = self.unreachable_for.lock().take()
         {
@@ -238,20 +292,22 @@ impl ThreadDbConnection for Faulty {
         }
         match fault {
             None => self.inner.batch(statements).await,
-            Some(CommitFault::LoseAckBefore) => Err(StorageError::Uncertain("lost before".into())),
-            Some(CommitFault::LoseAckAfter) => {
-                self.inner.batch(statements).await?;
-                Err(StorageError::Uncertain("lost after".into()))
+            Some(WriteFault::LoseAckBefore) => {
+                Err(StorageError::Uncertain(Unacknowledged::sent("lost before")))
             }
-            Some(CommitFault::StallAfter) => {
+            Some(WriteFault::LoseAckAfter) => {
+                self.inner.batch(statements).await?;
+                Err(StorageError::Uncertain(Unacknowledged::sent("lost after")))
+            }
+            Some(WriteFault::StallAfter) => {
                 self.inner.batch(statements).await?;
                 std::future::pending().await
             }
-            Some(CommitFault::Refuse) => {
+            Some(WriteFault::Refuse) => {
                 let io = rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_IOERR);
                 Err(crate::backends::sqlite::sqlite_error(rusqlite::Error::SqliteFailure(io, None)))
             }
-            Some(CommitFault::RefuseTooLarge) => {
+            Some(WriteFault::RefuseTooLarge) => {
                 Err(StorageError::TooLarge { what: "the commit".into(), limit: 0 })
             }
         }
@@ -264,104 +320,162 @@ impl ThreadDbConnection for Faulty {
 
 impl Fixture {
     /// A handle over a SQLite thread whose connection takes injected faults.
-    pub async fn faulty_thread(&self, holder: &str) -> (Thread, Arc<Faulty>) {
-        let dir = self.dir.as_ref().expect("faults are injected on the SQLite backend");
-        let file = dir.join("threads").join(format!("{}.sqlite", self.thread_id));
-        let faulty =
-            Arc::new(Faulty::new(Box::new(FileConnection::open(file, false).await.unwrap())));
+    pub async fn faulty_thread(&self) -> (Thread, Arc<Faulty>) {
+        let conn = FileConnection::open(self.file(), false, threads()).await.unwrap();
+        let faulty = Arc::new(Faulty::new(Box::new(conn)));
         let thread =
-            Thread::new(faulty.clone(), &self.thread_id, self.lease, SchemaCell::default(), holder)
+            Thread::new(faulty.clone(), &self.thread_id, self.lease, SchemaCell::default())
                 .await
                 .unwrap();
         (thread, faulty)
     }
 }
 
-/// One thread database in memory, every statement run inline on the caller's task, its
-/// `unixepoch()` read from `clock`: storage as a deterministic simulation runs it, on its virtual
-/// time. Clones share the database; `close` leaves it open.
-#[derive(Clone)]
-pub struct MemoryConnection(Arc<parking_lot::Mutex<rusqlite::Connection>>);
+/// A directory of its own under the system's temp directory, removed on drop.
+pub struct TempDir(pub PathBuf);
 
-impl MemoryConnection {
-    pub fn new(clock: Arc<dyn lk_agents_abi::Clock>) -> Result<Self, StorageError> {
-        use rusqlite::functions::FunctionFlags;
-        let conn = rusqlite::Connection::open_in_memory()
-            .map_err(crate::backends::sqlite::sqlite_error)?;
-        let wall = move || {
-            let wall = clock.wall().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-            wall.as_secs_f64()
-        };
-        let flags = FunctionFlags::SQLITE_UTF8;
-        let secs = wall.clone();
-        conn.create_scalar_function("unixepoch", 0, flags, move |_| Ok(secs() as i64))
-            .map_err(crate::backends::sqlite::sqlite_error)?;
-        // `unixepoch('subsec')`, the one modifier the schema uses.
-        conn.create_scalar_function("unixepoch", 1, flags, move |_| Ok(wall()))
-            .map_err(crate::backends::sqlite::sqlite_error)?;
-        Ok(Self(Arc::new(parking_lot::Mutex::new(conn))))
+impl TempDir {
+    pub fn new(prefix: &str) -> Self {
+        let dir = std::env::temp_dir().join(shortuuid(prefix));
+        std::fs::create_dir_all(&dir).expect("a temp directory");
+        Self(dir)
     }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Production's workers: a thread each, on the OS wall clock.
+pub fn threads() -> Workers {
+    Workers::threads(Arc::new(lk_agents_net::clock::RealClock::new()))
+}
+
+/// Workers as tasks of the current runtime, on the OS wall clock: a paused-time test's waits
+/// stay virtual.
+pub fn tasks() -> Workers {
+    let spawner = Arc::new(lk_agents_net::task::TokioSpawner::current());
+    Workers { spawner, clock: Arc::new(lk_agents_net::clock::RealClock::new()) }
+}
+
+/// A thread database file of its own, its connections' workers [`tasks`]. Removed on drop.
+pub struct TempDatabase {
+    dir: TempDir,
+    workers: Workers,
+}
+
+impl TempDatabase {
+    pub fn new() -> Self {
+        Self { dir: TempDir::new("lk-agents-db-"), workers: tasks() }
+    }
+
+    /// Another worker's connection to the database.
+    pub async fn connect(&self) -> FileConnection {
+        let file = self.dir.0.join("thread.sqlite");
+        FileConnection::open(file, true, self.workers.clone()).await.expect("a thread database")
+    }
+}
+
+impl Default for TempDatabase {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A spawner whose tasks die, dropped at their next poll once armed: a database worker that
+/// crashes with requests queued.
+pub struct Dying {
+    spawner: Arc<dyn lk_agents_abi::Spawner>,
+    armed: Arc<std::sync::atomic::AtomicBool>,
+    deaths: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Dying {
+    pub fn new(spawner: Arc<dyn lk_agents_abi::Spawner>) -> Self {
+        Self { spawner, armed: Arc::default(), deaths: Arc::default() }
+    }
+
+    /// How many tasks died.
+    pub fn deaths(&self) -> u64 {
+        self.deaths.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// The next task polled dies instead.
+    pub fn die_next_poll(&self) {
+        self.armed.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+impl lk_agents_abi::Spawner for Dying {
+    fn launch(
+        &self,
+        mut task: lk_agents_abi::Launch,
+    ) -> lk_agents_abi::OwnedTask<Box<dyn std::any::Any + Send>> {
+        let (armed, deaths) = (self.armed.clone(), self.deaths.clone());
+        let mut work = task.work;
+        task.work = Box::pin(std::future::poll_fn(move |cx| {
+            if armed.swap(false, std::sync::atomic::Ordering::AcqRel) {
+                deaths.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                return std::task::Poll::Ready(Box::new(()) as Box<dyn std::any::Any + Send>);
+            }
+            work.as_mut().poll(cx)
+        }));
+        self.spawner.launch(task)
+    }
+}
+
+/// The SQLite backend with each thread connection it opens decorated by `wrap`: how a test or a
+/// simulation puts faults under the production lane. Everything else is the backend's own.
+pub struct Wrapped<W> {
+    pub storage: Arc<SqliteStorage>,
+    pub wrap: W,
 }
 
 #[async_trait::async_trait]
-impl ThreadDbConnection for MemoryConnection {
-    async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
-        crate::backends::sqlite::query(&self.0.lock(), &statement)
-    }
-
-    async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
-        crate::backends::sqlite::batch(&mut self.0.lock(), &statements)
-    }
-
-    async fn close(&self) {}
-}
-
-/// A backend whose every thread is the one database behind `connection`: what a deterministic
-/// simulation hands `VoiceStore::bound`, so the production lane, lease and commit run over it.
-/// Only `open` is modeled; thread lifecycle belongs to the backends' own contracts.
-pub struct MemoryStorage {
-    pub connection: Arc<dyn ThreadDbConnection>,
-    pub lease: LeaseTiming,
-}
-
-#[async_trait::async_trait]
-impl Storage for MemoryStorage {
+impl<W> Storage for Wrapped<W>
+where
+    W: Fn(FileConnection) -> Arc<dyn ThreadDbConnection> + Send + Sync,
+{
     async fn create_thread(
         &self,
-        _: CreateRequest,
+        request: CreateRequest,
     ) -> Result<livekit_protocol::agent::agent_thread::Thread, StorageError> {
-        Err(StorageError::Invalid("a memory backend creates no threads".into()))
+        self.storage.create_thread(request).await
     }
 
     async fn get_thread(
         &self,
-        _: &str,
+        thread_id: &str,
     ) -> Result<livekit_protocol::agent::agent_thread::Thread, StorageError> {
-        Err(StorageError::Invalid("a memory backend keeps no registry".into()))
+        self.storage.get_thread(thread_id).await
     }
 
     async fn list_threads(
         &self,
-        _: livekit_protocol::agent::agent_thread::ListRequest,
+        request: livekit_protocol::agent::agent_thread::ListRequest,
     ) -> Result<livekit_protocol::agent::agent_thread::ListResponse, StorageError> {
-        Err(StorageError::Invalid("a memory backend keeps no registry".into()))
+        self.storage.list_threads(request).await
     }
 
     async fn update_thread(
         &self,
-        _: livekit_protocol::agent::agent_thread::UpdateRequest,
+        request: livekit_protocol::agent::agent_thread::UpdateRequest,
     ) -> Result<livekit_protocol::agent::agent_thread::Thread, StorageError> {
-        Err(StorageError::Invalid("a memory backend keeps no registry".into()))
+        self.storage.update_thread(request).await
     }
 
-    async fn delete_thread(&self, _: &str) -> Result<(), StorageError> {
-        Ok(())
+    async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError> {
+        self.storage.delete_thread(thread_id).await
     }
 
-    async fn open(&self, thread_id: &str, holder: &str) -> Result<Thread, StorageError> {
-        Thread::new(self.connection.clone(), thread_id, self.lease, SchemaCell::default(), holder)
-            .await
+    async fn open(&self, thread_id: &str) -> Result<Thread, StorageError> {
+        let connection = (self.wrap)(self.storage.connect(thread_id).await?);
+        Thread::new(connection, thread_id, self.storage.lease, SchemaCell::default()).await
     }
 
-    async fn close(&self) {}
+    async fn close(&self) {
+        self.storage.close().await;
+    }
 }

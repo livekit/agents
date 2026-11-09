@@ -1,6 +1,9 @@
 use std::future::Future;
 use std::pin::pin;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+#[allow(
+    clippy::disallowed_types,
+    reason = "the virtual clock is shared with its waiters; no decision reads it"
+)]
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::task::{Poll, Waker};
 use std::time::{Duration, SystemTime};
@@ -85,7 +88,10 @@ pub fn simulated_epoch() -> SystemTime {
 pub const TICK_EPSILON: Duration = Duration::from_micros(1);
 
 pub struct VirtualClock {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(
+        clippy::disallowed_types,
+        reason = "the virtual clock is shared with its waiters; no decision reads it"
+    )]
     state: Mutex<Virtual>,
 }
 

@@ -114,7 +114,7 @@ pub trait Storage: Send + Sync {
     async fn list_threads(&self, request: ListRequest) -> Result<ListResponse, StorageError>;
     async fn update_thread(&self, request: UpdateRequest) -> Result<ThreadRecord, StorageError>;
     async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError>;
-    async fn open(&self, thread_id: &str, holder: &str) -> Result<Thread, StorageError>;
+    async fn open(&self, thread_id: &str) -> Result<Thread, StorageError>;
     async fn get_thread_items(&self, id: &str, lane: Option<&str>, after: Option<&str>, limit: i64)
         -> Result<ThreadItemPage, StorageError>;
     async fn get_thread_tasks(&self, id: &str, status: Option<TaskState>)
@@ -130,7 +130,7 @@ pub trait Storage: Send + Sync {
 | `list_threads` | Page thread metadata by the supported scope and cursor, with the same ordering and expiry filtering on both backends. |
 | `update_thread` | Merge attributes (an empty value deletes the key) and apply an idle-TTL update, returning the updated metadata. This is the activity boundary that moves expiry. |
 | `delete_thread` | Make the thread unavailable, coordinate with active handles, and reclaim its metadata and database; repeating deletion is safe. |
-| `open` | Resolve an existing thread and return the shared engine's `Thread` handle, its writes under the worker's `holder` string. Opening alone does not acquire a lane lease. |
+| `open` | Resolve an existing thread and return the shared engine's `Thread` handle. Opening alone does not acquire a lane lease; each lease names the owner that takes it. |
 | `get_thread_items`, `get_thread_tasks` | Namespace reads of one thread's items and tasks through the backend's read interface; the default borrows the thread with `open` and releases it on either result. |
 | `close` | Release backend-owned resources after active handles have settled; repeated close is safe. |
 
@@ -191,8 +191,7 @@ names, `list_items`, `list_tasks` and `task` ([threads](../threads.md)), with
 
 Content reads require neither an active agent run nor a lane lease. A backend
 can open a thread solely for reading. Reads observe committed records; staged
-context writes and in-flight history are not exposed. The worker holder passed
-to `open` identifies a potential writer and does not grant write ownership.
+context writes and in-flight history are not exposed.
 
 Item pagination uses insertion position (`items.pos`), with an optional lane
 filter. Task queries distinguish insertion-order thread browsing (`tasks.pos`)

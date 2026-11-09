@@ -59,7 +59,7 @@ impl EventWrite {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fence {
     pub lane: String,
-    pub holder: String,
+    pub holder: crate::Holder,
     pub token: String,
     pub version: i64,
 }
@@ -112,8 +112,13 @@ pub fn bootstrap() -> Vec<Statement> {
     let mut out: Vec<Statement> =
         crate::sql::schema_statements(THREAD_SCHEMA).map(Statement::ddl).collect();
     out.push(InsertSchemaVersion { version: THREAD_SCHEMA_VERSION }.bind());
-    out.push(Statement::ddl(crate::thread::schema::CONTEXT_SCHEMA));
+    out.extend(framework_schema());
     out
+}
+
+/// [`FRAMEWORK_SCHEMA`]'s statements.
+pub(crate) fn framework_schema() -> impl Iterator<Item = Statement> {
+    crate::sql::schema_statements(FRAMEWORK_SCHEMA).map(Statement::ddl)
 }
 
 /// The schema version the database holds, `None` before any SDK wrote it; the catalog is probed
@@ -165,7 +170,8 @@ pub struct Acquire<'a> {
 /// What an acquire loaded, under the lease it took.
 #[derive(Debug)]
 pub struct Acquired {
-    pub fence: Fence,
+    /// The lane's version under the lease taken.
+    pub version: i64,
     /// This `run_id` already committed; the caller releases without running.
     pub already_committed: bool,
     pub lane: LaneRow,
@@ -188,7 +194,8 @@ pub(crate) async fn acquire(
 ) -> Result<Option<Acquired>, StorageError> {
     let (lane, token) = (req.lane, req.token);
     let mut b = Batch(schema);
-    b.0.push(Statement::ddl(crate::thread::schema::CONTEXT_SCHEMA));
+    b.0.extend(framework_schema());
+    b.add(PruneAppliedWrites {});
     b.add(InsertLane { lane });
     let take = b.add(TakeLease {
         lane,
@@ -228,14 +235,8 @@ pub(crate) async fn acquire(
         Some(i) => out.at(i)?.rows_affected() > 0,
         None => false,
     };
-    let fence = Fence {
-        lane: lane.to_owned(),
-        holder: req.holder.to_owned(),
-        token: token.to_owned(),
-        version,
-    };
     Ok(Some(Acquired {
-        fence,
+        version,
         already_committed: !out.at(committed)?.rows().is_empty(),
         lane: LaneRow::from_row(lane_row)?,
         items: rows(&out, items, ItemRow::from_row)?,
@@ -317,7 +318,7 @@ pub(crate) async fn checkpoint(
     let mut b = Batch::default();
     let waiter = b.add(SelectWaiter { lane });
     let status = b.add(SelectTaskStatus { lane, task_id });
-    let out = conn.batch(b.0).await?;
+    let out = super::read_batch(conn, b.0).await?;
     let waiter = first_cell(out.at(waiter)?.rows()).and_then(SqlValue::as_str).map(str::to_owned);
     let status = first_cell(out.at(status)?.rows()).map(TaskState::from_cell).transpose()?;
     Ok((waiter, status))
@@ -468,39 +469,44 @@ fn add_fenced_rows(
     Ok(())
 }
 
-/// The append-only rows of a run without a lease, after creating the lane row.
+/// The append-only rows of a run without a lease, after creating the lane row. Each is guarded on
+/// the run's `run_ended`, written last: a commit re-sent after a lost acknowledgment, or applied
+/// twice, writes nothing the second time.
 fn add_unfenced_rows(b: &mut Batch, lane: &str, c: &Commit) {
     // no lease was taken, so nothing created the lane row yet
     b.add(InsertLane { lane });
+    let run_id = c.run_id.as_str();
     for item in &c.items {
         b.add(InsertItemUnfenced {
             lane,
+            run_id,
             id: &item.id,
             message_id: item.message_id.as_deref(),
             payload: SqlValue::json(&item.payload),
         });
     }
     for id in &c.delete_items {
-        b.add(DeleteItemUnfenced { lane, id });
-    }
-    for e in c.events.iter().chain([&c.run_ended]) {
-        b.add(InsertEventUnfenced {
-            lane,
-            ts_ms: e.ts_ms,
-            run_id: &c.run_id,
-            event_type: &e.r#type,
-            payload: SqlValue::json(&e.payload),
-        });
+        b.add(DeleteItemUnfenced { lane, run_id, id });
     }
     for t in &c.tasks {
         b.add(UpsertTaskUnfenced {
             lane,
+            run_id,
             task_id: &t.task_id,
             name: t.name.as_deref(),
             message_id: t.message_id.as_deref(),
             status: t.status.as_str(),
             data: SqlValue::json(&t.data),
             internal: SqlValue::opt_json(t.internal.as_ref()),
+        });
+    }
+    for e in c.events.iter().chain([&c.run_ended]) {
+        b.add(InsertEventUnfenced {
+            lane,
+            ts_ms: e.ts_ms,
+            run_id,
+            event_type: &e.r#type,
+            payload: SqlValue::json(&e.payload),
         });
     }
 }
@@ -595,7 +601,7 @@ pub(crate) async fn resolve_commit(
     let committed = b.add(SelectCommittedRun { lane, run_id });
     let lane_fence = b.add(SelectFence { lane });
     let task = read_task.map(|task_id| b.add(SelectTask { lane, task_id }));
-    let out = conn.batch(b.0).await?;
+    let out = super::read_batch(conn, b.0).await?;
     let committed = !out.at(committed)?.rows().is_empty();
     let task = match task {
         Some(i) if committed => {
@@ -616,7 +622,7 @@ fn resolution(
 ) -> Result<Resolution, StorageError> {
     let (version, token) = match lane {
         Some(row) => {
-            let cells = Cells::new(row, &["version", "lease_token"])?;
+            let cells = Cells::new(row, &["version", "lease_token", "lease_until"])?;
             (cells.get::<i64>(0)?, cells.get::<Option<String>>(1)?)
         }
         None => (0, None),
@@ -678,7 +684,7 @@ pub(crate) async fn list_tasks(
         }
     };
     let count = b.add(CountThreadTasks { lane, status, updated_after });
-    let out = conn.batch(b.0).await?;
+    let out = super::read_batch(conn, b.0).await?;
 
     let (mut tasks, mut positions) = (Vec::new(), Vec::new());
     for row in out.at(page)?.rows() {
@@ -771,14 +777,14 @@ mod tests {
     fn fence() -> Fence {
         Fence {
             lane: "front-desk".into(),
-            holder: "w1".into(),
+            holder: crate::Holder::new("w1"),
             token: "lease_a".into(),
             version: 3,
         }
     }
 
     fn lane(version: i64, token: Option<&str>) -> Row {
-        vec![SqlValue::Int(version), token.map_or(SqlValue::Null, Into::into)]
+        vec![SqlValue::Int(version), token.map_or(SqlValue::Null, Into::into), SqlValue::Int(0)]
     }
 
     fn resolve(fence: Option<&Fence>, committed: bool, lane: Row) -> Resolution {

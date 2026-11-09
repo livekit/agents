@@ -111,7 +111,9 @@ impl TtsInference<'_, '_, '_> {
                 return Err((DriverError::Provider(error), false));
             }
         };
-        let (sink, mut source) = stream.split();
+        let (sink, source) = stream.split();
+        // Owned before the first read: a cancelled reply still closes it.
+        let mut source = lk_agents_net::owned::Owned::stream(&shared.background(), source);
         report_retries(shared, handle, ProviderKind::Tts, &mut source);
         let tts_data = SynthesisMetrics::new(
             self.tts.id(),
@@ -243,8 +245,7 @@ async fn synthesize(
     let StreamingTts { words, input_done, .. } = state;
     sink.end_input();
     let fed = transformed(shared, &words.raw);
-    let _ =
-        source.close(shared.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT)).await;
+    let _ = source.close().await;
     let produced = tts_data.produced();
     match heard {
         Ok(mut heard) => {
@@ -308,7 +309,7 @@ struct Streaming<'a, 'b> {
     handle: &'a SpeechHandle,
     acc: &'a mut TurnAccumulator,
     sink: &'a lk_agents_abi::TtsSink,
-    source: lk_agents_abi::TtsSource,
+    source: lk_agents_net::owned::Owned<lk_agents_abi::TtsSource>,
     rx: &'a mut mpsc::UnboundedReceiver<SpeechSegmentEvent>,
     text_out: Option<&'a TextLeg<'a>>,
     transforms: Option<Pipeline>,

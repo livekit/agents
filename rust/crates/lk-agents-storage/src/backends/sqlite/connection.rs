@@ -1,21 +1,23 @@
-use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::types::ValueRef;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::sql::{BatchResult, Row, SqlValue, Statement, StatementResult};
 use crate::{StorageError, ThreadDbConnection};
+use lk_agents_abi::storage::Unacknowledged;
+use lk_agents_abi::{Clock, Spawner, SpawnerExt as _};
 
-// Each database file is served by its own worker thread, so no query blocks the executor.
+// Each database is served by its own worker, so no query blocks the executor.
 
 /// How long a statement waits for another process's write lock before failing retryably.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-/// Requests queued to one connection thread before senders wait.
+/// Requests queued to one worker before senders wait.
 const QUEUE: usize = 32;
 
 pub(super) enum Request {
@@ -25,102 +27,152 @@ pub(super) enum Request {
     Close(oneshot::Sender<()>),
 }
 
-/// One SQLite database, executed on a thread of its own; requests are served in order.
+/// Where each database's worker runs and the clock its `unixepoch()` reads: a dedicated thread
+/// per worker and the wall clock in production, the scheduler and its virtual clock in a
+/// simulation.
+#[derive(Clone)]
+pub struct Workers {
+    pub spawner: Arc<dyn Spawner>,
+    pub clock: Arc<dyn Clock>,
+}
+
+impl Workers {
+    /// Production: each worker on a thread of its own.
+    pub fn threads(clock: Arc<dyn Clock>) -> Self {
+        Self { spawner: Arc::new(lk_agents_net::task::DedicatedThreads), clock }
+    }
+}
+
+type Open = Arc<dyn Fn() -> Result<SqliteThread, StorageError> + Send + Sync>;
+
+/// Opens the database, then runs its requests in order, each inline. Closes the connection once,
+/// at a close request or when every sender is gone. Dropped before it answers, the worker dies as
+/// a crashed one does: what it still held has an unknown outcome.
+async fn serve(
+    open: Open,
+    ready: oneshot::Sender<Result<(), StorageError>>,
+    mut rx: mpsc::Receiver<Request>,
+) {
+    let mut sqlite = match open() {
+        Ok(sqlite) => {
+            let _ = ready.send(Ok(()));
+            sqlite
+        }
+        Err(error) => {
+            let _ = ready.send(Err(error));
+            return;
+        }
+    };
+    let done = loop {
+        let Some(request) = rx.recv().await else { break None };
+        let access = sqlite.access.as_ref();
+        match request {
+            Request::Query(s, reply) => {
+                let _ =
+                    reply.send(super::lifecycle::with_access(access, || query(&sqlite.conn, &s)));
+            }
+            Request::Batch(statements, reply) => {
+                let run = || batch(&mut sqlite.conn, &statements);
+                let _ = reply.send(super::lifecycle::with_access(access, run));
+            }
+            Request::DeleteThread(directory, id, reply) => {
+                let _ = reply.send(super::lifecycle::delete(&mut sqlite.conn, &directory, &id));
+            }
+            Request::Close(done) => break Some(done),
+        }
+    };
+    super::lifecycle::close(sqlite.conn, sqlite.access.as_ref());
+    if let Some(done) = done {
+        let _ = done.send(());
+    }
+}
+
+/// One SQLite database, served by its worker in order. A worker found gone is replaced by the
+/// next request.
 pub struct FileConnection {
-    tx: mpsc::Sender<Request>,
+    tx: Mutex<mpsc::Sender<Request>>,
+    workers: Workers,
+    open: Open,
     closed: AtomicBool,
 }
 
 impl FileConnection {
-    /// Opens (creating when `create`) the file and starts its thread.
-    pub async fn open(path: PathBuf, create: bool) -> Result<Self, StorageError> {
-        Self::open_with_access(path, create, None).await
+    /// Opens (creating when `create`) the file and starts its worker.
+    pub async fn open(path: PathBuf, create: bool, workers: Workers) -> Result<Self, StorageError> {
+        Self::open_with_access(path, create, None, workers).await
     }
 
     pub(super) async fn open_with_access(
         path: PathBuf,
         create: bool,
         thread: Option<(PathBuf, String)>,
+        workers: Workers,
     ) -> Result<Self, StorageError> {
-        let (tx, rx) = mpsc::channel::<Request>(QUEUE);
-        let (ready, opened) = oneshot::channel();
-        std::thread::Builder::new()
-            .name("lk-agents-sqlite".into())
-            .spawn(move || match SqliteThread::open(&path, create, thread) {
-                Ok(sqlite) => {
-                    let _ = ready.send(Ok(()));
-                    sqlite.serve(rx);
-                }
-                Err(error) => {
-                    let _ = ready.send(Err(error));
-                }
-            })
-            .map_err(|e| StorageError::Unavailable(format!("sqlite thread: {e}")))?;
-        opened.await.map_err(|_| closed())??;
-        Ok(Self { tx, closed: AtomicBool::new(false) })
+        let clock = workers.clock.clone();
+        let open = move || SqliteThread::open(&path, create, thread.clone(), &clock);
+        Self::start(workers, Arc::new(open)).await
     }
 
+    /// Over the connection `open` makes, run first on the worker.
+    pub(super) async fn start(workers: Workers, open: Open) -> Result<Self, StorageError> {
+        let tx = spawn(&workers, &open).await?;
+        Ok(Self { tx: Mutex::new(tx), workers, open, closed: AtomicBool::new(false) })
+    }
+
+    /// A request that changes nothing, or whose loss before an answer is harmless.
     pub(super) async fn send<T>(
         &self,
         request: impl FnOnce(oneshot::Sender<Result<T, StorageError>>) -> Request,
     ) -> Result<T, StorageError> {
+        self.enqueue(request).await?.await.map_err(|_| closed())?
+    }
+
+    /// Queues `request` for the worker; refused, retryably, before the worker has it.
+    async fn enqueue<T>(
+        &self,
+        request: impl FnOnce(oneshot::Sender<Result<T, StorageError>>) -> Request,
+    ) -> Result<oneshot::Receiver<Result<T, StorageError>>, StorageError> {
         if self.closed.load(Ordering::Acquire) {
             return Err(closed());
         }
+        let mut tx = self.tx.lock().await;
+        if tx.is_closed() {
+            *tx = spawn(&self.workers, &self.open).await?;
+        }
         let (reply, answer) = oneshot::channel();
-        self.tx.send(request(reply)).await.map_err(|_| closed())?;
-        answer.await.map_err(|_| closed())?
+        tx.send(request(reply)).await.map_err(|_| closed())?;
+        Ok(answer)
     }
 }
 
-/// The thread that owns one SQLite connection and serves its requests in order.
-struct SqliteThread {
+/// Starts a worker over `open` and waits for it to open the database.
+async fn spawn(workers: &Workers, open: &Open) -> Result<mpsc::Sender<Request>, StorageError> {
+    let (tx, rx) = mpsc::channel(QUEUE);
+    let (ready, opened) = oneshot::channel();
+    // Owned by its senders: the worker ends once the connection closes or is dropped.
+    workers.spawner.spawn_detached(serve(open.clone(), ready, rx));
+    opened.await.map_err(|_| closed())??;
+    Ok(tx)
+}
+
+/// The connection a worker owns, and the thread's lifecycle access when it serves one.
+pub(super) struct SqliteThread {
     conn: rusqlite::Connection,
     access: Option<super::lifecycle::Access>,
 }
 
 impl SqliteThread {
-    fn open(
+    pub(super) fn open(
         path: &Path,
         create: bool,
         thread: Option<(PathBuf, String)>,
+        clock: &Arc<dyn Clock>,
     ) -> Result<Self, StorageError> {
         let access = thread
-            .map(|(directory, id)| super::lifecycle::Access::open(&directory, id))
+            .map(|(directory, id)| super::lifecycle::Access::open(&directory, id, clock))
             .transpose()?;
-        let conn = super::lifecycle::with_access(access.as_ref(), || connect(path, create))?;
+        let conn = super::lifecycle::with_access(access.as_ref(), || connect(path, create, clock))?;
         Ok(Self { conn, access })
-    }
-
-    /// Serves until a close request or until every sender is gone; closes the connection once.
-    fn serve(mut self, mut rx: mpsc::Receiver<Request>) {
-        while let Some(request) = rx.blocking_recv() {
-            if let ControlFlow::Break(done) = self.handle(request) {
-                super::lifecycle::close(self.conn, self.access.as_ref());
-                let _ = done.send(());
-                return;
-            }
-        }
-        super::lifecycle::close(self.conn, self.access.as_ref());
-    }
-
-    /// Breaks with the close request's reply, sent once the connection has closed.
-    fn handle(&mut self, request: Request) -> ControlFlow<oneshot::Sender<()>> {
-        let access = self.access.as_ref();
-        match request {
-            Request::Query(s, reply) => {
-                let _ = reply.send(super::lifecycle::with_access(access, || query(&self.conn, &s)));
-            }
-            Request::Batch(statements, reply) => {
-                let run = || batch(&mut self.conn, &statements);
-                let _ = reply.send(super::lifecycle::with_access(access, run));
-            }
-            Request::DeleteThread(directory, id, reply) => {
-                let _ = reply.send(super::lifecycle::delete(&mut self.conn, &directory, &id));
-            }
-            Request::Close(done) => return ControlFlow::Break(done),
-        }
-        ControlFlow::Continue(())
     }
 }
 
@@ -134,22 +186,32 @@ impl ThreadDbConnection for FileConnection {
         self.send(|reply| Request::Query(statement, reply)).await
     }
 
+    /// A worker that dies with the batch queued (a panic mid-batch, after its commit or not)
+    /// leaves its outcome unknown.
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
-        self.send(|reply| Request::Batch(statements, reply)).await
+        let answer = self.enqueue(|reply| Request::Batch(statements, reply)).await?;
+        answer.await.map_err(|_| {
+            StorageError::Uncertain(Unacknowledged::sent("the sqlite worker stopped mid-batch"))
+        })?
     }
 
     async fn close(&self) {
         if self.closed.swap(true, Ordering::AcqRel) {
             return;
         }
+        let tx = self.tx.lock().await.clone();
         let (done, closed) = oneshot::channel();
-        if self.tx.send(Request::Close(done)).await.is_ok() {
+        if tx.send(Request::Close(done)).await.is_ok() {
             let _ = closed.await;
         }
     }
 }
 
-pub(super) fn connect(path: &Path, create: bool) -> Result<rusqlite::Connection, StorageError> {
+pub(super) fn connect(
+    path: &Path,
+    create: bool,
+    clock: &Arc<dyn Clock>,
+) -> Result<rusqlite::Connection, StorageError> {
     use rusqlite::OpenFlags;
     let mut flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     if create {
@@ -164,7 +226,27 @@ pub(super) fn connect(path: &Path, create: bool) -> Result<rusqlite::Connection,
     conn.busy_timeout(BUSY_TIMEOUT).map_err(sqlite_error)?;
     conn.pragma_update(None, "journal_mode", "WAL").map_err(sqlite_error)?;
     conn.pragma_update(None, "synchronous", "NORMAL").map_err(sqlite_error)?;
+    unixepoch(&conn, clock.clone())?;
     Ok(conn)
+}
+
+/// `unixepoch()` and `unixepoch('subsec')`, the forms the schema uses, read from `clock`.
+fn unixepoch(conn: &rusqlite::Connection, clock: Arc<dyn Clock>) -> Result<(), StorageError> {
+    use rusqlite::functions::FunctionFlags;
+    let secs = move || {
+        let wall = clock.wall().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        wall.as_secs_f64()
+    };
+    let flags = FunctionFlags::SQLITE_UTF8;
+    let whole = secs.clone();
+    conn.create_scalar_function("unixepoch", 0, flags, move |_| Ok(whole() as i64))
+        .map_err(sqlite_error)?;
+    conn.create_scalar_function("unixepoch", 1, flags, move |cx| match cx.get_raw(0) {
+        ValueRef::Text(b"subsec") => Ok(secs()),
+        _ => Err(rusqlite::Error::UserFunctionError("unixepoch takes only 'subsec'".into())),
+    })
+    .map_err(sqlite_error)?;
+    Ok(())
 }
 
 /// Transient database failures (a busy lock, I/O, a full disk or memory) are retryable.
@@ -302,6 +384,39 @@ pub fn batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A worker keeps the queue's order. One that dies with a batch queued leaves it `Uncertain`;
+    /// the next request starts a fresh worker over the same database.
+    #[tokio::test(start_paused = true)]
+    async fn a_worker_keeps_order_and_dying_with_a_batch_queued_leaves_it_uncertain() {
+        let dir = crate::testing::TempDir::new("worker_");
+        let dying = Arc::new(crate::testing::Dying::new(Arc::new(
+            lk_agents_net::task::TokioSpawner::current(),
+        )));
+        let clock = Arc::new(lk_agents_net::clock::RealClock::new());
+        let workers = Workers { spawner: dying.clone(), clock };
+        let conn = FileConnection::open(dir.0.join("db.sqlite"), true, workers).await.unwrap();
+        conn.batch(vec![Statement::raw("CREATE TABLE notes (n INTEGER)")]).await.unwrap();
+        let insert = |n: i64| {
+            let insert =
+                Statement::raw("INSERT INTO notes VALUES (?1)").with(vec![SqlValue::Int(n)]);
+            conn.batch(vec![insert])
+        };
+        let (a, b, c) = tokio::join!(insert(1), insert(2), insert(3));
+        for applied in [a, b, c] {
+            applied.unwrap();
+        }
+        dying.die_next_poll();
+        let lost = insert(4).await;
+        assert!(matches!(lost, Err(StorageError::Uncertain(_))), "{lost:?}");
+        insert(5).await.unwrap();
+        let rows = conn.query(Statement::raw("SELECT n FROM notes ORDER BY rowid")).await.unwrap();
+        let order: Vec<Row> = [1, 2, 3, 5].map(|n| vec![SqlValue::Int(n)]).to_vec();
+        assert_eq!(rows, order, "applied in queue order; the lost batch never ran");
+        conn.close().await;
+        let closed = conn.query(Statement::raw("SELECT 1")).await;
+        assert!(matches!(closed, Err(StorageError::Unavailable(_))), "{closed:?}");
+    }
     #[test]
     fn corrupt_or_forbidden_databases_are_not_retryable() {
         for code in [

@@ -108,7 +108,7 @@ async fn items_and_tasks_page_through_the_existing_client() {
         })
         .await
         .unwrap();
-    let thread = store.storage.open(&record.thread_id, "writer").await.unwrap();
+    let thread = store.storage.open(&record.thread_id).await.unwrap();
     for index in 0..3 {
         let mut run = thread
             .lane("desk")
@@ -309,7 +309,7 @@ async fn task_filters_preserve_every_state_and_optional_name() {
         })
         .await
         .unwrap();
-    let thread = store.storage.open(&record.thread_id, "writer").await.unwrap();
+    let thread = store.storage.open(&record.thread_id).await.unwrap();
     let mut run = thread
         .lane("desk")
         .open(RunOptions::new("states", ""), &crate::Holder::new("test"))

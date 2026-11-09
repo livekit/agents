@@ -398,15 +398,15 @@ pub fn agent_message(parts: Vec<a2a::Part>, task_id: &str, message_id: String) -
     }
 }
 
-/// Waiting for a lane another holder has: a pause from 100 ms, doubling up to 1 s, until a
-/// deadline.
+/// A retry schedule: a pause from 100 ms, doubling up to 1 s, until a deadline. How a lane
+/// another holder has is polled and a write whose answer was lost is sent again.
 #[derive(Debug, Clone)]
-pub struct LanePoll {
+pub struct Backoff {
     deadline: Duration,
     pause: Duration,
 }
 
-impl LanePoll {
+impl Backoff {
     pub fn new(now: Duration, timeout: Duration) -> Self {
         Self { deadline: now + timeout, pause: Duration::from_millis(100) }
     }

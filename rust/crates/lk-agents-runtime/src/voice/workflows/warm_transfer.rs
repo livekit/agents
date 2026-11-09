@@ -8,9 +8,10 @@ pub use lk_agents_abi::voice::workflows::warm_transfer::{
     HUMAN_AGENT_IDENTITY, TWILIO_RINGING_TIMEOUT, TransferFailed, WarmTransferRefused,
 };
 use lk_agents_abi::voice::workflows::{TwilioCallEnd, TwilioDial};
-use lk_agents_abi::{Clock, Spawner, SpawnerExt};
+use lk_agents_abi::{Clock, Spawner};
+use lk_agents_net::owned::Background;
 use lk_agents_net::room_service::{RoomService, SipCall, Telephony, api_error};
-use lk_agents_net::task::{TaskId, TaskSet};
+use lk_agents_net::task::{ScopedTask, TaskSet};
 use lk_agents_voice::workflows::effects::{TransferEffects, TransferToolEffect};
 use serde_json::Value;
 
@@ -124,7 +125,7 @@ struct Running {
     phase: RunPhase,
     core: Transfer,
     hold: Option<Arc<dyn HoldMusic>>,
-    watcher: Option<TaskId>,
+    watcher: Option<ScopedTask>,
 }
 
 #[derive(Default)]
@@ -270,9 +271,7 @@ impl Drop for Restore {
     fn drop(&mut self) {
         let (effects, previous) = {
             let mut running = self.0.lock();
-            if let Some(watcher) = running.watcher.take() {
-                self.0.tasks.cancel(watcher);
-            }
+            running.watcher = None;
             let phase = match &running.phase {
                 RunPhase::Active { host, .. } => RunPhase::Restoring { host: host.clone() },
                 _ => return,
@@ -345,7 +344,7 @@ impl TransferRun {
         {
             let mut running = self.lock();
             running.core.human_connected();
-            running.watcher = Some(self.tasks.spawn(
+            running.watcher = Some(self.tasks.scoped(
                 self.spawner.as_ref(),
                 "warm transfer human watcher",
                 async move { this.watch_human(events).await },
@@ -376,7 +375,7 @@ impl TransferRun {
                     &room,
                     self.plan.ringing_timeout,
                     &*self.clock,
-                    self.spawner.clone(),
+                    Background::new(self.tasks.clone(), self.spawner.clone(), self.clock.clone()),
                 )
                 .await?;
             }
@@ -389,9 +388,7 @@ impl TransferRun {
     async fn abort_dial(&self, host: &Arc<dyn TransferHost>) {
         let effects = {
             let mut running = self.lock();
-            if let Some(watcher) = running.watcher.take() {
-                self.tasks.cancel(watcher);
-            }
+            running.watcher = None;
             running.core.abort_dial()
         };
         let close = effects.close_human.is_some();
@@ -545,7 +542,7 @@ enum Call {
 /// Cancels the call when the dial does not get past it, however it ends (a failure or the run
 /// dropped): Twilio can create the call after the transfer gave up.
 struct CancelOnDrop {
-    spawner: Arc<dyn Spawner>,
+    background: Background,
     api: Arc<dyn TransferApi>,
     dial: TwilioDial,
     call: Option<Call>,
@@ -567,19 +564,27 @@ impl CancelOnDrop {
 
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
-        let (api, dial) = (self.api.clone(), self.dial.clone());
+        let (api, dial, clock) =
+            (self.api.clone(), self.dial.clone(), self.background.clock.clone());
+        let cancel = |sid| async move {
+            let cancel = twilio_cancel(api, dial, sid);
+            if lk_agents_abi::timeout(&*clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT, cancel)
+                .await
+                .is_err()
+            {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "Twilio call cancel timed out");
+            }
+        };
         match self.call.take() {
-            // Detached: the dial's owner is being dropped, and the call must still be cancelled.
+            // The dial's owner is being dropped, and the call must still be cancelled.
             Some(Call::Creating(task)) => {
-                self.spawner.spawn_detached(async move {
+                self.background.cleanup("twilio call cancel", async move {
                     if let Ok(Ok(sid)) = task.await {
-                        twilio_cancel(api, dial, sid).await;
+                        cancel(sid).await;
                     }
                 });
             }
-            Some(Call::Created(sid)) => {
-                self.spawner.spawn_detached(twilio_cancel(api, dial, sid));
-            }
+            Some(Call::Created(sid)) => self.background.cleanup("twilio call cancel", cancel(sid)),
             None => {}
         }
     }
@@ -595,7 +600,7 @@ async fn twilio_originate(
     room: &Arc<dyn RtcRoom>,
     ringing_timeout: Option<Duration>,
     clock: &dyn Clock,
-    spawner: Arc<dyn Spawner>,
+    background: Background,
 ) -> Result<(), DialError> {
     let connect_url = api
         .connect_twilio_call(room_name.to_owned(), HUMAN_AGENT_IDENTITY.to_owned())
@@ -606,14 +611,14 @@ async fn twilio_originate(
     let create = |from: String, token: Option<String>| {
         let (reply, created) = tokio::sync::oneshot::channel();
         let (api, dial, twiml) = (api.clone(), dial.clone(), twiml.clone());
-        // Detached: a creation the caller stops waiting for is cancelled by `CancelOnDrop`.
-        spawner.spawn_detached(async move {
+        // Outlives the caller: a creation it stops waiting for is cancelled by `CancelOnDrop`.
+        background.spawn("twilio call creation", async move {
             let _ = reply.send(twilio_create_call(api, dial, from, twiml, token).await);
         });
         created
     };
     let mut guard = CancelOnDrop {
-        spawner: spawner.clone(),
+        background: background.clone(),
         api: api.clone(),
         dial: dial.clone(),
         call: Some(Call::Creating(create(from, token.clone()))),
@@ -976,7 +981,11 @@ mod tests {
             &room,
             Some(Duration::from_secs(1)),
             &clock,
-            spawner.clone(),
+            Background::new(
+                Arc::default(),
+                spawner.clone(),
+                Arc::new(lk_agents_abi::VirtualClock::new()),
+            ),
         ));
         let first =
             std::future::poll_fn(|cx| std::task::Poll::Ready(dialing.as_mut().poll(cx))).await;

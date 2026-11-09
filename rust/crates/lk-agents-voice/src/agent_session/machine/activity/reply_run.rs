@@ -6,7 +6,7 @@ use crate::events::RunOutcome as VoiceRunOutcome;
 use crate::generation::{PlanSpec, PlannedReply};
 use crate::tool_executor::{
     APPROVAL_KEY, AgentFrame, CallId, HostedTool, NextReply, Rendering, StepEnd, StepNext, ToolGo,
-    Toolset,
+    ToolOutcome, Toolset,
 };
 use crate::trace::{GenerationStep, ToolStep as TraceToolStep};
 use lk_agents_abi::agent::run::{Output, RunError, RunOutcome, RunResult, ValidationId};
@@ -40,16 +40,8 @@ pub struct ReplyRun {
     calls: BTreeMap<CallId, ReplyCall>,
     /// The step made calls the run admitted.
     acting: bool,
-    /// The floor dropped a call of the step unrun: the run cannot settle the step.
-    cut: bool,
-    /// The step the run settled, waiting for the floor's verdict.
-    pub(super) settling: Option<StepId>,
-    pub(super) settled_items: Option<Vec<ChatItem>>,
-    pub(super) terminal_call: Option<String>,
-    pub(super) tool_end: Option<(u32, StepEnd)>,
-    /// The floor's verdict on the step, waiting for the run to settle it.
-    verdict: Option<AgentRunContinuation>,
-    reply_required: BTreeMap<String, bool>,
+    /// Where the step's tool results stand.
+    pub(super) results: StepResults,
     /// The reply task waiting for its next step.
     waiter: Option<RequestId>,
     /// The reply's next step, waiting for the task to ask.
@@ -63,13 +55,35 @@ impl std::fmt::Debug for ReplyRun {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReplyRun")
             .field("request", &self.request)
-            .field("settling", &self.settling)
-            .field("verdict", &self.verdict)
+            .field("results", &self.results)
             .finish_non_exhaustive()
     }
 }
 
 impl ReplyRun {
+    pub(super) fn new(
+        run: AgentRun,
+        agent: Option<Arc<dyn AgentFrame>>,
+        plan: PlanSpec,
+        realtime: bool,
+        request: Option<lk_agents_core::agent_run::RequestId>,
+    ) -> Self {
+        ReplyRun {
+            run,
+            agent,
+            plan,
+            realtime,
+            request,
+            calls: BTreeMap::new(),
+            acting: false,
+            results: StepResults::Open,
+            waiter: None,
+            next: None,
+            previous_user_metrics: None,
+            accepted: BTreeMap::new(),
+        }
+    }
+
     /// The finished run's output, taken from the values the agent accepted, and whether the
     /// person cut it.
     fn take_output(
@@ -102,6 +116,77 @@ impl ReplyRun {
             RunOutcome::InputRequired(ask) => Some(VoiceRunOutcome::InputRequired(ask)),
         };
         (output, interrupted)
+    }
+}
+
+/// What the run settled a step with.
+#[derive(Debug)]
+pub(super) struct Settled {
+    pub(super) step: StepId,
+    pub(super) items: Vec<ChatItem>,
+    pub(super) terminal_call: Option<String>,
+}
+
+/// The executor's end of a step.
+#[derive(Debug)]
+pub(super) struct Ended {
+    /// The executor's step number.
+    pub(super) step: u32,
+    pub(super) end: Box<StepEnd>,
+}
+
+/// Where a step's tool results stand. The run's settlement and the executor's end each arrive
+/// once, in either order; the second hands both on, and the floor's verdict returns to the step
+/// the run settled.
+#[derive(Debug, Default)]
+pub(super) enum StepResults {
+    #[default]
+    Open,
+    /// The run settled the step; the executor has not ended it.
+    Settled(Settled),
+    /// The executor ended the step; the run has not settled it.
+    Ended(Ended),
+    /// Both arrived: the results are being handled, then the floor's verdict goes to `StepId`.
+    Handling(StepId),
+}
+
+impl StepResults {
+    /// The run settled the step: both halves once the executor ended it too.
+    fn settled(&mut self, settled: Settled) -> Option<(Settled, Ended)> {
+        match std::mem::take(self) {
+            StepResults::Ended(ended) => Some(self.handling(settled, ended)),
+            _ => {
+                *self = StepResults::Settled(settled);
+                None
+            }
+        }
+    }
+
+    /// The executor ended the step: both halves once the run settled it too.
+    pub(super) fn ended(&mut self, ended: Ended) -> Option<(Settled, Ended)> {
+        match std::mem::take(self) {
+            StepResults::Settled(settled) => Some(self.handling(settled, ended)),
+            _ => {
+                *self = StepResults::Ended(ended);
+                None
+            }
+        }
+    }
+
+    fn handling(&mut self, settled: Settled, ended: Ended) -> (Settled, Ended) {
+        *self = StepResults::Handling(settled.step);
+        (settled, ended)
+    }
+
+    /// The floor's verdict: the step it answers, when one is being handled.
+    fn verdict(&mut self) -> Option<StepId> {
+        match std::mem::take(self) {
+            StepResults::Handling(step) => Some(step),
+            other => {
+                *self = other;
+                None
+            }
+        }
     }
 }
 
@@ -192,26 +277,7 @@ impl VoiceDriver {
         plan.turn_instructions = None;
         plan.on_enter = false;
         plan.running_tool_calls = Vec::new();
-        let reply = ReplyRun {
-            run,
-            agent: toolset.agent.clone(),
-            plan,
-            realtime,
-            request,
-            calls: BTreeMap::new(),
-            acting: false,
-            cut: false,
-            settling: None,
-            settled_items: None,
-            terminal_call: None,
-            tool_end: None,
-            verdict: None,
-            reply_required: BTreeMap::new(),
-            waiter: None,
-            next: None,
-            previous_user_metrics: None,
-            accepted: BTreeMap::new(),
-        };
+        let reply = ReplyRun::new(run, toolset.agent.clone(), plan, realtime, request);
         self.activity.tools.replies.insert(speech, reply);
         self.reply_effects(speech, startup);
         message_id.map(|message_id| (message_id, offered))
@@ -272,12 +338,11 @@ impl VoiceDriver {
                     if self.run_contains_speech(speech) {
                         self.session.runs.retain_input_requirements(&input_requirements);
                     }
-                    if let Some(reply) = self.activity.tools.replies.get_mut(&speech) {
-                        reply.settling = Some(step);
-                        reply.settled_items = Some(items);
-                        reply.terminal_call = terminal_call;
+                    let settled = Settled { step, items, terminal_call };
+                    let reply = self.activity.tools.replies.get_mut(&speech);
+                    if let Some(both) = reply.and_then(|reply| reply.results.settled(settled)) {
+                        self.handle_reply_tool_results(speech, both);
                     }
-                    self.handle_reply_tool_results(speech);
                 }
                 AgentRunEffect::CancelToolExecution { execution } => {
                     self.cancel_tool_execution(execution)
@@ -520,22 +585,24 @@ impl VoiceDriver {
     ) {
         let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return };
         reply.previous_user_metrics = previous_user_metrics;
-        reply.verdict = Some(continuation);
-        reply.reply_required = reply_required;
-        self.reply_verdict(speech);
+        if let Some(step) = reply.results.verdict() {
+            let event = AgentRunEvent::ToolResultsHandled { step, continuation, reply_required };
+            self.reply_event(speech, event);
+        }
         self.answer_reply_waiter(speech);
     }
 
-    fn reply_verdict(&mut self, speech: SpeechId) {
-        let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return };
-        let (Some(step), Some(continuation)) = (reply.settling, reply.verdict) else { return };
-        reply.settling = None;
-        reply.verdict = None;
-        let reply_required = std::mem::take(&mut reply.reply_required);
-        self.reply_event(
-            speech,
-            AgentRunEvent::ToolResultsHandled { step, continuation, reply_required },
-        );
+    /// A call's task ended without reporting back (it died): the run settles the call in
+    /// whatever phase it waits, so no step waits on a call nobody reports.
+    pub(crate) fn reply_call_lost(
+        &mut self,
+        speech: SpeechId,
+        call_id: &str,
+        outcome: ToolOutcome,
+    ) {
+        let reply = self.activity.tools.replies.get(&speech);
+        let Some(call) = reply.and_then(|reply| reply.run.step_call_id(call_id)) else { return };
+        self.reply_event(speech, AgentRunEvent::CallLost { call, outcome });
     }
 
     /// The run's next step, planned: on the session's record as published, with what the run
@@ -556,7 +623,6 @@ impl VoiceDriver {
         let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return };
         reply.request = Some(request);
         reply.acting = false;
-        reply.cut = false;
         reply.calls.clear();
         if cut {
             reply.next = Some(StepNext::Interrupted);
@@ -779,13 +845,6 @@ impl super::AgentActivity {
             reply.calls.remove(&call);
         }
         first
-    }
-
-    /// A call of the reply was dropped unrun: its run will not settle the step.
-    pub(crate) fn reply_call_dropped(&mut self, speech: SpeechId) {
-        if let Some(reply) = self.tools.replies.get_mut(&speech) {
-            reply.cut = true;
-        }
     }
 
     fn reply_move(&mut self, speech: SpeechId, call: CallId, go: ToolGo) {

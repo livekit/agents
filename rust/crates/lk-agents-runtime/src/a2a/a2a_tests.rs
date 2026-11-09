@@ -390,7 +390,7 @@ fn options(policy: Option<Policy>) -> TurnOptions {
 }
 
 fn turn(s: &Thread, host: Arc<Fake>, policy: Option<Policy>) -> Turn {
-    Turn::new(s.clone(), LANE, host, clock(), options(policy))
+    Turn::new(s.clone(), "worker", LANE, host, clock(), options(policy))
 }
 
 /// `run_turn(storage, thread, LANE, message, policy, handler)` of the Python tests.
@@ -415,15 +415,15 @@ fn placeholder_id(v: &mut Value, key: &str, prefix: &str) {
 
 async fn two_workers_share_one_session(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let a = fx.thread("worker-a").await;
+    let a = fx.thread().await;
     let opts = TurnOptions { policy: PolicySpec::All(Policy::Queue), ..TurnOptions::default() };
     let host = Fake::new(Behavior::Counter);
-    let first = Turn::new(a.clone(), LANE, host.clone(), clock(), opts.clone())
+    let first = Turn::new(a.clone(), "worker", LANE, host.clone(), clock(), opts.clone())
         .run(a2a("hello", "m1", None, None), None)
         .await
         .unwrap();
-    let b = fx.thread("worker-b").await;
-    let second = Turn::new(b.clone(), LANE, host.clone(), clock(), opts)
+    let b = fx.thread().await;
+    let second = Turn::new(b.clone(), "worker", LANE, host.clone(), clock(), opts)
         .run(a2a("again", "m2", None, None), None)
         .await
         .unwrap();
@@ -455,7 +455,7 @@ async fn two_workers_share_one_session(backend: Backend) {
 
 async fn a_failed_storage_run_preserves_its_original_task(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s = fx.thread("worker-a").await;
+    let s = fx.thread().await;
     // The failed run saves no staged history/state; its original accepted task remains
     // queryable with the observed storage failure rather than becoming a worker-loss orphan.
     let failed = run_turn(
@@ -512,8 +512,8 @@ async fn a_failed_storage_run_preserves_its_original_task(backend: Backend) {
 
 async fn interrupt_yields_and_the_newer_task_answers_both(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let a = fx.thread("worker-a").await;
-    let b = fx.thread("worker-b").await;
+    let a = fx.thread().await;
+    let b = fx.thread().await;
     let tool_entered = Gate::new();
     let waiter_set = Gate::new();
     let host_a =
@@ -537,7 +537,7 @@ async fn interrupt_yields_and_the_newer_task_answers_both(backend: Backend) {
     let mut found = false;
     for _ in 0..200 {
         let info = b.lane(LANE).info().await.unwrap();
-        if info.is_some_and(|i| i.waiter.as_deref().is_some_and(|w| w.starts_with("worker-b/"))) {
+        if info.is_some_and(|i| i.waiter.is_some()) {
             found = true;
             break;
         }
@@ -576,8 +576,8 @@ async fn interrupt_yields_and_the_newer_task_answers_both(backend: Backend) {
 
 async fn the_inbox_batches_a_burst_into_one_reply(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let a = fx.thread("worker-a").await;
-    let b = fx.thread("worker-b").await;
+    let a = fx.thread().await;
+    let b = fx.thread().await;
     let host = Fake::new(Behavior::Text("one reply"));
     let opts = TurnOptions {
         debounce: DebounceSpec::All(Duration::from_millis(300)),
@@ -586,7 +586,7 @@ async fn the_inbox_batches_a_burst_into_one_reply(backend: Backend) {
     let first = {
         let (a, host, opts) = (a.clone(), host.clone(), opts.clone());
         tokio::spawn(async move {
-            Turn::new(a, LANE, host, clock(), opts)
+            Turn::new(a, "worker", LANE, host, clock(), opts)
                 .run(a2a("where", "m1", Some("sms"), None), None)
                 .await
         })
@@ -595,7 +595,7 @@ async fn the_inbox_batches_a_burst_into_one_reply(backend: Backend) {
     let second = {
         let (b, host, opts) = (b.clone(), host.clone(), opts);
         tokio::spawn(async move {
-            Turn::new(b, LANE, host, clock(), opts)
+            Turn::new(b, "worker", LANE, host, clock(), opts)
                 .run(a2a("are you", "m2", Some("sms"), None), None)
                 .await
         })
@@ -628,7 +628,7 @@ async fn the_inbox_batches_a_burst_into_one_reply(backend: Backend) {
 
 async fn a_message_id_resend_returns_the_existing_task(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s = fx.thread("worker-a").await;
+    let s = fx.thread().await;
     let echo = Fake::new(Behavior::Echo);
     let first = run_turn(&s, a2a("hi", "m1", Some("sms"), None), None, echo.clone()).await.unwrap();
     let again = run_turn(&s, a2a("hi", "m1", Some("sms"), None), None, echo.clone()).await.unwrap();
@@ -652,7 +652,7 @@ async fn a_message_id_resend_returns_the_existing_task(backend: Backend) {
 async fn a_lapsed_lease_fails_the_orphan_worker_lost(backend: Backend) {
     let lease = Some((Duration::from_secs(1), Duration::from_millis(300)));
     let fx = backend.fixture(lease).await;
-    let a = fx.thread("worker-a").await;
+    let a = fx.thread().await;
     let lane_a = a.lane(LANE);
     let db = &lane_a;
     let message = user_message("first", "m1", Some("sms"), None);
@@ -678,7 +678,7 @@ async fn a_lapsed_lease_fails_the_orphan_worker_lost(backend: Backend) {
     tokio::time::sleep(Duration::from_millis(2100)).await;
 
     // worker B takes the lane for the next message: the orphan fails worker-lost, not run again
-    let b = fx.thread("worker-b").await;
+    let b = fx.thread().await;
     let host = Fake::new(Behavior::Text("answered"));
     let r2 = tokio::time::timeout(
         Duration::from_secs(10),
@@ -707,7 +707,7 @@ async fn a_lapsed_lease_fails_the_orphan_worker_lost(backend: Backend) {
 
 async fn input_required_pending_call_is_the_next_messages_output(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let s = fx.thread("worker-a").await;
+    let s = fx.thread().await;
     let first = run_turn(
         &s,
         a2a("my car is damaged", "m1", None, None),
@@ -769,8 +769,8 @@ async fn input_required_pending_call_is_the_next_messages_output(backend: Backen
 
 async fn concurrent_runs_append_without_a_lease(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let a = fx.thread("worker-a").await;
-    let b = fx.thread("worker-b").await;
+    let a = fx.thread().await;
+    let b = fx.thread().await;
     let entered = Gate::new();
     let gate = Gate::new();
     let slow =
@@ -798,8 +798,8 @@ async fn concurrent_runs_append_without_a_lease(backend: Backend) {
 
 async fn reject_refuses_while_a_turn_runs(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let a = fx.thread("worker-a").await;
-    let b = fx.thread("worker-b").await;
+    let a = fx.thread().await;
+    let b = fx.thread().await;
     let entered = Gate::new();
     let gate = Gate::new();
     let slow =
@@ -839,8 +839,8 @@ async fn reject_refuses_while_a_turn_runs(backend: Backend) {
 async fn a_submitted_row_exists_while_the_turn_runs(backend: Backend) {
     for policy in [Policy::Interrupt, Policy::Queue, Policy::Concurrent, Policy::Reject] {
         let fx = backend.fixture(None).await;
-        let a = fx.thread("worker-a").await;
-        let b = fx.thread("worker-b").await;
+        let a = fx.thread().await;
+        let b = fx.thread().await;
         let entered = Gate::new();
         let gate = Gate::new();
         let slow = Fake::new(Behavior::Slow {
@@ -906,8 +906,8 @@ async fn a_submitted_row_exists_while_the_turn_runs(backend: Backend) {
 
 async fn a_lease_timeout_fails_the_early_row(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let a = fx.thread("worker-a").await;
-    let b = fx.thread("worker-b").await;
+    let a = fx.thread().await;
+    let b = fx.thread().await;
     let entered = Gate::new();
     let gate = Gate::new();
     let slow =
@@ -921,6 +921,7 @@ async fn a_lease_timeout_fails_the_early_row(backend: Backend) {
     entered.wait().await;
     let short = Turn::new(
         b.clone(),
+        "worker",
         LANE,
         Fake::new(Behavior::Echo),
         clock(),
@@ -952,8 +953,8 @@ async fn a_lease_timeout_fails_the_early_row(backend: Backend) {
 
 async fn a_rejected_message_leaves_no_submitted_row(backend: Backend) {
     let fx = backend.fixture(None).await;
-    let a = fx.thread("worker-a").await;
-    let b = fx.thread("worker-b").await;
+    let a = fx.thread().await;
+    let b = fx.thread().await;
     let entered = Gate::new();
     let gate = Gate::new();
     let slow =
@@ -1000,10 +1001,10 @@ lk_agents_storage::contract!(
 /// client as the raw `TooLarge`, the task left `working`.
 #[tokio::test]
 async fn a_refused_commit_fails_the_original_task_storage_unavailable() {
-    use lk_agents_storage::testing::CommitFault;
-    for fault in [CommitFault::Refuse, CommitFault::RefuseTooLarge] {
+    use lk_agents_storage::testing::WriteFault;
+    for fault in [WriteFault::Refuse, WriteFault::RefuseTooLarge] {
         let fx = Backend::Sqlite.fixture(None).await;
-        let (s, faults) = fx.faulty_thread("worker-a").await;
+        let (s, faults) = fx.faulty_thread().await;
         faults.fail_next_commit(fault);
         let host = Fake::new(Behavior::Echo);
         let r = turn(&s, host, Some(Policy::Queue))
@@ -1027,8 +1028,8 @@ async fn a_refused_commit_fails_the_original_task_storage_unavailable() {
 #[tokio::test]
 async fn an_unresolved_commit_answers_working_and_resolves_to_the_original_run() {
     let fx = Backend::Sqlite.fixture(None).await;
-    let (s, faults) = fx.faulty_thread("worker-a").await;
-    faults.fail_next_commit(lk_agents_storage::testing::CommitFault::LoseAckAfter);
+    let (s, faults) = fx.faulty_thread().await;
+    faults.fail_next_commit(lk_agents_storage::testing::WriteFault::LoseAckAfter);
     faults.unreachable_after_commit_for(Duration::from_secs(12));
     let host = Fake::new(Behavior::Echo);
     let r = turn(&s, host, Some(Policy::Queue))
@@ -1037,7 +1038,7 @@ async fn an_unresolved_commit_answers_working_and_resolves_to_the_original_run()
         .unwrap();
     assert_eq!((r.task.task_id.as_str(), r.task.status), ("AST_1", TaskState::Working));
 
-    let reader = fx.thread("reader").await;
+    let reader = fx.thread().await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let row = loop {
         let row = reader.lane(LANE).task("AST_1").await.unwrap().unwrap();
@@ -1056,13 +1057,13 @@ async fn an_unresolved_commit_answers_working_and_resolves_to_the_original_run()
 #[tokio::test]
 async fn the_submitted_row_is_durable_before_the_debounce() {
     let fx = Backend::Sqlite.fixture(None).await;
-    let s = fx.thread("worker-a").await;
+    let s = fx.thread().await;
     let opts = TurnOptions {
         policy: PolicySpec::All(Policy::Queue),
         debounce: DebounceSpec::All(Duration::from_secs(1)),
         ..TurnOptions::default()
     };
-    let turn = Turn::new(s.clone(), LANE, Fake::new(Behavior::Echo), clock(), opts);
+    let turn = Turn::new(s.clone(), "worker", LANE, Fake::new(Behavior::Echo), clock(), opts);
     let running = tokio::spawn(async move {
         turn.run(a2a("hello", "m1", Some("sms"), None), Some("AST_1".into())).await
     });
@@ -1122,11 +1123,15 @@ mod attachments {
     #[tokio::test]
     async fn sqlite_restart_keeps_references_but_no_inline_upload_in_task_or_inbox() {
         let dir = std::env::temp_dir().join(shortuuid("lk-attachment-boundary-"));
-        let storage = SqliteStorage::open(&dir, Default::default()).await.unwrap();
+        let storage =
+            SqliteStorage::open(&dir, Default::default(), lk_agents_storage::testing::threads())
+                .await
+                .unwrap();
         let created = storage.create_thread(Default::default()).await.unwrap();
-        let thread = storage.open(&created.thread_id, "first-worker").await.unwrap();
+        let thread = storage.open(&created.thread_id).await.unwrap();
         let turn = Turn::new(
             thread.clone(),
+            "worker",
             "desk",
             Arc::new(Host),
             Arc::new(RealClock::new()),
@@ -1153,8 +1158,11 @@ mod attachments {
         storage.close().await;
         drop(storage);
 
-        let reopened = SqliteStorage::open(&dir, Default::default()).await.unwrap();
-        let thread = reopened.open(&created.thread_id, "second-worker").await.unwrap();
+        let reopened =
+            SqliteStorage::open(&dir, Default::default(), lk_agents_storage::testing::threads())
+                .await
+                .unwrap();
+        let thread = reopened.open(&created.thread_id).await.unwrap();
         let task = thread.task(&task_id).await.unwrap().unwrap();
         assert_eq!(serde_json::to_value(&task.data.history[0]).unwrap()["parts"], parts);
         let inbox = thread.lane("desk").inbox(false).await.unwrap();

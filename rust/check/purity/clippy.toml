@@ -1,4 +1,5 @@
 # The purity policy for ABI, core, voice and media: decisions consume supplied data and time.
+# Tokio and futures need no entry: rust/check keeps them out of these crates' dependency tree.
 
 # Tests may unwrap, print and debug (AGENTS.md "Idiomatic Rust").
 allow-unwrap-in-tests = true
@@ -7,17 +8,6 @@ allow-dbg-in-tests = true
 allow-print-in-tests = true
 
 disallowed-methods = [
-  { path = "tokio::runtime::Handle::spawn", reason = "Execute tasks and retain synchronization only in runtime." },
-  { path = "tokio::runtime::Handle::spawn_blocking", reason = "Execute tasks and retain synchronization only in runtime." },
-  { path = "tokio::runtime::Runtime::spawn", reason = "Execute tasks and retain synchronization only in runtime." },
-  { path = "tokio::runtime::Runtime::spawn_blocking", reason = "Execute tasks and retain synchronization only in runtime." },
-  { path = "tokio::task::LocalSet::spawn_local", reason = "Execute tasks and retain synchronization only in runtime." },
-  { path = "tokio::task::JoinSet::spawn", reason = "Execute tasks and retain synchronization only in runtime." },
-  { path = "tokio::task::JoinSet::spawn_on", reason = "Execute tasks and retain synchronization only in runtime." },
-  { path = "tokio::task::JoinSet::spawn_local", reason = "Execute tasks and retain synchronization only in runtime." },
-  { path = "tokio::task::JoinSet::spawn_local_on", reason = "Execute tasks and retain synchronization only in runtime." },
-  { path = "tokio::task::JoinSet::spawn_blocking", reason = "Execute tasks and retain synchronization only in runtime." },
-  { path = "tokio::task::JoinSet::spawn_blocking_on", reason = "Execute tasks and retain synchronization only in runtime." },
   { path = "rand::random_iter", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "rand::random_bool", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "rand::random_ratio", reason = "Supply deterministic inputs; keep live resources in runtime." },
@@ -34,7 +24,6 @@ disallowed-methods = [
   { path = "std::thread::Scope::spawn", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "std::time::Instant::elapsed", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "std::time::SystemTime::elapsed", reason = "Supply deterministic inputs; keep live resources in runtime." },
-  { path = "tokio::time::Instant::elapsed", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "rand::Rng::random", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "rand::Rng::random_range", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "rand::Rng::gen", reason = "Supply deterministic inputs; keep live resources in runtime." },
@@ -61,21 +50,7 @@ disallowed-methods = [
   { path = "rand::random_range", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
   { path = "rand::rng", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
   { path = "rand::thread_rng", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "tokio::spawn", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "tokio::task::spawn", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "tokio::task::spawn_blocking", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "tokio::task::spawn_local", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "tokio::time::sleep", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "tokio::time::sleep_until", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "tokio::time::interval", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "tokio::time::interval_at", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "tokio::time::timeout", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "tokio::time::timeout_at", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "tokio::time::Instant::now", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "tokio::sync::mpsc::unbounded_channel", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
   { path = "std::sync::mpsc::channel", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "futures::channel::mpsc::unbounded", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "futures_channel::mpsc::unbounded", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
   { path = "crossbeam::channel::unbounded", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
   { path = "crossbeam_channel::unbounded", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
   { path = "lk_agents_telemetry::scoped::start", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
@@ -99,16 +74,8 @@ disallowed-types = [
   { path = "lock_api::ReentrantMutex", reason = "Execute tasks and retain synchronization only in runtime." },
   { path = "rand::rngs::ThreadRng", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "rand::rngs::OsRng", reason = "Supply deterministic inputs; keep live resources in runtime." },
-  { path = "tokio::sync::mpsc::UnboundedSender", reason = "Supply deterministic inputs; keep live resources in runtime." },
-  { path = "tokio::sync::mpsc::UnboundedReceiver", reason = "Supply deterministic inputs; keep live resources in runtime." },
-  { path = "futures::channel::mpsc::UnboundedSender", reason = "Supply deterministic inputs; keep live resources in runtime." },
-  { path = "futures::channel::mpsc::UnboundedReceiver", reason = "Supply deterministic inputs; keep live resources in runtime." },
-  { path = "futures_channel::mpsc::UnboundedSender", reason = "Supply deterministic inputs; keep live resources in runtime." },
-  { path = "futures_channel::mpsc::UnboundedReceiver", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "std::sync::mpsc::Sender", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "std::sync::mpsc::Receiver", reason = "Supply deterministic inputs; keep live resources in runtime." },
-  { path = "tokio::sync::Mutex", reason = "Supply deterministic inputs; keep live resources in runtime." },
-  { path = "tokio::sync::RwLock", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "std::collections::HashMap", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
   { path = "std::collections::HashSet", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
   { path = "std::sync::Mutex", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
@@ -130,10 +97,4 @@ disallowed-types = [
 ]
 
 disallowed-macros = [
-  { path = "tokio::select", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "tokio::join", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "tokio::try_join", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "futures::select", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "futures::join", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "futures::try_join", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
 ]

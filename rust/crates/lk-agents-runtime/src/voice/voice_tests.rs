@@ -394,8 +394,7 @@ async fn prepared_stt(
                 Arc::from(sink),
                 crate::voice::legs::PendingLeg::Stt(source),
                 runtime.shared.resources.clone(),
-                runtime.shared.time.clone(),
-                runtime.shared.spawner.clone(),
+                &runtime.shared.background(),
             )),
         },
         settled,
@@ -542,7 +541,7 @@ async fn refused_cleanup_task_admission_preserves_the_stream_owner() {
     let VoiceEvent::StreamOpened { outcome: Ok(sink), .. } = runtime.prepare_leg(opened) else {
         panic!("prepared STT did not produce a resource identity");
     };
-    runtime.tasks.close();
+    runtime.shared.tasks.close();
     runtime.perform_voice(vec![
         lk_agents_voice::agent_session::effects::VoiceEffect::DiscardOpenedInput(sink),
     ]);
@@ -616,11 +615,8 @@ impl lk_agents_abi::RealtimeSession for RealtimeProbe {
 async fn abandoned_realtime_connection_and_its_pending_pump_close() {
     let (mut runtime, _, _) = session("abandoned-realtime").await;
     let probe = Arc::new(RealtimeProbe::default());
-    runtime.realtime = Some(legs::RealtimeConnection::new(
-        probe.clone(),
-        runtime.shared.time.clone(),
-        runtime.shared.spawner.clone(),
-    ));
+    runtime.realtime =
+        Some(legs::RealtimeConnection::new(probe.clone(), &runtime.shared.background()));
     runtime.pump_realtime(probe.clone());
     tokio::task::yield_now().await;
     assert!(probe.reading.load(std::sync::atomic::Ordering::SeqCst));
@@ -633,17 +629,28 @@ async fn abandoned_realtime_connection_and_its_pending_pump_close() {
     assert_eq!(probe.closed.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
+/// The builder's executor and clock, over `tasks`.
+fn on(
+    builder: &DriverBuilder,
+    tasks: &Arc<lk_agents_net::task::TaskSet>,
+) -> lk_agents_net::owned::Background {
+    lk_agents_net::owned::Background::new(
+        Arc::clone(tasks),
+        builder.spawner.clone(),
+        builder.time.clock(),
+    )
+}
+
 #[tokio::test(start_paused = true)]
 async fn realtime_close_is_owned_once_even_when_task_admission_is_refused() {
     let (builder, _) = builder("refused-realtime-close");
     let probe = Arc::new(RealtimeProbe::default());
-    let mut connection =
-        legs::RealtimeConnection::new(probe.clone(), builder.time.clone(), builder.spawner.clone());
     let tasks = Arc::<lk_agents_net::task::TaskSet>::default();
     tasks.close();
+    let mut connection = legs::RealtimeConnection::new(probe.clone(), &on(&builder, &tasks));
     let tx = crate::voice::session::Tx::disconnected();
-    connection.close(&tasks, tx.clone());
-    connection.close(&tasks, tx);
+    connection.close(tx.clone());
+    connection.close(tx);
     drop(connection);
     tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, probe.settled.notified())
         .await
@@ -699,10 +706,9 @@ async fn cancelling_a_polled_realtime_close_continues_the_same_operation() {
     let (builder, _) = builder("cancel-polled-realtime-close");
     let release = Arc::new(tokio::sync::Notify::new());
     let probe = Arc::new(RealtimeProbe { release: Some(release.clone()), ..Default::default() });
-    let mut connection =
-        legs::RealtimeConnection::new(probe.clone(), builder.time.clone(), builder.spawner.clone());
     let tasks = Arc::<lk_agents_net::task::TaskSet>::default();
-    connection.close(&tasks, crate::voice::session::Tx::disconnected());
+    let mut connection = legs::RealtimeConnection::new(probe.clone(), &on(&builder, &tasks));
+    connection.close(crate::voice::session::Tx::disconnected());
     probe.closing.notified().await;
     tasks.close();
     tokio::task::yield_now().await;
@@ -749,17 +755,16 @@ async fn cancelling_a_polled_stream_retirement_preserves_close_and_registration_
     let release = Arc::new(tokio::sync::Notify::new());
     let probe = Arc::new(RealtimeProbe { release: Some(release.clone()), ..Default::default() });
     let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let tasks = Arc::<lk_agents_net::task::TaskSet>::default();
     let opened = legs::OpeningLeg::new(
         lk_agents_voice::audio::AudioChannel::Amd,
         Arc::new(StartupSink(ended.clone())),
         legs::PendingLeg::Stt(Box::new(PendingCloseSource { probe: probe.clone(), ended })),
         builder.resources.clone(),
-        builder.time.clone(),
-        builder.spawner.clone(),
+        &on(&builder, &tasks),
     );
     let id = opened.resource();
-    let tasks = Arc::<lk_agents_net::task::TaskSet>::default();
-    opened.retire(&tasks);
+    drop(opened);
     probe.closing.notified().await;
     tasks.close();
     tokio::task::yield_now().await;

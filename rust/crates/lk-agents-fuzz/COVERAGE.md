@@ -196,7 +196,7 @@ was a driver bug).
 | P4 | `nodes_are_the_active_agents` | every node the session opens (`llm`, `tts`, `stt`, `transcription`) is an override of the agent active then | 0 / 0 / 0 (new 2026-10-27) |
 | P5 | `provider_failure_is_accounted` | every injected failure is retried, surfaced (on the speech or as its error event), abandoned with an interrupted speech, or closes the session | 9 / 23 / 35 |
 | P5 | `speech_error_is_injected` | a failed speech traces back to an injected failure or an explicit refusal | 1 / 6 / 19 |
-| P5 | `provider_streams_closed` | every LLM, TTS and STT stream is closed by the end | 7 / 41 / 6 |
+| P5 | `provider_streams_closed` | every LLM, TTS, STT and VAD stream and every realtime socket is closed by the end | 7 / 41 / 6 |
 | P1 | `speech_is_heard` | a speech pushes audio within 15 s of its creation and of the scheduler letting it go, ends, or waits on something that still holds; one that ended unheard was cut by the person, the host, the server or the close (section 13) | 0 / 0 / 0 (new 2026-10-26) |
 | P1 | `pause_resolves` | a pause for the person's speech resumes, is interrupted or ends within 4 s beyond the endpointing delay of the person going quiet (section 13) | 0 / 0 / 0 (new 2026-10-26) |
 | P1 | `first_audio_is_prompt` | once a speech may play, its first audio reaches the speaker within 100 ms of the product having it (the voice's first chunk after its calibrated time to first audio, the realtime server's first delta), unless the speech was paused, cut, its output replaced or the session closing (section 14) | 0 / 0 / 0 (new 2026-10-26) |
@@ -777,8 +777,9 @@ Measured nowhere here, and each a separate source of production risk:
   `livekit.rtc` room adapter.
 - The binding from Python to the driver (`lk-agents-py`), plugins reached through host proxies.
 - Threads, lanes and leases in agent-db and the SQLite file backend, and the A2A text door.
-  The voice lane itself runs storage's own lease, renewal and commit code over its in-memory
-  database (2026-11-08); a text turn lands on it only between voice turns.
+  The voice lane itself runs storage's own lease, renewal and commit code over the production
+  SQLite backend, thread create/open and the registry included (2026-11-08); a text turn lands
+  on it only between voice turns.
 - Real provider behaviour beyond what was recorded: section 13 lists what each fake is
   calibrated from and what it still cannot do.
 - `lk-agents-inference` (native gateway clients, fallback adapters), `lk-agents-media`,

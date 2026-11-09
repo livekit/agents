@@ -468,55 +468,50 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
         st.pending.retain(|id| {
             requests.get(id).is_some_and(|request| request.state == ReservationState::Waiting)
         });
-        while !st.ready.is_empty() && !st.pending.is_empty() {
-            let first = *st.pending.front().expect("the loop runs while pending is not empty");
-            if st.processes.values().any(|p| p.request == Some(first) && p.phase == Phase::Retiring)
+        while let (Some(&request_id), Some(&process_id)) = (st.pending.front(), st.ready.front()) {
+            if st
+                .processes
+                .values()
+                .any(|p| p.request == Some(request_id) && p.phase == Phase::Retiring)
             {
                 // The head reservation must finish cleanup before any replacement is assigned.
                 // Spawning for later requests here would repeatedly replace their ready processes
                 // while the head remains blocked, starving the runtime and growing the pool.
                 return;
             }
-            let process_id = st.ready.pop_front().expect("the loop runs while ready is not empty");
-            let request_id =
-                st.pending.pop_front().expect("the loop runs while pending is not empty");
-            let request =
-                st.requests.get_mut(&request_id).expect("pending holds only live reservations");
+            st.pending.pop_front();
+            let Some(request) = st.requests.get_mut(&request_id) else { continue };
+            st.ready.pop_front();
             request.state = ReservationState::Reserved(process_id);
             request.acquire_attempts = 0;
             let job = (request.job_id.clone(), request_id);
             for (other, process) in &mut st.processes {
-                if *other != process_id && process.request == Some(request_id) {
+                if *other == process_id {
+                    process.phase = Phase::Reserved;
+                    process.request = Some(request_id);
+                    process.job = Some(job.clone());
+                } else if process.request == Some(request_id) {
                     process.request = None;
                 }
             }
-            let process =
-                st.processes.get_mut(&process_id).expect("ready holds only live processes");
-            process.phase = Phase::Reserved;
-            process.request = Some(request_id);
-            process.job = Some(job);
         }
         for request_id in st.pending.iter().copied().collect::<Vec<_>>() {
             if st.processes.values().any(|p| p.request == Some(request_id)) {
                 continue;
             }
-            let initializing = st.processes.iter().find_map(|(id, p)| {
-                (st.initializing.contains(id) && p.request.is_none() && p.phase != Phase::Retiring)
-                    .then_some(*id)
+            let initializing = st.processes.iter_mut().find(|(id, p)| {
+                st.initializing.contains(*id) && p.request.is_none() && p.phase != Phase::Retiring
             });
-            let process_id = match initializing {
-                Some(id) => id,
-                None if st.initializing.len() < CONCURRENT_INITIALIZATIONS => self.create(st),
+            match initializing {
+                Some((_, process)) => process.request = Some(request_id),
+                None if st.initializing.len() < CONCURRENT_INITIALIZATIONS => {
+                    self.create(st, Some(request_id));
+                }
                 None => break,
-            };
-            st.requests
-                .get_mut(&request_id)
-                .expect("pending holds only live reservations")
-                .acquire_attempts += 1;
-            st.processes
-                .get_mut(&process_id)
-                .expect("the process was just found or created")
-                .request = Some(request_id);
+            }
+            if let Some(request) = st.requests.get_mut(&request_id) {
+                request.acquire_attempts += 1;
+            }
         }
         if !st.draining && st.refill_paused_until.is_none() {
             let unassigned = st
@@ -531,12 +526,13 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
                 if st.initializing.len() >= CONCURRENT_INITIALIZATIONS {
                     break;
                 }
-                self.create(st);
+                self.create(st, None);
             }
         }
     }
 
-    fn create(&self, st: &mut State<P>) -> ProcessId {
+    /// A new process, assigned to `request` when one waits on it.
+    fn create(&self, st: &mut State<P>, request: Option<ReservationId>) {
         let id = ProcessId(st.next_process);
         st.next_process += 1;
         st.processes.insert(
@@ -545,7 +541,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
                 executor: None,
                 phase: Phase::Creating,
                 spawned: Instant::now(),
-                request: None,
+                request,
                 job: None,
                 closed: false,
                 receipt: false,
@@ -555,7 +551,6 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
         st.initializing.insert(id);
         let pool = self.clone();
         self.own(st, async move { pool.spawn_process(id).await });
-        id
     }
 
     async fn spawn_process(&self, id: ProcessId) {
@@ -647,14 +642,13 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
         process.phase = Phase::Retiring;
         let request_id = process.request;
         st.ready.retain(|ready| *ready != id);
-        let waiting = request_id.filter(|request_id| {
-            st.reservation(*request_id).is_some_and(|state| {
-                state == ReservationState::Waiting || state == ReservationState::Reserved(id)
-            })
+        let waiting = request_id.and_then(|request_id| {
+            let request = st.requests.get_mut(&request_id)?;
+            let live = request.state == ReservationState::Waiting
+                || request.state == ReservationState::Reserved(id);
+            live.then_some((request_id, request))
         });
-        if let Some(request_id) = waiting {
-            let request =
-                st.requests.get_mut(&request_id).expect("`waiting` names a live reservation");
+        if let Some((request_id, request)) = waiting {
             if reserved {
                 request.launch_attempts += 1;
             }
@@ -876,12 +870,13 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
         st.closed = true;
         st.refill_paused_until = None;
         st.pending.clear();
-        let reservations: Vec<_> = st.requests.keys().copied().collect();
-        for id in reservations {
-            let request = st.requests.get_mut(&id).expect("ids were just read from the table");
+        let mut released = Vec::new();
+        for (id, request) in &mut st.requests {
             request.state =
                 ReservationState::Failed(LaunchError::Admission(PoolAdmissionError::Closed));
-            let job_id = request.job_id.clone();
+            released.push((request.job_id.clone(), *id));
+        }
+        for (job_id, id) in released {
             st.release_job(&job_id, id);
         }
         let processes: Vec<_> = st.processes.keys().copied().collect();

@@ -25,7 +25,7 @@ pub(super) struct HostDrain {
 
 impl HostDrain {
     pub(super) async fn run(self, mut runner: SessionRunner) {
-        let mut answering = Vec::new();
+        let mut answering = lk_agents_net::task::ScopedTasks::new(Arc::clone(&self.tasks));
         let mut forwarded = 0;
         if let Some(events) = &self.events {
             self.delivered.open(events.as_ref(), &self.history);
@@ -51,9 +51,9 @@ impl HostDrain {
                 }
             }
         }
-        answering.into_iter().for_each(|task| self.tasks.cancel(task));
+        drop(answering);
         // The session reports nothing more: no wait on a speech's end outlives it.
-        runner.speeches.report_all();
+        runner.speeches.end();
         // Dropping the runner tells `aclose()` the host has seen everything.
         drop(runner);
         // However the session closed, its remote session host closes with it.
@@ -68,7 +68,7 @@ impl HostDrain {
         &self,
         call: HookCall,
         api: Tx,
-        answering: &mut Vec<lk_agents_net::task::TaskId>,
+        answering: &mut lk_agents_net::task::ScopedTasks,
     ) {
         if let (Some(remote), HookCall::FunctionToolsExecuted { event, .. }) = (&self.remote, &call)
         {
@@ -88,8 +88,7 @@ impl HostDrain {
         let first =
             std::future::poll_fn(|cx| std::task::Poll::Ready(answer.as_mut().poll(cx))).await;
         if first.is_pending() {
-            answering.retain(|task| self.tasks.contains(*task));
-            answering.push(self.tasks.spawn(self.spawner.as_ref(), "hook answer", answer));
+            answering.push(self.tasks.scoped(self.spawner.as_ref(), "hook answer", answer));
         }
     }
 

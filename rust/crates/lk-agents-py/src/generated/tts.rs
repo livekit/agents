@@ -1127,7 +1127,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
         let text_arg = text.to_owned();
         let bound = ::std::clone::Clone::clone(&self.conn);
         let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
+            &crate::py_streams::StreamCall,
             "Tts._core_synthesize",
             &crate::py_calls::calling_context(&self.context),
             &[],
@@ -1192,7 +1192,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
         let expressive_arg = expressive;
         let bound = ::std::clone::Clone::clone(&self.conn);
         let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
+            &crate::py_streams::StreamCall,
             "Tts._core_stream",
             &crate::py_calls::calling_context(&self.context),
             &[],
@@ -1240,16 +1240,9 @@ impl ::lk_agents_abi::Tts for TtsProxy {
 
 impl crate::py_errors::HostException for ::lk_agents_abi::tts::streams::DrainError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Pull(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Emitter(inner) => crate::py_errors::HostException::to_py_err(inner),
-            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
-                self,
-            )),
         }
     }
 }

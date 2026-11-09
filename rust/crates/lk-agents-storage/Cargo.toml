@@ -43,13 +43,13 @@ hyper = { version = "1.12", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 percent-encoding = "2"
-# Local storage: thread files and the registry.
-rusqlite = { version = "0.32.1", features = ["bundled", "hooks"] }
+# Local storage: thread files and the registry; `unixepoch()` reads the injected clock.
+rusqlite = { version = "0.32.1", features = ["bundled", "hooks", "functions"] }
 
 
 [features]
 # `testing`: the contract fixtures over both backends and a fault-injecting connection.
-testing = ["rusqlite/functions"]
+testing = []
 
 [dev-dependencies]
 lk-agents-storage = { path = ".", features = ["testing"] }

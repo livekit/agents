@@ -250,10 +250,6 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
 
 impl crate::py_errors::HostException for ::lk_agents_abi::evals::IntentFailure {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Provider(inner) => crate::py_errors::HostException::to_py_err(inner),
             _ => ::pyo3::exceptions::PyAssertionError::new_err(::std::string::ToString::to_string(

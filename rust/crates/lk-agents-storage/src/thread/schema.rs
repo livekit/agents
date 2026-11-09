@@ -84,6 +84,20 @@ struct EventColumns {
 
 json_cell!(TaskData, TaskInternal, ChatItem, a2a::Message);
 
+/// The framework statements a connection (a fault-injecting one, a simulated database) tells
+/// apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatementKind {
+    /// Takes the lane's lease: an acquire or an inbox receive.
+    LeaseTake,
+    /// Commits a run: bumps the lane's version.
+    Commit,
+    /// Reads the lane's version and lease.
+    FenceRead,
+    /// Writes the lane row or the journal, nothing a run staged.
+    Bookkeeping,
+}
+
 impl FromCell for TaskState {
     fn from_cell(cell: &SqlValue) -> Result<Self, crate::StorageError> {
         cell.as_str()
@@ -94,7 +108,7 @@ impl FromCell for TaskState {
 
 statement! {
     /// Creates the lane's row on its first use.
-    InsertLane<'a> { lane: &'a str } => "INSERT OR IGNORE INTO lanes (lane, version) VALUES (:lane, 0)"
+    InsertLane<'a> { lane: &'a str } as Bookkeeping => "INSERT OR IGNORE INTO lanes (lane, version) VALUES (:lane, 0)"
 }
 
 statement! {
@@ -110,7 +124,7 @@ statement! {
         lease_secs: i64,
         task_id: &'a str,
         wait_ms: i64,
-    } => r#"
+    } as LeaseTake => r#"
 UPDATE lanes
 SET waiter = CASE WHEN lease_holder = :holder THEN waiter END,
     lease_holder = :holder, lease_token = :token, lease_until = unixepoch() + :lease_secs
@@ -139,7 +153,7 @@ statement! {
         lease_secs: i64,
         message_id: &'a str,
         task_id: &'a str,
-    } => r#"
+    } as LeaseTake => r#"
 UPDATE lanes
 SET waiter = CASE WHEN lease_holder = :holder THEN waiter END,
     lease_holder = :holder, lease_token = :token, lease_until = unixepoch() + :lease_secs
@@ -221,7 +235,7 @@ statement! {
         ts_ms: i64,
         run_id: &'a str,
         payload: SqlValue,
-    } => r#"
+    } as Bookkeeping => r#"
 INSERT INTO events (ts_ms, lane, run_id, type, payload)
 SELECT :ts_ms, :lane, :run_id, 'run_started', jsonb(:payload)
 FROM lanes
@@ -239,7 +253,7 @@ statement! {
         ts_ms: i64,
         run_id: &'a str,
         payload: SqlValue,
-    } => r#"
+    } as Bookkeeping => r#"
 INSERT INTO events (ts_ms, lane, run_id, type, payload)
 SELECT :ts_ms, :lane, :run_id, 'run_ended', jsonb(:payload)
 FROM lanes
@@ -248,8 +262,8 @@ WHERE lane = :lane AND lease_token = :token
 }
 
 statement! {
-    /// The lane's fence as it stands: its version and lease token.
-    SelectFence<'a> { lane: &'a str } => "SELECT version, lease_token FROM lanes WHERE lane = :lane"
+    /// The lane's fence as it stands: its version, lease token and lease expiry.
+    SelectFence<'a> { lane: &'a str } as FenceRead => "SELECT version, lease_token, lease_until FROM lanes WHERE lane = :lane"
 }
 
 statement! {
@@ -413,9 +427,10 @@ ON CONFLICT(id) DO UPDATE SET message_id = excluded.message_id, payload = exclud
 }
 
 statement! {
-    /// [`InsertItem`] with no lease.
+    /// [`InsertItem`] with no lease, guarded on its run: a re-sent commit writes nothing twice.
     InsertItemUnfenced<'a> {
         lane: &'a str,
+        run_id: &'a str,
         id: &'a str,
         message_id: Option<&'a str>,
         payload: SqlValue,
@@ -423,7 +438,7 @@ statement! {
 INSERT INTO items (id, lane, seq, message_id, payload)
 SELECT :id, :lane, COALESCE((SELECT MAX(seq) FROM items WHERE lane = :lane), 0) + 1, :message_id, jsonb(:payload)
 FROM lanes
-WHERE lane = :lane
+WHERE lane = :lane AND NOT EXISTS (SELECT 1 FROM events WHERE lane = :lane AND run_id = :run_id AND type = 'run_ended')
 ON CONFLICT(id) DO UPDATE SET message_id = excluded.message_id, payload = excluded.payload,
   lane = CASE WHEN items.lane = excluded.lane THEN items.lane END
 "#
@@ -439,11 +454,11 @@ WHERE lane = :lane AND id = :id
 }
 
 statement! {
-    /// [`DeleteItem`] with no lease.
-    DeleteItemUnfenced<'a> { lane: &'a str, id: &'a str } => r#"
+    /// [`DeleteItem`] with no lease, guarded on its run: a re-sent commit writes nothing twice.
+    DeleteItemUnfenced<'a> { lane: &'a str, run_id: &'a str, id: &'a str } => r#"
 DELETE FROM items
 WHERE lane = :lane AND id = :id
-  AND EXISTS (SELECT 1 FROM lanes WHERE lane = :lane)
+  AND EXISTS (SELECT 1 FROM lanes WHERE lane = :lane AND NOT EXISTS (SELECT 1 FROM events WHERE lane = :lane AND run_id = :run_id AND type = 'run_ended'))
 "#
 }
 
@@ -457,7 +472,7 @@ statement! {
         run_id: &'a str,
         event_type: &'a str,
         payload: SqlValue,
-    } => r#"
+    } as Bookkeeping => r#"
 INSERT INTO events (ts_ms, lane, run_id, type, payload)
 SELECT :ts_ms, :lane, :run_id, :event_type, jsonb(:payload)
 FROM lanes
@@ -466,18 +481,18 @@ WHERE lane = :lane AND version = :version AND lease_token = :token
 }
 
 statement! {
-    /// [`InsertEvent`] with no lease.
+    /// [`InsertEvent`] with no lease, guarded on its run: a re-sent commit writes nothing twice.
     InsertEventUnfenced<'a> {
         lane: &'a str,
         ts_ms: i64,
         run_id: &'a str,
         event_type: &'a str,
         payload: SqlValue,
-    } => r#"
+    } as Bookkeeping => r#"
 INSERT INTO events (ts_ms, lane, run_id, type, payload)
 SELECT :ts_ms, :lane, :run_id, :event_type, jsonb(:payload)
 FROM lanes
-WHERE lane = :lane
+WHERE lane = :lane AND NOT EXISTS (SELECT 1 FROM events WHERE lane = :lane AND run_id = :run_id AND type = 'run_ended')
 "#
 }
 
@@ -511,9 +526,10 @@ WHERE tasks.status NOT IN ('completed', 'failed', 'canceled', 'rejected')
 }
 
 statement! {
-    /// [`UpsertTask`] with no lease.
+    /// [`UpsertTask`] with no lease, guarded on its run: a re-sent commit writes nothing twice.
     UpsertTaskUnfenced<'a> {
         lane: &'a str,
+        run_id: &'a str,
         task_id: &'a str,
         name: Option<&'a str>,
         message_id: Option<&'a str>,
@@ -526,7 +542,7 @@ INSERT INTO tasks
 SELECT :task_id, :lane, COALESCE((SELECT MAX(seq) FROM tasks WHERE lane = :lane), 0) + 1,
   :name, :message_id, :status, jsonb(:data), jsonb(:internal), CAST(unixepoch('subsec') * 1000 AS INTEGER)
 FROM lanes
-WHERE lane = :lane
+WHERE lane = :lane AND NOT EXISTS (SELECT 1 FROM events WHERE lane = :lane AND run_id = :run_id AND type = 'run_ended')
 ON CONFLICT(task_id) DO UPDATE SET
   status = excluded.status, name = excluded.name, message_id = excluded.message_id,
   data = excluded.data, internal = excluded.internal,
@@ -545,7 +561,7 @@ statement! {
         token: &'a str,
         state: SqlValue,
         drained_id: Option<i64>,
-    } => r#"
+    } as Commit => r#"
 UPDATE lanes
 SET version = version + 1,
   state = COALESCE(jsonb(:state), state),
@@ -560,7 +576,7 @@ statement! {
     /// Aborts the enclosing batch unless the lease still holds the lane at `version`: inserting
     /// a lane row without a version fails its NOT NULL constraint. What follows it in the batch,
     /// application SQL that cannot itself be fenced, then never applies after a takeover.
-    AssertFence<'a> { lane: &'a str, version: i64, token: &'a str } => r#"
+    AssertFence<'a> { lane: &'a str, version: i64, token: &'a str } as Bookkeeping => r#"
 INSERT INTO lanes (lane, version)
 SELECT :lane, NULL
 WHERE NOT EXISTS (
@@ -578,7 +594,7 @@ statement! {
         state: SqlValue,
         drained_id: Option<i64>,
         lease_secs: i64,
-    } => r#"
+    } as Commit => r#"
 UPDATE lanes
 SET version = version + 1,
   state = COALESCE(jsonb(:state), state),
@@ -763,15 +779,39 @@ WHERE lane = :lane AND id > (SELECT drained_id FROM lanes WHERE lane = :lane) OR
 "#
 }
 
-// Scope records are framework-private schema, independent of the platform's v1 thread tables.
-pub const CONTEXT_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS context_scopes (
+/// The framework's private tables, beside the platform's v1 thread tables: context scopes, and
+/// application transactions applied by request id, so a resend after a lost acknowledgment
+/// finds its own and writes nothing twice (a day of them is kept). Sent with the bootstrap and
+/// every acquire, so a database an older SDK created gains them.
+pub const FRAMEWORK_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS context_scopes (
         scope_id TEXT PRIMARY KEY,
         lane TEXT NOT NULL,
         revision INTEGER NOT NULL,
         fields JSONB NOT NULL,
         contracts JSONB NOT NULL,
         manifests JSONB NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS applied_writes (
+        id TEXT PRIMARY KEY,
+        applied_at INTEGER NOT NULL
     )";
+
+statement! {
+    /// Records an application transaction, first in its batch: a second apply fails the batch.
+    RecordAppliedWrite<'a> { id: &'a str } => r#"
+INSERT INTO applied_writes (id, applied_at) VALUES (:id, unixepoch())
+"#
+}
+
+statement! {
+    /// Forgets the application transactions applied more than a day ago.
+    PruneAppliedWrites {} => "DELETE FROM applied_writes WHERE applied_at < unixepoch() - 86400"
+}
+
+statement! {
+    /// Whether an application transaction applied.
+    SelectAppliedWrite<'a> { id: &'a str } => "SELECT 1 FROM applied_writes WHERE id = :id"
+}
 
 statement! {
     /// The lane's scopes.
@@ -855,11 +895,12 @@ mod tests {
         );
     }
 
-    /// An unfenced write is its fenced twin less the fence, and a commit that keeps the lease is
-    /// the one that releases it but for the lease.
+    /// An unfenced write is its fenced twin guarded on its run instead of the fence, and a commit
+    /// that keeps the lease is the one that releases it but for the lease.
     #[test]
     fn twin_statements_differ_only_where_they_should() {
         let fence = " AND version = :version AND lease_token = :token";
+        let run_not_ended = " AND NOT EXISTS (SELECT 1 FROM events WHERE lane = :lane AND run_id = :run_id AND type = 'run_ended')";
         for (fenced, unfenced) in [
             (InsertItem::SQL, InsertItemUnfenced::SQL),
             (DeleteItem::SQL, DeleteItemUnfenced::SQL),
@@ -867,7 +908,7 @@ mod tests {
             (UpsertTask::SQL, UpsertTaskUnfenced::SQL),
         ] {
             assert!(fenced.contains(fence), "{fenced}");
-            assert_eq!(fenced.replace(fence, ""), unfenced);
+            assert_eq!(fenced.replace(fence, run_not_ended), unfenced);
         }
         assert_eq!(
             CommitAndRelease::SQL.replace(

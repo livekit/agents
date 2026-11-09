@@ -63,10 +63,7 @@ pub type ToHost<I> = fn(Python<'_>, I) -> PyResult<Bound<'_, PyAny>>;
 pub const SINK_QUEUE: usize = 256;
 
 pub struct HostStream<T> {
-    iterator: Py<PyAny>,
-    event_loop: Py<PyAny>,
-    /// The stream's own context: a copy taken once, at open.
-    ctx: Py<PyAny>,
+    host: Arc<HostIterator>,
     convert: Convert<T>,
     clock: Arc<dyn Clock>,
     /// The pull whose caller stopped awaiting it: the next one resumes it.
@@ -74,6 +71,14 @@ pub struct HostStream<T> {
     ended: bool,
     input_stopped: Arc<AtomicBool>,
     failure: tokio::sync::watch::Sender<Option<ProviderError>>,
+}
+
+/// A host async iterator, the loop it runs on and its own context: a copy taken once, at open.
+/// Shared, so a drop can hand it on without the GIL.
+struct HostIterator {
+    iterator: Py<PyAny>,
+    event_loop: Py<PyAny>,
+    ctx: Py<PyAny>,
 }
 
 impl<T> HostStream<T> {
@@ -102,9 +107,11 @@ impl<T> HostStream<T> {
         let iterator =
             access::Context::run(ctx)?.call1((access::AsyncIterable::aiter(iterable)?,))?;
         Ok(HostStream {
-            iterator: iterator.unbind(),
-            event_loop: event_loop.clone().unbind(),
-            ctx: ctx.clone().unbind(),
+            host: Arc::new(HostIterator {
+                iterator: iterator.unbind(),
+                event_loop: event_loop.clone().unbind(),
+                ctx: ctx.clone().unbind(),
+            }),
             convert,
             clock,
             pending: None,
@@ -128,8 +135,8 @@ impl<T> HostStream<T> {
         let sink = HostSink {
             shared: Arc::new(SinkShared {
                 target: obj.clone().unbind(),
-                event_loop: source.event_loop.clone_ref(py),
-                ctx: source.ctx.clone_ref(py),
+                event_loop: source.host.event_loop.clone_ref(py),
+                ctx: source.host.ctx.clone_ref(py),
                 to_host,
                 stopped: source.input_stopped.clone(),
                 failure: source.failure.clone(),
@@ -145,8 +152,9 @@ impl<T> HostStream<T> {
 
     fn start(&self, close: bool) -> Result<Started, ProviderError> {
         Python::attach(|py| {
-            let iterator = self.iterator.clone_ref(py);
-            start_in(py, self.event_loop.bind(py), self.ctx.bind(py), move |py| {
+            let host = &self.host;
+            let iterator = host.iterator.clone_ref(py);
+            start_in(py, host.event_loop.bind(py), host.ctx.bind(py), move |py| {
                 let callable = if close {
                     access::AsyncClose::aclose(iterator.bind(py))?
                 } else {
@@ -215,12 +223,14 @@ impl<T: Send + 'static> StreamOutput<T> for HostStream<T> {
     }
 
     fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        // Closed here, however this close ends: the drop backstop stays off.
+        self.ended = true;
         Box::pin(async move {
             self.input_stopped.store(true, Ordering::Release);
             let clock = self.clock.clone();
             let pending = self.pending.take();
             let has_aclose =
-                Python::attach(|py| access::AsyncClose::matches(self.iterator.bind(py)));
+                Python::attach(|py| access::AsyncClose::matches(self.host.iterator.bind(py)));
             let mut failed = false;
             let teardown = async {
                 if let Some(mut pull) = pending {
@@ -252,6 +262,148 @@ impl<T: Send + 'static> StreamOutput<T> for HostStream<T> {
 }
 
 impl<T: Send + 'static> lk_agents_abi::utils::stream::ProviderStream<T> for HostStream<T> {}
+
+/// The backstop of a stream dropped unclosed and unfinished (an owner that leaked it): its
+/// pending pull is cancelled and its generator's `aclose()` queued on its loop, so the host task
+/// never runs on unowned.
+impl<T> Drop for HostStream<T> {
+    fn drop(&mut self) {
+        self.input_stopped.store(true, Ordering::Release);
+        if self.ended {
+            return;
+        }
+        let host = Arc::clone(&self.host);
+        close_later(move |py| {
+            let HostIterator { iterator, event_loop, ctx } = &*host;
+            Ok((iterator.clone_ref(py), event_loop.clone_ref(py), ctx.clone_ref(py)))
+        });
+    }
+}
+
+/// A host iterator, and the loop and the context it is closed in.
+type Located = (Py<PyAny>, Py<PyAny>, Py<PyAny>);
+
+/// `aclose()` of the host iterator nobody closed that `located` names, queued as a task of its
+/// loop, never awaited. Scheduled from the blocking I/O pool, so a drop holding a lock never
+/// waits for the GIL. Lost only when the interpreter or the process runtime is gone.
+fn close_later(located: impl FnOnce(Python<'_>) -> PyResult<Located> + Send + 'static) {
+    let schedule = move || {
+        let scheduled = Python::try_attach(|py| {
+            let (iterator, event_loop, ctx) = located(py)?;
+            schedule_aclose(py, iterator, event_loop, ctx)
+        });
+        if let Some(Err(error)) = scheduled {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "closing an abandoned host stream failed: {error}");
+        }
+    };
+    on_process(async move {
+        let pool = lk_agents_runtime::net::blocking_io::blocking_io();
+        let _ = pool.run((), schedule).await;
+    });
+}
+
+/// Queues `iterator.aclose()` as a task of `event_loop` in `ctx`, when it has one.
+fn schedule_aclose(
+    py: Python<'_>,
+    iterator: Py<PyAny>,
+    event_loop: Py<PyAny>,
+    ctx: Py<PyAny>,
+) -> PyResult<()> {
+    if !access::AsyncClose::matches(iterator.bind(py))? {
+        return Ok(());
+    }
+    let (loop_ref, task_ctx) = (event_loop.clone_ref(py), ctx.clone_ref(py));
+    let start = pyo3::types::PyCFunction::new_closure(py, None, None, move |args, _| {
+        let py = args.py();
+        let closing = access::AsyncClose::aclose(iterator.bind(py))?.call0()?;
+        let coroutine = crate::py_calls::awaiting(py)?.call1((closing,))?;
+        access::EventLoop::create_task(loop_ref.bind(py), &coroutine, task_ctx.bind(py))?;
+        PyResult::Ok(())
+    })?;
+    access::EventLoop::call_soon_threadsafe(event_loop.bind(py))?
+        .call1((access::Context::run(ctx.bind(py))?, start))?;
+    Ok(())
+}
+
+/// Runs `work` on the process runtime, off the dropping thread.
+fn on_process(work: impl std::future::Future<Output = ()> + Send + 'static) {
+    match crate::py_calls::process_handle() {
+        Ok(handle) => drop(handle.spawn(work)),
+        Err(_) => {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "an abandoned host stream could not be closed: no process runtime")
+        }
+    }
+}
+
+/// The entry of a call that returns a host stream: a caller dropped before it took the stream
+/// (a cancelled open) leaves the call to settle, and the stream it returned is closed in the
+/// context it ran in, never discarded with its generator running.
+pub struct StreamCall;
+
+/// A started call and the `(loop, context)` pair it runs in, until its caller takes its value.
+struct UnclaimedStream(Option<(Started, Py<PyAny>)>);
+
+impl UnclaimedStream {
+    /// The call's value, now the caller's.
+    async fn settle(mut self) -> PyResult<crate::py_calls::Called> {
+        let Some((started, _)) = &mut self.0 else { unreachable!("claimed once") };
+        let value = started.settled().await;
+        let ran_in = self.0.take().map(|(_, ran_in)| ran_in);
+        Ok(crate::py_calls::Called { value: value?, ran_in })
+    }
+}
+
+impl Drop for UnclaimedStream {
+    fn drop(&mut self) {
+        let Some((mut started, ran_in)) = self.0.take() else { return };
+        started.cancel();
+        on_process(async move {
+            if let Ok(value) = started.settled().await {
+                close_later(move |py| {
+                    let (event_loop, ctx) = ran_in.bind(py).extract()?;
+                    Ok((value, event_loop, ctx))
+                });
+            }
+        });
+    }
+}
+
+impl lk_agents_abi::invoke::HostEntry for StreamCall {
+    type Call = crate::py_calls::HostCall;
+    type Value = crate::py_calls::Called;
+    type Error = PyErr;
+
+    fn enter(
+        &self,
+        context: &HostRef,
+        span: Option<lk_agents_abi::telemetry::record::SpanContext>,
+        call: crate::py_calls::HostCall,
+    ) -> lk_agents_abi::BoxFuture<'static, PyResult<crate::py_calls::Called>> {
+        let context = context.clone();
+        Box::pin(async move {
+            UnclaimedStream(Some(crate::py_calls::start_call(&context, span, call)?)).settle().await
+        })
+    }
+
+    /// A cancellable open settles under its own cancellation: nothing is dropped unsettled.
+    fn enter_cancellable(
+        &self,
+        context: &HostRef,
+        span: Option<lk_agents_abi::telemetry::record::SpanContext>,
+        call: crate::py_calls::HostCall,
+        cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
+    ) -> lk_agents_abi::BoxFuture<'static, PyResult<crate::py_calls::Called>> {
+        crate::py_calls::Entry.enter_cancellable(context, span, call, cancel)
+    }
+
+    fn enter_now(&self, call: crate::py_calls::HostCall) -> PyResult<crate::py_calls::Called> {
+        crate::py_calls::Entry.enter_now(call)
+    }
+
+    fn refused(&self, label: &'static str, refusal: lk_agents_abi::invoke::Refusal) -> PyErr {
+        crate::py_calls::Entry.refused(label, refusal)
+    }
+}
 
 /// The input half of a duplex host stream.
 pub struct HostSink<I> {

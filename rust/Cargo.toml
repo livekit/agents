@@ -30,6 +30,8 @@ license = "Apache-2.0"
 [workspace.lints.clippy]
 # Every rule is in AGENTS.md "Rust architecture rules"; `make check` denies warnings.
 allow_attributes_without_reason = "warn"
+await_holding_lock = "warn"
+await_holding_refcell_ref = "warn"
 dbg_macro = "warn"
 print_stdout = "warn"
 self_named_module_files = "warn"

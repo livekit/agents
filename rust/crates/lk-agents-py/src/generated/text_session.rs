@@ -231,16 +231,9 @@ impl crate::py_errors::HostException for ::lk_agents_abi::text_session::RoutingE
 
 impl crate::py_errors::HostException for ::lk_agents_abi::text_session::TextSessionError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(
-            unreachable_patterns,
-            reason = "the fallback arm is dead when every variant has its own"
-        )]
         match self {
             Self::Routing(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Run(inner) => crate::py_errors::HostException::to_py_err(inner),
-            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
-                self,
-            )),
         }
     }
 }

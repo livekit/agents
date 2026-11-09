@@ -584,7 +584,7 @@ impl ::lk_agents_abi::Vad for VadProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
+            &crate::py_streams::StreamCall,
             "Vad._core_stream",
             &crate::py_calls::calling_context(&self.context),
             &[],
