@@ -5339,10 +5339,12 @@ pub mod cli {
                     v.extract::<bool>()
                 })?,
                 options: crate::py_values::attr_with(obj, "CliArgsStart", "options", |v| {
-                    crate::generated::records::worker_options::server_options_from_py(v)
+                    (crate::generated::records::worker_options::server_options_from_py(v))
+                        .map(::std::boxed::Box::new)
                 })?,
                 process: crate::py_values::attr_with(obj, "CliArgsStart", "process", |v| {
-                    crate::generated::records::worker_options::process_options_from_py(v)
+                    (crate::generated::records::worker_options::process_options_from_py(v))
+                        .map(::std::boxed::Box::new)
                 })?,
             });
         }
@@ -5396,14 +5398,14 @@ pub mod cli {
                     "simulation",
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(simulation, py)?,
                 )?;
-                kwargs.set_item(
-                    "options",
-                    crate::generated::records::worker_options::server_options_to_py(py, options)?,
-                )?;
-                kwargs.set_item(
-                    "process",
-                    crate::generated::records::worker_options::process_options_to_py(py, process)?,
-                )?;
+                kwargs.set_item("options", {
+                    let value = *options;
+                    crate::generated::records::worker_options::server_options_to_py(py, value)?
+                })?;
+                kwargs.set_item("process", {
+                    let value = *process;
+                    crate::generated::records::worker_options::process_options_to_py(py, value)?
+                })?;
                 crate::py_calls::call(
                     CLI_ARGS_START
                         .import(py, "livekit.agents._generated.cli", "CliArgsStart")?

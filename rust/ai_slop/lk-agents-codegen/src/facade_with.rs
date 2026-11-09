@@ -4,7 +4,7 @@ use crate::decl::{Class, Exit, ExitCall, FacadeClass, FacadeMethod, Method, Meth
 
 impl Module<'_> {
     /// `from_native`: `__init__(self, native, <#[host(new)] parameters>)`, keeping each.
-    pub(super) fn from_native(
+    pub(super) fn init_from_native(
         &mut self,
         facade: &FacadeClass,
         native: &Class,

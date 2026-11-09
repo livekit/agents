@@ -507,7 +507,7 @@ impl lk_agents_abi::stt::inference::InferenceStt for GatewayStt {
     }
 
     fn capabilities(&self) -> SttCapabilities {
-        self.shared.capabilities.lock().clone()
+        *self.shared.capabilities.lock()
     }
 
     fn conn_options(&self) -> ApiConnectOptions {

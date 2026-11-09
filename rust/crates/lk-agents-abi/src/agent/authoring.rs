@@ -70,7 +70,8 @@ impl ToolOptions {
             ("retries", self.retries.is_given()),
         ]
         .into_iter()
-        .filter_map(|(name, given)| given.then(|| name.to_owned()))
+        .filter(|(_, given)| *given)
+        .map(|(name, _)| name.to_owned())
         .collect()
     }
 }

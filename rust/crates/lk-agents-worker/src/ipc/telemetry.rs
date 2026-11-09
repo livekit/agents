@@ -146,7 +146,7 @@ pub(crate) fn start_job(
     if let Some(at) = started_on_server.filter(|at| *at > 0) {
         lk_agents_telemetry::event_at(&span, JobStartedOnServer, at);
     }
-    JobTrace { job: Job { key, simulation: simulation(&job) }, span }
+    JobTrace { job: Job { key, simulation: simulation(job) }, span }
 }
 
 #[cfg(test)]

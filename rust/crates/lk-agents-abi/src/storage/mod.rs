@@ -167,6 +167,10 @@ pub trait Storage: Send + Sync + Sized + 'static {
     /// `LIVEKIT_AGENTDB_RENEW_INTERVAL` (float seconds). An omitted or empty `holder` is the
     /// constructing process's `<hostname>-<pid>`. Opens nothing until first use.
     #[host(new)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the host constructor's keyword arguments"
+    )]
     fn new(
         env: &Self::Env,
         #[host(kw, default = None)] local: Option<LocalStorageOptions>,

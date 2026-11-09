@@ -113,15 +113,15 @@ pub fn parse_cli(argv: Vec<String>) -> CliParseResult {
             dev: args.dev,
             cli_addr: args.cli_addr,
             simulation: args.simulation,
-            options: ServerOptions {
+            options: Box::new(ServerOptions {
                 ws_url: given(args.url.filter(|s| !s.is_empty())),
                 api_key: given(args.api_key.filter(|s| !s.is_empty())),
                 api_secret: given(args.api_secret.filter(|s| !s.is_empty())),
                 shutdown_timeout: given(args.shutdown_timeout),
                 drain_timeout: given(args.drain_timeout),
                 ..Default::default()
-            },
-            process: ProcessOptions {
+            }),
+            process: Box::new(ProcessOptions {
                 max_retry: given(args.max_retry),
                 http_proxy: given(args.http_proxy.filter(|s| !s.is_empty()).map(Some)),
                 job_executor_type: given(args.job_executor_type),
@@ -130,7 +130,7 @@ pub fn parse_cli(argv: Vec<String>) -> CliParseResult {
                 shutdown_process_timeout: given(args.shutdown_process_timeout),
                 session_end_timeout: given(args.session_end_timeout),
                 ..Default::default()
-            },
+            }),
         },
         Command::Console(args) => {
             CliArgs::Console { connect_addr: args.connect_addr, record: args.record }

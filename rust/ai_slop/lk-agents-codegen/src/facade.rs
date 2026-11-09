@@ -91,6 +91,9 @@ struct Module<'a> {
     known: Vec<String>,
 }
 
+/// A method's signature parameters, and the value each named parameter sends on.
+type Parameters = (Vec<String>, Vec<(String, String)>);
+
 impl Module<'_> {
     fn native(&self, name: &str) -> Result<&Class, String> {
         self.declared
@@ -209,7 +212,7 @@ impl Module<'_> {
         }
         let mut members = Vec::new();
         if facade.from_native {
-            members.push(self.from_native(facade, &native, new)?);
+            members.push(self.init_from_native(facade, &native, new)?);
         } else if let Some(new) = new {
             members.push(self.constructor(facade, &native, new)?);
         }
@@ -481,11 +484,7 @@ impl Module<'_> {
     }
 
     /// A method's signature parameters and, by name, the value each sends on.
-    fn parameters(
-        &mut self,
-        native: &Class,
-        method: &FacadeMethod,
-    ) -> Result<(Vec<String>, Vec<(String, String)>), String> {
+    fn parameters(&mut self, native: &Class, method: &FacadeMethod) -> Result<Parameters, String> {
         let adapt = &method.adapt;
         let shown = crate::class_stub::parameters(native, &method.method, &mut self.typing);
         let mut signature = vec!["self".to_owned()];

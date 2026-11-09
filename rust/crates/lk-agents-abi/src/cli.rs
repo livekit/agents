@@ -39,9 +39,9 @@ pub enum CliArgs {
         simulation: bool,
         /// The server options the command line gives (`--url`, `--api-key`, `--api-secret`,
         /// `--shutdown-timeout`, `--drain-timeout`), over the `AgentServer`'s own.
-        options: crate::worker::types::ServerOptions,
+        options: Box<crate::worker::types::ServerOptions>,
         /// The process tuning the command line gives.
-        process: crate::worker::types::ProcessOptions,
+        process: Box<crate::worker::types::ProcessOptions>,
     },
     Console {
         connect_addr: String,

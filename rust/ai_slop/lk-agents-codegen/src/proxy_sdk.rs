@@ -248,9 +248,9 @@ fn subscription(
         }
         let mut values = Vec::new();
         for param in entry.params.iter().filter(|q| !q.ty.hidden()) {
-            let value = if events.pass.iter().any(|(n, _)| *n == param.name) {
-                param.name.clone()
-            } else if event.args.contains(&param.name) {
+            let value = if events.pass.iter().any(|(n, _)| *n == param.name)
+                || event.args.contains(&param.name)
+            {
                 param.name.clone()
             } else if let Some((_, steps)) = event.paths.iter().find(|(n, _)| *n == param.name) {
                 match (&param.ty, steps.split_last()) {
