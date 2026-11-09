@@ -103,7 +103,7 @@ class Instructions:
         parts = [self.render_static(modality=modality), self.dynamic or ""]
         result = "\n".join(p for p in parts if p)
 
-        if data:
+        if data is not None:
             result = utils.misc.safe_render(result, data)
 
         return result
