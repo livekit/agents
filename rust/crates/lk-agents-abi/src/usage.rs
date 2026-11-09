@@ -171,7 +171,7 @@ pub struct TtsUsage {
     /// Synthesized output audio seconds.
     #[host(default = None)]
     pub audio_duration: Option<f64>,
-    /// Synthesized characters.
+    /// Billed characters as the provider reported them, else the characters synthesized.
     #[host(default = None)]
     pub characters_count: Option<u64>,
 }

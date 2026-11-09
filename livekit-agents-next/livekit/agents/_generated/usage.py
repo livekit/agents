@@ -97,7 +97,7 @@ class TTSUsage(BaseModel):
     audio_duration: float | None = None
     """Synthesized output audio seconds."""
     characters_count: int | None = None
-    """Synthesized characters."""
+    """Billed characters as the provider reported them, else the characters synthesized."""
 
 
 class EOTUsage(BaseModel):

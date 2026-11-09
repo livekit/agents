@@ -110,7 +110,7 @@ pub struct SettledRun {
     #[host(hide_repr)]
     pub usage: crate::usage::Usage,
     /// The part of the answer, or of the question, that reached the person exactly as written;
-    /// `None` when nothing did (tools.md "Verbatim").
+    /// `None` when nothing did (tools.md "Wording and verbatim").
     #[host(hide_repr)]
     pub verbatim: Option<String>,
     #[host(rename = "_pending_call", default = None, hide_repr)]

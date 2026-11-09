@@ -163,14 +163,14 @@ await client.aclose()
 `cancel` and `aclose`. It runs on the framework's Rust A2A client, the one
 the server side uses: `connect()`, which `send` and `cancel` call for you,
 reads the card once and speaks JSON-RPC over HTTP with server-sent events.
-`send(message, thread_id=, task_id=, metadata=, chat_ctx=, traceparent=)` takes a `str` or
+`send(message, thread_id=, task_id=, metadata=, chat_ctx=)` takes a `str` or
 a `Message` (`from livekit.agents.a2a import Message`), the typed A2A message
 record: `parts` (text, data or file), `metadata` (typed LiveKit keys and an
 application map) and an optional `message_id`. With no `thread_id` it
 continues the thread of its last reply, and with none it starts a new one.
-A W3C `traceparent` travels as the request's `traceparent` header, so the
-endpoint's turn continues the caller's trace; `RemoteAgent` passes its tool
-call's span. An invalid value is not sent.
+The request carries the current span as its W3C `traceparent` header, so the
+endpoint's turn continues the caller's trace; under `RemoteAgent` that is its
+tool call's span.
 
 Every request carries `token` as `Authorization: Bearer`; with no token it
 carries none. The endpoint admits a message or a task method only under an
@@ -187,9 +187,9 @@ endpoint answers in it on its own lane
 ([two brains, one thread](internals/storage.md#two-brains-one-thread)). The
 endpoint finds that thread in the project's threads service, so the caller
 needs the same storage: a caller without storage, whose thread lives only in
-memory, gets the task failed `thread-not-found`. It
-reads the card under a project credential. Off the project's origin it sends
-no token.
+memory, gets the task failed `thread-not-found`. The same thread grant reads
+the card; with no thread to share, a project credential reads it. Off the
+project's origin it sends no token.
 `chat_ctx` goes as a `chat_ctx` part only to a card that lists the LiveKit
 extension ([conversation data](protocol/a2a.md#conversation-data-part)). Each update is a
 `TaskUpdate`: `state`, `text`, `task_id`, `context_id`, `metadata` with the
@@ -226,8 +226,10 @@ A resume is a `send` with the thread id, its `contextId`: there is no
 separate get or resume call. Retrying a first message with the same
 `message_id` returns the same thread and task, including on another worker.
 
-Nothing here is required: `tasks/get` and `tasks/list` are served to any A2A
-client. Response events are live only; `tasks/resubscribe` is unsupported.
+`tasks/get` and `tasks/list` need the thread's `contextId` beside the standard
+params, a LiveKit addition: a stock A2A client that omits it gets
+`TaskNotFoundError`. Response events are live only; `tasks/resubscribe` is
+unsupported.
 
 ## Admin reads
 

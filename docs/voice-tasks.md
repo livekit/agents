@@ -46,7 +46,8 @@ agent carries the instructions, tools and `output_type`; the task adds `.run()`
 and the floor handling around it. A `VoiceTask` cannot be passed to
 `update_agent()` or served on its own, and it exists only for the duration of
 one `.run()`. The agent it contains is ordinary shared configuration, built once
-at import like any other agent.
+at import like any other agent. A task opens with its agent's `on_enter`; an
+agent without one opens with a first reply the session generates.
 
 Declare the agent's `output_type`; returning `Completed(value)` from one of its
 tools completes the live interaction. Ordinary tool values and conversational
@@ -244,6 +245,9 @@ the live session. The frontend event queue is in-process and requires no DB.
 | Name | What |
 |---|---|
 | `GetEmailTask()` | a `VoiceTask` that collects and confirms an email address; `.run()` returns a `GetEmailResult` (`email_address`) |
+| `GetDtmfTask(num_digits=, ask_for_confirmation=False, dtmf_input_timeout=4.0, dtmf_stop_event=DtmfEvent.POUND)` | a `VoiceTask` that collects digits the caller presses or says, until `num_digits` arrived and the timeout passed without another, or the stop key was pressed; `.run()` returns a `GetDtmfResult` (`user_input`) |
+| `DtmfEvent` | the keypad keys: `"0"` to `"9"`, `"*"`, `"#"` and `"A"` to `"D"` |
+| `WarmTransferResult` | what a warm transfer returns: `human_agent_identity` |
 | `WarmTransfer(sip_call_to, ...)`, `TwilioConnectorWarmTransfer(phone_number, ...)` | hand the caller to a human agent over SIP: the caller waits on hold while a briefing session dials and briefs the human agent, whose `run()`, awaited in a tool, returns a `WarmTransferResult` (`human_agent_identity`) or raises `ToolError` when they decline; `instructions=` takes a `WorkflowInstructions` (`persona`, `extra`) |
 | `receive_dtmf(room, num_digits=, timeout=, stop_event=)` | keypad digits as a `GetDtmfResult`, up to the `stop_event` `DtmfEvent` or an inter-digit timeout; `format_dtmf` and `dtmf_event_to_code` render them |
 | `validate_card_number`, `is_expired`, `normalize_date_of_birth`, `normalize_email_address`, `normalize_phone_number` | the checks a capture tool runs on what the model heard |

@@ -29,7 +29,7 @@ from livekit.agents import telemetry
 telemetry.configure(
     endpoint="https://otlp.example.com",
     headers={"authorization": f"Bearer {os.environ['OTLP_TOKEN']}"},
-    metadata={"deployment": "eu-1"},   # attributes on every span the process exports
+    metadata={"deployment": "eu-1"},   # attributes on every span the process exports, Cloud's copy too
 )
 ```
 
@@ -38,6 +38,7 @@ telemetry.configure(
 | `endpoint=` | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | none: no application destination |
 | `headers=` | `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, `OTEL_EXPORTER_OTLP_METRICS_HEADERS` | none |
 | none | `OTEL_EXPORTER_OTLP_COMPRESSION`, `OTEL_EXPORTER_OTLP_TRACES_COMPRESSION`, `OTEL_EXPORTER_OTLP_METRICS_COMPRESSION` (`gzip` or `none`) | `none` |
+| none | `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` (`delta` or `lowmemory` for delta) | cumulative |
 | `metadata=` | none | none |
 | `allow_pii=` | `LIVEKIT_TELEMETRY_ALLOW_PII` | `False` |
 
@@ -122,16 +123,17 @@ another's data.
 A session in a job connected to LiveKit Cloud records its audio, traces,
 metrics, logs and transcript by default. The session's recording options turn
 parts off. At session end the framework uploads the session report; an
-`on_session_end` callback receives the same `SessionReport` first.
+`rtc_session(on_session_end=)` callback receives the `JobContext` first, and
+`ctx.make_session_report()` builds the same `SessionReport`.
 
 ## Diagnostics
 
-`telemetry.diagnostics()` returns the process's export counters as
-`dict[str, int]`:
+`telemetry.diagnostics()` returns the process's export counters as a
+`TelemetryDiagnostics` dataclass:
 
-| Key | Counts |
+| Attribute | Counts |
 | --- | --- |
-| `dropped` | records dropped because a bounded export queue was full |
+| `dropped` | records refused by a full export queue or a metric cardinality limit, or abandoned at a deadline |
 | `failed` | export requests a destination rejected or that failed |
 | `conflicts` | configuration conflicts reported |
 | `incomplete_cleanup` | job cleanups whose final flush did not finish in time |
@@ -145,9 +147,16 @@ Export never blocks or fails a conversation.
 Each process writes its logs to standard output; every record a job writes
 carries its `room_id`, `job_id` and agent identity. On LiveKit Cloud hosting,
 the hosted agent's log collector ingests them into the session view. The
-framework does not export logs over OTLP, so a self-hosted agent's logs do not
-appear in the Cloud session view; route standard output to your own log
-pipeline.
+framework does not export process logs over OTLP, so a self-hosted agent's
+logs do not appear in the Cloud session view; route standard output to your own
+log pipeline. The session report's records (transcript, events) reach Cloud as
+OTLP log records.
+
+## Prometheus
+
+A worker given a `prometheus` listener serves its own state (load, running jobs)
+at `/metrics` in the Prometheus text format;
+see [listeners](server.md#listeners).
 
 ## Reference
 

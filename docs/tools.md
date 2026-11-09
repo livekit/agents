@@ -1,8 +1,8 @@
 # Tools and toolsets
 
-A tool is a function the model can call. Its first parameter is the
-`RunContext`, the rest are its arguments, and its Google-style docstring
-feeds the schema.
+A tool is a function the model can call. A parameter annotated with
+`RunContext` receives the run's context (optional, in any position), the rest
+are its arguments, and its Google-style docstring feeds the schema.
 
 ## Tools on an agent
 
@@ -119,8 +119,8 @@ and its [complete example](text-session.md#running-a-text-conversation).
 
 ## Remote agents as tools
 
-A `RemoteAgent` delegates to an agent endpoint using A2A. Expose it through `.as_tool()`
-and attach the returned tool to the parent. An endpoint in the same codebase is named by
+A `RemoteAgent` delegates to an agent endpoint using A2A. Expose it through `.as_tool()`,
+which returns a toolset holding its one tool, and attach it to the parent. An endpoint in the same codebase is named by
 its Python object:
 
 ```python
@@ -155,8 +155,10 @@ the worker warns at startup about any it does not serve, and a call to one fails
 error. The worker decides where its endpoints are reached before it starts its job
 processes, which inherit the decision.
 
-An endpoint in another codebase is named by its URL, with the tool's name and description
-given in code:
+An endpoint in another codebase is named by its URL. The tool's name, description and
+input schema come from the remote agent card (its `toolName` and `inputSchema` extension
+params, its `delegate` skill description), fetched on first use: defining the tool makes no
+network call. A `name=` or `description=` given in code wins over the card:
 
 ```python
 eligibility = RemoteAgent(
@@ -167,8 +169,7 @@ eligibility = RemoteAgent(
 ```
 
 `RemoteAgent(endpoint | url, *, name=None, description=None, token=None, conn_options=None)`
-requires `name` and `description` with a URL, and accepts them with an endpoint to
-override its own. It accepts the same [connection policy](models.md#connection-options)
+takes `name` and `description` to override the endpoint's or the card's. It accepts the same [connection policy](models.md#connection-options)
 as `AgentClient`. A failed call is a tool error the parent model can answer around; it does
 not end the session.
 The remote service owns its history, application data, approval behavior,
@@ -232,8 +233,9 @@ See [A2A](protocol/a2a.md) for the wire protocol and authentication rules.
 
 The framework validates the parent-provided arguments against `parameters`
 before starting the child. These arguments become the child's task input.
-The child's `output_type` defines its final result. Runtime services and the
-persisted draft are supplied through application context.
+The child's `output_type` defines its final result. The child shares the
+parent's application context; for a different one, write a tool that calls
+`child.run(..., context=...)` itself.
 
 History selection and merging are independent. For example,
 `chat_history="fork", merge_chat_history=False` lets a specialist use the
@@ -251,6 +253,7 @@ parent conversation while returning only its accepted result.
 | raise `StopResponse()` | the call is answered with nothing and asks for no reply; `run()` ends the turn with `status="no_output"` |
 | any other exception | logged; the model reads "An internal error occurred" |
 | `InputRequired(question)` | the turn waits for the person; see [human input](#human-input) |
+| `Working(message=None)` | the call waits on another system: nothing reaches the person, the model reads `message` (else `working`) and no reply is asked |
 | `Failed(error)`, `Rejected(reason)` | the model reads the text as an error output and replies |
 | `Completed(value)` | An ordinary agent tool returns its call output; a VoiceTask tool completes its live interaction with the validated typed value. See [custom voice tasks](voice-tasks.md#authoring-a-custom-voicetask). |
 
@@ -342,8 +345,9 @@ Approval is held by the framework. The tool's schema has no parameter for
 it, and the body runs only for a repeat of the same call, with the same
 arguments, made after the person answered its read-back. A first call, a
 call with other arguments, or a second repeat asks again. The calls carry
-`lk.approval` (`asked`, `granted`) in `FunctionCall.extra`; the next call
-reads them from the history. The model reads an answered read-back's output
+`lk.approval` (`asked`, `granted`) in `FunctionCall.extra`, with
+`lk.approval_identity`, the canonical form of the validated arguments the call
+was decided on; the next call reads them from the history. The model reads an answered read-back's output
 as `not run yet: the person answered '...'`, with how to run it; the history
 stores the person's words. A raw-schema tool cannot require approval.
 
@@ -473,7 +477,8 @@ specific wins:
 | `reply_maybe_covered_template` | the deferred reply, when newer items followed the results | `call_ids` |
 
 Each is a `str.format()` template or a callable taking the arguments (for
-`update_template`, an `UpdatePromptArgs`) and returning the text; an unset
+`update_template` an `UpdatePromptArgs`, for the duplicate templates a
+`DuplicatePromptArgs`, for the reply templates a `ReplyPromptArgs`) and returning the text; an unset
 template keeps the framework's text. The deferred
 reply reads the templates of its latest result's tool.
 
@@ -494,8 +499,8 @@ tool does this for an expert's `input-required`
 |---|---|
 | `EndCallTool(extra_description=, delete_room=, end_instructions=, ignore_on_enter=, on_tool_called=, on_tool_completed=)` | a toolset whose `end_call` tool ends the call after the agent's goodbye; the callbacks receive a `ToolCalledEvent` and a `ToolCompletedEvent` |
 | `send_dtmf_events` | a tool that sends keypad (DTMF) tones on the call |
-| `ToolSearchToolset(id=, tools=, max_results=, search_strategy=)` | keeps a large tool collection out of the model's context: one `tool_search` tool loads the tools a search finds |
-| `ToolProxyToolset(id=, tools=, ...)` | the same collection behind two fixed tools, `tool_search` (returns schemas) and `call_tool`, so the tool list never changes |
+| `ToolSearchToolset(id=, tools=, max_results=, search_strategy=, search_description=, query_description=)` | keeps a large tool collection out of the model's context: one `tool_search` tool loads the tools a search finds; the `*_description` arguments reword the tool and its query parameter for the model |
+| `ToolProxyToolset(id=, tools=, ..., search_description=, query_description=, call_description=)` | the same collection behind two fixed tools, `tool_search` (returns schemas) and `call_tool`, so the tool list never changes |
 | `SearchStrategy`, `SearchItem` | the search the two toolsets run (`build_index`, `search`, `cleanup` over `SearchItem`s); `BM25SearchStrategy(k1=, b=)` is the default, `KeywordSearchStrategy` a simpler one |
 
 ## Idempotency

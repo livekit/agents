@@ -21,19 +21,28 @@ session = VoiceSession(stt="deepgram/nova-3:en", tts="cartesia/sonic-3:<voice>")
 ```
 
 The classes take `extra_kwargs=`, the provider's own options; `inference.STT` and
-`inference.TTS` also take `fallback=`, models the gateway falls back to (a `FallbackModel` or a
-model string, `FallbackModelType`). Options change through the provider's `update_options()`,
+`inference.TTS` also take `fallback=`, models the gateway falls back to (`FallbackModels`: a
+`FallbackModel`, a model string, or a list of them, each a `FallbackModelType`). Options change through the provider's `update_options()`,
 which also reaches its open streams (an STT stream gets them as a mid-stream update); streams
 have no `update_options` of their own. Their typed forms:
 
 | Module | Model strings | Provider options |
 | --- | --- | --- |
-| `inference.llm` | `LLMModels`: `OpenAIModels`, `GoogleModels`, `KimiModels`, `DeepSeekModels`, `ZAIModels`, `XAIModels`; realtime `RealtimeModels`: `OpenAIRealtimeModels`, `XAIRealtimeModels` | `ChatCompletionOptions` |
-| `inference.stt` | `STTModels`: `AssemblyAIModels`, `CartesiaModels`, `DeepgramModels`, `DeepgramFluxModels`, `GoogleModels`, `InworldModels`, `SpeechmaticsModels`, `XaiModels`; `STTLanguages`, `STTEncoding` | `AssemblyaiOptions`, `CartesiaOptions`, `DeepgramOptions`, `DeepgramFluxOptions`, `GoogleOptions`, `InworldOptions`, `SpeechmaticsOptions`, `XaiOptions` |
-| `inference.tts` | `TTSModels`: `CartesiaModels`, `DeepgramModels`, `FishAudioModels`, `InworldModels`, `RimeModels`, `XaiModels`; `TTSEncoding` | `CartesiaOptions`, `DeepgramOptions`, `FishAudioOptions`, `InworldOptions`, `RimeOptions`, `XaiOptions` |
+| `inference.llm` | `LLMModels`: `OpenAIModels`, `GoogleModels`, `KimiModels`, `DeepSeekModels`, `ZAIModels`, `XAIModels`; realtime `RealtimeModels`: `OpenAIRealtimeModels`, `XAIRealtimeModels` | `ChatCompletionOptions` (its `reasoning_effort` a `ReasoningEffort`), `ProviderEndpoint` |
+| `inference.stt` | `STTModels`: `AssemblyAIModels`, `CartesiaModels`, `DeepgramModels`, `DeepgramFluxModels`, `GoogleModels`, `InworldModels`, `OpenAIModels`, `SpeechmaticsModels`, `XaiModels`, `AutoModels`; `STTLanguages`, `STTEncoding` | `AssemblyaiOptions`, `CartesiaOptions`, `DeepgramOptions`, `DeepgramFluxOptions`, `GoogleOptions`, `InworldOptions`, `OpenAIOptions`, `SpeechmaticsOptions`, `XaiOptions` |
+| `inference.tts` | `TTSModels`: `AssemblyAIModels`, `CartesiaModels`, `DeepgramModels`, `FishAudioModels`, `InworldModels`, `RimeModels`, `XaiModels`; `TTSEncoding` | `AssemblyaiOptions`, `CartesiaOptions`, `DeepgramOptions`, `FishAudioOptions`, `InworldOptions`, `RimeOptions`, `XaiOptions` |
 | `inference` | `VADModels`; `TurnDetectorModels`, `TurnDetectorVersions` | `LemonSliceOptions`, for `AvatarSession` |
 
-`inference.TurnDetector()` is an end-of-turn model for `VoiceSession(turn_detection=)`.
+`inference.LLM(model, provider=, inference_class=, endpoint=)` takes the provider the
+gateway routes to (the gateway picks by default), the `InferenceClass` of its requests, and a
+`ProviderEndpoint(base_url=, api_key=)`: an OpenAI-compatible provider called directly with
+its own key in place of the gateway. Its stream is a `GatewayLLMStream`.
+`inference.STT(model=, vad=)` takes an optional model: left out or `"auto"`
+(`AutoModels`), the gateway picks. `vad=` is a VAD whose end of speech finalizes the transcript,
+for Speechmatics and OpenAI. Its stream is a `SpeechStream`.
+
+`inference.TurnDetector()` is an end-of-turn model for
+`VoiceSession(turn_handling={"turn_detection": ...})`.
 On a call with adaptive interruption, the session runs an
 `inference.AdaptiveInterruptionDetector`, which reports `voice.events.OverlappingSpeechEvent`s and fails
 with `InterruptionDetectionError`. A realtime model's `inference_class` is an
@@ -41,7 +50,8 @@ with `InterruptionDetectionError`. A realtime model's `inference_class` is an
 
 `llm.FallbackAdapter`, `stt.FallbackAdapter`, `tts.FallbackAdapter` and
 `llm.RealtimeModelFallbackAdapter` try a list of models in order; each emits an
-`AvailabilityChangedEvent` when a model goes down or comes back. `tts.StreamAdapter` and
+`AvailabilityChangedEvent` (`llm.realtime.RealtimeAvailabilityChangedEvent` for the realtime
+adapter) when a model goes down or comes back. `tts.StreamAdapter` and
 `stt.StreamAdapter` give a non-streaming TTS or STT a streaming interface.
 
 ### Sentences and pacing
@@ -123,10 +133,10 @@ plugin's classes, not these bases.
 
 | Module | Names |
 | --- | --- |
-| `livekit.agents.llm` | `LLM`, `LLMStream`, `ChatChunk` (its `usage` is a `TokenUsage`), `ChoiceDelta`, `FunctionToolCall`, `LLMError`; realtime: `RealtimeModel`, `RealtimeSession`, `RealtimeCapabilities`, `RealtimeError`, `RealtimeModelError` and its events (`EventTypes`: `InputSpeechStartedEvent`, `InputSpeechStoppedEvent`, `InputTranscriptionCompleted`, `GenerationCreatedEvent` with its `MessageGeneration`s, `RemoteItemAddedEvent`, `RealtimeSessionReconnectedEvent`); duplex (`llm.duplex`): `DuplexModel`, `DuplexSession`, `DuplexCapabilities`, `DuplexRealtimeAdapter` (a duplex model as a realtime model), `DuplexAudioFrame`, `DuplexOutputTranscriptDelta`, `AudioGate`/`FixedGate`; tools as providers read them: `Tool`, `ToolContext`, `ToolChoice`, `FunctionTool`, `RawFunctionTool`, `ProviderTool`, `is_function_tool`, `is_raw_function_tool` |
-| `livekit.agents.stt`, `livekit.agents.tts` | `STT`, `RecognizeStream`, `SpeechEvent` (`SpeechEventType`, `SpeechData` alternatives, `RecognitionUsage`), `STTCapabilities`, `STTError`; `TTS`, `ChunkedStream`, `SynthesizeStream`, `SynthesizedAudio`, `AudioEmitter`, `TTSCapabilities`, `MarkupInfo`, `TTSError`, `SentenceStreamPacer`; each module's `FallbackAdapter` and `StreamAdapter` |
+| `livekit.agents.llm` | `LLM`, `LLMStream`, `ChatChunk` (its `usage` is a `TokenUsage`), `ChoiceDelta`, `FunctionToolCall`, `LLMError`; realtime: `RealtimeModel`, `RealtimeSession`, `RealtimeCapabilities`, `RealtimeError`, `RealtimeModelError` and its events (`llm.realtime.EventTypes`: `InputSpeechStartedEvent`, `InputSpeechStoppedEvent`, `InputTranscriptionCompleted`, `GenerationCreatedEvent` with its `MessageGeneration`s, `RemoteItemAddedEvent`, `RealtimeSessionReconnectedEvent`); duplex (`llm.duplex`): `DuplexModel`, `DuplexSession`, `DuplexCapabilities`, `DuplexRealtimeAdapter` (a duplex model as a realtime model), `DuplexAudioFrame`, `DuplexOutputTranscriptDelta`, `AudioGate`/`FixedGate`; tools as providers read them: `Tool`, `ToolContext`, `ToolChoice`, `FunctionTool`, `RawFunctionTool`, `ProviderTool`, `is_function_tool`, `is_raw_function_tool` |
+| `livekit.agents.stt`, `livekit.agents.tts` | `STT`, `RecognizeStream`, `SpeechEvent` (`SpeechEventType`, `SpeechData` alternatives, `RecognitionUsage`), `STTCapabilities`, `STTError`; `TTS`, `ChunkedStream`, `SynthesizeStream`, `SynthesizedAudio`, `AudioEmitter`, `TTSCapabilities`, `TTSError`, `SentenceStreamPacer`; each module's `FallbackAdapter` and `StreamAdapter` |
 | `livekit.agents` | `Plugin`, `VAD`, `VADStream`, `VADEvent`, `VADEventType`, `VADCapabilities`, `LanguageCode`, `get_job_context`, `NOT_GIVEN`/`NotGivenOr`/`NotGiven`, `DEFAULT_API_CONNECT_OPTIONS`, `create_api_error_from_http`, `redacted_cause`, `ProviderAttempts` (a stream's `_core_attempts`, see [provider attempts](#provider-attempts)) |
-| `livekit.agents.tokenize` | `SentenceTokenizer`, `SentenceStream`, `WordTokenizer`, `WordStream`, `TokenData`, `TokenSpan`, `BufferedSentenceStream`, `BufferedWordStream`, the `basic` and `blingfire` tokenizers, `replace_words` |
+| `livekit.agents.tokenize` | `SentenceTokenizer`, `SentenceStream`, `WordTokenizer`, `WordStream`, `TokenData`, `BufferedSentenceStream`, the `basic` and `blingfire` tokenizers, `replace_words` |
 | `livekit.agents.utils` | `ConnectionPool`, `shortuuid`, `is_given`, `log_exceptions`, `EventEmitter`; `aio`: `Chan`, `ChanClosed`, `ChanEmpty`, `Interval`, `cancel_and_wait`; `media`: `AudioStreamDecoder`, `encode` |
 | `livekit.agents.http` | the client: `HttpSession`, `HttpResponse`, `FormData`, `WebSocket`, `WebSocketMessage`, `WebSocketMessageType`, `http_session`, `open`; see [HTTP and WebSockets](#http-and-websockets) |
 | `livekit.agents.voice.avatar` | `AvatarSession` (its join wait, metrics and close: [Avatars](voice-session.md#avatars)), `DataStreamAudioOutput`; an avatar replaces the call's audio with `session.output.replace_audio_tail(sink)`. The avatar worker's side: `AvatarRunner`, `AvatarOptions`, `VideoGenerator`, `AudioReceiver`/`DataStreamAudioReceiver`, `AudioSegmentEnd`, `QueueAudioOutput`; it publishes on the agent's behalf (`livekit.agents.types.ATTRIBUTE_PUBLISH_ON_BEHALF`) |
@@ -257,7 +267,10 @@ failure. `await pool.aclose()` releases the pool's connections.
 `inference.RealtimeModel`) take their session options as records from
 `livekit.agents.llm._realtime`, re-exported by each plugin's `realtime` module; plain dicts
 and OpenAI SDK objects are refused. An option not given is the provider's default; `None`
-turns it off. `update_options()` takes the same records and reaches every live session.
+turns it off. Every entry point takes every option its provider supports; an option a
+provider does not offer is absent from its model rather than ignored. `update_options()` takes
+the same records and reaches every live session; it omits only what cannot change
+mid-session, `max_session_duration`, which is set at construction.
 
 | Option | Records |
 | --- | --- |

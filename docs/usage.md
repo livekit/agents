@@ -277,17 +277,18 @@ union. Each carries `metadata`, the model and provider that produced it when kno
 | Record | Measures | Emitted as `metrics_collected` by |
 | --- | --- | --- |
 | `LLMMetrics` | One LLM request: time to first token, duration, tokens, tokens per second | the LLM |
-| `RealtimeModelMetrics` | One realtime response: time to first audio, duration, connection duration, tokens | the realtime model |
+| `RealtimeModelMetrics` | One realtime response: time to first audio (`ttft`), duration, connection duration, tokens | the realtime model |
 | `STTMetrics` | One recognition request or a stream's audio: duration, connection acquisition | the STT |
 | `TTSMetrics` | One synthesis: time to first audio, audio duration, characters, tokens, connection acquisition | the TTS |
 | `VADMetrics` | Inference count, total inference time and idle time since the last record | the VAD |
-| `EOUMetrics` | One user turn's end: end-of-utterance, transcription and turn-callback delays | the session's turn telemetry |
+| `EOUMetrics` | One user turn's end: end-of-utterance, transcription and turn-callback delays | telemetry only; never emitted as `metrics_collected` |
 | `EOTInferenceMetrics` | One end-of-turn model prediction: request timing and server inference time | the turn detector |
-| `InterruptionMetrics` | Adaptive interruption detection: inference timing and detection counts | the session's telemetry |
+| `InterruptionMetrics` | Adaptive interruption detection: inference timing and detection counts | telemetry only; never emitted as `metrics_collected` |
 | `AvatarMetrics` | Avatar startup: playback latency and join times | the avatar |
 
 Unavailable timings use `None`, including time to first token/audio when none
-arrived. A measured zero is zero. Timestamps specify their clock domain and unit;
+arrived. `LLMMetrics.duration`, `TTSMetrics.duration` and `TTSMetrics.audio_duration`
+are always measured. A measured zero is zero. Timestamps specify their clock domain and unit;
 duration calculations use the injected monotonic clock. A cancelled or failed
 request retains available measurements and its outcome.
 
@@ -326,7 +327,9 @@ An application can read a snapshot without configuring telemetry or collecting
 provider events.
 
 Normalized token names are `input_tokens`, `output_tokens`, `cache_read_tokens`,
-and `cache_write_tokens`. Remove `prompt_tokens`/`completion_tokens`, the duplicate
+and `cache_write_tokens`. The per-request span summaries sent to Cloud
+(`lk.llm_metrics` and its siblings) use these usage names and omit a value that
+was not measured instead of writing `-1` or `0`. Remove `prompt_tokens`/`completion_tokens`, the duplicate
 `prompt_cached_tokens`/`cache_read_tokens` representation, and cache-creation
 aliases from the normalized API. Provider SDK field names remain confined to
 adapters. Deprecated provider-specific output-image fields are replaced by the

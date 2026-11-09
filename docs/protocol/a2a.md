@@ -27,10 +27,11 @@ Every endpoint publishes `<endpoint>/.well-known/agent-card.json`:
 | `version`        | `a2a_session(version=)`, else the deployment the worker registered under (`LIVEKIT_AGENT_DEPLOYMENT`); a local worker registered under none uses `LIVEKIT_AGENT_VERSION`, else `1.0.0` |
 | security schemes | `livekit`, a bearer JWT (a LiveKit project token or a thread grant), always listed and required |
 | skills           | one, `delegate`; its description is the endpoint's `description=`, what another agent reads to decide whether to call |
-| `capabilities.extensions` | optional: `https://livekit.io/a2a/ext/agents/v1`, a capability hint that the endpoint reads LiveKit fields; it grants nothing |
+| `capabilities.extensions` | `https://livekit.io/a2a/ext/agents/v1` with `required: false`, always listed by a LiveKit endpoint and optional for others: a capability hint that the endpoint reads LiveKit fields; it grants nothing |
 
 The extension entry may carry `params` declaring the tool a caller's model
-sees for the endpoint; `RemoteAgent(url).as_tool()` reads them:
+sees for the endpoint; `RemoteAgent(url).as_tool()` reads them on first use, unless
+`name=` or `description=` given in code override them:
 
 | Param | Type and contract |
 | --- | --- |
@@ -333,7 +334,7 @@ model history. This contract does not define an audio/image transfer format.
 
 | Field | Location | Type and contract |
 | --- | --- | --- |
-| `contextId` | `GetTask`, `CancelTask` JSON-RPC `params` | Required string thread ID, alongside the standard `id`. This is a LiveKit addition to these requests. |
+| `contextId` | `GetTask`, `CancelTask`, `ListTasks`, `SubscribeToTask` JSON-RPC `params` | Required string thread ID, alongside the standard `id`. This is a LiveKit addition to these requests: a stock client that omits it gets `TaskNotFoundError`. |
 | `A2A-Version` | HTTP request header | Standard A2A version selection; LiveKit clients send `1.0`. |
 | `X-LiveKit-Thread-Grant` | direct-worker HTTP request header | Alternative bearer JWT carrier for the thread grant described above. |
 | `attributes` | LiveKit threads service, not an A2A message/task field | Application-defined string-to-string map for titles, previews, and flags. Read and updated through the thread API; never grants authorization. |
@@ -354,10 +355,13 @@ do not need to manufacture them. See [threads](../threads.md) and
 
 | Error                       | When |
 | --------------------------- | ---- |
-| `InvalidParamsError`        | a message with no `messageId`, params that are not an object |
+| `InvalidParamsError`        | a message with no `messageId`, params that are not an object; a body over the transport's payload budget |
 | `TaskNotFoundError`         | an unknown task id; a `taskId` not in the message's thread; `tasks/*` with no `contextId` |
 | `TaskNotCancelableError`    | `tasks/cancel` on a terminal task |
-| `UnsupportedOperationError` | a message to a terminal task; a message to a thread whose turn runs, on an endpoint whose policy is `reject` |
+| `UnsupportedOperationError` | a message to a terminal task; a message to a thread whose turn runs, on an endpoint whose policy is `reject`; `SubscribeToTask` (use `GetTask`); `GetExtendedAgentCard` |
+| `PushNotificationNotSupportedError` | any push notification config method |
+| `VersionNotSupportedError`  | an `A2A-Version` header other than `1.0` |
+| `InternalError`             | the endpoint's request budget is exhausted |
 | `MethodNotFoundError`, `InvalidRequestError`, `JSONParseError` | a malformed request; a batch request |
 
 JSON-RPC errors are for malformed requests. Everything else ends the task

@@ -39,7 +39,7 @@ class _Settled:
     """What this invocation consumed: an immutable, settled snapshot (usage.md)."""
     verbatim: str | None = field(repr=False)
     """The part of the answer, or of the question, that reached the person exactly as written;
-    `None` when nothing did (tools.md "Verbatim").
+    `None` when nothing did (tools.md "Wording and verbatim").
     """
     _pending_call: PendingCall | None = field(default=None, repr=False)
     input_requirements: list[RunInputRequirement] = field(default_factory=list, repr=False)

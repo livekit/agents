@@ -73,8 +73,11 @@ calls separately from that invocation result.
 
 A pending execution keeps its stored identity across human turns. After completion,
 a new request starts a new execution while retaining session history. On A2A,
-`ctx.execution_id` equals the task ID. A pending session must be resumed under
-that same task; supplying a different task is refused before execution.
+`ctx.execution_id` equals the task ID. A reply on the waiting task resumes the
+pending frame under that task. A reply without a `taskId` starts a new task:
+the session resumes the pending frame under the new task id, and the waiting
+task completes with `livekit/mergedInto` naming the new one
+([answering a task](protocol/a2a.md#answering-a-task)).
 
 On input required, save the returned state before accepting another request.
 The next request starts a new invocation of the recorded active frame; no
@@ -255,7 +258,7 @@ such as booking a room or verifying a guest. The parent model selects that
 tool and supplies its input. The session creates a child frame and records the
 parent frame ID and originating tool-call ID.
 
-1. The session invokes the child with its own history and application context.
+1. The session invokes the child with its own history and the parent's application context.
 2. If the child result has `status="input_required"`, the session returns an
    input-required result with the question and preserves the active child frame.
    The backend caller receives this outcome. A remote frontend can phrase
@@ -285,8 +288,9 @@ backend child conversation. Frontend presentation belongs to the calling
 ## Remote agent tools
 
 `RemoteAgent(url).as_tool()` exposes an A2A endpoint through the same agent-tool
-lifecycle. The remote card defines its public tool contract; its service owns
-history, approval, and execution. A remote call is an ordinary tool call in the
+lifecycle. The remote card, fetched on first use, defines its public tool
+contract unless `name=` or `description=` given in code override it; its
+service owns history, approval, and execution. A remote call is an ordinary tool call in the
 calling frame: the text session retains, in that frame's history, the
 references needed to forward replies and deliver completion to its parent agent. The same remote tool can be attached
 to a frontend agent; there, `VoiceSession` owns those interactions without a
@@ -300,7 +304,6 @@ Each conversational frame records:
 - A unique frame ID and stable agent name.
 - Its own model-compatible message history.
 - Its parent frame ID and originating parent tool-call ID, when called as a tool.
-- The application's context-scope reference.
 
 Session state identifies the active frame and its ordered parent chain. Stack
 depth is the number of active frames from root to child; it is not a Python
@@ -357,17 +360,10 @@ and record transferred messages so later turns do not append them again.
 Only dialogue added during the child conversation is eligible for transfer;
 the starting history copied from the parent is not copied back.
 
-Application context sharing is independent of both history choices. The
-application supplies a compatible shared context or constructs a child
-context with its own persisted draft. Pass `context_factory=` to `TextSession`
-for separate child contexts. The sync or async callback receives the agent's name
-and a `ContextStore` bound to that child's scope, and returns the application's
-live context. It constructs services and explicitly calls `store.load_context`;
-tools explicitly call `ctx.store.save_context` to retain changes. Each child
-frame has its own scope, preserved in saved state. Reconstructing a session calls
-the factory again for each child that runs; objects are reused within one request.
-The root uses the supplied `context=`. A shared customer or service reference
-can be reused while booking drafts remain separate. See
+Application context is independent of both history choices: an agent called
+as a tool always shares its parent's context and context scope. A child that
+needs a different context is called from an ordinary tool that runs
+`child.run(..., context=...)` with the context it builds. See
 [application context](context.md) for scope and persistence ownership.
 
 ## Persistence and execution ownership

@@ -23,7 +23,7 @@ scheduler = Agent(
 
 | Parameter | Meaning |
 | --- | --- |
-| `instructions` | Static instructions; dynamic parts come from registered functions |
+| `instructions` | Required keyword string: the static instructions; dynamic parts come from registered functions |
 | `name` | Stable agent identity; see below |
 | `context_type` | The application context type, for the type checker only |
 | `llm` | The reasoning model |
@@ -31,6 +31,10 @@ scheduler = Agent(
 | `output_type` | Final output contract; required for an agent exposed as a tool, including output functions |
 | `retries` | Retry budgets: an `int` for both, or `AgentRetries`; see [retries](#retries) |
 | `tool_handling` | Templates for what the model reads around tool calls (updates, refused duplicates, deferred replies); see [tools](tools.md#on-a-call) |
+
+A constructed agent reads back `agent.name`, `agent.instructions`, `agent.tools`
+(its tools and toolsets), `agent.llm` (its model, `NOT_GIVEN` when it uses the
+session's) and `agent.output_type` (`str` unless declared).
 
 As in pydantic-ai, the constructor infers the agent's type parameters from
 its arguments: `scheduler` above is an `Agent[SchedulingContext, Appointment]`,
@@ -137,6 +141,7 @@ the application's final-result contract. See the
 | `output` | The accepted application value in the completed branch |
 | `question` | The question in the input-required branch |
 | `input_requirements` | Every tool request awaiting human input, with its call identity, question and verbatim flag |
+| `verbatim` | The part of the answer or question that reached the person exactly as written, `None` when nothing did; see [wording and verbatim](tools.md#wording-and-verbatim) |
 | `new_messages()` | This invocation’s input and recorded messages, including tool calls/results |
 | `all_messages()` | Supplied history plus this invocation; suitable for the next direct run |
 | `usage` | Usage accumulated by this invocation |
@@ -144,8 +149,8 @@ the application's final-result contract. See the
 
 `input_requirements` preserves all tool-originated requests in model-call order, including
 requests produced alongside another terminal outcome. Each entry has `invocation_id`, `call.name`,
-`call.call_id`, `call.answer_tool`, `question`, and `verbatim`. The singular `question` and
-framework status retain their existing compatibility behavior. Additional requests remain
+`call.call_id`, `call.answer_tool`, `question`, and `verbatim`. The singular `question` is the
+first request. Additional requests remain
 waiting; this metadata does not queue their presentation, choose their priority, or answer
 them automatically. A conversation coordinator must retain their identities when deciding
 how to continue.
@@ -189,15 +194,15 @@ On a call, `VoiceSession` owns frontend interaction and expert reply routing; se
 
 ## `RunContext`
 
-Every tool, instruction function and output function receives
-`RunContext[Context]` as its first argument:
+Tools, instruction functions and output functions receive `RunContext[Context]`
+through any parameter annotated with it; the parameter is optional:
 
 | Member | What |
 |---|---|
 | `ctx.context` | the application object passed to `run(context=...)`; data, services, and helper methods |
 | `ctx.agent` | the agent this invocation runs; in a session's pipeline callback, the agent holding the call |
 | `ctx.store` | the managed store for explicit `load_context` and `save_context` calls |
-| `ctx.thread` | the durable thread this run belongs to, the same object an `a2a_session` handler gets; see [threads.md](threads.md) |
+| `ctx.thread` | the durable thread this run belongs to, the same object an `a2a_session` handler gets; raises `RuntimeError` in a direct run without storage; see [threads.md](threads.md) |
 | `ctx.live_session` | the `VoiceSession` of the call, `None` outside a call |
 | `ctx.task_id` | the A2A task ID of the turn, or `None` outside A2A; external operations need an operation-specific idempotency key |
 | `ctx.usage` | latest immutable usage snapshot of the owning execution scope; see [usage](usage.md#scope-and-delegation) |
@@ -329,9 +334,11 @@ Output functions resolve already committed effects. Effectful operations have
 their own idempotency contract.
 
 `ctx.execution_id` identifies the conversational task across human turns.
-Each turn has its own run identity. The framework stores the execution id in
-the run's persisted state, so a resumed run keeps it. On A2A it is the
-transport task id, which a frontend can supply by continuing that task.
+Each turn has its own run identity. The framework records the execution id on
+the run's input message, so a reply run with that history continues a pending
+execution; otherwise a run starts a new execution at its own invocation id. On
+A2A it is the transport task id, which a frontend can supply by continuing that
+task. On a call it is one id for the whole call.
 
 Approval binds to the exact effect terms and draft revision. Changed dates,
 room, price, guest, or payment details invalidate prior approval. Recheck
@@ -348,13 +355,17 @@ availability and authorization before committing the booking.
 ```python
 @front_desk.on_enter
 async def enter(session: VoiceSession) -> None:
-    await session.generate_reply(instructions="Greet the caller and offer assistance.")
+    session.generate_reply(instructions="Greet the caller and offer assistance.")
 
 
 @front_desk.on_exit
 async def exit(session: VoiceSession) -> None:
     await release_frontend_resources(session)
 ```
+
+`generate_reply` returns a `SpeechHandle`. Leave it unawaited to start the
+greeting and return; `await session.generate_reply(...)` only when code in the
+hook must run after the greeting has played out.
 
 These hooks describe frontend activation, not individual turns or backend
 requests. Returning `InputRequired` does not leave the active role. An agent
@@ -388,9 +399,10 @@ A history is a `ChatContext` of `ChatItem`s, exported from `livekit.agents.llm`:
 `ChatMessage` (`role`, a `ChatRole`; `content`, a list of `ChatContent`: text,
 `ImageContent` or `AudioContent`), `FunctionCall`, `FunctionCallOutput`,
 `AgentHandoff` (the speaking agent changed) and `AgentConfigUpdate` (its
-instructions or tools changed). An `ImageContent` takes a video frame as is, or
-the bytes of `livekit.agents.utils.media.encode(frame, EncodeOptions(...))`,
-whose `ResizeOptions` bound the image's size.
+instructions or tools changed). An `ImageContent(image=...)` takes a video frame
+as is, or a URL string; for encoded bytes, pass a `data:` URL built from
+`await livekit.agents.utils.media.encode(frame, EncodeOptions(...))`, whose
+`ResizeOptions` bound the image's size.
 
 ## Streaming runs
 

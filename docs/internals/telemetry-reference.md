@@ -17,8 +17,8 @@ conventions live in the attributes, the span kind and the metrics.
 | --- | --- | --- | --- | --- |
 | LLM request | `llm_request` (kind `CLIENT`) | `chat` | `gen_ai.provider.name`, `gen_ai.request.model` and request parameters, `gen_ai.response.model`, `gen_ai.response.id`, `gen_ai.response.finish_reasons`, `gen_ai.usage.*`, `gen_ai.response.time_to_first_chunk`; with message capture `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions`, `gen_ai.tool.definitions` | `gen_ai.client.inference.usage.input_tokens`, `gen_ai.client.inference.usage.output_tokens`, `gen_ai.client.operation.duration` |
 | Realtime model turn | `realtime_inference` (kind `CLIENT`) | `generate_content` | as an LLM request, with audio and text token splits | as an LLM request |
-| Tool call | `function_tool` | `execute_tool` | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type`, `gen_ai.tool.description`; with message capture `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` | `gen_ai.client.operation.duration` |
-| Agent turn | `agent_turn` | `invoke_agent` | `gen_ai.agent.name`, `gen_ai.conversation.id` | `gen_ai.client.operation.duration` |
+| Tool call | `function_tool` | `execute_tool` | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type`, `gen_ai.tool.description`; with message capture `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` | `gen_ai.execute_tool.duration` |
+| Agent turn | `agent_turn` | `invoke_agent` | `gen_ai.agent.name`, `gen_ai.conversation.id` | `gen_ai.invoke_agent.duration` |
 | Session | `agent_session` | `invoke_workflow` | `gen_ai.workflow.name`, `gen_ai.conversation.id` | |
 | Agent activation | `start_agent_activity` | `create_agent` | `gen_ai.agent.name`, `gen_ai.provider.name`, `gen_ai.request.model` | |
 
@@ -31,7 +31,7 @@ model call alike:
 | STT stream | `user_turn` carries the model; requests and reconnects as events | `gen_ai.provider.name`, `gen_ai.request.model`, `lk.stt.*`, audio duration usage |
 | TTS request | `tts_request` (kind `CLIENT`), `tts_request_run` per attempt | `gen_ai.provider.name`, `gen_ai.request.model`, `lk.tts.*`, `lk.response.ttfb`, character and audio duration usage |
 | End-of-turn prediction | `eou_detection` | provider and model of the detector, probability, threshold, delay |
-| VAD | no span per inference; `lk.agents.vad.*` metrics | inference duration and count |
+| VAD | no span and no metric per inference; `VADMetrics` reach the session's `metrics_collected` only | inference duration and count |
 
 The LiveKit metric instruments (`lk.agents.turn.*`, `lk.agents.usage.*`) are
 recorded alongside the GenAI ones; Cloud reads the LiveKit ones.
@@ -96,11 +96,12 @@ reach Agent Insights and the application endpoint.
 ### Text
 
 ```text
-a2a_request                             one A2A request; continues the caller's traceparent
-└── agent_run                           one AgentRun
-    ├── llm_request > llm_request_run
-    └── function_tool
-        └── (RemoteAgent call: the next agent's a2a_request, same trace)
+http_request                            one exchange on an agent endpoint; continues the caller's traceparent
+└── a2a_request                         one A2A request
+    └── agent_run                       one AgentRun
+        ├── llm_request > llm_request_run
+        └── function_tool
+            └── (RemoteAgent call: the next agent's http_request, same trace)
 ```
 
 ## Consumers
@@ -162,8 +163,7 @@ Compatibility rules:
 
 Everything the framework emits. Types are OTLP value types; "JSON" is a string
 holding JSON; durations are seconds. "Start" and "end" say when an attribute is
-set. Keys marked *new* are additions the declarations introduce; every other key
-keeps the name, type and meaning Cloud's consumers read today.
+set.
 
 ### Every span
 
@@ -172,7 +172,7 @@ keeps the name, type and meaning Cloud's consumers read today.
 | `gen_ai.conversation.id` | string | start: the conversation's thread id (`AT_...`) on every span of a call or text run, the job's startup spans included; the room session id (`RM_...`) for a call without a thread |
 | job identity (Destinations, internals) | string, bool | start, stamped by the destination |
 | `error.type`, `exception.type`, `exception.message`, `exception.stacktrace`; event `exception` | string | on a recorded failure ([Errors](telemetry.md#errors)) |
-| `lk.cancelled` *new* | bool | end: a `ScopedSpan` dropped without `end` |
+| `lk.cancelled` | bool | end: a `ScopedSpan` dropped without `end` |
 
 Span kind is `INTERNAL` unless stated.
 
@@ -248,7 +248,7 @@ and `user_state_changed` (`lk.old_state`, `lk.new_state`),
 
 | Span | Keys |
 | --- | --- |
-| `user_turn` | start: `lk.user_turn.origin` *new*, participant attributes, `gen_ai.request.model` and `gen_ai.provider.name` (the STT); end: `lk.user_turn.outcome` *new*, `lk.pii.user_transcript`, `lk.transcript_confidence` (double), `lk.transcription_delay` and `lk.end_of_turn_delay` (s, `0` when unmeasured), `lk.provider_request_ids` (string array), `lk.stt.events` (JSON: `received_at`, `type`, `transcript_length` per event), `lk.eou.resume_count` (int, when > 0) |
+| `user_turn` | start: `lk.user_turn.origin`, participant attributes, `gen_ai.request.model` and `gen_ai.provider.name` (the STT); end: `lk.user_turn.outcome`, `lk.pii.user_transcript`, `lk.transcript_confidence` (double), `lk.transcription_delay` and `lk.end_of_turn_delay` (s, `0` when unmeasured), `lk.provider_request_ids` (string array), `lk.stt.events` (JSON: `received_at`, `type`, `transcript_length` per event), `lk.eou.resume_count` (int, when > 0) |
 | `user_speaking` | participant attributes; `lk.is_interruption` (string `"true"`/`"false"`, every verdict, `"false"` at overlap end when unset), `lk.interruption.probability` (double), `lk.interruption.total_duration`, `lk.interruption.prediction_duration`, `lk.interruption.detection_delay` (s) |
 | `eou_wait` | `lk.eou.source`, `lk.eou.endpointing_delay` (s) at start and on re-arm; at end `lk.eou.outcome` (`committed`, `user_resumed`, `dropped`), `lk.eou.wait_duration` (s), `lk.eou.rearm_count`, `lk.eou.not_committed_count` (int); events `rearmed` (`lk.eou.source`), `user_resumed` |
 | `eou_detection` | after the prediction: `lk.pii.chat_ctx` (JSON), `lk.eou.endpointing_delay`, `lk.eou.language`, `lk.eou.source`, `lk.eou.from_cache` (bool), `lk.eou.probability`, `lk.eou.unlikely_threshold` (when known), `lk.eou.detection_delay` (s, streaming detectors); event `superseded` (`lk.eou.outcome`) |
@@ -297,8 +297,7 @@ step's start, `preemptive_generation_discarded` (`lk.speech_id`).
 | --- | --- | --- |
 | `gen_ai.operation.name` = `chat`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.request.stream` (true), `gen_ai.output.type` = `text` | | start |
 | `gen_ai.system_instructions`, `gen_ai.input.messages`, `gen_ai.tool.definitions` | JSON | start, with message capture |
-| `lk.input.delta`, `lk.input.base_span_id`, `lk.input.dropped_from_base`, and a span link to the base | | with message capture and input deltas |
-| `lk.llm_metrics` | JSON (`ttft`, `prompt_tokens`, `prompt_cached_tokens`, `completion_tokens`, `duration`, ...) | end, after a successful response |
+| `lk.llm_metrics` | JSON in the usage names (`ttft`, `input_tokens`, `cache_read_tokens`, `output_tokens`, `duration`, ...); an unmeasured value is omitted | end, after a successful response |
 | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` | int | end |
 | `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_write.input_tokens`, `gen_ai.usage.reasoning.output_tokens` | int | end, when > 0 |
 | `gen_ai.response.id`, `gen_ai.response.model`, `gen_ai.response.finish_reasons` (`stop`, `tool_call`, `error`) | | end |
@@ -334,8 +333,9 @@ step's start, `preemptive_generation_discarded` (`lk.speech_id`).
 | Span | Parent | Keys |
 | --- | --- | --- |
 | `judge_evaluation` | current; one per judge | `gen_ai.evaluation.name`; `gen_ai.evaluation.score.label` (the verdict); `gen_ai.evaluation.explanation` with message capture; its judge model's `llm_request` as a child |
-| `a2a_request` *new* (kind `SERVER`) | the caller's `traceparent` | `gen_ai.operation.name` = `invoke_agent`, `gen_ai.agent.name`, `gen_ai.conversation.id` (thread id), `lk.a2a.task_id` |
-| `agent_run` *new* | `a2a_request` or current | `gen_ai.operation.name` = `invoke_agent`, `gen_ai.agent.name`; at end `lk.run.status` (`completed`, `input_required`, `failed`) |
+| `http_request` (kind `SERVER`) | the caller's `traceparent` | `http.request.method`, `http.route`, `lk.endpoint.request_id`; at end `http.response.status_code` |
+| `a2a_request` (kind `SERVER`) | `http_request`, else the caller's `traceparent` | `gen_ai.operation.name` = `invoke_agent`, `gen_ai.agent.name`, `gen_ai.conversation.id` (thread id), `lk.a2a.task_id` |
+| `agent_run` | `a2a_request` or current | `gen_ai.operation.name` = `invoke_agent`, `gen_ai.agent.name`; at end `lk.run.status` (`completed`, `input_required`, `failed`) |
 
 ### Metrics
 

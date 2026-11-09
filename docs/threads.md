@@ -77,10 +77,9 @@ Every route below is signed with the project's key, so the agent trusts the id w
 
 | The job's `thread_id`            | `ctx.thread` and the call                                                               |
 | -------------------------------- | --------------------------------------------------------------------------------------- |
-| a known thread                   | that thread, open before the entrypoint runs; a lane that does not load fails `start()` |
-| empty                            | `None`: the call runs on a new thread of the local `SQLiteStorage()`                    |
-| unknown or deleted               | `None`: the refusal is logged; the call runs on a new local thread                      |
-| any, on a server without storage | `None`: the call runs on a new local thread                                             |
+| a known thread     | that thread, open before the entrypoint runs; a lane that does not load fails `start()` |
+| empty              | `None`: the call runs in memory and no thread is created                                 |
+| unknown or deleted | `None`: the refusal is logged; the call runs in memory                                   |
 
 Whoever dispatches the call already has its thread id and hands it to its frontend;
 the room does not publish it. A tool with the project's key reads it from the
@@ -99,7 +98,7 @@ application's choice.
 | ------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | web chat, API | as many as the application wants | a thread per chat, created with the person as `scope`, listed by scope for a sidebar, titled with `update(attributes=)`; see [clients.md](clients.md) |
 | the same      | one                              | the backend keeps one thread id per person and sends it every time                                                                                    |
-| calls         | the one the dispatch names       | the dispatch's `thread_id` (see [Calls](#calls)); with none, a new thread of the local `SQLiteStorage()`                                             |
+| calls         | the one the dispatch names       | the dispatch's `thread_id` (see [Calls](#calls)); with none, the call runs in memory and is not kept                                                  |
 
 Tags, folders and search are the application's own table, keyed by the
 thread id. Each thread is its own memory: what the agent learned in one
@@ -123,18 +122,20 @@ messages arrived, unless the endpoint chose otherwise; see
 On every context, in a tool during any run and in an endpoint's handler,
 `ctx.thread` is the durable thread. On a call, the live call itself is
 `ctx.live_session`, `None` outside a call; only it speaks. In an
-`rtc_session` entrypoint, `ctx.thread` is the call's thread, `None` on a
-server without storage, and `VoiceSession(thread=ctx.thread)` gives it to
-the call. A call without a thread runs on a new thread of the local
-`SQLiteStorage()` (its default directory); a call whose thread does not load
-fails to start (see [voice-session.md](voice-session.md#the-calls-thread)),
-and a text run without storage has no thread. See [storage.md](internals/storage.md).
+`rtc_session` entrypoint, `ctx.thread` is the call's thread, `None` when the
+dispatch named none, and `VoiceSession(thread=ctx.thread)` gives it to the
+call. A call without a thread runs in memory; a call whose thread does not load
+fails to start (see [voice-session.md](voice-session.md#the-calls-thread)).
+An `AgentServer` always has storage: its `storage=`, else the local
+`SQLiteStorage()`. A direct `agent.run()` outside a server has none, and
+`ctx.thread` raises `RuntimeError` there. See [storage.md](internals/storage.md).
 
 | Member                                                                             | Returns              | What                                                                                   |
 | ---------------------------------------------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------- |
 | `id`                                                                               | `str`                | the thread id                                                                          |
 | `info()`                                                                           | `ThreadInfo`         | the platform's record: scope, attributes, `created_at`, `last_active`, `expires_at`    |
 | `update(attributes=, idle_ttl_seconds=)`                                           | `ThreadInfo`         | change the attributes a listing returns, or the idle period                            |
+| `lane(agent)`                                                                      | `Lane`               | one agent's lane of this thread                                                        |
 | `lane(agent).history()`                                                            | `ChatContext`        | another agent's history in this thread                                                 |
 | `chat_history(agent=None)`                                                         | `ChatContext`        | this agent's history, or another agent's                                               |
 | `lane(agent).tasks(status=, limit=)`                                               | `list[TaskRecord]`   | A2A task records for the selected lane                                                 |
@@ -145,8 +146,8 @@ and a text run without storage has no thread. See [storage.md](internals/storage
 
 ## Lifecycle
 
-A thread is created on first contact, a message with no `contextId` or a
-call with no thread in its dispatch, or explicitly through the threads service.
+A thread is created on first contact, a message with no `contextId`, or
+explicitly through the threads service; a call never creates one.
 Creating it creates its database. It expires after its idle period, `idle_ttl`, set at
 creation or by `update(idle_ttl_seconds=)`; an update counts as activity
 and pushes the expiry. Deleting a thread deletes everything it holds.

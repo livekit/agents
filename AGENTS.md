@@ -62,8 +62,8 @@ Put test paths before category flags, whose optional argument is a provider name
 | `pytest.mark.unit` | `--unit` | fast, hermetic, no external providers/credentials/network |
 | `pytest.mark.audio_eot` | `--audio_eot` | hermetic audio end-of-turn / turn-detection suite |
 | `pytest.mark.plugin("name")` | `--plugin [name]` | provider integration test (needs that provider's deps/keys) |
-| `pytest.mark.stt` | `--stt` | cross-provider speech-to-text suite; requires provider dependencies and credentials |
-| `pytest.mark.tts` | `--tts` | cross-provider text-to-speech suite; requires provider dependencies and credentials |
+| `pytest.mark.stt("name")` | `--stt [name]` | speech-to-text suite, optionally for one provider; requires provider dependencies and credentials |
+| `pytest.mark.tts("name")` | `--tts [name]` | text-to-speech suite, optionally for one provider; requires provider dependencies and credentials |
 | `pytest.mark.realtime("name")` | `--realtime [name]` | realtime-model test |
 | `pytest.mark.evals` | `--evals` | behavioral evals against the LiveKit inference gateway |
 | `pytest.mark.docs` | `--docs` | tests for the docs-build tooling under `.github/` |
@@ -112,7 +112,7 @@ specification; implementation cleanup must follow the agreed contracts.
 - **Fast brain / slow brain**: the pattern every example follows. A frontend agent talks to the
   person (persona, pacing, voice) and its one tool is a `RemoteAgent(...).as_tool()` to a backend agent that
   holds the tools, the state and the systems of record.
-- **Agent** (`voice/agent.py`): shared configuration, `Agent[Context]`, and validated
+- **Agent** (`voice/__init__.py`): shared configuration, `Agent[Context, Output]`, and validated
   `output_type`, authored as a constructed instance with registered callbacks. `await agent.run(message, message_history=, context=)` executes that agent.
   Static instructions plus `@agent.instructions` functions; identity is an optional `name=`,
   else the module-level variable name. The loop itself is `AgentRun` in `lk-agents-core`.
@@ -186,17 +186,17 @@ specification; implementation cleanup must follow the agreed contracts.
 ```
 livekit-agents-next/livekit/agents/   # the public Python API and host adapters
 ├── voice/              # Agent, VoiceSession, VoiceTask, the livekit.rtc room adapter
-├── a2a/                # The text door: A2A endpoint API, AgentClient, RemoteAgent, tokens
+├── a2a.py              # The text door: A2A endpoint API, AgentClient, RemoteAgent, tokens
 ├── storage/            # AgentDBStorage, SQLiteStorage, thread handles, the context store
 ├── llm/                # Chat context, tools and toolsets, MCP, LLM and realtime APIs
 ├── beta/workflows.py   # Domain result types, validation helpers and transfer operations
 ├── stt.py, tts.py      # Speech-to-text and text-to-speech provider bases
 ├── inference/          # Hosted model inference (LLM, STT, TTS, realtime)
-├── ipc/                # Job-process bootstrap and the ASGI app endpoint streams are served into
+├── ipc/                # Job-process bootstrap
+├── http/               # The HTTP client and the ASGI app endpoint streams are served into
 ├── cli.py              # dev / start subcommands invoked by `lk agent`
 ├── text_session.py     # Backend conversations and explicitly supplied routing state
-├── evals.py            # Conversation judges
-├── simulation.py       # Simulation context and application verdicts
+├── evals.py            # Conversation judges (simulation context and verdicts: _generated/simulation.py)
 ├── telemetry.py        # OTel API provider adapter, configure, GenAI message capture, diagnostics
 ├── _generated/         # Generated implementations and forwarding modules (never edited)
 └── _core.pyi           # Generated stubs of the Rust core extension
@@ -231,7 +231,8 @@ Plugins in `livekit-plugins/` provide STT, TTS, LLM, and specialized services. E
 
 ### Model Interface Pattern
 STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
-- Base classes defining the interface (`stt/stt.py`, `tts/tts.py`, `llm/llm.py`, `llm/realtime.py`)
+- Base classes defining the interface, generated (`_generated/stt.py`, `tts.py`, `llm.py`, `realtime.py`)
+  and exported through `stt.py`, `tts.py`, `llm/__init__.py` and `llm/realtime.py`
 - Fallback adapters for resilience
 - Stream adapters for different streaming patterns
 

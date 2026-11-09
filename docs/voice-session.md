@@ -34,9 +34,15 @@ again when left empty.
 | `aec_warmup_duration` | seconds after the agent first speaks during which the person cannot interrupt, while echo cancellation adapts; 3 by default, none on an outbound SIP call the agent dialed |
 | `expressive` | `True`, or an `ExpressiveOptions` (`speech_steering`: `SpeechSteeringOptions`, whose `nonverbal_sounds` takes `NonverbalOptions`; or a custom instructions template) |
 | `tts_text_transforms` | the `TextTransforms` applied before synthesis: `"filter_markdown"`, `"filter_emoji"` |
+| `max_tool_steps` | model requests one reply may chain through tool calls; 3 by default |
+| `min_consecutive_speech_delay` | seconds of silence between two of the agent's speeches; 0 by default |
+| `use_tts_aligned_transcript` | whether the transcript follows the TTS's word timings rather than the text sent to it; the session decides when left out |
+| `user_away_timeout` | seconds of silence after which the person's state becomes `away`; 15 by default, `None` never |
+| `transcription_timeout` | seconds to wait for a transcript after the person spoke before `user_transcription_timeout`; `None` (the default) never |
+| `session_close_transcript_timeout` | seconds the close waits for the last transcript; 2 by default |
 | `tools` | tools and toolsets every agent of the call is offered, besides its own; a name an agent's tool already has is refused (`ValueError`) when that agent runs, see [tools](tools.md#tools-on-an-agent) |
 | `context` | the application object; marked fields require explicit loading and saving |
-| `thread` | the call's durable thread, `ctx.thread`; omitted, the call runs on a new thread of the local `SQLiteStorage()`; one whose lane does not load fails `start()` ([the call's thread](#the-calls-thread)) |
+| `thread` | the call's durable thread, `ctx.thread`; omitted, the call runs in memory and no thread is created; one whose lane does not load fails `start()` ([the call's thread](#the-calls-thread)) |
 
 `turn_detection` is a mode (`"stt"`, `"vad"`, `"realtime_llm"`, `"manual"`) or an
 `inference.TurnDetector`, which predicts the end of the person's turn on their audio; any other
@@ -46,10 +52,10 @@ object is refused (`TypeError`). Left out, a session without a realtime model ru
 
 `session.start(agent, chat_ctx=)` and `session.update_agent(agent, chat_ctx=)`
 are the two places to supply a different history. An explicit agent switch
-retains the current history when no replacement is supplied. Before `start()`,
-`update_agent(agent, chat_ctx=)` selects the agent the session starts with and
-the history it opens on, as the context read at that call; `start(chat_ctx=)`
-takes precedence over it.
+retains the current history when no replacement is supplied. `start(agent)`
+picks the agent the session starts with. Called before `start()`,
+`update_agent(agent, chat_ctx=)` only sets the history the session opens on;
+`start(chat_ctx=)` takes precedence over it.
 
 In a tool on a call, `ctx.live_session` is the call (`say()`,
 `generate_reply()`), and `ctx.thread` is the durable thread, the same
@@ -58,9 +64,9 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | Member | What |
 |---|---|
 | `start(agent, room=, room_options=, chat_ctx=)` | attach the session to the room (the job's when left out) with `agent` speaking; `room_options` is a `RoomOptions` of `audio_input` (`AudioInputOptions`), `audio_output` (`AudioOutputOptions`), `video_input` (`VideoInputOptions`), `text_input` (`TextInputOptions`, whose callback receives a `TextInputEvent`) and `text_output` (`TextOutputOptions`), each `True`/`False` or its options |
-| `say(text, audio=)`, `generate_reply(instructions=, user_input=, tools=)` | speak fixed words, or reply through the model; each returns the speech's `SpeechHandle`. `text` is a `str` or an async iterable of `str` read to its end; with `audio` (pre-synthesized frames, then `text` must be a `str`, else `ValueError`) the frames play instead of the TTS and `text` is still added to the history. `tools=` (names) offers only those of the driving agent's tools for that reply, plus its provider-owned tools; a realtime model refuses it. A reply asked from the agent's `on_enter` is that hook's reply: tools flagged `ToolFlag.IGNORE_ON_ENTER` are withheld from it |
-| `interrupt()` | stop the current speech |
-| `set_participant(identity)` | listen to another room participant (their audio, transcript and keypad); `None` listens to no one. By default the session links the first participant who joins, or `RoomOptions(participant_identity=)` |
+| `say(text, audio=, allow_interruptions=, add_to_chat_ctx=True)`, `generate_reply(instructions=, user_input=, tools=, tool_choice=, allow_interruptions=, chat_ctx=)` | speak fixed words, or reply through the model; each returns the speech's `SpeechHandle`. `allow_interruptions` overrides the session's for this speech; `add_to_chat_ctx=False` keeps a `say` out of the history; `tool_choice` and `chat_ctx` (the context this reply works on, refused on a realtime model) apply to this reply only. `text` is a `str` or an async iterable of `str` read to its end; with `audio` (pre-synthesized frames, then `text` must be a `str`, else `ValueError`) the frames play instead of the TTS and `text` is still added to the history. `tools=` (names) offers only those of the driving agent's tools for that reply, plus its provider-owned tools; a realtime model refuses it. A reply asked from the agent's `on_enter` is that hook's reply: tools flagged `ToolFlag.IGNORE_ON_ENTER` are withheld from it |
+| `interrupt(force=False)` | stop the current speech and the queued ones up to the first uninterruptible one; returns a future that resolves when they are done, or with the refusal |
+| `await set_participant(identity)` | listen to another room participant (their audio, transcript and keypad); `None` listens to no one. By default the session links the first participant who joins, or `RoomOptions(participant_identity=)` |
 | `update_agent(agent)`, `update_options(...)`, `override_options(...)` | see [updating a live session](#updating-a-live-session) |
 | `history` | the call's conversation, a new `ChatContext` over the session's items on each read; empty on a new thread and before `start()`; see [reading the session from a callback](#reading-the-session-from-a-callback) |
 | `current_agent` | the agent speaking now |
@@ -68,7 +74,16 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | `agent_state`, `user_state` | the agent's and the person's state, `"initializing"` and `"listening"` until their first change; read as `history` is |
 | `usage` | latest immutable `Usage` snapshot; retained after shutdown; see [usage and metrics](usage.md) |
 | `on(event, callback)` | subscribe to a session event, below |
-| `aclose()`, `async with` | end the call's session |
+| `drain()` | run the driving agent's `on_exit`, then wait until no speech is left, scheduling nothing new |
+| `wait_for_idle()` | wait until the session is idle: nothing speaking, queued or deciding a turn |
+| `shutdown(drain=True)` | close without waiting; `drain` lets queued speech finish first |
+| `aclose()`, `async with` | end the call's session and wait for it |
+| `options` | the resolved configuration the session runs on (a `ResolvedSessionOptions`), current as soon as a change is sent |
+| `llm`, `tools`, `conn_options`, `context` | the constructor's model, session tools, connection policy and application context |
+| `thread` | the call's thread, `None` for a call in memory |
+| `store` | the call's `ContextStore` for explicit `load_context` and `save_context`; raises before `start()` |
+| `amd` | the session's `AMD`, `None` when answering-machine detection is off |
+| `input`, `output` | the session's media endpoints; assigning `session.output.audio` replaces the audio sink the agent speaks into |
 
 | Event | Payload | When |
 |---|---|---|
@@ -82,7 +97,7 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | `"user_turn_exceeded"` | `UserTurnExceededEvent`: `transcript`, `accumulated_transcript`, `accumulated_word_count`, `duration` (a `timedelta`) | the person spoke past the turn limit without a reply |
 | `"user_transcription_timeout"` | `UserTranscriptionTimeoutEvent`: `speech_duration` | the person spoke but recognition produced no transcript |
 | `"agent_false_interruption"` | `AgentFalseInterruptionEvent`: `resumed` | an interruption turned out not to be one |
-| `"overlapping_speech"` | `OverlappingSpeechEvent` | adaptive interruption detection classified overlapping speech |
+| `"overlapping_speech"` | `OverlappingSpeechEvent`: `is_interruption`, `agent_ended`, `overlap_started_at`, `detected_at` | adaptive interruption detection classified overlapping speech |
 | `"tool_execution_updated"` | `ToolExecutionUpdatedEvent`: `update`, a `ToolCallStarted`, `ToolCallUpdated`, `ToolCallEnded` or `ToolReplyUpdated` | one step of a tool call's lifecycle on the call |
 | `"close"` | `CloseEvent`: `reason` (a `CloseReason`), `error` | the session closed |
 
@@ -399,14 +414,13 @@ it, and reports its playback to the receiver with that key.
 
 ## The call's thread
 
-On a server with storage, the door opens the call's thread before the
+The door opens the call's thread in the server's storage before the
 entrypoint runs: the job's `thread_id`, copied from the agent dispatch
 ([how a call gets its thread](threads.md#calls)). It is `ctx.thread` on the
-`JobContext`, `None` on a server without storage or when the dispatch named no
-thread, and `VoiceSession(thread=ctx.thread)` is how the call gets it. A
-`VoiceSession` without `thread=` runs on a new thread of the local
-`SQLiteStorage()`, in its default directory, and `session.thread` is that thread
-once started. An unknown or deleted dispatch thread id is logged as refused and
+`JobContext`, `None` when the dispatch named no thread, and
+`VoiceSession(thread=ctx.thread)` is how the call gets it. A `VoiceSession`
+without `thread=` runs in memory: no thread is created and `session.thread` is
+`None`. An unknown or deleted dispatch thread id is logged as refused and
 `ctx.thread` is `None`.
 
 A call given a thread whose lane does not load does not start: no other thread
@@ -521,8 +535,9 @@ can persist its own conversation independently without making this queue durable
 3. The session processes queued events when the active agent exposes the
    corresponding remote tool and speech, interruption, and frontend-task
    scheduling permits presentation.
-4. Useful progress may be combined; a question can trigger a fast-brain model
-   invocation to phrase it. Enqueueing alone does not invoke the LLM.
+4. Useful progress may be combined; presenting progress or a question runs a
+   presentation-only fast-brain model reply to phrase it. Enqueueing alone does
+   not invoke the LLM.
 5. Before delivering the question, the live session records the expert destination
    for the user's reply in the active conversation's runtime state.
 
@@ -537,7 +552,7 @@ remote lifecycle events before delivery.
 
 | Event | Session responsibility | Frontend presentation |
 | --- | --- | --- |
-| Progress | Retain correlation and ordering; coalesce superseded progress | Present useful updates when the conversational floor permits; an update need not trigger an LLM call |
+| Progress | Retain correlation and ordering; coalesce superseded progress | Present useful updates when the conversational floor permits, each through a presentation-only model reply with tools withheld |
 | Input required | Record the pending question and its expert as the reply destination | Ask through the fast brain, preserving meaning; deliver verbatim text unchanged |
 | Completed | Resolve the recorded parent tool call with the accepted result | Let the caller's next model invocation present the result |
 | Failed or cancelled | Settle the delegation with its recorded outcome | Explain the outcome through the frontend when appropriate |

@@ -109,7 +109,7 @@ reaches, crosses to the turn in the order the handler awaited it:
 - **A departed client.** A client that disconnects or stops reading does not stop the
   turn. The handler keeps running, its reports are dropped from that client's stream
   (`update()` texts still reach the journal), and the answer is committed and
-  available to a later `tasks/get` or resubscribe.
+  available to a later `tasks/get`.
 - **After the answer.** A task the handler left running reports into nothing:
   its reports are dropped, and a checkpoint returns "yield" at once.
 
@@ -163,7 +163,8 @@ if __name__ == "__main__":
 
 | `AgentServer` option | What |
 | --- | --- |
-| `agent_name`, `storage`, `preload_modules` | see above and below |
+| `storage` | where threads live; default the local `SQLiteStorage()`, so a server always has storage |
+| `agent_name`, `preload_modules` | see above and below |
 | `ws_url`, `api_key`, `api_secret` | the LiveKit project; default `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` |
 | `num_idle_processes` | job processes kept warm ahead of dispatch; `min(ceil(cpus), 4)` in production, none in development |
 | `load_threshold` | load at which the worker stops taking jobs; production default 0.7 |
@@ -172,7 +173,7 @@ if __name__ == "__main__":
 | `shutdown_timeout` | total process shutdown budget in seconds, including draining and cleanup; default 3610; must exceed `drain_timeout` |
 | `listeners` | the worker's `public`, `health` and `prometheus` listeners; see [Listeners](#listeners) |
 
-Every option but `storage`, `project_id`, `thread_api_port` and `preload_modules` is a key of
+Every option but `storage` and `preload_modules` is a key of
 `ServerOptionsKwargs`, declared once with the server's defaults; a type checker flags an
 unknown one. Process tuning (connection retries, the job processes' start method, executor,
 timeouts and HTTP proxy) is not an `AgentServer` option: the launcher sets it (see
@@ -316,7 +317,7 @@ would. It does not search the module's globals for a server. The Go CLI can use
 either form without changing the shared Rust CLI.
 
 `start` accepts `--url`, `--api-key`,
-`--api-secret`, `--log-level`, `--dev`, `--simulation`, `--cli-addr`,
+`--api-secret`, `--log-level`, `--dev`, `--simulation`, `--cli-addr` (only with `--dev`),
 `--shutdown-timeout`, and `--drain-timeout`. CLI timeout values override server
 configuration. The process tuning flags are `--max-retry`, `--http-proxy`,
 `--job-executor-type` (`process`, `thread`), `--multiprocessing-context` (`spawn`,
@@ -412,7 +413,9 @@ failure after an SSE stream started ends it with `x-lk-completion` trailers.
 
 The endpoint serves the conversation and nothing else. A thread's history
 and tasks are read from outside through the platform's threads service;
-see [clients.md](clients.md).
+see [clients.md](clients.md). On a server with local `SQLiteStorage`, the worker
+serves that threads service itself in development, and on the port
+`LIVEKIT_THREAD_API_PORT` names otherwise.
 
 ## HTTP routes
 

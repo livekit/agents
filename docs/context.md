@@ -5,10 +5,10 @@ with `run(context=...)`, and access it in tools through `ctx.context`.
 One typed object contains identity, mutable application data, services, and
 helper methods.
 
-Persistence is opt-in **per field**, not per entire context. Mark a user's
-validated data structure with `persisted(...)`; explicitly load its saved
-values with `load_context` and save changes with `save_context`. Ordinary
-fields remain runtime dependencies/data.
+Persistence is opt-in **per field**, not per entire context. The context is a
+dataclass instance; mark a user's validated data structure with
+`persisted(...)`, explicitly load its saved values with `load_context` and save
+changes with `save_context`. Ordinary fields remain runtime dependencies/data.
 
 ## A complete context
 
@@ -105,8 +105,8 @@ class CustomerContext:
     )
 ```
 
-These preferences belong to the root conversation scope. BookingContext's
-draft belongs to a separate booking context supplied for the child frame.
+These preferences belong to the conversation's context, which a child agent
+called as a tool shares.
 The customer's account profile remains authoritative in the
 customer service/database; conversation preferences do not silently update
 it. A child's final Booking result lets the parent update its own
@@ -115,8 +115,8 @@ preferences.last_booking_code explicitly. State is not merged on child exit.
 Session state is separate from agent application data and can be stored in its
 own marked field using the same explicit load/save API.
 The session records the active frame, its parent, and the parent tool-call ID
-that receives the child's accepted output. Each frame references
-the context scope chosen by the application.
+that receives the child's accepted output. Every frame reads the context
+supplied to the turn.
 History, preferences, draft, and customer profile are not interchangeable
 forms of memory.
 
@@ -228,8 +228,8 @@ Use the scoped store for both methods. Entrypoints, tools, and tests receive
 the store from their execution host. The runtime manages its connection.
 
 A store view is activation-scoped and must not be retained in persisted
-context or reused after its runtime ends. A child frame uses its
-recorded scope; a shared-context child retains the existing one.
+context or reused after its runtime ends. A child agent called as a tool uses
+its parent's store.
 Returning from the handler lets the runtime finish its commit and release
 resources.
 
@@ -327,9 +327,9 @@ async with ctx.store.independent_transaction() as tx:   # durable when the block
 | `await tx.fetch(sql, params)` | `list[Row]` |
 | `await tx.fetch_one(sql, params)` | one `Row`, or `None` |
 
-A `Row` is a list of column values in select order: `None`, numbers or
-strings (a boolean reads back as 0 or 1); parameters are `None`, booleans,
-numbers or strings. There are no BLOBs: a BLOB column
+A `Row` (`list[SqlValue]`, both from `livekit.agents.storage`) is a list of
+column values in select order: `None`, numbers or strings (a boolean reads back
+as 0 or 1); parameters are `SqlValue`s: `None`, booleans, numbers or strings. There are no BLOBs: a BLOB column
 read as a row value is refused, so select `hex(...)` instead. Reads observe committed records and writes
 apply together when the transaction commits, so a transaction reads before
 its first write; a read after a write is refused.
@@ -374,30 +374,30 @@ singleton for an Agent or a Python context class. Storage identity is:
 (thread/tenant boundary, context_scope_id, field_name)
 ```
 
-The scope ID identifies stored application data. Saved session frames retain
-their context-scope references across turns.
+The scope ID identifies stored application data.
 
 | Operation | Context/data scope |
 | --- | --- |
 | Start a new conversation | New root scope |
-| Call an agent as a tool | Application supplies a compatible shared context or a separate child context |
-| Child frame with shared context | Share current compatible context and scope |
-| Child frame with a new context | Allocate a fresh child context scope |
+| Call an agent as a tool | Share the parent's context and scope |
+| Run a child from a tool with `child.run(..., context=...)` | The context and scope the tool supplies |
 | Resume an existing execution | Restore its saved scope; never allocate a new one |
 
-A new booking job should pass a fresh BookingContext when it needs a separate
-draft. Shared context is intentional for specialists working on one case.
-Identity/service references may be reused without sharing the draft:
+An agent called as a tool works on its parent's case, so it shares the parent's
+context. A specialist that needs a separate draft is called from an ordinary
+tool that builds its context, reusing identity and service references without
+sharing the draft:
 
 ```python
-booking_context = BookingContext(
-    customer=app.customer,
-    hotel=app.hotel,
-)
+@front_desk.tool
+async def book(ctx: RunContext[CaseContext], request: str) -> Booking:
+    """Book a room for the guest."""
+    booking_context = BookingContext(customer=ctx.context.customer, hotel=ctx.context.hotel)
+    result = await booking_agent.run(request, context=booking_context)
+    return result.output
 ```
 
-The application creates a scope for the child frame and explicitly saves its
-marked fields. Later turns load that recorded scope.
+The tool explicitly loads and saves the child context's marked fields.
 No implicit copying/merging of application objects, cross-tenant sharing, or
 reuse of a finished booking's draft. Any future explicit scope-sharing handle
 needs separate authorization; field names do not grant access to another scope.
