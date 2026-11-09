@@ -408,8 +408,8 @@ impl From<&Metadata> for ModelMetadata {
     }
 }
 
-/// `lk.llm_metrics`: `LLMMetrics` as 1.8.10's `model_dump_json()` wrote it, which Cloud parses.
-/// Unmeasured durations are `-1`.
+/// `lk.llm_metrics`, which Cloud parses: `LLMMetrics` in the `TokenUsage` names (usage.md). An
+/// unmeasured value is omitted.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename = "llm_metrics")]
 pub struct LlmMetricsSummary {
@@ -417,16 +417,22 @@ pub struct LlmMetricsSummary {
     pub request_id: String,
     pub timestamp: f64,
     pub duration: f64,
-    pub ttft: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttft: Option<f64>,
     pub cancelled: bool,
-    pub completion_tokens: u64,
-    pub prompt_tokens: u64,
-    pub prompt_cached_tokens: u64,
-    pub cache_creation_tokens: u64,
-    pub reasoning_tokens: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_reasoning_tokens: Option<u64>,
     pub total_tokens: u64,
     pub tokens_per_second: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub speech_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<ModelMetadata>,
 }
 
@@ -438,13 +444,13 @@ impl From<&LlmMetrics> for LlmMetricsSummary {
             request_id: m.request_id.clone(),
             timestamp: m.timestamp,
             duration: m.duration,
-            ttft: m.ttft.unwrap_or(-1.0),
+            ttft: m.ttft,
             cancelled: m.cancelled,
-            completion_tokens: t.output_tokens,
-            prompt_tokens: t.input_tokens,
-            prompt_cached_tokens: t.cache_read_tokens.unwrap_or(0),
-            cache_creation_tokens: t.cache_write_tokens.unwrap_or(0),
-            reasoning_tokens: t.output_reasoning_tokens.unwrap_or(0),
+            input_tokens: t.input_tokens,
+            output_tokens: t.output_tokens,
+            cache_read_tokens: t.cache_read_tokens,
+            cache_write_tokens: t.cache_write_tokens,
+            output_reasoning_tokens: t.output_reasoning_tokens,
             total_tokens: t.total_tokens(),
             tokens_per_second: m.tokens_per_second,
             speech_id: m.speech_id.clone(),
@@ -602,13 +608,35 @@ mod tests {
         assert_eq!(iso(-0.5), "\"1969-12-31T23:59:59.500000+00:00\"");
     }
 
-    // Catches: the `type` tag lost or moved, or an unmeasured ttft written as null.
+    // Catches: the `type` tag lost or moved, an old token name back, or an unmeasured value
+    // written as `-1`, `0` or null.
     #[test]
-    fn metrics_summaries_keep_the_reference_shape() {
-        let m = LlmMetrics { ttft: None, metadata: None, ..crate::metrics::testkit::llm() };
+    fn the_llm_summary_uses_the_usage_names_and_omits_what_was_not_measured() {
+        let mut m = LlmMetrics { ttft: None, metadata: None, ..crate::metrics::testkit::llm() };
+        m.tokens.cache_read_tokens = None;
+        m.tokens.cache_write_tokens = None;
+        m.tokens.output_reasoning_tokens = None;
         let v = serde_json::to_value(LlmMetricsSummary::from(&m)).unwrap();
-        assert_eq!(v.as_object().unwrap().keys().next().map(String::as_str), Some("type"));
-        assert_eq!((v["type"].as_str(), v["ttft"].as_f64()), (Some("llm_metrics"), Some(-1.0)));
-        assert!(v["metadata"].is_null());
+        let o = v.as_object().unwrap();
+        assert_eq!(o.keys().next().map(String::as_str), Some("type"));
+        assert_eq!(v["type"].as_str(), Some("llm_metrics"));
+        for absent in [
+            "ttft",
+            "metadata",
+            "speech_id",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "output_reasoning_tokens",
+            "prompt_tokens",
+            "completion_tokens",
+        ] {
+            assert!(!o.contains_key(absent), "{absent}");
+        }
+        assert_eq!(v["input_tokens"].as_u64(), Some(m.tokens.input_tokens));
+        assert_eq!(v["output_tokens"].as_u64(), Some(m.tokens.output_tokens));
+        m.tokens.cache_read_tokens = Some(0);
+        m.ttft = Some(0.25);
+        let v = serde_json::to_value(LlmMetricsSummary::from(&m)).unwrap();
+        assert_eq!((v["cache_read_tokens"].as_u64(), v["ttft"].as_f64()), (Some(0), Some(0.25)));
     }
 }
