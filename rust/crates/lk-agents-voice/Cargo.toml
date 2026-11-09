@@ -7,9 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [lib]
-# `///` docs on `#[derive(Host)]` records are the reference's Python docstrings, emitted verbatim by
-# the generator; their indented examples are Python, not Rust doctests. The crate's Rust examples
-# are `ignore`d text.
+# The crate's Rust examples are `ignore`d text, not doctests.
 doctest = false
 
 [dependencies]

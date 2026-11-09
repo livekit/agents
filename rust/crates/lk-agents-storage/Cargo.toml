@@ -10,12 +10,11 @@ license.workspace = true
 # statements, fencing and leases. Every failure is a typed `StorageError`.
 
 [lib]
-# The `///` docs on the records are the generated pydantic models' docstrings; no Rust doctests.
+# The crate's docs hold no Rust doctests.
 doctest = false
 
 [dependencies]
-# `Host` for the row records, so their pydantic twins come from `lk-agents-codegen`, and their
-# `COLUMNS`/`SELECT` from `#[table]` (host-derive `table.rs`).
+# `#[table]` (host-derive `table.rs`): each row record's `COLUMNS`/`SELECT`.
 lk-agents-host-derive = { path = "../../ai_slop/lk-agents-host-derive" }
 # `StorageError` and the host-visible rows, declared with the host vocabulary.
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
