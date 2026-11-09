@@ -114,3 +114,36 @@ def test_update_options_without_speaking_rate_keeps_it():
     tts = TTS(api_key="test-key", speaking_rate=1.2)
     tts.update_options(voice_id=1234)
     assert tts._opts.speaking_rate == 1.2
+
+
+async def test_request_uses_the_sample_rate_frames_are_labeled_with():
+    """The emitter publishes ``TTS.sample_rate``. The API must be asked for that rate.
+
+    ``output_configuration.sample_rate`` is Hz. Without it the API returns the model's
+    default, and LiveKit plays those bytes at the labeled rate.
+    """
+    from livekit.plugins.cambai import TTS
+
+    async with _Server() as server:
+        explicit = TTS(
+            api_key="test-key",
+            base_url=server.base_url,
+            http_session=server.session,
+            sample_rate=16000,
+        )
+        await _synthesize(explicit)
+        default_pro = TTS(
+            api_key="test-key",
+            base_url=server.base_url,
+            http_session=server.session,
+            model="mars-pro",
+        )
+        await _synthesize(default_pro)
+
+    assert explicit.sample_rate == 16000
+    assert server.payloads[0]["output_configuration"] == {
+        "format": "pcm_s16le",
+        "sample_rate": 16000,
+    }
+    assert default_pro.sample_rate == 48000
+    assert server.payloads[1]["output_configuration"]["sample_rate"] == 48000

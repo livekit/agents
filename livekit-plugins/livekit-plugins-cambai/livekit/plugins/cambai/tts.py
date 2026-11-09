@@ -207,8 +207,11 @@ class ChunkedStream(tts.ChunkedStream):
             "language": self._opts.language,
             "speech_model": self._opts.speech_model,
             "enhance_named_entities_pronunciation": self._opts.enhance_named_entities,
+            # The emitter publishes TTS.sample_rate. Without this field the API
+            # returns the model's default rate and those bytes play at the wrong speed.
             "output_configuration": {
                 "format": self._opts.output_format,
+                "sample_rate": self._tts.sample_rate,
             },
         }
         if self._opts.user_instructions:
