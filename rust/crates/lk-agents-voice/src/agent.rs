@@ -98,8 +98,7 @@ pub enum TurnEdit {
     UpdateUserMessage(String),
 }
 
-/// `AgentSession._chat_ctx` (the history) and each agent's `chat_ctx` (its view) as one record:
-/// sorted by `created_at`, ties after; each id once. Items are stamped with their agent; the
+/// The session history and each agent's view as one record: sorted by `created_at`, ties after; each id once. Items are stamped with their agent; the
 /// agent's view is the current agent's items, history is every agent's.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SessionChatCtx {
@@ -118,10 +117,8 @@ impl SessionChatCtx {
         SessionChatCtx { agent: agent.to_owned(), ..Default::default() }
     }
 
-    /// A handoff's carry to an agent with `tools`: `AgentActivity(chat_ctx=...)` copies with
-    /// `tools=self.tools`, so a call to a tool the new agent lacks, and its output, stay the
-    /// previous agent's (in the history, out of the new agent's view), as `ChatContext.copy` drops
-    /// them.
+    /// A handoff's carry to an agent with `tools`: a call to a tool the new agent lacks, and its
+    /// output, stay the previous agent's (in the history, out of the new agent's view).
     pub fn hand_to(&mut self, agent: &str, tools: &BTreeSet<String>) -> Vec<String> {
         let valid: BTreeSet<String> = self
             .items
@@ -159,7 +156,7 @@ impl SessionChatCtx {
     }
 
     /// A turn ran with expressive off: the markup in the agent's past assistant messages goes for
-    /// good (`_strip_assistant_markup(self._chat_ctx)`), so it no longer few-shots the LLM.
+    /// good, so it no longer few-shots the LLM.
     pub fn strip_assistant_markup(&mut self) {
         self.view_revision += 1;
         for c in &mut self.items {
@@ -287,7 +284,7 @@ impl SessionChatCtx {
         changed
     }
 
-    /// `Agent.update_chat_ctx`: `agent`'s view becomes exactly `items` (the version is kept).
+    /// `agent`'s view becomes exactly `items` (the version is kept).
     /// Dropped items stay in history; known items are promoted in place; new ones are `HostCtx`,
     /// frame-only.
     pub fn update_agent_chat_ctx(&mut self, items: Vec<ChatItem>, agent: &str) {
@@ -334,7 +331,7 @@ impl SessionChatCtx {
     }
 
     /// A realtime server's mirror: the agent's view minus items the server created and minus agent
-    /// records (`_detach_reusable_resources`).
+    /// records.
     pub fn for_realtime(&self) -> ChatContext {
         ChatContext::new(
             self.items
@@ -389,9 +386,6 @@ mod tests {
     use lk_agents_abi::{ChatMessage, FunctionCall, FunctionCallOutput, Role};
     use std::time::{Duration, SystemTime};
 
-    // A handoff carries the conversation, but a call to a tool the new agent lacks, and its
-    // output, stay behind: `AgentActivity(chat_ctx=...)` copies with `tools=self.tools`, which
-    // drops them. Found by `scripts/parity.py handoff_update_agent`.
     #[test]
     fn a_handoff_leaves_calls_to_tools_the_new_agent_lacks() {
         let at = |s: u64| SystemTime::UNIX_EPOCH + Duration::from_secs(s);

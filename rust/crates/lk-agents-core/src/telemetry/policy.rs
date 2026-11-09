@@ -1,5 +1,3 @@
-//! Destination content policy. No host objects cross here.
-
 use lk_agents_abi::telemetry::policy::REDACTED_EXCEPTION;
 use lk_agents_abi::telemetry::record::{KeyValues, LogRecord, SpanRecord, Status, Value};
 use lk_agents_abi::telemetry::semconv::otel;
@@ -11,8 +9,7 @@ fn marks_pii(key: &str) -> bool {
     key.split('.').any(|segment| segment == "pii")
 }
 
-/// What one exporter destination removes or replaces in its copy of a record
-/// (docs/internals/telemetry.md "Destinations").
+/// What one exporter destination removes or replaces in its copy of a record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContentPolicy {
     /// `lk.pii.*` (any `pii` dot segment) at any depth.

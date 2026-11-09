@@ -1,5 +1,3 @@
-//! Typed OpenAI-compatible realtime frames, with deployment-specific session layouts.
-
 use crate::realtime::dialect::{NUM_CHANNELS, Protocol, SAMPLE_RATE};
 use base64::Engine as _;
 use lk_agents_abi::llm::provider_format::ImageResolver;

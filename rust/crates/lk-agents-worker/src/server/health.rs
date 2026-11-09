@@ -1,4 +1,3 @@
-//! Health and Prometheus routes; HTTP transport and limits live in `http`.
 use super::http::{HttpServer, Response, method_not_allowed, response, text};
 use super::*;
 use hyper::header::HeaderValue;
@@ -175,3 +174,7 @@ pub async fn serve_metrics(
         })
         .await
 }
+
+#[cfg(test)]
+#[path = "health_tests.rs"]
+mod tests;

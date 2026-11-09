@@ -1,8 +1,7 @@
-//! The realtime model over its WebSocket: session execution, framing and the declared classes.
-
 mod encode;
 #[cfg(test)]
-mod machine_tests;
+#[path = "openai_tests.rs"]
+mod tests;
 mod model;
 pub(crate) mod queue;
 pub mod session;

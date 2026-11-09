@@ -1,5 +1,3 @@
-//! The console transport and its session audio legs. TCP execution belongs to the runtime.
-
 use crate::errors::HostError;
 use crate::voice::io::{AudioInput, AudioOutput};
 use livekit_protocol::agent as proto;

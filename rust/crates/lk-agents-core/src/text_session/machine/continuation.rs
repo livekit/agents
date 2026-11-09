@@ -1,6 +1,3 @@
-//! Sequential child admission and once-only parent-call resolution. A parent is invoked only
-//! after every child call in its checkpoint has a result.
-
 use super::{
     ChildCallStatus, PendingChildCall, RoutingError, SessionFrame, TextSession, TextSessionEffect,
     TextSessionError, TextSessionTurn, initial, transfer,
@@ -8,6 +5,8 @@ use super::{
 use lk_agents_abi::agent::run::{RunOutcome, RunResult};
 use lk_agents_abi::{ChatItem, ChatMessage, FunctionCallOutput, Role, Ts};
 use serde_json::Value;
+
+// A parent is invoked only after every child call in its checkpoint has a result.
 
 impl TextSession {
     pub(super) fn next_child(&mut self, now: Ts, effects: &mut Vec<TextSessionEffect>) {

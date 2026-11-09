@@ -1,5 +1,3 @@
-//! Request-scoped resources shared by a direct invocation or all frames of a text session.
-
 use std::sync::Arc;
 
 use crate::{BoxFuture, errors::HostError, llm::toolsets::ToolsetHooks, storage::StorageError};

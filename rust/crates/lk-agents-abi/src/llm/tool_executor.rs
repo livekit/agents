@@ -1,7 +1,3 @@
-//! A tool's outcome as the host classified it, and the texts the model reads around it.
-
-// --- a tool's outcome: the one representation crossing from the host -------------------------
-
 /// `make_function_call_output`'s text for an unexpected exception; says nothing about it.
 pub const INTERNAL_ERROR_OUTPUT: &str = "An internal error occurred";
 

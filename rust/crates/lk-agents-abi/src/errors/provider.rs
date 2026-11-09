@@ -1,8 +1,8 @@
-//! A host exception travels through Rust behind a [`CapturedError`] and is re-raised as the same
-//! object; `retryable` and `status_code` are copied out so `FallbackChain` decides with no GIL.
-
 use super::{CapturedError, HostError, HostErrorKind};
 use crate::errors::api::{ApiError, ApiErrorKind};
+
+// A host exception is re-raised as the same object; `retryable` and `status_code` are copied out
+// so `FallbackChain` decides without the GIL.
 
 /// A provider failure, from either side of the seam.
 // Clones share the side-table entry. Crossing to the host re-raises the original exception.

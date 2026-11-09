@@ -1,6 +1,3 @@
-//! `llm/realtime.py`'s data half. The reference's stream-of-streams is flattened into [`Event`]s the
-//! host reassembles; `generate_reply`'s future becomes a `req_id` correlated with the answer event.
-
 use crate::errors::{ApiError, HostError};
 use crate::{ApiConnectOptions, AudioFrame, Maybe, ToolChoice, ToolSpec, Ts};
 use crate::{ChatItem, FunctionCall};
@@ -9,6 +6,9 @@ use super::realtime_options::{
     AudioTranscription, InferenceGateway, NoiseReduction, Reasoning, Tracing, Truncation,
     TurnDetection, Voice,
 };
+
+// The reference's stream-of-streams is flattened into `Event`s the host reassembles;
+// `generate_reply`'s future becomes a `req_id` correlated with the answer event.
 
 #[crate::host(file(module = "realtime_options"))]
 const _: () = ();
@@ -141,8 +141,6 @@ pub struct RealtimeModelError {
     /// already carry their captured exception through the host-error boundary.
     pub provider_error: Option<crate::errors::ApiError>,
 }
-
-// --- the events a host session reports and the commands it is sent (`_generated/realtime_wire.py`)
 
 /// The mirror gained an item the server created.
 #[crate::host(record(

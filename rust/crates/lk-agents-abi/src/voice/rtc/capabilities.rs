@@ -1,5 +1,3 @@
-//! SDK room capabilities, declared once. Runtime owns every live queue and operation.
-
 /// A published audio source and the publication controlling its lifetime.
 pub type PublishedAudioTrack = (Arc<dyn AudioSource>, Arc<dyn TrackPublication>);
 

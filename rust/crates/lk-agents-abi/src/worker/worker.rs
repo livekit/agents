@@ -1,5 +1,3 @@
-//! Worker host contracts. Runtime behavior belongs to `lk-agents-worker`.
-
 /// The worker's terminal drain state, independent of its display text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrainOutcome {
@@ -46,8 +44,6 @@ pub enum JobDecision {
     Reject,
 }
 
-// --- the worker's notifications ------------------------------------------------------------
-
 /// Registration accepted by the server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredInfo {
@@ -68,8 +64,6 @@ pub struct WorkerStopped {
     /// `closed`, `worker runtime cancelled`, or the runtime error's own sentence.
     pub reason: String,
 }
-
-// --- server launch configuration -----------------------------------------------------------
 
 /// What the host's process launcher needs, resolved by the server before it starts the job
 /// processes.

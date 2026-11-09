@@ -1,6 +1,3 @@
-//! The host's OpenTelemetry API, recorded in Rust (docs/internals/telemetry.md "What Python
-//! keeps"): the span the host's tracer starts, and the process's telemetry configuration.
-
 use std::collections::BTreeMap;
 
 use serde_json::Value;

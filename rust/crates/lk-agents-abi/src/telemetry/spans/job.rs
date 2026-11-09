@@ -1,5 +1,3 @@
-//! The job: its entrypoint, shutdown and room connection.
-
 use super::common::ParticipantAttrs;
 use super::session::{AgentSession, SessionStart};
 use crate::telemetry::decl::{Attrs, Content, External, Seconds, SpanValue, event, span};

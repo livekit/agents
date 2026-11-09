@@ -1,6 +1,3 @@
-//! `_CloudTransport` (`transports.py:74`): the gateway WebSocket, protobuf both ways. The socket
-//! is a [`WsTransport`]; this file owns the protocol, metrics and error taxonomy.
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

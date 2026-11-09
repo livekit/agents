@@ -1,7 +1,3 @@
-//! `TurnDetectorStream` (`inference/eot.py`): the session's decisions carried out against the
-//! mounted transport, with the input resampled to the detector's rate, the transport swapped for
-//! the local model on a cloud failure, and each `predict()` answered by its own waiter.
-
 use crate::telemetry;
 use std::collections::HashMap;
 use std::sync::Arc;

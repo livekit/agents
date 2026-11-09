@@ -1,7 +1,3 @@
-//! `session.default`'s `llm_node`, `tts_node` and `stt_node`: the session's provider over a
-//! registered node's input. The LLM and TTS nodes are where a node's provider request is made, so
-//! they open its `llm_request` or `tts_request`, under the span current at the call.
-
 use std::any::Any;
 use std::sync::Arc;
 
@@ -195,7 +191,7 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
     }
 }
 
-/// The node's `conn_options`, else the provider's own policy (models.md), else the defaults.
+/// The node's `conn_options`, else the provider's own policy, else the defaults.
 fn policy(
     given: Option<ApiConnectOptions>,
     provider: Option<ApiConnectOptions>,
@@ -288,7 +284,7 @@ trait Request<I, O>: Send + 'static {
 
 impl<I, O> Request<I, O> for () {}
 
-/// The default `tts_node`'s `tts_request`: the text fed, and its 1.8.10 metrics.
+/// The default `tts_node`'s `tts_request`: the text fed, and its metrics.
 struct Synthesis {
     trace: telemetry::TtsTrace,
     attempt: Option<telemetry::ScopedSpan<telemetry::TtsRequestRun>>,

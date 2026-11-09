@@ -1,6 +1,3 @@
-//! The job's RPC tracing (`_core_RpcTracing`): an `rtc.RpcInterceptor` recording the RPCs the
-//! job's local participant performs and handles.
-
 use crate::telemetry;
 use lk_agents_abi::errors::{HostError, HostErrorKind};
 use lk_agents_abi::voice::rtc::rpc::{

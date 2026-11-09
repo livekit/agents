@@ -1,13 +1,12 @@
-//! What the host's events have delivered: `session.history` as the host's own item objects, and
-//! the agent's and user's states. Each event reaches the host with the state it leaves, so a
-//! callback reads the session as of its event, and a read outside one reads the latest.
-
 use lk_agents_abi::voice::events::{AgentState, HostWire, UserState};
 use lk_agents_abi::voice::session_effects::{DeliveredState, SessionEvents};
 use lk_agents_abi::{ChatItem, HostRef};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::SystemTime;
+
+// Each event reaches the host with the state it leaves, so a callback reads the session as of
+// its event and a read outside one reads the latest.
 
 #[derive(Clone)]
 struct Item {

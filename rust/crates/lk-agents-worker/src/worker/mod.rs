@@ -1,7 +1,3 @@
-//! Worker runtime: drives the state, the control connection and host operations. Host futures
-//! are cancelled when it stops; writes are ordered, bounded and per-connection, and a reconnect
-//! regenerates state rather than replaying.
-
 use crate::http::IncomingRequest;
 use crate::hw::cpu::CpuMonitor;
 use crate::transport::{
@@ -23,6 +19,9 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
+
+// Host futures are cancelled when the worker stops; writes are ordered, bounded and
+// per-connection, and a reconnect regenerates state rather than replaying.
 
 /// Default ping interval.
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);

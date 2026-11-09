@@ -1,5 +1,3 @@
-//! The host event stream: what the driver hands its host, in order, and each item's wire record.
-
 use crate::agent_session::commands::HookId;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::events::{ErrorEvent, SessionEvent};
@@ -109,8 +107,6 @@ impl VoiceHostEvent {
                 crate::room_io::RoomIoEvent::DeleteRoomRequested(e) => {
                     HostWire::DeleteRoomRequested(e.clone())
                 }
-                // A key press reaches the DTMF task; a processor failure is the session's error;
-                // the room's descriptions are for the spans.
                 crate::room_io::RoomIoEvent::KeyPressed(_)
                 | crate::room_io::RoomIoEvent::InputProcessorFailed { .. }
                 | crate::room_io::RoomIoEvent::ParticipantInfo { .. }
@@ -131,14 +127,13 @@ impl SessionEvent {
         use lk_agents_abi::metrics::base::AgentMetrics;
         use lk_agents_abi::voice::events as w;
         let speech_id = |id: SpeechId| id.to_string();
-        // `created_at` is the host's stamp (`#[binding(skip)]`): inert here.
+        // `created_at` is stamped by the host.
         let host_stamp = 0.0;
         Some(match self {
             SessionEvent::Telemetry(_) => return None,
             SessionEvent::HistoryReloaded { items } => {
                 HostWire::HistoryReloaded(w::HistoryReloadedWire { items: items.clone() })
             }
-            // `alternatives[0]`'s text, speaker and language; an unnamed language is none.
             SessionEvent::UserInputTranscribed(t) => {
                 let best = t.ev.best_alternative();
                 HostWire::UserTranscript(w::UserInputTranscribed {
@@ -185,8 +180,6 @@ impl SessionEvent {
             }
             SessionEvent::PreemptiveGeneration(e) => HostWire::PreemptiveGeneration(e.clone()),
             SessionEvent::UserTurnExceeded(e) => HostWire::UserTurnExceeded(e.clone()),
-            // Wire kind `transcription_timeout`, model discriminant `user_transcription_timeout`.
-            // `turn_start` is monotonic, hence the anchor.
             SessionEvent::UserTranscriptionTimeout(e) => {
                 HostWire::TranscriptionTimeout(w::UserTranscriptionTimeout {
                     speech_duration: e.speech_duration.as_secs_f64(),
@@ -205,7 +198,7 @@ impl SessionEvent {
                     created_at: host_stamp,
                 })
             }
-            // Back-dated to the speech boundary; anchored into a wall float.
+            // Back-dated to the speech boundary.
             SessionEvent::UserStateChanged { old, new, at } => {
                 HostWire::UserStateChanged(w::UserStateChanged {
                     old_state: *old,
@@ -228,7 +221,6 @@ impl SessionEvent {
                     visibility: *visibility,
                 })
             }
-            // The host moves these ids between its context projections; no item crosses.
             SessionEvent::ContextCarried { from, to, items } => {
                 HostWire::ContextCarried(w::ContextCarriedWire {
                     from_agent: from.clone(),
@@ -319,8 +311,6 @@ mod tests {
         lk_agents_abi::WallAnchor { wall: 0.0, at: lk_agents_abi::Ts::ZERO }
     }
 
-    // Catches: `user_input_transcribed` naming no speaker and no language whatever the STT said
-    // (the reference reads both off `alternatives[0]`), as the e2e suite found on LiveKit Cloud.
     #[test]
     fn a_transcript_names_its_speaker_and_language() {
         let mut ev = SpeechEvent::new(SpeechEventType::FinalTranscript);
@@ -337,8 +327,6 @@ mod tests {
         assert_eq!(w.item_id, None, "the reference's STT path names no item");
     }
 
-    // Catches: `close.error` always `None`, though the reference closes with the error record of
-    // the unrecoverable `error` event.
     #[test]
     fn an_error_close_carries_its_error() {
         let error = ErrorEvent::provider(

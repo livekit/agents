@@ -1,7 +1,3 @@
-//! `inference/llm.py` -- the gateway LLM, HTTPS and OpenAI-compatible (§1.4): model tables
-//! ([`models`]), kwargs composition ([`request`]), streaming decode ([`parse`]), the request
-//! exchange and the request's lifecycle ([`machine`]), and the client executing it ([`gateway`]).
-
 pub mod algorithms;
 pub mod gateway;
 pub mod machine;

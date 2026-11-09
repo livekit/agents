@@ -1,5 +1,3 @@
-//! Generated host views of native synthesis streams.
-
 use crate::SynthesizedAudio;
 use crate::errors::{ProviderError, PullError};
 

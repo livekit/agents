@@ -1,11 +1,11 @@
-//! The adaptive-interruption seam: interruption or backchannel? One trait so a half-wired session is
-//! unrepresentable. `audio` gets the real frames at pipeline rate; the implementor resamples.
-
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::turn::detector::{LegEvent, ReqId};
 use crate::{AudioFrame, StreamInput, Ts};
+
+// One trait so a half-wired session is unrepresentable. `audio` gets the real frames at pipeline
+// rate; the implementor resamples.
 
 /// The reference's four sentinels, the overlap ones carrying its timestamps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

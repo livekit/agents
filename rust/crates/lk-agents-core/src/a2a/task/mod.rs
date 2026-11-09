@@ -1,6 +1,3 @@
-//! One durable A2A arrival. [`machine::TaskMachine`] owns its synchronous lifecycle;
-//! [`effects`] declares runtime storage/handler work without changing the ABI storage contracts.
-
 pub mod effects;
 pub mod machine;
 

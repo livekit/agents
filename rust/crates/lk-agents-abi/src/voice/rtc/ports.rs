@@ -1,5 +1,3 @@
-//! Incoming SDK streams use the shared pull/close primitive; runtime admits them within voice bounds.
-
 use super::{ParticipantIdentity, StreamInfo};
 use crate::{Closed, StreamOutput, Ts};
 use std::any::Any;

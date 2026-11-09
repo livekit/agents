@@ -48,7 +48,7 @@ fn unknown_offered_function_cannot_silently_disable_policy() {
 
 #[test]
 fn cleanup_cancels_the_captured_call_even_after_its_acting_phase_is_gone() {
-    use super::super::tools::tool_update_tests::running;
+    use super::super::tools::tests::running;
     use super::*;
 
     let mut driver = crate::agent_session::tests::driver();
@@ -59,7 +59,7 @@ fn cleanup_cancels_the_captured_call_even_after_its_acting_phase_is_gone() {
     let mut sibling = running("reply", 12);
     sibling.run_call = Some(CallId(2));
     driver.activity.tools.running.extend([first, sibling]);
-    // Cleanup no longer exposes the run's acting calls. The live owner retains that link.
+    // Cleanup hides the run's acting calls; the live owner retains that link.
     assert!(!driver.activity.tools.replies.contains_key(&speech));
     driver.reply_effects(speech, vec![AgentRunEffect::ToolCancel { call: CallId(1) }]);
     let effects = driver.take_outbox();
@@ -80,7 +80,7 @@ fn cleanup_cancels_the_captured_call_even_after_its_acting_phase_is_gone() {
 
 #[test]
 fn ending_an_admitted_call_does_not_remove_a_sibling_with_the_same_model_id() {
-    use super::super::tools::tool_update_tests::running;
+    use super::super::tools::tests::running;
     use super::*;
 
     let mut driver = crate::agent_session::tests::driver();

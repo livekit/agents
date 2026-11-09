@@ -1,7 +1,3 @@
-//! Voice session effect declarations and their typed payloads.
-//! Producer: `machine::VoiceDriver`; consumer: runtime `voice::VoiceRuntime`.
-//! Ordered dispatch, collectors, and timer execution are not part of this declaration file.
-
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{Answer, RequestId, VoiceHostEvent};
 use crate::audio_recognition::InterruptionSignal;
@@ -23,17 +19,15 @@ pub enum SpeechHistory {
     InMemory,
 }
 
-/// What a step asks the runtime to do, in one ordered list, not per-kind fields: order within and
-/// across kinds is inherited from the reference, where these ran inline in exactly this order.
-/// Driver-owned deadlines and deferred domain callbacks never cross this runtime boundary.
+/// What a step asks the runtime to do, in one ordered list: order within and across kinds is
+/// significant. Driver-owned deadlines and deferred callbacks never cross this boundary.
 #[derive(Debug)]
 pub enum VoiceEffect {
     /// Comes back as `VoiceEvent::StreamOpened{open}`: the loop never awaits `stream()`.
     OpenSttStream {
         open: u64,
         stt: ResourceId,
-        /// The activity the stream runs under (`start_agent_activity`), as the reference's STT
-        /// pump does; an `stt_node`'s own spans open there.
+        /// The activity the stream runs under; an `stt_node`'s own spans open there.
         span: Option<lk_agents_abi::telemetry::record::SpanContext>,
     },
     OpenVadStream {
@@ -178,8 +172,7 @@ pub enum VoiceEffect {
 }
 
 /// Every deadline of the session, fired by the driver's one [`TimerSet`](lk_agents_abi::TimerSet).
-/// `arm` on an armed timer replaces it (the reference's `handle.cancel(); handle =
-/// call_later(..)`). Deadlines due at one instant fire in declaration order: the close's bound,
+/// `arm` on an armed timer replaces it. Deadlines due at one instant fire in declaration order: the close's bound,
 /// a waiting commit, the parked turn, the callbacks, then the rest. The scheduler's two, last,
 /// fire in the scheduling pass, wherever it runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

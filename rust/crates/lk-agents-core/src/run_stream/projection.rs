@@ -1,5 +1,3 @@
-//! Public event envelopes, text snapshots and child-result presentation acknowledgments.
-
 use super::View;
 use lk_agents_abi::agent::run::{StreamEvent, ToolResultStatus};
 use lk_agents_abi::agent::stream::*;
@@ -88,7 +86,6 @@ impl Projection {
     }
 }
 
-/// The public event for `envelope`'s stream event, numbered `sequence`.
 fn present(envelope: Envelope, sequence: u64) -> PresentedEvent {
     let Envelope { agent_name, invocation_id, frame_id, event, .. } = envelope;
     match event {

@@ -1,5 +1,3 @@
-//! Gemini contents. Function results occupy their own user turn.
-
 use super::turns::{Dialect, ResultsTurn, Speaker, Turns, merge_turns};
 use super::wire::{FunctionDefinition, HostBytes};
 use super::{
@@ -12,6 +10,8 @@ use lk_agents_abi::{ChatContext, FunctionCall, FunctionCallOutput};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+
+// Function results occupy their own user turn.
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct GoogleFormatData {
@@ -425,9 +425,12 @@ fn simplify(schema: &mut Value, defs: &Value, refs: &mut Vec<String>) -> Result<
 
 #[cfg(test)]
 mod tests {
+    use lk_agents_abi::llm::provider_format::ProviderFormat;
     use lk_agents_abi::{ChatItem, InferenceDetail, Role};
+    use serde_json::json;
 
     use super::*;
+    use crate::llm::provider_format::host;
     use crate::llm::provider_format::testkit::{
         call, ctx, image, inline_images, msg, msg_with, no_images, out, text_of, url_images,
     };
@@ -668,5 +671,35 @@ mod tests {
             "properties": {"root": {"$ref": "#/$defs/Node"}},
         });
         assert!(simplify_schema(schema).is_err());
+    }
+
+    #[test]
+    fn gemini_optional_image_and_function_fields_are_omitted() {
+        let image_data = SerializedImage {
+            mime_type: None,
+            data_bytes: None,
+            external_url: None,
+            inference_detail: lk_agents_abi::InferenceDetail::Auto,
+        };
+        let (messages, _) = host::to_provider_format(
+            ProviderFormat::Google,
+            vec![msg_with("u", Role::User, vec![image("i")])],
+            Some([("i".into(), image_data)].into()),
+            false,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(messages[0]["parts"], json!([{"inline_data":{}}]));
+        let tools = host::to_fnc_ctx(
+            ProviderFormat::Google,
+            vec![ToolSchema::Legacy(json!({
+                "name":"lookup", "description":null, "parameters":{}
+            }))],
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(tools, [json!({"name":"lookup"})]);
     }
 }

@@ -1,12 +1,12 @@
-//! `llm/chat_context.py` as plain data. The reference's `copy()` is shallow and the pipeline relies
-//! on the aliasing; Rust clones, so every mutation through an alias is a `DiffOp::Replace`.
-
 pub mod protocol;
 
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use crate::utils::video::RtcVideoFrame;
+
+// The reference's `copy()` is shallow and the pipeline relies on the aliasing; Rust clones, so
+// every mutation through an alias is a `DiffOp::Replace`.
 
 /// JSON, not an opaque ref: the reference branches on it.
 pub type Extra = serde_json::Map<String, serde_json::Value>;

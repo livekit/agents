@@ -1,6 +1,3 @@
-//! `RoomOptions` as the host resolves it, the room-I/O events, and `PlaybackFinishedEvent`. `RoomIo`
-//! and the participant-linking rules live in `lk-agents-voice/src/room_io`.
-
 // `pub use`: an extract record's field types are copied verbatim into the generated module,
 // which globs this module to resolve them.
 pub use crate::voice::rtc::{

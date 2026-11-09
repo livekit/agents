@@ -1,6 +1,3 @@
-//! `voice/turn.py`: `TurnHandlingOptions`. One struct per group is both what a layer says (`None`
-//! and `NotGiven` are unsaid) and the resolved answer, where every leaf is said.
-
 use crate::agent_session::options::{AgentSessionOptions, option_group};
 use crate::audio_recognition::TurnDetectionMode;
 use lk_agents_abi::voice::session_options::{
@@ -9,6 +6,9 @@ use lk_agents_abi::voice::session_options::{
 };
 use lk_agents_abi::{Maybe, secs};
 use std::time::Duration;
+
+// Each group struct is both a layer (`None`/`NotGiven` leaves are unsaid) and the resolved
+// answer, where every leaf is said.
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct TurnHandlingOptions {

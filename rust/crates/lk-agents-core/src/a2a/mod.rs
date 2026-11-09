@@ -1,13 +1,3 @@
-//! `lk_agents_core::a2a`: the A2A text door's decisions. The records the host and the wire
-//! read ([`Message`], [`TurnContext`], [`HandlerOutput`], [`TurnResult`]), the door's options and
-//! their per-channel resolution ([`policy`]), and the decisions of a turn ([`outcome`]): which task
-//! a message answers, what each task row becomes, the checkpoint verdict. The runtime
-//! (`lk_agents_runtime::a2a`) runs the policies against storage and drives the host's handler.
-//!
-//! [`TurnHost::handle`] runs the handler to its [`HandlerOutput`], reporting progress, tokens and
-//! checkpoints as it goes; each checkpoint is answered whether it should yield. A turn yields at a
-//! checkpoint once a newer message waits under `interrupt` or a client canceled its task.
-
 use lk_agents_abi::a2a_protocol as a2a;
 pub mod attachments;
 pub mod auth;
@@ -43,6 +33,9 @@ pub use policy::*;
 pub use lk_agents_abi::a2a::options::{Policy, TurnOptions};
 pub use lk_agents_abi::a2a::turn::{PendingCall, TurnEvent, TurnHost};
 use lk_agents_abi::storage::journal::ToolExecution;
+
+// A turn yields at a checkpoint once a newer message waits under `interrupt` or a client canceled
+// its task.
 
 /// One incoming A2A message, as the handler sees it in `ctx.messages`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -104,7 +97,7 @@ impl Message {
     }
 
     /// The parts as chat content: text as is, data as compact JSON, an attachment as its typed
-    /// record in JSON (channels.md "Attachments"): `{"type": "attachment", "ref", "name",
+    /// record in JSON: `{"type": "attachment", "ref", "name",
     /// "media_type"}`, the fields a typed attachment content item will carry.
     pub fn content(&self) -> Vec<String> {
         self.parts
@@ -170,7 +163,7 @@ fn is_chat_ctx_part(part: &a2a::Part) -> bool {
             == Some("chat_ctx")
 }
 
-/// The `chat_ctx` data part of a delegation, validated (a2a.md#conversation-data-part): the
+/// The `chat_ctx` data part of a delegation, validated: the
 /// caller's conversation, read from the A2A message before `Message::from_a2a` strips the part.
 pub fn caller_history_of(message: &a2a::Message) -> Result<Option<Value>, StorageError> {
     let invalid = |error: caller_history::HistoryError| StorageError::Invalid(error.to_string());
@@ -387,7 +380,7 @@ mod tests {
         let stripped = Message::from_a2a(&with_history, 1.0, None).unwrap();
         assert_eq!(stripped.parts, vec![a2a::Part::text("fare?")]);
         assert_eq!(stripped.to_a2a().parts, vec![a2a::Part::text("fare?")]);
-        // a2a.md#conversation-data-part: the receiver validates the payload before using it
+        // The receiver validates the payload before using it.
         let unpaired = v1(json!({"messageId": "z", "role": "ROLE_USER", "parts": [
             {"data": {"items": [{"type": "function_call", "id": "c", "call_id": "1", "name": "f",
                 "arguments": "{}", "created_at": 1.0}]},
@@ -396,7 +389,7 @@ mod tests {
         assert!(caller_history_of(&unpaired).is_err());
     }
 
-    // Catches: a sender's `livekit/<name>` key read as LiveKit's own (a2a.md#metadata-keys), e.g.
+    // Catches: a sender's `livekit/<name>` key read as LiveKit's own, e.g.
     // a direct message choosing the delegation policy or a chat_ctx part dropped as history.
     #[test]
     fn short_livekit_keys_on_the_wire_are_the_senders_own() {

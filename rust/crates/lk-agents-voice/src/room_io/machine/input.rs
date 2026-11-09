@@ -1,9 +1,3 @@
-//! Which of the linked participant's tracks a media input reads, and which frames it admits.
-//!
-//! The executor reports the SDK's tracks and its readers' lifecycle; this decides which track to
-//! open, when a reader is obsolete, and when the frames already queued no longer belong to the
-//! selection and attachment the session reads.
-
 use std::collections::BTreeSet;
 
 use lk_agents_abi::voice::io::{IoError, Result};
@@ -88,8 +82,8 @@ impl ParticipantInput {
         self.reading.as_ref()
     }
 
-    /// `set_participant`: a new link retires the current reader and reads the participant's first
-    /// subscribed track; the same link keeps a track already read.
+    /// A new link retires the current reader and reads the participant's first subscribed track;
+    /// the same link keeps a track already read.
     pub fn link(
         &mut self,
         identity: Option<ParticipantIdentity>,
@@ -222,8 +216,7 @@ impl ParticipantInput {
     }
 }
 
-/// `_ParticipantAudioInputStream`: an ended track leaves half a second of silence, so a turn in
-/// progress can end.
+/// An ended track leaves half a second of silence, so a turn in progress can end.
 pub fn end_of_track(sample_rate: u32, num_channels: u16) -> AudioFrame {
     silence_frame(sample_rate / 2, sample_rate, num_channels)
 }

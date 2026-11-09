@@ -1,5 +1,3 @@
-//! Handler return normalization and run journal projection, shared by language hosts.
-
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::a2a::{
     metadata::VERBATIM_KEY,

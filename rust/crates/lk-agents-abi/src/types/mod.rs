@@ -1,6 +1,3 @@
-//! `types.py`: the provider-facing vocabulary every provider shares (connect options, identity,
-//! attempt policy).
-
 pub mod attributes;
 pub mod connect;
 pub mod headers;

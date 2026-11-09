@@ -1,8 +1,8 @@
-//! Every function but [`normalize`] expects a normalised string.
-
 use std::fmt;
 
 use super::data;
+
+// Every function but `normalize` expects a normalised string.
 
 /// Normalise a language code or name to BCP-47.
 // In the reference's order: English names (`"english"`), then ISO 639-3 (`"eng"`), then compound

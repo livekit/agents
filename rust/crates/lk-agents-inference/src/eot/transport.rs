@@ -1,6 +1,3 @@
-//! `_StreamingTurnDetectionTransport` (`base.py:41`) and the sink a transport reports into (the
-//! reference's back-reference into the stream).
-
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;

@@ -1,8 +1,3 @@
-//! `EndCallTool`: the session closes once the speech that called `end_call` is done, so the
-//! goodbye the tool asked for is heard. A realtime model that answers tool results by itself
-//! speaks that answer in a speech of its own: the session waits for it to start (five seconds at
-//! most) and closes once it is done.
-
 use crate::agent_session::VoiceDriver;
 use crate::agent_session::commands::Close;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
@@ -10,6 +5,9 @@ use crate::events::SessionEvent;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::CloseReason;
 use std::time::Duration;
+
+// The session closes only after the goodbye is heard, including a realtime model's own reply to
+// the tool result, which plays in a speech of its own.
 
 /// How long a realtime model's own reply to the tool result has to start.
 pub const REPLY_WAIT: Duration = Duration::from_secs(5);

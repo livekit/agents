@@ -1,5 +1,3 @@
-//! Connection attempts and retry deadlines. The runtime only executes their effects.
-
 use crate::effects::RealtimeConnectionEffect;
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, Ts};

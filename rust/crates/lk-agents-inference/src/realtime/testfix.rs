@@ -1,5 +1,3 @@
-//! Shared test fixtures (consumers use `lk_agents_inference::testkit`).
-
 use std::time::SystemTime;
 
 use lk_agents_abi::{ChatItem, ChatMessage, Role};

@@ -1,6 +1,3 @@
-//! Stored tasks projected into the upstream A2A records, and
-//! the JSON-RPC envelope encoded once for HTTP and server-sent events.
-
 use std::time::{Duration, UNIX_EPOCH};
 
 use a2a::{

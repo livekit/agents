@@ -1,9 +1,9 @@
-//! The interruption model's audio window. The leg receives the session's 16 kHz conversion,
-//! so an off-rate frame is refused. Multi-channel input averages with floor division.
-
 use thiserror::Error;
 
 pub use lk_agents_abi::AudioFrame;
+
+// The leg receives the session's 16 kHz conversion, so an off-rate frame is refused.
+// Multi-channel input averages with floor division.
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum AudioError {

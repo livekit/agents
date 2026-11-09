@@ -1,19 +1,3 @@
-//! Effect declarations for generation. These owners decide; runtime performs the work.
-//!
-//! | Producer | Public effect | Runtime consumer |
-//! | --- | --- | --- |
-//! | [`AudioPlayback`](super::machine::AudioPlayback) | [`AudioPlaybackEffect`] | generation playout |
-//! | [`GenerationPreparation`](super::machine::GenerationPreparation) | [`GenerationPreparationEffect`] | generation forwarding startup |
-//! | [`RealtimeGeneration`](super::machine::RealtimeGeneration) | [`RealtimeGenerationEffect`] | realtime generation |
-//! | [`StreamingTts`](super::machine::tts::StreamingTts) | [`StreamingTtsEffect`] | TTS text feed |
-//! | [`AlignedTranscript`](super::machine::tts::AlignedTranscript) | [`AlignedTranscriptEffect`] | TTS transcript capture |
-//! | [`SynthesisLoss`](super::machine::tts::SynthesisLoss) | [`SynthesisLossEffect`] | synthesis failure handling |
-//! | [`TurnAccumulator`](super::TurnAccumulator) | [`TurnAccumulatorEffect`] | generation segment forwarding |
-//! | [`ReplyContext`](super::ReplyContext) | [`ReplyStartupEffect`] | reply startup |
-//!
-//! The Flow/Cut/Finish/Playout enums below are private submachine contracts of AudioPlayback,
-//! not additional runtime protocols or public index exports.
-
 use super::machine::pipeline::Finished;
 use super::machine::playout::{SegmentEnd, SourceFailed};
 use crate::trace::PlayoutStep;
@@ -102,7 +86,6 @@ pub enum RealtimeGenerationEffect {
 }
 
 /// Physical work requested by the playback owner, plus its publications and terminal result.
-/// There is no runtime-facing forwarding, cut, or finish sub-protocol.
 #[must_use = "playback work and its completion must be handled"]
 pub enum AudioPlaybackEffect {
     CheckInterruption,

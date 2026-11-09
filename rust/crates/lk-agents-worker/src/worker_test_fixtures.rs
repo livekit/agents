@@ -1,5 +1,3 @@
-//! Scripted transports, gated hosts and worker rigs used by the worker tests.
-
 use crate::transport::{
     Connected, TransportError, TransportEvent, WorkerSink, WorkerStream, WorkerTransport,
 };
@@ -17,8 +15,6 @@ use crate::*;
 use crate::{HostError, JobId, WorkerHost};
 use livekit_protocol::{self as protocol, RegisterWorkerResponse, ServerMessage, server_message};
 use lk_agents_abi::{Clock, Ts};
-
-// A scripted transport
 
 pub(super) enum Step {
     /// The connect attempt fails.

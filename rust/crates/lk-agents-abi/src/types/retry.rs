@@ -1,6 +1,3 @@
-//! Provider attempt records: the request kind and the decision a host enacts. The policy is
-//! `lk_agents_core::request`.
-
 /// Crosses to a host as its tag (`FromStr` / `as_str`).
 /// The operation whose failures share an attempt allowance.
 #[crate::host(string)]

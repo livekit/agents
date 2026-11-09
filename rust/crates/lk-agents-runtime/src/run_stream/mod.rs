@@ -1,9 +1,7 @@
-//! On-demand native stream consumption and owned source/resource settlement.
-
 pub(crate) mod input;
 
 #[cfg(test)]
-#[path = "../run_stream_tests.rs"]
+#[path = "run_stream_tests.rs"]
 mod tests;
 
 use crate::agent_run::resources::RunResources;

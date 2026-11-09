@@ -1,6 +1,3 @@
-//! Schema and message formatting (`llm/_strict.py`, `llm/_provider_format/*`). All pure: images
-//! arrive through an [`ImageResolver`], and the reference's warnings come back as [`Dropped`].
-
 use lk_agents_abi::ImageContent;
 use serde_json::Value;
 
@@ -17,8 +14,6 @@ pub mod tools;
 mod turns;
 mod wire;
 
-#[cfg(test)]
-mod regression_tests;
 #[cfg(test)]
 mod testkit;
 

@@ -1,6 +1,3 @@
-//! Endpoint exchanges: the worker serves HTTP/1.1 and WebSocket on each endpoint stream and hands
-//! the binding one parsed exchange, which it adapts to its own application framework.
-
 use std::any::Any;
 use std::sync::Arc;
 

@@ -1,8 +1,8 @@
-//! The expressive-off chat edits (`agent_activity.py:3195`). Both mutate the stored history.
-
 use lk_agents_abi::{ChatContent, ChatContext, ChatItem, ChatMessage, Role};
 
 use crate::tts::markup::transcript::strip_all_markup;
+
+// Both expressive-off edits mutate the stored history.
 
 /// The ID of the expressive TTS markup-guide message in the chat context. Must not change: it is
 /// matched against persisted contexts.

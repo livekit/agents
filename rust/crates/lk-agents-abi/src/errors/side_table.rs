@@ -1,9 +1,9 @@
-//! The refcounted side-table keys. The registry is held by [`Weak`] so keys never keep the host
-//! table alive; `release` may run on any thread, so it must not block or take the GIL.
-
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
+
+// The registry is held by `Weak` so keys never keep the host table alive; `release` may run on
+// any thread, so it must not block or take the GIL.
 
 /// No resolution here: a pure crate must not read host memory.
 pub trait RefRegistry: Send + Sync + 'static {

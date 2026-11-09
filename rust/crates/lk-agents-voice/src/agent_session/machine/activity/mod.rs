@@ -1,7 +1,3 @@
-//! The active agent's state: recognition, speech scheduling, hooks, handoff and tool replies.
-//! `VoiceDriver` coordinates these components and applies prompt, tool, context and I/O changes.
-//! Shared invocation decisions remain in the `AgentRun` composed by `reply_run`.
-
 use crate::agent::{CommitOutcome, Committed, Source, Visibility};
 use crate::agent_session::effects::VoiceEffect;
 use crate::agent_session::machine::activity::false_interruption::PausedSpeech;
@@ -93,27 +89,17 @@ impl SpeechHistory {
 /// What the STT and VAD legs are fed: every model in the tree wants 16 kHz mono.
 pub const PIPELINE_SAMPLE_RATE: u32 = 16_000;
 
-/// `voice/agent_activity.py`'s `AgentActivity`: the running agent (its name, prompt and
-/// tools), its audio recognition, the speech queue and the current speech, the false-interruption
-/// pause, the hooks, and the realtime session. The `VoiceDriver` orchestrates it
-/// together with the [`VoiceSession`](crate::agent_session::VoiceSessionState): what spans two of its
-/// components is the driver's to answer.
+/// The running agent's state. What spans two of its components is the `VoiceDriver`'s to answer.
 pub(crate) struct AgentActivity {
-    /// The running agent's id (`AgentActivity.agent.id`).
     agent: String,
     /// Replies in flight keep the prompt and tools they snapshotted.
     instructions: crate::generation::Instructions,
     dynamic_instructions: Option<lk_agents_abi::resources::ResourceId>,
-    /// The agent's `transcription_node`.
     output_nodes: crate::agent_session::OutputNodes,
     toolset: Arc<crate::tool_executor::Toolset>,
-    /// `_tool_executor`.
     tools: crate::tool_executor::Tools,
     audio_recognition: AudioRecognition,
-    /// `_speech_q`, `_current_speech`, `_scheduling_paused`, `_preemptive_generation`, and every
-    /// live speech's handle.
     speech_scheduler: SpeechScheduler,
-    /// `_paused_speech` and the false-interruption timer.
     paused_speech: PausedSpeech,
     /// Attribution and completion facts share one lifetime, including after the close's edge.
     speech_history: SpeechHistory,
@@ -124,52 +110,37 @@ pub(crate) struct AgentActivity {
     pub(in crate::agent_session) tools_in_flight: BTreeSet<SpeechId>,
     /// The step's first frame transitions, once. Cleared when the step is spoken.
     spoke: BTreeSet<SpeechId>,
-    /// `_current_speech` as last announced (`FloorChanged`); compared at the end of every cycle.
+    /// Compared at the end of every cycle to announce floor changes.
     announced_current_speech: Option<SpeechId>,
-    /// `interrupt()`s waiting for their speeches' release.
     interrupt_waiters:
         Vec<crate::agent_session::machine::activity::false_interruption::InterruptWaiter>,
     /// How long a hook whose answer is needed is waited on; `None` when no host runs hooks.
     hook_bound: Option<Duration>,
-    /// The developer's callbacks in flight.
     hooks: crate::agent_session::machine::activity::hooks::Hooks,
-    /// `update_agent()`: the switches asked for and in progress.
     handoff: crate::agent_session::machine::activity::handoff::Handoff,
-    /// The `on_exit` each agent owes.
     on_exit: crate::agent_session::machine::activity::hooks::OnExit,
-    /// The host's `drain()`.
     drain: crate::agent_session::machine::activity::drain::Drain,
-    /// `VoiceTask.run()`: the tasks holding the floor and the parents they suspended.
     voice_tasks: crate::agent_session::machine::activity::voice_task::VoiceTasks,
-    /// DTMF collection while it runs.
     dtmf: crate::workflows::machine::dtmf::Dtmf,
-    /// `EndCallTool`: the speech whose goodbye the session closes after.
+    /// The speech whose goodbye the session closes after.
     end_call: Option<crate::workflows::end_call::EndCall>,
-    /// `on_user_turn_exceeded`, waited for or running.
     turn_limit: crate::agent_session::machine::activity::hooks::TurnLimit,
-    /// The user turn parked on `on_user_turn_completed` (`_user_turn_completed_atask`).
+    /// The user turn parked on `on_user_turn_completed`.
     pending_turn: Option<recognition::PendingTurn>,
     /// Decided turns waiting for `pending_turn`'s hook to return, in order.
     waiting_turns: std::collections::VecDeque<recognition::DecidedTurn>,
-    /// The user turn being heard, from its first evidence to its decision.
     pub(crate) user_turn: Option<crate::telemetry::UserTurnSpan>,
-    /// The agent update in progress (`update_agent`): from a handoff's `on_exit` or a VoiceTask's
-    /// suspension to the arriving agent's `on_enter`.
+    /// From a handoff's `on_exit` or a VoiceTask's suspension to the arriving agent's `on_enter`.
     update: Option<crate::telemetry::Holding<crate::telemetry::UpdateAgent>>,
-    /// The spans the arriving agent's toolsets were set up under, which its activity opens as.
     pub(crate) arriving: Option<crate::telemetry::Arriving>,
-    /// The last agent activity opened (`start_agent_activity`): what its input streams keep
-    /// running under.
+    /// What the activity's input streams keep running under.
     running_activity: Option<crate::telemetry::SpanContext>,
-    /// So a preemptive generation can be keyed to the turn after it.
     last_turn: Option<crate::audio_recognition::TurnId>,
-    /// A final arrived while the current speech was still uninterrupted: the preemptive
-    /// generation that final asks for this cycle sees it so, as the reference's does (its final
-    /// cuts a paused speech in a task, after `on_preemptive_generation` ran).
+    /// A final arrived while the current speech was uninterrupted: this cycle's preemptive
+    /// generation must still see the speech as live.
     live_speech_at_final: bool,
     preemptive: Option<Preemptive>,
     model: ActivityModel,
-    /// Authorized speeches awaiting their first frame.
     launching: BTreeSet<SpeechId>,
 }
 
@@ -202,8 +173,6 @@ impl AgentActivity {
         &mut self,
         toolset: crate::tool_executor::Toolset,
     ) -> (Vec<String>, Vec<String>) {
-        // "Record the configuration change (skip if no visible diff)", in spec order so
-        // the record is deterministic.
         let tools_added: Vec<String> = toolset
             .specs
             .iter()
@@ -221,7 +190,7 @@ impl AgentActivity {
         (tools_added, tools_removed)
     }
 
-    /// A handoff lands: the new agent, prompt, nodes and tools. The previous agent's id.
+    /// A handoff lands; returns the previous agent's id.
     pub(crate) fn set_agent(
         &mut self,
         agent: String,
@@ -237,15 +206,12 @@ impl AgentActivity {
         std::mem::replace(&mut self.agent, agent)
     }
 
-    /// The running agent's retry budgets (`Agent(retries=)`).
     pub(crate) fn retries(&self) -> lk_agents_abi::agent::Retries {
         self.toolset.agent.as_ref().map(|a| a.definition().retries).unwrap_or_default()
     }
 
-    /// What a request planned now is offered: the agent's toolset, then session additions whose
-    /// names the agent lacks (a provider refuses duplicates).
     /// `generate_reply(tools=)`: the agent's toolset offering only `names` and every
-    /// provider-owned tool, in declaration order; host objects and runner unchanged.
+    /// provider-owned tool, in declaration order.
     pub(crate) fn reply_toolset(&self, names: &[String]) -> Arc<crate::tool_executor::Toolset> {
         Arc::new(self.toolset.narrowed(names))
     }
@@ -277,7 +243,6 @@ impl AgentActivity {
         self.speech_scheduler.belongs_to_run(speech, run)
     }
 
-    /// Ask the lifecycle owners, rather than maintaining a duplicate pending-work ledger.
     pub(crate) fn has_run_work(&self, run: crate::events::RunId) -> bool {
         self.speech_scheduler.has_run_work(run)
             || self.hooks.has_run_work(run)
@@ -288,7 +253,6 @@ impl AgentActivity {
         self.speech_history.remember(speech, self.agent.clone(), kind);
     }
 
-    /// The agent `speech` was created under.
     pub(crate) fn speech_agent(&self, speech: SpeechId) -> Option<&str> {
         self.speech_history.records.get(&speech)?.origin.as_ref().map(|(agent, _)| agent.as_str())
     }
@@ -298,7 +262,7 @@ impl AgentActivity {
         self.speech_history.records.get(&speech)?.origin.as_ref().map(|(_, kind)| *kind)
     }
 
-    /// `_current_speech` as last announced (`FloorChanged`): the new one when it moved.
+    /// The new current speech when it moved since last announced.
     pub(crate) fn announce_current_speech(
         &mut self,
         current: Option<SpeechId>,
@@ -334,10 +298,8 @@ impl AgentActivity {
     }
 }
 
-/// The driver's configuration: the layers, the facts, and the resolved answer.
-///
-/// `effective` is only written by `resolve`; a change reports what moved as a [`ConfigDiff`] so
-/// only the affected machines are told.
+/// The driver's configuration layers and their resolved answer. `effective` is only written by
+/// `resolve`; a change reports what moved as a [`ConfigDiff`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct DriverConfig {
     pub stack: ConfigStack,
@@ -349,9 +311,8 @@ pub struct DriverConfig {
 pub struct ConfigDiff {
     /// The endpointing leaves changed: replace the model.
     pub endpointing: Option<crate::turn::EndpointingOptions>,
-    /// The resolved mode changed: `AudioRecognition::set_turn_detection_mode`.
     pub turn_detection_mode: Option<crate::audio_recognition::TurnDetectionMode>,
-    /// `timers.aec_warmup` changed (the host's outbound-SIP re-evaluation): the labels' window.
+    /// `timers.aec_warmup` changed.
     pub aec_warmup: Option<Option<Duration>>,
 }
 
@@ -423,8 +384,7 @@ impl DriverConfig {
 impl VoiceDriver {
     pub(crate) fn on_frame(&mut self, now: Ts, cmd: ActivityCommand) {
         match cmd {
-            // A sequence: `on_exit`, the drain, then the swap.
-            // A VoiceTask holds the floor: its parent waits on it, so no agent replaces it.
+            // A VoiceTask's parent waits on it, so no agent replaces it.
             ActivityCommand::Update(update) if self.activity.voice_tasks.running() => {
                 let refused = crate::agent_session::HandoffRefused::TaskRunning;
                 self.refuse_handoff(None, update, refused)
@@ -444,10 +404,8 @@ impl VoiceDriver {
             }
             ActivityCommand::UpdateInstructions(next) => {
                 self.activity.instructions = next.clone();
-                // "Record the configuration change" (`AgentActivity.update_instructions`), on the
-                // driver's clock.
                 self.commit_config(Some(next.render(Some(Modality::Audio))), vec![], vec![]);
-                // Ungated: the reference tells any realtime session and lets the plugin refuse.
+                // Ungated: the plugin may refuse.
                 if self.activity.realtime().is_some() {
                     self.rt_send(lk_agents_abi::RealtimeCommand::UpdateInstructions(
                         lk_agents_abi::UpdateInstructions {
@@ -474,7 +432,6 @@ impl VoiceDriver {
                 }
                 self.record_trace(ToolStep::ToolsetUpdated { tools });
             }
-            // A re-attached microphone opens a fresh STT stream.
             ActivityCommand::SetAudioInput(input) => {
                 self.set_audio_input(now, input.map(|AudioInputHandle(input)| input))
             }
@@ -497,8 +454,7 @@ impl VoiceDriver {
             ActivityCommand::SetAudioOutput(output) => {
                 let audio = output.is_some();
                 self.set_outputs(|o| o.audio = output);
-                // Selection changes future admissions. Existing segments keep their binding,
-                // including its pause and cleanup controls, until their release arrives.
+                // Existing segments keep their binding until their release arrives.
                 self.retire_outputs();
                 self.record_trace(PlayoutStep::OutputReplaced {
                     audio,
@@ -523,7 +479,6 @@ impl VoiceDriver {
                 // Host-supplied, so not announced: the host already holds these items.
                 let agent = self.activity.agent.clone();
                 self.session.chat_ctx.update_agent_chat_ctx(items, &agent);
-                // Ungated: the reference guards only on there being a session.
                 if self.activity.realtime().is_some() {
                     let ctx = self.session.chat_ctx.for_realtime();
                     self.rt_send(lk_agents_abi::RealtimeCommand::UpdateChatCtx(
@@ -547,8 +502,7 @@ impl VoiceDriver {
         )));
     }
 
-    /// The history records an agent leaves when it takes over: `AgentHandoff`, then
-    /// `AgentConfigUpdate` (skipped with neither instructions nor tools), in the reference's order.
+    /// `AgentHandoff`, then `AgentConfigUpdate` (skipped with neither instructions nor tools).
     pub(crate) fn record_handoff(&mut self, previous_agent: Option<String>) {
         let handoff = lk_agents_abi::AgentHandoffItem {
             id: self.session.ids.mint("item"),
@@ -565,8 +519,6 @@ impl VoiceDriver {
         }
     }
 
-    /// An `AgentConfigUpdate` record; an empty tool list is absent. The live callables (`tools`)
-    /// are host objects the host attaches.
     fn commit_config(
         &mut self,
         instructions: Option<String>,
@@ -584,8 +536,7 @@ impl VoiceDriver {
         self.commit_record(ChatItem::AgentConfigUpdate(config));
     }
 
-    /// Tell the realtime session which frame drives: instructions (audio rendering), conversation,
-    /// tools, in the reference's order. No-op on a pipeline session.
+    /// Tell the realtime session the instructions, conversation and tools, in that order.
     pub(crate) fn push_activity(&mut self, chat_ctx: Option<lk_agents_abi::ChatContext>) {
         if self.activity.realtime().is_none() {
             return;
@@ -605,9 +556,7 @@ impl VoiceDriver {
         }));
     }
 
-    /// Put a handoff or config record on the record. `AgentHandoff` is history-only;
-    /// `AgentConfigUpdate` goes to the agent's context and history (only the realtime view strips
-    /// it).
+    /// `AgentHandoff` is history-only; `AgentConfigUpdate` goes to the agent's context and history.
     pub(crate) fn commit_record(&mut self, item: ChatItem) {
         let (source, visibility) = match &item {
             ChatItem::AgentHandoff(_) => (Source::Handoff, Visibility::History),
@@ -616,11 +565,9 @@ impl VoiceDriver {
         self.commit_item(item, source, visibility);
     }
 
-    /// The one write to the record: inserted by its acoustic `created_at`, the speech told, the
-    /// host told via `ItemAdded{source}`, and the activity republished.
+    /// The one write to the record, inserted by its acoustic `created_at`.
     pub(crate) fn commit_item(&mut self, item: ChatItem, source: Source, visibility: Visibility) {
-        // Attributed to the agent that created the speech, not the driving one (a tool may commit
-        // after its agent was left); an item with no speech is the driving agent's.
+        // Attributed to the speech's agent: a tool may commit after its agent was left.
         let agent = source
             .speech()
             .and_then(|s| self.activity.speech_agent(s).map(str::to_owned))
@@ -634,9 +581,8 @@ impl VoiceDriver {
         self.perform_commit(commit);
     }
 
-    /// Items on the record changed in place (answered `InputRequired` outputs, an expert's
-    /// outcome): the host is told again of each, under the item's own id, source and agent, and a
-    /// realtime server's copy follows once.
+    /// Items on the record changed in place: the host is told again of each under its own id,
+    /// and a realtime server's copy follows once.
     pub(crate) fn replace_items(&mut self, items: impl IntoIterator<Item = ChatItem>) {
         let mut replaced = false;
         for item in items {
@@ -668,7 +614,6 @@ impl VoiceDriver {
         }
     }
 
-    /// The speech is told, the host learns of a new item, the activity is republished.
     fn perform_commit(&mut self, (entry, outcome): (Committed, CommitOutcome)) {
         // A call was pushed to the handle when the model made it; everything else is new here.
         let tell_speech =
@@ -704,8 +649,8 @@ impl VoiceDriver {
 }
 
 impl AgentActivity {
-    /// What the driver keeps per speech outlives it only while something may still ask: the
-    /// speech is live, a tool of it runs, or it is among the latest [`KEPT_SPEECHES`].
+    /// Keeps per-speech facts while the speech is live, a tool of it runs, or it is among the
+    /// latest [`KEPT_SPEECHES`].
     fn prune_settled_speeches(&mut self) {
         let scheduler = &self.speech_scheduler;
         let tools = &self.tools;
@@ -716,7 +661,6 @@ impl AgentActivity {
 }
 
 impl AgentActivity {
-    /// Construct the opening activity from the session assembly, before any transitions run.
     pub(crate) fn from_initial(
         initial: &mut crate::agent_session::InitialSession,
         paused_speech: PausedSpeech,

@@ -1,9 +1,3 @@
-//! A job's run inside its process (`_core.JobRun`): what ends the job (the room, the user, the
-//! parent, a crash, the simulator leaving; the first wins), the entrypoint's supervision, the
-//! order and bounds of the shutdown (whose steps the host runs and opens the spans of), the
-//! session report's outputs, the room connected once, the application calls in flight and the
-//! recording's setup.
-
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -27,6 +21,9 @@ use super::ipc_channel::Channel;
 use super::wire::{ToChild, bounded};
 use super::{ToParent, secs};
 use lk_agents_net::env::ProcessEnv;
+
+// The first cause that ends the job wins: the room, the user, the parent, a crash or the
+// simulator leaving.
 
 /// How long the entrypoint may take to return once the job shuts down, before it is cancelled.
 const ENTRYPOINT_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -635,8 +632,8 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         drop(st);
         if let (Some(exporter), Some(job)) = (telemetry::exporter(), self.inner.job.get()) {
             let cloud = observability && self.inner.cloud.is_some();
-            // Metrics follow the recording as a whole, as 1.8.10's process meter did; the only
-            // logs are the session report's records.
+            // Metrics follow the recording as a whole; the only logs are the session report's
+            // records.
             let recording = telemetry::CloudRecording {
                 traces: cloud && options.traces,
                 logs: cloud && options.logs,

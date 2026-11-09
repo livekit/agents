@@ -1,7 +1,6 @@
-//! Keeps a TTS markup tag from being split across synthesis segments (`tokenize/token_stream.py`).
-//! `<(/?)([A-Za-z]\w*)[^>]*?(/?)\s*>` scanned by hand. Offsets are characters, not bytes.
-
 use crate::tokenize::token_buffer::{Span, Tokenize};
+
+// Tags match `<(/?)([A-Za-z]\w*)[^>]*?(/?)\s*>`, scanned by hand. Offsets are characters.
 
 /// **Character** indices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

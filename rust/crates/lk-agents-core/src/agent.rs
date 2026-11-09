@@ -1,6 +1,3 @@
-//! What the core derives from an agent definition (`lk_agents_abi::agent::AgentDefinition`): its
-//! validity, its tools, the instructions of a request and the structured output's tool.
-
 use lk_agents_abi::ToolSpec;
 pub use lk_agents_abi::agent::AgentError;
 use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec};

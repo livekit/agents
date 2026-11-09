@@ -1,11 +1,13 @@
+use lk_agents_abi::llm::provider_format::ProviderFormat;
 use lk_agents_abi::{ChatItem, Role};
+use serde_json::json;
 
 use super::*;
-use crate::llm::provider_format::ToolSchema;
 use crate::llm::provider_format::testkit::{
     call, ctx, image, inline_images, msg, msg_with, no_images, out, text_content, text_of,
-    url_images,
+    url_images, wire,
 };
+use crate::llm::provider_format::{ToolSchema, host};
 
 fn run(
     items: Vec<ChatItem>,
@@ -164,4 +166,44 @@ fn strict_and_legacy_tool_schemas_unpack_from_different_levels() {
         serde_json::to_string(&to_fnc_ctx(&[legacy]).unwrap()).unwrap(),
         r#"[{"name":"t","description":"does a thing","input_schema":{"type":"object"}}]"#
     );
+}
+
+#[test]
+fn anthropic_unknown_image_mime_omits_media_type() {
+    for mime in [None, Some("image/unknown".into())] {
+        let mut images = inline_images(&["i"]).0;
+        images.get_mut("i").unwrap().mime_type = mime;
+        let (messages, _) = host::to_provider_format(
+            ProviderFormat::Anthropic,
+            vec![msg_with("u", Role::User, vec![image("i")])],
+            Some(images),
+            false,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            messages[0]["content"][0],
+            json!({
+                "type": "image", "source": {"type": "base64", "data": "/9j/"}
+            })
+        );
+    }
+}
+
+#[test]
+fn anthropic_array_results_are_blocks_only_when_their_schema_validates() {
+    for output in ["[1,2]", r#"[{"type":"image"}]"#, r#"[{"type":"tool_use"}]"#] {
+        let messages = wire(
+            ProviderFormat::Anthropic,
+            vec![call("c", "c0", "f", "{}"), out("o", "c0", "f", output)],
+        );
+        assert_eq!(messages[1]["content"][0]["content"], output);
+    }
+    let output = r#"[{"type":"text","text":"found"}]"#;
+    let messages = wire(
+        ProviderFormat::Anthropic,
+        vec![call("c", "c0", "f", "{}"), out("o", "c0", "f", output)],
+    );
+    assert_eq!(messages[1]["content"][0]["content"], json!([{"type":"text","text":"found"}]));
 }

@@ -1,5 +1,3 @@
-//! Realtime feature fixtures exercise the core through the runtime encoder and decoder.
-
 use super::wire::{IdGen, Incoming, WireShape};
 use crate::realtime::machine::{RealtimeMachine as Core, Step as CoreStep};
 use crate::realtime::{Dialect, OptionsPatch, SessionOptions};

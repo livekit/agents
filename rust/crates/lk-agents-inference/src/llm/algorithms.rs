@@ -1,6 +1,3 @@
-//! The shared LLM algorithms plugins call (`llm.utils`, `_provider_format`): the core's
-//! formatting, schemas and tool-argument rules, with provider formatting run on an admitted
-//! media worker of the hosting process.
 use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::llm::provider_format::vocabulary::GeminiToolBehavior;
 use lk_agents_abi::llm::provider_format::{

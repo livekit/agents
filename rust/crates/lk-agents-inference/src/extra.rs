@@ -1,5 +1,3 @@
-//! The gateway session's `connection` block every client sends.
-
 use lk_agents_abi::ApiConnectOptions;
 use serde::Serialize;
 

@@ -1,7 +1,7 @@
-//! The image seam. Nothing here encodes: images resolve through a caller-supplied [`ImageResolver`],
-//! keeping the `image` crate out of this tier.
-
 use lk_agents_abi::{ImageContent, InferenceDetail};
+
+// Nothing here encodes: images resolve through a caller-supplied `ImageResolver`, keeping the
+// `image` crate out of this tier.
 
 // `llm/utils.py`'s `SerializedImage`: what `serialize_image` returns. `inference_detail` is
 // [`InferenceDetail`] rather than a bare `str`: an unknown value raises rather than sending the

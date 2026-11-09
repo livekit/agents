@@ -1,6 +1,3 @@
-//! Built-in tool discovery (`ToolSearchToolset`, `ToolProxyToolset`): keyword and BM25 ranking of
-//! the tools a model may load, with native regex matching shared by all hosts.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use lk_agents_abi::tokenize::search::{self as abi, PatternError, ToolSearchError};

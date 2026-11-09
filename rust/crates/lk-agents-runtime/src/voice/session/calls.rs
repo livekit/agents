@@ -1,6 +1,3 @@
-//! An awaited input's call: its id goes in the input, its answer comes back to the caller that
-//! holds the [`Awaited`] half; a `say()` / `generate_reply()` is answered on its speech handle.
-//! [`Calls`] keeps each reply until the core answers its call.
 
 use crate::voice::VoiceRuntimeEvent;
 use crate::voice::session::Tx;

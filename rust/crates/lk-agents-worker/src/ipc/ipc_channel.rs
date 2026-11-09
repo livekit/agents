@@ -1,14 +1,3 @@
-//! The connection between the worker and one job process: typed messages over one stream, and
-//! the only code that touches its bytes.
-//!
-//! Each side first writes [`MAGIC`] and its [`VERSION`] (big-endian), then frames of a 4-byte
-//! big-endian length and a postcard-encoded message of at most [`MAX_FRAME`] bytes, and last an
-//! empty frame: its end, which a named pipe cannot signal by half-closing. A reader task
-//! and a writer task own the two halves, so a caller that stops waiting never cuts a frame.
-//!
-//! Transports: a socketpair on Unix, a named pipe on Windows, a bounded `tokio::io::duplex` in
-//! tests. All three run the same codec.
-
 use std::io;
 use std::marker::PhantomData;
 use std::time::Duration;
@@ -19,6 +8,11 @@ use parking_lot::Mutex;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
+
+// Each side writes `MAGIC` and its `VERSION` (big-endian), then frames of a 4-byte big-endian
+// length and a postcard message, and last an empty frame: its end, which a named pipe cannot
+// signal by half-closing. Reader and writer tasks own the halves, so a caller that stops waiting
+// never cuts a frame.
 
 /// The first bytes either side writes.
 pub const MAGIC: [u8; 4] = *b"LKAJ";

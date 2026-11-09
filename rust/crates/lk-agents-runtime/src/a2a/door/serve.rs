@@ -1,6 +1,3 @@
-//! An A2A endpoint over one HTTP exchange: its card and its JSON-RPC methods under
-//! `/<endpoint>`, the caller authenticated first, each answer as JSON or as an SSE stream.
-
 use lk_agents_abi::a2a::auth::{AuthError, AuthPrincipal, Credentials as _, PrincipalKind};
 use lk_agents_abi::a2a::card::EndpointDescriptor;
 use lk_agents_abi::a2a::door::{DoorError, TextServing};

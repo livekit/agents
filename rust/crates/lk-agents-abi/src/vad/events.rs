@@ -1,7 +1,7 @@
-//! The VAD pipeline events (`vad.py`). A `///` on a Python-targeted declaration is the
-//! reference's docstring verbatim; notes for a Rust reader are `//`.
-
 use crate::AudioFrame;
+
+// A `///` on a Python-targeted declaration is the reference's docstring verbatim; notes for a
+// Rust reader are `//`.
 
 // `vad.py:19`, a `(str, Enum)`: the wire strings are public API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, lk_agents_host_derive::Vocabulary)]

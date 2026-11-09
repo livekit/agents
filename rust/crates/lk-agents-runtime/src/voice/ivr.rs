@@ -1,5 +1,3 @@
-//! Runs the IVR navigator over the session's event feed and supplied clock.
-
 use crate::voice::session::PeerHandle;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::agent_session::VoiceCommandOrigin;

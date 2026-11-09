@@ -1,6 +1,3 @@
-//! The production job runner orders the job end, bounds the session report and still finishes
-//! shutdown.
-
 use super::*;
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::errors::RefRegistry;

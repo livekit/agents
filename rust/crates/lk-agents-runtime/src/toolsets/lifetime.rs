@@ -1,5 +1,3 @@
-//! Executes the core's toolset lifetime effects. Ready resources retain no host callbacks.
-
 use crate::host::Cancellation;
 use crate::telemetry;
 use lk_agents_abi::errors::HostError;
@@ -14,6 +12,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use tokio::sync::watch;
+
+// Ready resources retain no host callbacks.
 
 type Outcome = Result<(), HostError>;
 type Reply = watch::Sender<Option<Outcome>>;

@@ -1,6 +1,3 @@
-//! `_LocalTransport` (`transports.py:398`): the in-process mini model behind [`LocalEotModel`], a
-//! 1.2 s ring buffer snapshotted at request time, and a failed prediction scored 0.0.
-
 use parking_lot::Mutex;
 use std::time::Instant;
 

@@ -1,5 +1,3 @@
-//! I/O for a session with no RTC attachment or room resources.
-
 use crate::telemetry;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
 use lk_agents_abi::voice::room_owner;

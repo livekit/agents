@@ -1,6 +1,3 @@
-//! An agent's `AvatarSession` (`_core_AvatarLifecycle`): the avatar's join wait, its metrics, its
-//! close on the job's shutdown and its participant's removal.
-
 use crate::voice::session::owner::SessionOwner;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::metrics::base::{AvatarMetrics, Metadata};

@@ -1,7 +1,3 @@
-//! Adaptive interruption (`inference/interruption.py`): while the agent speaks audio fills a 3 s
-//! window; once the user talks over it, the window goes to the gateway every 100 ms until a
-//! verdict or either side stops. [`InterruptionMachine`] decides; [`transport`] drives.
-
 use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::turn::interruption::{InterruptionPort, InterruptionSource};
 use lk_agents_abi::{ApiConnectOptions, WallAnchor};
@@ -11,7 +7,6 @@ use std::sync::Arc;
 mod audio;
 mod event;
 pub mod machine;
-// The session loop's `InterruptionPort`, over the detector below.
 mod leg;
 mod options;
 pub mod proto;

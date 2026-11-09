@@ -1,5 +1,3 @@
-//! Session output composition and the synchronization lifetime it owns.
-
 use super::session::Timebase;
 use super::transcription::{TranscriptSyncConfig, TranscriptSynchronizer};
 use lk_agents_abi::voice::io::{AudioOutput, TextOutput};

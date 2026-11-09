@@ -1,5 +1,5 @@
-//! One entry of the gateway's server-side fallback chain (`FallbackModel`). On the wire STT sends an
-//! absent `extra_kwargs` as `null` and TTS as `{}`; that lives in the request builders.
+// On the wire STT sends an absent `extra_kwargs` as `null` and TTS as `{}`; that lives in the
+// request builders.
 
 /// Inference Fallback Adapter: configuration for a fallback STT model that runs server-side in LiveKit Inference, providing automatic fallback between providers.
 ///

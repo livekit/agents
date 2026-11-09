@@ -1,5 +1,3 @@
-//! A shared toolset's leases. IDs and operation outcomes are inputs; there are no host objects.
-
 use super::effects::ToolsetEffect;
 use std::collections::BTreeSet;
 

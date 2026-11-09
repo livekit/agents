@@ -1,5 +1,3 @@
-//! Transcript synchronization lifecycle decisions, with physical outcomes supplied as events.
-
 pub use super::pacer::{TranscriptPacerOptions, TranscriptPacerWarning};
 use super::synchronizer::{TranscriptSyncInput, TranscriptSyncSegments};
 use crate::transcription::effects::TranscriptPacerEffect;
@@ -200,3 +198,7 @@ impl TranscriptSync {
             .collect()
     }
 }
+
+#[cfg(test)]
+#[path = "lifecycle_tests.rs"]
+mod tests;

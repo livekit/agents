@@ -1,4 +1,5 @@
-//! Translation of parse_string.py and parse_string_helpers from the attributed upstream.
+// Translation of json_repair's parse_string.py and parse_string_helpers; see ../mod.rs.
+
 use super::*;
 use std::ops::ControlFlow;
 impl Parser {
@@ -501,7 +502,6 @@ enum Comma {
     OpensContainer,
 }
 
-/// The state of one string's scan.
 struct StringScan {
     left: char,
     right: char,

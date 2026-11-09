@@ -1,6 +1,3 @@
-//! The session report's recording upload, decided before any I/O: the header and its session
-//! summary, the `chat_history.json` bytes within their bound, and the audio file to send.
-
 use lk_agents_abi::livekit_protocol::agent as proto;
 use lk_agents_abi::telemetry::report::{
     CloudAgent, ErrorCounts, RecordingHeader, RecordingOptions, SESSION_SUMMARY_BYTES,
@@ -204,7 +201,6 @@ fn error_counts(events: &[Value]) -> ErrorCounts {
     errors
 }
 
-/// The last close event's reason.
 fn close_reason(events: &[Value]) -> Option<proto::CloseReason> {
     let reason = report_events(events).rev().find_map(|e| match e {
         ReportEvent::Close { reason } => Some(reason),

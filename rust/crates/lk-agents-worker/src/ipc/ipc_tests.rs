@@ -443,8 +443,6 @@ fn hello() -> Hello {
     Hello { asyncio_debug: false, http_proxy: None, health_timeout_ms: None }
 }
 
-// ------------------------------------------------------------------------------- supervision
-
 /// The supervisor's diagnostics and the runner it launched, as the test drives them.
 struct FakeHost {
     /// The job the supervisor's lines name, telling this test's lines from the others'.
@@ -918,8 +916,6 @@ async fn a_native_memory_sample_enforces_the_process_limit() {
     assert_eq!(line.level, log::Level::Error);
     assert_eq!(host.kills.load(Ordering::SeqCst), 1);
 }
-
-// ------------------------------------------------------------------------------------- child
 
 type WatchedChannel = (
     tokio::sync::mpsc::Receiver<ToChild>,

@@ -51,13 +51,12 @@ Report only CHANGES; never re-list an applied term.
   - `remove`: only a spelling the user just corrected away. Applied terms are otherwise sticky.
 If nothing meets the bar this turn, change nothing."#;
 
-/// `DriverBuilder::keyterms`: the resolved `stt_context_options` plus the host objects a pass needs.
+/// The resolved `stt_context_options` plus the host objects a pass needs.
 pub struct KeytermSetup {
-    /// `_resolve_detection(options["keyterm_detection"])`.
     pub detection: KeytermDetection,
-    /// `stt_context_options["keyterms"]`: the user's static list.
+    /// The user's static keyterms.
     pub static_keyterms: Vec<String>,
-    /// The detection LLM; `None` skips every pass, as the reference's `start()` does.
+    /// The detection LLM; `None` skips every pass.
     pub llm: Option<Arc<dyn Llm>>,
     /// The host's `[record_keyterms]` tool list, for an LLM that needs the objects beside the spec.
     pub tools_host: Option<HostRef>,
@@ -71,11 +70,9 @@ pub(crate) struct KeytermSlot {
     inflight: Option<u64>,
     /// Whether an STT without the `keyterms` capability was told so once already.
     warned_unsupported: bool,
-    /// The pass in flight's `keyterm_detection`, until it answers or fails.
     span: Option<crate::telemetry::ManualSpan<crate::telemetry::KeytermDetection>>,
 }
 
-/// The `record_keyterms` spec (`keyterm_detection.STTContextOptions`): three string lists, forced.
 fn record_keyterms_spec() -> lk_agents_abi::ToolSpec {
     lk_agents_abi::ToolSpec {
         provider_tool: None,
@@ -102,7 +99,7 @@ impl KeytermSlot {
     pub(crate) fn resource(&self) -> Option<ResourceId> {
         self.llm
     }
-    /// `KeytermDetector.start(session, stt)`: the slot, and the static terms to push at once.
+    /// The slot, and the static terms to push at once.
     pub(crate) fn start(setup: KeytermSetup, llm: Option<ResourceId>) -> (Self, Vec<String>) {
         let pass = KeytermPass::new(&setup.detection, &setup.static_keyterms);
         let initial = pass.keyterms();
@@ -123,7 +120,6 @@ impl KeytermSlot {
         self.detection.enabled && self.llm.is_some()
     }
 
-    /// One transition of the pass; what it asks for is the caller's to perform.
     pub(crate) fn step(&mut self, input: KeytermIn) -> Vec<KeytermEffect> {
         let pass = std::mem::replace(&mut self.pass, KeytermPass::Closed);
         let (next, out) = pass.step(input);
@@ -151,7 +147,6 @@ impl KeytermSlot {
         }
     }
 
-    /// One request: `llm.chat(.., tools=[record_keyterms], tool_choice="required")`.
     pub(crate) fn request(
         &self,
         prompt: String,
@@ -281,16 +276,11 @@ impl DetectionPass {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-
-// Options
-// ---------------------------------------------------------------------------------------------
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeytermDetection {
     pub enabled: bool,
     pub llm: Option<DetectionLlm>,
-    /// `max(1, turn_interval)`: `0` means every turn.
+    /// At least 1: `0` means every turn.
     pub turn_interval: u32,
     pub max_keyterms: Option<usize>,
     /// `None` when unset or empty: an empty override means the default prompt.
@@ -337,24 +327,21 @@ impl lk_agents_abi::turn::keyterms::KeytermFunctions for KeytermRules {
     }
 }
 
-/// `_resolve_detection`: defaults, then whatever keys the caller set.
+/// Defaults, then whatever keys the caller set.
 pub fn resolve_detection(config: Option<&KeytermDetectionConfig>) -> KeytermDetection {
     let d = KeytermDetection::default();
     let Some(c) = config else { return d };
     KeytermDetection {
         enabled: c.enabled.unwrap_or(d.enabled),
         llm: c.llm.clone(),
-        // `max(1, ...)` from the reference's constructor, folded in here.
         turn_interval: c.turn_interval.unwrap_or(d.turn_interval).max(1),
         max_keyterms: c.max_keyterms,
-        // Empty string -> the default prompt, per `options["instructions"] or DEFAULT`.
         instructions: c.instructions.clone().filter(|s| !s.is_empty()),
         timeout: c.timeout.unwrap_or(d.timeout),
     }
 }
 
-/// Which model to build, or `None` when the caller supplied an `LLM` object. Construction failures
-/// are swallowed host-side, as `_resolve_detection_llm` does.
+/// Which model to build, or `None` when the caller supplied an `LLM` object.
 pub fn resolve_detection_model(configured: Option<&DetectionLlm>) -> Option<&str> {
     match configured {
         Some(DetectionLlm::Instance) => None,
@@ -362,8 +349,6 @@ pub fn resolve_detection_model(configured: Option<&DetectionLlm>) -> Option<&str
         None => Some(DEFAULT_DETECTION_MODEL),
     }
 }
-
-// --- The pass counter ---
 
 /// Decides which user turns start a pass. Per activity (reset on `start`), unlike the keyterm state.
 #[derive(Debug, Clone)]
@@ -377,8 +362,8 @@ impl TurnGate {
         TurnGate { turn_interval: turn_interval.max(1), turn_count: 0 }
     }
 
-    /// `true` when this item should start a pass. Empty text isn't a turn (truthiness). The driver's
-    /// single-flight check runs after this, so a turn during a pass still advances the counter.
+    /// `true` when this item should start a pass; empty text is not a turn. A turn during a pass
+    /// still advances the counter.
     pub fn on_conversation_item(&mut self, role: Role, text: &str) -> bool {
         if role != Role::User || text.is_empty() {
             return false;
@@ -388,7 +373,6 @@ impl TurnGate {
     }
 }
 
-// --- The calculator ---
 /// The keyterm set and the rules that grow it; owned by the session, so it survives handoffs.
 #[derive(Debug, Clone, Default)]
 pub struct KeytermState {
@@ -448,7 +432,6 @@ impl KeytermState {
         }
 
         for term in &update.pending {
-            // `if term and ...`: an empty string is not a candidate.
             if term.is_empty() || self.static_terms.contains(term) {
                 continue;
             }
@@ -488,7 +471,6 @@ impl KeytermState {
     }
 }
 
-/// `list(dict.fromkeys(...))`: first occurrence wins, order preserved.
 fn dedup<'a>(terms: impl Iterator<Item = &'a str>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for t in terms {
@@ -499,17 +481,15 @@ fn dedup<'a>(terms: impl Iterator<Item = &'a str>) -> Vec<String> {
     out
 }
 
-// --- Rendering the pass input ---
-
-/// One transcript line; `text` is `text_content`, markup already stripped by the caller.
+/// One transcript line, markup already stripped by the caller.
 #[derive(Debug, Clone)]
 pub struct TranscriptItem<'a> {
     pub role: Role,
     pub text: &'a str,
 }
 
-/// `_format_input`: recent transcript plus current keyterms, `None` with no user/assistant text.
-/// Walked newest-first so a long call is truncated at the old end.
+/// Recent transcript plus current keyterms, `None` with no user/assistant text. Walked
+/// newest-first so a long call is truncated at the old end.
 pub fn format_detector_input(
     items: &[TranscriptItem<'_>],
     current: &[(&str, bool)],
@@ -558,17 +538,13 @@ fn role_upper(role: Role) -> &'static str {
     }
 }
 
-/// `", ".join(terms) or "(none)"`: the empty join is falsy, so it becomes the placeholder.
 fn join_or_none<'a>(terms: impl Iterator<Item = &'a str>) -> String {
     let joined = terms.collect::<Vec<_>>().join(", ");
     if joined.is_empty() { "(none)".to_string() } else { joined }
 }
 
-// --- Reading the pass output ---
-
-/// `_parse_tool_call`'s second half: the filtered `record_keyterms` arguments, `None` on no call or
-/// unparsable arguments. Terms are kept unstripped, as the reference sends them; a non-list value
-/// yields nothing.
+/// The filtered `record_keyterms` arguments; empty on no call. Terms are kept unstripped, and a
+/// non-list value yields nothing.
 pub fn parse_record_keyterms(args: Option<&serde_json::Value>) -> KeytermUpdate {
     let Some(args) = args else { return KeytermUpdate::default() };
     let terms = |key: &str| -> Vec<String> {
@@ -585,8 +561,6 @@ pub fn parse_record_keyterms(args: Option<&serde_json::Value>) -> KeytermUpdate 
     };
     KeytermUpdate { pending: terms("pending"), confirm: terms("confirm"), remove: terms("remove") }
 }
-
-// --- The pass: single-flight as a state, the request and the push as effects ---
 
 #[derive(Debug, Clone, PartialEq, Vocabulary)]
 pub enum KeytermIn {
@@ -656,7 +630,6 @@ impl KeytermPass {
     pub fn step(self, input: KeytermIn) -> (KeytermPass, Vec<KeytermEffect>) {
         let mut out = Vec::new();
         let next = match (self, input) {
-            // --------------------------------------------------------------------------- Idle
             (KeytermPass::Idle(mut p), KeytermIn::Item { role, text }) => {
                 let due = p.record(role, &text);
                 match due.then(|| p.request(&mut out)).flatten() {
@@ -676,9 +649,7 @@ impl KeytermPass {
                 KeytermPass::Idle(p)
             }
             (KeytermPass::Idle(_), KeytermIn::Close) => KeytermPass::Closed,
-            // ------------------------------------------------------------------------ Pending
             (KeytermPass::Pending { mut pass, req }, KeytermIn::Item { role, text }) => {
-                // The counter advances; the pass in flight is the single flight.
                 pass.record(role, &text);
                 KeytermPass::Pending { pass, req }
             }
@@ -720,7 +691,7 @@ impl KeytermPass {
 }
 
 impl Pass {
-    /// Record one item; returns whether the gate says a pass is due.
+    /// Records one item; returns whether a pass is due.
     fn record(&mut self, role: Role, text: &str) -> bool {
         if matches!(role, Role::User | Role::Assistant) && !text.is_empty() {
             self.transcript.push((role, text.to_owned()));
@@ -734,7 +705,7 @@ impl Pass {
         self.gate.on_conversation_item(role, text)
     }
 
-    /// One request, or `None` when there is no user/assistant text to show yet.
+    /// `None` when there is no user/assistant text to show yet.
     fn request(&mut self, out: &mut Vec<KeytermEffect>) -> Option<u64> {
         let items: Vec<TranscriptItem<'_>> = self
             .transcript
@@ -768,11 +739,8 @@ impl Pass {
     }
 }
 
-/// The detector as the driver runs it: started with the session, fed the conversation's items,
-/// its requests run off the loop and bounded.
 impl VoiceDriver {
-    /// `KeytermDetector.start(session, stt)`: the state survives handoffs, and static terms reach
-    /// the recogniser at once.
+    /// The state survives handoffs, and static terms reach the recogniser at once.
     pub(crate) fn keyterms_start(&mut self, setup: KeytermSetup, llm: Option<ResourceId>) {
         let (slot, initial) = KeytermSlot::start(setup, llm);
         self.session.providers.extend(llm);
@@ -788,7 +756,7 @@ impl VoiceDriver {
         self.perform_keyterms(now, effects);
     }
 
-    /// `_on_conversation_item_added`; fed only while a pass could run, as the reference subscribes.
+    /// Fed only while a pass could run.
     pub(crate) fn keyterms_on_item(&mut self, now: Ts, item: &ChatItem) {
         let detecting = self.session.keyterms.as_ref().is_some_and(KeytermSlot::detecting)
             && self.session.stt.as_ref().is_some_and(|stt| stt.capabilities.keyterms);
@@ -845,7 +813,7 @@ impl VoiceDriver {
         self.keyterm_span_ended(Some((before.as_slice(), after.as_slice())));
     }
 
-    /// `asyncio.wait_for(.., timeout)` expired: no change, the slot frees.
+    /// The pass timed out: no change, the slot frees.
     pub(crate) fn on_keyterm_timeout(&mut self, now: Ts) {
         let Some(slot) = self.session.keyterms.as_mut() else { return };
         let Some(req) = slot.time_out() else { return };
@@ -893,7 +861,6 @@ impl VoiceDriver {
         self.record_trace(DetectorStep::KeytermsPushed { terms });
     }
 
-    /// One request, bounded by the pass's timeout, run off the loop.
     fn request_keyterms(&mut self, now: Ts, req: u64, prompt: String) {
         let Some(slot) = self.session.keyterms.as_mut() else { return };
         let Some(llm) = slot.llm else {
@@ -901,8 +868,6 @@ impl VoiceDriver {
             self.keyterms_step(now, KeytermIn::Failed { req });
             return;
         };
-        // Build the request while borrowing its owner, then release that borrow before
-        // recording driver work. No host code is called while the slot is borrowed.
         let timeout = std::time::Duration::from_secs_f64(slot.detection.timeout.max(0.0));
         let request = slot.request(prompt, self.step.wall());
         slot.inflight = Some(req);
@@ -933,8 +898,7 @@ impl VoiceDriver {
         });
     }
 
-    /// The pass answered with the effective lists before and after it, or failed (`None`): its
-    /// `keyterm_detection` ends.
+    /// Ends the pass's span with the effective lists before and after it, or `None` on failure.
     pub(crate) fn keyterm_span_ended(&mut self, lists: Option<(&[String], &[String])>) {
         let Some(span) = self.session.keyterms.as_mut().and_then(|s| s.span.take()) else {
             return;

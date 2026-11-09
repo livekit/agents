@@ -103,9 +103,8 @@ fn shown(effects: &[TranscriptPacerEffect]) -> String {
         .collect()
 }
 
-// The reference's pacing loop shows a word halfway through its delay and counts it heard only
-// once the whole delay passed (`_SegmentSynchronizerImpl._main_task`): a cut keeps the words
-// whose audio ended, not the one playing. Found by `scripts/parity.py say_cut`.
+// A word is shown halfway through its delay and counted heard only once the whole delay passed:
+// a cut keeps the words whose audio ended, not the one playing.
 #[test]
 fn a_cut_keeps_the_words_whose_audio_ended() {
     // Four one-hyphen words over 0.4 s: 0.1 s each, shown at 0.05, 0.15, ...
@@ -125,7 +124,7 @@ fn a_cut_keeps_the_words_whose_audio_ended() {
 
 // Catches: a sink that reports no progress (`DataStreamAudioOutput`, an avatar) cut after
 // seconds of speech leaving nothing heard, so the interrupted reply had no item and the caller
-// no transcript (found by `scripts/e2e.py avatar` on LiveKit Cloud).
+// no transcript.
 #[test]
 fn a_cut_without_progress_hears_up_to_the_reported_playhead() {
     let p = paced("one two three four", 0.4);
@@ -141,9 +140,7 @@ fn a_cut_without_progress_hears_up_to_the_reported_playhead() {
     assert_eq!(heard.as_deref(), Some("one two"));
 }
 
-// The reference's pacing loop sleeps through a pause: the word whose delay began before it is
-// still shown (not heard), and only the next word waits. Found by `parity.py
-// realtime_interruption`.
+// A pause still shows (not hears) the word whose delay began before it; only the next word waits.
 #[test]
 fn a_pause_shows_the_word_in_its_delay() {
     let p = paced("one two three four", 0.4);
@@ -164,7 +161,7 @@ fn a_pause_shows_the_word_in_its_delay() {
 }
 
 // An aligned word starts at its stamp: a pause before it shows nothing (the pause shows only
-// a word already playing). Found by `transcript_follows_audio` reading it.
+// a word already playing).
 #[test]
 fn a_pause_shows_no_aligned_word_ahead_of_its_stamp() {
     let mut p = TranscriptPacer::new(TranscriptPacerOptions::default());
@@ -185,8 +182,7 @@ fn a_pause_shows_no_aligned_word_ahead_of_its_stamp() {
 }
 
 // An aligned word's audio is over at the TTS's `end_time`, however long its hyphens pace it: a
-// cut after it keeps it. Found by `cut_keeps_heard_words` (seed 7680): "Okay." stamped over the
-// first 10 ms was paced to 0.26 s, so a cut at 0.24 s remembered nothing.
+// cut after it keeps it.
 #[test]
 fn an_aligned_word_ends_at_its_stamp() {
     let mut p = TranscriptPacer::new(TranscriptPacerOptions::default());
@@ -212,8 +208,7 @@ fn an_aligned_word_ends_at_its_stamp() {
 }
 
 // An aligned delta's trailing space, paced a hyphen past the word, holds back no stamped word
-// after it. Found by `cut_keeps_heard_words` (seed 27432): the space after "That's" was due at
-// 0.26 s, so nothing after it showed while 120 ms played, and the cut remembered it all.
+// after it.
 #[test]
 fn a_paced_space_holds_back_no_stamped_word() {
     let mut p = TranscriptPacer::new(TranscriptPacerOptions::default());
@@ -231,8 +226,6 @@ fn a_paced_space_holds_back_no_stamped_word() {
 
 // A word's audio is over once the next one's starts: an adapted voice stamps a whole sentence,
 // its first word paced at the standard rate until the audio ended, the rest at the segment's.
-// Found by `cut_keeps_heard_words` (seed 7680): the first word outlasted the cut and the
-// reply remembered nothing of the words after it.
 #[test]
 fn a_word_ends_where_the_next_starts() {
     let mut p = TranscriptPacer::new(TranscriptPacerOptions::default());
@@ -259,8 +252,8 @@ fn a_word_ends_where_the_next_starts() {
     assert_eq!(heard.as_deref(), Some("one two"));
 }
 
-// Each word lasts its hyphens at the speed known when it starts, as the reference computes
-// each delay when it reaches the word: a re-estimate moves the words after it, not before.
+// Each word lasts its hyphens at the speed known when it starts: a re-estimate moves the words
+// after it, not before.
 #[test]
 fn a_word_keeps_the_speed_it_started_at() {
     let mut p = TranscriptPacer::new(TranscriptPacerOptions::default());

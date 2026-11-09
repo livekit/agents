@@ -1,5 +1,3 @@
-//! The endpoint identity published through its agent card.
-
 use crate::errors::HostError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

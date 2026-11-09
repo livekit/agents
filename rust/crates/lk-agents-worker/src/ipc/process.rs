@@ -1,9 +1,3 @@
-//! The process executor: the only code touching the OS process (exit observation, termination,
-//! multiprocessing's start-method reaping receipts, memory samples), behind [`RunnerExecutor`].
-//!
-//! All polls are nonblocking. An exit observation never substitutes for the start method's
-//! reaping receipt.
-
 use crate::ipc::telemetry;
 use std::io;
 use std::sync::Arc;
@@ -27,6 +21,9 @@ use super::supervisor::runner_log;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+
+// All polls are nonblocking. An exit observation never substitutes for the start method's
+// reaping receipt.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StartMethod {

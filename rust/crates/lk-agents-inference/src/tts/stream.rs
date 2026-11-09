@@ -1,5 +1,3 @@
-//! One native synthesis operation as the host sees it, for the gateway and fallback paths alike.
-
 use lk_agents_abi::errors::{HostError, ProviderError, PullError};
 use lk_agents_abi::tts::stream_pacer::PushedAudio;
 use lk_agents_abi::tts::streams::DrainError;

@@ -1,6 +1,3 @@
-//! The avatar's host contracts: its audio receiver, video generator and media, and what the
-//! receiver tells its host.
-
 use crate::errors::ProviderError;
 use crate::utils::video::{AudioReceiverFrame, AvatarFrame, MediaFrame};
 use crate::voice::io::AvatarPlaybackSegment;

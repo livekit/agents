@@ -1,5 +1,3 @@
-//! The requests a session holds while a replacement model waits for its conversation frame.
-
 /// Requests may wait for a replacement's context, never for unbounded application backlog.
 pub const FALLBACK_PENDING_REPLIES: usize = 32;
 pub const FALLBACK_PENDING_BYTES: usize = 1024 * 1024;

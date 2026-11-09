@@ -1,5 +1,3 @@
-//! The session report's records, exported to Cloud as OTLP logs.
-
 use crate::telemetry::decl::{Attrs, JsonObject, KvList, SpanContext, record};
 use crate::usage::ModelUsage;
 use livekit_protocol::agent::chat_context::ChatItem;

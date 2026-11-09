@@ -1,8 +1,7 @@
-//! Minimal edit script between two `ChatContext`s (`llm/utils.py`): a realtime server can only be
-//! told "insert this after that" or "delete this".
-
 use lk_agents_abi::{ChatContext, ChatItem};
 use std::collections::BTreeMap;
+
+// A realtime server can only be told "insert this after that" or "delete this".
 
 pub use lk_agents_abi::llm::chat_context::Anchored;
 

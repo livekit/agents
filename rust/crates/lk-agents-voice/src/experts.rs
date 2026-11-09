@@ -1,12 +1,9 @@
-//! The frontend expert event queue (voice-session.md "Expert events and frontend presentation"):
-//! one frontend conversation's delegations to remote experts, their queued events, and the expert
-//! question that owns the person's next reply. Decisions only; the driver presents, forwards and
-//! resolves. Owned by the session, so replacing the speaking agent keeps it.
-
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use serde::{Deserialize, Serialize};
+
+// Owned by the session, not the agent: replacing the speaking agent keeps the queue.
 
 /// A remote tool's configured identity: its endpoint and tool name, never a similar
 /// model-visible name alone.

@@ -1,5 +1,3 @@
-//! Shared tool-call domain: call admission/execution state in [`machine`], host work in [`effects`].
-
 pub mod effects;
 pub mod machine;
 

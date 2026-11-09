@@ -1,5 +1,3 @@
-//! I/O for one invocation, shared by the direct runner and TextSession. Coordinators own
-//! decisions and update delivery; this executor owns host work and provider requests.
 use super::*;
 use crate::host::HostInvoker;
 use crate::telemetry;
@@ -339,7 +337,6 @@ impl Execution {
         }
     }
 
-    /// Ends the invocation's span with its result.
     fn end_span(&mut self, settled: &Result<RunSettled, RunError>) {
         let Some(span) = self.span.take() else { return };
         match settled {

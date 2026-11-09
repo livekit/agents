@@ -1,25 +1,3 @@
-//! The job processes: the worker and each job process over one channel.
-//!
-//! - [`ipc_channel`]: the connection, the only code touching its bytes: transport, framing, limits
-//!   and the version check, with an in-memory variant for tests.
-//! - [`wire`]: the protocol's messages, a typed one per direction.
-//! - [`RunnerExecutor`] ([`executor`]): what a job runs in, a [`Runner`] launched with its channel;
-//!   a thread of the worker ([`ThreadExecutor`]) or a process ([`ProcessExecutor`]), both started
-//!   by the host's launcher, which reports on a [`ProcessLaunch`] or [`ThreadLaunch`].
-//! - [`process`]: the process executor, the only code touching the OS process: spawn receipts,
-//!   exit, kill, reaping receipts, memory.
-//! - [`RunnerSupervisor`] ([`supervisor`]): the worker's policy for one job runner over its
-//!   channel, its initialization, pings, memory sampling, shutdown and cleanup, whatever runs the
-//!   job.
-//! - [`ChildChannel`] ([`child`]): the job process's side, with the self health check. The child
-//!   answers pings from its own event loop, so a pong still measures that loop's responsiveness.
-//! - [`JobSupervisor`] ([`owner`]): one runner and its job as the host and the pool see them: its
-//!   steps, status, running job, pid and exit code.
-//! - [`pool`]: the warm processes, each a [`JobSupervisor`] the pool creates and drives. Spawning
-//!   the OS process stays with the host language.
-//! - [`JobSupervisor`], [`ProcessPool`], [`ChildChannel`] and [`JobRun`]: the classes the host
-//!   drives them through, calling back into it only through declared proxies.
-
 pub mod child;
 pub mod executor;
 pub mod ipc_channel;
@@ -46,6 +24,9 @@ pub use supervisor::secs;
 pub use supervisor::{InitError, ProtocolError, StartJobError};
 pub use supervisor::{RunnerFields, RunnerSupervisor, SupervisorCallbacks};
 pub use wire::{Hello, StartJob, ToChild, ToParent};
+
+// Spawning the OS process stays with the host language; `ipc_channel` is the only code touching
+// the channel's bytes and `process` the only code touching the OS process.
 
 /// The child's grace on top of the parent's `ping_timeout` before it calls itself orphaned.
 pub const HEALTH_CHECK_GRACE: f64 = 10.0;

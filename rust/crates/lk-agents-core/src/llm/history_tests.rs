@@ -1,5 +1,3 @@
-//! `ChatContext` and its index plans: copy, truncate and merge, over owned items and host facts.
-
 use super::*;
 use fixtures::{call, config_update, empty_msg, handoff, ids, msg, out, t, text};
 use lk_agents_abi::llm::chat_context::{ChatContent, ChatMessage, Role};
@@ -338,7 +336,6 @@ fn a_nameless_output_follows_its_call_through_a_tools_filter() {
 }
 
 mod fixtures {
-    //! Builders shared by the test modules. Nothing here is compiled into the library.
 
     use std::time::{Duration, SystemTime};
 

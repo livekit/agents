@@ -1,6 +1,3 @@
-//! The activity's IO: [`AgentInput`], the STT and VAD legs (reopened by a handoff or
-//! `update_models`), audio and video input, and output enablement.
-
 use crate::agent_session::effects::{AudioOp, StreamKind, VoiceEffect};
 use crate::agent_session::{IoKind, VoiceDriver};
 use crate::audio::{AudioChannel, ChannelEnd, on_leg_ended};
@@ -9,11 +6,8 @@ use crate::trace::{CoreStep, InputKind, InputStep, OutputKind, Step, TurnStep};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ChatMessage, Maybe, Role, Ts};
 
-/// `voice/io.py`'s `AgentInput` as the decision core holds it: the sink installed on each audio
-/// channel, the gate's last verdict and the input switch (all three told to the data plane), the
-/// camera with the task pumping it, and the STT and VAD streams being reopened for a new agent.
 pub(crate) struct AgentInput {
-    /// What this core installed on each channel; the data plane holds the same.
+    /// Mirrors what the data plane holds.
     pub(crate) sinks: std::collections::BTreeMap<crate::audio::AudioChannel, ResourceId>,
     /// The STT stream whose items the loop consumes: retired by a replacement or a removal, not
     /// by the stream's own end.
@@ -21,15 +15,12 @@ pub(crate) struct AgentInput {
     pub(crate) stt_provider: Option<lk_agents_abi::ProviderId>,
     /// The verdict last sent to the data plane; `None` before the first, so it is an edge.
     pub(crate) gate_discard: Option<bool>,
-    /// `input.set_audio_enabled(..)`.
     pub(crate) audio_enabled: bool,
-    /// When audio started flowing from the current source, as the data plane reported it.
     pub(crate) first_input_at: Option<Ts>,
-    /// So the same leg handed back is a no-op. Runtime retains the object.
+    /// So the same leg handed back is a no-op.
     pub(crate) video_instance: Option<lk_agents_abi::resources::VideoInputRef>,
     /// Shared: its rates are public attributes a caller may change mid-call.
     video_sampler: Option<crate::agent_session::video_sampler::VideoSampler>,
-    /// A pipeline session has nowhere to push a frame: said the first time only.
     video_sink_warned: bool,
     next_open: u64,
     /// The open a leg's `StreamOpened` must carry to land; any other is discarded (0: none).
@@ -37,12 +28,10 @@ pub(crate) struct AgentInput {
     vad_open: u64,
     /// The STT being opened is the same recogniser as before.
     stt_open_same: bool,
-    /// The VAD stream's inferences since its last `VADMetrics`.
     pub(crate) vad_metrics: VadMetricsFold,
 }
 
-/// `VADStream._metrics_monitor_task`'s fold: the inferences since the last record, and when the
-/// stream last heard speech start or end.
+/// The VAD inferences since the last metrics record, and when speech last started or ended.
 #[derive(Default)]
 pub(crate) struct VadMetricsFold {
     pub(crate) count: u32,
@@ -51,8 +40,6 @@ pub(crate) struct VadMetricsFold {
 }
 
 impl AgentInput {
-    /// The legs as the session opened them: the installed sinks, the camera with its pump (if one
-    /// was attached), nothing pending.
     pub(crate) fn new(
         sinks: std::collections::BTreeMap<crate::audio::AudioChannel, ResourceId>,
         video_instance: Option<lk_agents_abi::resources::VideoInputRef>,
@@ -96,7 +83,6 @@ impl AgentInput {
 }
 
 impl VoiceDriver {
-    /// The runtime prepared the sink; acceptance installs it on the data plane.
     fn install_sink(&mut self, channel: AudioChannel, sink: ResourceId) {
         self.input.sinks.insert(channel, sink);
         if channel == AudioChannel::Stt {
@@ -109,7 +95,6 @@ impl VoiceDriver {
         self.record_effect(VoiceEffect::AdoptOpenedInput { channel, sink });
     }
 
-    /// Take `channel`'s sink down, its input ended. `Agent(stt=None)`: this agent does not listen.
     fn remove_sink(&mut self, channel: AudioChannel) {
         if channel == AudioChannel::Stt {
             self.input.live_stt = None;
@@ -121,21 +106,19 @@ impl VoiceDriver {
         }
     }
 
-    /// `Given` reopens off the loop; the new sink replaces the old in one command, so no frame
-    /// finds the channel empty. `Given(None)` closes the leg; `NotGiven` leaves it.
+    /// `Given` reopens; the new sink replaces the old in one command, so no frame finds the
+    /// channel empty. `Given(None)` closes the leg; `NotGiven` leaves it.
     pub(crate) fn reopen_legs(
         &mut self,
         stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
         vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
     ) -> InputProviders {
         let given = stt.is_given() || vad.is_given();
-        // AgentUserState facts are the configured providers (`self._stt`/`self._vad`), not the live
-        // streams: a dead stream is still a recogniser.
+        // User-state facts follow the configured providers: a dead stream is still a recogniser.
         let mut intent =
             InputProviders { stt: self.session.stt.is_some(), vad: self.session.vad.is_some() };
         if let Maybe::Given(stt) = stt {
             match stt {
-                // A different STT: reopened; the row follows when the stream lands.
                 Some(stt) => {
                     let same_stt =
                         self.session.stt.as_ref().is_some_and(|old| old.instance == stt.instance);
@@ -147,7 +130,6 @@ impl VoiceDriver {
                     self.input.stt_open = open;
                     intent.stt = true;
                 }
-                // `Agent(stt=None)`: the leg closes and `stt_enabled` follows via `set_legs`.
                 None => {
                     self.session.stt = None;
                     self.input.stt_open = 0;
@@ -175,15 +157,13 @@ impl VoiceDriver {
             }
         }
         if given {
-            // `decide_commit` reads `stt_enabled`; a stale flag would wait for a transcript that
-            // never comes.
+            // A stale `stt_enabled` would make the commit wait for a transcript that never comes.
             self.activity.audio_recognition.set_legs(intent.stt, intent.vad);
         }
         intent
     }
 
-    /// A superseded open is closed unused (`LegOpenDiscarded`); a refused one leaves the old row
-    /// running.
+    /// A superseded open is closed unused; a refused one leaves the old leg running.
     pub(crate) fn on_leg_opened(
         &mut self,
         now: Ts,
@@ -215,7 +195,6 @@ impl VoiceDriver {
         }
     }
 
-    /// The opened leg replaces the old one. A new STT is prewarmed and its keyterms swapped in.
     fn adopt_opened_leg(&mut self, now: Ts, leg: StreamKind) -> AudioChannel {
         match leg {
             StreamKind::Stt => {
@@ -230,7 +209,6 @@ impl VoiceDriver {
         }
     }
 
-    /// Only a given leg is reopened.
     pub(crate) fn update_models(
         &mut self,
         stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
@@ -254,8 +232,7 @@ impl VoiceDriver {
         });
     }
 
-    /// A leg's drain ended: its sink is taken down if still installed. A failed STT is terminal
-    /// (`STTError{recoverable: False}`); a VAD failure is only journalled.
+    /// A failed STT is a non-recoverable error; a VAD failure is only journalled.
     pub(crate) fn on_leg_ended(&mut self, now: Ts, mut end: ChannelEnd) {
         let error = end.error.take();
         let leg = end.leg;
@@ -271,8 +248,7 @@ impl VoiceDriver {
                 AudioInputRouterCommand::Remove(sink),
             ));
         }
-        // The live recogniser died or ran out mid-utterance: it will never say the speech it
-        // began has ended, so it ends here, or the user speaks for the rest of the call and the
+        // A recogniser that died mid-utterance never reports its end: end it here, or the
         // session is never idle again.
         let recogniser_gone = matches!(installed, Some((AudioChannel::Stt, _)))
             && end.cause != crate::trace::ChannelEndCause::Closing;
@@ -289,12 +265,11 @@ impl VoiceDriver {
         }
     }
 
-    /// Detaching under a speaking user ends the speech like the reference's mute; a re-attach
-    /// forgets the acoustic anchor and reopens the STT leg on the same recogniser.
+    /// Detaching under a speaking user ends the speech; a re-attach forgets the acoustic anchor
+    /// and reopens the STT leg on the same recogniser.
     pub(crate) fn set_audio_input(&mut self, now: Ts, input: Option<ResourceId>) {
         let attached = input.is_some();
-        // Acceptance transfers this registration to the runtime's source queue/reader. It ends
-        // when that reader is replaced or closed, rather than at this core step's provider census.
+        // The runtime's source reader owns the registration from here.
         if let Some(source) = input {
             self.session.providers.remove(&source);
         }
@@ -313,7 +288,7 @@ impl VoiceDriver {
         }
     }
 
-    /// The host ended the user's speech (mic detached or muted: `on_end_of_speech(None)`).
+    /// The host ended the user's speech (mic detached or muted).
     pub(crate) fn host_end_of_speech(&mut self, now: Ts) {
         if !self.activity.audio_recognition.user_speaking() {
             return;
@@ -362,17 +337,15 @@ impl VoiceDriver {
             }
         });
         match leg {
-            // "End user speaking state when audio is disabled" (`_on_audio_enabled_changed`).
             IoKind::AudioInput if !enabled => self.host_end_of_speech(now),
             IoKind::AudioInput => {}
-            // The pause machine's "audio enabled" fact moved with the flag.
             IoKind::AudioOutput => self.refresh_pause_facts(now),
             IoKind::Transcription => {}
         }
     }
 
-    /// `_commit_user_turn`'s "flush the stt by pushing silence", `ceil(duration / 0.2)` frames.
-    /// Silent before any audio or with no STT leg.
+    /// Flushes the STT with `ceil(seconds / 0.2)` silent frames; a no-op before any audio or
+    /// with no STT leg.
     pub(crate) fn flush_stt_with_silence(&mut self, seconds: f64) {
         let heard = self.input.first_input_at.is_some();
         if !heard
@@ -381,7 +354,6 @@ impl VoiceDriver {
         {
             return;
         }
-        // `ceil`, so at least the asked duration is flushed.
         let frames = (seconds / 0.2).ceil() as u32;
         self.record_effect(VoiceEffect::UpdateAudioInputRouting(
             AudioInputRouterCommand::FlushSttWithSilence { frames },
@@ -389,8 +361,7 @@ impl VoiceDriver {
         self.record_trace(TurnStep::SttFlushed { frames });
     }
 
-    /// `VoiceActivityVideoSampler`'s rate gate (faster while the user speaks). Rejected frames are
-    /// dropped without journalling.
+    /// Rate-gated (faster while the user speaks); rejected frames are dropped unjournalled.
     pub(crate) fn on_video_frame(
         &mut self,
         now: Ts,
@@ -416,10 +387,8 @@ impl VoiceDriver {
         self.record_trace(InputStep::VideoFramePushed { sent });
     }
 
-    /// `AgentActivity.push_video`. Dropping the frame releases the host object. A pipeline
-    /// session has no realtime session to push to, so it is said once and dropped.
+    /// A pipeline session has no realtime session to push to: warned once, then dropped.
     pub(crate) fn push_video(&mut self, image: lk_agents_abi::ImageContent) -> bool {
-        // `if not self._started: return`.
         if self.session.closing_past_edge() {
             return false;
         }
@@ -434,7 +403,6 @@ impl VoiceDriver {
         };
 
         let item = ChatMessage::new(
-            // The message id is the driver's; the image's `img_` id came from the host.
             self.session.ids.mint("video"),
             Role::User,
             vec![lk_agents_abi::ChatContent::Image(image)],
@@ -448,7 +416,6 @@ impl VoiceDriver {
     }
 }
 
-/// Provider legs selected after a model update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InputProviders {
     pub(crate) stt: bool,

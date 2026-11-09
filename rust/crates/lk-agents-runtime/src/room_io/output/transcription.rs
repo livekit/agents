@@ -1,9 +1,3 @@
-//! `_output.py`'s `_ParticipantTranscriptionOutput`: a participant's transcript, as a text stream
-//! and as a legacy transcription, and its host object.
-//!
-//! Executes RoomTranscriptionWriter's RoomTranscriptionEffect operations. Word pacing belongs
-//! to TranscriptSync upstream; this adapter only publishes already-delivered transcript text.
-
 use crate::monotone::Monotone;
 use crate::telemetry;
 use lk_agents_abi::OwnedTask;
@@ -26,6 +20,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Notify;
+
+// Word pacing is TranscriptSync's, upstream: this adapter publishes already-delivered text.
 
 struct WriterState {
     core: RoomTranscriptionWriter,

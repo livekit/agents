@@ -1,6 +1,3 @@
-//! `inference/llm.py`'s model tables: which sampling parameters a model refuses, the lowest
-//! reasoning effort it admits, and which pair of think tags it wraps reasoning in.
-
 /// Reasoning models don't support sampling parameters.
 /// <https://platform.openai.com/docs/guides/reasoning>
 const REASONING_UNSUPPORTED_PARAMS: &[&str] = &[

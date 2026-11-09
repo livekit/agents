@@ -1,5 +1,5 @@
-//! Opaque ids in the protocol's `guid` format (`protocol/utils/guid`): a prefix then twelve
-//! characters of the shortuuid alphabet, as LiveKit Cloud mints its own.
+// The protocol's `guid` format: a prefix then twelve characters of the shortuuid alphabet, as
+// LiveKit Cloud mints its own.
 
 #[crate::host(functions)]
 pub trait Ids {

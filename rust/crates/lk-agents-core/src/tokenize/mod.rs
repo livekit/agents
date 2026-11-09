@@ -1,6 +1,3 @@
-//! `tokenize/`, the parts on the default path. Python keeps the tokenizer ABCs (plugins subclass and
-//! `isinstance` them). Offsets are characters, and `str.isspace()` is not `char::is_whitespace()`.
-
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::tokenize::TokenSpan;
 use lk_agents_abi::tokenize::bindings::{BufferedTokens, HostTokenization, TokenizerCallback};
@@ -27,6 +24,8 @@ pub use word::{
     BasicWordTokenizer, PUNCTUATIONS, Word, WordTokenizerOptions, count_words, is_char_based,
     is_punctuation, is_py_space, py_strip, split_words, split_words_of,
 };
+
+// Offsets are characters, and `str.isspace()` is not `char::is_whitespace()`.
 
 pub struct HostTokenizer;
 

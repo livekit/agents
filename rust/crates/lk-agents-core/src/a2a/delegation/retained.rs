@@ -1,5 +1,3 @@
-//! Retained interaction selection and correlation on the caller's own function-call records.
-
 use std::collections::BTreeMap;
 
 use lk_agents_abi::{ChatItem, FunctionCall};

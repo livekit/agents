@@ -1,6 +1,3 @@
-//! Executes a participant input's track selection: opens the tracks voice selects, pumps their
-//! frames into the bounded queue the session reads, and retires the streams voice retires.
-
 type PublicationSnapshot = (Vec<Publication>, Vec<Arc<dyn TrackPublication>>);
 
 use crate::telemetry;
@@ -491,7 +488,6 @@ pub struct ParticipantAudioInput {
     first_frame: Mutex<Option<(telemetry::ScopedSpan<telemetry::WaitForAudioTrack>, Option<u64>)>>,
 }
 
-/// `rtc.TrackSource.Name(..)`.
 fn source_name(source: TrackSource) -> &'static str {
     match source {
         TrackSource::Unknown => "SOURCE_UNKNOWN",

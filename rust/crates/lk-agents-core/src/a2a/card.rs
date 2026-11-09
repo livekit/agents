@@ -1,11 +1,10 @@
-//! The endpoint's agent card (docs/protocol/a2a.md#the-agent-card), from its descriptor, as the
-//! upstream A2A card's JSON in its field order.
-
 use lk_agents_abi::a2a::card::{EndpointCard, EndpointDescriptor};
 use lk_agents_abi::a2a::metadata::EXTENSION_URI;
 use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::errors::HostError;
 use serde_json::{Value, json};
+
+// The card JSON keeps the upstream A2A card's field order.
 
 pub struct CardBuilder;
 

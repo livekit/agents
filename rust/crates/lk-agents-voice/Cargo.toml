@@ -32,7 +32,3 @@ thiserror.workspace = true
 livekit-protocol.workspace = true
 prost.workspace = true
 pbjson-types.workspace = true
-
-[[test]]
-name = "voice"
-path = "src/voice_tests.rs"

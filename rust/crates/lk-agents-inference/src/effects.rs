@@ -1,8 +1,3 @@
-//! Provider lifecycle effect contracts, grouped by the machine that produces them.
-//!
-//! These are independent protocols, not variants of a common provider effect enum. Their
-//! executors own sockets, timers, delivery and cleanup; machines receive outcomes and time.
-
 use crate::avatar::machine::{AvatarRequestId, CreateFailure, ProviderSession, Retirement};
 use crate::interruption::{OverlappingSpeechEvent, RequestIdentity};
 use crate::llm::machine::LlmRequestId;

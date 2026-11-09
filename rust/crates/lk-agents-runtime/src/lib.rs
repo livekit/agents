@@ -1,13 +1,7 @@
-//! `lk-agents-runtime`: I/O, Tokio execution, real clocks, task ownership and effect execution for
-//! the synchronous cores (docs/internals/rust-core.md "Cores and the runtime").
-//!
-//! - [`process`]: the process-wide Tokio runtime and its fork guard.
-//! - [`host`]: `HostInvoker`, the lifecycle of host callbacks under their captured invocation.
-//! - [`agent_run`]: one agent invocation, the core's `AgentRun` executed.
-//! - [`a2a`]: the A2A text door's turns, driving the A2A core with the host's handler.
+//! `lk-agents-runtime`: I/O, Tokio execution, real clocks, task ownership and effect execution
+//! for the synchronous cores.
 
-/// What the extension names of the subject cores (it reaches them through the
-/// runtime): the declared classes a core implements outright.
+/// The declared classes a core implements outright, which the extension reaches through here.
 pub mod cores {
     pub use lk_agents_core::a2a::card::CardBuilder;
     pub use lk_agents_core::a2a::handler::HandlerOutcomes;

@@ -1,5 +1,3 @@
-//! Open thread and lane-run handles. Storage owns their resources; bindings only translate values.
-
 use super::context::{ContextScope, ContextScopeWrite};
 use super::{
     EventRow, InboxRow, ItemRow, LaneRow, StorageError, TaskPage, TaskRecord, TaskState,

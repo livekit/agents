@@ -1,6 +1,3 @@
-//! WebSocket exchanges over an in-memory stream: the upgrade's answer, frames both ways, limits,
-//! keepalive pings, the close handshake, drain and stop.
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -12,11 +9,11 @@ use tokio::io::AsyncWriteExt;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
-use super::exchange_tests::{
-    HANDSHAKE, attr, body, default_server, echo_size, exchange, get, parse, preamble, quick_idle,
-    server, start, traced, wire, wire_sized,
+use crate::http::exchange::tests::{
+    CASES, HANDSHAKE, attr, body, default_server, echo_size, exchange, get, host, parse, preamble,
+    quick_idle, serve_in_pieces, server, start, traced, wire, wire_sized,
 };
-use super::{EndpointServer, HttpServerLimits, Origin};
+use crate::http::{EndpointServer, HttpServerLimits, Origin};
 use crate::transport::HttpStreamResetCode as Code;
 
 /// Accept, echo text and reverse binary, and report the close code.
@@ -115,7 +112,7 @@ async fn drain_closes_open_websockets_with_going_away() {
 }
 
 /// The close code of the last close frame the server sent after its 101.
-pub(super) fn close_code(out: &[u8]) -> u16 {
+fn close_code(out: &[u8]) -> u16 {
     let head = out.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
     assert!(out.starts_with(b"HTTP/1.1 101"));
     assert!(String::from_utf8_lossy(&out[..head]).contains("s3pPLMBiTxaQ9kYGzzhZRbK+xOo="));
@@ -443,5 +440,48 @@ async fn a_client_gone_without_a_close_frame_is_an_abnormal_closure() {
         let (out, _) = exchange(&server, &raw).await;
         assert!(out.starts_with(b"HTTP/1.1 101"));
         assert_eq!(*closed.lock(), Some(u16::from(CloseCode::Abnormal)), "{partial_frame:?}");
+    }
+}
+
+#[tokio::test]
+async fn random_frames_after_an_upgrade_settle_and_free_their_connections() {
+    let limits = HttpServerLimits {
+        websocket_frame_bytes: 512,
+        websocket_message_bytes: 1024,
+        websocket_inbox: 2,
+        close_flush_timeout: Duration::from_millis(50),
+        ..Default::default()
+    };
+    let server = server(limits, |exchange| async move {
+        let accept = ExchangeMessage::Accept { subprotocol: None, headers: vec![] };
+        exchange.send(accept).await.map_err(host)?;
+        while !matches!(exchange.receive().await.map_err(host)?, ExchangeEvent::Closed { .. }) {}
+        Ok(())
+    });
+    for seed in 0..CASES {
+        let mut rng = fastrand::Rng::with_seed(seed);
+        let mut raw = HANDSHAKE.to_vec();
+        for _ in 0..rng.usize(1..8) {
+            // A frame header with random flags, opcode, mask and length, then random payload.
+            let length = rng.usize(0..2048);
+            raw.push(rng.u8(..));
+            match length {
+                0..=125 => raw.push(0x80 | length as u8),
+                126..=0xffff => {
+                    raw.push(0x80 | 126);
+                    raw.extend_from_slice(&(length as u16).to_be_bytes());
+                }
+                _ => unreachable!(),
+            }
+            raw.extend((0..4 + length).map(|_| rng.u8(..)));
+        }
+        if rng.bool() {
+            raw.truncate(rng.usize(HANDSHAKE.len()..raw.len()));
+        }
+        let (out, end) = serve_in_pieces(&server, &raw, &mut rng).await;
+        assert!(out.starts_with(b"HTTP/1.1 101"), "seed {seed}");
+        assert!(end.finished() || end.reset().is_some(), "seed {seed}");
+        assert_eq!(server.connections.open(), 0, "seed {seed}");
+        assert!(server.websockets.lock().open.is_empty(), "seed {seed}");
     }
 }

@@ -1,7 +1,3 @@
-//! The job process's side of the parent's channel (`_core.IpcClient`): the initialize handshake,
-//! then it serves the parent's messages, answers pings once the child's loop ran a callback,
-//! starts the one job and acks the parent's shutdown.
-
 use crate::ipc::telemetry;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -19,6 +15,9 @@ use super::ipc_channel::{Channel, ChannelError};
 use super::job_run::JobRun;
 use super::wire::{ToChild, ToParent, bounded};
 use lk_agents_net::env::ProcessEnv;
+
+// Pings are answered once the child's loop ran a callback, so a pong measures that loop's
+// responsiveness.
 
 /// The parent's messages the child holds while its loop is busy.
 const INBOX: usize = 64;

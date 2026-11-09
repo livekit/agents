@@ -1,5 +1,3 @@
-//! Warm transfer configuration and lifecycle decisions. Runtime owns rooms, requests and tasks.
-
 use crate::workflows::effects::{TransferEffects, TransferToolEffect};
 use crate::workflows::render;
 use lk_agents_abi::voice::workflows::{InstructionsArg, IoEnableState, TwilioDial};

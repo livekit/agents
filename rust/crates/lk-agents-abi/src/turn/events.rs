@@ -1,5 +1,5 @@
-//! The end-of-turn pipeline event (`voice/turn.py`). A `///` on a Python-targeted declaration is
-//! the reference's docstring verbatim; notes for a Rust reader are `//`.
+// A `///` on a Python-targeted declaration is the reference's docstring verbatim; notes for a
+// Rust reader are `//`.
 
 /// One end-of-turn prediction. Optional timing and backchannel data depend on the detector.
 ///

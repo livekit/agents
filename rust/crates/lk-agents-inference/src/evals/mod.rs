@@ -1,11 +1,7 @@
-//! Conversation evals (testing.md "Conversation evals"): the application's judges of one
-//! evaluation run concurrently in the host, each in its span; the intent judge makes one forced
-//! tool call on the evaluation's model. Its prompt and the scoring are [`prompts`]: pure support.
-
 pub mod prompts;
 
 #[cfg(test)]
-#[path = "../evals_tests.rs"]
+#[path = "evals_tests.rs"]
 mod tests;
 
 use std::sync::Arc;

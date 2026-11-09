@@ -1,5 +1,3 @@
-//! `request_lifecycle_vectors`: the request machine stepped directly on supplied time.
-
 use crate::effects::LlmRequestEffect;
 use std::time::Duration;
 

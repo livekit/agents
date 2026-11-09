@@ -1,7 +1,3 @@
-//! Backend conversation domain. [`machine::TextSession`] owns child continuation;
-//! [`effects`] declares runtime work. Routing definitions remain here; private history selection
-//! and transfer helpers live beside the coordinator in [`machine`].
-
 pub mod effects;
 pub mod machine;
 mod routing;

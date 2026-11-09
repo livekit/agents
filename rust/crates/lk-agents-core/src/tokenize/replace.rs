@@ -1,9 +1,9 @@
-//! `replace_words` and `split_paragraphs`, with the reference's arithmetic. Characters, not bytes.
-
 use std::collections::BTreeMap;
 
 use crate::tokenize::py_strip;
 use crate::tokenize::word::{WordTokenizerOptions, is_punctuation, split_words};
+
+// Offsets follow the reference's arithmetic, in characters, not bytes.
 
 /// `replace_words`, case-insensitively, over one string. Returns the text and `processed_index`.
 // `hold_last_word` holds the final word for the next chunk and returns `None` below two words.

@@ -1,5 +1,3 @@
-//! The resolved worker configuration and the worker's protocol constants.
-
 use lk_agents_abi::worker::ipc_host::WorkerError;
 use std::time::Duration;
 

@@ -1,8 +1,3 @@
-//! The driver's side of the frontend expert event queue. A call of a configured remote tool that
-//! detaches is a delegation: its body's later updates are its expert's progress, an
-//! `InputRequired` it reports is the expert's question, and its end is the expert's outcome,
-//! which resolves the originating call in place. The person's reply goes back to the body.
-
 use crate::agent::{Source, Visibility};
 use crate::agent_session::effects::VoiceEffect;
 use crate::agent_session::machine::activity::scheduling::{
@@ -19,13 +14,14 @@ use lk_agents_abi::llm::tool_executor::ASK_IN_OWN_WORDS;
 use lk_agents_abi::{ChatItem, Ts};
 use lk_agents_core::tts::markup::ChatMessageExt;
 
-/// How a presentation-only reply is told to pass on an expert's progress.
+// A detached call of a configured remote tool is a delegation: its updates are the expert's
+// progress and questions, and its end resolves the originating call in place.
+
 const PRESENT_PROGRESS: &str = "Tell the person how their request with the expert is going, \
      briefly and in your own words, adding nothing it does not say: ";
 
 impl VoiceDriver {
-    /// `call_id` detached: a call of one of the active agent's configured remote tools is now a
-    /// delegation the session resolves by its expert's outcome.
+    /// `call_id` detached: a configured remote tool's call becomes an expert delegation.
     pub(crate) fn open_expert(&mut self, call_id: &str) {
         let running = self.activity.tools.running.iter().find(|r| r.call.call_id == call_id);
         let Some(name) = running.map(|r| r.call.name.clone()) else { return };
@@ -168,9 +164,8 @@ impl VoiceDriver {
         self.start_speech(now, spec);
     }
 
-    /// A pipeline user turn that answers the expert question owning the person's reply: committed
-    /// as said and forwarded to exactly that request's delegated body, with no model reply and no
-    /// tool selection.
+    /// A user turn answering a pending expert question: committed as said and forwarded to that
+    /// request's body, with no model reply.
     pub(crate) fn forward_expert_reply(
         &mut self,
         now: Ts,
@@ -200,7 +195,6 @@ impl VoiceDriver {
 }
 
 impl super::AgentActivity {
-    /// The expert tools the active agent exposes, by configured identity.
     fn expert_tools(&self) -> Vec<ExpertTool> {
         let Some(agent) = &self.toolset.agent else { return Vec::new() };
         let tools = &agent.definition().tools;

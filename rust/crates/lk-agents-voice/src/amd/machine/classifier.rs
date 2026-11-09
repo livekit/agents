@@ -128,8 +128,6 @@ pub enum AmdTimer {
     Eot,
 }
 
-// --- events ---
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Vocabulary)]
 pub enum Start {
     /// Arm or move the detection budget (moves, never stacks).
@@ -177,8 +175,6 @@ pub enum In {
     Execute,
 }
 
-// --- effects ---
-
 /// The classification request, always after a [`AmdEffect::CancelClassification`]: a concurrent
 /// run would answer from a prefix of the greeting. A superseded run's answer still counts.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,8 +205,6 @@ pub enum Authorization {
     Pause,
     Resume,
 }
-
-// --- the machine ---
 
 /// What the one [`AmdTimer::Silence`] handle means; `ShortSpeech`'s duration is captured at arming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -351,7 +345,6 @@ impl Amd {
                 Amd::Emitted(c)
             }
             (amd @ (Amd::Dormant(_) | Amd::Listening(_)), In::Execute) => amd,
-            // ------------------------------------------------------------ Dormant, Listening
             (
                 Amd::Dormant(mut c) | Amd::Listening(mut c),
                 input @ (In::Verdict(_) | In::Timeout(_) | In::EndInput),
@@ -372,7 +365,6 @@ impl Amd {
                     Amd::Dormant(c)
                 }
             }
-            // ---------------------------------------------------------------------- Dormant
             (Amd::Dormant(mut c), In::Start(Start::DetectionTimer)) => {
                 c.hold(&mut out);
                 c.set_detection_deadline(now, &mut out);
@@ -387,7 +379,6 @@ impl Amd {
                 out.push(AmdEffect::Refused(Refusal::NotListening));
                 Amd::Dormant(c)
             }
-            // -------------------------------------------------------------------- Listening
             (Amd::Listening(mut c), In::Start(Start::DetectionTimer)) => {
                 c.set_detection_deadline(now, &mut out);
                 Amd::Listening(c)
@@ -409,7 +400,6 @@ impl Amd {
                 let released = c.reach_eot(&mut out);
                 if released { Amd::Emitted(c) } else { Amd::Listening(c) }
             }
-            // ---------------------------------------------------------------------- Emitted
             (Amd::Emitted(c), In::Start(Start::DetectionTimer | Start::Listening)) => {
                 out.push(AmdEffect::Refused(Refusal::AlreadyEmitted));
                 Amd::Emitted(c)
@@ -481,8 +471,6 @@ impl Core {
         self.silence_reached && (verdict.is_human() || self.eot_reached)
     }
 
-    // --- authorization --------------------------------------------------------------------
-
     /// Pause authorization once, on the first `Start`, or a speech could play over the greeting.
     fn hold(&mut self, out: &mut Vec<AmdEffect>) {
         if !self.held {
@@ -497,8 +485,6 @@ impl Core {
             out.push(AmdEffect::Authorization(Authorization::Resume));
         }
     }
-
-    // --- lifecycle ------------------------------------------------------------------------
 
     fn set_detection_deadline(&mut self, now: Ts, out: &mut Vec<AmdEffect>) {
         if self.detection_armed {
@@ -554,8 +540,6 @@ impl Core {
         }
     }
 
-    // --- speech ---------------------------------------------------------------------------
-
     fn on_speech_started(&mut self, now: Ts, out: &mut Vec<AmdEffect>) {
         for t in [AmdTimer::Silence, AmdTimer::NoSpeech, AmdTimer::Eot] {
             self.clear_deadline(t, out);
@@ -604,8 +588,6 @@ impl Core {
         out.push(AmdEffect::SetDeadline(AmdTimer::Silence, fire_at));
         self.silence = Some(arm);
     }
-
-    // --- transcripts ----------------------------------------------------------------------
 
     fn push_text(
         &mut self,
@@ -664,8 +646,6 @@ impl Core {
         out.push(AmdEffect::CancelClassification);
     }
 
-    // --- end of turn ----------------------------------------------------------------------
-
     fn reach_eot(&mut self, out: &mut Vec<AmdEffect>) -> bool {
         self.clear_deadline(AmdTimer::Eot, out);
         self.eot_reached = true;
@@ -691,8 +671,6 @@ impl Core {
         ));
         self.eot_armed = true;
     }
-
-    // --- verdicts -------------------------------------------------------------------------
 
     fn on_verdict(&mut self, now: Ts, v: Verdict, out: &mut Vec<AmdEffect>) -> bool {
         match v {
@@ -789,8 +767,6 @@ impl Core {
         }
         self.release_hold(out);
     }
-
-    // --- time -----------------------------------------------------------------------------
 
     fn on_timer(&mut self, now: Ts, timer: AmdTimer, out: &mut Vec<AmdEffect>) -> bool {
         match timer {
@@ -942,3 +918,7 @@ pub fn classification_verdicts(
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "classifier_tests.rs"]
+mod tests;

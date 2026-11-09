@@ -1,5 +1,3 @@
-//! Background sound selection and per-frame fade progression.
-
 pub use lk_agents_abi::voice::background_audio::LoopingStreamError;
 use lk_agents_abi::voice::background_audio::{PlaybackError, Sound, SoundSource};
 use std::f64::consts::PI;
@@ -9,7 +7,7 @@ use std::f64::consts::PI;
 pub const AUDIO_SOURCE_BUFFER_MS: u32 = 400;
 
 /// The published track's name; `aclose` resolves by name since a reconnect makes the cached SID
-/// stale (#5698).
+/// stale.
 pub const TRACK_NAME: &str = "background_audio";
 
 /// Resolved by name: `BuiltinAudioClip.path()` is public API, and the files are git-LFS objects
@@ -26,7 +24,7 @@ pub enum BuiltinAudioClip {
 }
 
 impl BuiltinAudioClip {
-    /// The enum's Python value, the file name (public API).
+    /// The file name, which is also the host enum's value (public API).
     pub fn file_name(self) -> &'static str {
         match self {
             BuiltinAudioClip::CityAmbience => "city-ambience.ogg",
@@ -41,7 +39,7 @@ impl BuiltinAudioClip {
     }
 }
 
-/// `_select_sound_from_list`: pick one config by probability, or none, from one uniform `draw` in
+/// Picks one config by probability, or none, from one uniform `draw` in
 /// `[0, 1)` the host supplies. Probabilities summing below one leave the rest to silence.
 pub fn select_sound(sounds: &[Sound], draw: f64) -> Option<usize> {
     let total: f64 = sounds.iter().map(|s| s.probability).sum();
@@ -112,7 +110,7 @@ pub enum ThinkingSound {
     Stop,
 }
 
-/// `_agent_state_changed`: entering "thinking" starts the sound unless it still plays (never a
+/// Entering "thinking" starts the sound unless it still plays (never a
 /// second copy), leaving it stops the sound. Unstarted or closing, nothing listens.
 /// `last_done` is whether the last thinking sound is done, when there was one.
 pub fn thinking_sound(
@@ -178,7 +176,7 @@ pub fn apply_gain(pcm: &[i16], gain: &[f32], num_channels: u16) -> Vec<i16> {
         .enumerate()
         .map(|(i, &s)| {
             let g = gain.get(i / ch).copied().unwrap_or(1.0);
-            // `np.clip(...)` then `.astype(np.int16)`: saturate, then truncate toward zero.
+            // Saturate, then truncate toward zero.
             (f32::from(s) * g).clamp(-32768.0, 32767.0) as i16
         })
         .collect()
@@ -192,7 +190,7 @@ pub struct FrameStep {
     pub last: bool,
 }
 
-/// Per-sound playback cursor (`_gen_wrapper`'s `t`, `stop_t`). The stop instant is latched once, at
+/// Per-sound playback cursor. The stop instant is latched once, at
 /// the frame the stop was first seen.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Playback {

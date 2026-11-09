@@ -1,5 +1,3 @@
-//! The driver: the only file in this crate that awaits anything; no decision is made here.
-
 use crate::effects::RealtimeConnectionEffect;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -1002,7 +1000,7 @@ impl lk_agents_abi::RealtimeSession for OpenAIRealtimeSession {
 }
 
 #[cfg(test)]
-#[path = "../session_retirement_tests.rs"]
-mod retirement_tests;
+#[path = "session_tests.rs"]
+mod tests;
 
 mod retirement;

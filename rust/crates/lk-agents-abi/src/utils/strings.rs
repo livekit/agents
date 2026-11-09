@@ -1,5 +1,3 @@
-//! Text classification data.
-
 /// Characters accepted by Python's whitespace classification, including ASCII separators.
 pub const PYTHON_WHITESPACE: &[char] = &[
     '\t', '\n', '\u{b}', '\u{c}', '\r', '\u{1c}', '\u{1d}', '\u{1e}', '\u{1f}', ' ', '\u{85}',

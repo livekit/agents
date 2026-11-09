@@ -1,6 +1,3 @@
-//! `llm/`: the chat context and its dumps, the LLM and realtime seams, the provider formats and
-//! schemas, tool arguments, and the MCP, tool-executor and fallback records.
-
 pub mod chat_context;
 pub mod duplex;
 pub mod events;

@@ -1,5 +1,3 @@
-"""The text door: A2A endpoints, ``AgentClient``, ``RemoteAgent`` and endpoint tokens."""
-
 from __future__ import annotations
 
 import asyncio
@@ -58,13 +56,11 @@ class RemoteAgent:
         return _RemoteTool(self)
 
 
-# what the servers in this process warn about when they do not serve it
+# endpoints a RemoteAgent targets; servers in this process warn about any they do not serve
 _referenced: weakref.WeakSet[A2AEndpoint] = weakref.WeakSet()
 
 
 class _ExpertTool(RawFunctionTool):
-    """The remote tool: its endpoint and name are its configured identity as an expert."""
-
     def __init__(self, tool: RawFunctionTool, url: Callable[[], str]) -> None:
         super().__init__(tool._func, tool.info)
         self._url = url
@@ -109,8 +105,7 @@ class _RemoteTool(Toolset):
             history.items,
             *project,
         )
-        # with no token of its own, the call shares its thread with the endpoint under a grant
-        # minted for that thread (docs/internals/storage.md "Two brains, one thread")
+        # with no token of its own, the call shares its thread under a grant minted for it
         thread = ctx._run.thread if ctx._run is not None else ctx._call().thread
         thread_id = thread.id if agent._token is None and thread is not None else None
         token = _core._core_remote_token(url, *project, agent._token, thread_id)
@@ -127,7 +122,7 @@ class _RemoteTool(Toolset):
                 ctx._session is not None,
             )
         except asyncio.CancelledError:
-            # stopped in this turn, then its reply (cancelling the remote task) and client closed
+            # stop in this turn, then wait for the remote task's cancellation and client close
             interaction.cancelled()
             ctx.function_call.extra.update(_json_object(interaction.extra))
             await interaction.settled()
@@ -145,9 +140,6 @@ _DELEGATED = "The request is with the expert: its progress, questions and result
 
 
 class _Delegation:
-    """What ``_core_RemoteInteraction.run`` reaches on the host for one tool call: its progress
-    and retained state, and on a call the person."""
-
     def __init__(self, ctx: RunContext) -> None:
         self._ctx = ctx
 
@@ -157,13 +149,9 @@ class _Delegation:
             await self._ctx.update(text)
 
     async def _core_delegated(self) -> None:
-        # The live session owns the interaction from here: the call waits on the expert while
-        # the conversation goes on.
         await self._ctx.update(_DELEGATED)
 
     async def _core_ask(self, question: str, verbatim: bool) -> str:
-        """The expert's question goes to the live session, which presents it when the floor
-        permits and forwards the person's reply here."""
         ctx = self._ctx
         assert ctx._session is not None
         ctx._expert_answer = asyncio.get_running_loop().create_future()
@@ -181,7 +169,7 @@ def _json_object(value: dict[str, object]) -> dict[str, JsonValue]:
 
 
 class A2ASessionOptions(TurnOptionsKwargs, total=False):
-    """``a2a_session``'s optional parameters (docs/server.md)."""
+    """Optional parameters of ``a2a_session``."""
 
     storage: Storage | None
     """This endpoint's storage when it is not the server's."""
@@ -193,10 +181,12 @@ class A2ASessionOptions(TurnOptionsKwargs, total=False):
 def a2a_session(
     *, endpoint: str, description: str, **options: Unpack[A2ASessionOptions]
 ) -> Callable[[_Handler], A2AEndpoint]:
-    """The text door as a decorator with no handler: the door is an object a module defines and
-    ``AgentServer.add()`` serves (``server.a2a_session(...)`` does both). ``endpoint`` is the
-    last path segment of its URL and ``description`` what another agent reads to decide whether
-    to call. It writes the worker's lane; an ``AgentHandler(lane=)`` door writes its own."""
+    """Declare an A2A text endpoint for ``AgentServer.add()`` to serve.
+
+    Args:
+        endpoint: The last path segment of the endpoint's URL.
+        description: What another agent reads to decide whether to call it.
+    """
     return lambda handler: A2AEndpoint(
         handler, endpoint=endpoint, description=description, **options
     )
@@ -230,17 +220,13 @@ class A2AEndpoint:
         self._url: str | None = None
         self._config: ServerConfig | None = None
 
-    # -- binding to a server --
-
     def bind(self, *, storage: Storage, config: ServerConfig) -> None:
-        """Attach the endpoint to a server's storage and options: its agent name (the lane,
-        unless the door writes its own) and URL."""
+        """Attach the endpoint to a server's storage and configuration."""
         self._storage = self._storage or storage
         self.version = self.version or config.card_version
         self._config = config
 
     def _door(self) -> _core._core_A2ADoor:
-        """The native door the worker serves, opened once over the handler."""
         if self._config is None or self._storage is None:
             raise RuntimeError(f"endpoint {self.name!r} is not attached to a server yet")
         if self._native is None:
@@ -285,8 +271,11 @@ class A2AEndpoint:
         return self._config.delegation_url(self.name)
 
     def card(self, base_url: str | None = None) -> dict[str, JsonValue]:
-        """The agent card as JSON, as the endpoint serves it (plan 7.3.1). ``base_url`` is where
-        the endpoint is reached when its own ``url`` is unknown."""
+        """The agent card as JSON, as the endpoint serves it.
+
+        Args:
+            base_url: Where the endpoint is reached when its own ``url`` is unknown.
+        """
         url = self.url
         cloud = url if url and not url.startswith("/") else None
         root = (cloud or base_url or f"/{self.name}").rstrip("/")

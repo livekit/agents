@@ -1,5 +1,3 @@
-//! TCP framing for the console transport.
-
 const HEADER_SIZE: usize = 4;
 pub(in crate::voice) const MAX_MESSAGE_SIZE: usize = 1 << 20;
 

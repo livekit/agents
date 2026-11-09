@@ -1,5 +1,3 @@
-//! The supplied-time request lifecycle used by host-authored providers.
-
 use std::sync::Arc;
 
 use crate::errors::HostError;

@@ -1,14 +1,10 @@
-//! `inference/vad.py`'s `_VADStream._main_task` as a synchronous machine: it cuts the input into
-//! model windows ([`VadPredict`]), one in flight at a time so a recurrent model sees them in order,
-//! and interprets each supplied [`VadResult`] and its measured duration. The runtime executes the
-//! model; no model, clock or task appears here. The slow-inference lag is reported on
-//! [`VadOutput::extra_inference_time`]; the host logs it.
-
 use std::collections::VecDeque;
 
 use crate::abi::AudioFrame;
 use lk_agents_abi::{VadEvent, VadEventType};
 use lk_agents_media::{AudioFormat, AudioResampler, Quality, pcm_bytes, pcm_samples};
+
+// One model window is in flight at a time, so a recurrent model sees them in order.
 
 /// `VAD_WINDOW_SAMPLES`, from `livekit.local_inference`. Silero's frame size at 16 kHz.
 pub const VAD_WINDOW_SAMPLES: usize = 512;

@@ -1,12 +1,3 @@
-//! The session report's pure projections (docs/internals/telemetry.md "Session report"): one
-//! `SessionReport` and its recording options become the Cloud records ([`records()`]) and the
-//! recording upload ([`upload()`]), bounds decided here, before any I/O. `lk-agents-net` exports
-//! and uploads.
-//!
-//! The Cloud records (OTLP logs) are as 1.8.10's `_upload_session_report` emitted them: the
-//! `chat_history` scope's session summary and chat items, the `evaluations` scope's evaluations,
-//! tags and outcome.
-
 mod json;
 mod upload;
 
@@ -25,6 +16,8 @@ use serde_json::Value as Json;
 
 pub use json::{console_json, options};
 pub use upload::{RecordingUpload, TRANSCRIPT_BYTES, TRANSCRIPT_ITEMS, upload};
+
+// The Cloud records (OTLP logs) must match what 1.8.10's `_upload_session_report` emitted.
 
 /// Whether the session's event retention may keep an event of `kind`: every report event, but
 /// the content-bearing ones only for a session that is not redacted.

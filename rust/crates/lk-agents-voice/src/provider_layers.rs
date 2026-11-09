@@ -1,5 +1,3 @@
-//! Session provider precedence over runtime-owned resource identities.
-
 pub use lk_agents_abi::voice::session::ModelSlot;
 use std::collections::{BTreeMap, BTreeSet};
 

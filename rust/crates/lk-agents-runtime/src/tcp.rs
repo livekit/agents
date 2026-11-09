@@ -1,5 +1,3 @@
-//! Raw TCP connections on the hosting process's reactor, exposed as generic byte IO ports.
-
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::SpawnerExt;
 use lk_agents_net::env::ProcessError;

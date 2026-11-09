@@ -1,8 +1,7 @@
-//! `tokenize/_basic_word.py::split_words`. `retain_format` (#3334) makes the tokens concatenate
-//! back to the source for the transcript synchroniser.
-
 use lk_agents_abi::tokenize::TokenSpan;
 use std::borrow::Cow;
+
+// `retain_format` makes the tokens concatenate back to the source for the transcript synchroniser.
 
 /// `tokenize/tokenizer.py:10`. `str.translate` deletes these anywhere in the token.
 pub const PUNCTUATIONS: [char; 39] = [

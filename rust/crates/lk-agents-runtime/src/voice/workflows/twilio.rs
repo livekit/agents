@@ -1,5 +1,3 @@
-//! Twilio Calls API HTTP requests. Transfer decisions remain in the voice core.
-
 use lk_agents_abi::voice::workflows::{TwilioCallEnd, TwilioDial};
 use lk_agents_voice::workflows::twilio::TwilioError;
 use serde_json::{Map, Value};

@@ -1,6 +1,3 @@
-//! The session's provider table: [`ResourceId`]s the core names in its effects, resolved to the
-//! providers the host registered, for whoever performs those effects.
-
 use lk_agents_abi::resources::{
     AudioOutputRef, LlmRef, RealtimeRef, ResourceId, SttRef, TextOutputRef, TtsRef, VadRef,
     VideoInputRef,

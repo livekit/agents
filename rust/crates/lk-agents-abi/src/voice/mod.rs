@@ -1,7 +1,3 @@
-//! `voice/`: the session-facing boundary records. One `#[derive(Host)]` declaration per shape that
-//! crosses the seam; `make generated` writes the pydantic and TypeScript twins. A declaration with
-//! no Rust caller is not dead code.
-
 pub mod amd;
 pub mod avatar;
 pub mod avatar_queue;
@@ -22,3 +18,5 @@ pub mod workflows;
 pub mod console;
 
 pub mod room_owner;
+
+// Boundary declarations generate host twins: one with no Rust caller is not dead code.

@@ -1,9 +1,9 @@
-//! `inference/stt.py`'s option resolution. Several are truthiness tests on values providers send
-//! empty or `false`; getting one wrong silently flips a capability.
-
 use lk_agents_abi::inference::models::InferenceProvider;
 use lk_agents_abi::{AlignedTranscript, SttCapabilities};
 use serde_json::{Map, Value};
+
+// Several options are truthiness tests on values providers send empty or `false`; getting one
+// wrong silently flips a capability.
 
 /// Models verified to carry word timings. Unknown models stay disabled until verified.
 const WORD_ALIGNED_MODELS: &[&str] = &[

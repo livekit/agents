@@ -1,6 +1,3 @@
-//! Authentication records and the generated credential bridge. Verification and signing execute
-//! in runtime; thread and endpoint permission decisions belong to the A2A core.
-
 use serde_json::{Map, Value};
 
 use crate::storage::ThreadInfo;

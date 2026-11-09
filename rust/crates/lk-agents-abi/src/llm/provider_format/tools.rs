@@ -1,7 +1,6 @@
-//! Tool metadata and duplicate-call vocabulary (`llm/tool_context.py`). `ToolFlag`
-//! stays a Python `Flag` (callers write `A | B`); Rust holds the bits.
-
 use serde_json::Value;
+
+// `ToolFlag` stays a Python `Flag` (callers write `A | B`); Rust holds the bits.
 
 /// The values are the reference's `auto()` order and the wire to the shim: never reorder.
 #[crate::host(codec(

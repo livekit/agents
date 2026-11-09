@@ -1,5 +1,3 @@
-//! Private ordered session coordination. Pure transitions and dispatch; no I/O.
-
 use crate::agent_session::machine::activity::drain::DrainEvent;
 use crate::agent_session::machine::activity::false_interruption::AudioInterruptTrigger;
 use crate::agent_session::machine::activity::handoff::{HandoffEvent, HandoffId};
@@ -19,7 +17,7 @@ use crate::agent_session::effects::*;
 
 fn effect_observation(effect: &VoiceEffect) -> Option<Step> {
     let step = match effect {
-        // The journal's copy never pins a host exception (`SessionEvent::journal_form`).
+        // Journalled through `SessionEvent::journal_form`, which never pins a host exception.
         VoiceEffect::Emit(_) => return None,
         VoiceEffect::OpenSttStream { open, stt, .. } => {
             ProviderCall::OpenLeg { leg: StreamKind::Stt, open: *open, resource: *stt }.into()
@@ -40,7 +38,6 @@ fn effect_observation(effect: &VoiceEffect) -> Option<Step> {
             let (speech, op, cause) = (*speech, *op, *cause);
             Step::Interrupt(InterruptStep::PlayoutGate { speech, op, cause })
         }
-        // The source swap's own step (`AudioInputSet`, `VideoInputSet`) is the handler's.
         VoiceEffect::Audio(
             AudioOp::SetVideoInput(_)
             | AudioOp::SetAudioInput(_)
@@ -92,8 +89,9 @@ fn effect_observation(effect: &VoiceEffect) -> Option<Step> {
     };
     Some(step)
 }
-/// Resolution delayed until the current domain transition has installed its sinks/overlap.
-/// The insertion index preserves order among requests in the single runtime outbox.
+
+/// Resolved once the current transition has installed its sinks and overlap; the stored outbox
+/// index keeps its place in the effect order.
 #[derive(Debug)]
 pub(crate) enum PendingInputOperation {
     Flush(StreamKind),
@@ -125,8 +123,7 @@ impl VoiceDriver {
         self.defer_callback(VoiceCallback::SessionEvent(event));
     }
 
-    /// Replaces this timer's deadline. Changes are visible immediately to domain queries;
-    /// unlike the old staging query, reading a deadline never changes journal or output order.
+    /// Replaces this timer's deadline, visible immediately to domain queries.
     pub(crate) fn set_deadline(&mut self, timer: Timer, at: Ts) {
         self.record_trace(CoreStep::TimerArmed { timer: timer.into(), at });
         self.timers.set_deadline(timer, at);
@@ -161,8 +158,8 @@ impl VoiceDriver {
         self.record_effect(VoiceEffect::EotFlush(reason));
     }
 
-    /// Resolve operation identities before the next FIFO callback. A stream replacement in
-    /// the same transition must be installed before its flush target is selected.
+    /// Runs before the next callback: a stream replaced in the same transition must be installed
+    /// before its flush target is selected.
     fn resolve_input_operations(&mut self) {
         let mut inserted = 0;
         for (index, operation) in std::mem::take(&mut self.pending_input) {
@@ -193,8 +190,8 @@ impl VoiceDriver {
         }
     }
 
-    /// Settle atomic domain transitions and their FIFO continuations. No domain handler
-    /// has to request scheduling or close progression; these are coordinator guarantees.
+    /// Settles transitions and their callbacks; scheduling and close progression run here, so no
+    /// handler has to request them.
     pub(crate) fn settle_internal(&mut self) {
         self.advance_transition();
         loop {
@@ -264,9 +261,7 @@ impl VoiceDriver {
     }
 
     fn on_session_event(&mut self, now: Ts, ev: SessionEvent) {
-        // `on_backchannel_confirmed`: clear the realtime model's buffered audio so a
-        // "mm-hm" cannot prefix the next turn. The reference's `turn_detection not in
-        // ("manual", "realtime_llm")` guard is unported: `TurnConfig::mode` is private.
+        // Clear the realtime model's buffered audio so a "mm-hm" cannot prefix the next turn.
         if matches!(ev, SessionEvent::BackchannelConfirmed)
             && self.session.config.effective().turn.interruption.detection_enabled()
             && self.activity.realtime().is_some()
@@ -275,9 +270,8 @@ impl VoiceDriver {
                 lk_agents_abi::llm::realtime::ClearAudio {},
             ));
         }
-        // The journal names the utterance's segments by one id: the realtime item's, else
-        // one minted here (the pure tier cannot). The event carries only the provider's, as
-        // the reference's STT path carries none.
+        // The journal names the utterance's segments by the realtime item's id, else a minted one;
+        // the event carries only the provider's.
         if let SessionEvent::UserInputTranscribed(t) = &ev {
             let minted = self.session.ids.user_transcript_item(t.is_final);
             let id = t.item_id.clone().unwrap_or(minted);
@@ -317,11 +311,9 @@ impl VoiceDriver {
                 None => self.session.usage.observe(metrics),
             }
         }
-        // The user state and away deadline are decided on the way to the host.
         self.on_session_edge(now, &ev);
-        // The heard user turn's evidence, and the close of every span; the spans this event ended
-        // go out right before it.
         self.hear_user_turn(now, &ev);
+        // The spans this event ended go out right before it.
         let closed = matches!(ev, SessionEvent::Close { .. });
         if closed {
             self.close_spans();
@@ -339,7 +331,6 @@ impl VoiceDriver {
     /// Speech boundaries move the user state, dated to the boundary's instant; a final transcript
     /// restores `away` or pushes the deadline out; every state edge reconciles the away timer.
     pub(crate) fn on_session_edge(&mut self, now: Ts, ev: &SessionEvent) {
-        // A DTMF collection reads the same edges (and its read-back's end) off the same events.
         self.dtmf_on_event(ev);
         self.end_call_on_event(now, ev);
         match ev {
@@ -356,8 +347,7 @@ impl VoiceDriver {
                 };
             }
             SessionEvent::UserInputTranscribed(t) => {
-                // Any non-empty transcript is the STT recovering
-                // (`AgentSession._user_input_transcribed`).
+                // Any non-empty transcript is the STT recovering.
                 if let Some(a) = t.ev.best_alternative() {
                     self.session.errors.on_transcript(&a.text);
                 }
@@ -369,7 +359,6 @@ impl VoiceDriver {
                     };
                 }
             }
-            // The IVR navigator reads the two state edges off the feed, as `IVRActivity` does.
             SessionEvent::AgentStateChanged { .. } | SessionEvent::UserStateChanged { .. } => {
                 let speaking = lk_agents_abi::voice::events::AgentState::Speaking;
                 if matches!(ev, SessionEvent::AgentStateChanged { new, .. } if *new == speaking)
@@ -409,7 +398,6 @@ impl VoiceDriver {
             | SessionEvent::RunSettled { .. }
             | SessionEvent::ContextCarried { .. }
             | SessionEvent::Close { .. } => {}
-            // `_on_conversation_item_added`: the keyterm pass's turn gate.
             SessionEvent::ConversationItemAdded { item, .. } => {
                 self.forward_chat_context(item);
                 if self.session.keyterms.is_some() {
@@ -420,8 +408,8 @@ impl VoiceDriver {
         }
     }
 
-    /// `stt._push_conversation_item` on `conversation_item_added`: a message's role and text reach
-    /// an STT that consumes conversation context, unless `forward_chat_context` is off.
+    /// A message's role and text reach an STT that consumes conversation context, unless
+    /// `forward_chat_context` is off.
     fn forward_chat_context(&mut self, item: &lk_agents_abi::ChatItem) {
         if !self.session.forward_chat_context {
             return;
@@ -436,8 +424,7 @@ impl VoiceDriver {
         });
     }
 
-    /// `SessionEvent::FloorChanged` when `_current_speech` differs from the last announced one.
-    /// Returns whether an emit was queued.
+    /// Queues `SessionEvent::FloorChanged` when the current speech changed; returns whether it did.
     pub(crate) fn publish_current_speech(&mut self) -> bool {
         let Some(holder) = self.activity.current_speech_changed() else { return false };
         self.publish_event(SessionEvent::FloorChanged { holder });
@@ -445,8 +432,8 @@ impl VoiceDriver {
     }
 }
 
-/// What one part of the session tells another within a step: queued privately by VoiceDriver, dispatched in
-/// the order raised until none is left, never seen outside the step.
+/// What one part of the session tells another within a step, dispatched in the order raised and
+/// never seen outside the step.
 #[derive(Debug)]
 pub(crate) enum VoiceCallback {
     EndOfTurn(crate::audio_recognition::EndOfTurnInfo),
@@ -461,8 +448,7 @@ pub(crate) enum VoiceCallback {
     SchedulingDrainFinished(PauseCause, PauseResult),
     /// The last speech held was released.
     SpeechesSettled,
-    /// Dispatch an accepted hook completion after dependent caller state is installed.
-    /// The hook owner retains its result until this callback; abandonment invalidates it.
+    /// Dispatched after dependent caller state is installed; abandonment invalidates it.
     HookFinished(HookId),
     /// The switch's drain settled: the swap is due.
     ApplyHandoff,

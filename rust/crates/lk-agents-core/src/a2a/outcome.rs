@@ -1,9 +1,3 @@
-//! The decisions of one turn, given what storage loaded and what the handler returned: which
-//! task a message answers when it continues a pending question ([`answer_pending`]), whether a
-//! checkpoint yields ([`checkpoint_stop`]), and what each task row becomes and what the history
-//! gains ([`settle`]), as [`HistoryEdit`]s the run applies. Ids and times are supplied by the
-//! caller.
-
 use lk_agents_abi::a2a_protocol as a2a;
 use serde_json::{Map, Value};
 
@@ -669,8 +663,7 @@ mod tests {
         assert_eq!(stop(true, false, false), None);
     }
 
-    /// docs/server.md#handler-outcomes: a handler's `Rejected` and `Working` set those task
-    /// states with their text as the status message; neither completes with an artifact.
+    /// A handler's `Rejected` and `Working` set those task states with their text as the status message; neither completes with an artifact.
     #[test]
     fn a_rejected_or_working_handler_sets_that_state_without_an_artifact() {
         for (status, outcome) in [
@@ -723,7 +716,7 @@ mod tests {
         let canceled = settled(text("late"), Some(Stop::ClientCanceled), true);
         assert_eq!(statuses(&canceled), vec![("AST_1", TaskState::Completed)]);
         assert_eq!(canceled.outcome, RunOutcome::Canceled);
-        // A2A_SEED=2316 (review12): a stop on a client's cancel whose answer row read back
+        // A2A_SEED=2316: a stop on a client's cancel whose answer row read back
         // uncanceled still ends that row, rather than leave it `working` with no run holding it
         let unseen = settled(text("late"), Some(Stop::ClientCanceled), false);
         assert_eq!(unseen.transitions.last().map(|t| t.status), Some(TaskState::Canceled));
@@ -817,7 +810,7 @@ mod tests {
         rows
     }
 
-    /// Found by the A2A DST (A2A_SEED=8): a reply continuing a pending question by its `taskId`
+    /// A2A_SEED=8: a reply continuing a pending question by its `taskId`
     /// stamped its `messageId` on both the receipt and the continued task, and the thread's
     /// unique (lane, message_id) task index refused the whole commit.
     #[test]
@@ -833,9 +826,8 @@ mod tests {
         assert_eq!(said, ["question", "answer"], "the continued task's history accumulates");
     }
 
-    /// docs/protocol/a2a.md#tasks: a client canceled the reply's receipt mid-turn; the task it
-    /// continued waits on its question again, so the person can answer anew. (Found by the A2A
-    /// DST, A2A_SEED=2316: the commit left it `working`, nobody running it.)
+    /// A client canceled the reply's receipt mid-turn; the task it continued waits on its question
+    /// again, so the person can answer anew (A2A_SEED=2316 left it `working`, nobody running it).
     #[test]
     fn a_canceled_reply_puts_the_continued_question_back() {
         let out = HandlerOutput { output: Some(json!("late")), ..HandlerOutput::default() };

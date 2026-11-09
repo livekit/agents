@@ -1,5 +1,3 @@
-//! Public stream events and the host-neutral request stream owner.
-
 use super::resources::ResourceError;
 use crate::{BoxFuture, errors::ProviderError};
 

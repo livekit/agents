@@ -1,5 +1,3 @@
-//! Participant/publication wait decisions over supplied room snapshots and events.
-
 use lk_agents_abi::voice::rtc::{
     ConnectionState, ParticipantIdentity, ParticipantKind, RtcError, TrackSid,
 };

@@ -1,6 +1,3 @@
-//! The sentence adapter's contracts (`tts/stream_adapter.py`): the speech text it is composed
-//! with and its host entry. The adapter itself is `lk_agents_inference`'s.
-
 use std::sync::Arc;
 
 use crate::errors::ProviderError;

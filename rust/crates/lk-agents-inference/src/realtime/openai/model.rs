@@ -1,5 +1,3 @@
-//! The ABI-declared OpenAI-protocol realtime facade. Provider defaults and option resolution stay here.
-
 use std::sync::Arc;
 use std::time::Duration;
 

@@ -1,12 +1,3 @@
-//! Request-scoped backend conversation coordination (text-session.md). `state` holds frames;
-//! `invocation` composes one AgentRun at a time. Runtime executes its effects and supplies
-//! validation and delivery receipts. Only a settled turn exposes a new state snapshot.
-//!
-//! - `state`: owned routing records for explicit application persistence.
-//! - `routing`: definitions, context-scope references and restored-state validation.
-//! - Private history helpers: one-time fresh/fork selection and delivered-dialogue transfer.
-//! - `continuation`: child admission, completion and fresh parent invocations.
-
 use super::effects::TextSessionEffect;
 use super::routing;
 use crate::agent_run::{self, AgentRun, CallId, Opening, OutputVerdict, RunInput};
@@ -27,7 +18,7 @@ use std::time::Duration;
 
 mod continuation;
 #[cfg(test)]
-#[path = "../../text_session_tests.rs"]
+#[path = "machine_tests.rs"]
 mod tests;
 
 pub use lk_agents_abi::text_session::{
@@ -35,6 +26,8 @@ pub use lk_agents_abi::text_session::{
     TextSessionState, TextSessionTurn,
 };
 pub use routing::{ChatHistory, LocalAgentTool, RoutingError, SessionAgent, TextSessionConfig};
+
+// Only a settled turn exposes a new state snapshot.
 
 /// Runtime/application inputs. Scope references describe contexts the application has built;
 /// this record contains neither services nor an instruction to load/save them.

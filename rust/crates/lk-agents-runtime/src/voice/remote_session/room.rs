@@ -1,6 +1,3 @@
-//! The room's `lk.agent.session` byte streams as a [`SessionTransport`] (`RoomSessionTransport`):
-//! one message per stream, read in the order the streams opened, written one stream at a time.
-
 use crate::telemetry;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -12,6 +9,8 @@ use prost::Message as _;
 use tokio::sync::Mutex as AsyncMutex;
 
 use super::{SessionTransport, TOPIC_SESSION_MESSAGES, proto};
+
+// One message per byte stream: read in the order the streams opened, written one at a time.
 
 pub struct RoomTransport(Arc<Inner>);
 

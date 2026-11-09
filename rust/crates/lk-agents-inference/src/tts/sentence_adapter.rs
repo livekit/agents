@@ -1,8 +1,3 @@
-//! [`StreamAdapter`] (`tts/stream_adapter.py`): a non-streaming TTS as a duplex one. Frames pass
-//! through; `is_final` needs a one-frame hold, taken only once no further sentence can arrive.
-//! Its sentences ([`Sentences`]) are split natively or by a host tokenizer's stream, and paced
-//! by the audio synthesized when asked.
-
 use super::pacing::{AdapterInput, HostSentences, Sentences, Split, trim_python_whitespace};
 use super::stream::TtsStream;
 use crate::telemetry;
@@ -27,7 +22,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 
-// ---------------------------------------------------------------------------- StreamAdapter
+// `is_final` needs a one-frame hold, taken only once no further sentence can arrive.
 
 #[derive(Clone)]
 pub struct StreamAdapter {

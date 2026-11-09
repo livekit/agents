@@ -1,5 +1,3 @@
-//! The TTS gateway protocol, separate from the STT session protocol.
-
 use super::TtsOptions;
 use lk_agents_abi::TranscriptChunk;
 use lk_agents_abi::errors::ApiError;

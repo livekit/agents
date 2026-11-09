@@ -1,6 +1,3 @@
-//! Run event assertions (testing.md "Programmatic tests"): the cursor `result.expect` walks. The
-//! matching, the cursor and the failure context are `lk-agents-core`'s.
-
 use serde_json::Value;
 
 use crate::ChatItem;

@@ -30,6 +30,6 @@ args=(
 if [[ $backend == agentdb ]]; then
     args+=(--run-ignored only -E 'test(agentdb::)')
 else
-    args+=(-E 'package(lk-agents-storage) | test(storage::) | test(a2a_) | test(agent_run::) | test(sse::)')
+    args+=(-E 'package(lk-agents-storage) | test(storage::) | test(a2a_) | test(a2a::tests::) | test(agent_run::) | test(sse::)')
 fi
 exec cargo nextest run "${args[@]}"

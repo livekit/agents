@@ -1,5 +1,3 @@
-"""SDK media helpers: audio frames and files, the audio stream decoder, and image encoding."""
-
 from __future__ import annotations
 
 import asyncio
@@ -18,14 +16,12 @@ from .aio import cancel_and_wait
 async def audio_frames_from_file(
     file_path: str, sample_rate: int = 48000, num_channels: int = 1
 ) -> AsyncGenerator[rtc.AudioFrame, None]:
-    """
-    Decode the audio file into rtc.AudioFrame instances and yield them as an async iterable.
+    """Decode an audio file and yield its frames.
+
     Args:
-        file_path (str): The path to the audio file.
-        sample_rate (int, optional): Desired sample rate. Defaults to 48000.
-        num_channels (int, optional): Number of channels (1 for mono, 2 for stereo). Defaults to 1.
-    Returns:
-        AsyncIterable[rtc.AudioFrame]: An async iterable that yields decoded AudioFrame
+        file_path: The path to the audio file.
+        sample_rate: Desired sample rate.
+        num_channels: Number of channels (1 for mono, 2 for stereo).
     """
 
     decoder = AudioStreamDecoder(sample_rate=sample_rate, num_channels=num_channels)
@@ -44,8 +40,7 @@ async def audio_frames_from_file(
             aborted = True
             raise
         finally:
-            # a cancelled read leaves a truncated file, not an end of input: signalling EOF
-            # would make the decoder report the abort as invalid audio. aclose() closes it.
+            # no EOF after a cancel: the decoder would report the truncated input as invalid audio
             if not aborted:
                 decoder.end_input()
 
@@ -58,7 +53,6 @@ async def audio_frames_from_file(
         await cancel_and_wait(reader_task)
         await decoder.aclose()
 
-    # propagate file reader errors (e.g. FileNotFoundError for missing files)
     if reader_task.done() and not reader_task.cancelled():
         if exc := reader_task.exception():
             raise exc

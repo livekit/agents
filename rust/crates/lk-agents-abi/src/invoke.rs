@@ -1,8 +1,3 @@
-//! HostInvoker's contract (docs/internals/rust-core.md "HostInvoker"): the scopes a host call can
-//! require of what it runs in ([`HostContext`](crate::agent::HostContext)), and the port a
-//! language binding implements to enter its host.
-//! `lk-agents-runtime`'s `host` module owns the dispatch; the binding only enters.
-
 use crate::BoxFuture;
 use crate::telemetry::record::SpanContext;
 use crate::utils::host_ref::HostRef;

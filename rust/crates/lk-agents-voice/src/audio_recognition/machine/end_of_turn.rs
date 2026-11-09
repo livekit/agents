@@ -1,6 +1,3 @@
-//! The end of the user's turn: the phase, the detector's predictions and the countdown, the
-//! commit, the user turn limit and the transcription timeout.
-
 use super::{
     AudioRecognition, Detector, EndOfTurnInfo, Phase, Prediction, Run, Start, TurnId, TurnSnapshot,
     UserTurnCommitDecision, UserTurnCommitVerdict, UserTurnTracker, compute_end_of_turn_metrics,
@@ -20,8 +17,6 @@ use lk_agents_core::tokenize::{WordTokenizerOptions, count_words};
 use std::time::Duration;
 
 impl AudioRecognition {
-    // --- the phase -----------------------------------------------------------------------------
-
     /// The one place the phase changes. Arms and cancels the phases' timers by diffing, so
     /// "armed => fired xor cancelled" holds here.
     #[must_use = "recognition effects must be applied before the next transition"]
@@ -43,7 +38,7 @@ impl AudioRecognition {
         eff
     }
 
-    /// `_user_turn_committed`: the owner declared this turn's end at least once. A running
+    /// The owner declared this turn's end at least once. A running
     /// countdown carries its own flag (`Run::declared`); a countdown is not a declaration.
     pub(super) fn declared(&self) -> bool {
         match &self.phase {
@@ -176,8 +171,6 @@ impl AudioRecognition {
         eff
     }
 
-    // --- the turn detector --------------------------------------------------------------------
-
     /// The detector answered `req`, or failed. Only the request the phase holds applies; a
     /// failure takes the timeout's transition and serves `min_delay`.
     #[must_use = "recognition effects must be applied before the next transition"]
@@ -201,7 +194,6 @@ impl AudioRecognition {
             }
             Phase::Awaiting { run, req: r, deadline: _ } if r == req => match result {
                 Ok(p) => eff.extend(self.resolve(now, run, p, false)),
-                // "eot prediction timed out, committing without a prediction".
                 Err(()) => {
                     eff.push(self.detected(None, run.min_delay, false));
                     eff.extend(self.enter_delaying(now, run, run.min_delay, None, None))
@@ -219,8 +211,6 @@ impl AudioRecognition {
         eff
     }
 
-    // --- timers ---------------------------------------------------------------------------------
-
     /// A timer for a phase the machine has left (a fire that raced a cancel) is dropped.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub fn on_timer(&mut self, now: Ts, timer: Timer) -> Vec<AudioRecognitionEffect> {
@@ -230,7 +220,7 @@ impl AudioRecognition {
                 if let Phase::Awaiting { run, req, .. } = &self.phase {
                     let (run, req) = (*run, *req);
                     self.fired = Some(timer);
-                    // `._bounce_eou_task`: the one site that cancels with `timed_out=True`.
+                    // The one site that cancels with `timed_out=True`.
                     eff.push(AudioRecognitionEffect::CancelEot(req, true));
                     eff.push(self.detected(None, run.min_delay, false));
                     eff.extend(self.enter_delaying(now, run, run.min_delay, None, None));
@@ -286,10 +276,8 @@ impl AudioRecognition {
         eff
     }
 
-    // --- lifecycle --------------------------------------------------------------------------------
-
-    /// `_clear_user_turn`: drop the turn and everything accumulated for it. Unlike the reference
-    /// this also retires a running countdown and a manual commit.
+    /// Drops the turn and everything accumulated for it, including a running countdown and a
+    /// manual commit.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub fn clear_user_turn(&mut self, now: Ts) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
@@ -314,13 +302,13 @@ impl AudioRecognition {
         self.user_turn_start = None;
         eff.extend(self.reset_transcription_timeout());
 
-        // "reset stt to clear the buffer from previous user turn" (a stream swap here).
+        // A stream swap clears the STT buffer from the previous user turn.
         eff.push(AudioRecognitionEffect::FlushInput(StreamKind::Stt));
         eff
     }
 
-    /// `._bounce_eou_task`. `TooFewWords` drops the words, `RealtimeBackchannel` keeps them.
-    /// Anchors reset only `if committed:`. A verdict for a turn already left is dropped.
+    /// `TooFewWords` drops the words, `RealtimeBackchannel` keeps them. Anchors reset only when
+    /// committed. A verdict for a turn already left is dropped.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub fn on_commit_verdict(
         &mut self,
@@ -359,12 +347,12 @@ impl AudioRecognition {
             ));
         }
         if committed {
-            // "clear the transcript if the user turn was committed"; the final's instant goes too.
+            // The final's instant goes with the transcript.
             self.last_final_transcript_time = None;
             self.user_turn_start = None;
             eff.extend(self.reset_transcription_timeout());
 
-            // "only reset if there is no new speech", against the snapshot the countdown took.
+            // Only reset if there is no new speech since the countdown's snapshot.
             if self.last_speaking_time == info.snapshot.last_speaking_time {
                 self.speech_start_time = None;
                 self.vad_speech_started = false;
@@ -376,10 +364,9 @@ impl AudioRecognition {
             }
         }
 
-        // "reset turn-scoped interruption state once per logical turn (commit or drop)"
         eff.extend(self.overlap.step(In::TurnClosed).1);
 
-        // The turn is consumed (`_user_turn_committed = False`); the user may still be talking.
+        // The turn is consumed; the user may still be talking.
         let next = if speaking {
             Phase::Speaking {
                 since: self.speech_start_time.unwrap_or(now),
@@ -393,8 +380,8 @@ impl AudioRecognition {
         eff
     }
 
-    /// `_commit_user_turn`'s tail, after the driver's wait. `text` stands in for STT and goes
-    /// through `promote_interim`, never as a forged final (which double-reported the words).
+    /// A manual commit, after the driver's wait. `text` stands in for STT and goes through
+    /// `promote_interim`, never as a forged final, which would double-report the words.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub fn commit_user_turn(
         &mut self,
@@ -405,7 +392,7 @@ impl AudioRecognition {
         let mut eff = Vec::new();
         eff.extend(self.promote_interim(text));
         // Past the close's edge nothing waits: commit what the turn holds, or nothing; a manual
-        // turn completes even with no words, as the reference's commit runs it in that mode.
+        // turn completes even with no words.
         let manual = self.cfg.turn_detection_mode == super::TurnDetectionMode::Manual;
         if self.closed && self.audio_transcript.is_empty() && !manual {
             return eff;
@@ -439,7 +426,7 @@ impl AudioRecognition {
     }
 
     /// Closing: cut a running endpointing delay short, or drop it when `commit` is off (an error
-    /// close). Nothing happens in `Awaiting`: the reference's inference wait ignores `_closing`.
+    /// close). Nothing happens in `Awaiting`: the inference wait ignores the close.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub fn on_closing(&mut self, now: Ts, commit: bool) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
@@ -456,10 +443,7 @@ impl AudioRecognition {
         eff
     }
 
-    // --- the user turn limit ------------------------------------------------------------------------
-
-    /// `_check_user_turn_limit`. Words are counted with `split_character` off (#2366), unlike the
-    /// interruption guard, so CJK text hits `max_duration` long before `max_words`.
+    /// Words are counted with `split_character` off, unlike the interruption guard, so CJK text hits `max_duration` long before `max_words`.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub(super) fn check_user_turn_limit(
         &mut self,
@@ -545,9 +529,7 @@ impl AudioRecognition {
         eff
     }
 
-    // --- the transcription timeout ------------------------------------------------------------
-
-    /// `_arm_transcription_timeout`. `delay` (VAD silence already elapsed) is subtracted so the
+    /// `delay` (VAD silence already elapsed) is subtracted so the
     /// window runs from when the user stopped.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub(super) fn arm_transcription_timeout(
@@ -563,7 +545,7 @@ impl AudioRecognition {
         if self.turn_transcript_received {
             return eff;
         }
-        // Accumulated across segments (#6182's `speech_duration < 0.7` filter needs the total).
+        // Accumulated across segments: the short-speech filter needs the total.
         self.turn_speech_duration += speech_duration;
         eff.extend(self.cancel_transcription_timeout());
         let remaining = timeout.saturating_sub(delay);
@@ -612,9 +594,7 @@ impl AudioRecognition {
         eff
     }
 
-    // --- the countdown ----------------------------------------------------------------------------
-
-    /// `_run_eou_detection`: start or restart the countdown. Legal from every phase; a fresh turn
+    /// Starts or restarts the countdown. Legal from every phase; a fresh turn
     /// is the only way out of `Committed`.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub(super) fn run_eou_detection(
@@ -655,8 +635,7 @@ impl AudioRecognition {
             return eff;
         }
 
-        // Snapshot before `_ensure_user_turn_span()`: the reference passes the start as a task
-        // argument, so a countdown started before any span snapshots `None`.
+        // Snapshot before the turn span opens: a countdown started before any span snapshots `None`.
         let snapshot_turn_start = self.user_turn_start;
         self.ensure_user_turn(now, None);
         // The opportunity held for an unanswered `Committed` turn is stale.
@@ -665,7 +644,7 @@ impl AudioRecognition {
             snapshot: TurnSnapshot {
                 last_speaking_time: self.last_speaking_time,
                 last_final_transcript_time: self.last_final_transcript_time,
-                // `_user_turn_start` (the turn's earliest onset), not `_speech_start_time`.
+                // The turn's earliest onset, not the latest speech start.
                 speech_start_time: snapshot_turn_start,
             },
             skip_reply: match start {
@@ -707,8 +686,7 @@ impl AudioRecognition {
         match self.cfg.detector {
             Detector::None => eff.extend(self.enter_delaying(now, run, run.min_delay, None, None)),
             Detector::Streaming { prediction_timeout } => match prediction {
-                // `._bounce_eou_task`: no request in flight, so commit on `min_delay` with no
-                // prediction.
+                // No request in flight: commit on `min_delay` with no prediction.
                 Prediction::Absent => {
                     eff.extend(self.enter_delaying(now, run, run.min_delay, None, None))
                 }
@@ -717,7 +695,7 @@ impl AudioRecognition {
                     eff.push(AudioRecognitionEffect::EouDetected(EouDetected::Awaiting));
                     eff.extend(self.set_phase(Phase::Awaiting { run, req, deadline }));
                 }
-                // `from_cache`: resolves without suspending, so no timer is ever armed.
+                // A cached prediction resolves at once, so no timer is ever armed.
                 Prediction::Ready(p) => eff.extend(self.resolve(now, run, p, true)),
             },
         }
@@ -841,7 +819,7 @@ impl AudioRecognition {
     ) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
         let fire_at = anchored(now, run.snapshot.last_speaking_time, delay);
-        // `if extra_sleep > 0`: a passed deadline is not slept on.
+        // A passed deadline is not slept on.
         if fire_at > now {
             eff.extend(self.set_phase(Phase::Delaying {
                 run,
@@ -886,8 +864,8 @@ impl AudioRecognition {
     }
 }
 
-/// The deadline is anchored on when the user stopped speaking (`._bounce_eou_task`), so a slow
-/// detector eats into the delay. `Ts::ZERO` is a real instant, so no falsy-zero test.
+/// The deadline is anchored on when the user stopped speaking, so a slow detector eats into the
+/// delay. `Ts::ZERO` is a real instant, so no falsy-zero test.
 fn anchored(now: Ts, last_speaking_time: Option<Ts>, delay: Duration) -> Ts {
     match last_speaking_time {
         Some(t) => t.saturating_add(delay),

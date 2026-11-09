@@ -1,5 +1,3 @@
-//! Provider drains and camera forwarding owned by the session runtime.
-
 use crate::telemetry;
 use crate::voice::session::Timebase;
 use crate::voice::session::Tx;

@@ -1,5 +1,3 @@
-//! A2A host contracts.
-
 pub mod auth;
 pub mod card;
 pub mod client;

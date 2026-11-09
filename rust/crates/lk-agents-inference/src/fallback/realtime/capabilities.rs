@@ -1,5 +1,3 @@
-//! `llm/realtime_fallback_adapter.py`'s capability merge.
-
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 
 /// Which hard capability disagreed, and the two values.

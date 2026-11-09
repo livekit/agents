@@ -1,8 +1,3 @@
-//! The user turn's spans (`telemetry.md`, "The user turn"). The activity owns one
-//! [`UserTurnSpan`] per user turn, from its first evidence to its end: while it is heard, while
-//! decided turns wait for their hook, and while the hook runs. Dropping one unended is a bug the
-//! `Drop` assertion of its spans reports.
-
 use super::participant_attrs;
 use crate::audio_recognition::{EndOfTurnInfo, EouDetected, UserTurnCommitVerdict};
 use lk_agents_abi::Ts;
@@ -17,6 +12,8 @@ use lk_agents_abi::telemetry::spans::user_turn::{
 use lk_agents_abi::voice::events::OverlappingSpeechEvent;
 use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_telemetry::span::{ManualSpan, Trace};
+
+// Dropping a `UserTurnSpan` unended trips its spans' `Drop` assertion: end every turn.
 
 /// Every way a decided turn ends; a new verdict is a new arm here.
 impl From<UserTurnCommitVerdict> for UserTurnOutcome {

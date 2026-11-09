@@ -1,7 +1,3 @@
-//! One HTTP/1.1 exchange on an endpoint stream: the request head and body in, the response out.
-//! Each stream carries exactly one exchange. A failure after the response head is reported in
-//! the chunked body's completion trailers; before it, by resetting the stream.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,6 +15,9 @@ use super::websocket::Connection;
 use super::{EndpointServer, READ_SIZE, ReadHalf, ServerState, StreamEnd, Wire, WriteHalf};
 use crate::server::PublicRoutes;
 use crate::transport::HttpStreamResetCode as Code;
+
+// One exchange per stream. A failure after the response head goes in the chunked body's
+// completion trailers; before it, the stream is reset.
 
 const MAX_HEADERS: usize = 128;
 const REASON_LIMIT: usize = 256;
@@ -963,3 +962,7 @@ fn push_field(out: &mut Vec<u8>, name: &[u8], value: &[u8]) {
 fn closed(error: std::io::Error) -> ExchangeError {
     ExchangeError::Closed(error.to_string())
 }
+
+#[cfg(test)]
+#[path = "exchange_tests.rs"]
+pub(super) mod tests;

@@ -1,5 +1,3 @@
-//! Opt-in measurements through real codec, image and recording adapters. Timings are observations;
-//! assertions cover delivered media and bounded admission, independent of the host's CPU speed.
 #![cfg(all(feature = "media-images", feature = "media-ffmpeg", unix))]
 
 use std::future::Future;
@@ -14,6 +12,8 @@ use lk_agents_inference::codecs::{AudioDecoder, decoder_limits};
 use lk_agents_media::pool::JobClass;
 use lk_agents_runtime::recording::SessionRecorder;
 use serde_json::{Value, json};
+
+// Timings are observations; assertions hold independent of the host's CPU speed.
 
 fn cpu_ns(clock: libc::clockid_t) -> u64 {
     let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };

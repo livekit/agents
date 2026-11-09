@@ -1,7 +1,3 @@
-//! User-turn recognition domain: configuration, commit guards and diagnostic records.
-//! [`machine::AudioRecognition`] owns live turn state and transitions; [`effects`] declares
-//! its ordered work, [`observation`] records facts, and [`overlap`] supplies overlap judgments.
-
 use crate::agent_session::effects::Timer;
 use crate::agent_session::machine::activity::false_interruption::count_min_words;
 use lk_agents_abi::turn::detector::ReqId;
@@ -33,44 +29,36 @@ pub(super) struct PendingCommit {
     pub(super) close: bool,
 }
 
-/// Everything `on_end_of_turn` reads before deciding.
+/// Everything the end-of-turn commit reads before deciding.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CommitInputs<'a> {
-    /// `self._scheduling_paused`.
     pub scheduling_paused: bool,
-    /// `self._session._closing`; read only inside the paused branch.
+    /// Read only inside the paused branch.
     pub closing: bool,
-    /// `self.stt is not None`.
     pub stt_enabled: bool,
-    /// `self._turn_detection != "manual"`.
     pub manual_turn_detection: bool,
     pub current_speech: Option<CommitSpeech>,
-    /// `interruption["min_words"]`. `0` disables the guard.
+    /// `0` disables the guard.
     pub min_interruption_words: usize,
-    /// `info.new_transcript`.
     pub new_transcript: &'a str,
-    /// `isinstance(self.llm, llm.RealtimeModel)`.
     pub realtime_llm: bool,
-    /// `self._rt_turn_detection_enabled`.
     pub rt_turn_detection: bool,
-    /// `self._interruption_detection_enabled`.
     pub interruption_detection: bool,
-    /// `info.backchannel_over_agent`.
     pub backchannel_over_agent: bool,
-    /// `info.skip_reply`, after AMD has had its say.
+    /// After AMD has had its say.
     pub skip_reply: bool,
     /// Started by a final with no onset since the previous commit: a late final.
     pub late: bool,
 }
 
-/// The three guard-relevant facts about `self._current_speech`.
+/// The guard-relevant facts about the current speech.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommitSpeech {
     pub allow_interruptions: bool,
     pub interrupted: bool,
 }
 
-/// Which branch of `on_end_of_turn` ran.
+/// Which branch of the end-of-turn commit ran.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
 pub enum UserTurnCommitVerdict {
     Reply,
@@ -92,13 +80,11 @@ pub enum UserTurnCommitVerdict {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UserTurnCommitDecision {
     pub verdict: UserTurnCommitVerdict,
-    /// The reference's return value.
     pub committed: bool,
-    /// `self._cancel_false_interruption_timer()`, except where the reply task returns early.
     pub cancel_false_interruption: bool,
 }
 
-/// `on_end_of_turn`'s guards, in the reference's order. Pure.
+/// The end-of-turn commit guards, in order.
 pub fn decide_commit(i: &CommitInputs<'_>) -> UserTurnCommitDecision {
     if i.scheduling_paused {
         return UserTurnCommitDecision {
@@ -108,7 +94,6 @@ pub fn decide_commit(i: &CommitInputs<'_>) -> UserTurnCommitDecision {
         };
     }
 
-    // "avoid interruption if the new_transcript is too short"; every conjunct matters.
     if i.stt_enabled
         && !i.manual_turn_detection
         && i.min_interruption_words > 0
@@ -138,7 +123,7 @@ pub fn decide_commit(i: &CommitInputs<'_>) -> UserTurnCommitDecision {
         };
     }
 
-    // `_user_turn_completed_impl`: a turn that asks for no reply keeps no item without words.
+    // A turn that asks for no reply keeps no item without words.
     if i.skip_reply && i.new_transcript.is_empty() {
         return UserTurnCommitDecision {
             verdict: UserTurnCommitVerdict::Empty,
@@ -170,9 +155,8 @@ impl UserTurnCommitVerdict {
     }
 }
 
-/// `TurnDetectionMode`, as `AudioRecognition._turn_detection_mode` holds it: resolved once by
-/// [`crate::agent_session::options::resolve_turn_detection_mode`]; changed only by
-/// [`AudioRecognition::set_turn_detection_mode`].
+/// Resolved once by [`crate::agent_session::options::resolve_turn_detection_mode`]; changed only
+/// by [`AudioRecognition::set_turn_detection_mode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
 pub enum TurnDetectionMode {
     /// `"vad"`: a VAD end of speech starts the countdown; STT finals feed it.
@@ -192,11 +176,10 @@ pub enum TurnDetectionMode {
 pub enum Detector {
     /// Every turn commits after `min_delay`.
     None,
-    /// `inference.TurnDetector`: inference starts on VAD silence, bounded by `prediction_timeout`.
+    /// Inference starts on VAD silence, bounded by `prediction_timeout`.
     Streaming { prediction_timeout: Duration },
 }
 
-/// `session.options.turn_handling["user_turn_limit"]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UserTurnLimit {
     pub max_words: Option<usize>,
@@ -205,26 +188,22 @@ pub struct UserTurnLimit {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TurnConfig {
-    /// `self._stt is not None`.
     pub stt_enabled: bool,
-    /// `self._vad is not None`.
     pub vad_enabled: bool,
-    /// `self._using_default_vad`: a default VAD is not trusted for timing.
+    /// A default VAD is not trusted for timing.
     pub using_default_vad: bool,
-    /// `_turn_detection_mode`.
     pub turn_detection_mode: TurnDetectionMode,
-    /// `_interruption_enabled` (an adaptive interruption detector and a VAD), which is also
-    /// `_interruption_detection_enabled`, the gate on `_on_end_of_speech`'s `interruption=`.
+    /// An adaptive interruption detector and a VAD are both present.
     pub interruption_enabled: bool,
-    /// `session.options.transcription_timeout`. `None` disables it (#6182).
+    /// `None` disables it.
     pub transcription_timeout: Option<Duration>,
     pub user_turn_limit: UserTurnLimit,
-    /// `interruption["backchannel_boundary"]`, normalised to a start/end pair.
+    /// Normalised to a start/end pair.
     pub backchannel_boundary: Option<(Duration, Duration)>,
     pub detector: Detector,
 }
 
-/// `_UserTurnTracker`: words and text since the agent last spoke (longer than one turn).
+/// Words and text since the agent last spoke (longer than one turn).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UserTurnTracker {
     pub words: usize,
@@ -234,7 +213,6 @@ pub struct UserTurnTracker {
     pub exceeded: bool,
 }
 
-/// `_EndOfTurnMetrics`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct EndOfTurnMetrics {
     pub started_speaking_at: Option<Ts>,
@@ -245,8 +223,7 @@ pub struct EndOfTurnMetrics {
     pub on_user_turn_completed_delay: Option<Duration>,
 }
 
-/// `_compute_end_of_turn_metrics`, including its refusal to guess: an anchor that predates the
-/// turn start yields `None` rather than an inflated delay (issue #6093).
+/// An anchor that predates the turn start yields no metrics rather than an inflated delay.
 pub fn compute_end_of_turn_metrics(
     speech_start_time: Option<Ts>,
     last_speaking_time: Option<Ts>,
@@ -258,7 +235,6 @@ pub fn compute_end_of_turn_metrics(
     else {
         return EndOfTurnMetrics::default();
     };
-    // stale/out-of-order anchor: stopping to speak cannot predate the turn start
     if stopped < start {
         return EndOfTurnMetrics::default();
     }
@@ -275,8 +251,7 @@ pub fn compute_end_of_turn_metrics(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TurnId(pub u64);
 
-/// The turn anchors copied before waiting: "copy the last_speaking_time before awaiting (the
-/// value can change)" (`._run_eou_detection`).
+/// The turn anchors copied before waiting, since the live values keep changing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TurnSnapshot {
     pub last_speaking_time: Option<Ts>,
@@ -293,12 +268,12 @@ pub struct Run {
     pub max_delay: Duration,
     /// Started by a late final for a turn that already ended.
     pub late: bool,
-    /// `_user_turn_committed` as the countdown carries it: `true` only when the owner declared the
-    /// end (STT end of speech, a commit). A VAD end or a final carries `false`.
+    /// `true` only when the owner declared the end (STT end of speech, a commit). A VAD end or a
+    /// final carries `false`.
     pub declared: bool,
 }
 
-/// The streaming detector's answer, mirroring `self._turn_detector_prediction_fut`.
+/// The streaming detector's answer.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Prediction {
     /// Nothing requested, or the request was cancelled by new speech.
@@ -355,7 +330,7 @@ impl Phase {
         }
     }
 
-    /// `_end_of_turn_task is not None and not done()`: a countdown is in flight.
+    /// A countdown is in flight.
     pub fn is_running(&self) -> bool {
         match self {
             Phase::Awaiting { .. } | Phase::Delaying { .. } | Phase::ManualCommitted { .. } => true,
@@ -367,12 +342,12 @@ impl Phase {
     }
 }
 
-/// `_EndOfTurnInfo`: the machine's half; the driver adds the peer half and runs [`decide_commit`].
+/// The machine's half; the driver adds the peer half and runs [`decide_commit`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct EndOfTurnInfo {
     pub turn_id: TurnId,
     pub owner: TurnDetectionMode,
-    /// `self._stt is not None`, as the machine believes it.
+    /// As the machine believes it.
     pub stt_enabled: bool,
     /// A reply was already triggered and should be skipped after end-of-turn detection.
     pub skip_reply: bool,
@@ -383,7 +358,7 @@ pub struct EndOfTurnInfo {
     pub backchannel_over_agent: bool,
     /// A late final for a turn that already ended.
     pub late: bool,
-    /// The countdown's anchors: "only reset if there is no new speech" compares against them.
+    /// The countdown's anchors: a reset happens only if no new speech arrived since them.
     pub snapshot: TurnSnapshot,
 }
 
@@ -395,11 +370,12 @@ pub use lk_agents_abi::WallAnchor;
 /// ([`TurnDetectionMode::RealtimeLlm`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ServerSpeech {
-    /// `input_speech_started`.
     Started,
-    /// `input_speech_stopped`.
     Stopped,
-    /// `input_audio_transcription`: the server's transcript of the user's words, and the id of
-    /// the item it transcribes (`UserInputTranscribedEvent.item_id`).
-    Transcription { text: String, is_final: bool, item_id: String },
+    /// The server's transcript of the user's words, and the id of the item it transcribes.
+    Transcription {
+        text: String,
+        is_final: bool,
+        item_id: String,
+    },
 }

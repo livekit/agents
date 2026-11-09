@@ -1,7 +1,3 @@
-//! `llm/fallback_adapter.py`, as a [`FallbackChain`] plus glue. The adapter is itself an [`Llm`].
-//! `chat()` returns at once and the chain runs as a task feeding an `mpsc`
-//! (`FallbackLLMStream._run`), so its failure surfaces on the first `next()`.
-
 use lk_agents_abi::llm::fallback::{HostChatContext, HostTools};
 use lk_agents_abi::{ChatContext, Extra};
 use std::sync::Arc;
@@ -25,6 +21,9 @@ use crate::fallback::channel::{ServeAttempt, drain_probe, forward};
 use crate::fallback::traced::{self, Traced};
 use crate::telemetry;
 use lk_agents_net::env::ProcessEnv;
+
+// `chat()` returns at once and the chain runs as a task feeding an `mpsc`, so its failure
+// surfaces on the first `next()`.
 
 pub struct LlmBackend {
     inner: Arc<dyn Llm>,
@@ -348,3 +347,7 @@ fn served(chain: &FallbackChain<LlmBackend>) -> telemetry::LlmFallbackChoice {
         provider: telemetry::provider_name(&id.provider),
     }
 }
+
+#[cfg(test)]
+#[path = "llm_tests.rs"]
+mod tests;

@@ -1,8 +1,3 @@
-//! One agent invocation executed: the core's `AgentRun` stepped one event at a time, its model
-//! requests run against the agent's `Llm`, its host callbacks through [`HostInvoker`](crate::host::HostInvoker), its
-//! deadline on the clock. Updates (stream events, then the settled result) reach the consumer
-//! through a bounded queue the driver waits on; nothing is dropped.
-
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -29,6 +24,8 @@ use tokio_util::sync::CancellationToken;
 pub(crate) mod execution;
 pub mod resources;
 use execution::{Execution, Reporter};
+
+// Updates reach the consumer through a bounded queue the driver waits on; nothing is dropped.
 
 /// Events the work in flight may report ahead of the driver.
 const EVENT_QUEUE: usize = 64;
@@ -203,7 +200,7 @@ pub(crate) async fn wait(clock: &dyn Clock, at: Option<Ts>) {
 
 mod runner;
 #[cfg(test)]
-#[path = "../agent_run_tests.rs"]
+#[path = "agent_run_tests.rs"]
 mod tests;
 /// `result.expect`'s events: the assertions are the core's own, nothing runs.
 pub use lk_agents_core::assertions::RunEvents;

@@ -1,5 +1,3 @@
-//! Public keypad reception and result contracts.
-
 /// Why room digit reception stopped short.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[crate::host(error(kind = "livekit.agents.llm.tool_context.ToolError"))]

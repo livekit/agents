@@ -1,7 +1,3 @@
-//! `_core.InferenceEot` and `_core.EotStream`: `inference.TurnDetector`'s threshold table and the
-//! streams it opens. One table is shared by the detector and all its streams, so a stream's
-//! cloud-to-local fallback rescales what the detector answers.
-
 use super::{
     CloudOptions, CloudTransport, DetectorStream, EotRequestId, EotSession, EotStream,
     EotTransport, LocalEotModel, LocalTransport, MetricsCallback, MountedTransport,

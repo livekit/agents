@@ -1,11 +1,11 @@
-//! The metric instruments. A span end field with `metric = Instrument` records one when its span
-//! ends; the others are recorded where their value is computed.
-
 use super::decl::{Attrs, BoolString, Label, SpanValue, metric};
 use super::errors::ErrorType;
 use super::semconv::otel;
 use super::spans::common::GenAiOperation;
 use super::spans::session::BlockingSeverity;
+
+// A span end field with `metric = Instrument` records one when its span ends; the others are
+// recorded where their value is computed.
 
 /// A duration histogram's bucket bounds, in seconds: the GenAI semantic conventions' advice.
 pub const DURATION_BOUNDS: &[f64] =

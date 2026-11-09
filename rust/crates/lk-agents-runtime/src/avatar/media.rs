@@ -1,5 +1,3 @@
-//! Avatar track execution over the shared RTC ports. The voice plan supplies publication options.
-
 use crate::rtc::synchronizer::AVSynchronizer;
 use crate::telemetry;
 use lk_agents_abi::errors::ProviderError;

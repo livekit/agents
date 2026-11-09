@@ -1,10 +1,3 @@
-//! `inference/tts.py` -- the gateway TTS, WebSocket + JSON (§1.4). `synthesize()` is the duplex
-//! path with one push and the input closed, as in the reference, so [`GatewayTts::stream`] always
-//! returns `Some`. A synthesis takes a configured socket from the client's pool and gives it back
-//! once the gateway said `done`, as the reference's `ConnectionPool` does.
-//! Text is normalised, split into sentences and converted to the provider's markup here, as
-//! `inference/tts.py`'s `SynthesizeStream` does.
-
 use self::stream::TtsStream;
 use crate::abi::{
     StreamInput, StreamOutput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
@@ -39,6 +32,9 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use wire::FallbackModel;
+
+// A synthesis takes a configured socket from the client's pool and gives it back only once the
+// gateway said `done`.
 
 pub mod emitter;
 pub mod machine;
@@ -784,3 +780,7 @@ impl InferenceTts for GatewayTts {
         Ok(TtsStream::new(Some(Box::new(sink)), Box::new(source), self.clock.clone()))
     }
 }
+
+#[cfg(test)]
+#[path = "tts_tests.rs"]
+mod tests;

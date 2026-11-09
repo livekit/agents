@@ -1,7 +1,3 @@
-//! `AgentSession._aclose_impl`: the close in flight (`_closing_task`), the step it is at and the
-//! `drain()` callers it answers, and the sequence: `on_exit`, drain, hard edge, trailing
-//! transcript, legs. Also the commands refused past the edge and the errors that close.
-
 use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::CloseReason;
@@ -37,9 +33,8 @@ pub(crate) struct Closing {
     pub(crate) reason: CloseReason,
     pub(crate) error: Option<crate::events::ErrorEvent>,
     pub(crate) phase: ClosePhase,
-    /// Host `drain()`s answered by the close's own drain (the reference's drain waits on the
-    /// activity lock `_aclose_impl` holds), `Ok` once the edge has settled. `None` once answered:
-    /// a later caller is answered at once.
+    /// Host `drain()`s answered by the close's own drain. `None` once answered: a later caller is
+    /// answered at once.
     drains: Option<Vec<RequestId>>,
 }
 
@@ -71,9 +66,9 @@ impl ClosePhase {
 }
 
 impl VoiceDriver {
-    /// `AgentSession._aclose_impl`: the agent's `on_exit`, the drain, the hard edge, the trailing
-    /// transcript, the legs, `close`. A second request joins the close in progress (a drain asked
-    /// for again restarts its bound).
+    /// The close sequence: the agent's `on_exit`, the drain, the hard edge, the trailing
+    /// transcript, the legs. A second request joins the close in progress (a drain asked for
+    /// again restarts its bound).
     pub(crate) fn begin_closing(&mut self, now: Ts, close: Close) {
         let Close { reason, drain, error } = close;
         if let Some(closing) = &self.session.closing {
@@ -86,26 +81,18 @@ impl VoiceDriver {
         if self.session.closing_span.is_none() {
             self.session.closing_span = self.session_close_span(reason, drain, error.as_ref());
         }
-        // The systems (AMD, IVR) close themselves on this, in this instant.
         self.record_effect(VoiceEffect::Tap(crate::agent_session::SystemTap::CloseRequested));
-        // The keyterm pass: the request in flight is cancelled, no push after this.
         self.keyterms_step(now, crate::keyterm_detection::KeytermIn::Close);
-        // DTMF collection stop, the first thing the close runs, stops listening: a key pressed
-        // during the drain is not collected, a pending debounce never answers.
+        // Stopped before the drain so a key pressed during it is not collected.
         self.dtmf_step(crate::workflows::machine::dtmf::DtmfTaskEvent::Stop);
-        // Every VoiceTask ends first: the agent the close exits is the one they suspended.
+        // VoiceTasks end first: the agent the close exits is the one they suspended.
         self.close_voice_tasks(now);
         let exit = self.plan_exit();
-        // A host `drain()` in progress is adopted: its `on_exit` and its pause become the close's,
-        // and the caller is answered with the close's drain.
+        // A host `drain()` in progress is adopted: its `on_exit` and its pause become the close's.
         let drains = self.activity.take_drain_waiters();
         let phase = ClosePhase::Requested;
         self.session.closing = Some(Closing { reason, error, phase, drains: Some(drains) });
-        // A non-drain close: every open speech force-interrupted regardless of
-        // `allow_interruptions`, a false-interruption pause released so a later turn never
-        // resolves it as false, and every pending socket request settled `Closing`.
         if !drain {
-            // The reference's close runs the session-level `interrupt(force=True)`.
             let generating = self.activity.realtime_generating();
             self.force_cut_open(now);
             self.cancel_speech_pause(now);
@@ -259,10 +246,8 @@ impl VoiceDriver {
         self.enter_close_phase(phase, rt.map(|_| HOST_TEARDOWN_TIMEOUT), now);
 
         self.answer_close_drains();
-        // `send_replace`: `send` stores nothing while no task subscribes, so a later one would
-        // never see the close.
         self.record_effect(VoiceEffect::Closing);
-        // The activity's `aclose()` cancels its tools before it closes the models.
+        // Tools are cancelled before the models close.
         self.cancel_running_tools(now);
         self.record_effect(VoiceEffect::EotClose);
         if let Some(rt) = rt {
@@ -411,7 +396,7 @@ impl VoiceDriver {
                 self.answer(call, Answer::Hold(Err(IdleRefused::Closing)));
                 return;
             }
-            // A commit the loop never ran: `""`, as the reference answers a closing session.
+            // A commit the loop never ran answers `""`.
             Command::Speech(SpeechCommand::CommitUserTurn { call, .. }) => {
                 self.record_trace(TurnStep::CommitAnswered { transcript: String::new() });
                 self.answer(call, Answer::Commit(Ok(String::new())));
@@ -462,53 +447,40 @@ impl VoiceDriver {
 
     /// The hard edge: scheduling stopped, timers cancelled, countdown committed or torn down, what
     /// is open interrupted; after it only the close's own steps happen. The close moves on once
-    /// every cut speech has reported `SpeechDone`, as the reference awaits `current_speech`, or
-    /// [`HOST_TEARDOWN_TIMEOUT`] releases them.
+    /// every cut speech has reported `SpeechDone`, or [`HOST_TEARDOWN_TIMEOUT`] releases them.
     pub(crate) fn close_edge(&mut self, now: Ts) {
         self.enter_close_phase(ClosePhase::Edge, Some(HOST_TEARDOWN_TIMEOUT), now);
 
         let reason =
             self.session.closing.as_ref().map(|c| c.reason).unwrap_or(CloseReason::UserInitiated);
         self.session.on_close_edge();
-        // A hold the host has not released ends with the session: past the edge its release is
-        // dropped.
         for hold in self.session.idle.take_holds() {
             self.record_trace(SpeechStep::IdleHoldReleased { hold });
         }
-        // A run still open ends here, `Closed`, before the close's own last event.
         self.run_close();
-        // Detach the microphone: the recogniser hears only the commit's silence flush.
+        // The recogniser hears only the commit's silence flush from here.
         self.record_effect(VoiceEffect::UpdateAudioInputRouting(
             AudioInputRouterCommand::SetSource(None),
         ));
-        // And the recorder: its last flush, its timer cancelled at the edge.
         self.detach_recorder(now);
-        // `wait_for_idle` raises `ActivityClosedError` on a closing session; the trailing-turn
-        // commit below commits what the turn holds.
         self.refuse_idle_waiters();
         if let Some(reason) = self.activity.refuse_turn_limit() {
             self.record_trace(crate::trace::TurnStep::TurnLimitSkipped(reason));
         }
-        // A pending host `commit_user_turn()` is answered below from the close's commit, never
-        // with words that were not committed.
+        // Answered from the close's commit, never with words that were not committed.
         let host_commit_pending = self.activity.has_pending_commit();
-        // Refuse a handoff in flight; a running hook is left to the host and its wait abandoned.
         self.abandon_handoffs();
-        // The per-leg frame census, journalled when the data plane answers.
         self.record_effect(VoiceEffect::UpdateAudioInputRouting(
             AudioInputRouterCommand::ReportCensus,
         ));
-        // Cut a running endpointing delay short, unless the close is an error's: that commits no
-        // trailing transcript, so the countdown is torn down.
+        // An error close commits no trailing transcript, so its countdown is torn down.
         let effects = self.activity.close_recognition(now, reason != CloseReason::Error);
         self.apply_recognition_effects(effects);
         if host_commit_pending {
             self.perform_pending_commit(now);
         }
-        // An in-flight prediction answers a turn nobody will decide: end its task.
         self.record_effect(VoiceEffect::EotClose);
-        // Cancel the turn's armed timers through the cycle so each is journalled, skipping those
-        // the turn machine just cancelled; the others are cancelled with what owns them.
+        // Skips timers the turn machine just cancelled, so each cancel is journalled once.
         for t in [
             Timer::EotPredictionTimeout,
             Timer::EndpointingDelay,
@@ -523,15 +495,10 @@ impl VoiceDriver {
                 self.clear_deadline(t);
             }
         }
-        // Watchdogs go with their speeches, the current speech is released, a pending preemptive
-        // generation discarded, a drain-waiting pause refused, and nothing is authorized again.
         self.close_scheduling(now);
-        // What the drain did not finish is force-interrupted; a speech that does not report its
-        // end by the edge's bound is released by the close. `BTreeMap` order keeps runs stable.
         self.force_cut_open(now);
-        // Release a held pause so no turn during the transcript wait resolves it as false.
+        // No turn during the transcript wait may resolve the held pause as false.
         self.cancel_speech_pause(now);
-        // The socket too, settling every `generate_reply()` still awaiting `GenerationCreated`.
         self.realtime_interrupt(InterruptCause::Closing);
     }
 

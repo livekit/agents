@@ -1,6 +1,3 @@
-//! The provider metric folds the host's streams drive; the implementation is `lk-agents-core`'s
-//! `metrics::provider`.
-
 use crate::metrics::base::{LlmMetrics, SttMetrics, TtsMetrics};
 use crate::usage::TokenUsage;
 use crate::{LlmChunk, SpeechEvent, SynthesizedAudio};

@@ -1,5 +1,3 @@
-//! Desired and acknowledged realtime contexts, operation preparation and replay.
-
 use super::{Outgoing, RealtimeMachine, Step};
 use crate::realtime::protocol::ROOT_ITEM;
 use lk_agents_abi::{ChatContext, ChatItem, Ts};

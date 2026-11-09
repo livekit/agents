@@ -1,5 +1,3 @@
-//! Worker CPU smoothing, capacity, status, and idle-process calculations.
-
 use lk_agents_abi::Ts;
 use std::collections::VecDeque;
 use std::time::Duration;

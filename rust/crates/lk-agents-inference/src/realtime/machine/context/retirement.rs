@@ -1,5 +1,3 @@
-//! Runtime-owned disposal of retired context state.
-
 use super::{ContextWork, CtxUpdate, DeferredCommand};
 use crate::realtime::RemoteChatContext;
 use lk_agents_abi::ChatContext;

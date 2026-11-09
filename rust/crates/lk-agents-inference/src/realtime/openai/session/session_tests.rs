@@ -1,0 +1,1009 @@
+use std::sync::Arc;
+use std::time::Duration;
+
+use lk_agents_abi::Maybe;
+use lk_agents_inference::realtime::openai::{
+    AudioDelta, Auth, Azure, Connect, Event, GenerationCreated, INFERENCE, OPENAI, OpenAIRealtime,
+    OptionsPatch, SeqIds, VOICE_LIVE, XAI,
+};
+use lk_agents_inference::testkit::{FakeWs, NoImages, text};
+use lk_agents_net::clock::RealClock;
+use lk_agents_net::task::TokioSpawner;
+use serde_json::json;
+
+/// No test may block for longer than this. A driver bug that parks forever fails as a timeout
+/// rather than as a hung CI job.
+const BOUND: Duration = Duration::from_secs(5);
+
+async fn next_event(
+    session: &lk_agents_inference::realtime::openai::OpenAIRealtimeSession,
+) -> Event {
+    tokio::time::timeout(BOUND, session.next_event())
+        .await
+        .expect("the driver produced no event within the bound")
+        .expect("the event stream ended early")
+}
+
+/// Wait until the fake has recorded at least `n` frames, or fail. Polling rather than sleeping:
+/// the send is a `tokio` task hop away, not a delay.
+async fn frames(ws: &FakeWs, n: usize) -> Vec<serde_json::Value> {
+    tokio::time::timeout(BOUND, async {
+        loop {
+            let sent = ws.sent_json();
+            if sent.len() >= n {
+                return sent;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("expected {n} frames, saw {:?}", ws.sent()))
+}
+
+fn model(ws: Arc<FakeWs>, dialect: lk_agents_inference::realtime::Dialect) -> OpenAIRealtime {
+    <OpenAIRealtime>::new(
+        dialect,
+        "sk-test",
+        ws,
+        Arc::new(TokioSpawner::current()),
+        Arc::new(RealClock::new()),
+        Arc::new(NoImages),
+    )
+    .with_ids(Arc::new(SeqIds::default()))
+}
+
+// Catches: the driver never sending the opening `session.update`, or sending it to a URL the
+// provider does not serve. Both are silent -- the socket is open and the client looks healthy, but
+// the server never learns the voice, the audio format or the turn-detection config, so it answers
+// in its own defaults or not at all. The URL and the auth header are exactly the two things the
+// unit tests cannot check, because neither reaches the machine.
+#[tokio::test]
+async fn opening_a_session_connects_and_configures_it() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let session = model(ws.clone(), OPENAI).session(false).await;
+
+    let sent = frames(&ws, 1).await;
+    assert_eq!(sent[0]["type"], json!("session.update"));
+    assert_eq!(sent[0]["session"]["model"], json!("gpt-realtime"));
+    assert_eq!(sent[0]["session"]["audio"]["output"]["voice"], json!("marin"));
+    assert_eq!(sent[0]["session"]["audio"]["input"]["format"]["rate"], json!(24000));
+
+    let (url, headers) = ws.last_connect().expect("connected");
+    assert_eq!(url, "wss://api.openai.com/v1/realtime?model=gpt-realtime");
+    assert_eq!(headers.get("Authorization"), Some("Bearer sk-test"));
+    assert_eq!(headers.get("User-Agent"), Some("LiveKit Agents"));
+
+    session.aclose().await;
+}
+
+// Catches: the xAI dialect being applied to the machine but not to the connection. Its base URL is
+// already a `wss://` path, so a driver that re-derived one would connect to
+// `wss://api.x.ai/v1/realtime/realtime`, and its `voice` must arrive at the top level of the
+// session object or the server rejects the update. Both of these only exist once the dialect, the
+// URL builder and the socket are wired together.
+#[tokio::test]
+async fn the_xai_dialect_reaches_both_the_url_and_the_payload() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let session = model(ws.clone(), XAI).session(false).await;
+
+    let sent = frames(&ws, 1).await;
+    assert_eq!(sent[0]["session"]["voice"], json!("Ara"));
+    assert!(
+        sent[0]["session"]["audio"]["output"].get("voice").is_none(),
+        "promoted out of the nested block"
+    );
+    assert_eq!(sent[0]["session"]["turn_detection"]["type"], json!("server_vad"));
+    assert_eq!(ws.last_connect().unwrap().0, "wss://api.x.ai/v1/realtime?model=grok-voice-latest");
+
+    session.aclose().await;
+}
+
+// Catches: a broken loop between `generate_reply`, the wire and the event stream. The correlation
+// is tested exhaustively in `machine.rs`; what is untested there is that the `req_id` the caller
+// is handed is the one that actually goes out as `metadata.client_event_id`, and that the reply
+// comes back out of the event channel rather than being dropped by the pump.
+#[tokio::test]
+async fn a_generate_reply_round_trips_through_the_socket() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let session = model(ws.clone(), OPENAI).session(false).await;
+    frames(&ws, 1).await;
+
+    let req_id = session.generate_reply(None);
+    let sent = frames(&ws, 2).await;
+    assert_eq!(sent[1]["type"], json!("response.create"));
+    assert_eq!(sent[1]["response"]["metadata"]["client_event_id"], json!(req_id));
+
+    ws.feed(text(json!({
+        "type": "response.created",
+        "response": {"id": "resp_1", "metadata": {"client_event_id": req_id}},
+    })));
+
+    loop {
+        if let Event::GenerationCreated(GenerationCreated { response_id, req_id: got }) =
+            next_event(&session).await
+        {
+            assert_eq!(response_id, "resp_1");
+            assert_eq!(got, Some(req_id), "the caller's handle came back");
+            break;
+        }
+    }
+    session.aclose().await;
+}
+
+// Catches: audio deltas never reaching the consumer -- decoded but dropped, or emitted before the
+// generation exists so the machine discards them. A session that configures itself correctly and
+// then plays silence is the most expensive failure in this crate, and it is invisible to every
+// pure test because it lives in the pump's dispatch.
+#[tokio::test]
+async fn server_audio_reaches_the_event_stream_as_frames() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let session = model(ws.clone(), OPENAI).session(false).await;
+    frames(&ws, 1).await;
+
+    // 4 bytes of base64 "AAAA" is 3 bytes of PCM; use a whole sample pair instead.
+    let pcm = base64_of(&[1u8, 0, 2, 0]);
+    ws.feed(text(json!({"type": "response.created", "response": {"id": "resp_1"}})));
+    ws.feed(text(json!({
+        "type": "response.output_item.added",
+        "item": {"id": "msg_1", "type": "message"},
+    })));
+    ws.feed(text(json!({
+        "type": "response.output_audio.delta", "item_id": "msg_1", "delta": pcm,
+    })));
+
+    loop {
+        if let Event::AudioDelta(AudioDelta { message_id, frame, .. }) = next_event(&session).await
+        {
+            assert_eq!(message_id, "msg_1");
+            assert_eq!(frame.sample_rate, 24_000);
+            assert_eq!(frame.num_channels, 1);
+            assert_eq!(&*frame.data, &[1u8, 0, 2, 0]);
+            assert_eq!(frame.samples_per_channel, 2);
+            break;
+        }
+    }
+    session.aclose().await;
+}
+
+// Catches: `push_audio` bypassing the 100 ms re-framing, or base64-encoding the wrong buffer. The
+// gateway accepts almost any chunk size, so a client that sent one frame per 10 ms `rtc` callback
+// would work -- and would send ten times the frames, which is the kind of regression only a test
+// that counts them catches.
+#[tokio::test]
+async fn pushed_audio_is_reframed_to_one_hundred_millisecond_chunks() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let session = model(ws.clone(), OPENAI).session(false).await;
+    frames(&ws, 1).await;
+
+    // 250 ms of 24 kHz mono i16, delivered as five 50 ms frames.
+    for _ in 0..5 {
+        session.push_audio(lk_agents_abi::AudioFrame {
+            data: vec![0u8; 24_000 / 20 * 2].into(),
+            sample_rate: 24_000,
+            num_channels: 1,
+            samples_per_channel: 24_000 / 20,
+        });
+    }
+    let sent = frames(&ws, 3).await;
+    let appends: Vec<_> =
+        sent.iter().filter(|f| f["type"] == json!("input_audio_buffer.append")).collect();
+    assert_eq!(appends.len(), 2, "250 ms is two whole 100 ms chunks, with 50 ms left buffered");
+
+    session.send(lk_agents_abi::RealtimeCommand::CommitAudio(
+        lk_agents_abi::llm::realtime::CommitAudio {},
+    ));
+    let sent = frames(&ws, 4).await;
+    assert_eq!(sent.last().unwrap()["type"], json!("input_audio_buffer.commit"));
+    session.aclose().await;
+}
+
+fn base64_of(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+// Catches: the realtime handshake with no bound, or bounded on tokio's clock, which the session's
+// virtual clock never moves -- so a gateway that accepts the socket and never finishes the
+// handshake was a session that never produced an event. On the session clock it is the reference's
+// `APIConnectionError("... connection timed out")`; with no retry budget it is final.
+#[tokio::test]
+async fn a_handshake_that_never_completes_is_reported_as_a_connection_timeout_on_the_session_clock()
+{
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let ws = Arc::new(FakeWs::hanging());
+    let mut connect = Connect::openai("sk-test", "https://api.openai.com/v1");
+    connect.conn.max_retry = 0;
+    let realtime = <OpenAIRealtime>::new(
+        OPENAI,
+        "sk-test",
+        ws.clone(),
+        Arc::new(TokioSpawner::current()),
+        clock.clone(),
+        Arc::new(NoImages),
+    )
+    .with_connect(connect)
+    .with_ids(Arc::new(SeqIds::default()));
+    let session = realtime.session(false).await;
+
+    lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
+    match next_event(&session).await {
+        Event::Error(err) => {
+            let error = err.provider_error.expect("typed provider error retained");
+            assert_eq!(error.kind, lk_agents_abi::errors::ApiErrorKind::Timeout);
+            assert_eq!(error.phase, Some(lk_agents_abi::errors::TimeoutPhase::Connect));
+            assert!(!err.recoverable, "no retry budget: there is nothing to resume");
+        }
+        other => panic!("expected the connection timeout, got {other:?}"),
+    }
+    assert!(ws.sent().is_empty(), "nothing was sent on a socket that never opened");
+}
+
+// Catches: a send that never completes (the peer stopped reading and its TCP window filled)
+// wedging the session forever instead of failing the connection within `write_timeout`.
+#[tokio::test]
+async fn a_send_that_stalls_fails_the_connection_within_the_write_timeout() {
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let ws = Arc::new(FakeWs::stalling_sends());
+    let mut connect = Connect::openai("sk-test", "https://api.openai.com/v1");
+    connect.conn.max_retry = 0;
+    connect.conn.write_timeout = Some(3.0);
+    let realtime = <OpenAIRealtime>::new(
+        OPENAI,
+        "sk-test",
+        ws.clone(),
+        Arc::new(TokioSpawner::current()),
+        clock.clone(),
+        Arc::new(NoImages),
+    )
+    .with_connect(connect)
+    .with_ids(Arc::new(SeqIds::default()));
+    let session = realtime.session(false).await;
+
+    lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(3)).await;
+    loop {
+        match next_event(&session).await {
+            Event::Metrics(_) => continue,
+            Event::Error(err) => {
+                assert!(err.message.contains("write timeout"), "{}", err.message);
+                assert!(!err.recoverable, "no retry budget: there is nothing to resume");
+                break;
+            }
+            other => panic!("expected the write timeout, got {other:?}"),
+        }
+    }
+}
+
+// Catches: a dropped connection ending the session, or reconnecting without telling the caller
+// or without replaying the session. The reference's `_main_task` reports the drop as a recoverable
+// error, waits its first retry interval and reconnects, sending the session again.
+#[tokio::test]
+async fn an_unexpected_close_is_recoverable_and_the_session_reconnects() {
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    // Drop one established socket after the provider received its opening update.
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let realtime = <OpenAIRealtime>::new(
+        OPENAI,
+        "sk-test",
+        ws.clone(),
+        Arc::new(TokioSpawner::current()),
+        clock.clone(),
+        Arc::new(NoImages),
+    )
+    .with_ids(Arc::new(SeqIds::default()));
+    let session = realtime.session(false).await;
+    frames(&ws, 1).await;
+    ws.feed(Ok(lk_agents_net::transport::WsMessage::Closed));
+
+    loop {
+        match next_event(&session).await {
+            Event::Metrics(_) => continue,
+            Event::Error(err) => {
+                assert!(err.message.contains("closed unexpectedly"), "{}", err.message);
+                assert!(err.recoverable);
+                break;
+            }
+            other => panic!("expected the drop, got {other:?}"),
+        }
+    }
+    lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_millis(100)).await;
+    tokio::time::timeout(BOUND, async {
+        while ws.connect_count() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the session reconnected");
+    let sent = frames(&ws, 2).await;
+    assert_eq!(sent[1]["type"], json!("session.update"), "the reconnection replays the session");
+    session.aclose().await;
+}
+
+// Catches: Azure reached with the OpenAI URL or auth. Azure takes the deployment as `model` and an
+// `api-key` header; its beta event names must read as the GA ones.
+#[tokio::test]
+async fn azure_gets_its_url_and_header() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let connect = Connect {
+        base_url: "https://res.openai.azure.com/openai".into(),
+        azure: Some(Azure { deployment: Some("gpt-rt".into()) }),
+        auth: Auth::Azure { api_key: Some("az-key".into()), entra_token: None },
+        conn: Default::default(),
+    };
+    let session = model(ws.clone(), OPENAI).with_connect(connect).session(false).await;
+
+    frames(&ws, 1).await;
+    let (url, headers) = ws.last_connect().unwrap();
+    assert_eq!(url, "wss://res.openai.azure.com/openai/v1/realtime?model=gpt-rt");
+    assert_eq!(headers.get("api-key"), Some("az-key"));
+    assert!(!headers.iter().any(|(k, _)| k == "Authorization"));
+
+    // a beta event name reads as the GA one
+    ws.feed(text(json!({"type": "conversation.item.created", "previous_item_id": null,
+        "item": {"id": "i1", "type": "message", "role": "user",
+                 "content": [{"type": "input_text", "text": "hi"}]}})));
+    loop {
+        if let Event::RemoteItemAdded(added) = next_event(&session).await {
+            assert_eq!(added.item.id(), "i1");
+            break;
+        }
+    }
+    session.aclose().await;
+}
+
+// Catches: the beta protocol applied to the machine but not the socket. Voice Live takes the Azure
+// URL and key, its model as the `model` query parameter, and rejects the GA session shape.
+#[tokio::test]
+async fn voice_live_connects_through_azure_and_sends_the_beta_session() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let connect = Connect {
+        base_url: "https://res.services.ai.azure.com/voice-live/realtime?api-version=2026-04-10"
+            .into(),
+        azure: Some(Azure { deployment: Some("gpt-realtime".into()) }),
+        auth: Auth::Azure { api_key: Some("az-key".into()), entra_token: None },
+        conn: Default::default(),
+    };
+    let realtime = model(ws.clone(), VOICE_LIVE).with_connect(connect);
+    realtime.update_options(OptionsPatch {
+        voice: Maybe::Given(json!({"type": "azure-standard", "name": "en-US-AvaNeural"})),
+        ..Default::default()
+    });
+    let session = realtime.session(false).await;
+
+    let sent = frames(&ws, 1).await;
+    let s = &sent[0]["session"];
+    assert!(s.get("type").is_none() && s.get("audio").is_none(), "{s}");
+    assert_eq!(s["voice"], json!({"type": "azure-standard", "name": "en-US-AvaNeural"}));
+    assert_eq!(s["modalities"], json!(["text", "audio"]));
+    assert_eq!(s["input_audio_format"], json!("pcm16"));
+    assert_eq!(s["turn_detection"]["type"], json!("server_vad"));
+    assert!(s.get("max_response_output_tokens").is_some() && s.get("tracing").is_none());
+    let (url, headers) = ws.last_connect().unwrap();
+    assert_eq!(
+        url,
+        "wss://res.services.ai.azure.com/voice-live/realtime?api-version=2026-04-10&model=gpt-realtime"
+    );
+    assert_eq!(headers.get("api-key"), Some("az-key"));
+    assert!(!realtime.capabilities().message_truncation);
+    session.aclose().await;
+}
+
+// Catches: LiveKit Inference reached with a static key instead of a gateway JWT, without the
+// provider it routes to, or with `session.model` (the gateway picks the model from the URL).
+#[tokio::test]
+async fn livekit_inference_signs_each_connection_and_drops_the_session_model() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let connect = Connect {
+        base_url: "https://agent-gateway.livekit.cloud/v1".into(),
+        azure: None,
+        auth: Auth::Inference {
+            api_key: "APIkey".into(),
+            api_secret: "secret".into(),
+            provider: Some("openai".into()),
+            inference_class: Some(String::new()),
+            identity: Default::default(),
+        },
+        conn: Default::default(),
+    };
+    let realtime = model(ws.clone(), INFERENCE).with_connect(connect);
+    let session = realtime.session(false).await;
+
+    let sent = frames(&ws, 1).await;
+    assert!(sent[0]["session"].get("model").is_none(), "{}", sent[0]);
+    let (url, headers) = ws.last_connect().unwrap();
+    assert_eq!(url, "wss://agent-gateway.livekit.cloud/v1/realtime?model=gpt-realtime");
+    let auth = headers.iter().find(|(k, _)| k == "Authorization").expect("a bearer").1.clone();
+    assert!(auth.starts_with("Bearer ey"), "a JWT, not the key: {auth}");
+    assert_eq!(headers.get("X-LiveKit-Inference-Provider"), Some("openai"));
+    assert_eq!(
+        headers.get("User-Agent"),
+        Some(lk_agents_inference::headers::user_agent(env!("CARGO_PKG_VERSION")).as_str())
+    );
+    assert_eq!(headers.get("X-LiveKit-Inference-Priority"), None);
+    session.aclose().await;
+}
+
+// Catches: `update_options` reaching the model but not its live sessions, or sending what did not
+// change. The reference diffs each option against the session's own and sends one
+// `options_update_` session.update with only the changes, the audio halves together.
+#[tokio::test]
+async fn update_options_sends_only_what_changed_to_the_live_session() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let realtime = model(ws.clone(), OPENAI);
+    let session = realtime.session(false).await;
+    frames(&ws, 1).await;
+
+    realtime.update_options(OptionsPatch {
+        voice: Maybe::Given("cedar".into()),
+        speed: Maybe::Given(1.0),
+        ..Default::default()
+    });
+    let sent = frames(&ws, 2).await;
+    assert_eq!(sent[1]["type"], json!("session.update"));
+    assert!(sent[1]["event_id"].as_str().unwrap().starts_with("options_update_"));
+    assert_eq!(
+        sent[1]["session"],
+        json!({"type": "realtime", "audio": {"output": {"voice": "cedar"}}}),
+        "speed did not change, transcription and noise reduction are the model's own"
+    );
+    assert_eq!(realtime.model(), "gpt-realtime");
+    session.aclose().await;
+}
+
+#[tokio::test]
+async fn realtime_send_stall_fires_write_deadline_without_starting_remote_read_timeout() {
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let ws = Arc::new(FakeWs::stalling_sends());
+    let mut connect = Connect::openai("sk-test", "https://api.openai.com/v1");
+    connect.conn.max_retry = 0;
+    connect.conn.write_timeout = Some(3.0);
+    connect.conn.read_timeout = Some(1.0);
+    let realtime = <OpenAIRealtime>::new(
+        OPENAI,
+        "sk-test",
+        ws,
+        Arc::new(TokioSpawner::current()),
+        clock.clone(),
+        Arc::new(NoImages),
+    )
+    .with_connect(connect);
+    let session = realtime.session(false).await;
+    assert!(matches!(next_event(&session).await, Event::Metrics(_)));
+    session.generate_reply(None);
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(1)).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), session.next_event()).await.is_err(),
+        "a queued response is not waiting for the remote reader yet"
+    );
+    lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(2)).await;
+    let Event::Error(error) = next_event(&session).await else {
+        panic!("expected write timeout");
+    };
+    let provider = error.provider_error.expect("native timeout category is retained");
+    assert_eq!(provider.kind, lk_agents_abi::errors::ApiErrorKind::Timeout);
+    assert_eq!(provider.phase, Some(lk_agents_abi::errors::TimeoutPhase::Write));
+    session.aclose().await;
+}
+
+#[test]
+fn realtime_malformed_message_preserves_operation_identity_and_decode_cause() {
+    let error = lk_agents_inference::realtime::openai::wire::decode_text(
+        r#"{"type":"response.created","event_id":"evt_bad","response":{"id":42}}"#,
+        &Default::default(),
+        std::time::SystemTime::UNIX_EPOCH,
+    )
+    .expect_err("malformed known fields must fail before core dispatch");
+    assert_eq!(error.operation, "response.created");
+    assert_eq!(error.event_id.as_deref(), Some("evt_bad"));
+    assert!(error.cause.contains("expected a string"));
+    let error = lk_agents_inference::realtime::openai::wire::decode_text(
+        r#"{"type":"response.output_audio.delta","item_id":"m1","delta":"not base64"}"#,
+        &Default::default(),
+        std::time::SystemTime::UNIX_EPOCH,
+    )
+    .expect_err("invalid base64 cannot produce an empty audio frame");
+    assert!(error.cause.contains("invalid PCM base64"));
+    let error = lk_agents_inference::realtime::openai::wire::decode_text(
+        r#"{"type":"response.done","response":{"id":"r1","status":"unknown"}}"#,
+        &Default::default(),
+        std::time::SystemTime::UNIX_EPOCH,
+    )
+    .expect_err("an unknown terminal status cannot become a completed response");
+    assert!(error.cause.contains("unsupported response status"));
+    let error = lk_agents_inference::realtime::openai::wire::decode_text(
+        r#"{"type":"response.done","event_id":"evt_usage","response":{"id":"r1","status":"completed","usage":{"input_tokens":"invalid"}}}"#,
+        &Default::default(), std::time::SystemTime::UNIX_EPOCH,
+    ).expect_err("malformed known numeric fields cannot become zero usage on clean completion");
+    assert_eq!(error.event_id.as_deref(), Some("evt_usage"));
+    assert!(error.cause.contains("expected u64"));
+}
+
+#[tokio::test]
+async fn unknown_server_items_do_not_end_the_session() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let session = model(ws.clone(), OPENAI).session(false).await;
+    frames(&ws, 1).await;
+    for event in
+        ["conversation.item.added", "response.output_item.added", "response.output_item.done"]
+    {
+        ws.feed(text(json!({"type": event, "item": {"type": "mcp_list_tools"}})));
+    }
+    let req_id = session.generate_reply(None);
+    frames(&ws, 2).await;
+    ws.feed(text(json!({"type": "response.created", "response": {
+        "id": "after_mcp", "metadata": {"client_event_id": req_id}
+    }})));
+    loop {
+        match next_event(&session).await {
+            Event::GenerationCreated(created) => {
+                assert_eq!(created.response_id, "after_mcp");
+                assert_eq!(created.req_id, Some(req_id));
+                break;
+            }
+            Event::Error(error) => panic!("unknown item ended session: {error:?}"),
+            _ => {}
+        }
+    }
+    session.aclose().await;
+}
+
+#[tokio::test]
+async fn realtime_image_preparation_cannot_hold_close_or_publish_a_stale_result() {
+    use lk_agents_abi::llm::provider_format::{ImageResolver, SerializedImage};
+    struct StalledImage {
+        started: parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        release: parking_lot::Mutex<std::sync::mpsc::Receiver<()>>,
+        settled: parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    }
+    impl ImageResolver for StalledImage {
+        fn resolve(
+            &self,
+            image: &lk_agents_abi::ImageContent,
+        ) -> Result<SerializedImage, lk_agents_abi::llm::provider_format::FormatError> {
+            assert_eq!(image.id, "frame_1");
+            if let Some(started) = self.started.lock().take() {
+                let _ = started.send(());
+            }
+            self.release.lock().recv().unwrap();
+            if let Some(settled) = self.settled.lock().take() {
+                let _ = settled.send(());
+            }
+            Ok(SerializedImage::inline(vec![1, 2, 3], "image/jpeg", Default::default()))
+        }
+    }
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let (settled, done) = tokio::sync::oneshot::channel();
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let model = <OpenAIRealtime>::new(
+        OPENAI,
+        "sk",
+        ws.clone(),
+        Arc::new(TokioSpawner::current()),
+        Arc::new(RealClock::new()),
+        Arc::new(StalledImage {
+            started: parking_lot::Mutex::new(Some(started)),
+            release: parking_lot::Mutex::new(wait),
+            settled: parking_lot::Mutex::new(Some(settled)),
+        }),
+    );
+    let session = model.session(false).await;
+    frames(&ws, 1).await;
+    let image = lk_agents_abi::ImageContent {
+        id: "frame_1".into(),
+        image: lk_agents_abi::ImageSource::Url("data:image/jpeg;base64,AQID".into()),
+        inference_width: None,
+        inference_height: None,
+        inference_detail: Default::default(),
+        mime_type: None,
+    };
+    session.send(lk_agents_abi::RealtimeCommand::PushItem(lk_agents_abi::PushItem {
+        item: Box::new(lk_agents_abi::ChatItem::Message(lk_agents_abi::ChatMessage::new(
+            "video_1",
+            lk_agents_abi::Role::User,
+            vec![lk_agents_abi::ChatContent::Image(image)],
+            std::time::SystemTime::UNIX_EPOCH,
+        ))),
+        reply_required: false,
+    }));
+    tokio::time::timeout(BOUND, ready).await.unwrap().unwrap();
+    tokio::time::timeout(BOUND, session.aclose()).await.expect("image work cannot delay close");
+    release.send(()).unwrap();
+    tokio::time::timeout(BOUND, done).await.unwrap().unwrap();
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        ws.sent_json().len(),
+        1,
+        "the retired connection must never send the prepared image"
+    );
+}
+
+#[tokio::test]
+async fn realtime_total_deadline_during_handshake_retains_its_total_phase() {
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let mut connect = Connect::openai("sk", "https://api.openai.com/v1");
+    connect.conn.total_timeout = Some(3.0);
+    connect.conn.connect_timeout = Some(30.0);
+    let model = <OpenAIRealtime>::new(
+        OPENAI,
+        "sk",
+        Arc::new(FakeWs::hanging()),
+        Arc::new(TokioSpawner::current()),
+        clock.clone(),
+        Arc::new(NoImages),
+    )
+    .with_connect(connect);
+    let session = model.session(false).await;
+    lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(3)).await;
+    let Event::Error(error) = next_event(&session).await else {
+        panic!("expected total timeout");
+    };
+    assert!(!error.recoverable);
+    assert_eq!(
+        error.provider_error.unwrap().phase,
+        Some(lk_agents_abi::errors::TimeoutPhase::Total)
+    );
+    session.aclose().await;
+}
+
+#[tokio::test]
+async fn realtime_stalled_close_keeps_ownership_until_the_transport_releases() {
+    use lk_agents_net::transport::{TransportError, WsReceiver, WsSender, WsTransport};
+    struct StalledClose {
+        sender: Arc<dyn WsSender>,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        settled: Arc<tokio::sync::Notify>,
+    }
+    #[async_trait::async_trait]
+    impl WsSender for StalledClose {
+        async fn send_text(&self, text: String) -> Result<(), TransportError> {
+            self.sender.send_text(text).await
+        }
+        async fn send_binary(&self, data: Vec<u8>) -> Result<(), TransportError> {
+            self.sender.send_binary(data).await
+        }
+        fn is_closed(&self) -> bool {
+            self.sender.is_closed()
+        }
+        async fn close(&self) {
+            self.started.notify_one();
+            self.release.notified().await;
+            self.sender.close().await;
+            self.settled.notify_one();
+        }
+    }
+    struct Transport {
+        socket: Arc<FakeWs>,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        settled: Arc<tokio::sync::Notify>,
+        owner: parking_lot::Mutex<Option<std::sync::Weak<dyn WsSender>>>,
+    }
+    #[async_trait::async_trait]
+    impl WsTransport for Transport {
+        async fn connect(
+            &self,
+            url: &str,
+            headers: lk_agents_inference::headers::Headers,
+        ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
+            let (sender, receiver) = self.socket.connect(url, headers).await?;
+            let sender: Arc<dyn WsSender> = Arc::new(StalledClose {
+                sender,
+                started: self.started.clone(),
+                release: self.release.clone(),
+                settled: self.settled.clone(),
+            });
+            *self.owner.lock() = Some(Arc::downgrade(&sender));
+            Ok((sender, receiver))
+        }
+    }
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let transport = Arc::new(Transport {
+        socket: Arc::new(FakeWs::new(vec![]).keep_open()),
+        started: Arc::default(),
+        release: Arc::default(),
+        settled: Arc::default(),
+        owner: Default::default(),
+    });
+    let model = <OpenAIRealtime>::new(
+        OPENAI,
+        "sk",
+        transport.clone(),
+        Arc::new(TokioSpawner::current()),
+        clock.clone(),
+        Arc::new(NoImages),
+    );
+    let session = Arc::new(model.session(false).await);
+    frames(&transport.socket, 1).await;
+    let closing = tokio::spawn({
+        let session = session.clone();
+        async move { session.aclose().await }
+    });
+    tokio::time::timeout(BOUND, transport.started.notified()).await.unwrap();
+    lk_agents_inference::testkit::arm_then_advance(&clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT)
+        .await;
+    tokio::time::timeout(BOUND, closing).await.unwrap().unwrap();
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    let owner = transport.owner.lock().as_ref().unwrap().clone();
+    assert!(
+        owner.upgrade().is_some(),
+        "the runtime must retain a transport whose close missed its deadline"
+    );
+    assert_eq!(
+        transport.socket.connect_count(),
+        1,
+        "incomplete cleanup cannot start another connection"
+    );
+    assert!(matches!(
+        session.cleanup_observation(),
+        Some(lk_agents_inference::effects::RealtimeConnectionEffect::CleanupIncomplete {
+            generation: 1
+        })
+    ));
+    transport.release.notify_one();
+    tokio::time::timeout(BOUND, transport.settled.notified()).await.unwrap();
+    tokio::time::timeout(BOUND, async {
+        while owner.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[test]
+fn realtime_fallback_byte_budget_counts_retained_string_allocations() {
+    use lk_agents_inference::fallback::realtime::{
+        BacklogOverload, FALLBACK_PENDING_BYTES, FallbackBacklog,
+    };
+    let mut instructions = String::with_capacity(FALLBACK_PENDING_BYTES + 1);
+    instructions.push('x');
+    let refused = FallbackBacklog::default()
+        .hold(lk_agents_abi::RealtimeCommand::GenerateReply(lk_agents_abi::GenerateReply {
+            req_id: "retained".into(),
+            instructions: Some(instructions),
+            tool_choice: None,
+        }))
+        .expect_err("short text with a large retained allocation must exceed the byte budget");
+    assert_eq!(refused.0, BacklogOverload::Bytes);
+}
+
+#[tokio::test]
+async fn realtime_unsent_say_never_claims_a_proactive_server_response() {
+    let ws = Arc::new(FakeWs::stalling_sends());
+    let model = <OpenAIRealtime>::new(
+        XAI,
+        "sk",
+        ws.clone(),
+        Arc::new(TokioSpawner::current()),
+        Arc::new(RealClock::new()),
+        Arc::new(NoImages),
+    );
+    let session = model.session(false).await;
+    assert!(matches!(next_event(&session).await, Event::Metrics(_)));
+    session.send(lk_agents_abi::RealtimeCommand::Say(lk_agents_abi::llm::realtime::Say {
+        req_id: "unsent_say".into(),
+        text: "Say this after the socket writes".into(),
+        add_to_chat_ctx: true,
+    }));
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    ws.feed(text(json!({"type":"response.created","response":{"id":"proactive"}})));
+    let Event::GenerationCreated(created) = next_event(&session).await else {
+        panic!("expected server generation");
+    };
+    assert_eq!(created.response_id, "proactive");
+    assert_eq!(
+        created.req_id, None,
+        "an unconfirmed local write cannot claim a proactive response"
+    );
+    session.aclose().await;
+}
+
+/// 10 ms of 24 kHz mono whose samples count on from the frame before, so order is checkable.
+fn counted_frame(index: usize) -> lk_agents_abi::AudioFrame {
+    let data: Vec<u8> =
+        (0..240).flat_map(|sample| ((index * 240 + sample) as u16).to_le_bytes()).collect();
+    lk_agents_abi::AudioFrame::new(data, 24_000, 1, 240)
+}
+
+/// The wire's event types after the opening `session.update`, and the audio appended, in order.
+fn input_on_the_wire(sent: &[serde_json::Value]) -> (Vec<String>, Vec<u8>) {
+    use base64::Engine as _;
+    let mut audio = Vec::new();
+    let types = sent[1..]
+        .iter()
+        .map(|frame| {
+            if frame["type"] == json!("input_audio_buffer.append") {
+                let chunk = frame["audio"].as_str().expect("base64 audio");
+                audio.extend(base64::engine::general_purpose::STANDARD.decode(chunk).unwrap());
+            }
+            frame["type"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    (types, audio)
+}
+
+async fn sent_until(ws: &FakeWs, last: &str) -> Vec<serde_json::Value> {
+    tokio::time::timeout(BOUND, async {
+        loop {
+            let sent = ws.sent_json();
+            if sent.last().is_some_and(|frame| frame["type"] == json!(last)) {
+                return sent;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("expected a final {last}, saw {:?}", ws.sent()))
+}
+
+async fn no_errors(session: &lk_agents_inference::realtime::openai::OpenAIRealtimeSession) {
+    session.aclose().await;
+    while let Some(event) = tokio::time::timeout(BOUND, session.next_event()).await.unwrap() {
+        assert!(!matches!(event, Event::Error(_)), "{event:?}");
+    }
+}
+
+// Catches: the console crash. Pre-connect audio and the mic backlog reach a session whose socket
+// is still connecting, one frame per 10 ms, as a burst; each frame was a queued command and then
+// a writer batch, and a full queue was a non-retryable "write backlog exceeded". Seconds of audio
+// must wait, arrive whole and in order, and stay before the commit and the reply that follow it.
+#[tokio::test]
+async fn seconds_of_audio_before_a_slow_connect_arrive_in_order_before_the_commit() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open().connect_on(gate.clone()));
+    let session = model(ws.clone(), OPENAI).session(false).await;
+
+    let frames: Vec<_> = (0..300).map(counted_frame).collect();
+    for frame in &frames {
+        session.push_audio(frame.clone());
+    }
+    session.send(lk_agents_abi::RealtimeCommand::CommitAudio(
+        lk_agents_abi::llm::realtime::CommitAudio {},
+    ));
+    session.generate_reply(None);
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    gate.notify_one();
+
+    let (types, audio) = input_on_the_wire(&sent_until(&ws, "response.create").await);
+    let mut expected = vec!["input_audio_buffer.append"; 30];
+    expected.extend(["input_audio_buffer.commit", "response.create"]);
+    assert_eq!(types, expected, "three seconds is thirty 100 ms appends, then the commit");
+    let pushed: Vec<u8> = frames.iter().flat_map(|frame| frame.data.iter().copied()).collect();
+    assert!(audio == pushed, "the audio arrived reordered or cut");
+    no_errors(&session).await;
+}
+
+// Catches: a clear reordered against the audio around it. The audio before it is dropped
+// locally, the server is still told to clear its buffer, and the audio after it is what the
+// commit names.
+#[tokio::test]
+async fn a_clear_drops_the_audio_before_it_and_keeps_the_audio_after_it() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open().connect_on(gate.clone()));
+    let session = model(ws.clone(), OPENAI).session(false).await;
+
+    for index in 0..20 {
+        session.push_audio(counted_frame(index));
+    }
+    session.send(lk_agents_abi::RealtimeCommand::ClearAudio(
+        lk_agents_abi::llm::realtime::ClearAudio {},
+    ));
+    let kept: Vec<_> = (100..120).map(counted_frame).collect();
+    for frame in &kept {
+        session.push_audio(frame.clone());
+    }
+    session.send(lk_agents_abi::RealtimeCommand::CommitAudio(
+        lk_agents_abi::llm::realtime::CommitAudio {},
+    ));
+    gate.notify_one();
+
+    let (types, audio) = input_on_the_wire(&sent_until(&ws, "input_audio_buffer.commit").await);
+    assert_eq!(
+        types,
+        [
+            "input_audio_buffer.clear",
+            "input_audio_buffer.append",
+            "input_audio_buffer.append",
+            "input_audio_buffer.commit"
+        ]
+    );
+    let after: Vec<u8> = kept.iter().flat_map(|frame| frame.data.iter().copied()).collect();
+    assert!(audio == after, "audio from before the clear reached the server");
+    no_errors(&session).await;
+}
+
+// Catches: a pump that never drains turning local pressure into a dead session. The command it
+// could not take is lost, so its reply fails, and the error is recoverable.
+#[tokio::test]
+async fn a_stuck_input_fails_the_lost_reply_recoverably() {
+    let ws = Arc::new(FakeWs::hanging());
+    let session = model(ws.clone(), OPENAI).session(false).await;
+    for _ in 0..64 {
+        session.send(lk_agents_abi::RealtimeCommand::Interrupt(
+            lk_agents_abi::llm::realtime::Interrupt { response_id: None },
+        ));
+    }
+    let req_id = session.generate_reply(None);
+    match next_event(&session).await {
+        Event::Error(error) => assert!(error.recoverable, "{error:?}"),
+        other => panic!("expected the stuck input, got {other:?}"),
+    }
+    match next_event(&session).await {
+        Event::GenerateReplyFailed(failed) => assert_eq!(failed.req_id, req_id),
+        other => panic!("expected the lost reply to fail, got {other:?}"),
+    }
+}
+
+mod live {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use lk_agents_abi::llm::realtime::GenerationDone;
+    use lk_agents_inference::realtime::openai::{
+        AudioDelta, Event, GenerationCreated, OPENAI, OpenAIRealtime,
+    };
+    use lk_agents_inference::testkit::NoImages;
+    use lk_agents_net::clock::RealClock;
+    use lk_agents_net::task::TokioSpawner;
+    use lk_agents_net::websocket::TungsteniteTransport;
+
+    #[tokio::test]
+    #[ignore = "requires OPENAI_API_KEY and reaches the network"]
+    async fn a_real_session_accepts_our_opening_update_and_answers() {
+        let Ok(api_key) = std::env::var("OPENAI_API_KEY") else {
+            eprintln!("OPENAI_API_KEY unset; skipping");
+            return;
+        };
+
+        let session = <OpenAIRealtime>::new(
+            OPENAI,
+            api_key,
+            Arc::new(TungsteniteTransport),
+            Arc::new(TokioSpawner::current()),
+            Arc::new(RealClock::new()),
+            Arc::new(NoImages),
+        )
+        .session(false)
+        .await;
+
+        let req_id = session.generate_reply(Some("Say the single word: pong.".into()));
+
+        // Bounded, like every other await in this crate's tests. A live server that says nothing is a
+        // failed test, not a hung one.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        let mut saw_audio = false;
+        loop {
+            let Ok(Some(ev)) = tokio::time::timeout_at(deadline, session.next_event()).await else {
+                panic!("no answer within 20 s; saw_audio={saw_audio}");
+            };
+            match ev {
+                // The server rejecting the opening `session.update` arrives here and nowhere else.
+                Event::Error(e) => panic!("the server rejected something: {}", e.message),
+                Event::GenerationCreated(GenerationCreated { req_id: Some(got), .. }) => {
+                    assert_eq!(got, req_id, "the correlation survives a real round trip");
+                }
+                Event::AudioDelta(AudioDelta { .. }) => saw_audio = true,
+                Event::GenerationDone(GenerationDone { status, usage, .. }) => {
+                    assert_eq!(status, lk_agents_inference::realtime::GenerationStatus::Completed);
+                    assert!(usage.output_tokens > 0, "the usage block is where we think it is");
+                    assert!(saw_audio, "an audio session that produced no audio");
+                    break;
+                }
+                _ => {}
+            }
+        }
+        session.aclose().await;
+    }
+}

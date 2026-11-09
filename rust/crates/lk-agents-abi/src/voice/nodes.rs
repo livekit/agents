@@ -1,7 +1,3 @@
-//! The session's registered nodes, as the core opens them over the host's `_SessionNodes`
-//! (`_core.AgentNodes`), and the default `llm_node`, `tts_node` and `stt_node` the host's nodes
-//! may call.
-
 use std::any::Any;
 use std::sync::Arc;
 

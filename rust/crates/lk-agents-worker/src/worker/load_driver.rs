@@ -1,5 +1,3 @@
-//! Load sampling I/O and freshness. Capacity decisions stay in `load`.
-
 use super::{Completion, Outbox, Worker};
 use crate::CpuMonitor;
 use crate::load::{STALE_AFTER, STARTUP_WINDOW};

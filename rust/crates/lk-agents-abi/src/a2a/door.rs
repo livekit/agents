@@ -1,6 +1,3 @@
-//! The JSON-RPC door the worker serves an A2A endpoint through, and its already encoded
-//! HTTP/SSE frames.
-
 use std::sync::Arc;
 
 use super::auth::AuthError;

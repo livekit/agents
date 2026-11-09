@@ -1,7 +1,3 @@
-//! `HostAudioReceiver`: the avatar runner's receiver over a host `AudioReceiver`. Its audio is
-//! read from a native queue: `QueueAudioOutput`'s, or one the host's iterator is pumped into,
-//! stamped with the clear epoch it was captured in.
-
 use crate::telemetry;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::utils::video::AudioReceiverFrame;

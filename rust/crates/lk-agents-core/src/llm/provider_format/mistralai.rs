@@ -1,5 +1,3 @@
-//! Mistral Conversations entries, with instructions out of band.
-
 use super::group::{
     DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE, convert_mid_conversation_instructions, group_tool_calls,
 };

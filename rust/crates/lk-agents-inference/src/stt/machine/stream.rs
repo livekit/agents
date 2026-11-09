@@ -1,8 +1,3 @@
-//! STT completion policy. Audio EOF asks for finalization. Some providers acknowledge it with
-//! `session.finalized`; others (Deepgram, AssemblyAI) answer with at most a final transcript and
-//! keep the socket open, so a quiet period after the input ended completes the stream: short after
-//! a final transcript, `finalization_timeout` otherwise. Socket EOF before completion fails.
-
 use super::transcript::TranscriptMachine;
 use crate::effects::SttStreamEffect;
 use crate::stt::wire::Incoming;
@@ -10,6 +5,10 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::resources::ResourceId;
 use std::time::Duration;
+
+// Some providers acknowledge finalization with `session.finalized`; others (Deepgram, AssemblyAI)
+// answer with at most a final transcript and keep the socket open, so a quiet period after the
+// input ended completes the stream.
 
 /// Quiet period after a post-EOF final transcript that completes a stream with no acknowledgment.
 pub const FINAL_TRANSCRIPT_QUIET: Duration = Duration::from_secs(3);

@@ -1,10 +1,10 @@
-//! Typed server events. Unknown events retain their envelope identity; unknown items are ignored.
-
 use super::*;
 use crate::realtime::protocol::OutputItemKind;
 use lk_agents_abi::llm::realtime::{GenerationStatus, Modalities};
 use lk_agents_abi::usage::TokenUsage;
 use serde::Deserialize;
+
+// Unknown events retain their envelope identity; unknown items are ignored.
 
 #[derive(Deserialize)]
 struct Envelope {

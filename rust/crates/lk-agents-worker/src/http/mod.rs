@@ -1,16 +1,5 @@
-//! Endpoint streams: the worker serves one HTTP/1.1 exchange, or one WebSocket connection, on each
-//! stream and hands the binding the parsed exchange. Parsing, framing, limits, deadlines, completion
-//! trailers and closing are decided here; the binding only adapts the exchange to its framework.
-
 mod exchange;
 mod websocket;
-
-#[cfg(test)]
-mod exchange_tests;
-#[cfg(test)]
-mod hostile_input_tests;
-#[cfg(test)]
-mod websocket_tests;
 
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -38,6 +27,9 @@ use crate::transport::{
 
 pub use exchange::Exchange;
 pub(crate) use exchange::{Origin, decode_path};
+
+// Parsing, framing, limits, deadlines, completion trailers and closing are decided here; the
+// binding only adapts the exchange to its framework.
 
 /// The largest single read from an endpoint stream.
 pub(crate) const READ_SIZE: usize = 64 << 10;

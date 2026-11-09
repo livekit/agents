@@ -1,5 +1,3 @@
-//! Typed realtime inputs decoded by the runtime before dispatch.
-
 /// The `previous_item_id` that places an item first in the conversation.
 pub const ROOT_ITEM: &str = "root";
 

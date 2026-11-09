@@ -1,11 +1,17 @@
-//! Builders shared by the provider test modules. Nothing here is compiled into the library.
-
+use crate::llm::provider_format::host::to_provider_format;
 use crate::llm::provider_format::{PreResolved, SerializedImage};
+use lk_agents_abi::llm::provider_format::ProviderFormat;
 use lk_agents_abi::{
     AgentHandoffItem, ChatContent, ChatContext, ChatItem, ChatMessage, FunctionCall,
     FunctionCallOutput, ImageContent, ImageSource, InferenceDetail, Role,
 };
+use serde_json::Value;
 use std::time::{Duration, SystemTime};
+
+/// The provider wire messages the host entry produces for `items`, with no images resolved.
+pub fn wire(format: ProviderFormat, items: Vec<ChatItem>) -> Vec<Value> {
+    to_provider_format(format, items, None, false, false, None).unwrap().0
+}
 
 pub fn text_of(value: &(impl serde::Serialize + ?Sized)) -> String {
     serde_json::to_string(value).unwrap()

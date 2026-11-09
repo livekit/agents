@@ -1,4 +1,3 @@
-//! Declared runner and its cancellable, bounded update source.
 use super::*;
 use crate::telemetry;
 use lk_agents_abi::errors::Invalid;

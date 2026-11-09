@@ -1,5 +1,3 @@
-//! The agent's turn: one speech, its nodes, realtime inference and tool calls.
-
 use serde::Serialize;
 
 use super::common::{GenAiOperation, OutputType, ParticipantAttrs, ToolType};

@@ -1,7 +1,3 @@
-//! `voice/events.py`'s generated events, and the session-event wire the host routes by record
-//! class (`_generated/session_dispatch.py`). The public events are dataclasses
-//! (`_generated/events.py`); the wire-only records are `_generated/session_wire.py`.
-
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -14,8 +10,6 @@ use crate::voice::room_io::{
 // The Python `module` and `path` of every record here that names none of its own.
 #[crate::host(file(module = "events", path = "livekit.agents.voice.events"))]
 const _: () = ();
-
-// --- the two state vocabularies ------------------------------------------------------------------
 
 /// Whether the user is speaking, listening, or has gone away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -81,8 +75,6 @@ pub enum HookName {
     /// The host's close of the session.
     Closing,
 }
-
-// --- the session events --------------------------------------------------------------------------
 
 #[crate::host(record(
     module = "events",
@@ -225,8 +217,6 @@ pub enum SpeechSource {
     GenerateReply,
 }
 
-// --- the tool lifecycle ---------------------------------------------------------------------------
-//
 // `ToolExecutionUpdatedEvent.update`'s members, each crossing as its public record.
 
 /// A function tool call was dispatched.
@@ -336,8 +326,6 @@ pub struct ToolExecutionUpdated {
     pub update: ToolUpdate,
 }
 
-// --- limits, errors and the close ------------------------------------------------------------------
-
 // The user turn passed a configured word or duration limit. No `///`: it would become a docstring.
 #[crate::host(record(
     module = "events",
@@ -380,8 +368,6 @@ pub enum CloseReason {
     TaskCompleted,
 }
 
-// --- the session-event wire payloads --------------------------------------------------------------
-//
 // What `VoiceSession._core_event` routes by class; no public model.
 
 /// The user started speaking (`on_start_of_speech`): the record is the whole message.
@@ -705,8 +691,6 @@ pub struct SessionErrorWire {
     pub processor_failure: Option<crate::voice::rtc::ProcessorFailure>,
 }
 
-// --- the interruption detector's verdict and its wire ----------------------------------------
-
 /// `OverlappingSpeechEvent` (`inference/interruption.py:120`), the detector's only public verdict.
 #[crate::host(record(
     module = "overlap",
@@ -765,8 +749,6 @@ pub struct HistoryReloadedWire {
     #[host(skip)]
     pub items: Vec<crate::ChatItem>,
 }
-
-// --- the host event stream, as one union ------------------------------------------------------------
 
 /// Every event the session hands its host, as the record the host reads, routed by its class.
 ///

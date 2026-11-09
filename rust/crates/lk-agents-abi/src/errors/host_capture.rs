@@ -1,5 +1,3 @@
-//! The binding reads the facts of a captured host exception; the decision lives here.
-
 use super::ApiErrorKind;
 
 /// Several may be true.

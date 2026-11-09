@@ -1,10 +1,9 @@
-//! Owned snapshots crossing the application load/save boundary. History uses the shared
-//! ChatItem codec at that boundary; routing metadata contains no callbacks, tasks or host handles.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{ChatItem, ChatMessage};
 use serde_json::Value;
+
+// Routing metadata contains no callbacks, tasks or host handles.
 
 /// A stable backend conversation frame, distinct from a call or invocation.
 #[crate::host(record(module = "text_session", emit, extract))]

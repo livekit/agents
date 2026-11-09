@@ -1,8 +1,7 @@
-//! Owned PCM, not a [`MediaRef`](crate::MediaRef): native VAD and TTS read the samples and frames
-//! live milliseconds, so the binding copies; [`Bytes`] makes the STT/VAD fan-out free and lets
-//! frames share one buffer.
-
 use bytes::Bytes;
+
+// Owned PCM, not a `MediaRef`: native VAD and TTS read the samples and frames live milliseconds,
+// so the binding copies; `Bytes` makes the STT/VAD fan-out free.
 
 /// Interleaved signed 16-bit little-endian PCM, with a one-dimensional contiguous payload.
 /// `samples_per_channel` is carried, not derived: a plugin frame may disagree with its data length.

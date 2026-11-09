@@ -123,8 +123,7 @@ fn a_clear_reports_the_cut_segment_after_the_generator_cleared() {
 }
 
 // Catches: the cut segment's end, read after a clear, reaching the generator once the next
-// segment's audio set the runner playing: the next segment reported finished before it played
-// (survey seed 7462; the reference has the race).
+// segment's audio set the runner playing: the next segment reported finished before it played.
 #[test]
 fn a_cut_segments_end_after_a_clear_is_not_the_next_segments() {
     let mut core = running();
@@ -148,8 +147,7 @@ fn a_cut_segments_end_after_a_clear_is_not_the_next_segments() {
 }
 
 // Catches: one playing flag for a generator holding two segments: the first segment's end, out
-// after the second segment's audio was read, took the flag and the second was never reported
-// (survey seed 32394; the reference has the race).
+// after the second segment's audio was read, took the flag and the second was never reported.
 #[test]
 fn back_to_back_segments_are_each_reported_finished() {
     let mut core = running();
@@ -302,8 +300,7 @@ fn skipped_clear_epochs_keep_each_segments_debt_until_its_clear_answers() {
 }
 
 // Catches: the generator cleared while a frame of the cut audio was still on its way into it: the
-// push landed after the clear and the avatar spoke the cut audio on (survey seed 1353: two frames
-// 60 ms after the clear, against one frame period).
+// push landed after the clear and the avatar spoke the cut audio on.
 #[test]
 fn a_clear_waits_for_the_audio_on_its_way_into_the_generator() {
     let mut core = running();

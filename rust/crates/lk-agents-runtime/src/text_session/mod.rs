@@ -1,6 +1,3 @@
-//! The request-scoped TextSession driver. The core owns routing; `agent_run::Execution`
-//! executes every invocation's effects. A consumer acknowledges presentation before release.
-
 mod runner;
 pub use runner::{Runner, Updates};
 

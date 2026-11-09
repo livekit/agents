@@ -1,5 +1,3 @@
-//! Runtime subscriptions, bounded receiving and decoder cleanup for pre-connect audio.
-
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;

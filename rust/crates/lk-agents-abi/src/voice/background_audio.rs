@@ -1,5 +1,3 @@
-//! A caller-supplied background audio stream.
-
 use crate::AudioFrame;
 use crate::errors::ProviderError;
 use std::sync::Arc;

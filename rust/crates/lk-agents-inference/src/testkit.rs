@@ -1,6 +1,3 @@
-//! Fakes for the [`lk_agents_net::transport`] seam, for tests only (`cfg(test)` or the `testkit` feature).
-//! Deterministic; the only clock is the caller's `VirtualClock`.
-
 use async_trait::async_trait;
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use std::sync::Arc;
@@ -210,7 +207,6 @@ pub async fn arm_then_advance(clock: &lk_agents_abi::VirtualClock, by: std::time
     clock.advance(by);
 }
 pub mod fallback {
-    //! Shared fallback provider fixtures, reused by native and composition tests.
     use crate::fallback::{ChainObserver, IgnoreEvents};
     use lk_agents_abi::errors::{ApiError, ProviderError};
     use lk_agents_abi::tokenize::language::LanguageCode;

@@ -1,5 +1,3 @@
-//! Labels a steering disables are omitted along with every example that demonstrates them.
-
 use crate::tts::markup::prompts::*;
 use crate::tts::markup::provider::{
     FISHAUDIO_DRAMA_SPANS, FISHAUDIO_EMOTIONS, FISHAUDIO_TONES, GEMINI_SOUNDS, Provider,
@@ -8,6 +6,8 @@ use crate::tts::markup::provider::{
 use crate::tts::markup::provider::{
     NonverbalField, ProviderExt, nonverbal_prosody_labels, nonverbal_sound_labels, sound_usage_hint,
 };
+
+// Labels a steering disables are omitted along with every example that demonstrates them.
 
 /// Drop example lines that demonstrate a *vocabulary* label not in `allowed`.
 fn sound_examples(examples: &[&str], allowed: &[&str], vocabulary: &[&str]) -> Vec<String> {
@@ -213,7 +213,7 @@ pub(crate) fn llm_instructions(
         }
         Provider::FishAudio => fishaudio(
             &allowed_sounds(provider, steering),
-            // `steering.get("disfluencies", True)` — absent means on
+            // Absent means on.
             steering.and_then(|s| s.disfluencies).unwrap_or(true),
         ),
         Provider::FishAudioDrama => fishaudio_drama(

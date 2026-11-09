@@ -1,8 +1,3 @@
-//! The pure half of `_BaseStreamingTurnDetectorStream` (`inference/eot/base.py:91-434`):
-//! correlation, staleness, supersede, the one-way cloud->local fallback, failure defaults and
-//! warn-once state. The host executes the [`EotAction`]s. `now` is a wall-clock `f64` that only
-//! lands in [`EotPrediction::last_speaking_time`].
-
 use std::sync::Arc;
 
 use lk_agents_abi::EotPrediction;
@@ -14,6 +9,8 @@ use crate::eot::{CancelReason, EotRequestId, EotWarning};
 pub use lk_agents_abi::turn::eot::{
     EotDegrade, EotFlush, EotResolve, EotStartInference, EotSwapToLocal, EotWarn,
 };
+
+// `now` is a wall-clock `f64` that only lands in `EotPrediction::last_speaking_time`.
 
 /// What the shell must do next; several co-occur (a cloud failure warns, resolves and swaps, in
 /// that order). Variant names and the records' `tag_value`s are the wire: `base.py`'s `_apply`

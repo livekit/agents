@@ -1,13 +1,11 @@
-//! `tokenize/_basic_sent.py::split_sentences`: the rule-based splitter behind `basic.SentenceTokenizer`
-//! (https://stackoverflow.com/a/31505798). The text may not contain `<prd>` or `<stop>`. Offsets
-//! are characters.
-
 use std::sync::LazyLock;
 
 use regex::Regex;
 
 use crate::tokenize::py_strip;
 use lk_agents_abi::tokenize::TokenSpan;
+
+// The text may not contain `<prd>` or `<stop>`. Offsets are characters.
 
 const STARTERS: &str = r"(Mr|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever)";
 const SUFFIXES: &str = "(Inc|Ltd|Jr|Sr|Co)";

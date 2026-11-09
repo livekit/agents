@@ -1,6 +1,3 @@
-//! Attributes no single span declares: the session identity the exporter stamps, the keys every
-//! span carries, the participant group and the failure event.
-
 use crate::telemetry::decl::{Attrs, Content, SpanValue, event};
 use crate::telemetry::errors::ErrorType;
 use crate::telemetry::semconv::{otel, protocol};

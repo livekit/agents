@@ -1,5 +1,3 @@
-//! `APIError` & co. as a plain Rust value, plus the rules its host classes apply.
-
 use crate::errors::ProviderError;
 
 /// Flat; [`ApiErrorKind::is_a`] knows the subclass edges.

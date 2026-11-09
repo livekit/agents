@@ -1,8 +1,3 @@
-//! `tts/fallback_adapter.py`. The output rate is chosen for the whole list and per-entry
-//! resampling rides on the chain (`tts:86-118,262-282`). [`TokenLog`] replays pushed tokens into a
-//! fresh input on failover (`tts:428-434`) and into the streaming probe (`tts:504-531`). A failure
-//! after output remains a failure and cannot replay delivered audio.
-
 use crate::fallback::chain::{
     Attempt, Backend, ChainCall, ChainObserver, FallbackChain, RecoveryMode,
 };
@@ -30,16 +25,14 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
+// A failure after output remains a failure: delivered audio cannot be replayed.
+
 fn send(sink: &dyn StreamInput<String>, token: &Token) {
     let _ = match token {
         Token::Text(text) => sink.push(text.clone()),
         Token::Flush => sink.flush(),
     };
 }
-
-// ---------------------------------------------------------------------------------------------
-// The replayable text leg
-// ---------------------------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
@@ -174,10 +167,6 @@ impl StreamInput<String> for LoggingSink {
         self.0.end();
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// The backend
-// ---------------------------------------------------------------------------------------------
 
 /// `cx`: where each instance's `tts_request` opens (the adapter request's attempt).
 #[derive(Clone)]
@@ -328,10 +317,6 @@ impl Backend for TtsBackend {
         drain_probe(source, self.clock.as_ref(), stop).await
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// The adapter
-// ---------------------------------------------------------------------------------------------
 
 /// `tts:92-95`: `streaming` is `any`, `aligned_transcript` is `all`, over the members as given.
 pub fn merge_capabilities(entries: &[TtsCapabilities]) -> TtsCapabilities {

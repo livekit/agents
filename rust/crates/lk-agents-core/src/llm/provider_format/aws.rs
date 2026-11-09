@@ -1,5 +1,3 @@
-//! AWS Bedrock Converse messages and tagged union blocks.
-
 use super::turns::{Dialect, ResultsTurn, Speaker, Turns, merge_turns};
 use super::wire::{FunctionDefinition, HostBytes};
 use super::{

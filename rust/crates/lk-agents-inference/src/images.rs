@@ -1,6 +1,3 @@
-//! The declared image functions: provider images prepared on the media pool, host frames read
-//! through the frames themselves.
-
 use std::sync::Arc;
 
 use lk_agents_abi::InferenceDetail;

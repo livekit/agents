@@ -1,7 +1,3 @@
-//! A thread database's rows as the host reads them (docs/internals/storage.md#thread-database).
-//! The storage core keeps its typed `#[table]` rows and converts them into these; chat items and
-//! A2A messages cross as their protobuf JSON.
-
 use serde_json::{Map, Value};
 
 /// A task's state: the storage core's `TaskState` as the host reads it.

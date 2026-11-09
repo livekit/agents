@@ -1,7 +1,3 @@
-//! `_core.SessionOptions`: `AgentSession(**kwargs)`'s options before the session holds them. The
-//! kwargs cross once; the layer they became, and every `update_options` since, is merged by voice's
-//! rules.
-
 use lk_agents_abi::HostRef;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::voice::session_options::{
@@ -141,8 +137,6 @@ impl lk_agents_abi::voice::session::SessionOptions for SessionOptions {
         self.state().layers.session.turn.interruption.mode
     }
 }
-
-// VoiceRuntime retention of host provider objects selected by the voice core.
 
 pub(super) type Providers = BTreeMap<String, Option<HostRef>>;
 

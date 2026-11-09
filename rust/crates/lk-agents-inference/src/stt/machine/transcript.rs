@@ -1,9 +1,8 @@
-//! `SpeechStream`'s `_process_*` methods: gateway messages in, `SpeechEvent`s out, as a clock-free
-//! accumulator. `speaking` is written from three places, and its end-of-speech edge releases a
-//! deferred keyterm update.
-
 use crate::stt::wire::{Incoming, Transcript};
 use lk_agents_abi::{RecognitionUsage, SpeechData, SpeechEvent, SpeechEventType, TranscriptChunk};
+
+// `speaking` is written from three places, and its end-of-speech edge releases a deferred keyterm
+// update.
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(super) struct Processed {

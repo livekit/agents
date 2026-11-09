@@ -1,15 +1,12 @@
-//! The host handler of one turn: one awaited host call, its reports read through a bounded queue.
-//!
-//! The handler awaits each report ([`HandlerPort`]): a checkpoint waits for the turn's verdict,
-//! progress and tokens for room in the queue. The turn reads the queue in report order and
-//! sees the handler's output only once every report it awaited before returning was read.
-
 use lk_agents_abi::a2a::turn::{HandlerOutput, HandlerPort, TurnEvent, TurnHost};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{BoxFuture, Clock, Ts};
 use lk_agents_net::task::Cancellation;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
+
+// The turn reads reports in order and sees the handler's output only once every report it
+// awaited before returning was read.
 
 /// Reports a handler may have awaited and the turn not yet read.
 pub const REPORT_QUEUE: usize = 64;
@@ -19,7 +16,7 @@ enum Report {
     Event(TurnEvent),
 }
 
-/// What the handler reports through; handed to the host as `_core_HandlerTurn`.
+/// What the handler reports through.
 pub struct HandlerTurn {
     task_id: String,
     reports: mpsc::Sender<Report>,

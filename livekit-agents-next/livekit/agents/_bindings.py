@@ -1,5 +1,3 @@
-"""The hand-written method bodies of the generated models (``_generated/*.py`` call them)."""
-
 from __future__ import annotations
 
 import asyncio
@@ -78,8 +76,7 @@ class _MetricsProvider(Protocol):
 
 
 def auth_grant_post_init(grant: AgentThreadGrant) -> None:
-    # Frozen records still accept arbitrary sequences at construction, then retain their own
-    # list. This is Python authoring normalization, not a second grant schema or policy owner.
+    # the record is frozen; keep an owned list of whatever sequence was passed
     object.__setattr__(grant, "thread_ids", list(grant.thread_ids))
 
 
@@ -88,55 +85,45 @@ class _Provider(Protocol):
 
 
 def core_leg(provider: _Provider | None) -> Any:
-    """Resolve the declared provider bridge; provider bases return their Python implementation."""
     return None if provider is None else provider._core_leg()
 
 
 def core_legs(providers: Sequence[_Provider]) -> list[Any]:
-    """``core_leg`` of each provider, in order."""
     return [provider._core_leg() for provider in providers]
 
 
 def silero_model() -> Any:
-    """``livekit-local-inference``'s Silero model, which the core asks for only when the build
-    links no native one."""
+    # requested only when the build links no native Silero
     from livekit.local_inference import VAD
 
     return VAD()
 
 
 def overrides(provider: object, host: type, *names: str) -> bool:
-    """Whether ``provider``'s class replaces one of ``names`` as the class that mixes in the
-    generated ``host`` (the class just before it in the MRO) defines them."""
+    """Whether ``provider``'s class overrides any of ``names`` defined by the class that mixes
+    in the generated ``host`` (the class just before it in the MRO)."""
     mro = type(provider).__mro__
     owner = mro[mro.index(host) - 1]
     return any(getattr(type(provider), name) is not getattr(owner, name) for name in names)
 
 
 class AttemptHost(Protocol):
-    """What ``ProviderAttempts`` runs for one provider request (docs/models.md "Provider
-    attempts"). ``LLMStream``, ``ChunkedStream``, ``SynthesizeStream`` and ``RecognizeStream``
-    implement it; a plugin implements ``_run`` and never these."""
+    """One provider request run by ``ProviderAttempts``; plugins implement ``_run``, not this."""
 
     _core_attempt_task: asyncio.Task[Any] | None
     _core_cancelled: bool
 
     async def _core_attempt(self, retry: bool) -> object:
-        """One attempt: the provider's ``_run``, its value the request's result; ``retry``: an
-        earlier attempt failed, so a stream replaying its input rewinds it first."""
+        """Run one attempt; ``retry`` means an earlier one failed and input must be rewound."""
         ...
 
     def _core_produced(self) -> bool:
         """Whether output already reached the caller, so the request may not be replayed."""
         ...
 
-    def _core_retrying(self, error: Exception) -> None:
-        """A failed attempt that will be retried, as the provider's recoverable ``error``."""
-        ...
+    def _core_retrying(self, error: Exception) -> None: ...
 
-    def _core_failed(self, error: Exception) -> None:
-        """The error that ends the request, as the provider's unrecoverable ``error``."""
-        ...
+    def _core_failed(self, error: Exception) -> None: ...
 
 
 async def pump(
@@ -145,9 +132,8 @@ async def pump(
     feed: Callable[[_InputT], None],
     drain: Awaitable[None],
 ) -> None:
-    """A core stream fed ``items`` (each through ``feed``, then its end of input) while ``drain``
-    takes what it yields, until it ends. A feed that fails ends the stream with its error rather
-    than leaving it waiting for an end of input; the stream is closed either way."""
+    """Feed ``items`` into ``native`` while ``drain`` consumes it. A failed feed ends the stream
+    with its error; the stream is closed either way."""
     from .utils import aio
 
     async def _feed() -> None:
@@ -165,26 +151,23 @@ async def pump(
             feeding.result()
         await draining
     finally:
-        # Native close must start even if an authored input's finally block stalls. A cancelled
-        # close waiter leaves both cleanup branches running, under their original owners.
+        # native close must start even if an authored input's finally block stalls
         await aio.await_cleanup(asyncio.gather(aio.cancel_and_wait(feeding, draining), _close()))
 
 
 async def drain(native: _Source[_OutputT], out: Callable[[_OutputT], None]) -> None:
-    """Each item ``native`` yields into ``out``, until it ends."""
     while (item := await native.recv()) is not None:
         out(item)
 
 
 def emit_metrics(provider: _MetricsProvider, record: BaseModel | None) -> None:
-    """A request's metrics, folded by the core, as the provider's ``metrics_collected`` event."""
     if record is not None:
         provider.emit("metrics_collected", record)
 
 
 async def run_attempts(host: AttemptHost, attempts: _core.ProviderAttempts) -> object:
-    """``attempts.run()`` for ``host``. A cancellation cancels the running attempt in the same
-    turn, as ``aclose()`` promises, then waits for its cleanup before propagating."""
+    """A cancellation cancels the running attempt in the same turn, as ``aclose()`` promises,
+    then waits for its cleanup before propagating."""
     try:
         return await attempts.run()
     except asyncio.CancelledError:
@@ -194,8 +177,7 @@ async def run_attempts(host: AttemptHost, attempts: _core.ProviderAttempts) -> o
         await attempts.settled()
         raise
     except Exception as error:
-        # the session reports what ends a request it owns; otherwise the ending event carries
-        # the last attempt's error once retries were exhausted, else the very exception raised
+        # a session reports the requests it owns; once retries are exhausted, report the cause
         if not attempts.core:
             cause = error.__cause__ if attempts.exhausted else None
             host._core_failed(cause if isinstance(cause, Exception) else error)
@@ -203,17 +185,13 @@ async def run_attempts(host: AttemptHost, attempts: _core.ProviderAttempts) -> o
 
 
 def attempt_started(host: AttemptHost) -> None:
-    """Called first in every ``_core_attempt``: records the attempt's task so a cancellation
-    reaches it in the same turn; an attempt starting after its request was cancelled does not
-    run."""
+    """Called first in every ``_core_attempt`` so a cancellation reaches it in the same turn."""
     if host._core_cancelled:
         raise asyncio.CancelledError
     host._core_attempt_task = asyncio.current_task()
 
 
 class _Recognition:
-    """``recognize``'s one request: ``_recognize_impl`` in attempts."""
-
     def __init__(
         self,
         stt: STT,
@@ -253,7 +231,6 @@ async def recognize(
     language: NotGivenOr[str],
     conn_options: APIConnectOptions,
 ) -> SpeechEvent:
-    """``STT.recognize``: ``_recognize_impl`` in attempts, its metrics once it answers."""
     started = time.perf_counter()
     event = cast(
         "SpeechEvent",
@@ -430,7 +407,6 @@ async def default_text_input_cb(sess: VoiceSession, ev: TextInputEvent) -> None:
 
 
 def chat_request(req: _core.ChatRequest) -> tuple[llm.ChatContext, list[Tool]]:
-    """The context and the offered tools of a request the core makes."""
     from . import llm
 
     if req.chat_ctx_host is not None:
@@ -460,8 +436,6 @@ def forward_session_events(
     session: llm.RealtimeSession | llm.DuplexSession,
     put: Callable[[realtime_wire.Event], None],
 ) -> None:
-    """A realtime or duplex session's caller events, reconnects and errors, as the core reads
-    them."""
     from ._generated import realtime_wire
 
     session.on("input_speech_started", lambda _: put(realtime_wire.InputSpeechStartedEvent()))
@@ -491,11 +465,6 @@ def forward_session_events(
 
 
 class _DuplexSession:
-    """A plugin's ``DuplexSession`` (``plugin``) flattened: the core feeds its input, applies the
-    updates in order and pulls ``plugin.audio_stream``; the session's callbacks queue one event at a time
-    into ``events``. The core calls the plugin's own update methods directly; the methods here
-    resolve tool names and convert records."""
-
     def __init__(
         self, session: llm.DuplexSession, tools: Callable[[], Sequence[Tool | Toolset]]
     ) -> None:
@@ -549,19 +518,14 @@ def _chat_ctx(items: list[ChatItem] | None) -> NotGivenOr[llm.ChatContext]:
 
 
 class FallbackListener(Protocol):
-    """A fallback adapter as its chain reports to it: an entry, by its index in the adapter's
-    list, went unavailable or recovered; every entry is unavailable."""
+    """A fallback adapter's view of its chain; entries are identified by list index."""
 
     def _core_availability_changed(self, ev: AvailabilityChanged) -> None: ...
 
     def _core_all_unavailable(self) -> None: ...
 
 
-# --- io legs ---------------------------------------------------------------------------------
-
-
 async def next_audio_frame(source: io.AudioInput) -> rtc.AudioFrame | None:
-    """The core's read of an ``io.AudioInput``: its next frame, ``None`` once it ends."""
     try:
         return await source.__anext__()
     except StopAsyncIteration:
@@ -569,24 +533,18 @@ async def next_audio_frame(source: io.AudioInput) -> rtc.AudioFrame | None:
 
 
 def rgba_frame(frame: rtc.VideoFrame) -> rtc.VideoFrame:
-    """The core's read of a frame it encodes: its pixels as RGBA, converted from any other type."""
     if frame.type == rtc.VideoBufferType.RGBA:
         return frame
     return frame.convert(rtc.VideoBufferType.RGBA)
 
 
 def audio_output_capabilities(output: io.AudioOutput) -> io.AudioOutputCapabilities:
-    """What the core reads of an ``io.AudioOutput`` once: whether its whole chain can pause."""
     from .voice import io
 
     return io.AudioOutputCapabilities(pause=output.can_pause)
 
 
-# --- tools ------------------------------------------------------------------------------------
-
-
 def tool_specs(tools: Sequence[Tool | Toolset]) -> list[ToolSpec]:
-    """Project function schemas and provider declarations through the core's tool boundary."""
     from . import llm
     from .llm.tool_context import ProviderTool, ToolFlag
     from .llm.utils import tool_schema
@@ -617,7 +575,7 @@ def tool_specs(tools: Sequence[Tool | Toolset]) -> list[ToolSpec]:
 
 
 def offered_tools(pool: Sequence[Tool | Toolset], names: Sequence[str]) -> list[Tool]:
-    """The tools of ``pool`` a request offers: the named function tools and every provider tool."""
+    """The named function tools of ``pool`` plus every provider tool."""
     from . import llm
     from .llm.tool_context import ProviderTool
 
@@ -653,13 +611,11 @@ def _connection_error_str(self: APIConnectionError) -> str:
     if root is None:
         return self.message
 
-    # naming our own type by .message keeps a cycle that ends on one out of __str__, which
-    # would otherwise re-enter here through the same chain.
+    # .message, not str(): str() on our own type re-enters here through the same chain
     if isinstance(root, APIConnectionError):
         root_message = root.message
     else:
-        # a third-party __str__ may raise (e.g. aiohttp.ClientConnectorError on a partially
-        # initialized connection key); the type name alone still beats losing the message.
+        # a third-party __str__ may raise (e.g. aiohttp.ClientConnectorError)
         try:
             root_message = str(root)
         except Exception:
@@ -684,11 +640,7 @@ def create_api_error_from_http(
     request_id: str | None = None,
     body: object | None = None,
 ) -> APIStatusError:
-    """Create an APIStatusError from an HTTP status code.
-
-    When the message carries extra detail beyond the standard reason phrase,
-    both the message and the reason are shown. Otherwise just the reason.
-    """
+    """Create an APIStatusError from an HTTP status code and an optional detail message."""
     from http import HTTPStatus
 
     from . import _core

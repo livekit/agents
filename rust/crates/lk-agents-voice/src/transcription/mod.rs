@@ -120,7 +120,6 @@ pub struct EmojiTransform;
 
 impl TextTransform for EmojiTransform {
     fn push(&mut self, chunk: &str) -> Vec<String> {
-        // Yields the filtered chunk even when empty, as the reference does.
         vec![filter_emoji(chunk)]
     }
     fn flush(&mut self) -> Vec<String> {
@@ -128,7 +127,7 @@ impl TextTransform for EmojiTransform {
     }
 }
 
-/// `_apply_text_transforms`: the stages, in order.
+/// The text transform stages, in order.
 pub struct Pipeline {
     stages: Vec<Box<dyn TextTransform>>,
 }

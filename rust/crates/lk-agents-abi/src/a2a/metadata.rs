@@ -1,5 +1,3 @@
-//! LiveKit's wire metadata vocabulary. Short `livekit/` keys on the wire remain application data.
-
 #[crate::host(file(module = "a2a_metadata"))]
 const _: () = ();
 

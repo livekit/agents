@@ -1,10 +1,3 @@
-//! User-turn recognition state and transitions over supplied STT, VAD and detector observations.
-//!
-//! `AudioRecognition` owns transcript accumulation, endpointing, overlap integration, commit and
-//! close state. Inputs enter through its methods; ordered `AudioRecognitionEffect` values leave
-//! each transition. VoiceDriver executes those requests and returns detector/timer outcomes.
-//! `end_of_turn` and `speech` are private implementation children of this same owner.
-
 use super::{
     Detector, EndOfTurnInfo, InterruptionSignal, MIN_SILENCE_DURATION, OverlapVerdict,
     PendingCommit, Phase, Prediction, Run, ServerSpeech, TurnConfig, TurnDetectionMode, TurnId,
@@ -28,7 +21,7 @@ mod speech;
 
 const FRESH_FINAL: Duration = Duration::from_millis(500);
 
-// A short transcript never overwrites an established language (characters, as Python len).
+// A shorter transcript (in characters) never overwrites an established language.
 const MIN_LANGUAGE_DETECTION_LENGTH: usize = 5;
 const NON_SPECIFIC_LANGUAGE_CODES: [&str; 2] = ["auto", "multi"];
 
@@ -36,7 +29,7 @@ const NON_SPECIFIC_LANGUAGE_CODES: [&str; 2] = ["auto", "multi"];
 /// the adaptive interruption channel, and a host `commit_user_turn()` waiting for its transcript.
 pub struct AudioRecognition {
     eot_provider: Option<lk_agents_abi::ProviderId>,
-    /// `_commit_user_turn_atask` waiting for the final transcript.
+    /// A host commit waiting for the final transcript.
     pending_commit: Option<PendingCommit>,
     cfg: TurnConfig,
     phase: Phase,
@@ -45,60 +38,49 @@ pub struct AudioRecognition {
     /// Pairs wall and monotonic clocks so server onsets map without reading a clock.
     pub(crate) wall_anchor: Option<WallAnchor>,
 
-    // --- transcript accumulation -------------------------------------------------------------
     audio_transcript: String,
     interim_transcript: String,
     preflight_transcript: String,
     final_confidences: Vec<f64>,
     last_language: Option<LanguageCode>,
 
-    // --- turn anchors ------------------------------------------------------------------------
     last_final_transcript_time: Option<Ts>,
     last_speaking_time: Option<Ts>,
     speech_start_time: Option<Ts>,
-    /// `_user_turn_start`; also stands for "the `user_turn` span is open".
+    /// Also stands for "the `user_turn` span is open".
     user_turn_start: Option<Ts>,
 
-    // --- independent facts -------------------------------------------------------------------
     vad_speech_started: bool,
-    /// Written only by `_on_start_of_agent_speech`, from the driver's first-frame sequencer.
+    /// Written only from the driver's first-frame sequencer.
     agent_speaking: bool,
     agent_speech_started_at: Option<Ts>,
 
-    // --- the hold-flush buffer ---------------------------------------------------------------
-    /// `_ignore_user_transcript_until`.
     ignore_user_transcript_until: Option<Ts>,
     transcript_buffer: VecDeque<SpeechEvent>,
-    /// `_STTPipeline.input_started_at`, owned by the driver: the STT stream's anchor, stamped on
-    /// the first frame and reset on stream swap; every hold-window test is relative to it.
+    /// The STT stream's anchor, stamped on the first frame and reset on stream swap; every
+    /// hold-window test is relative to it.
     pub(crate) input_started_at: Option<Ts>,
-    /// `_adaptive_interruption_active`: the channel is open. Unlike the static config flag,
-    /// teardown clears this one.
+    /// Unlike the static config flag, teardown clears this one.
     interruption_active: bool,
 
-    // --- adaptive interruption ---------------------------------------------------------------
     overlap: OverlapJudge,
 
-    // --- user turn limit ---------------------------------------------------------------------
     turn_tracker: UserTurnTracker,
     turn_limit_timer_armed: bool,
 
-    // --- transcription timeout ---------------------------------------------------------------
     turn_speech_duration: Duration,
     turn_transcript_received: bool,
     transcription_timeout_armed: bool,
 
-    // --- the close ---------------------------------------------------------------------------
-    /// `on_closing` ran: late words still accumulate for the trailing commit, but nothing arms a
-    /// timer, decides a turn or reads the VAD.
+    /// Late words still accumulate for the trailing commit, but nothing arms a timer, decides a
+    /// turn or reads the VAD.
     closed: bool,
 
-    // --- ids and dedup -----------------------------------------------------------------------
     /// The phase timer being handled: `set_phase` must not cancel it (it is no longer armed).
     fired: Option<Timer>,
     eot_seq: u64,
     turn_seq: u64,
-    /// `self._last_emitted_prediction`: one prediction is announced once, compared by value.
+    /// One prediction is announced once, compared by value.
     last_emitted: Option<EotPrediction>,
     /// A backchannel opportunity whose countdown commits in the same cycle, held for the driver's
     /// verdict: released on a refusal or `Dropped`, dropped on a commit that replies.
@@ -167,8 +149,6 @@ impl AudioRecognition {
         }
     }
 
-    // --- reads: data out, host never touched ---------------------------------------------------
-
     pub(crate) fn eot_provider(&self) -> Option<&lk_agents_abi::ProviderId> {
         self.eot_provider.as_ref()
     }
@@ -196,8 +176,7 @@ impl AudioRecognition {
         &self.phase
     }
 
-    /// `_current_transcript`: this turn's transcript, interim included (the interruption `min_words`
-    /// guard reads this). An empty interim adds no separator.
+    /// This turn's transcript, interim included (the interruption `min_words` guard reads this).
     pub fn current_transcript(&self) -> String {
         if self.interim_transcript.is_empty() {
             self.audio_transcript.clone()
@@ -206,17 +185,16 @@ impl AudioRecognition {
         }
     }
 
-    /// `_audio_transcript`: this turn's final words.
+    /// This turn's final words.
     pub fn audio_transcript(&self) -> &str {
         &self.audio_transcript
     }
 
-    /// `_end_of_turn_task is not None and not done()`. `Committed` is not open.
+    /// A countdown is in flight; `Committed` is not open.
     pub fn turn_open(&self) -> bool {
         self.phase.is_running()
     }
 
-    /// `self._speaking`, i.e. `not self._user_silence_ev.is_set()`. Read off the phase.
     /// Speaking on the recogniser's word alone: no detector heard the start, so none will hear
     /// the end.
     pub fn speaking_on_recogniser(&self) -> bool {
@@ -239,7 +217,7 @@ impl AudioRecognition {
         self.last_speaking_time
     }
 
-    /// `_last_final_transcript_time`: `commit_user_turn` skips its flush within 0.5 s of it.
+    /// `commit_user_turn` skips its flush within 0.5 s of it.
     pub fn last_final_transcript_time(&self) -> Option<Ts> {
         self.last_final_transcript_time
     }
@@ -255,7 +233,6 @@ impl AudioRecognition {
         }
     }
 
-    /// `_turn_detection`.
     pub fn turn_detection_mode(&self) -> TurnDetectionMode {
         self.cfg.turn_detection_mode
     }
@@ -264,22 +241,19 @@ impl AudioRecognition {
         self.cfg.stt_enabled
     }
 
-    // --- driver-owned inputs -----------------------------------------------------------------
-
     pub(crate) fn set_eot_provider(&mut self, provider: Option<lk_agents_abi::ProviderId>) {
         self.eot_provider = provider;
     }
 
-    /// The detector's own thresholds (`unlikely_threshold(language)`, ..), read by the driver
-    /// when the session opens and with each answer, as the reference reads them once the
-    /// prediction lands. `None` (a detector without a table) keeps what the machine has.
+    /// The detector's own thresholds, read when the session opens and with each answer. `None`
+    /// (a detector without a table) keeps what the machine has.
     pub(crate) fn set_thresholds(&mut self, thresholds: Option<ThresholdOptions>) {
         if let Some(thresholds) = thresholds {
             self.thresholds = thresholds;
         }
     }
 
-    /// `_adaptive_interruption_active`: the interruption channel exists and is not closed.
+    /// The interruption channel exists and is not closed.
     pub fn set_interruption_active(&mut self, active: bool) {
         self.interruption_active = active;
     }
@@ -289,13 +263,13 @@ impl AudioRecognition {
         self.endpointing.min_delay()
     }
 
-    /// `update_options(endpointing_opts=..)`: the estimator is replaced, learned floor and all.
+    /// The estimator is replaced, learned floor and all.
     pub fn set_endpointing(&mut self, cfg: &crate::turn::EndpointingOptions) {
         self.endpointing = Endpointing::new(cfg);
     }
 
-    /// `update_options(turn_detection=..)`. Only crossing the manual boundary retires the running
-    /// evaluation (`._update_options`): under manual only `commit_user_turn()` may end a turn.
+    /// Only crossing the manual boundary retires the running evaluation: under manual only
+    /// `commit_user_turn()` may end a turn.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub fn set_turn_detection_mode(
         &mut self,
@@ -327,7 +301,7 @@ impl AudioRecognition {
 enum Start {
     /// A speech end or a final. `declared`: the STT's own end of speech, as opposed to a VAD end.
     Auto { declared: bool },
-    /// `commit_user_turn` (`AudioRecognition._commit_user_turn`: `_user_turn_committed = True`).
+    /// `commit_user_turn`.
     Manual { skip_reply: bool },
 }
 
@@ -358,8 +332,7 @@ impl AudioRecognition {
     /// The recognizer may still owe a final transcript while closing.
     pub(crate) fn transcript_pending(&self, now: Ts) -> bool {
         let turn = self;
-        // A manual turn is committed whatever it holds: the reference's commit completes it even
-        // with no words.
+        // A manual turn is committed whatever it holds, even with no words.
         let manual = turn.turn_detection_mode() == TurnDetectionMode::Manual;
         if manual || turn.user_speaking() || !turn.current_transcript().trim().is_empty() {
             return true;

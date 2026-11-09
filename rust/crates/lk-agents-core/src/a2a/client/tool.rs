@@ -1,6 +1,3 @@
-//! A remote tool's definition comes from its card. The extension's optional tool declaration
-//! refines the ordinary text capability without changing what a plain A2A peer receives.
-
 use a2a::AgentCard;
 use lk_agents_abi::a2a::client::AgentCard as ToolCard;
 use lk_agents_abi::a2a::metadata::EXTENSION_URI;

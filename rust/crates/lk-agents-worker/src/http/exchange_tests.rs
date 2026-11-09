@@ -1,6 +1,3 @@
-//! The endpoint server over an in-memory stream: the test is the node, a Rust fake is the
-//! binding's application.
-
 use std::any::Any;
 use std::future::Future;
 use std::sync::Arc;
@@ -11,16 +8,17 @@ use lk_agents_abi::BoxFuture;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::telemetry;
 use lk_agents_abi::worker::http::{
-    EndpointExchange, EndpointHandler, EndpointRequest, ExchangeEvent, ExchangeKind,
+    EndpointExchange, EndpointHandler, EndpointRequest, ExchangeError, ExchangeEvent, ExchangeKind,
     ExchangeMessage, HttpExchange,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
-use super::{EndpointServer, Exchange, HttpServerLimits, Origin, StreamEnd, TextDoors, Wire};
+use super::{Exchange, Origin};
+use crate::http::{EndpointServer, HttpServerLimits, StreamEnd, TextDoors, Wire};
 use crate::transport::HttpStreamResetCode as Code;
 
 #[derive(Default)]
-pub(super) struct FakeEnd {
+pub(crate) struct FakeEnd {
     finished: AtomicBool,
     reset: parking_lot::Mutex<Option<Code>>,
     stopped: parking_lot::Mutex<Option<Code>>,
@@ -39,10 +37,10 @@ impl StreamEnd for FakeEnd {
 }
 
 impl FakeEnd {
-    pub(super) fn finished(&self) -> bool {
+    pub(crate) fn finished(&self) -> bool {
         self.finished.load(Ordering::SeqCst)
     }
-    pub(super) fn reset(&self) -> Option<Code> {
+    pub(crate) fn reset(&self) -> Option<Code> {
         *self.reset.lock()
     }
 }
@@ -63,7 +61,7 @@ impl EndpointHandler for App {
     }
 }
 
-pub(super) fn server<F, Fut>(limits: HttpServerLimits, app: F) -> Arc<EndpointServer>
+pub(crate) fn server<F, Fut>(limits: HttpServerLimits, app: F) -> Arc<EndpointServer>
 where
     F: Fn(Arc<Exchange>) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<(), HostError>> + Send + 'static,
@@ -73,7 +71,7 @@ where
 
 /// The spans a test server records.
 #[derive(Default)]
-pub(super) struct Spans(parking_lot::Mutex<Vec<telemetry::record::Record>>);
+pub(crate) struct Spans(parking_lot::Mutex<Vec<telemetry::record::Record>>);
 
 impl telemetry::record::RecordSink for Spans {
     fn record(&self, record: telemetry::record::Record) {
@@ -82,7 +80,7 @@ impl telemetry::record::RecordSink for Spans {
 }
 
 impl Spans {
-    pub(super) fn http_requests(&self) -> Vec<telemetry::record::SpanRecord> {
+    pub(crate) fn http_requests(&self) -> Vec<telemetry::record::SpanRecord> {
         let records = self.0.lock();
         let spans = records.iter().filter_map(|record| match record {
             telemetry::record::Record::Span(span) if span.name == "http_request" => {
@@ -94,14 +92,14 @@ impl Spans {
     }
 }
 
-pub(super) fn attr<'a>(
+pub(crate) fn attr<'a>(
     span: &'a telemetry::record::SpanRecord,
     key: &str,
 ) -> Option<&'a telemetry::record::Value> {
     span.attributes.iter().find(|(name, _)| name == key).map(|(_, value)| value)
 }
 
-pub(super) fn traced<F, Fut>(limits: HttpServerLimits, app: F) -> (Arc<EndpointServer>, Arc<Spans>)
+pub(crate) fn traced<F, Fut>(limits: HttpServerLimits, app: F) -> (Arc<EndpointServer>, Arc<Spans>)
 where
     F: Fn(Arc<Exchange>) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<(), HostError>> + Send + 'static,
@@ -116,7 +114,7 @@ where
     (Arc::new(EndpointServer::new(Arc::new(app), limits, tracer)), spans)
 }
 
-pub(super) fn default_server<F, Fut>(app: F) -> Arc<EndpointServer>
+pub(crate) fn default_server<F, Fut>(app: F) -> Arc<EndpointServer>
 where
     F: Fn(Arc<Exchange>) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<(), HostError>> + Send + 'static,
@@ -124,7 +122,7 @@ where
     server(HttpServerLimits::default(), app)
 }
 
-pub(super) fn preamble() -> EndpointRequest {
+pub(crate) fn preamble() -> EndpointRequest {
     EndpointRequest {
         request_id: "AER_test".into(),
         authorized: true,
@@ -133,12 +131,12 @@ pub(super) fn preamble() -> EndpointRequest {
     }
 }
 
-pub(super) fn wire() -> (Wire, DuplexStream, Arc<FakeEnd>) {
+pub(crate) fn wire() -> (Wire, DuplexStream, Arc<FakeEnd>) {
     wire_sized(8 << 20)
 }
 
 /// A stream whose buffer holds `capacity` bytes each way: a small one is a slow peer.
-pub(super) fn wire_sized(capacity: usize) -> (Wire, DuplexStream, Arc<FakeEnd>) {
+pub(crate) fn wire_sized(capacity: usize) -> (Wire, DuplexStream, Arc<FakeEnd>) {
     let (client, server) = tokio::io::duplex(capacity);
     let (read, write) = tokio::io::split(server);
     let end = Arc::new(FakeEnd::default());
@@ -146,7 +144,7 @@ pub(super) fn wire_sized(capacity: usize) -> (Wire, DuplexStream, Arc<FakeEnd>) 
 }
 
 /// Serve `raw` as a whole request, half-closed after it, and return the response bytes.
-pub(super) async fn exchange_with(
+pub(crate) async fn exchange_with(
     server: &EndpointServer,
     raw: &[u8],
     request: EndpointRequest,
@@ -168,15 +166,15 @@ pub(super) async fn exchange_with(
     (out, end)
 }
 
-pub(super) async fn exchange(server: &EndpointServer, raw: &[u8]) -> (Vec<u8>, Arc<FakeEnd>) {
+pub(crate) async fn exchange(server: &EndpointServer, raw: &[u8]) -> (Vec<u8>, Arc<FakeEnd>) {
     exchange_with(server, raw, preamble()).await
 }
 
-pub(super) struct Parsed {
-    pub(super) status: u16,
-    pub(super) headers: Vec<(String, String)>,
-    pub(super) body: Vec<u8>,
-    pub(super) trailers: Vec<(String, String)>,
+pub(crate) struct Parsed {
+    pub(crate) status: u16,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: Vec<u8>,
+    pub(crate) trailers: Vec<(String, String)>,
 }
 
 impl Parsed {
@@ -199,7 +197,7 @@ fn fields(lines: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-pub(super) fn parse(raw: &[u8]) -> Parsed {
+pub(crate) fn parse(raw: &[u8]) -> Parsed {
     let mut headers = [httparse::EMPTY_HEADER; 32];
     let mut response = httparse::Response::new(&mut headers);
     let httparse::Status::Complete(at) = response.parse(raw).unwrap() else {
@@ -239,11 +237,11 @@ pub(super) fn parse(raw: &[u8]) -> Parsed {
     Parsed { status, headers, body, trailers }
 }
 
-pub(super) fn get(target: &str) -> Vec<u8> {
+pub(crate) fn get(target: &str) -> Vec<u8> {
     format!("GET {target} HTTP/1.1\r\nhost: agents.test\r\n\r\n").into_bytes()
 }
 
-pub(super) fn post(target: &str, body: &[u8]) -> Vec<u8> {
+pub(crate) fn post(target: &str, body: &[u8]) -> Vec<u8> {
     let mut raw = format!(
         "POST {target} HTTP/1.1\r\nhost: agents.test\r\ncontent-length: {}\r\n\r\n",
         body.len()
@@ -253,7 +251,7 @@ pub(super) fn post(target: &str, body: &[u8]) -> Vec<u8> {
     raw
 }
 
-pub(super) fn start(status: u16, headers: &[(&str, &str)]) -> ExchangeMessage {
+pub(crate) fn start(status: u16, headers: &[(&str, &str)]) -> ExchangeMessage {
     ExchangeMessage::Start {
         status,
         headers: headers
@@ -263,11 +261,11 @@ pub(super) fn start(status: u16, headers: &[(&str, &str)]) -> ExchangeMessage {
     }
 }
 
-pub(super) fn body(data: &[u8], more: bool) -> ExchangeMessage {
+pub(crate) fn body(data: &[u8], more: bool) -> ExchangeMessage {
     ExchangeMessage::Body { data: data.to_vec(), more }
 }
 
-pub(super) async fn read_body(exchange: &Exchange) -> Option<Vec<u8>> {
+pub(crate) async fn read_body(exchange: &Exchange) -> Option<Vec<u8>> {
     let mut all = Vec::new();
     loop {
         match exchange.receive().await.unwrap() {
@@ -285,7 +283,7 @@ pub(super) async fn read_body(exchange: &Exchange) -> Option<Vec<u8>> {
 
 /// Answer with the request body's length, or `-` when the client went away. After a malformed
 /// body the exchange is already reset, so the answer fails.
-pub(super) fn echo_size() -> Arc<EndpointServer> {
+pub(crate) fn echo_size() -> Arc<EndpointServer> {
     default_server(|exchange| async move {
         let size = read_body(&exchange).await.map_or("-".to_owned(), |b| b.len().to_string());
         let length = size.len().to_string();
@@ -567,7 +565,7 @@ async fn admission_is_bounded_and_released_when_an_exchange_is_dropped() {
     assert_eq!(server.connections.open(), 0);
 }
 
-pub(super) const HANDSHAKE: &[u8] = b"GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n\
+pub(crate) const HANDSHAKE: &[u8] = b"GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n\
     Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
     Sec-WebSocket-Version: 13\r\n\r\n";
 
@@ -636,7 +634,7 @@ async fn the_listener_routes_parsed_heads_and_answers_what_it_refuses() {
     assert_eq!(server.connections.open(), 0);
 }
 
-pub(super) fn quick_idle() -> HttpServerLimits {
+pub(crate) fn quick_idle() -> HttpServerLimits {
     HttpServerLimits {
         idle_timeout: Duration::from_millis(50),
         close_flush_timeout: Duration::from_millis(50),
@@ -910,4 +908,171 @@ async fn each_exchange_is_an_http_request_span_that_continues_the_callers_trace(
         attr(slow, "lk.endpoint.completion"),
         Some(&telemetry::record::Value::String("timeout".into()))
     );
+}
+
+// Seeded random and mutated input: a failing case prints its seed.
+pub(crate) const CASES: u64 = 300;
+
+pub(crate) fn host(error: ExchangeError) -> HostError {
+    HostError::new(error.to_string())
+}
+
+/// Read the whole body and echo it back in random pieces; a disconnect ends quietly.
+async fn echo(exchange: Arc<Exchange>) -> Result<(), HostError> {
+    let mut all = Vec::new();
+    loop {
+        match exchange.receive().await.map_err(host)? {
+            ExchangeEvent::Body { data, more } => {
+                all.extend_from_slice(&data);
+                if !more {
+                    break;
+                }
+            }
+            ExchangeEvent::Text { .. } | ExchangeEvent::Binary { .. } => {}
+            ExchangeEvent::Disconnected | ExchangeEvent::Closed { .. } => return Ok(()),
+        }
+    }
+    exchange.send(start(200, &[])).await.map_err(host)?;
+    let mut rng = fastrand::Rng::with_seed(all.len() as u64);
+    let mut rest = all.as_slice();
+    while !rest.is_empty() {
+        let (piece, tail) = rest.split_at(rng.usize(1..=rest.len()));
+        exchange.send(body(piece, true)).await.map_err(host)?;
+        rest = tail;
+    }
+    exchange.send(body(b"", false)).await.map_err(host)
+}
+
+/// A valid request with a random body, framing, header case and trailers; and its body.
+fn valid_request(rng: &mut fastrand::Rng) -> (Vec<u8>, Vec<u8>) {
+    let body: Vec<u8> = (0..rng.usize(0..20_000)).map(|_| rng.u8(..)).collect();
+    let host = if rng.bool() { "Host" } else { "hOsT" };
+    let mut raw = format!("POST /echo?n={} HTTP/1.1\r\n{host}: agents.test\r\n", rng.u32(..));
+    if rng.bool() {
+        raw.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
+        let mut raw = raw.into_bytes();
+        raw.extend_from_slice(&body);
+        return (raw, body);
+    }
+    raw.push_str("Transfer-Encoding: chunked\r\n\r\n");
+    let mut raw = raw.into_bytes();
+    let mut rest = body.as_slice();
+    while !rest.is_empty() {
+        let (chunk, tail) = rest.split_at(rng.usize(1..=rest.len().min(4096)));
+        let extension = if rng.bool() { ";name=value" } else { "" };
+        raw.extend_from_slice(format!("{:x}{extension}\r\n", chunk.len()).as_bytes());
+        raw.extend_from_slice(chunk);
+        raw.extend_from_slice(b"\r\n");
+        rest = tail;
+    }
+    raw.extend_from_slice(b"0\r\n");
+    if rng.bool() {
+        raw.extend_from_slice(b"x-trailer: done\r\n");
+    }
+    raw.extend_from_slice(b"\r\n");
+    (raw, body)
+}
+
+/// Write `raw` in random pieces with yields between them, half-close, and read the response.
+pub(crate) async fn serve_in_pieces(
+    server: &EndpointServer,
+    raw: &[u8],
+    rng: &mut fastrand::Rng,
+) -> (Vec<u8>, Arc<FakeEnd>) {
+    let (wire, client, end) = wire();
+    let (mut reader, mut writer) = tokio::io::split(client);
+    let mut pieces = Vec::new();
+    let mut rest = raw;
+    while !rest.is_empty() {
+        let (piece, tail) = rest.split_at(rng.usize(1..=rest.len().min(8192)));
+        pieces.push(piece.to_vec());
+        rest = tail;
+    }
+    let write = async move {
+        for piece in pieces {
+            if writer.write_all(&piece).await.is_err() {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        let _ = writer.shutdown().await;
+    };
+    let read = async move {
+        let mut out = Vec::new();
+        let _ = reader.read_to_end(&mut out).await;
+        out
+    };
+    let serve = server.serve(wire, Origin::Node(preamble()));
+    let ((), (), out) = tokio::time::timeout(
+        Duration::from_secs(5),
+        futures_util::future::join3(serve, write, read),
+    )
+    .await
+    .expect("the exchange settles");
+    (out, end)
+}
+
+#[tokio::test]
+async fn valid_requests_round_trip_however_they_are_framed_and_split() {
+    let server = default_server(echo);
+    for seed in 0..CASES {
+        let mut rng = fastrand::Rng::with_seed(seed);
+        let (raw, body) = valid_request(&mut rng);
+        let (out, end) = serve_in_pieces(&server, &raw, &mut rng).await;
+        let response = parse(&out);
+        assert_eq!(response.status, 200, "seed {seed}");
+        assert!(response.body == body, "seed {seed}: the echoed body differs");
+        assert!(response.trailers.is_empty(), "seed {seed}");
+        assert!(end.finished() && end.reset().is_none(), "seed {seed}");
+        assert_eq!(server.connections.open(), 0, "seed {seed}");
+    }
+}
+
+/// Flip, insert, delete, duplicate or cut bytes.
+fn mutate(raw: &mut Vec<u8>, rng: &mut fastrand::Rng) {
+    for _ in 0..rng.usize(1..=4) {
+        if raw.is_empty() {
+            raw.push(rng.u8(..));
+        }
+        let at = rng.usize(..raw.len());
+        match rng.u8(..5) {
+            0 => raw[at] = rng.u8(..),
+            1 => raw.insert(at, *b"\r\n:;0 \t\x00\xff".get(rng.usize(..9)).unwrap()),
+            2 => {
+                let end = (at + rng.usize(1..64)).min(raw.len());
+                raw.drain(at..end);
+            }
+            3 => {
+                let end = (at + rng.usize(1..64)).min(raw.len());
+                let copy = raw[at..end].to_vec();
+                raw.splice(at..at, copy);
+            }
+            _ => raw.truncate(at),
+        }
+    }
+}
+
+#[tokio::test]
+async fn mutated_requests_settle_and_free_their_connections() {
+    let limits = HttpServerLimits {
+        request_head_bytes: 4096,
+        body_metadata_bytes: 256,
+        head_timeout: Duration::from_millis(200),
+        ..Default::default()
+    };
+    let server = server(limits, echo);
+    let mut answered = 0;
+    for seed in 0..CASES {
+        let mut rng = fastrand::Rng::with_seed(seed);
+        let (mut raw, _) = valid_request(&mut rng);
+        mutate(&mut raw, &mut rng);
+        let (out, end) = serve_in_pieces(&server, &raw, &mut rng).await;
+        assert_eq!(server.connections.open(), 0, "seed {seed}");
+        if end.reset().is_none() {
+            assert!(end.finished(), "seed {seed}: neither answered nor reset");
+            assert!(out.starts_with(b"HTTP/1.1 "), "seed {seed}: {:?}", &out[..out.len().min(64)]);
+            answered += 1;
+        }
+    }
+    assert!(answered > 0 && answered < CASES, "mutations both pass and fail: {answered}");
 }

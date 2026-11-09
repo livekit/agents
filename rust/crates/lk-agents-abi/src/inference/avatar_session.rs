@@ -1,5 +1,3 @@
-//! `inference.AvatarSession`'s native half: the gateway avatar, implemented by the runtime.
-
 use crate::errors::{ApiError, ProviderError};
 use crate::{ApiConnectOptions, Extra};
 

@@ -1,8 +1,3 @@
-//! The driver: one WebSocket, a reconnect ladder, and the effects [`InterruptionMachine`] asked for.
-//! `_forward_data` and `recv_task` (`inference/interruption.py:793`) are `select!` arms in
-//! `run_once`; only the send half is a task. The `Mutex<InterruptionMachine>` is never held across an
-//! `.await`.
-
 use crate::effects::InterruptionEffect;
 use crate::headers::{HeaderProvider, Headers, gateway_headers};
 use crate::interruption::event::OverlappingSpeechEvent;
@@ -33,6 +28,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, UNIX_EPOCH};
 use tokio::sync::{Notify, mpsc, watch};
+
+// The `Mutex<InterruptionMachine>` is never held across an `.await`.
 
 /// One connection's two halves.
 struct Socket {
@@ -851,3 +848,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "transport_tests.rs"]
+mod driver_tests;

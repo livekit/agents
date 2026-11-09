@@ -1,6 +1,5 @@
-//! The model names LiveKit Inference serves, by modality: the type hints of `inference.STT`,
-//! `inference.TTS`, `inference.LLM` and the local models. Model parameters stay `String`: a model
-//! the gateway serves before it is listed here is still accepted.
+// Model parameters stay `String`: a model the gateway serves before it is listed here is still
+// accepted.
 
 /// The provider a gateway model string names: `"provider/model"`, or the bare provider.
 #[crate::host(wire_strs)]

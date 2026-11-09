@@ -1,5 +1,3 @@
-//! Reusable RTC source capabilities. Scheduling belongs to voice and execution to runtime.
-
 use super::{RtcError, TrackSource};
 use crate::utils::video::{MediaFrame, VideoFrame};
 use std::any::Any;

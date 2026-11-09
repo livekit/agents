@@ -1,6 +1,3 @@
-//! Work produced by [`super::machine::TextSession`], executed by the runtime text-session driver.
-//! The `Run` variant contains canonical [`crate::effects::AgentRunEffect`] values.
-
 use super::{FrameId, RoutingError, TextSessionError, TextSessionTurn};
 use crate::agent_run;
 use lk_agents_abi::ChatItem;

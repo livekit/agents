@@ -1,5 +1,3 @@
-//! Image preparation's records and its host functions; media prepares, the runtime admits.
-
 use std::sync::Arc;
 
 use crate::utils::video::{RtcVideoFrame, VideoFrame};

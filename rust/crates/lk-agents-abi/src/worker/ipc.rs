@@ -1,5 +1,4 @@
-//! A job runner's completion keeps its OS exit status separate from its control protocol's failure;
-//! its supervision settings and its job's status.
+// A job runner's completion keeps its OS exit status separate from its control protocol's failure.
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[crate::host(record(module = "worker_ipc", emit))]

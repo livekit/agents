@@ -1,37 +1,30 @@
-//! Requests, cancellation and open-generation identity for the realtime session.
-
 use super::*;
 
-/// The realtime session's requests and its one open generation. The loop owns it; the `VoiceDriver`
-/// methods below decide and act. State is updated before any action that can re-enter (a fatal
-/// error closes the session, and the close interrupts this machine).
+/// The realtime session's requests and its open generations. State is updated before any action
+/// that can re-enter (a fatal error closes the session, and the close interrupts this machine).
 #[derive(Default)]
 pub struct RealtimeSessionState {
     pub(super) caps: RealtimeCapabilities,
     next_key: u64,
     pub(super) pending: BTreeMap<String, Pending>,
-    /// Requests ready to go while the server was busy, oldest first: sent one at a time once
-    /// it is not (the server takes one reply at a time and refuses the rest).
+    /// Requests held while the server was busy, oldest first: the server takes one reply at a
+    /// time and refuses the rest.
     queue: std::collections::VecDeque<String>,
-    /// Every generation still generating, oldest first: a server-initiated turn created while
-    /// another plays is queued behind it (`_on_generation_created` schedules a new speech).
+    /// Every generation still generating, oldest first.
     open: Vec<Open>,
     /// The generations this session closed last; their late deltas are dropped silently.
     closed: std::collections::VecDeque<String>,
-    /// A new session took over (`SessionSwapped`): it gets its frame once the speeches the
-    /// swap cut are released, so the conversation it is given holds what the caller heard.
+    /// A new session took over: it gets its frame once the speeches the swap cut are released,
+    /// so the conversation it is given holds what the caller heard.
     pub(super) swap: Option<Swap>,
     /// Tools ran on a self-replying model: its next server-initiated generation is the
     /// follow-up, awaited under the timer keyed here.
     pub(super) auto_follow_up: Option<(Reuse, RequestKey)>,
-    /// The last step's tools asked the server for a reply it generates itself: the agent stays
-    /// `thinking` when that speech ends (the reference resets only when no reply is expected).
-    /// Cleared when a generation opens.
+    /// The last step's tools expect a server-generated reply: the agent stays `thinking` when
+    /// that speech ends. Cleared when a generation opens.
     auto_reply_expected: bool,
-    /// Requests cancelled (`CancelReply`) before the server answered: a generation that still
-    /// answers one is interrupted (`_realtime_reply_task`: "the response already landed").
-    /// Forgotten once asked.
-    /// Each under its timer: a server that never answers frees the queue at its bound.
+    /// Requests cancelled before the server answered: a generation that still answers one is
+    /// interrupted. Each under its timer, so a server that never answers frees the queue.
     pub(super) cancelled_requests: BTreeMap<String, RequestKey>,
     /// A generation answering a request already settled: its `GenerationDone` is dropped.
     pub(super) discarded: Option<String>,
@@ -98,8 +91,7 @@ pub enum Settled {
     TimedOut(RealtimeError),
     /// Cut by the interruption that also cut the server's turn, or by the close, for its cause.
     Interrupted(crate::trace::InterruptCause),
-    /// The socket is gone: the reference's pending `generate_reply()` future fails with a
-    /// `RealtimeError`, which `_realtime_reply_task` logs, as it does a timeout.
+    /// The socket is gone: the pending request fails with a `RealtimeError`.
     Ended,
 }
 
@@ -114,15 +106,13 @@ pub(super) struct Pending {
     pub(super) request: Request,
     pub(super) call: Option<SpeechCall>,
     pub(super) allow_interruptions: Option<bool>,
-    /// The speech announced when it was asked for, which the server's answer plays into (a
-    /// `Say`, a `GenerateReply` or a user turn: `_realtime_reply_task`'s handle).
+    /// The speech announced when it was asked for, which the server's answer plays into.
     pub(super) speech: Option<SpeechId>,
     pub(super) phase: Phase,
 }
 
-/// Where a request is on its way to the server, with its command.
 pub(super) enum Phase {
-    /// Held until its speech is authorized, as the reference asks the server only then.
+    /// Held until its speech is authorized.
     Unsent(RealtimeCommand),
     /// Ready, and held while the server generates a reply or answers another request.
     Queued(RealtimeCommand),
@@ -139,8 +129,7 @@ struct Open {
     cancelled: bool,
 }
 
-// Share the closed-generation identity horizon and keep retained late text below one bounded
-// duplex transcript backlog. Admission counts identifiers and text bytes.
+// Bounds retained late transcript text; admission counts identifiers and text bytes.
 const ATTRIBUTED_TRANSCRIPT_BYTES: usize = 256 * 1024;
 
 struct AttributedTranscript {

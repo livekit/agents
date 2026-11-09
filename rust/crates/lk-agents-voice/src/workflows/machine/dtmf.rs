@@ -1,6 +1,3 @@
-//! DTMF collection: the digits the caller presses on the keypad, debounced, with an optional
-//! read-back to confirm them; the collector, and the driver running it.
-
 use crate::agent_session::effects::Timer;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::machine::coordination::VoiceCallback;
@@ -61,7 +58,7 @@ pub(crate) fn parse_all(
     symbols.iter().map(|s| DtmfEvent::from_wire(s).ok_or_else(|| refusal(s))).collect()
 }
 
-/// `dtmf_event_to_code` (`beta/workflows/utils.py:30`): digits are themselves, `*` is 10, `#` is 11
+/// `dtmf_event_to_code`: digits are themselves, `*` is 10, `#` is 11
 /// and `A`-`D` are 12-15.
 pub fn dtmf_code(symbol: &str) -> Result<u8, String> {
     let event =
@@ -187,7 +184,6 @@ impl DtmfCollector {
             return DtmfAction::Idle;
         }
 
-        // immediately kick off the DTMF reply generation if matches the stop event
         if digit == self.stop_event.as_str() {
             return DtmfAction::RunNow;
         }
@@ -212,7 +208,6 @@ impl DtmfCollector {
             return DtmfAction::Idle;
         }
         if busy {
-            // clear any pending DTMF reply generation
             DtmfAction::Cancel
         } else if !self.inputs.is_empty() {
             // A full debounce restart (`schedule()`), not a resume.
@@ -226,7 +221,6 @@ impl DtmfCollector {
     pub fn generate_reply(&mut self) -> DtmfReply {
         self.reply_running = true;
 
-        // if input not fully received (i.e. timeout), return None
         if self.inputs.len() != self.num_digits {
             return DtmfReply::Finished(DtmfOutcome::Incomplete {
                 message: render(
@@ -239,7 +233,6 @@ impl DtmfCollector {
             });
         }
 
-        // if not asking for confirmation, return the DTMF inputs
         if !self.ask_for_confirmation {
             return DtmfReply::Finished(DtmfOutcome::Complete(dtmf_result(&self.inputs)));
         }

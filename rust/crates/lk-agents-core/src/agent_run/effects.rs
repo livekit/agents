@@ -1,6 +1,3 @@
-//! Work produced by [`super::machine::AgentRun`], executed by the runtime's agent-run driver.
-//! Tool-call effects are converted into these invocation variants, not nested in another enum.
-
 use super::{CallId, CheckpointId, RenderId, RequestId, StepId};
 use lk_agents_abi::agent::run::{RunError, RunResult, StreamEvent, ValidationId};
 use lk_agents_abi::agent::{OutputCandidate, ToolTemplate};

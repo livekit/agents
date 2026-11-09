@@ -9,7 +9,7 @@ use lk_agents_abi::{SpeechEvent, Ts};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// `ErrorEvent` (`events.py`): which leg failed, whether the attempt loop goes on (`recoverable`),
+/// Which leg failed, whether the attempt loop goes on (`recoverable`),
 /// and the error itself (a `ProviderError::Host` is moved, never stringified).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ErrorEvent {
@@ -92,14 +92,14 @@ pub struct UserTranscriptEvent {
     /// `is_final` on the wire. Preflight transcripts are not final; a manual commit re-emits a held
     /// interim as final.
     pub is_final: bool,
-    /// The reference's `speaking=`: `None` when the session has no trusted VAD. Three-valued.
+    /// `None` when the session has no trusted VAD.
     pub speaking: Option<bool>,
-    /// `UserInputTranscribedEvent.item_id`, shared by every segment; `None` from the turn machine,
+    /// Shared by every segment; `None` from the turn machine,
     /// stamped by the driver.
     pub item_id: Option<String>,
 }
 
-/// `on_end_of_turn`'s `EndOfTurnInfo`, as much of it as the host needs.
+/// The end-of-turn info, as much of it as the host needs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserTurnCompletedEvent {
     /// The turn that ended. A `TurnCommand::HookDone` answers for this turn and no other.
@@ -108,7 +108,7 @@ pub struct UserTurnCompletedEvent {
     pub transcript_confidence: f64,
 }
 
-/// VAD heard speech and no transcript arrived (`UserTranscriptionTimeoutEvent`, #6182).
+/// VAD heard speech and no transcript arrived.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TranscriptionTimeoutEvent {
     /// Total VAD speech this turn that produced no transcript, summed across segments.
@@ -117,7 +117,7 @@ pub struct TranscriptionTimeoutEvent {
 }
 
 /// A sentence the core decided and only the host can say: a core crate has no logger. `message` is
-/// the reference's own sentence (users grep for it); `fields` is its `extra={...}`, `lk.pii.*` included.
+/// stable (users grep for it); `fields` are its log extras, `lk.pii.*` included.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagnosticEvent {
     pub level: DiagnosticLevel,
@@ -152,28 +152,26 @@ impl DiagnosticEvent {
     }
 }
 
-/// The sentences the core says, verbatim from the reference (`tools/check-diagnostics.py` checks them).
+/// The sentences the core says; `tools/check-diagnostics.py` checks them verbatim.
 pub mod diagnostics {
-    /// `AgentActivity._user_turn_completed_task`, the reply-path variant of `.on_end_of_turn`'s.
     pub const SCHEDULING_PAUSED: &str = "skipping reply to user input, speech scheduling is paused";
 
-    /// `AgentActivity._user_turn_completed_impl`: the turn is dropped, the speech plays on.
+    /// The turn is dropped, the speech plays on.
     pub const UNINTERRUPTIBLE_SPEECH: &str =
         "skipping reply to user input, current speech generation cannot be interrupted";
 
-    /// `generation._execute_tools_task` (error level): a call answering `tool_choice="none"` is
-    /// dropped, so the budget's forced `"none"` ends the turn.
+    /// Error level: a call answering `tool_choice="none"` is dropped, so the budget's forced
+    /// `"none"` ends the turn.
     pub const TOOL_CHOICE_NONE: &str =
         "received a tool call with tool_choice set to 'none', ignoring";
 
-    /// `agent_activity.AgentActivity._pipeline_reply_task_impl`.
     pub const MAX_TOOL_STEPS: &str = "maximum number of function calls steps reached, generating final response with tool_choice='none'";
 
     /// A tool kept raising `ModelRetry` past its budget (`Retries.tools`): the reply ends.
     pub const TOOL_RETRIES_EXCEEDED: &str = "tool exceeded its max retries count, ending the reply";
 }
 
-/// One `session._run()`, numbered by the driver; tags what the run owns.
+/// One session run, numbered by the driver; tags what the run owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RunId(pub u64);
 
@@ -307,8 +305,7 @@ pub enum SessionEvent {
         /// The host asked for this one (`say()`, `generate_reply()`).
         user_initiated: bool,
     },
-    /// `_update_agent_state(next)`: decided here, applied by the host's
-    /// `AgentSession._update_agent_state`. `old` is always `Some`.
+    /// Decided here, applied by the host.
     AgentStateChanged {
         old: AgentState,
         new: AgentState,
@@ -316,7 +313,7 @@ pub enum SessionEvent {
     /// The spans and measurements that ended this step (`telemetry`), for the exporter; never
     /// the host's.
     Telemetry(Arc<Vec<lk_agents_abi::telemetry::record::Record>>),
-    /// `AgentSession.user_state` moved (the driver is the one writer). `at` is the edge's own
+    /// The user state moved (the driver is the one writer). `at` is the edge's own
     /// back-dated instant, or the away timer's deadline.
     UserStateChanged {
         old: UserState,
@@ -379,7 +376,7 @@ pub enum SessionEvent {
     RunStarted {
         run: RunRef,
     },
-    /// `Command::Run` opened nothing; the host raises the reference's error for the cause.
+    /// `Command::Run` opened nothing; the host raises the error for the cause.
     RunRefused {
         cause: RunRefusal,
         host: Option<lk_agents_abi::HostRef>,

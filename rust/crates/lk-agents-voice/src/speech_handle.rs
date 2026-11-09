@@ -1,6 +1,3 @@
-//! A speech's accepted state. The voice core owns it; the runtime's live `SpeechHandle` mirrors
-//! what the core publishes ([`SpeechUpdate`]) and turns the host's requests into queued inputs.
-
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{ChatItem, MetricsReport};
@@ -177,7 +174,7 @@ impl SpeechView {
     }
 
     /// The host's `interrupt(force)` against this view, `requested` already or not: whether it
-    /// records a new request for the core, in the reference's order (`speech_handle.py:185`).
+    /// records a new request for the core, in the reference's order.
     /// Interrupted or done already, it is a no-op; disallowed, it raises unless forced.
     pub fn host_interrupt(&self, requested: bool, force: bool) -> Result<bool, SpeechError> {
         if requested || self.interrupted() || self.done() {

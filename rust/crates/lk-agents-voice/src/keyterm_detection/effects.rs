@@ -1,4 +1,3 @@
-//! Work requested by the domain state machine.
 use lk_agents_abi::Vocabulary;
 
 #[derive(Debug, Clone, PartialEq, Vocabulary)]

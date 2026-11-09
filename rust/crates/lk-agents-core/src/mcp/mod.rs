@@ -1,6 +1,3 @@
-//! MCP tool logic: option resolution, schemas, setup decisions, and the
-//! interpretation of tool results. The session and its transports are the runtime's I/O.
-
 use std::sync::Arc;
 
 use lk_agents_abi::llm::mcp::{

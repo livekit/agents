@@ -1,6 +1,3 @@
-//! Thread storage as the host sees it: the `Storage` class `AgentDBStorage` and `SQLiteStorage`
-//! configure, the thread records it answers with, and the error every operation fails with.
-
 pub mod context;
 pub mod handles;
 pub mod http;

@@ -1,5 +1,3 @@
-//! Coalesce by speaker, independently of a provider's wire role and message shape.
-
 use super::group::{
     DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE, Dropped, GroupItem,
     convert_mid_conversation_instructions, group_tool_calls,

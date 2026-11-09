@@ -1,7 +1,3 @@
-//! What every telemetry producer hands the exporter: finished spans, log records and metric
-//! measurements, with the job they belong to. Declarations (`telemetry::spans`) produce the
-//! attribute lists; `lk-agents-net` encodes these records as OTLP per destination.
-
 use std::borrow::Cow;
 
 /// The framework's instrumentation scope, and its `service.name` unless the application names one.

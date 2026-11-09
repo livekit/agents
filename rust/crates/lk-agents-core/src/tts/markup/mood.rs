@@ -1,5 +1,3 @@
-//! `tts/_mood.py`.
-
 use crate::tts::markup::mood_data::keywords;
 
 pub use lk_agents_abi::tts::markup::Mood;

@@ -1,4 +1,3 @@
-//! Work requested by workflow lifecycle owners.
 use lk_agents_abi::voice::workflows::IoEnableState;
 
 /// Resource-specific effects of a lifecycle transition. The runtime supplies their handles.

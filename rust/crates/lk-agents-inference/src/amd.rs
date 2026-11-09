@@ -1,6 +1,3 @@
-//! Answering-machine detection model selection and verdict vocabulary.
-//! The synchronous classifier belongs to `lk_agents_voice::amd::machine`.
-
 pub use lk_agents_abi::voice::amd::{
     AMD_PROMPT, AmdCategory, AmdPrediction, AmdReason, DEFAULT_LLM_MODEL, DEFAULT_STT_MODEL,
     EVALUATED_LLM_MODELS, EVALUATED_STT_MODELS,

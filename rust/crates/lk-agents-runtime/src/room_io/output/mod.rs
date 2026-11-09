@@ -1,6 +1,3 @@
-//! `voice/room_io/_output.py`: `_ParticipantAudioOutput`, the agent's audio on its published track,
-//! and its host object; the transcription output is [`transcription`].
-
 use crate::telemetry;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackSegment, PlaybackTracker};
 use lk_agents_abi::voice::io::{IoError, Result};
@@ -158,7 +155,7 @@ impl Shared {
         }
     }
 
-    /// `_forward_audio`: one frame at a time from the backlog into the source, paced by the source.
+    /// One frame at a time from the backlog into the source, paced by the source.
     async fn forward_audio(self: Arc<Self>) {
         loop {
             let frame = loop {
@@ -199,7 +196,6 @@ impl Shared {
             self.report(progress);
         }
 
-        // The await that paces everything.
         if let Err(error) = src.capture(&telemetry::Cx::NONE, &frame).await {
             if !self.lock().playback.closed() {
                 let (failure, played) = match src.playback_info() {
@@ -278,7 +274,7 @@ impl Shared {
         }
     }
 
-    /// `_wait_for_playout`, per closed segment: wait for the drain, then finish the segment.
+    /// Per closed segment: wait for the drain, then finish the segment.
     async fn wait_for_playout(self: Arc<Self>) {
         loop {
             self.wait_until(|s| s.playback.closed() || s.playback.ready_to_finish()).await;
@@ -396,8 +392,8 @@ impl Shared {
     }
 }
 
-/// `_ParticipantAudioOutput`: frames rebuffered into a backlog, forwarded into the track's source by
-/// one pump, each flushed segment finished by one watcher.
+/// The agent's audio on its published track: frames rebuffered into a backlog, forwarded into the
+/// track's source by one pump, each flushed segment finished by one watcher.
 pub struct ParticipantAudioOutput {
     room: Arc<dyn RtcRoom>,
     spawner: Arc<dyn Spawner>,

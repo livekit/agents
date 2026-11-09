@@ -1,8 +1,3 @@
-//! One admitted worker owns a recording's PCM, encoder and ordered writes. Ingress only retains
-//! bounded frame references; terminal status is published after the worker and file have settled.
-//! The microphone reaches the worker through a `media_queue`: what its bound drops is written as
-//! silence, so the file keeps call time.
-
 #[cfg(any(test, feature = "media-ffmpeg"))]
 use std::io::Write;
 #[cfg(feature = "media-ffmpeg")]
@@ -28,6 +23,8 @@ use tokio::sync::{RwLock, mpsc, oneshot, watch};
 pub use lk_agents_abi::recorder::{RecordingFailure, RecordingStatus, RecordingSummary};
 
 use crate::telemetry;
+
+// Terminal status is published only after the worker and file settle.
 
 /// The microphone's bound: what the recording keeps while its worker falls behind.
 #[cfg(any(test, feature = "media-ffmpeg"))]

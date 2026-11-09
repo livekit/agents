@@ -1,7 +1,3 @@
-//! The worker's warm job processes (`_core.ProcPool`, and the server runtime's own pool): the pool
-//! keeps them warm and hands each job the next ready one; each process is a [`JobSupervisor`] over
-//! a launcher the host makes.
-
 use crate::ipc::telemetry;
 use std::sync::Arc;
 

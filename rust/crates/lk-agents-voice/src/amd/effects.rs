@@ -1,4 +1,3 @@
-//! Work requested by answering-machine classification.
 use super::machine::classifier::{
     AmdPrediction, AmdTimer, Authorization, ClassifyRequest, Refusal,
 };

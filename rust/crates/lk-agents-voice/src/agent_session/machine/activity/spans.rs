@@ -1,8 +1,3 @@
-//! The activity's span entities, opened and ended through `self.telemetry`: the user turn heard
-//! from the recognizer's facts (with the STT, the endpointing and the conversation only the driver
-//! knows), the agent turns its speeches own, and its lifecycle callbacks' spans with the
-//! `session_start` or `update_agent` they run in.
-
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{HookKind, VoiceDriver};
 use crate::audio_recognition::{EouDetected, TurnDetectionMode};
@@ -13,12 +8,11 @@ use lk_agents_abi::{ChatContext, ChatMessage, Role, ToDictOptions};
 use lk_agents_abi::{SpeechEventType, Ts};
 use lk_agents_core::llm::history::ChatContextExt;
 
-/// `_EOU_MAX_HISTORY_TURNS`: the items an `eou_detection` span records.
+/// The items an `eou_detection` span records.
 const EOU_HISTORY: usize = 6;
 
 impl VoiceDriver {
-    /// The STT's plugin model and provider: `user_turn` records them as 1.8.10 does, and they
-    /// label its measurements.
+    /// The STT's plugin model and provider, recorded on `user_turn` and labelling its measurements.
     pub(crate) fn span_stt(&self) -> telemetry::Stt {
         let id = self.stt_identity();
         telemetry::Stt {
@@ -83,7 +77,7 @@ impl VoiceDriver {
     }
 
     /// A transcript opens a turn no speech edge opened; a final heard after the speech re-arms
-    /// the countdown (1.8.10's `stt` trigger).
+    /// the countdown.
     fn hear_transcript(
         &mut self,
         now: Ts,
@@ -317,8 +311,8 @@ impl VoiceDriver {
         }
     }
 
-    /// The activity an agent's input streams open under (`start_agent_activity`, as the
-    /// reference's STT pump): the arriving agent's, reserved, else the running one's.
+    /// The activity an agent's input streams open under: the arriving agent's, reserved, else the
+    /// running one's.
     pub(crate) fn activity_span(&self) -> Option<telemetry::SpanContext> {
         (self.activity.arriving.as_ref().map(|a| a.activity.context))
             .or(self.activity.running_activity)

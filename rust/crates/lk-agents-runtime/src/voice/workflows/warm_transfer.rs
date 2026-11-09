@@ -1,9 +1,3 @@
-//! The warm transfer (`beta.workflows.WarmTransfer`): while the caller waits on hold, a second
-//! session in a room of its own dials a human agent, briefs them on the call, and either moves
-//! them into the caller's room or reports why not. The core runs the sequence and decides; the
-//! host (`TransferHost`) connects rooms, starts the second session and plays the hold music; the
-//! LiveKit and Twilio requests go through [`TransferApi`].
-
 use crate::telemetry;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::{ApiError, HostError};
@@ -147,8 +141,7 @@ enum RunPhase {
     },
 }
 
-/// `_core.WarmTransfer`: the transfer's plan (its briefing instructions and tools, how it dials)
-/// and its run.
+/// A warm transfer's plan (briefing instructions, tools, how it dials) and its run.
 pub struct TransferRun {
     plan: TransferPlan,
     /// The trunk to dial through when the plan names no trunk id.
@@ -488,7 +481,6 @@ impl TransferRun {
     }
 }
 
-/// `rtc.DisconnectReason.Name(reason)`.
 fn reason_name(reason: DisconnectReason) -> String {
     reason.as_str().to_uppercase()
 }

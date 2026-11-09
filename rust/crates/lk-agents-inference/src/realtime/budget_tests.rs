@@ -1,6 +1,3 @@
-//! Round-robin realtime core steps at 1/8/32/64 sessions and 1k/10k-item histories.
-//! LK_REALTIME_STEP_QUALIFICATION=1 enforces K-31 CPU gates with optimized core packages.
-
 use super::support::{RetirementStats, thread_cpu};
 
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -8,6 +5,8 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use lk_agents_abi::llm::realtime::UpdateChatCtx;
 use lk_agents_abi::{ChatContext, ChatMessage, RealtimeCommand, Role, Ts};
 use lk_agents_inference::realtime::{OPENAI, Outgoing, RealtimeMachine, SessionOptions, Step};
+
+// LK_REALTIME_STEP_QUALIFICATION=1 enforces the CPU gates; run it with optimized core packages.
 
 fn context(count: usize) -> ChatContext {
     ChatContext::new(

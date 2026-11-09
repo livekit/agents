@@ -1,6 +1,3 @@
-//! The stream's self-running executor: owns the gateway socket, reconnect attempts, audio
-//! re-framing and the event translation for one live stream.
-
 use super::*;
 use crate::effects::SttStreamEffect;
 use crate::telemetry;

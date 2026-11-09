@@ -1,6 +1,3 @@
-//! The task-ownership contract: an injected [`Spawner`] hands back an [`OwnedTask`]. The
-//! executor-agnostic implementation and the Tokio executor live in `lk_agents_net::task`.
-
 use std::any::Any;
 use std::future::Future;
 use std::panic::Location;

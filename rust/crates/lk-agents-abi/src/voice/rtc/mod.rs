@@ -1,6 +1,3 @@
-//! Values exchanged through the RTC capability boundary. Opaque video references keep frame
-//! resources owned by the host.
-
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;

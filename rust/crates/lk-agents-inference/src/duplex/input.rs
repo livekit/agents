@@ -1,8 +1,3 @@
-//! `_core.DuplexInput`: a duplex session's input. The engine pushes the caller's audio into a `Now`
-//! media queue and the plugin pulls it, so a plugin that falls behind skips to the newest audio
-//! after a gap instead of answering audio that is seconds old. Mute and unmute travel in the audio
-//! at the point they were asked; a flush (a reconnect) drops what is queued.
-
 use std::sync::Arc;
 use std::time::Duration;
 

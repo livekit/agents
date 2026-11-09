@@ -1,5 +1,3 @@
-//! The session clock.
-
 use lk_agents_abi::{Clock, Elapsed, Ts, VirtualClock};
 use lk_agents_voice::agent_session::Now;
 use std::sync::Arc;

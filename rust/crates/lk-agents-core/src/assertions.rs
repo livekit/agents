@@ -1,7 +1,3 @@
-//! Run event assertions (testing.md "Programmatic tests"): the cursor `result.expect` walks over
-//! the events of one tested invocation, what each assertion matches and the failure it reports.
-//! A failure names the expectation and lists the events with the one it concerns marked.
-
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::agent::assertions::{AssertionFailure, EventExpectation};
 use serde_json::Value;

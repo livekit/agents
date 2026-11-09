@@ -1,5 +1,3 @@
-//! Run the lock inversion in a child: a blocked native mutex cannot be cancelled by Tokio.
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -10,6 +8,8 @@ use lk_agents_abi::turn::inference::EotStream as _;
 use parking_lot::Mutex;
 
 use lk_agents_inference::eot::*;
+
+// A blocked native mutex cannot be cancelled by Tokio, so the lock inversion runs in a child.
 
 struct CloudFailure(Arc<tokio::sync::Notify>);
 

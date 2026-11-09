@@ -1,7 +1,3 @@
-//! `_DuplexRealtimeSession`'s decisions, synchronous: a duplex model's continuous output cut into
-//! generations at the gate's edges, its transcript fragments attached to the sound that carries
-//! them, and the conversation the session sees. Every input returns the events it produced.
-
 use lk_agents_core::llm::history::ChatContextExt;
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, SystemTime};

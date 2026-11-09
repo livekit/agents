@@ -1,5 +1,3 @@
-//! Typed room observations and the native SDK event callback port.
-
 use std::fmt;
 use std::sync::Arc;
 

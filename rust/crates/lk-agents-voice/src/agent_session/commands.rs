@@ -1,6 +1,3 @@
-//! The session's command vocabulary: everything a host or a system may ask of the driver, each
-//! answered (when it is) through the channel it carries.
-
 use crate::agent_session::machine::activity::false_interruption::InterruptRefusal;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::machine::activity::voice_task::VoiceTaskCommandKind;
@@ -495,11 +492,9 @@ pub struct ModelUpdate {
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 #[vocabulary(kind = ActivityCommandKind)]
 pub enum ActivityCommand {
-    /// No stream is torn down, so no word is dropped. Order (`_update_activity`): refuse when
-    /// closing; `on_exit` before the pause; drain; closing re-check; swap; `on_enter` not awaited.
-    /// A second queues.
+    /// No stream is torn down, so no word is dropped. Order: refuse when closing; `on_exit`
+    /// before the pause; drain; closing re-check; swap; `on_enter` not awaited. A second queues.
     Update(Box<AgentUpdate>),
-    // --- the running agent, changed in place: not a handoff, which replaces the whole agent ---
     /// Replies in flight keep theirs. Carries the full triple: workflow tasks put their persona in
     /// the modality variants.
     UpdateInstructions(Instructions),
@@ -555,8 +550,7 @@ pub struct AgentUpdate {
     pub options: crate::agent_session::options::AgentSessionOptions,
     /// The agent's `expressive`, replacing the previous agent's; `None` defers to the session's.
     pub expressive: Option<crate::agent_session::options::Expressive>,
-    /// The agent's `transcription_node`, replacing the previous
-    /// agent's.
+    /// The agent's `transcription_node`, replacing the previous agent's.
     pub output_nodes: crate::agent_session::OutputNodes,
     pub call: Option<RequestId>,
     /// The spans its toolset setup ran under, which the handoff opens.
@@ -606,8 +600,7 @@ impl Command {
                 .flatten()
                 .collect()
             }
-            // Classify new command/activity variants explicitly: no resource-bearing update
-            // may silently bypass queue refusal and retirement accounting.
+            // Listed explicitly so a new resource-bearing variant cannot skip retirement accounting.
             Command::Activity(
                 ActivityCommand::UpdateInstructions(_)
                 | ActivityCommand::UpdateTools(_)

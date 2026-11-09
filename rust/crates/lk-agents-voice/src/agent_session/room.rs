@@ -1,5 +1,3 @@
-//! Session consequences of room attachment and departure.
-
 use super::{Close, VoiceDriver, VoiceHostEvent};
 use crate::trace::{RoomLinkStep, RoomStep, Step};
 use lk_agents_abi::Ts;
@@ -81,8 +79,7 @@ impl RoomLink {
         known
     }
 
-    /// Does this disconnect end the session? A deletion in flight is the end of the call already
-    /// (`not self._delete_room_task`).
+    /// Does this disconnect end the session? A deletion in flight is the end of the call already.
     fn disconnect_closes(&self, reason: DisconnectReason) -> bool {
         !self.deletion_requested
             && self.config.close_on_disconnect
@@ -112,7 +109,6 @@ impl VoiceDriver {
                     self.apply_user_state_updates(updates);
                 };
                 let reason = unlinked.reason;
-                // A deletion in flight is the end of the call already (`not self._delete_room_task`).
                 let closes = self.session.room.disconnect_closes(reason);
                 self.record_trace(RoomStep::Link(RoomLinkStep::Unlinked { reason, closes }));
                 if closes {
@@ -129,8 +125,7 @@ impl VoiceDriver {
                     let updates = self.session.states.on_link(now, true, closing);
                     self.apply_user_state_updates(updates);
                 };
-                // `_on_room_io_participant_linked`: an outbound SIP call has no warmup, unless the
-                // application set `aec_warmup_duration` itself.
+                // An outbound SIP call has no warmup, unless the application set one itself.
                 if *outbound_sip && !self.session.config.aec_warmup_given() {
                     let patch = crate::agent_session::options::aec_warmup_layer(None);
                     let diff = self.session.config.configure(&patch);

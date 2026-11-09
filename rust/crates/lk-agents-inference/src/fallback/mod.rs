@@ -1,9 +1,3 @@
-//! Provider fallback: one generic [`FallbackChain`] for LLM/STT/TTS, and the realtime adapter's
-//! sessions, driven by [`machine`]. A fallback adapter implements the same traits as its entries.
-//! Realtime differs: failure is a pushed event, recovery is a cooldown, a healthy primary is not
-//! preempted, and availability is per session. The `metrics_collected` tee lives in
-//! `lk-agents-py`, since these traits carry no event emitter.
-
 mod chain;
 mod channel;
 mod llm;
@@ -29,11 +23,6 @@ pub use tts::{
 
 #[cfg(test)]
 mod adapter_tests;
-#[cfg(test)]
-mod host_tests;
-#[cfg(test)]
-#[path = "../fallback_tests.rs"]
-mod tests;
 
 /// `DEFAULT_FALLBACK_API_CONNECT_OPTIONS` (`llm:17`, `stt:27`, `tts:31`): the adapter is the retry
 /// loop. `retry_interval` drops to the dataclass default (2.0), as in the reference.

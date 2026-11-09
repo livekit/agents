@@ -1,6 +1,3 @@
-//! The avatar worker's audio receiver (`DataStreamAudioReceiver`): executes the pure receive
-//! state's streams and reports, and implements its ABI class and host receiver directly.
-
 use crate::rtc::events::RpcHandler;
 use crate::rtc::wait;
 use crate::telemetry;
@@ -256,7 +253,7 @@ impl RxInner {
         });
     }
 
-    /// `_send_task`: the playback reports, in order, each retried by its attempt policy.
+    /// Sends the playback reports, in order, each retried by its attempt policy.
     async fn send(self: Arc<Self>) -> std::result::Result<(), ReceiverEnd> {
         let Some(mut rx) = self.rpc_rx.lock().take() else {
             return Ok(());

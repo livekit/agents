@@ -1,5 +1,3 @@
-//! VoiceRuntime messages retain resources until converted into pure decision inputs.
-
 use crate::telemetry;
 use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::{SpeechEvent, VadEvent};

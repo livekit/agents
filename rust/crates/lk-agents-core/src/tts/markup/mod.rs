@@ -1,6 +1,3 @@
-//! Expressive markup: the LLM is taught one tag, `<expr type label/>`, lowered per provider. Square
-//! brackets are never stripped (they are prose links, #6590).
-
 use lk_agents_abi::tts::markup as abi;
 use lk_agents_abi::tts::markup::{MarkupClass, MarkupFunctions, TranscriptStripper};
 use provider::ProviderExt;
@@ -35,6 +32,8 @@ pub use transcript::{
 };
 
 pub use lk_agents_abi::tts::markup::{Markup, SentenceTokenizerConfig};
+
+// Square brackets are never stripped: they are prose links.
 
 pub trait MarkupExt {
     fn llm_instructions(&self, speech_steering: Option<&SpeechSteering>) -> Option<String>;
@@ -95,7 +94,7 @@ pub fn sentence_tokenizer_of(
 }
 
 #[cfg(test)]
-#[path = "../markup_tests.rs"]
+#[path = "markup_tests.rs"]
 mod tests;
 
 /// Supplies the non-streaming TTS adapter with this voice's text transformations.

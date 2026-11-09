@@ -1,12 +1,7 @@
-//! Audio end-of-turn detection, `inference/eot/*`: caller-minted request ids, so stale answers are
-//! recognised.
-//!
-//! `session` holds every decision; `transport`, `cloud` (gateway protocol over the shared
-//! WebSocket transport) and `local` (the mini model over a [`LocalEotModel`]) carry them out, mounted by `shell`. Connection headers come from the host
-//! through [`CloudOptions::headers`].
-
 use livekit_protocol::agent as proto;
 use std::time::Duration;
+
+// Request ids are caller-minted, so stale answers are recognised.
 
 mod cloud;
 mod detector;
@@ -18,10 +13,8 @@ mod shell;
 mod stream;
 mod transport;
 
-// `ClientMessage`/`ServerMessage` from the shared protocol crate, aliased as `proto`.
-
 #[cfg(test)]
-#[path = "../eot_tests.rs"]
+#[path = "eot_tests.rs"]
 mod tests;
 
 pub use cloud::{CloudOptions, CloudTransport, HeaderProvider};

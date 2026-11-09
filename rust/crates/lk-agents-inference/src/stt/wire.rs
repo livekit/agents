@@ -1,5 +1,3 @@
-//! The STT gateway's JSON protocol: the frames the client sends and the messages it receives.
-
 use super::SttOptions;
 use super::options::keyterms_extra_for_model;
 use lk_agents_abi::errors::ApiError;

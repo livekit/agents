@@ -1,6 +1,3 @@
-//! `_core`'s inference lookups ([`InferenceModels`]): the gateway's model tables, request headers
-//! and local model registry, answered by the modules that own them.
-
 use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::inference::InferenceModels;
 use lk_agents_abi::{SttCapabilities, TtsCapabilities};

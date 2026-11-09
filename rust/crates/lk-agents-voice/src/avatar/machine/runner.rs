@@ -1,30 +1,16 @@
-//! `voice/avatar/_runner.py`'s `AvatarRunner`, the avatar worker's side: the agent's audio from an
-//! `AudioReceiver` into the user's `VideoGenerator`, what it generates out through the SDK's
-//! `rtc.AVSynchronizer` (publishing the tracks on the first frame), and each segment's playback
-//! reported back.
-//!
-//! [`RunnerCore`] makes every decision as a state machine: `handle(event) -> effects`, no
-//! timers of its own. The frames are plain records ([`AvatarFrame`], [`MediaFrame`]): the core
-//! decides where each one goes, never what is in it. The shared runtime queue owner
-//! executes each [`AvatarIoOperation`] against the host proxies and answer it with an [`AvatarEvent`].
-
 use crate::avatar::effects::AvatarEffect;
 use std::collections::{BTreeMap, VecDeque};
 
 use lk_agents_abi::errors::ProviderError;
 pub use lk_agents_abi::utils::video::{AudioReceiverFrame, AvatarFrame, MediaFrame};
 
-/// The playback position of a segment cut before any of it played.
-const NOT_PLAYED: f64 = 0.0;
-
-// ----------------------------------------------------------------------------- the host's side
-
 pub use lk_agents_abi::voice::avatar::{
     AvatarAudio, AvatarAudioReceiver, AvatarMedia, AvatarVideoGenerator,
 };
 use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackSegment};
 
-// ----------------------------------------------------------------------------- the core
+/// The playback position of a segment cut before any of it played.
+const NOT_PLAYED: f64 = 0.0;
 
 /// A host call into the runner, answered by [`AvatarEffect::Answer`] with the same id.
 pub type CallId = u64;
@@ -118,7 +104,7 @@ pub enum AvatarIoOperation {
     CloseMedia,
 }
 
-/// Where one of the two loops (`_read_audio`, `_forward_video`) is.
+/// Where one of the two loops is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Pump {
     #[default]
@@ -130,12 +116,11 @@ enum Pump {
     Done,
 }
 
-/// The runner's two loops, as the reference names them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Loop {
-    /// `_read_audio`: the receiver's audio into the generator.
+    /// The receiver's audio into the generator.
     ReadAudio,
-    /// `_forward_video`: the generator's frames out to the room.
+    /// The generator's frames out to the room.
     ForwardVideo,
 }
 
@@ -219,7 +204,6 @@ impl Lifecycle {
 #[derive(Debug)]
 pub struct RunnerCore {
     lazy_publish: bool,
-    /// `_room_connected_fut`.
     connected: bool,
     publish: Publish,
     lifecycle: Lifecycle,
@@ -229,11 +213,9 @@ pub struct RunnerCore {
     held: Option<(MediaFrame, Option<f64>)>,
     /// The audio frame being pushed, and its duration: reported once the push returns.
     pushing: Option<f64>,
-    /// `_playback_position`.
     position: f64,
-    /// The reference's `_audio_playing`, counted: the segments whose audio went into the generator
-    /// and whose end has not come out of it. The generator holds a segment's end while the next
-    /// segment's audio is read, and one flag for both reported the first and lost the second.
+    /// The segments whose audio went into the generator and whose end has not come out of it.
+    /// The generator holds a segment's end while the next segment's audio is read.
     owed: VecDeque<AvatarPlaybackSegment>,
     /// The segment the receiver is handing over has had audio.
     reading: bool,
@@ -246,8 +228,7 @@ pub struct RunnerCore {
     reports: VecDeque<PendingReport>,
     frame_pull_paused: bool,
     /// A clear cut the segment the receiver was handing over: its end, read before any new
-    /// audio, is the cut segment's, whose finish the clear reported. The reference pushes it on to
-    /// the generator, where it reports the next segment finished before it played.
+    /// audio, is the cut segment's, whose finish the clear already reported.
     stale_end: bool,
     /// The last segment key minted for a receiver that keys none.
     unkeyed: u64,
@@ -319,7 +300,6 @@ impl RunnerCore {
 
     pub fn handle(&mut self, event: AvatarEvent) -> Vec<AvatarEffect> {
         let mut effects = Vec::new();
-        // an answer to an op the close cut
         if self.cut() && event.dropped_once_cut() {
             return effects;
         }
@@ -536,7 +516,6 @@ impl RunnerCore {
     ) {
         match result {
             Ok(Some(AvatarFrame::SegmentEnd)) => {
-                // the agent hears the segment finished; the forwarding goes on
                 if let Some(segment) = self.owed.pop_front() {
                     let position = std::mem::take(&mut self.position);
                     let interrupted = false;
@@ -568,7 +547,6 @@ impl RunnerCore {
         }
     }
 
-    /// `start()` waited on the publish.
     fn answer_start(
         &mut self,
         call: CallId,
@@ -666,7 +644,7 @@ impl RunnerCore {
                 self.lifecycle = Lifecycle::Cancelling { call, phase };
                 out.push(AvatarEffect::CancelIo);
             }
-            // as the reference's `aclose`, which raises before cancelling anything
+            // A failed receiver close raises before cancelling anything.
             Err(e) => {
                 self.lifecycle = Lifecycle::Open(phase);
                 out.push(AvatarEffect::Answer { call, result: Err(RunnerError::Failed(e)) });
@@ -707,7 +685,6 @@ impl RunnerCore {
         }
     }
 
-    /// Start both loops.
     fn begin(&mut self, out: &mut Vec<AvatarEffect>) {
         if let Some(phase) = self.lifecycle.phase_mut()
             && !matches!(phase, RunPhase::Failed(_))
@@ -766,7 +743,6 @@ impl RunnerCore {
         }
     }
 
-    /// `_publish_track`: once the room has connected.
     fn ask_publish(&mut self, out: &mut Vec<AvatarEffect>) {
         if self.connected {
             self.publish = Publish::InFlight;
@@ -795,7 +771,6 @@ impl RunnerCore {
         out.push(AvatarEffect::Io(AvatarIoOperation::Push(frame)));
     }
 
-    /// One loop's end.
     fn loop_ended(
         &mut self,
         ended: Loop,
@@ -825,7 +800,7 @@ impl RunnerCore {
         self.answer_waiting(out);
     }
 
-    /// `wait_for_complete`'s answers, once the outcome is known.
+    /// Answers every `wait_for_complete` once the outcome is known.
     fn answer_waiting(&mut self, out: &mut Vec<AvatarEffect>) {
         let result = match &self.lifecycle {
             Lifecycle::ClosingMedia { outcome, .. } | Lifecycle::Closed { outcome } => {

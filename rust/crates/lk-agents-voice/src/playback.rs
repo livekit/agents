@@ -1,7 +1,3 @@
-//! The segment bookkeeping of one `io.AudioOutput` (`_playback_segments_count`,
-//! `_playback_finished_count`, `_last_playback_ev`): which keyed segment is capturing, which owe a
-//! report, how much of the open one was heard, and when a `wait_for_playout` is satisfied.
-
 use lk_agents_abi::voice::io::{PlaybackFinished, PlaybackSegment};
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -202,8 +198,7 @@ mod tests {
     }
 
     /// A reset mid-capture leaves the rest of the audio a segment the session never keyed; its
-    /// number must not take the key the session hands the next speech (seed 477 refused that
-    /// speech's output after its words were forwarded).
+    /// number must not take the key the session hands the next speech.
     #[test]
     fn audio_captured_after_a_reset_does_not_take_the_next_speechs_key() {
         let mut s = PlaybackSegments::default();

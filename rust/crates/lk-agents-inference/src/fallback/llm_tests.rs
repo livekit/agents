@@ -1,0 +1,117 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use lk_agents_abi::ChoiceDelta;
+use lk_agents_abi::llm::fallback::FallbackLlm as DeclaredFallback;
+
+use std::sync::Arc;
+
+use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::{ChatRequest, Clock, Closed, Llm, LlmChunk, LlmStream, StreamOutput, Ts};
+use lk_agents_net::clock::RealClock;
+
+use super::FallbackLlm;
+use lk_agents_net::env::ProcessEnv;
+
+struct Provider(Arc<AtomicBool>);
+
+impl Llm for Provider {
+    fn label(&self) -> String {
+        "scripted".into()
+    }
+
+    fn model(&self) -> String {
+        "native-model".into()
+    }
+
+    fn chat<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: &'a ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        Box::pin(async move {
+            Ok(Box::new(Response { sent: false, closed: self.0.clone() }) as LlmStream)
+        })
+    }
+}
+
+struct Response {
+    sent: bool,
+    closed: Arc<AtomicBool>,
+}
+
+impl StreamOutput<LlmChunk> for Response {
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
+        Box::pin(async move {
+            if self.sent {
+                return std::future::pending().await;
+            }
+            self.sent = true;
+            Ok(Some(LlmChunk {
+                id: "reply".into(),
+                delta: Some(ChoiceDelta {
+                    content: Some("native response".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+        })
+    }
+
+    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            self.closed.store(true, Ordering::SeqCst);
+            Closed::Clean
+        })
+    }
+}
+
+impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for Response {}
+
+#[tokio::test]
+async fn declared_fallback_keeps_native_dispatch_and_cancels_its_open_stream() {
+    let empty = <FallbackLlm as DeclaredFallback>::new(
+        &ProcessEnv::current_runtime(),
+        vec![],
+        5.0,
+        0,
+        0.5,
+        false,
+        None,
+    );
+    assert!(empty.is_err());
+
+    let closed = Arc::new(AtomicBool::new(false));
+    let fallback = <FallbackLlm as DeclaredFallback>::new(
+        &ProcessEnv::current_runtime(),
+        vec![Arc::new(Provider(closed.clone()))],
+        5.0,
+        0,
+        0.5,
+        false,
+        None,
+    )
+    .expect("native provider accepted");
+    assert_eq!(fallback.model(), "native-model");
+    let mut stream =
+        Llm::chat(&fallback, &lk_agents_abi::telemetry::Cx::NONE, &ChatRequest::default())
+            .await
+            .expect("opened");
+    let chunk = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .expect("first chunk arrived")
+        .expect("provider succeeded")
+        .expect("provider emitted a chunk");
+    assert_eq!(chunk.delta.unwrap().content.as_deref(), Some("native response"));
+    assert_eq!(DeclaredFallback::active_index(&fallback), 0);
+
+    let deadline = RealClock::new().now().saturating_add(Duration::from_secs(5));
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), stream.close(deadline))
+            .await
+            .expect("close settled"),
+        Closed::Clean,
+    );
+    assert!(closed.load(Ordering::SeqCst));
+    DeclaredFallback::aclose(&fallback).await;
+}

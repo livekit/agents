@@ -1,5 +1,3 @@
-//! RoomIO attachment, participant selection, readiness and retirement decisions.
-
 use lk_agents_abi::Closed;
 use lk_agents_abi::voice::io::{IoError, Result};
 pub use lk_agents_abi::voice::room_io::{
@@ -10,10 +8,9 @@ use lk_agents_abi::voice::rtc::{ParticipantIdentity, ParticipantKind};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-/// `_pre_connect_audio.PRE_CONNECT_AUDIO_BUFFER_STREAM`.
 pub const PRE_CONNECT_AUDIO_BUFFER_STREAM: &str = "lk.agent.pre-connect-audio-buffer";
 
-/// `PreConnectAudioHandler._max_delta_s`: a buffer older than this is stale and dropped.
+/// A pre-connect buffer older than this is stale and dropped.
 pub const PRE_CONNECT_MAX_DELTA: Duration = Duration::from_secs(1);
 
 /// The kinds a [`RoomIoConfig`] auto-links: `participant_kinds`, or the defaults when empty.
@@ -25,8 +22,8 @@ pub fn accepted_kinds(config: &RoomIoConfig) -> &[ParticipantKind] {
     }
 }
 
-/// Whether the agent transcript follows audio playout: `sync_transcription` unset (`NOT_GIVEN`)
-/// means yes when there is an audio output.
+/// Whether the agent transcript follows audio playout: an unset `sync_transcription` means yes
+/// when there is an audio output.
 pub fn wants_transcript_sync(config: &RoomIoConfig, has_audio_output: bool) -> bool {
     let Some(text) = &config.text_output else { return false };
     text.sync_transcription != Some(false) && has_audio_output
@@ -34,9 +31,9 @@ pub fn wants_transcript_sync(config: &RoomIoConfig, has_audio_output: bool) -> b
 
 pub use lk_agents_abi::voice::room_owner::RoomIoEvent;
 
-/// `RoomIO._on_participant_connected`. Not when someone is already linked, when an explicit target
-/// is configured and this is not it, or when the candidate is an avatar publishing for the agent.
-/// The publish-on-behalf filter applies only without an explicit target (the reference's `elif`).
+/// Whether to link a connecting participant. Not when someone is already linked, when an explicit
+/// target is configured and this is not it, or, without an explicit target, when the candidate is
+/// an avatar publishing for the agent.
 pub fn decide_link(
     already_linked: bool,
     configured_target: Option<&ParticipantIdentity>,
@@ -66,8 +63,8 @@ pub fn outbound_sip(
         && !attributes.contains_key("sip.ruleID")
 }
 
-/// `_ParticipantLegacyTranscriptionOutput._is_local_proxy_participant`: publishing on behalf of the
-/// agent is a reason to accept (the caption belongs on the avatar's track).
+/// Publishing on behalf of the agent is a reason to accept: the caption belongs on the avatar's
+/// track.
 pub fn is_local_proxy_participant(
     subject: Option<&ParticipantIdentity>,
     candidate: &ParticipantIdentity,
@@ -186,8 +183,7 @@ impl RoomIo {
         true
     }
 
-    /// `set_participant`: `listed_sid` is the participant's SDK sid when it is in the room.
-    /// `None` once closing.
+    /// `listed_sid` is the participant's SDK sid when it is in the room. `None` once closing.
     pub fn set_participant(
         &mut self,
         identity: Option<ParticipantIdentity>,
@@ -244,7 +240,7 @@ impl RoomIo {
         .then_some(self.attachment)
     }
 
-    /// `_on_sip_dtmf_received`: a key the linked participant pressed is activity.
+    /// A key the linked participant pressed is activity.
     pub fn accepts_key_press(&self, participant: &ParticipantIdentity) -> bool {
         self.linked.as_ref() == Some(participant)
     }

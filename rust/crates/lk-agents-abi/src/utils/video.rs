@@ -1,9 +1,7 @@
-//! Video as plain data, and the frames an avatar worker moves: records with their bytes, never the
-//! host's objects. A frame's buffer is shared (`Bytes`), so moving it through the core copies
-//! nothing; crossing in from a host `bytes` buffer copies nothing either, and crossing out is one
-//! copy into the host's `bytes`.
-
 use crate::AudioFrame;
+
+// A frame's buffer is shared (`Bytes`): moving it through the core or in from a host `bytes`
+// buffer copies nothing; crossing out is one copy into the host's `bytes`.
 
 /// Marks the end of one avatar audio segment.
 #[crate::host(record(module = "avatar", path = "livekit.agents.voice.avatar", marker, emit))]

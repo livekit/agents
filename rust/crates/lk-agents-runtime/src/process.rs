@@ -1,23 +1,20 @@
-//! The process-wide Tokio runtime, started on first use and never at import: `fork()` copies only
-//! the calling thread, so a runtime inherited across a fork has no workers. The process records
-//! its owner and refuses to serve another.
-
 use parking_lot::Mutex;
 use std::sync::Arc;
 
 use lk_agents_abi::Clock;
 use lk_agents_net::env::ProcessError;
 
+// Started on first use, never at import: `fork()` copies only the calling thread, so a runtime
+// inherited across a fork has no workers.
+
 struct Started {
     runtime: tokio::runtime::Runtime,
     http: Arc<lk_agents_net::http::GatewayHttp>,
 }
 
-/// What the process holds: the runtime once started, and its owner.
 struct State {
     started: Option<Started>,
-    /// The process that declared itself the core's (`_core.init`, else its first entry or the
-    /// runtime's start): the runtime, when started, is this process's.
+    /// The process that declared itself the runtime's owner.
     owner: Option<u32>,
 }
 
@@ -74,13 +71,13 @@ fn owned(state: &mut State) -> Result<(), ProcessError> {
 }
 
 /// The fork guard every host entry passes first: a process that never declared itself does so
-/// now (the reference has no initialiser); one that inherited another's declaration across a
+/// now; one that inherited another's declaration across a
 /// fork is refused until it calls [`reinit`], since its runtime's threads did not survive.
 pub fn check_pid() -> Result<(), ProcessError> {
     owned(&mut state())
 }
 
-/// Declares this process as the runtime's owner (`_core.init` in a forked child): a runtime
+/// Declares this process as the runtime's owner (in a forked child): a runtime
 /// inherited from the parent is abandoned, never dropped, since dropping joins worker threads
 /// the child does not have. The next [`handle`] starts a fresh one.
 pub fn reinit() {
@@ -155,9 +152,8 @@ impl lk_agents_abi::worker::ipc_host::ProcessInitialization for Initialization {
 mod pid_tests {
     use super::*;
 
-    // The failure the guard exists for, and its remedy: a declaration inherited from another
-    // process is refused until this one re-declares itself; a process that never declared is
-    // usable at once (the reference needs no initialiser).
+    // A declaration inherited from another process is refused until this one re-declares itself;
+    // a process that never declared is usable at once.
     #[test]
     fn a_forked_child_is_refused_until_it_re_declares_itself() {
         state().owner = None;

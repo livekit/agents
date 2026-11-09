@@ -1,5 +1,3 @@
-//! Cancellation: what cancelled work is still owed, and when the invocation settles anyway.
-
 use lk_agents_abi::Ts;
 use lk_agents_abi::agent::run::RunError;
 use std::collections::BTreeSet;

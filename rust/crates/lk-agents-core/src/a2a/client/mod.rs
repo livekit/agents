@@ -1,7 +1,3 @@
-//! The A2A client's synchronous protocol state. Runtime executes [`Request`]s and feeds each
-//! response to its own [`ReplyState`]; neither a connection nor an outstanding task lives on a
-//! reusable remote-tool definition.
-
 use lk_agents_abi::a2a_protocol as a2a;
 mod messages;
 pub use messages::{message_from_wire, message_to_wire, metadata_to_wire, part_from_wire};
@@ -18,6 +14,8 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::a2a::rpc::{TaskRef, task_state};
+
+// Neither a connection nor an outstanding task lives on a reusable remote-tool definition.
 
 /// Connection, timeout and status failures are the transport's `ApiError` kinds.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -696,5 +694,5 @@ fn short_metadata(metadata: Map<String, Value>) -> Map<String, Value> {
 }
 
 #[cfg(test)]
-#[path = "../client_tests.rs"]
+#[path = "client_tests.rs"]
 mod tests;

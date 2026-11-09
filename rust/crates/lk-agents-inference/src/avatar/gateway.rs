@@ -1,11 +1,3 @@
-//! The gateway avatar: one [`AvatarSessionLifecycle`] per instance, stepped by a driver task that
-//! executes its effects. Host calls and transport observations reach the driver as stamped
-//! inputs, applied in order with every deadline due before them. The host's `session_id` and
-//! `provider_session_id` are views the driver updates from the core's effects.
-//!
-//! The driver is its own owner: it ends once the instance is dropped (which closes it) and the
-//! core owes nothing, so a session created after its caller left is still terminated.
-
 use crate::effects::AvatarSessionEffect;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -28,6 +20,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
 use lk_agents_net::env::ProcessEnv;
+
+// The driver outlives its caller: it ends only once the instance is dropped and the core owes
+// nothing, so a session created after its caller left is still terminated.
 use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, read_body};
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 
@@ -571,3 +566,7 @@ impl ExchangeKind {
         reporter.report(event).await;
     }
 }
+
+#[cfg(test)]
+#[path = "gateway_tests.rs"]
+mod tests;

@@ -1,7 +1,3 @@
-//! `_core.VoiceSession` as the host holds it: assembled from the host's arguments, started,
-//! commanded and closed. It owns what runs beside the session's loop (the host event drain, hook
-//! answers, handoffs, a streamed `say`'s feed); the decisions behind each command are voice's.
-
 mod builder;
 pub(super) mod calls;
 mod class;
@@ -12,7 +8,7 @@ pub mod owner;
 pub(super) mod shared;
 pub mod storage;
 #[cfg(test)]
-#[path = "../session_tests.rs"]
+#[path = "session_tests.rs"]
 mod tests;
 mod time;
 
@@ -23,8 +19,6 @@ pub use shared::*;
 pub use time::Timebase;
 
 use host_drain::HostDrain;
-#[cfg(test)]
-use host_drain::answer_hook;
 
 use crate::telemetry;
 use crate::voice::nodes::Nodes;
@@ -168,7 +162,6 @@ struct Running {
     /// `Agent.chat_ctx`: the driving agent's view, as the driver last published it.
     chat_ctx: tokio::sync::watch::Receiver<Arc<lk_agents_abi::ChatContext>>,
     peer: PeerHandle,
-    /// One per session.
     amd: Option<Arc<dyn lk_agents_abi::voice::amd::AmdPort>>,
     /// The loop and the host event drain, cancelled once the close has drained.
     loop_tasks: Vec<TaskId>,
@@ -177,15 +170,12 @@ struct Running {
     drained: Option<tokio::sync::oneshot::Receiver<()>>,
     /// The loop's id counter: a speech call's handle has its id before the loop creates it.
     speech_ids: Arc<AtomicU64>,
-    /// The executor's, for every TTS swapped in.
     tts_adapter: TtsAdapter,
-    /// The executor's, for every STT swapped in.
     stt_adapter: SttAdapter,
     _stalls: crate::telemetry::StallWatch,
 }
 
 impl Running {
-    /// A host call's id, from the session's counter.
     fn next_call(&self) -> RequestId {
         RequestId(self.speech_ids.fetch_add(1, Ordering::Relaxed))
     }
@@ -604,7 +594,7 @@ impl VoiceSession {
         sent
     }
 
-    /// `AMD._run`. One per session; the verdict comes back as `amd_result`.
+    /// Attaches answering-machine detection once per session; the verdict arrives as `amd_result`.
     pub fn attach_amd(
         &self,
         setup: lk_agents_voice::amd::AmdSetup,
@@ -620,7 +610,7 @@ impl VoiceSession {
         })
     }
 
-    /// `_aclose_impl`: resolves once the loop returned and the drain handed over the last event.
+    /// Resolves once the loop returned and the drain handed over the last event.
     /// The stage stays `Running` meanwhile (hooks and tools still answer through it). Idempotent.
     pub fn close(
         &self,

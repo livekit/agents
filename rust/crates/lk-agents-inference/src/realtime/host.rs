@@ -1,7 +1,3 @@
-//! A plugin's realtime model as the core's own: its session's updates apply one after the other,
-//! a reply is requested once the updates sent before it applied, and each generation is drained in
-//! its own task.
-
 use std::sync::Arc;
 
 use lk_agents_abi::errors::HostError;

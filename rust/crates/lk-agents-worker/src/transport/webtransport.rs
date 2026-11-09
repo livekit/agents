@@ -1,9 +1,3 @@
-//! The WebTransport worker connection (livekit/protocol#1728), client side of livekit-server's
-//! `pkg/agent/endpoint/conformance/worker.go`. One QUIC session at `https://<host>:<port>/agent`;
-//! the worker opens the control stream first, messages framed with a 4-byte big-endian length.
-//! Every server-opened stream is an [`EndpointStream`]. No QUIC keep-alive: the 2.5 s status
-//! update keeps it busy and quinn's 30 s idle timeout detects a dead peer.
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -18,6 +12,10 @@ use prost::Message as _;
 
 use super::MAX_CONTROL_MESSAGE;
 pub use livekit_protocol::agent_http::{AgentEndpointKind, HttpStreamResetCode, StreamPreamble};
+
+// The worker opens the control stream first; its messages carry a 4-byte big-endian length.
+// No QUIC keep-alive: the 2.5 s status update keeps the session busy and quinn's 30 s idle
+// timeout detects a dead peer.
 
 /// `endpoint.SessionCloseOK`.
 const SESSION_CLOSE_OK: u32 = 0;

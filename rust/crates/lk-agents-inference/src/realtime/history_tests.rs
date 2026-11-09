@@ -1,5 +1,3 @@
-//! Core context preparation, acknowledgements and retirement under long histories.
-
 use super::support::thread_cpu as cpu_time;
 
 use std::collections::BTreeMap;

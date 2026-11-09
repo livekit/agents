@@ -1,5 +1,3 @@
-//! Place unsolicited server items beside local insertions without scanning a history in one step.
-
 use super::{ContextWork, RealtimeMachine, Step};
 use crate::realtime::RemoteChatContext;
 use lk_agents_abi::{ChatItem, Ts};
@@ -136,3 +134,7 @@ impl RealtimeMachine {
         self.continue_context(now)
     }
 }
+
+#[cfg(test)]
+#[path = "server_items_tests.rs"]
+mod tests;

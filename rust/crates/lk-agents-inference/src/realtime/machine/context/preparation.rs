@@ -1,5 +1,3 @@
-//! Incremental snapshot, validation and edit preparation for a requested conversation.
-
 use super::{CtxUpdate, RealtimeMachine, Retired, Step};
 use lk_agents_abi::{ChatContext, ChatItem};
 use lk_agents_core::llm::ctx_diff::{ChatContextDiff, DiffOps};

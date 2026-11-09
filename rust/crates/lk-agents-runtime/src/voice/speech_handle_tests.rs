@@ -133,7 +133,7 @@ fn a_speech_is_itself_across_handles() {
 // Catches: a host `interrupt()` the loop refused leaving the request behind (the speech read
 // `interrupted` forever), the check reading a stale `allow_interruptions` right after the setter,
 // a handle with no id until the loop created it, a host view going back to `False` once the
-// speech ended (1.x's `_interrupt_fut` is sticky), and a request a speech created done never
+// speech ended (the interrupt is sticky), and a request a speech created done never
 // heard reading as an interruption the loop never made.
 #[test]
 fn the_host_reads_the_loops_verdict_on_its_interrupt() {
@@ -178,9 +178,8 @@ fn the_host_reads_the_loops_verdict_on_its_interrupt() {
 }
 
 // Catches: `handle.allow_interruptions = False` lost when the speech ended before the request
-// reached the loop (smoke's "the setter before creation was lost": a say with no audio output
-// ends within the call): the setter checked the view, released it, and asked a speech the loop
-// had already let go. An ended speech's setter is the handle's own, as in 1.x.
+// reached the loop (a say with no audio output ends within the call). An ended speech's setter is
+// the handle's own.
 #[test]
 fn a_setter_on_an_ended_speech_keeps_the_hosts_value() {
     let mut speech = Speech::created(true);

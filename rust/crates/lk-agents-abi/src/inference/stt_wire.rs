@@ -1,5 +1,3 @@
-//! Numeric error codes emitted by the gateway's STT protocol.
-
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SttErrorCode {

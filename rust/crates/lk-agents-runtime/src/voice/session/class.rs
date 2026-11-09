@@ -1,6 +1,3 @@
-//! The declared `_core.VoiceSession` over [`VoiceSession`]: assembly from the host's arguments,
-//! and every other method one command to the loop.
-
 use super::*;
 use crate::telemetry;
 use lk_agents_abi::llm::fallback::RealtimeLeg;
@@ -299,8 +296,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         &self,
         frame: UpdateAgentArgs,
     ) -> Result<BoxFuture<'static, bool>, SessionRefused> {
-        // Always `_update_activity(previous_activity="close", new_activity="start")`. The answer
-        // first: a refused handoff registers no provider it would never release.
+        // The answer first: a refused handoff registers no provider it would never release.
         let (call, rx) = self.call(Answer::handoff)?;
         let mut update = self.frame(frame);
         update.call = Some(call.id);
@@ -552,7 +548,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
                     .to_owned(),
             ));
         }
-        // `_start_ivr_detection`: the session's tools extended, then the navigator started.
+        // The session's tools extended, then the navigator started.
         if let Some(specs) = tools {
             self.send(Command::Ivr(IvrCommand::AddTools(Toolset {
                 specs,

@@ -1,11 +1,10 @@
-//! Shared console audio accounting and microphone projection. The CLI acknowledges the last
-//! flush once it has played it and drops the acknowledgement on a clear, so its unkeyed receipt
-//! settles the flushed segment; a receipt before the flush belongs to a segment already cleared.
-
 use super::proto::agent_session_message::{Message, console_io};
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::voice::io::{IoError, PlaybackFinished, PlaybackSegment};
 use std::time::Duration;
+
+// The CLI acknowledges the last flush once played and drops it on a clear, so its unkeyed
+// receipt settles the flushed segment; a receipt before the flush belongs to a cleared segment.
 
 /// The rate the CLI captures and plays at.
 pub const CONSOLE_SAMPLE_RATE: u32 = 48_000;

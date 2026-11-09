@@ -1,5 +1,4 @@
-//! Thinking spans stripped from streamed deltas. `""` (an empty delta) and `None` (no delta, or pure
-//! thinking) are different answers, written back into `delta.content`.
+// `""` (an empty delta) and `None` (no delta, or pure thinking) are different answers.
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FilterState {

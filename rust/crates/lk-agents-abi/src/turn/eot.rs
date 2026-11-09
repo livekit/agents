@@ -1,6 +1,3 @@
-//! End-of-turn actions and transport events. Session decisions live in
-//! `lk_agents_inference::eot::EotSession`; Python values use the declared record classes.
-
 use crate::EotPrediction;
 
 /// The caller mints it, so cancelling a superseded request is a no-op rather than a teardown of the
@@ -26,8 +23,6 @@ impl EotRequestId {
         &self.0
     }
 }
-
-// --- the actions ------------------------------------------------------------------------------
 
 /// A resolved request and its prediction measurements.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,8 +72,6 @@ pub struct EotWarn {
     pub warning: String,
     pub reason: Option<String>,
 }
-
-// --- the transport events ---------------------------------------------------------------------
 
 /// The measurements a transport reports for one request.
 #[derive(Debug, Clone, PartialEq)]

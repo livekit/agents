@@ -1,10 +1,3 @@
-//! Model request spans (docs/internals/telemetry-reference.md "Span trees"): one `llm_request` or
-//! `tts_request` per request wherever it is made, an `llm_request_run` or `tts_request_run` per
-//! attempt, and the request's usage, timing and 1.8.10 metrics summary recorded as it ends. The
-//! provider's `request_span` names what its request records as: an LLM fallback adapter records its
-//! own spans and a registered node makes its own request, so the caller opens none and calls it
-//! under its own context instead. A request that failed ends failed, also when it is dropped.
-
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use lk_agents_abi::errors::ProviderError;
@@ -26,7 +19,8 @@ use lk_agents_abi::{ChatRequest, Llm, LlmChunk, ProviderId, SynthesizedAudio, Tt
 use lk_agents_core::metrics::provider::LlmMetricState;
 use lk_agents_core::telemetry::gen_ai;
 
-// What the crate's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
+// A request that failed ends failed, also when it is dropped.
+
 pub(crate) use lk_agents_abi::telemetry::decl::GenAiContent;
 pub(crate) use lk_agents_abi::telemetry::instruments::DuplexOutputLag;
 pub use lk_agents_abi::telemetry::spans::inference::RequestSpan;

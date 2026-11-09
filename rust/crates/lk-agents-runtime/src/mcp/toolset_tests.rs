@@ -15,12 +15,12 @@ struct Host {
     cancelled: AtomicUsize,
     closes: AtomicUsize,
     session: Arc<super::super::session::McpSession>,
-    server: Arc<super::super::tests::Server>,
+    server: Arc<super::super::session::tests::Server>,
 }
 
 impl Default for Host {
     fn default() -> Self {
-        let server = Arc::new(super::super::tests::Server::default());
+        let server = Arc::new(super::super::session::tests::Server::default());
         server.refuse.store(true, Ordering::SeqCst);
         Self {
             reachable: AtomicBool::new(false),

@@ -1,8 +1,3 @@
-//! Background decoding: one admitted native job runs a `lk_agents_media::source` decode and hands
-//! its frames to an async consumer through a bounded queue. Pulls yield cooperatively;
-//! cancellation retains native ownership through worker settlement. The pool is the process's,
-//! lent through [`ProcessEnv`](lk_agents_net::env::ProcessEnv).
-
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -16,6 +11,8 @@ use parking_lot::Mutex;
 use tokio::sync::Notify;
 
 use lk_agents_net::env::ProcessEnv;
+
+// Cancellation retains native ownership until the decode worker settles.
 
 mod stream_buffer;
 pub use stream_buffer::StreamBuffer;
@@ -473,5 +470,5 @@ pub fn decoder_limits(sample_rate: u32, num_channels: u16) -> DecoderLimits {
 }
 
 #[cfg(test)]
-#[path = "../codecs_tests.rs"]
+#[path = "codecs_tests.rs"]
 mod tests;

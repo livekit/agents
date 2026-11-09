@@ -1,6 +1,3 @@
-//! `_core.PlaybackTracker`: voice's [`PlaybackSegments`] deciding, this executing (the lock,
-//! the waits and the fan-out to observers).
-
 use lk_agents_abi::voice::io::{
     Playback, PlaybackEvent, PlaybackFinished, PlaybackObserver, PlaybackReports, PlaybackSegment,
     PlaybackTracker,
@@ -184,7 +181,7 @@ impl Playback for Tracker {
 impl PlaybackReports for Tracker {}
 
 impl PlaybackObserver for Tracker {
-    /// Forward a child's event as this node's own (`_forward_next_playback_finished`).
+    /// Forward a child's event as this node's own.
     fn on_playback_event(&self, ev: &PlaybackEvent) {
         match ev {
             PlaybackEvent::Started(e) => {

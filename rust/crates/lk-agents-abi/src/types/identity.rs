@@ -1,5 +1,3 @@
-//! Who a provider is, as metrics and errors report it; defaults to `"unknown"` as the reference.
-
 /// `label`, `model`, `provider`: the identity the reference's `Metadata` and `label` fields carry.
 ///
 /// Read off a host provider's `_core_id()`, a dict with the base classes' `"unknown"` defaults.

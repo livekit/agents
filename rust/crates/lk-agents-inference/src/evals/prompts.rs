@@ -1,10 +1,9 @@
-//! Every string the intent judge's model sees, the reading of its answer, and the scoring of
-//! judgments: a wording change moves verdict rates. Pure: data in, data out.
-
 use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::evals::{EvaluationScore, JudgeVerdict};
 use lk_agents_abi::{ToolFlags, ToolSpec};
 use serde_json::{Value, json};
+
+// A wording change here moves verdict rates.
 
 pub const INTENT_SYSTEM_PROMPT: &str = "You are a test evaluator for conversational agents.\n\
 You will be shown a message and a target intent. Determine whether the message accomplishes the intent.\n\

@@ -1,5 +1,3 @@
-//! The canonical thread/remote-session chat protocol mapping.
-
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod proto {

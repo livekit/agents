@@ -1,5 +1,3 @@
-//! Where a stream's input queue dropped audio, so its transcripts stay on call time.
-
 use lk_agents_abi::SpeechEvent;
 use std::time::Duration;
 

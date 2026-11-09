@@ -5,8 +5,6 @@
 
 //! The provider seam and the data vocabulary every other crate is written against. Native providers
 //! and host plugins implement the same traits. Nothing here performs I/O, spawns or blocks.
-//!
-//! One module per subject, named like the reference package (`livekit/agents/`).
 
 // `Vocabulary` and `host` are the root re-exports of `lk-agents-host-derive`; the telemetry
 // declaration macros are re-exported from `telemetry::decl`.

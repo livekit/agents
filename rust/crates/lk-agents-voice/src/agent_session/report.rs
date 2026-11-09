@@ -1,7 +1,3 @@
-//! The session's part of its `SessionReport` (docs/internals/telemetry.md "Session report"), read
-//! from the core's own state at one instant. The job adds its identity, tags, events, options
-//! and recording.
-
 use crate::agent_session::machine::VoiceDriver;
 use crate::telemetry;
 
@@ -25,7 +21,6 @@ mod tests {
     use lk_agents_abi::{ChatItem, ChatMessage, Role};
     use std::time::{Duration, UNIX_EPOCH};
 
-    // Catches: a report reading anything but the session's own committed history.
     #[test]
     fn the_report_snapshots_the_session_history() {
         let mut driver = crate::agent_session::tests::driver();

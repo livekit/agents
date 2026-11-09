@@ -1,6 +1,3 @@
-//! `drain()`: the host waits for the driving agent to say its goodbye (`on_exit`) and for
-//! scheduling to pause with nothing left to say; the session stays open.
-
 use super::Cx;
 use crate::agent_session::machine::activity::hooks::Exit;
 use crate::agent_session::machine::coordination::PauseResult;
@@ -25,8 +22,7 @@ enum Phase {
     Exiting {
         hook: HookId,
     },
-    /// A handoff in progress is leaving the agent: callers wait for its swap, as `drain()` waits
-    /// on the lock the switch holds.
+    /// A handoff in progress is leaving the agent: callers wait for its swap.
     Joined,
     Pausing,
     /// The pause settled with a speech still open: wait for its end.
@@ -49,8 +45,7 @@ pub(crate) enum DrainEvent {
     Closing,
 }
 
-/// Milestones produced by the drain owner. The driver records them in this order before
-/// dispatching deferred scheduling work; the drain never writes to the runtime outbox.
+/// The driver records these in order before dispatching deferred scheduling work.
 pub(crate) enum DrainOutcome {
     Started { exit_hook: Option<HookId> },
     Finished { waiters: Vec<RequestId>, refused: Option<DrainRefused> },
@@ -102,7 +97,6 @@ impl Drain {
         }
     }
 
-    /// The handoff this drain joined ended without a swap: its callers' drain runs here.
     fn agent_stays(&mut self, cx: &mut Cx<'_>, out: &mut Vec<DrainOutcome>) {
         if cx.switching || !matches!(self.current, Some(AgentDrain { phase: Phase::Joined, .. })) {
             return;
@@ -147,8 +141,8 @@ impl Drain {
         waiters
     }
 
-    /// Never refused while running; it waits where the reference's `_lock` would: on a handoff's
-    /// swap, or the agent's `on_exit` then the pause.
+    /// Never refused while running: waits on a handoff's swap, or the agent's `on_exit` then the
+    /// pause.
     fn asked(&mut self, waiters: Vec<RequestId>, cx: &mut Cx<'_>, out: &mut Vec<DrainOutcome>) {
         let Some(drain) = &mut self.current else {
             if cx.switching {
@@ -194,7 +188,6 @@ impl Drain {
         self.left_ready(cx.quiet, out);
     }
 
-    /// Callers whose agent was left, answered `Ok` once nothing is open.
     fn left_ready(&mut self, quiet: bool, out: &mut Vec<DrainOutcome>) {
         if !quiet || self.left.is_empty() {
             return;

@@ -1,5 +1,3 @@
-//! Conversion between the upstream A2A wire and the one generated host message schema.
-
 use lk_agents_abi::a2a::client::{
     AgentClientError, Message, MessageInput, MessageMetadata, MessagePart,
 };
@@ -168,3 +166,7 @@ pub fn metadata_to_wire(metadata: MessageMetadata) -> Result<Map<String, Value>,
     }
     Ok(output)
 }
+
+#[cfg(test)]
+#[path = "messages_tests.rs"]
+mod tests;

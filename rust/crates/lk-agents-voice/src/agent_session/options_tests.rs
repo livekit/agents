@@ -2,7 +2,6 @@ use super::*;
 use lk_agents_abi::voice::events::DiagnosticLevel;
 use lk_agents_abi::voice::session_options::InterruptionGateFunctions;
 
-// Catches: a mode the legs cannot honour kept instead of falling as automatic selection does.
 #[test]
 fn an_unhonourable_mode_falls_as_automatic_selection() {
     let none = SessionLegs::none();
@@ -35,8 +34,6 @@ fn gate(
     )
 }
 
-// Catches: the host's gate answering a different reason than `_resolve_interruption_detection`,
-// or losing the sentence the reference logs with it.
 #[test]
 fn the_interruption_gate_names_its_reason() {
     assert!(gate(true, None, false, true).build);
@@ -79,8 +76,7 @@ fn the_interruption_gate_names_its_reason() {
     assert_eq!(realtime.reason.as_deref(), Some("cannot_gatekeep"));
 }
 
-// Catches: the host's read of `_rt_turn_detection_enabled` deciding differently from the
-// driver's, so the server keeps detecting turns a local VAD was asked to own.
+// The host's read must match the driver's, or the server keeps turns a local VAD should own.
 #[test]
 fn the_server_keeps_turn_detection_unless_a_local_vad_takes_it() {
     let rt = |caps, vad, mode: Option<TurnDetection>, interruption| {
@@ -102,8 +98,6 @@ fn the_server_keeps_turn_detection_unless_a_local_vad_takes_it() {
     assert!(!rt(false, true, None, false));
 }
 
-// Catches: an override resolving under the agent layer, a base change to a leaf no layer sets
-// hidden until the release, or a release taking out a layer other than its own.
 #[test]
 fn an_override_wins_leaf_by_leaf_until_its_own_release() {
     use crate::agent_session::machine::activity::DriverConfig;
@@ -136,8 +130,7 @@ fn an_override_wins_leaf_by_leaf_until_its_own_release() {
     assert_eq!(delays(&config), (Some(ms(500)), Some(ms(4000))), "the agent layer is back");
 }
 
-// Catches: an agent's `turn_detection=None` deferring to the session's mode. The reference takes
-// the agent's given value, and `None` is automatic selection (`agent_activity.py`).
+// The agent's given `None` wins over the session's mode rather than deferring to it.
 #[test]
 fn an_agents_turn_detection_none_is_automatic_selection() {
     let kwargs = TurnHandlingKwargs {

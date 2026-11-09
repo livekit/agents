@@ -230,7 +230,7 @@ fn is_horizontal_rule(line: &str) -> bool {
     count >= 3
 }
 
-/// The three `LINE_PATTERNS`, sequentially as the reference's three `sub` passes.
+/// The three line patterns, applied in sequence.
 fn strip_line_markers(line: &str) -> String {
     let mut out = line.to_owned();
 
@@ -273,8 +273,7 @@ fn strip_leading_marker(line: &str, is_marker: impl Fn(char) -> bool) -> String 
     c[end..].iter().collect()
 }
 
-/// `process_complete_text`. `at_line_start` enables the line patterns; `line_complete` the
-/// whole-line ones.
+/// `at_line_start` enables the line patterns; `line_complete` the whole-line ones.
 pub fn process_complete_text(text: &str, at_line_start: bool, line_complete: bool) -> String {
     let mut out = text.to_owned();
     if at_line_start {
@@ -382,7 +381,7 @@ pub fn has_incomplete_pattern(buffer: &str) -> bool {
     open_brackets as i64 - count_links(buffer, false) as i64 - count_links(buffer, true) as i64 > 0
 }
 
-/// `filter_markdown` as a push accumulator. Returns the pieces per chunk, not joined: the
+/// The markdown filter as a push accumulator. Returns the pieces per chunk, not joined: the
 /// synchroniser paces per chunk.
 #[derive(Debug)]
 pub struct MarkdownFilter {
@@ -397,7 +396,7 @@ impl Default for MarkdownFilter {
 }
 
 impl MarkdownFilter {
-    /// At line start, as the reference's stream begins.
+    /// Starts at a line start.
     pub fn new() -> Self {
         MarkdownFilter { buffer: String::new(), at_line_start: true }
     }
@@ -462,7 +461,7 @@ fn is_emoji(c: char) -> bool {
     )
 }
 
-/// `filter_emoji`. Stateless: nothing here spans a chunk boundary.
+/// Removes emoji. Stateless: nothing here spans a chunk boundary.
 pub fn filter_emoji(chunk: &str) -> String {
     if !chunk.chars().any(is_emoji) {
         return chunk.to_owned();
@@ -496,9 +495,8 @@ mod tests {
         assert_eq!(held.concat() + &rest.concat(), "plain *", "nothing is lost across the two");
     }
 
-    // Catches: a markdown construct the reference strips reaching the speaker (or one it keeps
-    // stripped), whole or split across chunks. Expected outputs are the reference
-    // `filter_markdown`'s, run over the same chunks.
+    // Catches: a markdown construct reaching the speaker (or plain text stripped), whole or split
+    // across chunks.
     #[test]
     fn markdown_is_stripped_as_the_reference_strips_it() {
         let cases: &[(&[&str], &str)] = &[

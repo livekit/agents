@@ -1,5 +1,3 @@
-//! One admitted disposal owner per realtime session, independent of socket/control dispatch.
-
 use super::{Pump, Shared};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
@@ -80,3 +78,7 @@ pub(super) async fn run(
         retained = Some(shared);
     }
 }
+
+#[cfg(test)]
+#[path = "retirement_tests.rs"]
+mod tests;

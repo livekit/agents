@@ -1,5 +1,3 @@
-//! `inference.LLM`'s native client: the LiveKit Inference gateway, implemented by the runtime.
-
 use std::sync::Arc;
 
 use crate::errors::{ApiError, Invalid};

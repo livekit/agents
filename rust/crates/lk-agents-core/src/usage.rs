@@ -1,7 +1,3 @@
-//! usage.md's accounting: request starts, provider measurements and tool-body starts in, the
-//! immutable [`Usage`] snapshot out. A run, a text-session turn and a voice session each own one
-//! [`Ledger`]; the runtime only feeds it.
-
 use std::collections::BTreeMap;
 
 use lk_agents_abi::metrics::base::{AgentMetrics, Metadata};
@@ -91,9 +87,9 @@ impl Ledger {
         }
     }
 
-    /// A streaming request's usage report for its latest period: it adds to the earlier ones
-    /// (usage.md "Counting": a stream's reports create no new requests). A report after the
-    /// stream ended adds to its ended request, and measures it if it ended unmeasured.
+    /// A streaming request's usage report for its latest period: it adds to the earlier ones and
+    /// creates no new request. A report after the stream ended adds to its ended request, and
+    /// measures it if it ended unmeasured.
     pub fn report_delta(&mut self, request: u64, metrics: &AgentMetrics) {
         let Some((_, _, delta)) = measure(metrics) else { return };
         if let Some(pending) = self.pending.get_mut(&request) {

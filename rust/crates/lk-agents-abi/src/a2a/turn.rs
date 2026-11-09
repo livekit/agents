@@ -1,6 +1,3 @@
-//! A managed turn's typed host boundary. Protocol values cross as protobuf JSON; storage rows
-//! cross as the same records returned by the thread's read APIs.
-
 use crate::storage::StorageError;
 use crate::{ChatItem, usage::Usage};
 use serde_json::{Map, Value};

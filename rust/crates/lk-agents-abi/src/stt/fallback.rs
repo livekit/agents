@@ -1,5 +1,3 @@
-//! `stt.FallbackAdapter`'s chain over the host's STTs, implemented by `lk-agents-inference`.
-
 use std::sync::Arc;
 
 use crate::errors::Invalid;

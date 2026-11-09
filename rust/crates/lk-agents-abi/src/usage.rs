@@ -1,7 +1,6 @@
-//! usage.md's records: what an operation consumed. A `///` is API (generated pydantic); Rust
-//! notes go in `//`. The accounting that builds them is `lk_agents_core::usage`'s.
-
 use serde::{Deserialize, Serialize};
+
+// A `///` is API (generated pydantic); Rust notes go in `//`.
 
 // The Python `module` and `path` of every record here that names none of its own.
 #[crate::host(file(module = "usage", path = "livekit.agents"))]

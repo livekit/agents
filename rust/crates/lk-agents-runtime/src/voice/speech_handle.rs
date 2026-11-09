@@ -1,7 +1,3 @@
-//! `SpeechHandle`: the live object a host and the speech's tasks hold. The voice core owns the
-//! speech's state; this handle mirrors what the core publishes ([`SpeechUpdate`]), lets tasks and
-//! the host wait on it, and sends the host's requests to the core as queued inputs.
-
 use super::session::Tx;
 use crate::monotone::Monotone;
 use crate::voice::VoiceRuntimeEvent;
@@ -67,7 +63,6 @@ pub enum SayStream {
 }
 
 struct Inner {
-    /// The core's last published view.
     view: SpeechView,
     /// `interrupt()` was called from the host and the loop has not refused it.
     requested: bool,
@@ -559,7 +554,6 @@ impl From<SpeechRefused> for lk_agents_abi::voice::speech_handle::SpeechRefused 
     }
 }
 
-/// The host's refusal for `error`.
 fn refused(error: impl Into<SpeechRefused>) -> HostRefused {
     error.into().into()
 }
@@ -650,7 +644,7 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
         Ok(SpeechHandle::exception(self).map_err(refused)?)
     }
 
-    /// Synchronous and in the reference's order (`speech_handle.py:185`).
+    /// Synchronous, in the reference's order.
     fn interrupt(&self, force: bool) -> Result<(), HostRefused> {
         // Under the list's lock: the loop has published every step it took before this request,
         // so a speech not done here is one the request reaches before anything ends it.

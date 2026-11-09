@@ -1,9 +1,3 @@
-//! Ordered outcomes of recognition transitions. Recognition reports domain facts and requests;
-//! the voice driver owns timer execution, deferred callbacks, and runtime delivery.
-//!
-//! [`AudioRecognition`](super::machine::AudioRecognition) produces these effects;
-//! [`VoiceDriver`](crate::agent_session::machine::VoiceDriver) consumes them in transition order.
-
 use std::time::Duration;
 
 use lk_agents_abi::Ts;
@@ -16,8 +10,8 @@ use crate::agent_session::machine::activity::false_interruption::{
 };
 use crate::events::SessionEvent;
 
-/// Keep outcomes in transition order: in particular, teardown precedes a replacement deadline
-/// and a turn's transcript publication precedes its end-of-turn notification.
+/// In transition order: teardown precedes a replacement deadline, and a turn's transcript
+/// publication precedes its end-of-turn notification.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AudioRecognitionEffect {
     SetDeadline(Timer, Ts),

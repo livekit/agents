@@ -1,9 +1,3 @@
-//! The agent server as the host drives it: `_core.ServerConfig` (`AgentServer`'s options, the
-//! environment read where one was left empty, writable until the server starts) and
-//! `_core.ServerRuntime` (the server and its job process pool, over the host's launchers and
-//! callbacks, which it reaches through the declared `ServerHost`), with endpoint streams
-//! dispatched to the host.
-
 use crate::ipc::telemetry;
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};

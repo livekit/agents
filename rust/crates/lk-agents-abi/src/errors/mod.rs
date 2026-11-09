@@ -1,6 +1,3 @@
-//! The exception taxonomy and its ordinary host exception classes. The generated Python classes
-//! retain the public inheritance hierarchy and constructor contracts.
-
 mod api;
 mod host_capture;
 mod provider;

@@ -1,5 +1,3 @@
-//! Provider-specific gateway STT options. Unknown keys remain gateway-owned.
-
 use lk_agents_abi::inference::models::InferenceProvider;
 use lk_agents_abi::stt::inference::{
     AssemblyaiMode, AssemblyaiVoiceFocus, DeepgramFluxRedact, InworldAudioEncoding, OpenaiDelay,

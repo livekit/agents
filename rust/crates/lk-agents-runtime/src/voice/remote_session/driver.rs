@@ -1,7 +1,3 @@
-//! The session host as a running thing: loops, in-flight table and drain
-//! (`voice/remote_session.py`'s `SessionHost`). Tasks go through the injected [`Spawner`]; every
-//! wait is bounded on the session clock.
-
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -20,8 +16,8 @@ use super::{
 };
 use proto::agent_session_message::Message;
 
-/// `SessionHost` (`remote_session.py:321`), running. Events queue from construction and one writer
-/// drains them in order; each request is a task named by its type.
+/// The running session host. Events queue from construction and one writer drains them in order;
+/// each request is a task named by its type.
 pub struct SessionServer {
     shared: Arc<HostShared>,
 }
@@ -44,7 +40,6 @@ struct HostState {
     transport: Option<Arc<dyn SessionTransport>>,
 }
 
-/// `voice/remote_session.py`'s `SessionHost`, running in Rust. Events queue from construction.
 impl SessionServer {
     pub fn new(time: Timebase, spawner: Arc<dyn Spawner>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -65,7 +60,7 @@ impl SessionServer {
         self.shared.state.lock().started
     }
 
-    /// `register_session`; until set, requests get no response.
+    /// Registers the session; until set, requests get no response.
     pub fn set_port(&self, port: Arc<dyn SessionPort>) {
         self.shared.state.lock().host =
             Some(Arc::new(SessionHost::new(port, self.shared.time.clone())));
@@ -83,7 +78,7 @@ impl SessionServer {
         }
     }
 
-    /// `_send_event(event, created_at)`: stamp and queue an encoded event.
+    /// Stamps and queues an encoded event.
     pub fn send_event(
         &self,
         event: proto::AgentSessionEvent,
@@ -95,7 +90,7 @@ impl SessionServer {
 
     /// Encode one session event from the facts the host reports and queue it, stamped `created_at`
     /// (now when `None`). An event with no wire form (a tool status outside the closed set) is
-    /// dropped, as the reference does; one that cannot be encoded is logged.
+    /// dropped; one that cannot be encoded is logged.
     pub fn send_wire(&self, event: WireEvent, created_at: Option<f64>) {
         let unsent = |error: &dyn std::fmt::Display| {
             log::error!(target: lk_agents_abi::LOG_TARGET, error = error.to_string().as_str();
@@ -113,8 +108,8 @@ impl SessionServer {
         }
     }
 
-    /// `start()`: transport, then writer and receive loop. Idempotent; a failed start still counts
-    /// as started, as the reference. `console` is where the console messages go.
+    /// Starts the transport, then the writer and receive loop. Idempotent; a failed start still
+    /// counts as started. `console` is where the console messages go.
     pub async fn start(
         &self,
         transport: Arc<dyn SessionTransport>,
@@ -149,7 +144,7 @@ impl SessionServer {
         Ok(())
     }
 
-    /// `SessionHost.aclose()`: the receive loop cancelled, in-flight handlers drained, the writer
+    /// The receive loop cancelled, in-flight handlers drained, the writer
     /// flushed, then the transport closed, all within one shared `drain` budget. Returns the
     /// request types cancelled at the deadline, sorted and distinct.
     pub async fn aclose(&self, drain: Duration) -> Vec<String> {
@@ -182,8 +177,8 @@ impl SessionServer {
     }
 }
 
-/// How long the host's close waits for in-flight requests (`_SHUTDOWN_DRAIN_TIMEOUT`), the
-/// writer's flush included: well under the worker's shutdown allowance.
+/// How long the host's close waits for in-flight requests, the writer's flush included: well
+/// under the worker's shutdown allowance.
 pub const SHUTDOWN_DRAIN: Duration = Duration::from_secs(3);
 
 /// A session's remote session protocol, as the session runs it: the host on its transport (the
@@ -305,7 +300,6 @@ async fn recv_loop(
                 return;
             }
         };
-        // `_dispatch_transport_message` (`remote_session.py:454`): requests, then the console legs.
         match (msg.message, console.as_deref()) {
             (Some(Message::Request(req)), _) => {
                 let host = sh.state.lock().host.clone();
@@ -326,7 +320,7 @@ async fn recv_loop(
     }
 }
 
-/// `_handle_request_safe`: a failed handler still owes the opaque `"internal error"` response.
+/// A failed handler still owes the opaque `"internal error"` response.
 async fn handle_request(
     host: Arc<SessionHost>,
     transport: Arc<dyn SessionTransport>,

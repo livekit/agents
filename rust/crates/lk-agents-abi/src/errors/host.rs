@@ -1,5 +1,3 @@
-//! Language-neutral host failures. The adapter owns the original exception object.
-
 use super::side_table::side_table_ref;
 
 /// A key into the binding's side table for a captured host exception.

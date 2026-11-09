@@ -1,5 +1,3 @@
-//! Admission for one request's presentation and final-result consumer.
-
 use lk_agents_abi::agent::stream::StreamRefused;
 
 pub mod projection;

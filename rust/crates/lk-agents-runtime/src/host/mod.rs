@@ -1,18 +1,3 @@
-//! `HostInvoker` (docs/internals/rust-core.md "HostInvoker"): every Rust-to-host call is
-//! dispatched here, language-neutral, and entered through the binding's
-//! [`HostEntry`](lk_agents_abi::invoke::HostEntry) port (`lk-agents-py`'s `host`).
-//! [`call`], [`call_now`] and [`notify`] are what generated proxies call: a call runs in the
-//! host context its invocation captured at entry, refused before the host is entered when it
-//! captured none or lacks a scope the call requires.
-//!
-//! An operation's callbacks ([`HostInvoker`]) each get their own copy of the operation's
-//! [`Invocation`] with the scopes they declare (tool call, approval) and a fresh operation id,
-//! run as tasks the invoker owns, are cancelled through the host (their calls still settle), and
-//! release their captured context when they settle.
-//!
-//! No host call is made while a lock is held (rust-core.md "HostInvoker"): an entry may wait for
-//! the GIL. Log lines are queued and never wait for it.
-
 use crate::telemetry;
 use futures_util::StreamExt as _;
 use futures_util::stream::FuturesUnordered;
@@ -24,6 +9,8 @@ use lk_agents_abi::{BoxFuture, FunctionCall};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::TokioSpawner;
 use std::collections::BTreeMap;
+
+// Never call the host while holding a lock: an entry may wait for the GIL.
 
 /// Runs `call` through `entry` in a copy of the host context `scope` captured, with `cx`'s span
 /// current; dropping the future cancels the host side, which still settles. A refused call

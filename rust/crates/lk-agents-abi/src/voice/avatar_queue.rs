@@ -1,5 +1,3 @@
-//! Queue-backed audio's generated boundary; segment admission and report correlation are native.
-
 use super::avatar::AudioReceiverObservation;
 use super::io::{AvatarPlaybackSegment, PlaybackSegment};
 use crate::AudioFrame;

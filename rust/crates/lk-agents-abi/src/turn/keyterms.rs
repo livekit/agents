@@ -1,6 +1,3 @@
-//! The STT-context options as the host writes them, the resolved detection config, and the
-//! keyterm-set change records. The resolver lives in `lk-agents-voice/src/keyterm_detection.rs`.
-
 // The Python `module` and `path` of every record here that names none of its own.
 #[crate::host(file(module = "keyterms", path = "livekit.agents.voice.agent_session"))]
 const _: () = ();

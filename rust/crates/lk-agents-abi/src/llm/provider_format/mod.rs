@@ -1,4 +1,3 @@
-//! Image, tool and formatting error boundary contracts.
 pub mod host;
 pub mod image;
 pub mod tools;

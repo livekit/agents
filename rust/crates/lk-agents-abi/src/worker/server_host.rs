@@ -1,7 +1,3 @@
-//! The agent server as the host drives it: its configuration, its runtime (which owns the job
-//! process pool), and the host server (`worker._ServerCallbacks`) with the processes' launcher
-//! and the user's callbacks.
-
 use std::any::Any;
 use std::sync::Arc;
 

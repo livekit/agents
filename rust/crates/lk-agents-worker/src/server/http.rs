@@ -1,8 +1,3 @@
-//! HTTP/1 transport for the worker's bodyless operational endpoints.
-//!
-//! Hyper owns parsing and response framing. This layer owns admission, deadlines and shutdown;
-//! routes only receive a validated request head and return a typed response.
-
 use std::convert::Infallible;
 use std::future::Future;
 use std::sync::Arc;
@@ -25,6 +20,8 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 use super::ServerError;
+
+// Hyper owns parsing and response framing; this layer owns admission, deadlines and shutdown.
 
 pub(super) type Response = hyper::Response<Full<Bytes>>;
 

@@ -1,5 +1,3 @@
-//! The server's side of the client's frames: what each `Outgoing` does to the conversation,
-//! the buffer and the responses, and what the real server refuses.
 use lk_agents_abi::{ChatItem, Maybe, Ts};
 use lk_agents_inference::realtime::{Incoming, Outgoing, SessionOptions, protocol::ServerError};
 

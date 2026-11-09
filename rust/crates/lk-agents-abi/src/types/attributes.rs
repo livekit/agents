@@ -1,6 +1,5 @@
-//! The `lk.*` wire vocabulary: protocol keys a frontend, a client SDK or LiveKit Cloud reads. Each
-//! is declared once here; the core reads these names and the Python `livekit.agents.types`
-//! constants are generated from them.
+// Each `lk.*` key is declared once here; the core reads these names and the Python
+// `livekit.agents.types` constants are generated from them.
 
 #[crate::host(file(module = "types", path = "livekit.agents.types"))]
 const _: () = ();

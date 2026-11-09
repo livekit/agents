@@ -1,7 +1,3 @@
-//! The public listener: the agent's endpoints and HTTP routes, served by the worker itself where no
-//! LiveKit Cloud node routes them (a self-hosted server, the console). Each connection is served
-//! as a node's stream is; the listener routes the parsed head itself, as a node does.
-
 use std::sync::Arc;
 
 use futures_util::{StreamExt, stream::FuturesUnordered};
@@ -14,6 +10,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::ServerError;
 use crate::http::{EndpointServer, HttpStream, Origin, decode_path};
+
+// Served where no LiveKit Cloud node routes the endpoints (a self-hosted server, the console):
+// the listener routes the parsed head itself, as a node does.
 
 /// Matches the endpoint server's pending handler limit.
 const MAX_CONNECTIONS: usize = 256;

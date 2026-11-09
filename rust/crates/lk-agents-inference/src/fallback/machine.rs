@@ -1,6 +1,3 @@
-//! Request-local fallback decisions and the single plugin-instance health authority.
-//! Adapters execute the effects and report observations; neither owns retry policy.
-
 use crate::effects::FallbackChainEffect;
 use std::collections::BTreeMap;
 use std::time::Duration;

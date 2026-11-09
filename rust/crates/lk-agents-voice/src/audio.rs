@@ -37,14 +37,16 @@ pub fn audio_gate(i: &GateInputs) -> bool {
 
 /// [`substituted`](Self::substituted) is the only place the substitution side is decided.
 ///
-/// | leg            | feed        | gate side     | reference                             |
-/// |----------------|-------------|---------------|---------------------------------------|
-/// | `Stt`          | `Raw`       | `Substituted` | `self._stt_pipeline.audio_ch`         |
-/// | `Vad`          | `Raw`       | `Real`        | `self._vad_ch`                        |
-/// | `Realtime`     | `Raw`       | `Substituted` | `self._rt_session.push_audio`         |
-/// | `Eot`          | `Converted` | `Substituted` | `self._turn_detector_stream.push_audio` |
-/// | `Interruption` | `Converted` | `Real`        | `self._interruption_ch` (hears the user while the agent speaks) |
-/// | `Amd`          | `Raw`       | `Real`        | `self._session.amd.push_audio`        |
+/// | leg            | feed        | gate side     |
+/// |----------------|-------------|---------------|
+/// | `Stt`          | `Raw`       | `Substituted` |
+/// | `Vad`          | `Raw`       | `Real`        |
+/// | `Realtime`     | `Raw`       | `Substituted` |
+/// | `Eot`          | `Converted` | `Substituted` |
+/// | `Interruption` | `Converted` | `Real`        |
+/// | `Amd`          | `Raw`       | `Real`        |
+///
+/// `Interruption` hears the user while the agent speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, lk_agents_abi::Vocabulary)]
 pub enum AudioChannel {
     Stt,
@@ -57,7 +59,7 @@ pub enum AudioChannel {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Feed {
-    /// The source's own frame, unconverted, as the reference forwards it; each plugin resamples.
+    /// The source's own frame, unconverted; each plugin resamples.
     Raw,
     /// The one 16 kHz mono conversion, for the two Rust-native detectors written against it.
     Converted,

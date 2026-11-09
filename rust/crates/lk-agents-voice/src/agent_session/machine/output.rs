@@ -1,14 +1,12 @@
-//! A segment takes the session's current outputs when it activates and keeps them until it
-//! settles. `OutputBindingEvent` is the single generation-to-owner lifecycle boundary:
-//! reserve -> activate -> settle/release, with pending cleanup retaining the same binding.
-//! Core owns admission and leases; the runtime owns physical audio/text resources.
-
 use crate::agent_session::effects::{AudioOp, VoiceEffect};
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{Answer, Outputs, RequestId, VoiceDriver};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::PlaybackSegment;
 use std::collections::{BTreeMap, BTreeSet};
+
+// A binding goes reserve -> activate -> settle/release; pending cleanup retains the same binding.
+// A segment takes the session's current outputs at activation and keeps them until it settles.
 
 #[derive(Debug, Clone)]
 pub struct SegmentBinding {
@@ -40,8 +38,7 @@ pub enum OutputBindingError {
     ReplyLost,
 }
 
-/// Generation requests and cleanup facts for one output binding. The generation queue
-/// preserves ordering; this protocol is handled only by the session's binding owner.
+/// Generation requests and cleanup facts for one output binding.
 #[derive(Debug)]
 pub enum OutputBindingEvent {
     BindRequested {
@@ -97,9 +94,8 @@ impl OutputBindings {
         speech: SpeechId,
         outputs: &Outputs,
     ) -> Result<SegmentBinding, OutputBindingError> {
-        // Each speech forwards one segment at a time, including speculative synthesis.
-        // The scheduler runs one current and one speculative generation. Unsettled cleanup
-        // consumes the same slots, so a silent transport cannot accumulate retired bindings.
+        // One current and one speculative generation; unsettled cleanup takes the same slots, so
+        // a silent transport cannot accumulate retired bindings.
         if self.bound.len() >= 2 {
             return Err(OutputBindingError::Capacity);
         }
@@ -232,7 +228,6 @@ impl OutputBindings {
 }
 
 impl VoiceDriver {
-    /// One entry for output reservation, activation, cleanup retention, and final release.
     pub(crate) fn on_output_binding(&mut self, event: OutputBindingEvent) {
         match event {
             OutputBindingEvent::BindRequested { call, speech } => self.bind_output(call, speech),
@@ -309,8 +304,7 @@ impl VoiceDriver {
         else {
             return;
         };
-        // Incomplete physical cleanup retains the lease in its existing activation phase.
-        // It must neither activate a reserved binding nor retire an active one.
+        // The lease stays in its phase: neither activate a reserved binding nor retire an active one.
         let diagnostic = crate::events::DiagnosticEvent::warning(
             "output cleanup is incomplete; retaining its playback binding",
         )

@@ -1,7 +1,3 @@
-//! `DriverBuilder`: assembles a session's cores ([`SessionCores`]: its driver and data plane) from
-//! its providers, legs and options. The [`SessionExecutor`] opens the streams and runs the tasks
-//! that feed them.
-
 /// A realtime session and its registered resource identity.
 pub type RealtimeLeg = (Arc<dyn lk_agents_abi::RealtimeSession>, ResourceId);
 
@@ -336,7 +332,7 @@ impl DriverBuilder {
             by_channel: std::collections::BTreeMap::new(),
             forwarder: AudioInputRouter::new(PIPELINE_SAMPLE_RATE),
         };
-        // The STT pump runs under the first agent's activity, as the reference's does.
+        // The STT pump runs under the first agent's activity.
         let opening = self.opening();
         let activity = opening.activity.map_or(opening.start.context, |activity| activity.context);
         let cx = self.trace.clone().continuing(Some(activity));
@@ -348,7 +344,6 @@ impl DriverBuilder {
         let realtime_events = realtime.as_ref().map(|realtime| Arc::clone(&realtime.session));
         let Sinks { by_channel: sinks, forwarder } = sinks;
 
-        // The microphone, read by the runtime.
         let audio_in =
             self.audio_in.clone().map(|input| self.resources.register_audio_input(input));
         let resources = &self.resources;
@@ -494,7 +489,6 @@ impl DriverBuilder {
         ))
     }
 
-    /// What the spawned tasks share with the loop.
     fn shared(
         &self,
         queue: &Tx,
@@ -582,8 +576,7 @@ impl DriverBuilder {
             return Ok(None);
         };
         let tools = self.realtime_tools.clone();
-        // Who ends the turn, decided once from the model's capabilities and the session's
-        // inputs (`_resolve_rt_turn_detection_enabled`).
+        // Who ends the turn, decided once from the model's capabilities and the session's inputs.
         let caps = model.capabilities();
         let side = lk_agents_voice::agent_session::machine::activity::realtime::SessionSide {
             stt: self.stt.is_some(),
@@ -633,7 +626,7 @@ pub(super) fn prepare_opening_legs(
     if let Some(stt) = &builder.stt {
         stt.prewarm();
     }
-    // The engine's TTS budget: the session's, else the TTS's own policy (models.md).
+    // The engine's TTS budget: the session's, else the TTS's own policy.
     builder.conn.tts =
         builder.conn.tts.or_else(|| builder.tts.as_ref().and_then(|t| t.conn_options()));
     let conn = builder.conn.tts;
@@ -818,3 +811,7 @@ impl Drop for OpeningSession {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "builder_tests.rs"]
+mod tests;

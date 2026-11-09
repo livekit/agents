@@ -1,6 +1,3 @@
-//! An invocation a coordinator (VoiceSession) composes: it owns the record, plans each request
-//! and supplies voice constraints after handling canonical tool results.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use lk_agents_abi::{ChatItem, ChatMessage, Ts};

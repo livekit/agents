@@ -1,6 +1,3 @@
-//! The provider-agnostic transcript side: strip every dialect, surface the leading expression, hold
-//! a tag that straddles a chunk boundary.
-
 use lk_agents_abi::tts::markup::{EMOTION_TAG, MarkerKind, TranscriptionExpression};
 use lk_agents_abi::{ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TranscriptChunk};
 
@@ -167,7 +164,6 @@ impl TranscriptMarkupStripper {
     }
 }
 
-/// The reference's value, unexplained.
 const MAX_HELD_CHARS: usize = 256;
 
 /// `held` carries an unclosed span across calls; call once more with `end_of_stream = true`.

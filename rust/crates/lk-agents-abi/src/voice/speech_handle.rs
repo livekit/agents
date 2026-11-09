@@ -1,6 +1,3 @@
-//! `_core.SpeechHandle`: one speech of a voice session as the host's `SpeechHandle` wraps it. The
-//! speech's state machine is `lk-agents-voice`'s.
-
 use std::any::Any;
 
 use crate::errors::ProviderError;

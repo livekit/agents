@@ -1,6 +1,3 @@
-//! The journal's events (docs/internals/storage.md#journal): one typed record per event type,
-//! stored as its `type` and JSON payload.
-
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "serde")]

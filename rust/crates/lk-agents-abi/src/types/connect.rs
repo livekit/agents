@@ -1,5 +1,3 @@
-//! Per-operation connection policy and its generated, frozen Python dataclass.
-
 use std::time::Duration;
 
 use thiserror::Error;

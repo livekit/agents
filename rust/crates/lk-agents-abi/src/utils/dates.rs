@@ -1,5 +1,3 @@
-//! `datetime.date`, valid by construction.
-
 use chrono::{Datelike, NaiveDate};
 
 #[crate::host(codec(

@@ -1,11 +1,10 @@
-//! `AudioGate` (`llm/duplex_adapter.py`): which frames of a duplex model's continuous output carry
-//! speech worth playing. Durations count audio, not wall clock, so one set of defaults ports across
-//! providers, frame sizes and networks.
-
 use std::collections::VecDeque;
 
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::errors::HostError;
+
+// Durations count audio, not wall clock, so one set of defaults ports across providers, frame
+// sizes and networks.
 
 /// A floor this low is digital silence; it keeps the gate's ratios finite when a model emits zeros.
 pub const SILENCE_FLOOR: f64 = 1e-4;

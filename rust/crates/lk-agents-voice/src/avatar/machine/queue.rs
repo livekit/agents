@@ -1,5 +1,3 @@
-//! Queue-backed audio admission, cut accounting and playback report correlation.
-
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::utils::video::AudioReceiverFrame;
 use lk_agents_abi::voice::avatar::AudioReceiverObservation;

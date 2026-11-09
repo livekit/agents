@@ -1,5 +1,3 @@
-//! Project host validation into the shared run's verdict without taking acceptance policy.
-
 use lk_agents_abi::HostRef;
 use lk_agents_abi::agent::ValidatedOutput;
 use lk_agents_abi::errors::HostError;

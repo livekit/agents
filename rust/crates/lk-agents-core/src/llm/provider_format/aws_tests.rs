@@ -1,8 +1,12 @@
+use lk_agents_abi::llm::provider_format::ProviderFormat;
 use lk_agents_abi::{ChatItem, InferenceDetail, Role};
+use serde_json::json;
 
 use super::*;
+use crate::llm::provider_format::host;
 use crate::llm::provider_format::testkit::{
-    call, ctx, image, inline_images, msg, msg_with, no_images, out, text_of, url_images,
+    call, ctx, image, inline_images, msg, msg_with, no_images, out, text_content, text_of,
+    url_images, wire,
 };
 
 fn run(items: Vec<ChatItem>, images: &dyn ImageResolver) -> Formatted<Message, BedrockFormatData> {
@@ -149,4 +153,42 @@ fn empty_text_parts_are_dropped_rather_than_emitted_as_empty_blocks() {
         text_of(&run(vec![msg("m", Role::User, &["a", "", "b"])], &no_images()).messages),
         r#"[{"role":"user","content":[{"text":"a"},{"text":"b"}]}]"#
     );
+}
+
+#[test]
+fn bedrock_raw_tools_omit_missing_and_empty_descriptions() {
+    for schema in [json!({}), json!({"description": ""})] {
+        let tools = host::to_fnc_ctx(
+            ProviderFormat::Aws,
+            vec![ToolSchema::Raw { name: "lookup".into(), raw_schema: schema }],
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            tools,
+            [json!({"toolSpec": {
+                "name": "lookup", "inputSchema": {"json": {}}
+            }})]
+        );
+    }
+}
+
+#[test]
+fn bedrock_failed_tool_results_have_error_status() {
+    let mut output = out("o", "c0", "f", "permission denied");
+    if let ChatItem::FunctionCallOutput(output) = &mut output {
+        output.is_error = true;
+    }
+    let messages = wire(ProviderFormat::Aws, vec![call("c", "c0", "f", "{}"), output]);
+    assert_eq!(messages[1]["content"][0]["toolResult"]["status"], "error");
+}
+
+#[test]
+fn bedrock_images_are_only_emitted_for_user_messages() {
+    let messages = wire(
+        ProviderFormat::Aws,
+        vec![msg_with("a", Role::Assistant, vec![image("i"), text_content("caption")])],
+    );
+    assert_eq!(messages[0]["content"], json!([{"text": "caption"}]));
 }

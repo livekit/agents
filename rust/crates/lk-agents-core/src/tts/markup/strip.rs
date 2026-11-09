@@ -1,12 +1,10 @@
-//! `tts/markup_utils.py`: the XML tag stripper, the bracket rewrite, and the whitespace rule every
-//! removal goes through. The patterns are the reference's, transcribed for `fancy_regex`: CPython's
-//! `\s` is written `[\s\x1c-\x1f]` (`str.isspace` also counts U+001C..U+001F), its `\w` is
-//! `[\p{L}\p{N}_]` (`str.isalnum() or "_"`), and `\b` is spelled out from that `\w`.
-
 use std::borrow::Cow;
 use std::sync::LazyLock;
 
 use fancy_regex::{Regex, RegexBuilder};
+
+// CPython regex classes, transcribed for `fancy_regex`: `\s` is `[\s\x1c-\x1f]` (`str.isspace`
+// also counts U+001C..U+001F), `\w` is `[\p{L}\p{N}_]`, and `\b` is spelled out from that `\w`.
 
 pub(crate) type Captures<'t> = fancy_regex::Captures<'t, str>;
 

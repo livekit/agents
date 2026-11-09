@@ -1,7 +1,6 @@
-//! Linux cgroup detection, CPU quotas and usage counters; parsing is split from I/O so it tests
-//! on any platform.
-
 use std::time::Duration;
+
+// Parsing is split from I/O so it tests on any platform.
 
 /// Source of CPU capacity and usage measurements: `"cgroup_v2"`, `"cgroup_v1"` or `"default"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

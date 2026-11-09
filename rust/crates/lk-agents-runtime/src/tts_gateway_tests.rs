@@ -122,8 +122,7 @@ async fn synthesize_is_the_duplex_path_with_one_push_and_an_end() {
 }
 
 // Catches: a socket opened, configured and closed per synthesis, which put the gateway's
-// handshake and `session.create` before every reply's first audio. The reference's
-// `ConnectionPool` hands a finished synthesis's socket to the next one.
+// handshake and `session.create` before every reply's first audio.
 #[tokio::test]
 async fn a_second_synthesis_reuses_the_socket_the_first_finished_on() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
@@ -145,7 +144,6 @@ async fn a_second_synthesis_reuses_the_socket_the_first_finished_on() {
 
 // Catches: frames without `USERDATA_TTS_STARTED_TIME`, so the session measured TTFB from the
 // first token it pushed, sentence buffering included, and had no time to first sentence.
-// `_mark_started()` stamps the first sentence sent.
 #[tokio::test]
 async fn frames_carry_the_instant_the_first_sentence_went_out() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
@@ -176,7 +174,7 @@ async fn until_sent(ws: &FakeWs, n: usize) -> Vec<serde_json::Value> {
 }
 
 // Catches: holding sentences until `end_input` (or a flush), which makes time-to-first-audio
-// carry the whole LLM generation. `_sentence_stream_task` sends each sentence as it arrives.
+// carry the whole LLM generation.
 #[tokio::test]
 async fn the_first_sentence_goes_out_before_end_input() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());

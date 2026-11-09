@@ -1,5 +1,3 @@
-//! Real TLS handshakes through the framework's HTTP, storage and worker transports.
-
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;

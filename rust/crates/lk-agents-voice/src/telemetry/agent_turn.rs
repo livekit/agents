@@ -1,10 +1,3 @@
-//! The agent's turn: one `agent_turn` per speech, from its first generation to its end and the
-//! end of the tools it started, with `agent_speaking` as a direct child and a `generation` event
-//! at each step's start. The speech's scheduler entry owns its [`AgentTurnSpan`]; the runtime
-//! opens the nodes, the realtime inference and the tool calls under the turn's [`SpanContext`]. A
-//! preemptive generation discarded for the speech that answers the same user turn hands that
-//! speech its turn, as 1.8.10 does.
-
 use super::participant_attrs;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::events::SpeechOutcome;
@@ -27,6 +20,8 @@ use lk_agents_abi::{FunctionCall, MetricsReport, ProviderId};
 use lk_agents_telemetry::span::{ManualSpan, Trace};
 use std::collections::BTreeSet;
 use std::time::Duration;
+
+// One `agent_turn` lasts from a speech's first generation until it and the tools it started end.
 
 /// What a speech's turn starts with.
 pub(crate) struct Reply {
@@ -136,7 +131,7 @@ impl AgentTurnSpan {
     }
 
     /// A discarded preemptive generation's turn, continued by `speech`, the one answering the
-    /// same user turn (as 1.8.10 does).
+    /// same user turn.
     pub(crate) fn adopt(
         mut self,
         trace: &mut Trace,

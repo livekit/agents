@@ -1,5 +1,3 @@
-//! Provider-specific gateway TTS options. Unknown keys remain gateway-owned.
-
 use lk_agents_abi::inference::models::InferenceProvider;
 use lk_agents_abi::inference::tts_client::{
     CartesiaSpeedPreset, FishAudioLatency, InworldDeliveryMode, InworldTextNormalization,

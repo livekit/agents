@@ -1,8 +1,11 @@
+use lk_agents_abi::llm::provider_format::ProviderFormat;
+use serde_json::json;
+
 use super::*;
-use crate::llm::provider_format::ToolSchema;
 use crate::llm::provider_format::testkit::{
-    call, ctx, image, inline_images, msg, msg_with, no_images, out, text_of, url_images,
+    call, ctx, image, inline_images, msg, msg_with, no_images, out, text_of, url_images, wire,
 };
+use crate::llm::provider_format::{ToolSchema, host};
 
 fn chat(items: Vec<lk_agents_abi::ChatItem>, images: &dyn ImageResolver) -> Vec<Message> {
     to_chat_ctx(&ctx(items), images).unwrap().messages
@@ -224,4 +227,72 @@ fn the_responses_dialect_names_its_trailing_text_part_input_text() {
         text_of(&responses(vec![m], &url_images(&["i"])))
             .contains(r#"{"type":"input_text","text":"caption"}"#)
     );
+}
+
+#[test]
+fn openai_images_are_only_emitted_for_user_messages() {
+    use crate::llm::provider_format::testkit::text_content;
+    for format in [ProviderFormat::OpenAi, ProviderFormat::OpenAiResponses] {
+        for role in [Role::System, Role::Developer, Role::Assistant] {
+            // Invalid-role images must not even ask the image resolver to encode them.
+            let messages =
+                wire(format, vec![msg_with("m", role, vec![image("i"), text_content("caption")])]);
+            assert_eq!(messages[0]["content"], "caption");
+        }
+    }
+}
+
+#[test]
+fn openai_encrypted_reasoning_round_trips_in_vendor_content() {
+    let mut message = msg("a", Role::Assistant, &["answer"]);
+    let reasoning =
+        json!({"reasoning": [{"type":"reasoning", "encrypted_content":"opaque-ciphertext"}]});
+    message.as_message_mut().unwrap().extra.insert("openai".into(), reasoning.clone());
+    let messages = wire(ProviderFormat::OpenAi, vec![message]);
+    assert_eq!(messages[0]["extra_content"]["openai"], reasoning);
+}
+
+#[test]
+fn responses_strict_function_tools_use_the_flat_schema() {
+    let tools = host::to_fnc_ctx(
+        ProviderFormat::OpenAiResponses,
+        vec![ToolSchema::Strict(json!({
+            "type": "function", "function": {
+                "name": "lookup", "parameters": {"type":"object"}, "strict": true
+            }
+        }))],
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        tools,
+        [
+            json!({"type":"function", "name":"lookup", "parameters":{"type":"object"}, "strict":true})
+        ]
+    );
+}
+
+#[test]
+fn openai_missing_image_mime_uses_a_valid_jpeg_data_uri() {
+    let mut images = inline_images(&["i"]).0;
+    images.get_mut("i").unwrap().mime_type = None;
+    let (messages, _) = host::to_provider_format(
+        ProviderFormat::OpenAi,
+        vec![msg_with("u", Role::User, vec![image("i")])],
+        Some(images),
+        false,
+        false,
+        None,
+    )
+    .unwrap();
+    assert_eq!(messages[0]["content"][0]["image_url"]["url"], "data:image/jpeg;base64,/9j/");
+}
+
+#[test]
+fn responses_unknown_phase_is_not_sent_to_the_server() {
+    let mut message = msg("a", Role::Assistant, &["answer"]);
+    message.as_message_mut().unwrap().extra.insert("openai".into(), json!({"phase":"invalid"}));
+    let messages = wire(ProviderFormat::OpenAiResponses, vec![message]);
+    assert_eq!(messages, [json!({"role":"assistant", "content":"answer"})]);
 }

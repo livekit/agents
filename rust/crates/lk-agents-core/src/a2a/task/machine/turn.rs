@@ -1,9 +1,3 @@
-//! The turn inside the open run, one operation at a time: the pending question the message
-//! answers, the handler's checkpoints and
-//! output, the answer row's status when the turn stopped, and the settlement staged for the
-//! commit. Every storage read and the handler's stream are separate steps, so other requests and
-//! clients interleave with each of them.
-
 use std::time::Duration;
 
 use lk_agents_abi::storage::thread::{ItemRow, TaskRow};
@@ -17,6 +11,9 @@ use crate::a2a::{
     HandlerOutput, Message, Policy, Settle, Stop, TurnIds, answer_pending, batch_to_chat_message,
     checkpoint_stop, settle,
 };
+
+// Every storage read and the handler's stream are separate steps, so other requests and clients
+// interleave with each of them.
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum Step {

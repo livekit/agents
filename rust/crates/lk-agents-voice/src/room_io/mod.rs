@@ -1,4 +1,3 @@
-//! Room I/O domain records and synchronous state machines.
 use lk_agents_abi::voice::rtc::RtcError;
 
 pub mod effects;

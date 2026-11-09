@@ -1,8 +1,3 @@
-//! Sentence pacing (`tts.SentenceStreamPacer`): sentences held back until the audio already
-//! synthesized is nearly played, then sent in batches. [`SentencePacer`] decides on supplied
-//! time; [`PacedSentences`] runs it over a host sentence stream for a plugin
-//! (`SentenceStreamPacer.wrap()`); the sentence adapter runs it over its own sentences.
-
 use std::collections::VecDeque;
 use std::sync::Arc;
 

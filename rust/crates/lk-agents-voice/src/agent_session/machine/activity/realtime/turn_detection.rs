@@ -1,5 +1,3 @@
-//! Reconcile client and realtime-server turn ownership.
-
 use crate::agent_session::options::TurnDetection;
 use crate::audio_recognition::TurnDetectionMode;
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;

@@ -1,6 +1,6 @@
-//! `tts/_mood_data.py`. Weight 2 names a mood, weight 1 supports one; keywords are stems.
-
 use crate::tts::markup::mood::Mood;
+
+// Weight 2 names a mood, weight 1 supports one; keywords are stems.
 
 /// Scored against a lowercased label.
 pub(crate) fn keywords(mood: Mood) -> &'static [(&'static str, u32)] {

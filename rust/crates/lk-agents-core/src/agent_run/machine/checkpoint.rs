@@ -1,5 +1,3 @@
-//! Managed-turn checkpoints gate model requests and accepted result delivery.
-
 use super::{AgentRun, AgentRunEffect, CheckpointId, Phase, Purpose, RunError, RunResult};
 use lk_agents_abi::Ts;
 

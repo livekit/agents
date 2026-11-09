@@ -1,5 +1,3 @@
-//! Executes frame pacing over shared RTC capabilities. No SDK-specific avatar host object.
-
 use crate::telemetry;
 use lk_agents_abi::utils::video::{MediaFrame, VideoFrame};
 use lk_agents_abi::voice::rtc::{AudioSource, RtcError, VideoSource};

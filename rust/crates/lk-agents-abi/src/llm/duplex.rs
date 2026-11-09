@@ -1,6 +1,3 @@
-//! `llm.DuplexRealtimeAdapter`'s engine: a duplex model run as a realtime model, its output gated
-//! and segmented in `lk-agents-inference`; the plugin's model and session stay host objects.
-
 use std::any::Any;
 use std::sync::Arc;
 

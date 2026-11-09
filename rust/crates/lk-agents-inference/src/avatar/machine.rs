@@ -1,15 +1,3 @@
-//! One avatar instance's provider sessions as a synchronous machine on supplied time. A create is
-//! reserved before it launches, retried under one operation identity (its request id, which the
-//! runtime turns into one idempotency key), delivered to its caller and adopted by the instance,
-//! or retired: every session the gateway reports is either held by the instance or terminated.
-//!
-//! One creation at a time: a second caller is refused while one is in flight or once a session
-//! was adopted, and the first creation is left untouched. A create the gateway may have received
-//! is never abandoned: when its caller stops waiting, the instance closes, or it fails without an
-//! answer after it was sent, it is retired: asked again under its identity until the gateway
-//! answers, and a session it made is terminated rather than leaked. A retirement still unanswered
-//! at its deadline and a missed cleanup deadline are each reported once.
-
 use crate::effects::AvatarSessionEffect;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -19,6 +7,9 @@ use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::resources::ResourceId;
 
 use lk_agents_core::request::{self, AttemptFailure, Policy, Step};
+
+// A create the gateway may have received is never abandoned: it is retried under its request id
+// (one idempotency key) until the gateway answers, and a session it made is terminated.
 
 /// How long a create no caller takes keeps asking the gateway for the session it may have made.
 pub const RETIREMENT_TIMEOUT: Duration = Duration::from_secs(30);

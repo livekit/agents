@@ -1,6 +1,3 @@
-//! `_FallbackRealtimeSession`: one session over the active model, swapped for the next one on
-//! failure with the conversation replayed.
-
 use super::*;
 use crate::effects::FallbackChainEffect;
 use lk_agents_abi::llm::fallback::{

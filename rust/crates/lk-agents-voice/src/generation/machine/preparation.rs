@@ -1,9 +1,3 @@
-//! Generation-step preparation and playback authorization share one owner.
-//!
-//! Preparation can admit speculative synthesis before playback. Once observed, authorization
-//! belongs to the entire generation step and is reused by every segment, including text-only
-//! segments. The runtime only waits for scheduling/authorization facts and supplies their result.
-
 use crate::generation::effects::GenerationPreparationEffect;
 use std::time::SystemTime;
 
@@ -47,8 +41,8 @@ enum PreparationPhase {
     Interrupted,
 }
 
-/// One generation step's synthesis admission and reusable playback authorization.
-/// This is separate from AudioPlayback's per-segment source/receipt lifecycle and launch hold.
+/// One generation step's synthesis admission and playback authorization, reused by every
+/// segment of the step, including text-only ones.
 #[derive(Default)]
 pub struct GenerationPreparation {
     phase: PreparationPhase,

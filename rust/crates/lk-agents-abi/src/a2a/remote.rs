@@ -1,5 +1,3 @@
-//! The remote tool adapter's typed decisions. Live resources remain on the endpoint client.
-
 use serde_json::{Map, Value};
 
 use crate::ChatItem;

@@ -1,5 +1,3 @@
-//! Speech text: expressive markup and the transcript of synthesized audio.
-
 use self::markup::drop_bracket_cues;
 use lk_agents_abi::TranscriptChunk;
 use std::collections::BTreeMap;

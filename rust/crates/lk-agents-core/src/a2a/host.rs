@@ -1,6 +1,3 @@
-//! Conversion of native turn records at the generated host boundary. Protocol JSON is decoded
-//! once here, before the runtime accepts handler output.
-
 use lk_agents_abi::a2a::turn as host;
 use lk_agents_abi::llm::chat_context::protocol;
 use lk_agents_abi::storage::StorageError;

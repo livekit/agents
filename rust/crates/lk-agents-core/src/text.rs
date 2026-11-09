@@ -1,5 +1,3 @@
-//! Character classification shared by text processing and speech tokenization.
-
 use lk_agents_abi::tokenize::language;
 
 /// Python's whitespace set includes the four ASCII information separators.

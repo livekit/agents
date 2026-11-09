@@ -1,6 +1,3 @@
-//! The driver's tool side: the running set, background updates (`ctx.update()`), the deferred
-//! tool reply, and the fillers (`RunContext.with_filler`).
-
 use crate::agent::{Source, Visibility};
 use crate::agent_session::closing::SESSION_CLOSING;
 use crate::agent_session::effects::{Timer, VoiceEffect};
@@ -26,19 +23,14 @@ use lk_agents_abi::{ChatItem, FunctionCall, Ts};
 use lk_agents_core::agent_run::AgentRunEvent;
 use lk_agents_core::tool_calls::{Admission, admit};
 
-/// `_FillerScheduler`'s log when its `say` raised: the filler ends there.
 const FILLER_STOPPED: &str =
     "filler stopped on an error, no further filler will play for this tool call";
 
 impl VoiceDriver {
-    // ------------------------------------------------------------------ dispatch
-
-    /// The model made a call: the core admits it (arguments a template leaked into repaired, an
-    /// `InputRequired(tool=)` answer in place of the model's arguments). A call `tool_choice="none"`
-    /// forbade is recorded as made and never runs. Any other waits for its step's authorization
-    /// to play (a call made while another speech plays, or by a preemptive generation, waits),
-    /// then joins its reply's run and starts with the first move the run decides; hosted by the
-    /// reply's agent unless it names a tool the request did not offer.
+    /// The model made a call. One `tool_choice="none"` forbade is recorded as made and never runs.
+    /// Any other waits for its step's authorization, then joins its reply's run and starts with
+    /// the first move the run decides; hosted by the reply's agent unless it names a tool the
+    /// request did not offer.
     pub(crate) fn on_tool_made(
         &mut self,
         now: Ts,
@@ -94,9 +86,8 @@ impl VoiceDriver {
 
     /// One waiting call, started or dropped unrun; returned when it keeps waiting.
     ///
-    /// Authorization last: a discarded preemptive generation, or a speech interrupted while
-    /// queued, drops the call unrun. A start already authorized runs, interrupted or not, as the
-    /// reference's executor starts the body right after `tool_execution_started_cb`.
+    /// A discarded preemptive generation, or a speech interrupted while queued, drops the call
+    /// unrun. A start already authorized runs, interrupted or not.
     fn try_start_deferred(&mut self, now: Ts, d: Deferred) -> Option<Deferred> {
         let state = self.activity.speech_scheduler.speech(d.speech);
         match state.map(|s| (s.step_authorized(d.step), s.interrupted() || s.done())) {
@@ -109,8 +100,8 @@ impl VoiceDriver {
 
     /// An authorized call starts once its run decided its first move.
     fn start_authorized(&mut self, now: Ts, mut d: Deferred) -> Option<Deferred> {
-        // `_tool_execution_started_cb`: stamped with its start (history is ordered by
-        // `created_at`, and it was made before the step was authorized).
+        // Stamped with its start: history is ordered by `created_at`, and it was made before the
+        // step was authorized.
         if d.id.is_none() {
             d.call.created_at = self.step.wall();
             d.id = self.reply_call_made(d.speech, d.call.clone());
@@ -136,8 +127,6 @@ impl VoiceDriver {
             ToolGo::Start { call: id, item: Box::new(call), host: host.map(Box::new), first };
         self.answer(Some(go), Answer::ToolGo(start));
     }
-
-    // ------------------------------------------------------------------ the running set
 
     /// A started call is the run's; a hosted one enters the running set and is announced, and the
     /// away window is held off. The invocation its callbacks run in, when hosted.
@@ -310,7 +299,7 @@ impl VoiceDriver {
         message: Option<String>,
         status: ToolEndStatus,
     ) {
-        // The last tool to land under two listening participants restarts the away window (#6883).
+        // The last tool to land under two listening participants restarts the away window.
         let closing = self.session.closing_past_edge();
         {
             let updates = self.session.states.on_tool_call_ended(now, closing);
@@ -383,8 +372,8 @@ impl VoiceDriver {
         }
     }
 
-    /// `_ToolExecutor.aclose()`: every body still running at the host, a detached one by now, is
-    /// cancelled and its end told as its own cancellation would tell it.
+    /// Every body still running at the host is cancelled and its end told as its own cancellation
+    /// would tell it.
     pub(crate) fn cancel_running_tools(&mut self, now: Ts) {
         let running = std::mem::take(&mut self.activity.tools.running);
         if running.is_empty() {
@@ -405,8 +394,6 @@ impl VoiceDriver {
             self.publish_event(tool_ended(id, call_id, None, ToolEndStatus::Cancelled));
         }
     }
-
-    // ------------------------------------------------------------------ background updates
 
     pub(crate) fn on_tool_update(
         &mut self,
@@ -431,7 +418,7 @@ impl VoiceDriver {
             return;
         }
         let wall = self.step.wall();
-        // `update()` restarts a pending filler dwell so it can't race the update (`reset_dwell`).
+        // Restart a pending filler dwell so it can't race the update.
         self.fillers_reset_dwell(now, &call_id);
         match update {
             ToolUpdate::Progress { message, raw } => {
@@ -471,7 +458,7 @@ impl VoiceDriver {
                     .tools
                     .take_update_owner(&invocation_id, operation, &call_id)
                     .expect("exact owner checked above");
-                // The end is journalled before the away window moves (#6883).
+                // The end is journalled before the away window moves.
                 self.record_trace(TraceToolStep::Updated {
                     call_id: call_id.clone(),
                     id: id.clone(),
@@ -482,7 +469,7 @@ impl VoiceDriver {
                     let updates = self.session.states.on_tool_call_ended(now, closing);
                     self.apply_user_state_updates(updates);
                 };
-                // A silent return voices nothing (`_execute_tool`'s `None` and `StopResponse`).
+                // A silent return (`None` or `StopResponse`) voices nothing.
                 match report.outcome {
                     ToolOutcome::Cancelled => {
                         self.publish_event(tool_ended(id, call_id, None, ToolEndStatus::Cancelled));
@@ -514,8 +501,7 @@ impl VoiceDriver {
     }
 
     /// Commit the pair to the record at once, so an earlier reply still sees it, deliver what it
-    /// owes the person, and batch it for the deferred reply when it asks for one
-    /// (`_enqueue_reply`).
+    /// owes the person, and batch it for the deferred reply when it asks for one.
     fn commit_pair(&mut self, running: &Running, id: String, pair: ToolExecution) {
         let ToolExecution { call, output, delivery, .. } = pair;
         let reply_required = output.reply_required;
@@ -535,11 +521,8 @@ impl VoiceDriver {
         }
     }
 
-    // ------------------------------------------------------------------ deliveries
-
-    /// What a call's outcome owes the person: a verbatim result said as written (`say()`), or an
-    /// `InputRequired` asked (`_apply_transition`), its call answered by the person's next
-    /// message, the question the output of a run ending on the tool's speech.
+    /// What a call's outcome owes the person: a verbatim result said as written, or an
+    /// `InputRequired` asked, its call answered by the person's next message.
     pub(crate) fn deliver_outcome(&mut self, now: Ts, speech: SpeechId, delivery: Delivery) {
         // What the call's speech says or asks is part of a run only when the call's speech is.
         let voice_run = if self.run_contains_speech(speech) {
@@ -652,8 +635,6 @@ impl VoiceDriver {
         Some(speech)
     }
 
-    // ------------------------------------------------------------------ the deferred reply
-
     /// One reply for every pending update, at the first idle instant with no current speech. Runs
     /// before idle waiters are answered, so a `foreground()` waits behind it.
     pub(crate) fn try_deliver_tool_reply(&mut self) {
@@ -665,7 +646,7 @@ impl VoiceDriver {
             return;
         }
         let batch = Batch(std::mem::take(&mut self.activity.tools.pending));
-        // "if the update is still the tail, the agent hasn't spoken since".
+        // An update still at the tail means the agent hasn't spoken since.
         let last_pending = batch.last_item_id();
         let last_record = self.session.chat_ctx.last_agent_item_id().map(str::to_owned);
         let at_tail = last_pending.is_some() && last_pending == last_record;
@@ -754,7 +735,7 @@ impl VoiceDriver {
         self.try_deliver_tool_reply();
     }
 
-    /// `SpeechCommand::FillerStart`: the scope opened. The dwell begins at the first idle instant.
+    /// The filler scope opened. The dwell begins at the first idle instant.
     pub(crate) fn on_filler_start(&mut self, now: Ts, start: FillerStart) {
         let FillerStart { id, call_id, speech, delay, interval, max_steps, source } = start;
         let fresh = !self.activity.tools.fillers.contains_key(&id)
@@ -794,7 +775,7 @@ impl VoiceDriver {
         }
     }
 
-    /// `ctx.update()` on `call_id`: a dwell in flight restarts (`reset_dwell`).
+    /// `ctx.update()` on `call_id`: a dwell in flight restarts.
     fn fillers_reset_dwell(&mut self, now: Ts, call_id: &str) {
         for id in self.activity.tools.fillers_of(|r| r.call_id == call_id) {
             if let Some(run) = self.activity.tools.fillers.get_mut(&id) {
@@ -804,8 +785,8 @@ impl VoiceDriver {
         }
     }
 
-    /// The dwell waits for idle and restarts when the agent or user starts speaking (the
-    /// reference's `wait_for_idle()` then race). Once per wake.
+    /// The dwell waits for idle and restarts when the agent or user starts speaking. Once per
+    /// wake.
     pub(crate) fn pump_fillers(&mut self, now: Ts) {
         if self.activity.tools.fillers.is_empty() {
             return;
@@ -833,7 +814,7 @@ impl VoiceDriver {
         answered: Option<lk_agents_abi::voice::session_effects::FillerReply>,
     ) {
         let Some((id, step)) = self.activity.tools.filler_answered(hook) else { return };
-        // The reference's loop dies on the callable's exception, which ends the filler.
+        // The callable raised: the filler ends.
         let Some(reply) = answered else {
             self.end_filler(id, FillerEnd::Refused);
             return;
@@ -849,8 +830,7 @@ impl VoiceDriver {
 
     fn fire_filler(&mut self, now: Ts, id: FillerId, step: u32, text: Option<String>, spoke: bool) {
         let realtime = self.realtime_says();
-        // The reference's `say` raises with no voice to speak the text (no TTS, no realtime model
-        // that says) while audio plays, which ends the filler.
+        // No voice to speak the text while audio plays: the filler ends.
         if text.is_some()
             && self.session.tts.is_none()
             && self.session.outputs.plays_audio()
@@ -900,9 +880,8 @@ impl VoiceDriver {
             spoke: produced,
             speech,
         });
-        // A say refused while scheduling drains is interrupted at birth and leaves the session
-        // idle, so the next fire would come in the same instant. The reference's `say` raises
-        // there, which ends the filler.
+        // A say refused while scheduling drains leaves the session idle, so the next fire would
+        // come in the same instant: the filler ends.
         if interrupted {
             self.end_filler(id, FillerEnd::Refused);
             return;
@@ -939,10 +918,8 @@ impl VoiceDriver {
     }
 
     fn fire_filler_step(&mut self, now: Ts, id: FillerId, step: u32) {
-        // A second fire in the instant of the last: its say finished at birth (no voice
-        // to speak it), left the session idle at once, and `interval=0` with no dwell
-        // came round again with no time passing, forever. The reference's loop spins
-        // there; this ends the filler, as it ends one whose say is refused.
+        // A second fire in the instant of the last would loop forever with `interval=0` and no
+        // dwell: the filler ends.
         let Some(run) = self.activity.tools.fillers.get_mut(&id) else { return };
         if run.fired_at.replace(now) == Some(now) {
             self.end_filler(id, FillerEnd::Refused);
@@ -987,8 +964,8 @@ impl super::AgentActivity {
         self.tools_in_flight.remove(&speech);
     }
 
-    /// The tool that claimed the person's turn, once (`_consume_next_turn`); not yet while the
-    /// question it waits behind is still being asked.
+    /// The tool that claimed the person's turn, once; not yet while the question it waits behind
+    /// is still being asked.
     pub(crate) fn consume_claim(&mut self) -> Option<String> {
         let claim = self.tools.claim.as_ref()?;
         let asking = claim
@@ -1052,5 +1029,5 @@ impl VoiceDriver {
 }
 
 #[cfg(test)]
-#[path = "tool_update_tests.rs"]
-pub(super) mod tool_update_tests;
+#[path = "tools_tests.rs"]
+pub(super) mod tests;

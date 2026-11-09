@@ -1,5 +1,5 @@
-//! Verbatim from `_language_data.py`. Sorted slices for `binary_search_by_key` (`tables_are_sorted`
-//! guards it).
+// Verbatim from `_language_data.py`. Sorted slices for `binary_search_by_key` (`tables_are_sorted`
+// guards it).
 
 static ISO_639_3_TO_1: &[(&str, Option<&str>)] = &[
     ("afr", Some("af")),

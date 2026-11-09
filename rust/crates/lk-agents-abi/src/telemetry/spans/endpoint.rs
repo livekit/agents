@@ -1,5 +1,3 @@
-//! The worker's endpoint server.
-
 use crate::telemetry::decl::{Attrs, External, span};
 use crate::telemetry::semconv::otel;
 use crate::worker::http::HttpCompletion;

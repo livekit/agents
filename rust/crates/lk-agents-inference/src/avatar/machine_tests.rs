@@ -1,6 +1,3 @@
-//! `avatar_creation_lifecycle` / `creation_adoption_vectors`: the avatar machine stepped
-//! directly on supplied time.
-
 use crate::effects::AvatarSessionEffect;
 use std::time::Duration;
 

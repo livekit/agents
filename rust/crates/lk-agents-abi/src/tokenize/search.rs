@@ -1,5 +1,3 @@
-//! Tool discovery export contracts, implemented by `lk_agents_core::tool_search`.
-
 /// A native search pattern failed while matching.
 #[crate::host(error(kind = "ValueError"))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

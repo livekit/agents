@@ -1,6 +1,3 @@
-//! Building the `chat.completions.create` body: `LLM.chat()`'s kwargs composition and
-//! `LLMStream._run()`'s final assembly, as two pure functions over `serde_json::Map`.
-
 use crate::abi::ToolChoice;
 use crate::headers::{HEADER_INFERENCE_PROVIDER, Headers};
 use serde_json::{Map, Value, json};

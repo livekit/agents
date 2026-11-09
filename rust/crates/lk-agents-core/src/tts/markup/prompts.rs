@@ -1,6 +1,6 @@
-//! The `expr` instruction blocks, byte-identical to `tts/_provider_format.py`; `{}` in a `_TMPL` is
-//! a `format!` hole.
 #![allow(clippy::doc_markdown)]
+
+// Byte-identical to `tts/_provider_format.py`; `{}` in a `_TMPL` is a `format!` hole.
 
 pub(crate) const EXPR_PREAMBLE: &str = concat!(
     "You control speech delivery with a single XML marker tag: <expr/>. Every marker has a type ",

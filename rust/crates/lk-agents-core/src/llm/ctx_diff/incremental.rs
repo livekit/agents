@@ -1,5 +1,3 @@
-//! Bounded preparation of the conversation edit script.
-
 use super::{DiffOps, item_changed};
 use lk_agents_abi::ChatContext;
 use std::collections::{BTreeMap, BTreeSet};

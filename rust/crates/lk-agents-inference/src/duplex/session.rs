@@ -1,5 +1,3 @@
-//! The duplex model run as a realtime model: its sessions, their event delivery and host integration.
-
 use crate::realtime::openai::queue::{self, Delivery, EventReceiver};
 use crate::telemetry;
 use std::sync::Arc;

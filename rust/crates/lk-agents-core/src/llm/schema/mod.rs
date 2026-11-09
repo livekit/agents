@@ -1,6 +1,3 @@
-//! `llm/utils.py`'s schema half: pure JSON transforms. The pydantic steps stay in the host; Rust
-//! starts from the emitted schema.
-
 mod defaults;
 mod openai;
 

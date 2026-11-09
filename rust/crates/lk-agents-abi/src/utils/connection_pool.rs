@@ -1,5 +1,3 @@
-//! Connection pool bookkeeping exposed to host transports.
-
 #[crate::host(class(name = "ConnectionPoolState", pid = false))]
 pub trait ConnectionPoolState: Send + Sized + 'static {
     #[host(new)]

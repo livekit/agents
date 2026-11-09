@@ -1,5 +1,3 @@
-//! Realtime operations decided by the core and executed by the runtime writer.
-
 use super::{OptionsPatch, SessionOptions};
 use crate::realtime::dialect::Dialect;
 use lk_agents_abi::{AudioFrame, ChatItem, ToolChoice, ToolSpec};

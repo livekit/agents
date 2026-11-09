@@ -1,4 +1,3 @@
-//! Chat and tool-format exports; implementations live in their owning cores and runtime.
 use super::vocabulary::GeminiToolBehavior;
 use super::{ProviderFormat, SerializedImage, StrictError, ToolSchema};
 use crate::errors::Invalid;

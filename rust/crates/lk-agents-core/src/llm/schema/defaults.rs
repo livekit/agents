@@ -1,11 +1,11 @@
-//! `_inject_schema_defaults` (`llm/utils.py:305`): a strict schema's `null` means "use your default",
-//! turned back before pydantic validates. `null` is a sentinel only where it was not already legal.
-
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use crate::llm::provider_format::StrictError;
 use serde_json::{Map, Number, Value};
+
+// A strict schema's `null` means "use your default", turned back before pydantic validates.
+// `null` is a sentinel only where it was not already legal.
 
 type Object = Map<String, Value>;
 

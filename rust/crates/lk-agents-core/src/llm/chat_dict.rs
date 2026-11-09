@@ -1,6 +1,3 @@
-//! `ChatContext.to_dict` (`chat_context.py:629`): the item filters over each item's generated
-//! `model_dump(mode="json", exclude_none=True)`.
-
 use lk_agents_abi::llm::chat_context::ItemKind;
 use lk_agents_abi::llm::to_dict::ChatContextDict;
 use lk_agents_abi::{ChatItem, DumpCx, ModelDump, ToDictError, ToDictHost, ToDictOptions};

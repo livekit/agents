@@ -1,7 +1,3 @@
-//! `ChatContext.to_dict` records: `model_dump(mode="json", exclude_none=True)`,
-//! generated per record (`#[binding(model_dump)]`), and the declared host function. The item
-//! filters are `lk_agents_core::llm::chat_dict`.
-
 use std::time::SystemTime;
 
 use crate::MediaRef;

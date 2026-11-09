@@ -1,5 +1,3 @@
-//! The host's audio chunker; the implementation is `lk-agents-media`'s.
-
 use crate::AudioFrame;
 
 /// Buffers bytes and emits whole frames: fixed-size, or progressive (20 ms first, doubling to

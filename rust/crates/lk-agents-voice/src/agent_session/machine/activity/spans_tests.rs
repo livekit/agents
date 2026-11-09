@@ -646,7 +646,7 @@ fn an_interrupted_reply_records_its_wait_cause_and_playout() {
 }
 
 // Catches: a reply whose audio played out whole and was then interrupted (closing while its tools
-// ran) ending its turn with no `lk.playout.position` (DST seed 54).
+// ran) ending its turn with no `lk.playout.position`.
 #[test]
 fn an_interruption_after_the_audio_played_out_reports_where_it_stopped() {
     let mut s = opened();
@@ -916,8 +916,7 @@ fn the_session_opens_the_spans_start_reserved() {
     assert_eq!(hook, Some(one(&records, "on_enter").context), "the hook runs under its span");
 }
 
-// Catches: `agent_session` without the job's dispatch, worker and agent ids, which 1.8.10 repeated
-// from `job_entrypoint`.
+// Catches: `agent_session` without the job's dispatch, worker and agent ids.
 #[test]
 fn the_session_carries_its_jobs_ids() {
     let job_ids = JobIds {

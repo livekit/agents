@@ -1,5 +1,3 @@
-//! The `/bargein` wire protocol: seven JSON messages plus one binary frame format. Pure.
-
 use serde::{Deserialize, Serialize};
 
 /// `InterruptionWSSessionCreateSettings` (`inference/interruption.py:696`), in the pydantic

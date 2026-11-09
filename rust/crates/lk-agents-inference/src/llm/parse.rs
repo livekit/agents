@@ -1,13 +1,10 @@
-//! `LLMStream._parse_choice` and the usage chunk, as a pure accumulator over SSE chunks. Several
-//! branches are truthiness tests on strings providers routinely send empty.
-
 use super::thinking::{FilterState, strip_thinking_tokens};
 use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{ChoiceDelta, Extra, FunctionToolCall, LlmChunk, Role};
 use serde::Deserialize;
 
-// Only the fields the reference reads, `#[serde(default)]` everywhere.
+// Several branches are truthiness tests on strings providers routinely send empty.
 
 /// `#[serde(default)]` covers only an absent key; providers send `"tool_calls": null` (and the STT
 /// gateway `"words": null`), which would fail the whole message.

@@ -1,6 +1,3 @@
-//! `tokenize/token_stream.py`'s `BufferedTokenStream` (`:87`). Lengths and offsets are characters,
-//! not bytes, as in Python.
-
 use std::borrow::Cow;
 
 use crate::tokenize::word::{WordTokenizerOptions, split_words};
@@ -8,6 +5,8 @@ use crate::tokenize::xml;
 use lk_agents_abi::SentenceSplitter;
 use lk_agents_abi::tokenize::TokenSpan;
 use lk_agents_abi::tokenize::bindings::TokenizerToken;
+
+// Lengths and offsets are characters, not bytes, as in Python.
 
 /// Character indices. Spans must tile the input start-to-start, or the text in a gap is dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]

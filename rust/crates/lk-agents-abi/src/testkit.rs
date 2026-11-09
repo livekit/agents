@@ -1,5 +1,3 @@
-//! Builders shared by the test modules. Nothing here is compiled into the library.
-
 use std::time::{Duration, SystemTime};
 
 use crate::llm::chat_context::{AgentHandoffItem, ChatContent, ChatItem, FunctionCall};

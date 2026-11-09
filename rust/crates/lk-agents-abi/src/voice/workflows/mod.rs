@@ -1,6 +1,3 @@
-//! What the prebuilt workflows hand the host and read back, and the prompt constants the
-//! reference's `beta/workflows/` modules publish. The workflows are `lk-agents-voice`'s.
-
 use crate::utils::dates::Date;
 
 /// The caller session's io legs the warm transfer turns off while the caller is on hold, read

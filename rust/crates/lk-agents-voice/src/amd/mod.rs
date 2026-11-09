@@ -1,5 +1,3 @@
-//! Answering-machine decisions and the native detector setup accepted by a runtime.
-
 pub mod effects;
 pub mod machine;
 

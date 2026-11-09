@@ -1,5 +1,3 @@
-//! RTC execution for the synchronous room state.
-
 use super::input::{ParticipantAudioInput, ParticipantVideoInput};
 use super::output::{
     ParticipantAudioOutput,
@@ -256,7 +254,6 @@ impl RoomIo {
         self.request_close();
     }
 
-    /// `_init_task`.
     async fn init(self: Arc<Self>) -> Result<()> {
         self.connected.wait_for(|set| *set).await;
 
@@ -318,7 +315,6 @@ impl RoomIo {
         Ok(())
     }
 
-    /// `_on_participant_connected`'s filter.
     async fn consider(
         &self,
         candidate: &ParticipantIdentity,
@@ -489,7 +485,7 @@ impl RoomIo {
         }
     }
 
-    /// `_init_task`, unless the room stops first; a failed start fails the room.
+    /// Runs `init` unless the room stops first; a failed start fails the room.
     async fn run_startup(self: Arc<Self>) {
         let result = tokio::select! {
             biased;
@@ -868,7 +864,6 @@ impl room_owner::RoomIo for RoomIo {
         }
     }
 
-    /// `wait_for_ready`.
     fn wait_for_ready<'a>(&'a self) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let mut view = self.view.subscribe();
@@ -883,7 +878,6 @@ impl room_owner::RoomIo for RoomIo {
         })
     }
 
-    /// `set_participant`.
     fn set_participant<'a>(
         &'a self,
         identity: Option<ParticipantIdentity>,
@@ -895,7 +889,6 @@ impl room_owner::RoomIo for RoomIo {
         self.set_participant(None)
     }
 
-    /// `_on_user_input_transcribed`, then `_forward_user_transcript`, as one await.
     fn on_user_input_transcribed<'a>(
         &'a self,
         transcript: &'a str,
@@ -962,7 +955,7 @@ impl SessionEventForwarder {
     }
 
     /// What the room said before the stop still reaches the session: the room's `Close` stops
-    /// this loop at the instant it is queued here (seed 19655).
+    /// this loop at the instant it is queued here.
     fn deliver_pending(&mut self) {
         while let Ok(event) = self.events.try_recv()
             && (self.listener)(event)

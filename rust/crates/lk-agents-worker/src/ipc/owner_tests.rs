@@ -1,5 +1,3 @@
-//! The state a `JobSupervisor` exposes, over a job thread a scripted child answers for.
-
 use super::*;
 use std::any::Any;
 use std::time::Duration;

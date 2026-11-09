@@ -1,6 +1,3 @@
-//! The `chat.completions.create` request, over the shared agent core's formatting algorithms:
-//! to the LiveKit Inference gateway, or straight to a provider with its own key.
-
 use crate::headers::{Headers, gateway_headers};
 use crate::llm::request::ChatArgs;
 use crate::llm::{Auth, BodyEncoding, LlmOptions, models, request};

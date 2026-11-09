@@ -1,5 +1,3 @@
-//! The user's turn, from its first evidence to its outcome (`telemetry.md`, "The user turn").
-
 use serde::Serialize;
 
 use super::agent_turn::ChatContextDict;

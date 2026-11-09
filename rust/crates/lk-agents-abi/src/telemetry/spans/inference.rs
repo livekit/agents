@@ -1,5 +1,3 @@
-//! Model requests: LLM and TTS requests, their attempts and adapters, and the usage groups.
-
 use serde::Serialize;
 
 use super::common::{GenAiOperation, OutputType};

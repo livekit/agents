@@ -1,13 +1,3 @@
-//! The realtime core over the simulated server, on virtual time: a LiveKit Inference realtime
-//! session's conversation machine and connection policy (`RealtimeMachine`, `RealtimeConnection`)
-//! stepped in the order the native session's pump steps them, against [`Server`] as the real
-//! one was measured. The socket is the server's typed records; the person's audio reaches it in
-//! the writer's 100 ms batches; the server answers on its own clock.
-//!
-//! A test sends commands and server-side happenings ([`Exo`], a dropped socket) at instants of
-//! its choosing and reads what the driver would have been told ([`Sim::events`]) and what the
-//! server refused or answered from the wrong state ([`Sim::breaches`]). What the machine gets
-//! wrong about the server shows here; what the driver does with its events is the DST's.
 use lk_agents_inference::effects::RealtimeConnectionEffect;
 use std::{
     collections::{BTreeSet, VecDeque},

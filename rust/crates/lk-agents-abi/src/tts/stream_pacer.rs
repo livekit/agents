@@ -1,6 +1,3 @@
-//! `tts.SentenceStreamPacer`: sentences released as the audio already synthesized plays out, and
-//! the host sentence streams the pacer and the sentence adapter read.
-
 use std::sync::Arc;
 
 use crate::errors::{HostError, ProviderError};

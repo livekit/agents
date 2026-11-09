@@ -1,6 +1,3 @@
-//! The OpenAI-protocol realtime model's options (OpenAI, Azure OpenAI, Azure Voice Live, xAI and
-//! LiveKit Inference): one record per option, each serialized as the session field it sets.
-
 use serde::{Serialize, Serializer};
 
 /// A wire string, serialized as itself.

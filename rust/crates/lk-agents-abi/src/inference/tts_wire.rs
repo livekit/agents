@@ -1,5 +1,3 @@
-//! The TTS gateway's error and fallback vocabularies.
-
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]

@@ -1,5 +1,3 @@
-//! RTC frame pacing. Time is supplied by the executor; this module owns no source or timer.
-
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::avatar::AvatarOptions;
 use lk_agents_abi::voice::rtc::{TrackPublishOptions, TrackSource, media::VideoTrackOptions};

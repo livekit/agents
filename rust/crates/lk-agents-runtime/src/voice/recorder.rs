@@ -1,4 +1,3 @@
-//! Installs the recorder's keyed observers on the executor's admitted outputs.
 use crate::voice::session::SessionShared;
 use lk_agents_abi::recorder::AudioRecorder;
 use lk_agents_abi::resources::ResourceId;
@@ -99,3 +98,7 @@ impl PlaybackObserver for RecorderPlaybackObserver {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "recorder_tests.rs"]
+mod tests;

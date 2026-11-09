@@ -1,5 +1,3 @@
-//! The host bridge and public contract of a warm transfer.
-
 use super::{InstructionsArg, IoEnableState, TwilioDial};
 use crate::Maybe;
 use crate::errors::HostError;

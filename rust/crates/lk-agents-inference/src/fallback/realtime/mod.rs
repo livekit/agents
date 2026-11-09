@@ -1,14 +1,8 @@
-//! `RealtimeModelFallbackAdapter`: the realtime fallback on the shared chain machine. Unlike the
-//! LLM/STT/TTS chains, failure is a pushed event, recovery is a cooldown, a healthy primary is not
-//! preempted, and availability is per session. `capabilities` merges the models' capabilities,
-//! `session` replaces a failed model's session and replays the conversation, and `backlog` bounds
-//! the requests held while it does.
-
 mod backlog;
 mod capabilities;
 mod session;
 #[cfg(test)]
-#[path = "../realtime_tests.rs"]
+#[path = "realtime_tests.rs"]
 mod tests;
 
 pub use backlog::{

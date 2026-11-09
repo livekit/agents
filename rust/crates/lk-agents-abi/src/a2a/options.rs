@@ -1,5 +1,3 @@
-//! A text door's arrival options, declared once for native execution and the host API.
-
 use std::collections::BTreeMap;
 use std::time::Duration;
 

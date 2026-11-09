@@ -1,5 +1,3 @@
-//! The voice session: its lifecycle, agent activities, RPC, AMD and keyterm detection.
-
 use super::agent_turn::AgentTurn;
 use super::common::{GenAiOperation, ParticipantAttrs};
 use super::job::JobEntrypoint;

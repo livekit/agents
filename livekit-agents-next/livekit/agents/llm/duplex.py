@@ -36,7 +36,7 @@ TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 class DuplexModel(ABC):
     """A speech model that listens and speaks at the same time, handling interruptions itself.
 
-    Run one inside an ``VoiceSession`` with :class:`~livekit.agents.llm.DuplexRealtimeAdapter`.
+    Run one inside a ``VoiceSession`` with :class:`~livekit.agents.llm.DuplexRealtimeAdapter`.
     """
 
     def __init__(self, *, capabilities: DuplexCapabilities) -> None:
@@ -73,8 +73,6 @@ class DuplexModel(ABC):
     async def _core_session(
         self, tools: Callable[[], Sequence[Tool | Toolset]] | None
     ) -> _bindings._DuplexSession:
-        """A new session as the core drives it, offering the tools ``tools`` answers (the
-        objects the core refers to by name)."""
         return _bindings._DuplexSession(self.session(), tools or list)
 
     async def __aenter__(self) -> DuplexModel:
@@ -94,12 +92,10 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         super().__init__()
         self._duplex_model = duplex_model
         self._closing = False
-        # set once the whole configuration is applied; a model whose configuration is immutable
-        # once started waits on it before connecting
+        # set once configured; a model whose configuration is immutable waits on it to connect
         self._configured = asyncio.Event()
-        # the caller's audio, its gaps and mute changes, in order: pulled with ``async for`` while
-        # connected and flushed on reconnect; a plugin more than 250 ms behind skips to the newest
-        # audio after a gap
+        # the caller's audio, gaps and mute changes; a plugin more than 250 ms behind skips to
+        # the newest audio after a gap
         self._input = _core.DuplexInput()
 
     @property
@@ -130,14 +126,11 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
     async def aclose(self) -> None:
         """Close the session; an override calls ``super().aclose()`` first.
 
-        It releases a model that waits on ``_configured``, which then reads ``_closing`` to see
-        that the configuration was abandoned rather than applied.
+        Releases a model waiting on ``_configured``; ``_closing`` tells it the configuration was
+        abandoned.
         """
         self._closing = True
         self._configured.set()
-
-    # underscored until the shape settles: this is the framework's contract with the plugin, and
-    # apps reach a plugin's own methods through Agent.duplex_session
 
     @abstractmethod
     async def _update_instructions(self, instructions: str) -> None: ...
@@ -206,11 +199,10 @@ class AudioGate(Protocol):
 
 
 class DuplexRealtimeAdapter(_facades.DuplexRealtimeAdapter):
-    """Runs a :class:`DuplexModel` inside an ``VoiceSession``.
+    """Runs a :class:`DuplexModel` inside a ``VoiceSession``.
 
-    The core (``_core.DuplexRealtimeModel``) gates the model's continuous output, segments it
-    into generations and attaches its transcript; output the model never transcribes still plays,
-    it just has no chat item.
+    The model's continuous output is gated and segmented into generations with their
+    transcripts; output the model never transcribes still plays, without a chat item.
     """
 
     @property

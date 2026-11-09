@@ -1,5 +1,3 @@
-//! The process launcher's typed command line, and the agent server the dev channel reports on.
-
 /// The launcher's `--log-level`; `warning` and `critical` are aliases of `warn` and `fatal`.
 #[crate::host(record(module = "cli", extract, emit))]
 #[crate::host(wire_strs(msg = format!("unknown log level {s:?}")))]

@@ -1,5 +1,3 @@
-//! Resampling quality and errors. The implementation lives in `lk-agents-media`.
-
 /// The discriminants are the protobuf ordinals passed to libsoxr as the recipe.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum Quality {

@@ -1,11 +1,7 @@
-//! Real gateway coverage for the runtime-selected native speech factory.
-
 use std::sync::Arc;
 
 fn credentials() -> Option<(String, String, String)> {
-    // The *inference* key pair, which is distinct from the room key pair. `resolve_credential`
-    // reproduces the reference's fallback (§creds), and the point of using it here rather than
-    // reading the vars directly is that the fallback itself gets exercised against a real key.
+    // The inference key pair, distinct from the room's; resolved so the fallback is exercised too.
     let key = lk_agents_inference::credentials::resolve_api_key(
         None,
         std::env::var("LIVEKIT_INFERENCE_API_KEY").ok().as_deref(),
@@ -25,13 +21,9 @@ fn credentials() -> Option<(String, String, String)> {
     Some((key, secret, url))
 }
 
-/// Catches: everything the WebSocket half assumes and the unit tests fake — the `?model=` query
-/// parameter, the `Authorization` header surviving the handshake (a WS upgrade drops headers
-/// silently in several client libraries), `"type"` being the first key of `session.create`, and
-/// the `input_transcript` → `output_audio` → `done` sequence.
-///
-/// The LLM's happy path proves the HTTP transport; this proves the other one, and they share no
-/// code below [`lk_agents_net::transport`].
+// Catches: what the WebSocket half assumes and the unit tests fake: the `?model=` query, the
+// `Authorization` header surviving the upgrade (several clients drop it), `"type"` first in
+// `session.create`, and the `input_transcript`, `output_audio`, `done` sequence.
 #[tokio::test]
 #[ignore = "needs LIVEKIT_INFERENCE_API_KEY/_SECRET and the network"]
 async fn a_tts_synthesis_round_trips_over_the_websocket() {

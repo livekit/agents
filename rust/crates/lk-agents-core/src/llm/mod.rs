@@ -1,4 +1,3 @@
-//! Pure chat formatting, schema normalization and tool argument recovery.
 pub mod chat_dict;
 pub mod ctx_diff;
 pub mod history;

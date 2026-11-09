@@ -1,13 +1,10 @@
-//! The providers a session uses, by id. The host registers each one when it hands it over and
-//! puts the typed reference in its command: the core decides with the reference (its id and what
-//! the provider said about itself at registration) and names the id in the effects that reach it.
-//! The runtime's table resolves an id to the provider for whoever performs those effects. The
-//! microphone and the audio sinks it feeds are registered the same way, so the data plane names
-//! them by id.
-
 use crate::llm::realtime::RealtimeCapabilities;
 use crate::voice::io::AudioOutputCapabilities;
 use crate::{ProviderId, SttCapabilities, TtsCapabilities, VadCapabilities};
+
+// The core decides with a provider's typed reference and names its id in effects; the runtime's
+// table resolves the id for whoever performs them. Microphones and audio sinks are registered the
+// same way.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ResourceId(pub u64);

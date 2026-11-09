@@ -1,7 +1,7 @@
-//! Conversational identity travels with saved history, independently of invocation ids.
-
 use lk_agents_abi::{ChatItem, ChatMessage, Role};
 use serde::{Deserialize, Serialize};
+
+// Conversational identity travels with saved history, independently of invocation ids.
 
 const EXECUTION_KEY: &str = "lk.execution";
 

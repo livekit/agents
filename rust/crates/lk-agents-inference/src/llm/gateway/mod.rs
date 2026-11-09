@@ -1,8 +1,3 @@
-//! The gateway LLM: each `chat()` is one [`LlmRequest`] core whose effects this module executes,
-//! pulled by its consumer. The request is stepped only while it is pulled or closed, so nothing
-//! runs ahead of demand; transport observations wait in a bounded queue, stamped with the instant
-//! they were made, and are applied in that order with every deadline due before them.
-
 use crate::effects::LlmRequestEffect;
 use crate::telemetry;
 use std::collections::{BTreeMap, VecDeque};
@@ -38,6 +33,8 @@ use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, error_chain};
 use lk_agents_net::sse::SseDecoder;
 use lk_agents_net::task::TokioSpawner;
+
+// The request is stepped only while it is pulled or closed, so nothing runs ahead of demand.
 
 /// Transport observations an attempt may report ahead of the consumer before it stops reading.
 const OBSERVATION_QUEUE: usize = 32;
@@ -641,3 +638,7 @@ struct InbandError {
     _kind: String,
     code: u16,
 }
+
+#[cfg(test)]
+#[path = "gateway_tests.rs"]
+mod tests;

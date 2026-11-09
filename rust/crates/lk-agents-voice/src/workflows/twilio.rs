@@ -1,6 +1,3 @@
-//! The warm transfer's Twilio caller selection, reply decisions, and connector TwiML.
-//! The runtime builds and sends HTTP requests and owns the cancel-on-drop guard.
-
 use lk_agents_abi::voice::workflows::TwilioDial;
 
 /// Twilio refused the caller id preserved from the original call (21210, 21212): no call exists.

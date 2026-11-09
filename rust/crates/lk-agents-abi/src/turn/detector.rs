@@ -1,6 +1,3 @@
-//! The end-of-turn detector seam: an audio detector (`inference.TurnDetector.stream()`) that hears
-//! the user and predicts on request. Thresholds come from [`crate::tokenize::language`].
-
 use std::time::Duration;
 
 use crate::EotPrediction;

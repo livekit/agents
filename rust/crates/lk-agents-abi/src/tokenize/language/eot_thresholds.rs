@@ -1,9 +1,8 @@
-//! Per-language EOT thresholds (`inference/eot/languages.py`), rekeyed through
-//! [`LanguageCode::language`] so `"en-US"`, `"eng"` and `"english"` share a row.
-
 use std::collections::BTreeMap;
 
 use super::code::LanguageCode;
+
+// Rekeyed through `LanguageCode::language` so `"en-US"`, `"eng"` and `"english"` share a row.
 
 /// Shipped with the local mini model (#4722), on its own probability scale. Sorted, for binary
 /// search.

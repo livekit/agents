@@ -1,5 +1,5 @@
-//! A `Vocabulary` enum's `assert_<enum>_is_covered::<G, S>()` requires a `Covers<K>` impl per
-//! variant, so a new variant nobody has decided about stops compiling.
+// A `Vocabulary` enum's `assert_<enum>_is_covered::<G, S>()` requires a `Covers<K>` impl per
+// variant, so a new variant nobody has decided about stops compiling.
 
 #[derive(Debug)]
 pub enum Coverage<T> {

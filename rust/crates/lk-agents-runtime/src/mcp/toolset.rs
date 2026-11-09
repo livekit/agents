@@ -1,6 +1,3 @@
-//! An `MCPToolset`'s lifecycle: its listing, the background recovery of an unreachable server
-//! and the idle close after the last run. The host lists and closes; this decides when.
-
 use std::sync::Arc;
 use std::time::Duration;
 

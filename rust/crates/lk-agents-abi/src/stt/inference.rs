@@ -1,6 +1,3 @@
-//! `inference.STT`'s native client: the LiveKit Inference gateway's WebSocket, implemented by
-//! `lk-agents-inference`.
-
 use std::sync::Arc;
 
 use serde_json::{Map, Value};

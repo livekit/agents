@@ -1,7 +1,3 @@
-//! The attempts of a host provider's request: [`AttemptMachine`] projects the host's
-//! observations onto the shared supplied-time attempt machine, and [`ProviderAttempts`] executes
-//! it, running the host's attempt (`_core_attempt`) under its deadlines and retry decisions.
-
 use std::sync::Arc;
 
 use lk_agents_abi::HostRef;

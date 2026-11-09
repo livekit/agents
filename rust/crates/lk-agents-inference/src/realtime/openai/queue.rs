@@ -1,5 +1,3 @@
-//! Realtime ingress over a media queue, and bounded event delivery with one reserved terminal observation.
-
 use super::session::Cmd;
 use lk_agents_abi::RealtimeCommand as Command;
 use lk_agents_abi::errors::ApiError;

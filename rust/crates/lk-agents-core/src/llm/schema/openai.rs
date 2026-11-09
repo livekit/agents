@@ -1,12 +1,11 @@
-//! `llm/utils.py`'s OpenAI wrappers, minus the pydantic prologue. Key order and the
-//! `description or ""` fallback are behaviour.
-
 use crate::llm::provider_format::to_strict_json_schema;
 use serde_json::{Map, Value, json};
 
 use crate::llm::schema::defaults::SchemaError;
 
-/// `build_legacy_openai_schema` (`utils.py:203`) — non-strict tool description.
+// Key order and the `description or ""` fallback are observable behaviour.
+
+/// `build_legacy_openai_schema`: the non-strict tool description.
 ///
 /// `internally_tagged` gives the flat form the Responses API and Bedrock want; the default is
 /// `{"type": "function", "function": {...}}`. A `None` or empty description emits `""`.
@@ -39,7 +38,7 @@ pub fn build_legacy_openai_schema(
     }
 }
 
-/// `build_strict_openai_schema` (`utils.py:229`) — strict-mode tool description. Defaulted fields
+/// `build_strict_openai_schema`: the strict-mode tool description. Defaulted fields
 /// become nullable so the model can decline them; [`inject_schema_defaults`](crate::llm::schema::inject_schema_defaults)
 /// swaps the null back.
 pub fn build_strict_openai_schema(
@@ -62,7 +61,7 @@ pub fn build_strict_openai_schema(
     ]))
 }
 
-/// `to_openai_response_format` (`utils.py:288`) — structured-output response format. No null
+/// `to_openai_response_format`: the structured-output response format. No null
 /// sentinel: nothing resolves it on the decode side, so defaulted fields stay required.
 pub fn to_openai_response_format(
     name: &str,

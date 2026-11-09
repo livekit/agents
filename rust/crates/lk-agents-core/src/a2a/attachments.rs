@@ -1,13 +1,12 @@
-//! Managed endpoint attachment boundary. A URL part carries an opaque application reference;
-//! resolving or authorizing that reference belongs to the application. Inline uploads have no
-//! durable reference and cannot enter the thread's task or inbox records.
-
 use super::rpc::invalid_params;
 use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::a2a_protocol::JsonRpcError;
 use serde_json::Value;
 
 use lk_agents_abi::storage::StorageError;
+
+// A URL part is an opaque application reference; inline uploads have no durable reference and
+// cannot enter the thread's task or inbox records.
 
 /// Check declared part shapes before the upstream protobuf-JSON adapter can discard fields.
 /// In particular, that adapter chooses the first content field when several are supplied.
@@ -60,3 +59,7 @@ pub fn validate_received_parts(message: &a2a::Message) -> Result<(), StorageErro
 fn inline_upload_error() -> String {
     "inline attachment bytes cannot be stored with a thread; supply an application reference in a URL part".into()
 }
+
+#[cfg(test)]
+#[path = "attachments_tests.rs"]
+mod tests;

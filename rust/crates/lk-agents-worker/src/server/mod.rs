@@ -1,8 +1,3 @@
-//! `AgentServer` around the worker connection (`worker.py`): its options resolved once against the
-//! environment, the health listener and its `/worker` record, the job `simulate_job` hands the
-//! pool, and the lifecycle (start, load, drain, close) the binding runs, with the job process pool.
-//! The host keeps the processes' launcher and the user's callbacks.
-
 /// A server lifecycle failure, raised to the host as its message (`RuntimeError`): nothing
 /// branches on it.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -62,8 +57,6 @@ use tokio_util::sync::CancellationToken;
 mod health;
 mod http;
 mod public;
-#[cfg(test)]
-use health::health_route;
 pub use health::{HealthProbe, ServerStatus, serve_health, serve_metrics};
 pub use http::bind_listener;
 pub use public::{PublicRoutes, serve_public};
@@ -77,7 +70,7 @@ use prost::Message as _;
 
 use crate::{AcceptArguments, JobDecision, JobRequest, RunningJobInfo, WORKER_PROTOCOL_VERSION};
 
-// --------------------------------------------------------------------- simulated jobs
+// The host keeps the processes' launcher and the user's callbacks.
 
 #[derive(Default)]
 pub struct SimulatedJobOptions {
@@ -160,8 +153,6 @@ pub fn simulated_job(
     })
 }
 
-// --------------------------------------------------------------------- job requests
-
 /// The answer to a job request: a server with no voice door rejects it (another worker may take
 /// it), one with a voice door accepts it.
 pub fn job_decision(req: &JobRequest, has_rtc: bool) -> JobDecision {
@@ -179,8 +170,6 @@ pub fn job_decision(req: &JobRequest, has_rtc: bool) -> JobDecision {
 pub fn decode_room(bytes: &[u8]) -> Result<proto::Room, WorkerError> {
     proto::Room::decode(bytes).map_err(|e| WorkerError::Invalid(format!("room_info: {e}")))
 }
-
-// --------------------------------------------------------------------- the listeners
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServerPhase {
@@ -1106,7 +1095,5 @@ impl Resources {
 }
 
 #[cfg(test)]
-mod lifecycle_tests;
-#[cfg(test)]
-#[path = "../server_tests.rs"]
+#[path = "server_tests.rs"]
 mod tests;

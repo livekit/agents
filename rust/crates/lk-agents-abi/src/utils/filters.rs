@@ -1,5 +1,3 @@
-//! Export contracts for numeric filters; implementations live in the media core.
-
 use crate::Maybe;
 
 /// The reference raises `ValueError` in `__init__` and asserts in `reset`; the binding picks.

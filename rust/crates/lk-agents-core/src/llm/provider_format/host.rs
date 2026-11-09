@@ -1,6 +1,3 @@
-//! `to_provider_format` and `to_fnc_ctx` as the host calls them. Images arrive pre-serialised, so
-//! each is encoded once; dropped items are logged with the reference's warning, not raised.
-
 use std::collections::BTreeMap;
 
 use lk_agents_abi::errors::Invalid;
@@ -15,6 +12,8 @@ use super::{
     mistralai, openai,
 };
 use lk_agents_abi::{ChatContext, ChatItem};
+
+// Dropped items are logged with the reference's warning, not raised.
 
 /// `ChatContext.to_provider_format(format, ...)` -> `(messages, data)`. `data` is `None` for OpenAI
 /// and a dict for the dialects that hoist something out of band.

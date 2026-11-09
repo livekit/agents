@@ -1,5 +1,3 @@
-//! Room audio buffering, pause/refeed and playout accounting over supplied observations.
-
 use lk_agents_abi::voice::io::{IoError, PlaybackFinished, PlaybackSegment, Result};
 use lk_agents_abi::voice::rtc::{PlaybackInfo, TrackSid, frame_duration};
 use lk_agents_abi::{AudioFrame, Ts};
@@ -137,8 +135,7 @@ struct Run {
 }
 
 impl Ledger {
-    /// `_report_run`: close the open run at `playhead` and open the next at `resumes_at` (past a
-    /// cut's discard).
+    /// Close the open run at `playhead` and open the next at `resumes_at` (past a cut's discard).
     fn report_run(
         &mut self,
         playhead: Duration,
@@ -424,8 +421,8 @@ impl Playback {
         true
     }
 
-    /// `_wait_for_playout`'s finish over every window settled so far (a pause can make the source
-    /// run dry more than once). `None` while the source still holds `queued` audio: the pause put
+    /// The finish over every window settled so far (a pause can make the source run dry more than
+    /// once). `None` while the source still holds `queued` audio: the pause put
     /// some back, so the watcher waits for playout again.
     pub fn finish(
         &mut self,

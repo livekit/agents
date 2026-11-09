@@ -1,5 +1,3 @@
-//! Agent authoring state and generated Python configuration records. Callables stay in the host.
-
 use super::Retries;
 use crate::llm::provider_format::tools::{DuplicateMode, DuplicateScope, ToolFlag};
 use crate::{HostRef, Maybe, ToolChoice};

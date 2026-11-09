@@ -1,5 +1,3 @@
-//! `worker.py` and `job.py`: the worker records, the end of a job, and the remote-session records.
-
 pub mod http;
 pub mod ipc;
 pub mod job;

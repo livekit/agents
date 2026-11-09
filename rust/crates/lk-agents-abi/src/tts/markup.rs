@@ -1,5 +1,3 @@
-//! Speech markup vocabulary and language-neutral export contracts.
-
 /// Returned because the blingfire tokenizer lives outside this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SentenceTokenizerConfig {

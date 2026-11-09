@@ -1,5 +1,3 @@
-//! Failures at the host RTC boundary.
-
 use super::TrackSid;
 
 /// A host sees a host failure as its own exception again, anything else as a `RuntimeError`.

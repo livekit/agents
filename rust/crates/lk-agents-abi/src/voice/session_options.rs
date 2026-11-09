@@ -1,6 +1,3 @@
-//! The `AgentSession` option seam: kwargs as written, legs as stated, the resolved configuration.
-//! The policy lives in `lk-agents-voice/src/agent_session/options.rs` and `turn.rs`.
-
 use crate::Maybe;
 use crate::Modality;
 use crate::tts::markup::SpeechSteering;

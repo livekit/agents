@@ -1,7 +1,3 @@
-//! The developer's callbacks the driver awaits (`on_enter`, `on_exit`, `on_user_turn_completed`,
-//! a tool reply's rendering, a filler's source, the `function_tools_executed` handlers), and how
-//! long each is waited on.
-
 use crate::agent::TurnEdit;
 use crate::agent_session::effects::Timer;
 use crate::agent_session::machine::activity::recognition::PendingTurn;
@@ -117,9 +113,7 @@ impl VoiceDriver {
             self.accept_hook_completion(now, id, HookEnd::NoHost, outcome);
             return;
         }
-        // Its span opens first: the host runs the hook under it.
         let span = match kind {
-            // The committed turn's hook runs in its turn, which its parked turn owns.
             HookKind::OnUserTurnCompleted => (self.activity.pending_turn.as_mut())
                 .filter(|p| p.hook == Some(id))
                 .and_then(|p| p.span.hook_issued(&mut self.telemetry, &self.activity.agent)),
@@ -153,7 +147,7 @@ impl VoiceDriver {
         self.issue_hook(now, HookCall::OnEnter { id, agent, scope, span: None }, None);
     }
 
-    /// The turn parks on it until answered, as long as that takes (`await on_user_turn_completed`).
+    /// The turn parks on it until answered, however long that takes.
     pub(crate) fn issue_turn_hook(
         &mut self,
         now: Ts,
@@ -193,8 +187,7 @@ impl VoiceDriver {
         if kind == HookKind::OnExit {
             self.defer_callback(VoiceCallback::HookFinished(id));
         } else {
-            // These consumers were already synchronous; keep turn edits, filler refusal and
-            // tools-executed handling ahead of any earlier queued cross-component callbacks.
+            // Dispatched now, ahead of earlier queued cross-component callbacks.
             self.dispatch_hook_completion(now, id);
         }
     }
@@ -227,7 +220,6 @@ impl VoiceDriver {
             let stop = matches!(outcome, Some(HookOutcome::Turn(edits))
                 if edits.iter().any(|e| matches!(e, TurnEdit::StopResponse)));
             match record.kind {
-                // The hook ends, and its turn with it.
                 HookKind::OnUserTurnCompleted => {
                     let failure = failure.as_ref().map(|f| f as &dyn telemetry::SpanError);
                     if let Some(pending) =
@@ -332,7 +324,7 @@ impl VoiceDriver {
                     self.activity.turn_limit = TurnLimit::Idle;
                 }
             }
-            // "error occurred during on_user_turn_completed": return, no reply.
+            // A failed `on_user_turn_completed` stops the reply.
             HookKind::OnUserTurnCompleted => {
                 let edits = match outcome {
                     Turn(edits) => edits,
@@ -350,8 +342,6 @@ impl VoiceDriver {
                     }
                 }
             }
-            // The filler's callable: text, a speech it made itself, or nothing; `None` when it
-            // raised or its bound passed.
             HookKind::FillerSource => {
                 let answered = match outcome {
                     Filler(reply) => Some(reply),
@@ -362,7 +352,6 @@ impl VoiceDriver {
                 };
                 self.on_filler_source(now, id, answered)
             }
-            // What the handlers left; unanswered, the event stands as issued.
             HookKind::FunctionToolsExecuted => {
                 let left = match outcome {
                     FunctionToolsExecuted { reply_required } => Some(reply_required),
@@ -471,8 +460,8 @@ impl Leave<'_> {
     }
 }
 
-/// `on_user_turn_exceeded` (`_user_turn_exceeded_task`): waiting for the reply the end of turn may
-/// bring, or the developer's callback running.
+/// `on_user_turn_exceeded`: waiting for the reply the end of turn may bring, or the callback
+/// running.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) enum TurnLimit {
     #[default]
@@ -542,7 +531,6 @@ impl VoiceDriver {
         );
     }
 
-    /// `_scheduling_paused or _new_turns_blocked`, or the activity closing.
     fn turn_limit_blocked(&self) -> bool {
         self.activity.speech_scheduler.is_paused()
             || self.activity.in_window()
@@ -564,8 +552,7 @@ impl super::AgentActivity {
         None
     }
 
-    /// The activity ends (a swap, the close's edge): the wait raises `ActivityClosedError`, a
-    /// running callback is abandoned.
+    /// The activity ends (a swap or the close): the wait is refused.
     pub(crate) fn refuse_turn_limit(&mut self) -> Option<TurnLimitSkip> {
         if matches!(std::mem::take(&mut self.turn_limit), TurnLimit::Waiting(_)) {
             return Some(TurnLimitSkip::Paused);

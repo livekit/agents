@@ -1,5 +1,3 @@
-//! The drain half of anything the chain fans out: an `mpsc` plus the task that fills it.
-
 use std::sync::Arc;
 
 use crate::fallback::chain::StreamTask;

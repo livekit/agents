@@ -1,6 +1,3 @@
-//! `update_agent()`: switching agents, from the leaving agent's `on_exit` through the drain to the
-//! swap, in the order the switches were asked for, with the user turn held across it.
-
 use super::Cx;
 use crate::agent::TurnEdit;
 use crate::agent_session::machine::activity::drain::DrainEvent;
@@ -23,14 +20,12 @@ pub struct HandoffId(pub u64);
 pub(crate) struct Handoff {
     next: u64,
     in_progress: Option<InProgress>,
-    /// The order switches were asked for, which is the order they land in (each `update_agent`
-    /// chains behind the one before).
+    /// Switches land in the order they were asked for.
     queue: VecDeque<(HandoffId, Box<AgentUpdate>, Option<crate::events::RunId>)>,
     /// A user turn decided while a switch runs, delivered to the arriving agent once.
     pub(crate) held_user_turn: Option<HeldUserTurn>,
-    /// The host's `say()` / `generate_reply()` asked while the leaving agent drains, in order: the
-    /// reference schedules them on `_next_activity`. Replayed on the agent the switch leaves
-    /// driving, or into the close's refusal.
+    /// The host's `say()` / `generate_reply()` asked while the leaving agent drains, in order.
+    /// Replayed on the agent the switch leaves driving, or refused by the close.
     pub(crate) held_speech: Vec<SpeechCommand>,
 }
 
@@ -44,7 +39,7 @@ struct InProgress {
 enum Phase {
     /// The leaving agent may still speak its goodbye.
     Exiting { hook: HookId },
-    /// `PauseScheduling { cause: Handoff }` asked: the swap lands once every speech has finished.
+    /// Scheduling paused: the swap lands once every speech has finished.
     Draining,
 }
 
@@ -70,7 +65,6 @@ pub(crate) enum HandoffEvent {
 }
 
 impl Handoff {
-    /// The agent the switch in progress brings in.
     pub(crate) fn arriving(&self) -> Option<&str> {
         self.in_progress.as_ref().map(|handoff| handoff.update.agent.as_str())
     }
@@ -140,7 +134,6 @@ impl Handoff {
         matches!(self.in_progress, Some(InProgress { phase: Phase::Draining, .. }))
     }
 
-    /// The switch in progress.
     pub(crate) fn in_progress(&self) -> Option<&AgentUpdate> {
         self.in_progress.as_ref().map(|h| &*h.update)
     }
@@ -155,7 +148,6 @@ impl Handoff {
         self.in_progress.take().map(|InProgress { id, update, .. }| (id, update))
     }
 
-    /// Every queued switch refused as closing.
     #[must_use]
     pub(crate) fn refuse_queued(&mut self) -> Vec<VoiceCallback> {
         let mut callbacks = Vec::new();
@@ -190,7 +182,6 @@ impl Handoff {
         self.start(id, update, run, cx, out);
     }
 
-    /// The next queued switch, unless one is in progress.
     fn start_next(&mut self, cx: &mut Cx<'_>, out: &mut Vec<VoiceCallback>) {
         if self.switching() {
             return;
@@ -233,7 +224,6 @@ fn refuse(
 }
 
 impl VoiceDriver {
-    /// The caller answered and the run lets go.
     pub(crate) fn refuse_handoff(
         &mut self,
         _id: Option<HandoffId>,
@@ -291,14 +281,11 @@ impl VoiceDriver {
 
     /// The close: pending handoffs refused; a running callback is abandoned, not cancelled.
     pub(crate) fn abandon_handoffs(&mut self) {
-        // A drain still waiting on its `on_exit` is refused as closing; one already pausing is
-        // answered by the pause's refusal.
+        // A drain already pausing is answered by the pause's refusal instead.
         self.drain_step(DrainEvent::Closing);
-        // A DTMF collection started during the close ends with it: an owed answer is `Stopped`.
         self.dtmf_step(crate::workflows::machine::dtmf::DtmfTaskEvent::Stop);
         self.handoff_step(HandoffEvent::Closing);
         self.activity.on_exit.abandon();
-        // Nothing pending is delivered, a render in flight is dropped.
         self.activity.tools.pending.clear();
         let tools = &mut self.activity.tools;
         tools.reply.take_if(|r| matches!(r, crate::tool_executor::ToolReply::Rendering { .. }));
@@ -351,9 +338,7 @@ impl VoiceDriver {
         true
     }
 
-    /// Reconfigure the running session for a new agent. Nothing is swapped: the scheduling task,
-    /// socket, pump and unchanged streams keep running; only what the next plan reads and the
-    /// changed legs move.
+    /// Reconfigure the running session for a new agent; unchanged streams keep running.
     pub(crate) fn update_agent(&mut self, now: Ts, update: AgentUpdate) {
         let (stt_reopened, vad_reopened) = (update.stt.is_given(), update.vad.is_given());
         let AgentUpdate {
@@ -372,7 +357,6 @@ impl VoiceDriver {
             ..
         } = update;
         self.session.expressive.agent = expressive;
-        // The arriving agent's turn limit is its own; a callback still running is abandoned.
         if let Some(reason) = self.activity.refuse_turn_limit() {
             self.record_trace(crate::trace::TurnStep::TurnLimitSkipped(reason));
         }
@@ -393,7 +377,6 @@ impl VoiceDriver {
             self.record_effect(effect);
         }
 
-        // The new agent's view: the context it brought, or the conversation carried forward.
         let replaced_ctx = chat_ctx.is_some();
         let agent = self.activity.agent.clone();
         match chat_ctx {
@@ -401,7 +384,6 @@ impl VoiceDriver {
                 self.session.chat_ctx.update_agent_chat_ctx(items, &agent);
             }
             None => {
-                // The conversation carried forward; the host is told which items changed agent.
                 let from = self.session.chat_ctx.agent().to_owned();
                 let items = self.session.chat_ctx.hand_to(&agent, &tool_names);
                 if from != agent {
@@ -414,29 +396,21 @@ impl VoiceDriver {
             }
         }
 
-        // The handoff's two records, minted here only: the `AgentHandoff` item
-        // (`record_handoff_item`) and the history-only `AgentConfigUpdate` (`_start_session`),
-        // stamped on the session clock. Empty without an agent id (test harness): `None`.
         self.record_handoff((!previous_agent.is_empty()).then_some(previous_agent));
 
         let legs = self.reopen_legs(stt, vad);
 
-        // The agent layer, replaced whole, over the legs this update left (an STT that refused to
-        // open is still the old one). Only the STT and VAD facts are resolved against; the
-        // session's providers are the one record of the LLM/TTS.
+        // An STT that refused to open is still the old one.
         self.session.config.legs.stt = legs.stt;
         self.session.config.legs.vad = legs.vad;
         let diff = self.session.config.set_agent(options);
         self.apply_config(now, crate::agent_session::options::ConfigLayer::Agent, diff);
 
-        // A realtime handoff is three commands on the same socket, not a reconnect. Ungated by the
-        // `mutable_*` capabilities: a refusal on the wire is visible, a skipped push is not. The
-        // chat context only when the agent brought one, through `for_realtime`.
+        // Ungated by the `mutable_*` capabilities: a refusal on the wire is visible, a skipped
+        // push is not.
         let ctx = replaced_ctx.then(|| self.session.chat_ctx.for_realtime());
         self.push_activity(ctx);
 
-        // A handoff lifts the pause the switch caused; a preemptive generation about the old turn
-        // goes too.
         self.resume_scheduling(now);
         let legs = crate::trace::ProviderPresence {
             stt: legs.stt,
@@ -457,8 +431,7 @@ impl VoiceDriver {
 }
 
 impl super::AgentActivity {
-    /// The transition window: from a tool's handoff request (`_new_turns_blocked` is set in
-    /// `update_agent`) through the swap.
+    /// The transition window: from a handoff request through the swap.
     pub(crate) fn in_window(&self) -> bool {
         self.handoff.switching()
     }

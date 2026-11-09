@@ -1,5 +1,3 @@
-//! MCP host contracts. Runtime owns the SDK, transports, requests and cleanup.
-
 // The generated module globs this one to resolve field types.
 pub use crate::llm::provider_format::tools::{DuplicateMode, DuplicateScope, ToolFlag};
 

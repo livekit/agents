@@ -1,7 +1,3 @@
-//! CPU capacity and usage: the default load calculator's input and the basis of
-//! `num_idle_processes`' prod default. cgroup monitors live in [`crate::hw::cgroup`]; the bare-host
-//! one uses `sysinfo`, so it works on macOS and Windows.
-
 pub use crate::hw::cgroup::{
     CpuMonitorKind, busy_fraction, cpu_count_v1, cpu_count_v2, detect, parse_cpu_max,
     parse_usage_usec,

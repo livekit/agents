@@ -626,12 +626,10 @@ _RenderedT = TypeVar("_RenderedT", bound=str | Awaitable[str])
 
 
 class _InstructionsView(str, Generic[Context_T]):
-    _source: str
     _agent: Agent
 
     def __new__(cls, source: str, agent: Agent) -> _InstructionsView[Context_T]:
         view = super().__new__(cls, source)
-        view._source = source
         view._agent = agent
         return view
 

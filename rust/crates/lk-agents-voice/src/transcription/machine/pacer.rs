@@ -1,5 +1,3 @@
-//! One segment's pacing: its words released against its audio's playhead, as the reference's
-//! `_SegmentSynchronizerImpl` does.
 use crate::transcription::Heard;
 use crate::transcription::effects::TranscriptPacerEffect;
 use crate::transcription::machine::synchronizer::{Hyphenator, Liang};
@@ -11,8 +9,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// The synchroniser's tokenizer settings, from `TranscriptSynchronizer.__init__`: tokens must
-/// reassemble the input, punctuation is paced, and CJK/Thai split per character.
+/// The synchroniser's tokenizer settings: tokens must reassemble the input, punctuation is paced,
+/// and CJK/Thai split per character.
 pub const SYNC_TOKENIZER: WordTokenizerOptions =
     WordTokenizerOptions { ignore_punctuation: false, split_character: true, retain_format: true };
 
@@ -62,7 +60,6 @@ pub enum TranscriptPacerWarning {
 }
 
 impl TranscriptPacerWarning {
-    /// The reference's log line for it (`_SegmentSynchronizerImpl`).
     pub fn message(self) -> &'static str {
         match self {
             TranscriptPacerWarning::TextAfterEnd => {
@@ -129,8 +126,7 @@ pub(in crate::transcription) struct TranscriptPacer {
     state: TranscriptPacerState,
     opts: TranscriptPacerOptions,
     speed: f64,
-    /// `basic.WordTokenizer(...).stream()`: a token is emitted once a following one proves it
-    /// complete.
+    /// A token is emitted once a following one proves it complete.
     words: TokenBuffer<Words>,
     stripper: TranscriptMarkupStripper,
     queue: VecDeque<Planned>,
@@ -144,8 +140,7 @@ pub(in crate::transcription) struct TranscriptPacer {
     forwarded: Vec<(String, f64)>,
     /// Where the next unaligned word starts: the end of the last one shown (`None` before any).
     cursor: Option<f64>,
-    /// The front word's `(start, end)`, fixed at the speed known when it started, as the
-    /// reference's pacing loop computes each word's delay as it reaches it.
+    /// The front word's `(start, end)`, fixed at the speed known when it started.
     front: Option<(f64, f64)>,
     audio_secs: f64,
     frames: u64,
@@ -210,20 +205,20 @@ impl TranscriptPacer {
         matches!(self.state, TranscriptPacerState::Finished | TranscriptPacerState::Closed)
     }
 
-    /// One event in, its effects out. The state × event table:
+    /// One event in, its effects out. The state x event table:
     ///
     /// | state \ event | Text | TextEnd | Audio | AudioEnd | Position | Finished | Split | Close |
     /// |---|---|---|---|---|---|---|---|---|
-    /// | Streaming | plan | → TextEnded | count | → AudioEnded¹ | release | early³ | split | cut |
-    /// | TextEnded | warn | warn | count | → InputsEnded¹ | release | early³ | split | cut |
-    /// | AudioEnded | plan | → InputsEnded¹ | warn | warn | release | early³ | finish² | cut |
-    /// | InputsEnded | warn | warn | warn | warn | release | finish | finish² | cut |
-    /// | Finished | warn | warn | warn | warn | warn | warn | warn | → Closed |
+    /// | Streaming | plan | -> TextEnded | count | -> AudioEnded (1) | release | early (3) | split | cut |
+    /// | TextEnded | warn | warn | count | -> InputsEnded (1) | release | early (3) | split | cut |
+    /// | AudioEnded | plan | -> InputsEnded (1) | warn | warn | release | early (3) | finish (2) | cut |
+    /// | InputsEnded | warn | warn | warn | warn | release | finish | finish (2) | cut |
+    /// | Finished | warn | warn | warn | warn | warn | warn | warn | -> Closed |
     /// | Closed | warn | warn | warn | warn | warn | warn | warn | warn |
     ///
-    /// ¹ re-estimates the speed. A segment whose inputs ended with no audio shows its text whole
-    /// at once: nothing will play it. ² Interrupted: with its audio over, nothing plays on after
-    /// the cut. ³ Finishes, warned too early.
+    /// (1) re-estimates the speed. A segment whose inputs ended with no audio shows its text whole
+    /// at once: nothing will play it. (2) Interrupted: with its audio over, nothing plays on after
+    /// the cut. (3) Finishes, warned too early.
     ///
     /// Positions are the sink's, in its current playout; the pacer moves them past the last
     /// split.
@@ -365,9 +360,8 @@ impl TranscriptPacer {
         }
     }
 
-    /// The reference's pacing loop (`_SegmentSynchronizerImpl._main_task`): each word starts where
-    /// the previous one ended (or when it arrived), lasts its hyphens at the speed known then, and
-    /// is shown halfway through. An aligned word keeps the TTS's own timing.
+    /// Each word starts where the previous one ended (or when it arrived), lasts its hyphens at the
+    /// speed known then, and is shown halfway through. An aligned word keeps the TTS's own timing.
     fn release(&mut self, position: Duration, out: &mut Vec<TranscriptPacerEffect>) {
         self.position = position;
         let now = position.as_secs_f64();
@@ -410,8 +404,7 @@ impl TranscriptPacer {
         }
     }
 
-    /// The word whose delay had begun is still shown: the reference's pacing loop sleeps through
-    /// a pause and waits only before the next word.
+    /// The word whose delay had begun is still shown; only the next word waits.
     fn paused(&mut self, out: &mut Vec<TranscriptPacerEffect>) {
         let Some((start, end)) = self.front.take() else { return };
         let word = self.queue.pop_front().expect("a started word is the queue's front");
@@ -437,8 +430,7 @@ impl TranscriptPacer {
         }
     }
 
-    /// The words shown whose audio had ended by `position` (`forwarded_text`, which the reference
-    /// extends only once a word's whole delay has passed).
+    /// The words shown whose audio had ended by `position`.
     fn heard(&self, position: Duration) -> String {
         let at = position.as_secs_f64() + 1e-9;
         self.forwarded.iter().take_while(|(_, end)| *end <= at).map(|(w, _)| w.as_str()).collect()
@@ -446,7 +438,7 @@ impl TranscriptPacer {
 
     /// The playout ended. Complete: everything left is heard, at once. Cut: what was forwarded by
     /// the playhead it reports. A sink that reports no progress (an avatar's data stream) paces
-    /// nothing before this; the reference's loop paced its words on the wall clock meanwhile.
+    /// nothing before this.
     fn finish(
         &mut self,
         position: Duration,
@@ -498,7 +490,7 @@ impl TranscriptPacer {
     }
 }
 
-/// `_TextSyncOptions`, minus the word tokenizer (pinned -- see [`SYNC_TOKENIZER`]).
+/// Pacing options; the word tokenizer is pinned to [`SYNC_TOKENIZER`].
 #[derive(Clone)]
 pub struct TranscriptPacerOptions {
     /// The caller's `transcription_speed_factor`. Multiplies [`STANDARD_SPEECH_RATE`].

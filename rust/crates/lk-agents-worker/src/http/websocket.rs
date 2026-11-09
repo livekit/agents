@@ -1,7 +1,3 @@
-//! One WebSocket connection: the answer to the upgrade, frames both ways and the close handshake.
-//! A reader task answers pings and queues messages in a bounded inbox, so a connection that only
-//! sends still notices its peer leaving. Closing is one shared operation, whoever asks for it.
-
 use std::sync::Arc;
 
 use futures_util::stream::{SplitSink, SplitStream};
@@ -23,6 +19,9 @@ use super::exchange::{Recorded, Response};
 use super::{HttpServerLimits, ReadHalf, ServerState, StreamEnd, WriteHalf};
 use crate::transport::HttpStreamResetCode as Code;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+// A reader task answers pings and queues messages in a bounded inbox, so a connection that only
+// sends still notices its peer leaving.
 
 pub(crate) const GOING_AWAY: u16 = 1001;
 /// A close frame's payload is at most 125 bytes, two of them the code.
@@ -527,3 +526,7 @@ impl Connection {
         inbox.try_send(Inbound { event, _queued: queued }).is_ok()
     }
 }
+
+#[cfg(test)]
+#[path = "websocket_tests.rs"]
+mod tests;

@@ -1,5 +1,3 @@
-//! Realtime message ordering, output modality and the server's retained transcript.
-
 use crate::agent_session::machine::activity::realtime::response_id_of;
 use crate::generation::effects::RealtimeGenerationEffect;
 use crate::transcription::Heard;
@@ -371,7 +369,7 @@ mod tests {
     // Catches: a message the server cancelled after starting it, before any of its words, ended
     // the bound audio leg as an unvoiced segment. Its text leg had opened no segment, so the
     // audio end alone opened one, and the next speech's words paired with it and were shown whole
-    // before their audio (`transcript_follows_audio`, survey seed 3465).
+    // before their audio.
     #[test]
     fn only_a_message_that_forwarded_words_ends_the_audio_leg_unvoiced() {
         let started = |id: &str| {

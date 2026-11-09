@@ -1,8 +1,3 @@
-//! Gateway STT adapter. `machine::SttStream` owns synchronous recognition completion,
-//! including its private transcript accumulator. `wire` validates provider messages;
-//! `executor` is the self-running socket/reconnect/media task, and `stream` exposes live
-//! input/output halves. Callers never manually pump accepted input.
-
 mod executor;
 pub(crate) mod gaps;
 pub(crate) mod input;
@@ -665,5 +660,5 @@ impl Stt for GatewayStt {
 }
 
 #[cfg(test)]
-#[path = "../stt_tests.rs"]
+#[path = "stt_tests.rs"]
 mod tests;

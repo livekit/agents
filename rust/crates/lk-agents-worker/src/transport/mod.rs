@@ -1,5 +1,3 @@
-//! WebSocket and WebTransport connections to the worker endpoint.
-
 use std::sync::Arc;
 use std::time::Duration;
 

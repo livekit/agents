@@ -1,8 +1,3 @@
-//! The typed thread records the storage port speaks: what A2A task decisions
-//! (`lk_agents_core::a2a`) read and request, and `lk-agents-storage` reads and writes. The host
-//! reads their twins in [`super`]; chat items are `livekit.agent` records and A2A messages the
-//! `a2a` crate's.
-
 use std::time::Duration;
 
 use livekit_protocol::agent::ChatRole;

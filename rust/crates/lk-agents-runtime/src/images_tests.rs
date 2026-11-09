@@ -1,4 +1,3 @@
-//! Native image admission isolates text formatting and refuses oversized pixel work before encoding.
 #![cfg(feature = "media-images")]
 
 use lk_agents_abi::media::images::{ImageEncodeOptions, ImageInput};

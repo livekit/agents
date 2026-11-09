@@ -1,5 +1,3 @@
-//! Hook terminal ownership and the deferred boundary needed by no-host close.
-
 use super::*;
 use crate::agent_session::Close;
 use crate::agent_session::effects::VoiceEffect;

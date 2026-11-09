@@ -10,7 +10,7 @@ fn tokens(input: u64, output: u64, cache_read: Option<u64>) -> Measurement {
     Measurement { tokens, ..Measurement::default() }
 }
 
-// usage.md "Implementation boundaries": cumulative reports replace, they never add up.
+// Cumulative reports replace, they never add up.
 #[test]
 fn repeated_cumulative_reports_count_once() {
     let mut l = Ledger::default();
@@ -26,8 +26,7 @@ fn repeated_cumulative_reports_count_once() {
     assert!(u.complete);
 }
 
-// usage.md "Counting and missing measurements": a failed request keeps its partial tokens and
-// stays unmeasured after settlement.
+// A failed request keeps its partial tokens and stays unmeasured after settlement.
 #[test]
 fn a_failed_request_keeps_its_partial_tokens_and_stays_unmeasured() {
     let mut l = Ledger::default();
@@ -43,7 +42,7 @@ fn a_failed_request_keeps_its_partial_tokens_and_stays_unmeasured() {
     assert!(u.settled && !u.complete);
 }
 
-// usage.md "TokenUsage": an aggregated breakdown is known only if every contribution supplied it.
+// An aggregated breakdown is known only if every contribution supplied it.
 #[test]
 fn a_breakdown_one_request_lacks_is_unknown_in_the_aggregate() {
     let mut l = Ledger::default();
@@ -59,8 +58,8 @@ fn a_breakdown_one_request_lacks_is_unknown_in_the_aggregate() {
     assert_eq!((u.tokens.input_tokens, u.tokens.cache_read_tokens), (20, None));
 }
 
-// usage.md "Scope and delegation": a turn counts every invocation it absorbed exactly once, and an
-// invocation's request still in flight stays unmeasured.
+// A turn counts every invocation it absorbed exactly once, and an invocation's request still in
+// flight stays unmeasured.
 #[test]
 fn absorbed_invocations_count_once_and_close_their_pending_requests() {
     let mut turn = Ledger::default();
@@ -82,8 +81,7 @@ fn absorbed_invocations_count_once_and_close_their_pending_requests() {
     assert_eq!((u.requests, u.unmeasured_requests, u.tool_calls, u.total_tokens()), (2, 1, 2, 20));
 }
 
-// usage.md "ModelUsage": empty identities are `None`, and a text and a realtime LLM of the same
-// identity share one entry.
+// Empty identities are `None`, and a text and a realtime LLM of the same identity share one entry.
 #[test]
 fn identities_are_normalized_and_shared_across_llm_sources() {
     let mut l = Ledger::default();
@@ -118,8 +116,8 @@ fn a_realtime_connection_record_is_no_request() {
     assert_eq!(l.snapshot().requests, 1);
 }
 
-// usage.md "Counting": a recognition stream is one request from its open; each usage report adds
-// its period's audio, and creates no request of its own.
+// A recognition stream is one request from its open; each usage report adds its period's audio,
+// and creates no request of its own.
 #[test]
 fn a_streams_usage_reports_add_to_its_one_request() {
     let report = |secs| {
@@ -140,8 +138,8 @@ fn a_streams_usage_reports_add_to_its_one_request() {
     assert!(u.complete);
 }
 
-// usage.md "Counting": a report that arrives after its stream ended still belongs to the stream's
-// one request; it adds its audio, creates no request, and resolves a stream that ended unmeasured.
+// A report that arrives after its stream ended still belongs to the stream's one request; it adds
+// its audio, creates no request, and resolves a stream that ended unmeasured.
 #[test]
 fn a_late_stream_report_adds_to_the_ended_request() {
     let report = |secs| {

@@ -1,5 +1,3 @@
-//! What the decision core knows of time: the instant of the step it handles.
-
 use lk_agents_abi::Ts;
 use std::time::Duration;
 

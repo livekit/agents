@@ -1,7 +1,3 @@
-//! What a job runs in, as supervision sees it: a [`RunnerExecutor`] launches a [`Runner`] and hands
-//! back the worker's end of its channel. The process executor ([`super::process`]) and the thread
-//! executor ([`ThreadExecutor`]) are the two; supervision never asks which one it has.
-
 use crate::ipc::telemetry;
 use std::sync::Arc;
 

@@ -1,5 +1,3 @@
-//! Duplex control outcomes must wake a parked reader and remain bounded without host output.
-
 use super::*;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::duplex::{self as abi, DuplexAudio, DuplexTranscript};

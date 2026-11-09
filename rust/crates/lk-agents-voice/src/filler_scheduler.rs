@@ -19,7 +19,6 @@ pub enum FillerAction {
     Done,
 }
 
-/// What `_FillerScheduler.__init__` raises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum FillerError {
     #[error("delay must be non-negative")]
@@ -36,7 +35,7 @@ enum State {
     Done,
 }
 
-/// `_FillerScheduler`'s decisions; its host class keeps the waits (`wait_for_idle`, the dwell
+/// The filler's decisions; the host keeps the waits (`wait_for_idle`, the dwell
 /// race, the cooldown sleep) and the `say`.
 #[derive(Debug)]
 pub struct FillerScheduler {
@@ -134,7 +133,7 @@ impl FillerScheduler {
         if produced {
             self.steps += 1;
         }
-        // `interval is None` short-circuits before `max_steps`: one fire.
+        // No interval short-circuits before `max_steps`: one fire.
         let Some(interval) = self.interval else {
             self.state = State::Done;
             return FillerAction::Done;

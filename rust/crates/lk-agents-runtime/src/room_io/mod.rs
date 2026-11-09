@@ -1,5 +1,3 @@
-//! Runtime room performers and their supplied session capability.
-
 mod detached;
 pub mod input;
 pub mod output;
@@ -22,7 +20,7 @@ use std::sync::Arc;
 
 pub use owner::RoomIo;
 
-/// `_core_RoomSession`: the session's room, or none for a session without RTC.
+/// The session's room, or none for a session without RTC.
 pub struct FixedRoom {
     pub rtc: Option<Arc<dyn RtcRoom>>,
     pub time: crate::voice::session::Timebase,
@@ -113,7 +111,7 @@ impl room_owner::RoomRuntime for RoomFactory {
 
 impl room_owner::RoomSession for FixedRoom {}
 
-/// `_core.RoomAudioInput`: the room's microphone leg as the host holds it.
+/// The room's microphone leg as the host holds it.
 pub struct RoomAudioInput(pub Arc<dyn room_owner::RoomAudioInputPort>);
 
 impl room_owner::RoomAudioInput for RoomAudioInput {
@@ -159,7 +157,7 @@ impl io::AudioInput for RoomAudioInput {
     }
 }
 
-/// `_core.RoomVideoInput`: the room's video leg as the host holds it.
+/// The room's video leg as the host holds it.
 pub struct RoomVideoInput(pub Arc<dyn room_owner::RoomVideoInputPort>);
 
 impl room_owner::RoomVideoInput for RoomVideoInput {

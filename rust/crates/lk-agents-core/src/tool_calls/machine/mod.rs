@@ -1,12 +1,5 @@
-//! The tool calls of one model step (rust-core "Shared tool execution"): parse and canonicalise
-//! the model's arguments, have the host prepare them, bind approval to the validated identity,
-//! admit duplicates per the tool's policy, run the body, and record each outcome as it arrives.
-//! Results are assembled in model order by the coordinator; waiting on one call never holds back
-//! another's lifecycle. `AgentRun` and VoiceSession compose the same machine: the coordinator
-//! executes its [`ToolCallEffect`]s and returns the outcomes.
-
 #[cfg(test)]
-#[path = "../../tool_calls_tests.rs"]
+#[path = "machine_tests.rs"]
 mod tests;
 
 use super::effects::ToolCallEffect;
@@ -26,6 +19,9 @@ use crate::tool_outcome;
 use lk_agents_abi::agent::run::{StreamEvent, ToolResultStatus};
 use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec, ReadBack};
 use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer, ToolTemplate};
+
+// The coordinator assembles results in model order; waiting on one call never holds back
+// another's lifecycle.
 
 /// The parameter the model sets to re-assert a call of an `on_duplicate="confirm"` tool.
 use lk_agents_abi::llm::provider_format::tools::CONFIRM_DUPLICATE_PARAM;
@@ -525,7 +521,7 @@ impl ToolCalls {
                 .map(|c| ChatItem::FunctionCall(c.item.clone()))
                 .collect();
             let call = &mut self.calls[index];
-            // Shorten history references to the lifetime of this step’s local decisions.
+            // Shorten history references to the lifetime of this step's local decisions.
             let decided = history.map(|item| -> &ChatItem { item }).chain(&earlier);
             if approval::granted(decided, &self.approval_answers, &call.item.name, &canonical) {
                 approval::set_mark(&mut call.item, Approval::Granted, &canonical);

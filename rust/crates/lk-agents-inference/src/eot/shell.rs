@@ -1,7 +1,3 @@
-//! The host-facing shell around one mounted [`EotTransport`]. [`PredictionListener`] methods run on
-//! the transport's task, so all but `session_created` only post to a channel; taking the host's
-//! lock there is how deadlocks happen.
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -14,6 +10,9 @@ use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
 use crate::eot::{EotTransport, EotWarning, PredictionListener, TransportPrediction};
+
+// `PredictionListener` methods run on the transport's task, so all but `session_created` only
+// post to a channel: taking the host's lock there deadlocks.
 
 /// `provider` (`base.py:65`): both native backends are the same vendor.
 pub const PROVIDER: &str = "livekit";

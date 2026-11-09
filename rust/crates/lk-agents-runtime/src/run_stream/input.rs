@@ -1,5 +1,3 @@
-//! Native runner sources adapted in Rust, without crossing the host boundary.
-
 use lk_agents_abi::agent::run::RunUpdate;
 use lk_agents_abi::agent::stream::StreamOutcome;
 use lk_agents_abi::errors::Invalid;

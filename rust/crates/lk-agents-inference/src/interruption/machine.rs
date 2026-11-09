@@ -1,6 +1,3 @@
-//! `InterruptionMachine`: every decision `_forward_data` and `recv_task` make, with no socket.
-//! `now: Ts` is for anything measured, `wall: f64` (`time.time()`) for anything reported.
-
 use crate::effects::InterruptionEffect;
 use crate::interruption::audio::{AudioError, AudioFrame, AudioWindow};
 use crate::interruption::event::{
@@ -14,6 +11,8 @@ use lk_agents_abi::turn::detector::ReqId;
 use std::num::NonZeroUsize;
 use std::time::Duration;
 use thiserror::Error;
+
+// `now: Ts` is for anything measured, `wall: f64` (`time.time()`) for anything reported.
 
 /// `BoundedDict(maxsize=10)` (`inference/interruption.py:433`): a leak guard, not protocol.
 const CACHE_MAXSIZE: usize = 10;

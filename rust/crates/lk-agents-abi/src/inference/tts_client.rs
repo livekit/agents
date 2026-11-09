@@ -1,5 +1,3 @@
-//! The native gateway synthesis resource. Runtime owns its connections and secrets.
-
 use super::fallback::TtsFallbacks;
 use crate::errors::ProviderError;
 use crate::{ApiConnectOptions, Tts};

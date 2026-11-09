@@ -1,5 +1,3 @@
-//! Executes a scope's native toolset lease plan; all acquired leases settle before failure/close.
-
 use lk_agents_abi::llm::toolsets::{self, Lease, Lifetime, ToolsetHooks};
 use lk_agents_abi::{BoxFuture, errors::HostError};
 use lk_agents_core::toolsets::Group as Policy;
@@ -11,6 +9,8 @@ use std::sync::{
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+
+// Every acquired lease settles before a failure or close returns.
 
 type Outcome = Result<(), HostError>;
 type Reply = watch::Sender<Option<Outcome>>;

@@ -1,11 +1,3 @@
-//! `lk agent console`'s local call (`cli/tcp_console.py`): the CLI owns the microphone, the speakers
-//! and the TUI, and reaches the agent over one TCP socket carrying length-prefixed
-//! `AgentSessionMessage`s. [`ConsoleIo`] is that socket as the session sees it: the
-//! [`SessionTransport`] and [`ConsoleSink`] the session's remote session host
-//! ([`SessionServer`](super::remote_session::driver::SessionServer)) runs on, and the
-//! session's audio input and output legs. What the legs account for is
-//! [`ConsolePlayback`]'s; only the socket is here.
-
 use crate::telemetry;
 use lk_agents_net::task::TaskSet;
 use parking_lot::Mutex;
@@ -29,6 +21,9 @@ use lk_agents_voice::remote_session::console::{
 };
 use lk_agents_voice::remote_session::{ConsoleSink, SessionTransport, proto};
 use proto::agent_session_message::{Message, console_io};
+
+// The CLI owns the microphone, speakers and TUI, and reaches the agent over one TCP socket of
+// length-prefixed `AgentSessionMessage`s.
 
 /// The CLI's socket: transport, console sink and both audio legs. Connected by `start()`; what is
 /// sent before then is queued.

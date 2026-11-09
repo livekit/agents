@@ -1,6 +1,3 @@
-//! The session's and the agent's options (the `AgentSession` keywords, `turn_handling` among them
-//! in [`crate::turn`]): the layers, their defaults and resolution, and the host's view.
-
 use crate::audio_recognition::TurnDetectionMode;
 use crate::events::DiagnosticEvent;
 use crate::turn::{
@@ -43,11 +40,10 @@ pub fn running_layer(
     Ok(update_layer(update))
 }
 
-/// `_RECORDING_ALL_ON`. Note `redaction: false`: "all on" is about the four capture keys.
+/// `redaction: false`: "all on" is about the four capture keys.
 pub const RECORDING_ALL_ON: RecordingOptions =
     RecordingOptions { audio: true, traces: true, logs: true, transcript: true, redaction: false };
 
-/// `_RECORDING_ALL_OFF`.
 pub const RECORDING_ALL_OFF: RecordingOptions = RecordingOptions {
     audio: false,
     traces: false,
@@ -56,15 +52,14 @@ pub const RECORDING_ALL_OFF: RecordingOptions = RecordingOptions {
     redaction: false,
 };
 
-/// `AgentActivity._resolve_interruption_detection`: said only when the caller asked for `adaptive`.
+/// Said only when the caller asked for `adaptive`.
 pub const INTERRUPTION_DETECTION_INCOMPATIBLE: &str = "interruption_detection is provided, but it's not compatible with the current configuration and will be disabled";
 
-/// `agent_activity.AgentActivity._resolve_interruption_detection`.
 pub const ADAPTIVE_OFF_IN_PRODUCTION: &str =
     "adaptive interruption is disabled by default in production mode";
 
-/// The layer a `CoreStep::ConfigApplied` reports. `Session` is `__init__` ∪ `update_options`;
-/// `Override` is an `override_options` layer pushed or released.
+/// The layer a `CoreStep::ConfigApplied` reports. `Session` is construction plus
+/// `update_options`; `Override` is an `override_options` layer pushed or released.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Vocabulary)]
 pub enum ConfigLayer {
     Session,
@@ -140,8 +135,7 @@ option_group!(AgentSessionOptions {} groups(turn, speech, timers));
 pub struct SpeechOptions {
     pub max_tool_steps: Option<u32>,
     pub min_consecutive_speech_delay: Option<Duration>,
-    /// `use_tts_aligned_transcript`: `None` is the reference's `NOT_GIVEN`, "if the TTS can",
-    /// resolved too.
+    /// `None` is "if the TTS can", and stays `None` when resolved.
     pub use_tts_aligned_transcript: Option<bool>,
     /// `tts_text_transforms`: `None` is "run none".
     pub tts_text_transforms: Maybe<Option<TextTransformSet>>,
@@ -170,7 +164,7 @@ option_group!(TimerOptions {
     session_close_transcript_timeout: Duration,
 });
 
-/// The reference's defaults: every leaf said. The endpointing base tightens to `0.3 / 2.5` with a
+/// The defaults: every leaf said. The endpointing base tightens to `0.3 / 2.5` with a
 /// streaming detector, and the owner is what automatic selection means for these legs.
 pub const fn defaults(legs: &SessionLegs) -> AgentSessionOptions {
     let (min_delay, max_delay) = match legs.detector {
@@ -229,11 +223,11 @@ pub const fn defaults(legs: &SessionLegs) -> AgentSessionOptions {
         },
     }
 }
-/// Automatic selection (`None`) falls `realtime_llm` → `vad` → `manual`. A mode the legs cannot
-/// honour falls back as automatic selection does; `Manual` always holds. `RealtimeLlm` only when no local leg can decide;
-/// `DriverBuilder::start` refines it. Only an asked-for `stt` is `Stt`: the reference's unset mode
-/// (`_turn_detection_mode = None`, the default turn detector included) is its VAD-based path, which
-/// with an STT and no VAD ends turns on finals alone and leaves the STT's speech events unread.
+
+/// Automatic selection (`None`) falls `realtime_llm` -> `vad` -> `manual`. A mode the legs cannot
+/// honour falls back as automatic selection does; `Manual` always holds. Only an asked-for `stt`
+/// is `Stt`: the unset mode is the VAD-based path, which with an STT and no VAD ends turns on
+/// finals alone.
 pub const fn resolve_turn_detection_mode(
     detection: Option<TurnDetection>,
     legs: &SessionLegs,
@@ -260,16 +254,15 @@ const fn auto_turn_detection_mode(legs: &SessionLegs) -> TurnDetectionMode {
     }
 }
 
-/// `_interruption_by_audio_activity_enabled`'s initial value: off under `manual` or
-/// `realtime_llm`, where the user's audio is not a turn signal.
+/// Off under `manual` or `realtime_llm`, where the user's audio is not a turn signal.
 const fn by_audio_activity(detection: Option<TurnDetection>) -> bool {
     !matches!(detection, Some(TurnDetection::Manual | TurnDetection::RealtimeLlm))
 }
 
-/// The layers, in the order they apply: `defaults(legs)` ⊕ `session` ⊕ `agent` ⊕ `overrides`.
+/// The layers, in the order they apply: `defaults(legs)`, `session`, `agent`, `overrides`.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ConfigStack {
-    /// The base: `__init__`, each `update_options` merged in.
+    /// The base: construction, each `update_options` merged in.
     pub session: AgentSessionOptions,
     /// The active `Agent`'s overrides; replaced whole by `update_agent`.
     pub agent: Option<AgentSessionOptions>,
@@ -311,8 +304,7 @@ pub fn session_turn_handling(kw: &SessionKwargs) -> TurnHandlingKwargs {
     kw.turn_handling.unwrap_or_default()
 }
 
-/// **The session layer**: what it leaves unsaid falls to `defaults(legs)`.
-/// Past this line nothing is `f64`.
+/// The session layer: what it leaves unsaid falls to `defaults(legs)`.
 pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
     let SessionKwargs {
         turn_handling: _,
@@ -489,18 +481,16 @@ pub enum Deployment {
     Production,
 }
 
-/// The inputs `_resolve_interruption_detection` reads, as facts.
+/// The facts the interruption detector's gate reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InterruptionGateInputs {
     /// The pipeline STT, when the LLM is not a realtime model; `None` is no STT.
     pub stt: Option<SttGate>,
     /// The LLM is realtime, and whether the server detects turns (no local VAD or STT).
     pub realtime: Option<RealtimeGate>,
-    /// `self.vad is not None`.
     pub has_vad: bool,
     /// The resolved `turn_detection`: `Manual` and `RealtimeLlm` have nothing to withhold with.
     pub turn_detection: Option<TurnDetection>,
-    /// `self.allow_interruptions`.
     pub allow_interruptions: bool,
     /// `interruption_detection` as the agent and the session said it, explicitly (`None` is
     /// `NOT_GIVEN`): either saying `Vad` refuses, neither saying anything is the default.
@@ -514,7 +504,7 @@ pub struct RealtimeGate {
 }
 
 /// The gate's answer. `Build` asks the host to construct the detector; `VadOnly` carries the
-/// reference's sentence when it has one.
+/// diagnostic to log when it has one.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InterruptionGate {
     Build,
@@ -544,7 +534,7 @@ impl InterruptionGate {
     }
 }
 
-/// `_resolve_interruption_detection`, condition for condition: nothing can gatekeep (warned
+/// `VadOnly` when nothing can gatekeep (warned
 /// only if `adaptive` was asked), `allow_interruptions = false`, either layer said `"vad"`, or
 /// neither said anything in production. Then `Build`.
 pub fn resolve_interruption_detector(inputs: &InterruptionGateInputs) -> InterruptionGate {

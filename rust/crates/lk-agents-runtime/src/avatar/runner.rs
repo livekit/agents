@@ -1,6 +1,3 @@
-//! The avatar worker's runner (`AvatarRunner`): host I/O and ownership around the synchronous
-//! RunnerCore, implementing its ABI class directly.
-
 use crate::telemetry;
 use lk_agents_abi::voice::avatar::{
     self, AvatarAudioReceiver, AvatarMedia, AvatarVideoGenerator, RunnerError,
@@ -17,8 +14,6 @@ use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
-
-// ----------------------------------------------------------------------------- the I/O layer
 
 /// The host objects the runner's ops run against.
 #[derive(Clone)]

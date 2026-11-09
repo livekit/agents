@@ -1,5 +1,4 @@
-//! Omission is distinct from a value. `Maybe<Option<T>>` represents omitted, null, and non-null
-//! values across the binding: `Agent(llm=None)` means "no LLM", not "unchanged".
+// Omission is distinct from a value: `Agent(llm=None)` means "no LLM", not "unchanged".
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum Maybe<T> {

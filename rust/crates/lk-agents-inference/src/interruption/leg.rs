@@ -1,6 +1,3 @@
-//! The session loop's [`InterruptionPort`], satisfied by this module's detector: audio, sentinels
-//! and verdicts stay in Rust. One stream per session, opened from the session's `open` (it spawns).
-
 use std::sync::Arc;
 
 use lk_agents_abi::turn::detector::{LegEvent, ReqId};

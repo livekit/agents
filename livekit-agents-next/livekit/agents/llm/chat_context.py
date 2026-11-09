@@ -265,14 +265,13 @@ class ChatContext:
         """Convert history to the upstream SDK's request types for the selected provider."""
         from .utils import to_chat_ctx
 
-        messages, data = await to_chat_ctx(
+        return await to_chat_ctx(
             self,
             format,
             inject_dummy_user_message=inject_dummy_user_message,
             inject_trailing_user_message=inject_trailing_user_message,
             thought_signatures=thought_signatures,
         )
-        return messages, data
 
     def find_insertion_index(self, *, created_at: float) -> int:
         """The index after the last item with `created_at <=` the given timestamp.

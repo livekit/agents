@@ -1,7 +1,3 @@
-//! One remote tool interaction. Definitions may be reused; context, pending-task identity and
-//! settlement belong to the conversation coordinator, which explicitly retains `InteractionState`.
-//! Credentials are verified in runtime before this owner receives `VerifiedAuthority`.
-
 use lk_agents_abi::a2a_protocol as a2a;
 pub mod retained;
 
@@ -15,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::a2a::caller_history::CallerHistory;
 use crate::a2a::client::TaskUpdate;
 use crate::a2a::rpc::TaskRef;
+
+// Credentials are verified in runtime before this owner receives `VerifiedAuthority`.
 
 /// A local verifier's authority for this exact destination and caller thread. Never restored
 /// from conversation state or inferred from peer-controlled card/metadata fields.
@@ -384,5 +382,5 @@ pub fn record_delegation(
 }
 
 #[cfg(test)]
-#[path = "../delegation_tests.rs"]
+#[path = "delegation_tests.rs"]
 mod tests;

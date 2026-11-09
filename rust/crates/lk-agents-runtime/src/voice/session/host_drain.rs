@@ -1,6 +1,3 @@
-//! The host's side of a session's event stream: each event serialised to the host, each hook
-//! call answered under its span.
-
 use super::*;
 use crate::telemetry;
 use lk_agents_abi::voice::events::HookName;
@@ -137,9 +134,6 @@ impl HostDrain {
     }
 }
 
-/// Runs the hook `call` asks for through `hooks` and answers it. Calls the host first, before any
-/// other await, so a caller polling it once has handed the call to the host loop in event order.
-/// The name the host logs a failed hook under.
 fn hook_name(kind: HookKind) -> HookName {
     match kind {
         HookKind::OnEnter => HookName::OnEnter,
@@ -151,6 +145,8 @@ fn hook_name(kind: HookKind) -> HookName {
     }
 }
 
+/// Runs the hook `call` asks for through `hooks` and answers it. Calls the host before any other
+/// await, so a caller polling it once has handed the call to the host loop in event order.
 pub(super) async fn answer_hook(
     hooks: Arc<dyn SessionHooks>,
     call: HookCall,
@@ -230,7 +226,6 @@ pub(super) async fn answer_hook(
                 .await
                 .map(|reply_required| HookOutcome::FunctionToolsExecuted { reply_required })
         }
-        // Unanswered: the reference's templates.
         HookCall::FillerSource { source: None, .. } => {
             Ok(HookOutcome::Filler(FillerReply::Declined))
         }
@@ -283,3 +278,7 @@ fn turn_edits(
     }
     edits
 }
+
+#[cfg(test)]
+#[path = "host_drain_tests.rs"]
+mod tests;

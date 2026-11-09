@@ -1,7 +1,3 @@
-//! `stt.StreamAdapter` (`stt/stream_adapter.py`): a recognize-only STT as a streaming one, the
-//! VAD cutting the audio into utterances each recognized once it ends. Implemented by
-//! `lk-agents-inference`.
-
 use std::sync::Arc;
 
 use crate::errors::ProviderError;

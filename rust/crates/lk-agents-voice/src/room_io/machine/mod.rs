@@ -1,4 +1,3 @@
-//! Pure room attachment, input/output, readiness and publication owners.
 use attachment::*;
 pub mod attachment;
 pub mod input;

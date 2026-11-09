@@ -1,6 +1,3 @@
-//! The prompts the beta and workflow host tools are written with, in the `workflow_prompts`
-//! module.
-
 #[crate::host(file(module = "workflow_prompts"))]
 const _: () = ();
 

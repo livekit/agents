@@ -1,8 +1,3 @@
-//! A plugin VAD's stream: its audio waits on the `Now` media queue a native detection uses, and a
-//! pump hands it to the plugin one entry at a time, awaiting each. A plugin that falls behind
-//! holds the pump, so the queue drops to the newest audio instead of the stream failing. The pump
-//! runs while the reader pulls events; a gap is a flush, so the detector restarts on current audio.
-
 use std::sync::Arc;
 
 use lk_agents_abi::errors::ProviderError;
@@ -16,6 +11,9 @@ use lk_agents_telemetry as telemetry;
 use tokio_util::sync::CancellationToken;
 
 use super::stream::{Flush, Input};
+
+// A plugin that falls behind holds the pump, so the queue drops to the newest audio instead of
+// the stream failing; a gap is a flush, so the detector restarts on current audio.
 
 /// The wrapper a host VAD's `_core_stream` is handed out through.
 pub struct PluginInput;

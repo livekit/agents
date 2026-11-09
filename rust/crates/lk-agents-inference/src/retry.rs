@@ -1,6 +1,3 @@
-//! One retry owner for provider requests. Providers open one attempt; the returned stream owns
-//! replay eligibility, the wait, and cancellation of its in-flight operation.
-
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{
     ApiConnectOptions, BoxFuture, Clock, Closed, ProviderStream, StreamOutput, Ts,

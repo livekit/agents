@@ -1,7 +1,3 @@
-//! The outcome table (tools.md "What a tool returns"): the call output a [`ToolOutcome`] records,
-//! whether it asks the model for a reply, and the text a verbatim result delivers. One table for
-//! direct runs, TextSession and voice; the host only classifies what the body returned or raised.
-
 use lk_agents_abi::agent::FunctionToolInfo;
 use lk_agents_abi::agent::run::RunError;
 use lk_agents_abi::llm::tool_executor::{
@@ -61,12 +57,9 @@ pub struct ToolShape {
 /// Which coordinator reads the table. The two differ in one row only, a `None` return.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// `agent.run()` and TextSession: `None` is a value the model reads and continues from
-    /// (tools.md "What a tool returns").
+    /// `agent.run()` and TextSession: `None` is a value the model reads and continues from.
     Text,
-    /// A call: a silent tool asks for no follow-up reply, the reference's
-    /// `reply_required = fnc_out is not None`. Interim until the owner rules on the `None` row for
-    /// calls (pending question, OVERNIGHT.md; settled with E-3).
+    /// A call: a silent tool asks for no follow-up reply (`reply_required = fnc_out is not None`).
     Voice,
 }
 

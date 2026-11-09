@@ -1,6 +1,3 @@
-//! Definition and restored-state validation. Live context construction and save fencing belong
-//! to the caller; the coordinator only checks the supplied names and scope references.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use lk_agents_abi::agent::AgentDefinition;

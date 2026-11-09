@@ -1,5 +1,3 @@
-//! Generation execution over the session's injected ports.
-
 mod forward;
 mod llm;
 mod output;

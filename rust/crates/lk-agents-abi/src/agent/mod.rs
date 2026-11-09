@@ -1,8 +1,3 @@
-//! The agent host: the application callbacks an agent invocation runs through `HostInvoker`
-//! (docs/internals/rust-core.md "HostInvoker"), and the records that cross with them. The
-//! decisions are `lk-agents-core`'s; the runtime executes these calls; the host binds signatures,
-//! validates application types and runs the bodies.
-
 pub mod assertions;
 pub mod authoring;
 pub mod resources;

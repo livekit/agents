@@ -1,7 +1,3 @@
-//! `inference`'s native turn-taking models: `TurnDetector`'s engine (the threshold table and the
-//! streams it opens, cloud with a fallback to the local mini model, native when the build links
-//! one, else the host's) and `AdaptiveInterruptionDetector`.
-
 use std::sync::Arc;
 
 use crate::errors::Invalid;

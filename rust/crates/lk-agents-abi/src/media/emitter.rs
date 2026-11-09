@@ -1,6 +1,3 @@
-//! The TTS emitter's host class, its errors and its output port; framing (lk-agents-media),
-//! decoding and the drift timer (lk-agents-inference) stay native.
-
 use std::sync::Arc;
 
 use crate::errors::HostError;

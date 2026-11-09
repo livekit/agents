@@ -1,6 +1,3 @@
-//! The `<expr/>` dialect: split out of a transcript, lowered to each provider's native syntax. The
-//! patterns are `tts/_provider_format.py`'s, transcribed as `strip.rs` describes.
-
 use crate::tts::markup::provider::{
     FISHAUDIO_DRAMA_SPANS, FISHAUDIO_TONES, GEMINI_PAUSE, GEMINI_SOUNDS, Provider, ProviderExt,
     XAI_WRAPPING, cartesia_prosody, fishaudio_sound_alias, gemini_sound_alias, xai_sound_alias,
@@ -211,8 +208,6 @@ fn sound_marker(provider: Provider, label: String) -> String {
         }
     }
 }
-
-// --- native-tag rewrites ---------------------------------------------------------------------
 
 /// `_xai_break_to_bracket` / `_fishaudio_break_to_bracket`, which differ only in the bracket names.
 fn break_to_bracket(raw: &str, short: &str, long: &str) -> String {

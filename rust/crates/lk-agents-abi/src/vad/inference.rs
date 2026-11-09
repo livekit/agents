@@ -1,6 +1,3 @@
-//! `inference.VAD`'s native detector (Silero): the detection machine and stream execution in
-//! `lk-agents-inference`, the model native when the build links one, else the host's.
-
 use std::sync::Arc;
 
 use crate::errors::{HostError, Invalid, ProviderError};

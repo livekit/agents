@@ -1,8 +1,8 @@
-//! The LLM pipeline events (`llm/llm.py`). A `///` on a Python-targeted declaration is the
-//! reference's docstring verbatim; notes for a Rust reader are `//`.
-
 use crate::llm::chat_context::{Extra, Role};
 use crate::usage::TokenUsage;
+
+// A `///` on a Python-targeted declaration is the reference's docstring verbatim; notes for a
+// Rust reader are `//`.
 
 // The Python `module` and `path` of every record here.
 #[crate::host(file(module = "llm", path = "livekit.agents.llm"))]

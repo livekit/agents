@@ -1,5 +1,3 @@
-//! Idle predicates and waiter ownership shared by speech, turns and tools.
-
 use super::AgentActivity;
 use crate::agent_session::machine::activity::scheduling::{SpeechId, Status};
 use crate::agent_session::{IdleRefused, IdleWaiter, RequestId, VoiceDriver};
@@ -8,9 +6,8 @@ use lk_agents_abi::Ts;
 
 impl VoiceDriver {
     /// `wait_for_idle`: nothing is speaking, queued, winding down or deciding a turn, and no user
-    /// turn is claimed. A turn held for the agent a handoff brings in does not count: the reference
-    /// has no such turn (it drops it), and the drain it waits on may itself wait on idle, through
-    /// a tool of the speech being drained.
+    /// turn is claimed. A turn held for a handoff's incoming agent does not count: the drain it
+    /// waits on may itself wait on idle through a tool of the speech being drained.
     pub(crate) fn is_idle(&self) -> bool {
         self.activity.is_idle()
             && !self.activity.audio_recognition.is_deciding_turn()
@@ -33,8 +30,7 @@ impl VoiceDriver {
         if !self.session.idle.has_waiters() || !self.is_idle() {
             return;
         }
-        // `wait_for_idle` raises `ActivityClosedError` when it wakes on a closing session: idle
-        // reached during a close's drain grants nothing, or a hold would outlive the session.
+        // Idle reached during a close grants nothing, or a hold would outlive the session.
         if self.session.closing.is_some() {
             self.refuse_idle_waiters();
             return;
@@ -86,7 +82,6 @@ impl VoiceDriver {
         for waiter in self.session.idle.take_waiters() {
             // A refused hold was never granted, so none is named.
             self.record_trace(SpeechStep::IdleAnswered { hold: None, closing: true });
-            // A hold refused was never granted: whatever run owned the ask lets it go.
             self.answer(waiter.call, waiter.answer(Err(IdleRefused::Closing)));
         }
     }

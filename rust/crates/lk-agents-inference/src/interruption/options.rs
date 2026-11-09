@@ -1,5 +1,3 @@
-//! `InterruptionOptions` and the module constants.
-
 use thiserror::Error;
 
 /// The gateway's fixed input rate (`inference/interruption.py:50`).

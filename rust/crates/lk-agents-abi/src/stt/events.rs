@@ -1,10 +1,10 @@
-//! The STT pipeline events (`stt/stt.py`). A `///` on a Python-targeted declaration is the
-//! reference's docstring verbatim; notes for a Rust reader are `//`.
-
 use crate::tokenize::language::LanguageCode;
 
 use crate::llm::chat_context::Extra;
 use crate::tts::transcript::TranscriptChunk;
+
+// A `///` on a Python-targeted declaration is the reference's docstring verbatim; notes for a
+// Rust reader are `//`.
 
 // `stt/stt.py`, a `(str, Enum)`: users write `ev.type == "final_transcript"`, so the wire strings
 // are public API.

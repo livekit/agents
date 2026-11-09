@@ -1,6 +1,3 @@
-//! Host work produced by [`super::machine::ToolCalls`], consumed by invocation coordination.
-//! [`crate::effects::AgentRunEffect`] projects this protocol into canonical invocation work.
-
 use crate::agent_run::CallId;
 use lk_agents_abi::FunctionCall;
 use lk_agents_abi::agent::ToolTemplate;

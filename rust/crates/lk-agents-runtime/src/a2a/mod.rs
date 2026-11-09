@@ -1,9 +1,3 @@
-//! The A2A text door's turns: [`Turn::run`] takes one incoming message to its answer by executing
-//! the operations of `lk_agents_core::a2a::task::TaskMachine` against storage and the host's
-//! handler, and feeding each typed result back. Every decision (deduplication, arrival policy,
-//! claim, drain, the pending question, checkpoints, settlement, commit and failure outcomes) is
-//! the machine's; this file only executes.
-
 pub mod door;
 pub mod handler;
 
@@ -514,8 +508,6 @@ impl Turn {
     }
 }
 
-// The declared text-turn surface over the A2A executor.
-
 impl TurnContract for Turn {
     type Env = ProcessEnv;
     type Thread = Thread;
@@ -554,6 +546,10 @@ impl TurnContract for Turn {
         Ok(turn.run(message, task_id).await?.into())
     }
 }
+
+#[cfg(test)]
+#[path = "a2a_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 mod lease_tests {

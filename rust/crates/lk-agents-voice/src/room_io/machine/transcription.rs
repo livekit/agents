@@ -1,9 +1,3 @@
-//! Room transcription publication: visibility, segment framing, and participant/track routing.
-//!
-//! `RoomTranscriptionWriter` decides the ordered text-stream and legacy publication operations;
-//! the runtime performs `RoomTranscriptionEffect`s on the room. TranscriptSync owns word pacing
-//! against audio playback before text reaches this boundary; this owner does not pace speech.
-
 use super::{is_local_proxy_participant, publishes_on_behalf_of};
 use crate::room_io::MAX_STREAM_BYTES;
 use crate::room_io::effects::RoomTranscriptionEffect;
@@ -63,7 +57,6 @@ enum Writing {
 }
 
 /// Room publication state: one segment's visible text, tags, and ordered publication work.
-/// Participant routing and queue admission retain this same writer's stream/segment identity.
 pub struct RoomTranscriptionWriter {
     /// Deltas accumulate into one stream per segment (the agent's transcript); otherwise each text
     /// is a full replacement in its own short stream (the user's).
@@ -81,8 +74,7 @@ pub struct RoomTranscriptionWriter {
 }
 
 impl RoomTranscriptionWriter {
-    /// Reserve the first segment before text arrives, as the reference output's reset does.
-    /// Every later boundary supplies its successor; capture never needs to ask for an identity.
+    /// Reserves the first segment before text arrives; every later boundary supplies its successor.
     pub fn new(is_delta_stream: bool, json_format: bool, segment: String) -> Self {
         Self {
             is_delta_stream,
@@ -110,7 +102,6 @@ impl RoomTranscriptionWriter {
         self.expression.as_ref().map_or(0, |(_, value)| value.capacity())
     }
     pub fn admit_text(&mut self, text: &str) -> Result<()> {
-        // A closed output takes no more text; `capture` drops it.
         if self.closed() {
             return Ok(());
         }

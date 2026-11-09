@@ -1,5 +1,3 @@
-//! Shared toolset resource ownership for text invocations and voice activations.
-
 use crate::{BoxFuture, errors::HostError};
 use std::{any::Any, sync::Arc};
 

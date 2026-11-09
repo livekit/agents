@@ -1,5 +1,3 @@
-//! The `/agent` binary control protocol over the shared WebSocket transport.
-
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::TokioSpawner;
 use std::sync::Arc;

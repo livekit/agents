@@ -1,8 +1,3 @@
-//! An endpoint's JSON-RPC 2.0 requests (docs/protocol/a2a.md), decoded once into the upstream A2A
-//! records plus LiveKit's additions (`contextId` on the task methods, `offset` on a subscription),
-//! and the envelopes the answers go out in. A malformed request is a JSON-RPC error here; what a
-//! well-formed request meets later is its method's outcome.
-
 use a2a::{
     CancelTaskRequest, GetTaskRequest, JsonRpcError, JsonRpcId, JsonRpcResponse, ListTasksRequest,
     SendMessageRequest, SubscribeToTaskRequest, error_code,
@@ -275,8 +270,8 @@ pub fn task_state(state: &a2a::TaskState) -> Option<TaskState> {
     })
 }
 
-/// The task methods name the thread with `contextId`: missing, the task is not found
-/// (a2a.md#tasks); not a string, the params are invalid.
+/// The task methods name the thread with `contextId`: missing, the task is not found; not a
+/// string, the params are invalid.
 fn context_id(params: &Map<String, Value>) -> Result<String, JsonRpcError> {
     match params.get("contextId") {
         None | Some(Value::Null) => Err(rpc_error(
@@ -505,7 +500,7 @@ mod tests {
         json!({"messageId": id, "role": "ROLE_USER", "parts": [{"text": "hi"}]})
     }
 
-    // Catches: the envelope errors a2a.md lists becoming internal errors or a coerced request
+    // Catches: the protocol's envelope errors becoming internal errors or a coerced request
     // (a batch answered, `[]` params read as `{}`, a fractional id accepted).
     #[test]
     fn malformed_envelopes_are_their_json_rpc_errors() {
@@ -675,8 +670,7 @@ mod tests {
         }
     }
 
-    // Catches: the error table of a2a.md#errors drifting while the answers moved out of the door
-    // (a follow-up to a terminal task, cancel of a terminal task, a cursor of another task).
+    // Catches: the protocol's error table drifting (a follow-up to a terminal task, cancel of a terminal task, a cursor of another task).
     #[test]
     fn method_answers_keep_the_documented_errors() {
         let task = TaskRef { id: "AST_1".into(), context_id: "AT_1".into() };
@@ -709,7 +703,7 @@ mod tests {
     }
 
     // Catches: a `reject` lane answering INTERNAL_ERROR, which hides the task the client must
-    // cancel first (server.md, interruption policies).
+    // cancel first.
     #[test]
     fn a_rejected_message_names_the_running_task() {
         let rejected = StorageError::Rejected { running_task_id: Some("AST_r".into()) };

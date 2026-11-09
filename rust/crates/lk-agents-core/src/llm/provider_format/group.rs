@@ -1,6 +1,3 @@
-//! `_provider_format/utils.py`: the two rewrites every dialect runs before it formats. Neither clones
-//! the context.
-
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,6 +6,8 @@ use lk_agents_abi::{ChatContext, ChatItem, ChatMessage, FunctionCall, FunctionCa
 use crate::llm::provider_format::FormatError;
 
 pub use lk_agents_abi::llm::provider_format::host::DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE;
+
+// The two rewrites every dialect runs before it formats; neither clones the context.
 
 /// A system/developer message is the preamble only when it is the first one and no message or
 /// tool call precedes it. Every other one is rewritten as a `role` message wrapped in `template`,

@@ -1,7 +1,3 @@
-//! The far end of the remote session protocol (`voice/remote_session.py`'s `RemoteSession`): ids,
-//! correlation, timeouts and the ready poll. No agent runs it; the host's tests drive the
-//! session host with it.
-
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,13 +17,13 @@ pub enum RequestError {
     /// The transport refused the request; the transport's own error.
     #[error(transparent)]
     Transport(HostError),
-    /// No response inside the timeout (`asyncio.TimeoutError`).
+    /// No response inside the timeout.
     #[error("")]
     Timeout,
     /// The response carried a non-empty `error`: `session request {type} failed: {error}`.
     #[error("{0}")]
     Failed(String),
-    /// The client closed while the request was pending (`future.cancel()`).
+    /// The client closed while the request was pending.
     #[error("")]
     Cancelled,
     /// A request before `start()`.
@@ -47,7 +43,8 @@ pub enum ReadyError {
     Cancelled,
 }
 
-/// `RemoteSession` (`remote_session.py:826`), running.
+/// The far end of the remote session protocol: ids, correlation, timeouts and the ready poll.
+/// No agent runs it; tests drive the session host with it.
 pub struct RemoteSession {
     pub(super) shared: Arc<Client>,
 }
@@ -56,7 +53,6 @@ pub(super) struct Client {
     clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
     state: Mutex<ClientState>,
-    /// `_pending_requests` (`remote_session.py:981`), by request id.
     pub(super) pending: Mutex<HashMap<String, oneshot::Sender<proto::SessionResponse>>>,
     recv: Arc<TaskSet>,
 }
@@ -78,8 +74,6 @@ impl Drop for Unregister<'_> {
     }
 }
 
-/// `voice/remote_session.py`'s `RemoteSession`, running in Rust: ids, correlation, timeouts and the
-/// ready poll.
 impl RemoteSession {
     pub fn new(clock: Arc<dyn Clock>, spawner: Arc<dyn Spawner>) -> Self {
         RemoteSession {
@@ -93,7 +87,7 @@ impl RemoteSession {
         }
     }
 
-    /// `start()`: start the transport and the receive loop; arriving events go to `sink`. Idempotent.
+    /// Starts the transport and the receive loop; arriving events go to `sink`. Idempotent.
     pub async fn start(
         &self,
         transport: Arc<dyn SessionTransport>,
@@ -117,7 +111,7 @@ impl RemoteSession {
         Ok(())
     }
 
-    /// `aclose()`: cancel every pending request, stop reading, close the transport.
+    /// Cancels every pending request, stops reading, closes the transport.
     pub async fn aclose(&self) {
         let transport = {
             let mut st = self.shared.state.lock();
@@ -135,7 +129,7 @@ impl RemoteSession {
         }
     }
 
-    /// `_send_request`: register an id, send, wait up to `timeout`, refuse a non-empty `error`.
+    /// Registers an id, sends, waits up to `timeout`, refuses a non-empty `error`.
     pub async fn request(
         &self,
         request: proto::session_request::Request,
@@ -169,7 +163,7 @@ impl RemoteSession {
                 return Err(RequestError::Timeout);
             }
         };
-        // `if resp.error: raise` (`remote_session.py:1057`): `Some("")` is success.
+        // `Some("")` is success.
         match resp.error.as_deref() {
             Some(e) if !e.is_empty() => {
                 Err(RequestError::Failed(format!("session request {kind} failed: {e}")))
@@ -178,8 +172,7 @@ impl RemoteSession {
         }
     }
 
-    /// `wait_for_ready` (`remote_session.py:1070`): ping, each bounded by `min(retry, remaining)`,
-    /// until answered. At the deadline, the latched send error is preferred to a bare timeout.
+    /// Pings, each bounded by `min(retry, remaining)`, until answered. At the deadline, the latched send error is preferred to a bare timeout.
     pub async fn wait_for_ready(
         &self,
         timeout: Duration,
@@ -197,8 +190,7 @@ impl RemoteSession {
             let ping = proto::session_request::Request::Ping(proto::session_request::Ping {});
             let error = match self.request(ping, retry_interval.min(remaining)).await {
                 Ok(_) => return Ok(()),
-                // No sleep: the elapsed timeout was the pacing. A bare timeout at the deadline even
-                // with a latched send error, as in the reference.
+                // No sleep: the elapsed timeout was the pacing.
                 Err(RequestError::Timeout) => {
                     now = clock.now();
                     if now >= deadline {
@@ -246,7 +238,7 @@ async fn client_recv_loop(
                     let _ = tx.send(resp);
                 }
             }
-            // Emitted under `msg.event.WhichOneof("event")`; an event with no arm set is dropped.
+            // An event with no arm set is dropped.
             Some(Message::Event(e)) => {
                 if let Some(inner) = &e.event {
                     sink.event(super::event_kind(inner).as_str(), &e);

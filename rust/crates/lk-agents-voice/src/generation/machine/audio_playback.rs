@@ -1,8 +1,3 @@
-//! One audio segment's playback lifecycle: forwarding, interruption, receipts, and completion.
-//!
-//! The runtime supplies physical outcomes and performs requested work. The owner keeps the
-//! forwarding/receipt/finish states private, including when the source transcript is sampled.
-
 use super::playout::{
     AudioPlaybackCutEvent, AudioPlaybackFinishEvent, AudioPlaybackFlowEvent, Completion,
     CutReceipt, Playout, SegmentFinish, SegmentFlow, drained,
@@ -57,7 +52,6 @@ pub enum AudioPlaybackEvent {
 }
 
 impl AudioPlaybackEvent {
-    /// The outcome of forwarding work, for the segment flow.
     fn into_flow(self) -> AudioPlaybackFlowEvent {
         match self {
             Self::InterruptionChecked { interrupted } => {
@@ -74,7 +68,6 @@ impl AudioPlaybackEvent {
         }
     }
 
-    /// The outcome of completion work, for the segment finish.
     fn into_finish(self) -> AudioPlaybackFinishEvent {
         match self {
             Self::PlaybackReceiptReceived(result) => AudioPlaybackFinishEvent::Receipt(result),
@@ -84,7 +77,6 @@ impl AudioPlaybackEvent {
         }
     }
 
-    /// The outcome of cut receipt work, for the cut receipt.
     fn into_cut(self) -> AudioPlaybackCutEvent {
         match self {
             Self::CutReceiptPolled(report) => AudioPlaybackCutEvent::Probed(report),
@@ -95,7 +87,6 @@ impl AudioPlaybackEvent {
     }
 }
 
-// These states group existing policies without exposing their instruction enums to the runtime.
 enum PlaybackPhase {
     Initial { stop_at_boundary: bool },
     Forwarding(SegmentFlow),
@@ -108,10 +99,8 @@ enum PlaybackPhase {
     Done,
 }
 
-/// Owns a segment's playback decisions and accounting; it has no sink, clock, task, or I/O.
-///
-/// Speech/floor scheduling and generation-step authorization remain separate owners. A source
-/// without an output still uses this lifecycle to drain until its boundary/end/interruption.
+/// Owns a segment's playback decisions and accounting. A source without an output still uses
+/// this lifecycle to drain until its boundary, end or interruption.
 pub struct AudioPlayback {
     phase: PlaybackPhase,
     has_sink: bool,

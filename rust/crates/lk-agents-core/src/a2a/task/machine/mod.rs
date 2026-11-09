@@ -1,13 +1,6 @@
-//! One A2A message's task, from arrival to its answer (docs/internals/storage.md#the-unit-of-work):
-//! deduplication by `messageId`, the channel's arrival policy, the early `submitted` row, the
-//! lane claim, the drain of a batch inbox, the turn ([`turn`]: the pending question, the handler's
-//! checkpoints and output, the settlement), its commit and every typed storage failure. Storage
-//! owns atomic admission and fencing; this machine decides which operation follows each outcome.
-//! The runtime executes one [`Operation`] at a time and feeds its typed result back.
-
 mod drain;
 #[cfg(test)]
-#[path = "../../task_tests.rs"]
+#[path = "machine_tests.rs"]
 mod tests;
 mod turn;
 
@@ -31,6 +24,8 @@ use lk_agents_abi::storage::context::{AppStatement, ContextScopeWrite};
 use lk_agents_abi::storage::thread::ItemRow;
 use lk_agents_abi::storage::thread::{LeaseAfterCommit, TaskPickup, WhenHeld};
 use turn::{Step, Turning};
+
+// Storage owns atomic admission and fencing; this machine only picks the next operation.
 
 /// One completion belongs to exactly one issued operation.
 #[derive(Debug)]
@@ -1201,7 +1196,6 @@ fn answered(row: &TaskRow) -> bool {
         || row.internal.as_ref().is_some_and(|i| i.answered)
 }
 
-/// How a step ends the machine.
 enum Finish {
     Answer(Box<Answer>),
     Error(StorageError),

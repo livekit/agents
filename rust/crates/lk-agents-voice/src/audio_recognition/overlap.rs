@@ -1,5 +1,3 @@
-//! `OverlapJudge`: the adaptive interruption channel's verdicts on speech over the agent.
-
 use super::{InterruptionSignal, OverlapVerdict};
 use crate::agent_session::effects::AudioInterruptGuard;
 use crate::agent_session::machine::activity::false_interruption::AudioInterruptTrigger;
@@ -11,7 +9,7 @@ use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum In {
-    /// Over agent speech, with the detector live (`_on_start_of_overlap_speech`).
+    /// Over agent speech, with the detector live.
     Started {
         started_at: Ts,
         speech_duration: Duration,
@@ -36,7 +34,7 @@ pub enum In {
     },
     /// The question dies with the speech it was about.
     AgentSpeechEnded,
-    /// The turn committed or was dropped: turn-scoped interruption state resets once per logical turn.
+    /// The turn committed or was dropped: turn-scoped interruption state resets.
     TurnClosed,
 }
 
@@ -51,15 +49,16 @@ pub enum OverlapRefusal {
     InsideBoundary,
 }
 
+/// The adaptive interruption channel's verdicts on speech over the agent.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OverlapJudge {
-    /// `_interruption_detection_enabled`: whether verdicts set `interruption_detected`.
+    /// Whether verdicts set `interruption_detected`.
     detection_enabled: bool,
     judging: Option<ReqId>,
     seq: u64,
-    /// The overlap audio is ongoing (`_overlap_open`).
+    /// The overlap audio is ongoing.
     open: bool,
-    /// `_overlap_in_current_turn`; can be true while none is open.
+    /// An overlap happened this turn; can be true while none is open.
     in_turn: bool,
     backchannel_over_agent: bool,
     interruption_detected: bool,
@@ -83,8 +82,7 @@ impl OverlapJudge {
         }
     }
 
-    /// `_restore_interruption_by_audio_activity`, once per takeover: back to the session's default,
-    /// not `true`.
+    /// Once per takeover: back to the session's default, not `true`.
     #[must_use = "recognition effects must be applied before the next transition"]
     fn release_guard(&mut self) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
@@ -160,22 +158,21 @@ impl OverlapJudge {
                 self.open = false;
 
                 if self.boundary_armed && !verdict.is_interruption {
-                    // "falling back to vad".
+                    // Falls back to VAD interruption.
                     eff.extend(self.release_guard());
                     return (Some(OverlapRefusal::InsideBoundary), eff);
                 }
-                // `on_interruption`: the guard goes back before the interruption. A backchannel verdict
-                // keeps it until the agent speech ends, or the VAD would cut what was just cleared.
+                // A backchannel verdict keeps the guard until the agent speech ends, or the VAD
+                // would cut what was just cleared.
                 if verdict.is_interruption {
                     eff.extend(self.release_guard());
                 }
                 if self.detection_enabled {
                     self.interruption_detected = verdict.is_interruption;
                 }
-                // "only honor the verdict while this turn's overlap is unresolved".
                 if self.in_turn && !verdict.agent_ended {
                     self.backchannel_over_agent = !verdict.is_interruption;
-                    // "clear the backchannel audio, but only between segments".
+                    // Clear the backchannel audio only between segments.
                     if !verdict.is_interruption && !user_speaking {
                         eff.push(AudioRecognitionEffect::PublishSessionEvent(
                             SessionEvent::BackchannelConfirmed,
@@ -199,8 +196,6 @@ impl OverlapJudge {
             }
             In::Boundary { armed } => self.boundary_armed = armed,
             In::UserOnset { agent_speaking } => {
-                // "every speech onset clears the prior backchannel verdict; an overlap re-derives
-                // it"
                 self.backchannel_over_agent = false;
                 if !agent_speaking {
                     self.in_turn = false;
@@ -215,7 +210,6 @@ impl OverlapJudge {
                 eff.extend(self.release_guard());
             }
             In::TurnClosed => {
-                // "reset turn-scoped interruption state once per logical turn (commit or drop)"
                 self.backchannel_over_agent = false;
                 self.in_turn = false;
             }

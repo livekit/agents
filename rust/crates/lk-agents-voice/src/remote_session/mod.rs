@@ -16,7 +16,7 @@ use lk_agents_abi::worker::remote_session::{
 };
 use prost::Message as _;
 
-/// `TOPIC_SESSION_MESSAGES` (`remote_session.py:57`): the byte-stream topic both halves register on.
+/// The byte-stream topic both halves register on.
 pub const TOPIC_SESSION_MESSAGES: &str = "lk.agent.session";
 
 pub use lk_agents_abi::voice::events::UserState;
@@ -49,10 +49,9 @@ fn encode_amd_category(c: AmdCategory) -> proto::AmdCategory {
     }
 }
 
-/// `_send_event`'s mapping (`remote_session.py:459`) from the facts the host reports, unstamped.
-/// `Ok(None)` for a tool status outside `_TOOL_CALL_STATUS_MAP` / `_TOOL_REPLY_STATUS_MAP`
-/// (`remote_session.py:295-301`), which the reference drops; a malformed debug payload is refused.
-/// `language` and the hand-built tool calls' `id`/`created_at` go out unset, as in the reference.
+/// Encodes the facts the host reports, unstamped. `Ok(None)` for a tool status the wire has no
+/// value for; a malformed debug payload is refused. `language` and the hand-built tool calls'
+/// `id`/`created_at` go out unset.
 pub fn encode_wire(
     ev: WireEvent,
 ) -> Result<Option<proto::agent_session_event::Event>, prost::DecodeError> {
@@ -110,8 +109,7 @@ pub fn encode_wire(
         WireEvent::SessionUsageUpdated(v) => Event::SessionUsageUpdated(pb::SessionUsageUpdated {
             usage: Some(encode_session_usage(&v.usage)),
         }),
-        // Not `AgentSession` events: the AMD and EOT back-channels (`amd/detector.py:564`,
-        // `agent_activity.py:2393`).
+        // Not `AgentSession` events: the AMD and EOT back-channels.
         WireEvent::AmdPrediction(v) => Event::AmdPrediction(pb::AmdPrediction {
             speech_duration: Some(encode_duration_secs(v.speech_duration)),
             category: encode_amd_category(v.category) as i32,
@@ -303,8 +301,8 @@ macro_rules! same_arm {
     }};
 }
 
-/// The name a client emits an arriving event under: `msg.event.WhichOneof("event")`
-/// (`remote_session.py:1018`). Five of these are not in `RemoteSessionEventTypes`.
+/// The name a client emits an arriving event under: `msg.event.WhichOneof("event")`.
+/// Five of these are not in `RemoteSessionEventTypes`.
 pub fn event_kind(event: &proto::agent_session_event::Event) -> RemoteSessionEventKind {
     same_arm!(event, proto::agent_session_event::Event => RemoteSessionEventKind:
         AgentStateChanged, UserStateChanged, ConversationItemAdded, UserInputTranscribed,
@@ -619,7 +617,7 @@ fn encode_model_usage(mu: &ModelUsage) -> proto::ModelUsage {
     proto::ModelUsage { usage: Some(usage) }
 }
 
-/// `MessageToDict` then `Struct().update(d)` (`remote_session.py:833-841`). Only an object becomes
+/// `MessageToDict` then `Struct().update(d)`. Only an object becomes
 /// a `Struct`; anything else is `None`.
 pub fn json_to_struct(v: &serde_json::Value) -> Option<proto::Struct> {
     match v {
@@ -649,5 +647,5 @@ fn json_to_value(v: &serde_json::Value) -> pbjson_types::Value {
 }
 
 #[cfg(test)]
-#[path = "../remote_session_tests.rs"]
+#[path = "remote_session_tests.rs"]
 mod tests;

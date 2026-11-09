@@ -1,5 +1,3 @@
-//! Shared gateway identification, authentication and inference URL selection.
-
 pub type HeaderProvider = std::sync::Arc<dyn Fn() -> Headers + Send + Sync>;
 pub use lk_agents_net::transport::Headers;
 

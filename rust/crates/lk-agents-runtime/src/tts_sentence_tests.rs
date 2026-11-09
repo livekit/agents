@@ -1,5 +1,3 @@
-//! Sentence adapter conformance with the production speech text transformations.
-
 use lk_agents_abi::Tts;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
@@ -28,8 +26,6 @@ async fn bounded<F: std::future::Future>(what: &str, f: F) -> F::Output {
         Err(_) => panic!("{what}: blocked forever -- a token never reached the source"),
     }
 }
-
-// ---------------------------------------------------------------- fakes
 
 /// Splits on '.', keeping the delimiter, and buffers the tail. Records every call so a test
 /// can assert what the sink forwarded.
@@ -133,7 +129,6 @@ struct FakeTts {
 
     inner_closed: Arc<AtomicUsize>,
     fail_after: Option<usize>,
-    /// `markup._provider_key()`.
     markup: &'static str,
 }
 
@@ -242,8 +237,6 @@ async fn drain(mut source: TtsSource) -> Result<Vec<SynthesizedAudio>, ProviderE
     .await
 }
 
-// ---------------------------------------------------------------- tests
-
 // Catches: a paced adapter sending every sentence at once, sending before the audio already
 // synthesized played out, or losing a held sentence.
 #[tokio::test(start_paused = true)]
@@ -297,9 +290,8 @@ fn tts_records(records: Vec<AgentMetrics>) -> Vec<(u32, bool, bool)> {
     records.into_iter().map(view).collect()
 }
 
-// Catches: one record for the whole stream: the reference's adapter forwards each sentence's
-// `ChunkedStream` metrics (one non-streamed TTSMetrics per sentence, the one cut by the close
-// as cancelled), and a failed sentence leaves none.
+// Catches: one record for the whole stream instead of one per sentence (the one cut by the close
+// as cancelled), and a failed sentence leaving one.
 #[tokio::test]
 async fn each_sentence_is_metered_as_its_own_call() {
     let tts = FakeTts::new(2);
@@ -573,7 +565,7 @@ async fn a_sentence_failing_before_audio_is_synthesized_again_within_its_budget(
     assert_eq!(tts.texts(), vec!["first.", "first.", "first."]);
 }
 
-// Catches: resynthesizing a sentence whose audio was already delivered (F-10): the listener
+// Catches: resynthesizing a sentence whose audio was already delivered: the listener
 // would hear its beginning twice. The delivered frame stays delivered and the stream fails.
 #[tokio::test(start_paused = true)]
 async fn sentence_adapter_partial_failure_never_resynthesizes_delivered_audio() {

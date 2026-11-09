@@ -1,5 +1,3 @@
-//! The acknowledged server conversation, ordered by links and indexed by item identity.
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

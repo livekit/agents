@@ -1,5 +1,3 @@
-//! Publishes a request's live response events; slow or disconnected observers are detached.
-
 use a2a::{JsonRpcId, StreamResponse};
 use lk_agents_abi::a2a::door::{DoorError, DoorFrame};
 use lk_agents_abi::a2a::turn::TurnEvent;

@@ -1,8 +1,3 @@
-//! What a provider changes about the OpenAI Realtime wire protocol. Most of xAI's deltas are
-//! [`Dialect`] fields; the held-transcript machine and `say()` via `force_message` are real state
-//! in [`crate::realtime::machine`]. xAI's extra inbound events are decoded for every dialect:
-//! OpenAI never sends them, and gating would make the decoder depend on config.
-
 use std::time::Duration;
 
 use lk_agents_abi::llm::realtime::{RealtimeConfigurationError, RealtimeProvider};
@@ -11,6 +6,10 @@ use serde_json::{Value, json};
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 
 pub use lk_agents_abi::llm::realtime::{NUM_CHANNELS, SAMPLE_RATE};
+
+// xAI's extra inbound events are decoded for every dialect: OpenAI never sends them, and gating
+// would make the decoder depend on config.
+
 /// A string: `f64::INFINITY` would serialise as `null`.
 pub const DEFAULT_MAX_OUTPUT_TOKENS: &str = "inf";
 /// `_FATAL_ERROR_CODES`: the socket reconnects but every generation fails, so these stop the

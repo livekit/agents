@@ -1,6 +1,3 @@
-//! The server's side: every `Incoming` event, and what it does to the generation, the transcript
-//! and the mirrored conversation.
-
 use super::{Generation, MessageState, Outgoing, RealtimeMachine, SPOKEN_REMEMBERED, Step};
 use std::collections::BTreeMap;
 

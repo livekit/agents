@@ -1,6 +1,3 @@
-//! The `batch` policy's inbox drain: one run under the kept lease picks up every pending
-//! receipt, fails a dead holder's rows and answers the rest in one turn.
-
 use std::time::Duration;
 
 use lk_agents_abi::storage::TaskState;

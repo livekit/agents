@@ -1,10 +1,10 @@
-//! `Vad`: `VAD.stream()` is abstract (`vad.py:94`), so it returns `Result`, not `Option<Result>`.
-
 use crate::VadEvent;
 use crate::errors::ProviderError;
 
 use crate::AudioFrame;
 use crate::utils::stream::{ProviderStream, StreamInput};
+
+// `VAD.stream()` is abstract, so it returns `Result`, not `Option<Result>`.
 
 // `vad.py:71`.
 #[crate::host(record(

@@ -1,5 +1,3 @@
-//! Synchronous realtime conversation, response and connection policy.
-
 pub mod dialect;
 pub mod host;
 pub mod machine;

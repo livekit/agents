@@ -32,12 +32,7 @@ _REALTIME_MODEL_IDS: frozenset[str] = frozenset(
 
 
 def is_realtime_model(model: str) -> bool:
-    """Whether a LiveKit Inference model string names a realtime (speech-to-speech) model.
-
-    Only the models listed in ``RealtimeModels`` count: a newly released realtime
-    model has to be added there before ``llm="..."`` resolves it to a
-    ``RealtimeModel``.
-    """
+    """Whether a LiveKit Inference model string names a realtime model in ``RealtimeModels``."""
     return model in _REALTIME_MODEL_IDS
 
 
@@ -69,14 +64,13 @@ def min_reasoning_effort(model: str) -> ReasoningEffort | None:
 
 
 class LLM(_facades.LLM):
-    """LiveKit Inference LLM over the core's gateway client (``_core.InferenceLlm``)."""
+    """LiveKit Inference LLM."""
 
     @classmethod
     def from_model_string(cls, model: str) -> LLM:
         return cls(model)
 
     def _core_native(self) -> _core.InferenceLlm:
-        """The client as a session of the current job holds it: its requests carry that job."""
         headers = get_inference_headers(inference_class=self._native.inference_class)
         return self._native.identified(list(headers.items()), self)
 
@@ -113,8 +107,7 @@ class LLMStream(llm.LLMStream):
         self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
-        # Only the Python provider plugins use this compatibility stream. Native
-        # inference does not need the OpenAI SDK installed or imported.
+        # lazy: only the provider plugins running this stream need the OpenAI SDK
         import httpx2 as httpx
         import openai
         from openai.types.chat import ChatCompletionToolParam

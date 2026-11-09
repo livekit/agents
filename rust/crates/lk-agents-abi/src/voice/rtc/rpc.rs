@@ -1,6 +1,3 @@
-//! RPC as the job's local participant performs and handles it: the SDK's call records, the
-//! `next` continuations of an `rtc.RpcInterceptor`, and the native interceptor that traces them.
-
 use crate::errors::HostError;
 use crate::worker::ipc_host::JobExecution;
 use std::any::Any;

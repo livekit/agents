@@ -1,5 +1,3 @@
-//! Export contracts for speech tokenization, implemented by the voice core.
-
 use crate::errors::HostError;
 use std::sync::Arc;
 

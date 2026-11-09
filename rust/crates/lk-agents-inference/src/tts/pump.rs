@@ -1,5 +1,3 @@
-//! Gateway I/O executor for the synchronous synthesis protocol.
-
 use super::machine::{SentInput, TtsSynthesis, TtsSynthesisEvent};
 use super::*;
 use crate::effects::TtsSynthesisEffect;

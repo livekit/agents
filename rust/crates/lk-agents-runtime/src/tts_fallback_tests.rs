@@ -1,4 +1,3 @@
-//! TTS fallback integration using the production speech factory.
 use super::FallbackTts;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{
@@ -133,7 +132,7 @@ fn built(
     )
 }
 
-// Catches: a member without a duplex path failing every streamed request (`tts:384-395`).
+// Catches: a member without a duplex path failing every streamed request.
 #[tokio::test]
 async fn a_batch_only_member_streams_through_sentences() {
     let pushed = Arc::new(Mutex::new(Vec::new()));
@@ -165,7 +164,7 @@ async fn a_batch_only_member_streams_through_sentences() {
     fb.aclose();
 }
 
-// Catches: dropping `_pushed_tokens` replay on failover (`tts:428-434`).
+// Catches: dropping `_pushed_tokens` replay on failover.
 #[tokio::test]
 async fn a_failover_replays_the_text_already_pushed_into_the_new_provider() {
     let (broken, _) = built("broken", 24_000, 1, 0, usize::MAX, false);
@@ -210,7 +209,7 @@ fn tts_chain(entries: Vec<Arc<dyn Tts>>) -> FallbackTts {
     .expect("a usable list")
 }
 
-// Catches: a streaming probe that replays nothing from `snapshot` (`tts:504-531`).
+// Catches: a streaming probe that replays nothing from `snapshot`.
 #[tokio::test]
 async fn a_streaming_probe_replays_the_text_recorded_so_far() {
     let (flaky, flaky_pushed) = built("flaky", 24_000, 1, 2, 1, false);
@@ -318,8 +317,7 @@ impl Tts for SpeaksOnEnd {
 }
 
 // Catches: probing a skipped entry as the scan passes it, before any text has arrived, so the
-// streamed probe declines for want of text and the provider stays down for good (#6678,
-// `tts:417-420`).
+// streamed probe declines for want of text and the provider stays down for good.
 #[tokio::test]
 async fn an_entry_skipped_on_a_streamed_request_is_probed_with_that_requests_text() {
     let (flaky, flaky_pushed) = built("flaky", 24_000, 1, 1, 2, false);
@@ -480,7 +478,7 @@ mod options {
 mod tts {
     use super::*;
 
-    // Catches: the TTS drain never marking the serving entry (`AfterOutput::Stop`, `tts:293-297`).
+    // Catches: the TTS drain never marking the serving entry (`AfterOutput::Stop`).
     #[tokio::test]
     async fn the_tts_that_emitted_audio_retains_its_failure_and_identity() {
         let (broken, _) = built("broken", 24_000, 1, 0, usize::MAX, false);

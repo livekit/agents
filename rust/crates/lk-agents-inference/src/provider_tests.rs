@@ -1,7 +1,3 @@
-//! The provider attempt executor's contract (docs/models.md "Provider attempts"): one host
-//! attempt at a time, retried, raised or stopped as the attempt policy decides, cancelled at a
-//! deadline and settled before `settled` returns.
-
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;

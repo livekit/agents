@@ -1,26 +1,15 @@
-//! The attempts of one gateway request, as a synchronous machine on supplied time: the attempt
-//! currently running and its phase deadline, the retry decision and its backoff, the total
-//! deadline and the cleanup every launched attempt still owes. Its owner (a request lifecycle)
-//! turns the [`Step`]s into its own resource's effects and reports the transport's
-//! observations back by attempt.
-//!
-//! Timeouts follow `APIConnectOptions`: connect runs from launch until the transport has a
-//! connection, write until the request body is handed over, read while a response is expected
-//! (the owner says since when), each restarted by transport progress; total runs from acceptance
-//! and never restarts. A failure is retried only while its error allows it, attempts remain and
-//! the owner has not marked the request unsafe to replay.
-//!
-//! A request the server may have received and that no answer resolved (timed out, stopped or cut
-//! after it was sent) may still take effect. When no caller takes its outcome, its owner retires
-//! it: the request keeps asking under its identity until an attempt answers or the retirement
-//! deadline passes, which is reported.
-
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use super::{AttemptFailure, Policy, Retry, Step};
 use lk_agents_abi::errors::{ApiError, ApiErrorKind, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, HOST_TEARDOWN_TIMEOUT, Ts};
+
+// Phase timeouts (connect, write, read) restart on transport progress; total runs from acceptance
+// and never restarts. A failure is retried only while its error allows it, attempts remain and
+// the owner has not marked the request unsafe to replay. A request the server may have received
+// but no answer resolved may still take effect, so when no caller takes its outcome it is retired:
+// it keeps asking under its identity until an attempt answers or the retirement deadline passes.
 
 /// A retiring request's phases are bounded so it asks at least this many times inside its window:
 /// a silent attempt never holds the whole window, even when the caller set no limits.

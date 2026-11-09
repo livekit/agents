@@ -1,6 +1,3 @@
-//! Authorization decisions over verified claims. Header selection preserves carrier precedence;
-//! token cryptography and wall-clock validation execute in runtime.
-
 use lk_agents_abi::a2a::auth::{AuthError, AuthGrant, AuthOperation, AuthPrincipal};
 
 /// A malformed selected carrier refuses, rather than falling back to another credential.

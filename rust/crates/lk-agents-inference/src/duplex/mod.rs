@@ -1,14 +1,10 @@
-//! `DuplexRealtimeAdapter` (`llm/duplex.py`): a full-duplex speech model (it listens and
-//! speaks at once, handling interruptions itself) run as the session's realtime model. The model's
-//! continuous output is gated, cut into generations and given its transcript here.
-
 pub mod gate;
 mod host;
 pub mod input;
 pub mod segmenter;
 pub mod session;
 #[cfg(test)]
-#[path = "../duplex_tests.rs"]
+#[path = "duplex_tests.rs"]
 mod tests;
 
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};

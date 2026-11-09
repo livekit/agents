@@ -1,15 +1,3 @@
-//! The local models (the VAD and the end-of-turn mini model) as a build links them in. A native
-//! provider registers one [`LocalModels`] at link time and the core calls it directly; with none
-//! linked, both come from the host's `livekit.local_inference`, one host call per inference.
-//!
-//! A provider is a crate linked into the final artifact beside the binding:
-//!
-//! ```ignore
-//! lk_agents_inference::local_models::inventory::submit! {
-//!     lk_agents_inference::local_models::LocalModels { init, vad, eot }
-//! }
-//! ```
-
 use std::sync::Arc;
 
 pub use inventory;
@@ -17,6 +5,10 @@ pub use inventory;
 use crate::eot::LocalEotModel;
 use crate::vad::VadModel;
 use crate::vad::VadModelFactory;
+
+// A native provider registers at link time with
+// `inventory::submit! { LocalModels { init, vad, eot } }`; with none linked, both models come from
+// the host's `livekit.local_inference`, one host call per inference.
 
 /// One native provider of the local models.
 pub struct LocalModels {

@@ -1,7 +1,7 @@
-//! The AMD verdict. [`AmdCategory`] mirrors a `(str, Enum)`, so `ev.category == "machine-vm"` works;
-//! a `#[pyclass]` enum would compare `False` silently.
-
 use std::time::Duration;
+
+// `AmdCategory` mirrors a `(str, Enum)`, so `ev.category == "machine-vm"` works; a `#[pyclass]`
+// enum would compare `False` silently.
 
 // `classifier.py:28`. The wire strings are public API (enum values, an OTel attribute, the job
 // tagger key).
@@ -177,8 +177,6 @@ pub trait AmdFunctions {
     fn amd_prediction_is_machine(prediction: AmdPrediction) -> bool;
 }
 
-// --- the user's tuning, as the host takes it ---------------------------------------------------
-
 /// Per-`AMD` overrides of the classifier's timings and prompt (`voice/amd/detector.py`).
 #[crate::host(record(
     module = "amd",
@@ -207,8 +205,6 @@ pub struct AmdDetectionOptions {
     #[host(default = None)]
     pub prompt: Option<String>,
 }
-
-// --- the machine's config, as the host hands it over ------------------------------------------
 
 /// With AMD's own STT, session transcripts are dropped, or the greeting is seen twice.
 #[crate::host(record(module = "amd", extract))]

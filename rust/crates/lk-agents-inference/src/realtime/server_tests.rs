@@ -1,38 +1,3 @@
-//! The OpenAI Realtime server, as the real one was measured answering the protocol and, where
-//! that is silent, as the docs say: the peer the realtime core is tested against
-//! ([`super::sim`]).
-//!
-//! Sans-IO, in the protocol's typed records: the realtime core's client frames
-//! ([`Outgoing`]) go in with the instant they arrived ([`Server::client`]), what the server does
-//! on its own accord goes in as an [`Exo`], and every server event comes out of [`Server::pop`]
-//! once it is due, as the [`Incoming`] the client decodes from it. Each event's delay after its
-//! cause is drawn from a hand-set range around what the real server took, so a reply is
-//! created about 100 ms after its `response.create`, its first item 300 ms later, its audio in
-//! 400 ms deltas faster than real time, and `response.done` while the client is still playing
-//! most of it -- which is what made a server onset over a finished generation the common
-//! barge-in, not a rare one. The server answers the client's frames in the order they came.
-//!
-//! It holds the conversation: items by id and kind, placed where the real server places them (a
-//! reply's item when it is added, after any client item that arrived first), deleted and
-//! truncated on the client's word (a truncation cuts what the item holds); a reply reads what the
-//! conversation holds when it is asked. One reply at a time: a second `response.create` over an
-//! active one is refused, a cancel frees the conversation at once (a reply asked in the same
-//! breath is created before the cancelled one's tail and `response.done`), and a cancelled reply
-//! keeps streaming what it had generated before the cancel landed. Under server VAD an onset needs
-//! audio the client sent; it cancels the reply in progress when `interrupt_response`
-//! (`cancelled`/`turn_detected`, its message `incomplete`), and the end of the turn commits the
-//! buffer and, with `create_response` and no reply active, opens one. The transcription completes
-//! asynchronously, before or after the reply's events.
-//!
-//! What the real server refuses it refuses, with the real code and the real choice of citing the
-//! frame or not, and reports each refusal as a [`Breach`] with whether the client already knew
-//! better when it sent the frame (it had been told the state that makes the frame invalid) or
-//! merely raced an event on the wire. So are two answers the server gives from the wrong state: a
-//! reply asked in the same breath before the tool output it should read, and a cancel landing on
-//! the server's reply to the person's turn before anything prompted it.
-//!
-//! The audio a response carries is silence of the delta's nominal length: its length is what
-//! truncation is judged against.
 use std::{collections::BTreeMap, time::SystemTime};
 
 use fastrand::Rng;
@@ -45,6 +10,10 @@ use lk_agents_inference::realtime::{
     Incoming, TurnDetection,
     protocol::{OutputItemKind, ResponseDone, TranscriptionCompleted, TranscriptionUsage},
 };
+
+// Each event's delay after its cause is drawn from a hand-set range around what the real server
+// took; a response's audio is silence of the delta's nominal length, which truncation is judged
+// against.
 
 #[path = "client_tests.rs"]
 mod client;

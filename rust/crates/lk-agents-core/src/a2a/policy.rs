@@ -1,6 +1,3 @@
-//! The door's arrival options: the five inbox policies and the debounce, as declared (one
-//! value, or per channel over the default map) and as resolved for a message's channel.
-
 use lk_agents_abi::a2a_protocol as a2a;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -82,3 +79,7 @@ pub fn resolve_debounce(debounce: &DebounceSpec, channel: &str, policy: Policy) 
     }
     if policy == Policy::Batch { defaults["sms"] } else { Duration::ZERO }
 }
+
+#[cfg(test)]
+#[path = "policy_tests.rs"]
+mod tests;

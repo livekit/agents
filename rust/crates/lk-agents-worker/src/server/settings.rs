@@ -1,6 +1,3 @@
-//! `AgentServer(...)`'s options, resolved once against the environment, and the environment
-//! reads the host calls.
-
 use livekit_protocol as proto;
 
 use crate::{EnvOption, RuntimeConfig, WorkerConfig};
@@ -425,7 +422,7 @@ impl ServerSettings {
     }
 }
 
-/// `https://<project>/agents/<agent>/<deployment>`, where the text doors are reached (plan 7.2),
+/// `https://<project>/agents/<agent>/<deployment>`, where the text doors are reached,
 /// when the URL and the agent are known; a worker registered without a deployment is `_`.
 pub fn endpoint_url_base(ws_url: &str, agent_name: &str, deployment: &str) -> Option<String> {
     if ws_url.is_empty() || agent_name.is_empty() {
@@ -440,3 +437,7 @@ pub fn endpoint_url_base(ws_url: &str, agent_name: &str, deployment: &str) -> Op
     let deployment = if deployment.is_empty() { "_" } else { deployment };
     Some(format!("{base}/agents/{agent_name}/{deployment}"))
 }
+
+#[cfg(test)]
+#[path = "settings_tests.rs"]
+pub(super) mod tests;

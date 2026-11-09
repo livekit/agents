@@ -1,5 +1,3 @@
-//! The job a process runs (`job.py`): its start fields, the session's view of it and its trace.
-
 use crate::telemetry::decl::SpanValue;
 
 /// A `livekit.agent.Job`, crossing as the SDK's message.

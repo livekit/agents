@@ -1,5 +1,3 @@
-//! OpenAI Chat Completions and Responses request items.
-
 use super::group::group_tool_calls;
 use super::wire::{Content, FunctionDefinition};
 use super::{

@@ -1,5 +1,3 @@
-//! TtsSynthesis protocol decisions. The adapter owns sockets, bounded delivery and cleanup.
-
 use crate::effects::TtsSynthesisEffect;
 use std::{collections::BTreeSet, time::Duration};
 

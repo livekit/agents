@@ -1,5 +1,3 @@
-//! Anthropic Messages content blocks, with the system prompt out of band.
-
 use super::turns::{Dialect, ResultsTurn, Speaker, Turns, merge_turns};
 use super::wire::FunctionDefinition;
 use super::{

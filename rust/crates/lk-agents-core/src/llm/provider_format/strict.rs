@@ -1,7 +1,7 @@
-//! `llm/_strict.py`. Key order is observable (`preserve_order`); `$defs` are made strict before
-//! anything resolves them, but `$ref`s are inlined by value, without Python's incidental aliasing.
-
 use serde_json::{Map, Value};
+
+// Key order is observable (`preserve_order`). `$defs` are made strict before anything resolves
+// them, but `$ref`s are inlined by value, without Python's incidental aliasing.
 
 /// Public so `resolve_ref` is usable from the schema walk.
 pub type Object = Map<String, Value>;

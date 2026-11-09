@@ -1,11 +1,7 @@
-//! The job process protocol: what the worker says to a job process ([`ToChild`]) and what the job
-//! process answers ([`ToParent`]). The [`ipc_channel`](super::ipc_channel) carries them and checks the
-//! version.
-//!
-//! The parent speaks first, [`Hello`]; the child answers [`ToParent::Ready`]. Everything after is
-//! one-way: a ping's pong echoes its timestamp, and the shutdown is acked by messages of its own.
-
 use serde::{Deserialize, Serialize};
+
+// The parent speaks first, `Hello`; the child answers `ToParent::Ready`. Everything after is
+// one-way: a ping's pong echoes its timestamp, and the shutdown is acked by messages of its own.
 
 /// The longest free text a message carries (an error, a reason); longer text is cut.
 pub const MAX_TEXT: usize = 64 << 10;

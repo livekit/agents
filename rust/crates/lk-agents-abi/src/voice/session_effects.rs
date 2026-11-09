@@ -1,5 +1,3 @@
-//! What `start()` decides. The decision is in `lk-agents-voice/src/agent_session/`.
-
 /// A user-turn hook result: updated text, history and whether it stopped the response.
 use crate::voice::session_options::RecordingOptions;
 use std::sync::Arc;

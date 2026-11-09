@@ -1,12 +1,12 @@
-//! One authoring authority for agents used by text runs and voice sessions. The host registry
-//! keeps actual callables under these IDs so no native configuration retains Python self.
-
 use lk_agents_abi::agent::Retries;
 use lk_agents_abi::agent::authoring::{
     AgentConfiguration, AuthoringError, CallbackKind, DEFAULT_AGENT_NAME, Registered, ToolOptions,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
+
+// The host registry keeps the callables under these IDs, so no native configuration retains a
+// Python `self`.
 
 pub struct AgentConfig {
     name: Option<String>,

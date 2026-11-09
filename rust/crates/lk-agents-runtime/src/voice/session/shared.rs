@@ -1,7 +1,3 @@
-//! What a session's spawned tasks and the host share with its queue owner: the clock, the
-//! published views and outputs, the queue and the replies of the calls awaiting the core, the
-//! host event stream and the taps a system watches.
-
 use super::calls::{Awaited, Call, Calls};
 use super::time::Timebase;
 use crate::telemetry;
@@ -308,7 +304,6 @@ pub struct SessionShared {
     pub(in crate::voice) gen_ids: std::sync::atomic::AtomicU64,
     pub(in crate::voice) session_id: String,
     pub(in crate::voice) chat_ctx: tokio::sync::watch::Receiver<Arc<lk_agents_abi::ChatContext>>,
-    /// The providers by id.
     pub(in crate::voice) resources: crate::voice::resources::Resources,
     /// `session.keyterms`: the last list pushed to the recogniser.
     pub(in crate::voice) keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,

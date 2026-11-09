@@ -1,6 +1,3 @@
-//! `metrics/`: the performance records (`base`) and the provider folds that make them
-//! (`provider`). Usage is `crate::usage`'s.
-
 pub mod base;
 pub mod provider;
 

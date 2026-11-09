@@ -1,8 +1,3 @@
-//! The process's telemetry (docs/internals/telemetry.md "Destinations"): one tracer every
-//! `ProcessEnv` lends, and one OTLP exporter it records to once the host installs telemetry; the
-//! `function_tool` span the voice and text executors share; and the usage counters a metrics
-//! record feeds.
-
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::collections::BTreeMap;
@@ -32,7 +27,6 @@ pub(crate) use lk_agents_net::export::stall::{Blocked, event_loop_blocked};
 use parking_lot::Mutex;
 use serde_json::Value as JsonValue;
 
-// What the runtime's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
 pub(crate) use lk_agents_abi::telemetry::decl::SpanDecl;
 pub(crate) use lk_agents_abi::telemetry::decl::{Content, Json, Measured, Seconds};
 pub(crate) use lk_agents_abi::telemetry::instruments::{AudioConsumer, TurnLlmTtft, TurnTtsTtfb};
@@ -380,9 +374,8 @@ pub(crate) fn end_function_tool(
     }
 }
 
-/// The `lk.agents.usage.*` counters and the connection time one metrics record carries, as
-/// 1.8.10 recorded them: a zero records nothing; the labels are the record's model, what is not
-/// known omitted.
+/// The `lk.agents.usage.*` counters and connection time one metrics record carries: a zero
+/// records nothing; the labels are the record's model, unknowns omitted.
 pub(crate) fn record_usage(cx: &Cx, metrics: &AgentMetrics) {
     let md = metrics.metadata();
     let model = || {

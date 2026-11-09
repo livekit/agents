@@ -1,11 +1,10 @@
-//! `StreamBuffer`: a blocking pipe giving a decode job a blocking `read`. `end_input` drains then
-//! EOFs; `close` EOFs at once even with bytes unread, which is how the decode job tells a teardown
-//! from a failure.
-
 use std::collections::VecDeque;
 use std::thread::Thread;
 
 use parking_lot::Mutex;
+
+// `end_input` drains then EOFs; `close` EOFs at once even with bytes unread, which is how the
+// decode job tells a teardown from a failure.
 
 /// Writes are kept whole, so a reader can take them as the writer made them.
 #[derive(Default)]

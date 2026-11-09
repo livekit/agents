@@ -1,5 +1,3 @@
-//! Playout window accounting shared by SDK source adapters and simulated sources.
-
 use lk_agents_abi::voice::rtc::PlaybackInfo;
 use std::time::Duration;
 
@@ -68,8 +66,7 @@ mod tests {
     }
 
     // Catches: a `settle` that reports cumulative totals rather than the window since the last
-    // one. `_ParticipantAudioOutput` waits once per flush and reads per-utterance figures off the
-    // result; a cumulative answer would report every earlier utterance's audio as this one's.
+    // one, which would report every earlier utterance's audio as this one's.
     #[test]
     fn each_settle_reports_only_the_window_since_the_previous_one() {
         let mut ledger = PlayoutLedger::new();
@@ -81,8 +78,7 @@ mod tests {
     }
 
     // Catches: discarded audio counted as played, or a window's discard leaking into the next.
-    // `discarded` is the interruption signal `on_playback_finished(interrupted=True)` derives from, so
-    // both errors change what the user is told about an interruption.
+    // `discarded` is the interruption signal, so both errors change what the user is told.
     #[test]
     fn a_clear_moves_the_unplayed_part_from_played_to_discarded() {
         let mut ledger = PlayoutLedger::new();

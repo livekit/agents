@@ -1,7 +1,3 @@
-//! The warm process pool: admission, process eligibility, joins and the close deadline, with the
-//! host's steps run as tasks the pool owns. Every change happens under one lock; a host step only
-//! reports back into it.
-
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::sync::Arc;
@@ -19,6 +15,9 @@ use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::job::RunningJobInfo;
 
 use super::process_pool::Executor;
+
+// Every change happens under one lock; a host step runs as a task the pool owns and only reports
+// back into it.
 
 pub const MAX_ACQUIRE_ATTEMPTS: u32 = 3;
 pub const MAX_LAUNCH_ATTEMPTS: u32 = 3;

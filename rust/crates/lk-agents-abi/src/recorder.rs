@@ -1,5 +1,3 @@
-//! Recording observations and the native tap consumed by the live session.
-
 use crate::AudioFrame;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

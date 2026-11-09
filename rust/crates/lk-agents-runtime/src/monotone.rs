@@ -1,5 +1,3 @@
-//! A level-triggered cell whose value only moves forward.
-
 use tokio::sync::watch;
 
 /// Level-triggered, so a late observer never hangs. Values that legitimately go backwards
@@ -53,8 +51,7 @@ mod tests {
         Done,
     }
 
-    // Catches: routing a value that goes backwards (`_clear_authorization()`,
-    // `speech_handle.py:303`) through `Monotone`.
+    // Catches: routing a value that goes backwards (`_clear_authorization()`) through `Monotone`.
     #[test]
     #[cfg(debug_assertions)]
     #[should_panic(expected = "would regress")]

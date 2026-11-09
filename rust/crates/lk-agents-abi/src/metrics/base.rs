@@ -1,7 +1,7 @@
-//! `metrics/base.py`. A `///` on a declared type or field is API (it lands in the schema digest the
-//! gate compares); Rust-only notes go in `//`. Request metrics embed `usage`'s `TokenUsage`.
-
 use crate::usage::TokenUsage;
+
+// A `///` on a declared type or field is API (it lands in the schema digest the gate compares);
+// Rust-only notes go in `//`.
 
 // The Python `module` and `path` of every record here that names none of its own.
 #[crate::host(file(module = "metrics", path = "livekit.agents.metrics"))]

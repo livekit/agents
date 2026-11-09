@@ -1,4 +1,4 @@
-//! Shared resource-lifetime admission. Executors own work; a cancelled waiter cannot abandon it.
+// Executors own the work; a cancelled waiter cannot abandon it.
 
 /// Admission for the lifetime surrounding a voice session or text request. Repeated callers join the
 /// operation already admitted; closing before start never acquires resources.

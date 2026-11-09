@@ -1,4 +1,3 @@
-//! Pure avatar segment identity, admission, framing and clear decisions.
 use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackSegment};
 use std::time::Duration;
 
@@ -52,12 +51,9 @@ pub struct FinishedPayload {
 /// What the avatar worker reads: audio, and where each segment ends.
 pub type Received = lk_agents_abi::utils::video::AudioReceiverFrame;
 
-/// Why reading stopped: closed by us (the end of iteration), or failed (the reference re-raises it
-/// from iteration).
 pub use lk_agents_abi::voice::avatar::ReceiverEnd;
 
 pub use lk_agents_abi::voice::avatar::ClearBufferListener;
 
-/// `STREAM_IDLE_TIMEOUT`: with no chunk or trailer for this long, the last segment's trailer is
-/// assumed lost.
+/// With no chunk or trailer for this long, the last segment's trailer is assumed lost.
 pub const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(10);

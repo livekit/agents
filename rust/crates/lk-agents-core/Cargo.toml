@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# The shared agent execution core (docs/internals/rust-core.md "Agent execution"): `AgentRun`, the
+# The shared agent execution core: `AgentRun`, the
 # tool/approval/output decisions and the outcome table that direct runs, TextSession and
 # VoiceSession compose, and the A2A task decisions (`a2a`). Synchronous and pure: no runtime,
 # executor, Tokio, futures or pyo3.
@@ -32,7 +32,3 @@ thiserror.workspace = true
 
 [dev-dependencies]
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde", "testkit"] }
-
-[[test]]
-name = "a2a"
-path = "src/a2a_tests.rs"

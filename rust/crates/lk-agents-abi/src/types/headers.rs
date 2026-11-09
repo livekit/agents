@@ -1,5 +1,3 @@
-//! Ordered HTTP headers shared by clients and the host boundary.
-
 #[crate::host(codec(
     extract,
     emit,

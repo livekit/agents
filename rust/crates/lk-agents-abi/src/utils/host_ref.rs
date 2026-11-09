@@ -1,11 +1,11 @@
-//! Opaque host payloads Rust moves and never inspects. Released by refcount, not per generation:
-//! committed history outlives any one generation's snapshot.
-
 pub use crate::errors::RefRegistry;
 pub use crate::errors::side_table::Entry as RefEntry;
 use crate::errors::side_table::Entry;
 use std::marker::PhantomData;
 use std::sync::Arc;
+
+// Released by refcount, not per generation: committed history outlives any one generation's
+// snapshot.
 
 /// A retained object with a compile-time role; all roles share one ownership implementation.
 pub struct ObjectRef<Kind> {

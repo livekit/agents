@@ -1,6 +1,3 @@
-//! The resources surrounding a direct run or a whole text-session turn. The owner, rather than
-//! any language waiter, retains startup, rollback and finalization through settlement.
-
 use lk_agents_abi::agent::resources::{ContextHydration, ResourceError};
 use lk_agents_abi::llm::toolsets::{ToolsetGroup as _, ToolsetHooks};
 use lk_agents_abi::storage::Storage as _;

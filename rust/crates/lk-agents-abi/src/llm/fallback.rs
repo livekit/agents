@@ -1,6 +1,3 @@
-//! The fallback adapters: `AvailabilityChangedEvent` (all of them), the chain's report to its
-//! adapter, and the native LLM, TTS and realtime chains.
-
 /// `AvailabilityChangedEvent`, identical in all three fallback adapters: an entry, by position in
 /// the host's list, went unavailable or recovered. The host maps the index back to its instance.
 #[derive(Debug, Clone, PartialEq, Eq)]

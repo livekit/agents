@@ -1,5 +1,3 @@
-//! Background sound stream execution and room track ownership.
-
 use crate::telemetry;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::rtc::{

@@ -1,5 +1,3 @@
-//! Wait effects are SDK snapshots and event subscriptions; decisions live in the voice core.
-
 use super::*;
 use lk_agents_voice::room_io::machine::wait::{
     Participant, Ready, RoomWait, RoomWaitEvent, Snapshot, Track, WaitFor,

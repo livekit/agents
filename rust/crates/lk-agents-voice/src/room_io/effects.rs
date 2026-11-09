@@ -1,8 +1,6 @@
-//! Room publication work from `machine::RoomTranscriptionWriter`, performed by the runtime
-//! room transcription output. TranscriptSync owns upstream word pacing, not this protocol.
-
-/// Ordered room publication work requested by [`RoomTranscriptionWriter`](super::machine::RoomTranscriptionWriter).
-/// A replacement is its own short stream; everything else closes final.
+/// Ordered room publication work requested by
+/// [`RoomTranscriptionWriter`](super::machine::RoomTranscriptionWriter). A replacement is its own
+/// short stream; everything else closes final.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoomTranscriptionEffect {
     /// Open the segment's text stream; only the replacement mode's closing stream opens final.

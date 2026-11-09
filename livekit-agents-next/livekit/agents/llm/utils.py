@@ -250,7 +250,7 @@ def prepare_function_arguments(
                 fnc_call.arguments = canonical
 
     try:
-        return _prepare_function_arguments(fnc=fnc, args_dict=args_dict, call_ctx=call_ctx)
+        return bind_function_arguments(fnc, validated_arguments(fnc, args_dict), call_ctx)
     except ToolError:
         raise
     except (pydantic.ValidationError, ValueError, TypeError) as e:
@@ -292,15 +292,6 @@ def validated_arguments(
 
     model = model_type.model_validate(resolved)  # can raise ValidationError
     return _shallow_model_dump(model)
-
-
-def _prepare_function_arguments(
-    *,
-    fnc: FunctionTool | RawFunctionTool,
-    args_dict: dict[str, object],
-    call_ctx: RunContext[_ContextT] | None,
-) -> tuple[tuple[object, ...], dict[str, object]]:
-    return bind_function_arguments(fnc, validated_arguments(fnc, args_dict), call_ctx)
 
 
 def bind_function_arguments(
@@ -430,8 +421,6 @@ async def to_chat_ctx(
     ProviderMessages,
     GoogleFormatData | BedrockFormatData | AnthropicFormatData | MistralFormatData | None,
 ]:
-    from .chat_context import ImageContent
-
     images = {
         content.id: await serialize_image(content)
         for item in chat_ctx.items
@@ -462,8 +451,6 @@ def to_fnc_ctx(
     tool_behavior: TOOL_BEHAVIOR | None = None,
     use_parameters_json_schema: bool = True,
 ) -> list[dict[str, Any]]:
-    from .tool_context import FunctionTool, RawFunctionTool
-
     responses = format == "openai.responses"
     specs: list[ToolSchema] = []
     for tool in tool_ctx.flatten() if responses else tool_ctx.function_tools.values():

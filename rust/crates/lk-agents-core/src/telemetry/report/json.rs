@@ -1,5 +1,3 @@
-//! The report as JSON: the options it records and the console's `session_report.json`.
-
 use std::io;
 
 use lk_agents_abi::telemetry::report::{RecordingOptions, SessionReport};

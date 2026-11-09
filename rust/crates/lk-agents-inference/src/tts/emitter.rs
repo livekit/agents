@@ -1,13 +1,3 @@
-//! `tts.AudioEmitter`: the I/O owner around the media crate's PCM framing state machine.
-//! It supplies decoding, ordered audio delivery, flush scheduling, and segment
-//! finalization. Effects reach the host through [`EmitterOutput`], whose calls queue in order on
-//! the host loop: no host code runs inside an emitter call, so a consumer that calls back into
-//! the emitter never nests in it.
-//!
-//! PCM and WAV are framed inside the call that pushed them. A compressed container decodes on an
-//! admitted native worker, one decoder per segment as in the reference: its calls queue for the
-//! emitter's task, which ends a segment only after the segment's audio is decoded and framed.
-
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -26,6 +16,10 @@ use tokio::sync::{Notify, watch};
 
 use crate::codecs::{self, DecoderInput, decoder_limits};
 use lk_agents_net::env::ProcessEnv;
+
+// `EmitterOutput` calls queue in order on the host loop: no host code runs inside an emitter
+// call, so a consumer that calls back into the emitter never nests in it. A segment ends only
+// after its audio is decoded and framed.
 
 /// What the emitter runs on, lent by the process.
 pub struct EmitterEnv {

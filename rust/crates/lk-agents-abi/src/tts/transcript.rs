@@ -1,5 +1,3 @@
-//! Transcript text and alignment metadata shared by every language binding.
-
 /// A transcript word or chunk with optional alignment, confidence and speaker metadata.
 ///
 /// Times are seconds on the owning audio stream's timeline. Stream adapters apply the source

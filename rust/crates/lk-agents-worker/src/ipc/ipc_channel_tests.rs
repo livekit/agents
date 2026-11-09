@@ -1,5 +1,4 @@
-//! The job channel over its real transport (and the in-memory one): framing, limits, how a
-//! connection ends, and a stress run. Allocation checks record only their own thread.
+//! The job channel over its real transport, in its own binary for the allocation recorder.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;

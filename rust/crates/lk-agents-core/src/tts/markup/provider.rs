@@ -1,17 +1,15 @@
-//! The per-provider dialect tables from `tts/_provider_format.py`.
-//!
-//! Provider docs:
-//! * Cartesia: <https://docs.cartesia.ai/build-with-cartesia/sonic-3/ssml-tags>
-//! * Inworld: <https://docs.inworld.ai/tts/capabilities/steering>
-//! * xAI: <https://docs.x.ai/developers/model-capabilities/audio/text-to-speech>
-//! * Fish Audio: <https://docs.fish.audio/developer-guide/core-features/emotions>
-//! * Gemini: <https://ai.google.dev/gemini-api/docs/speech-generation#controllable>
-
 use NonverbalField::*;
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 pub use lk_agents_abi::tts::markup::{NonverbalField, Provider};
+
+// Provider markup references:
+// Cartesia: <https://docs.cartesia.ai/build-with-cartesia/sonic-3/ssml-tags>
+// Inworld: <https://docs.inworld.ai/tts/capabilities/steering>
+// xAI: <https://docs.x.ai/developers/model-capabilities/audio/text-to-speech>
+// Fish Audio: <https://docs.fish.audio/developer-guide/core-features/emotions>
+// Gemini: <https://ai.google.dev/gemini-api/docs/speech-generation#controllable>
 
 pub trait ProviderExt {
     fn native_tags(self) -> &'static [&'static str];

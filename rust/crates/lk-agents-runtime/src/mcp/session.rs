@@ -1,6 +1,3 @@
-//! The SDK service has one owner; requests borrow its peer, never its join handle. The session
-//! keeps its target, so a lost connection reconnects on the next listing or call.
-
 use crate::telemetry;
 use lk_agents_abi::SpawnerExt;
 use lk_agents_net::task::TokioSpawner;
@@ -38,6 +35,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::transport::{Observed, StdioTransport, TransportReceipt, connect_http};
 use super::{McpError, McpProgress};
+
+// Requests borrow the SDK service's peer, never its join handle, which has one owner.
 
 /// The `notifications/cancelled` reason for a request its caller stopped awaiting.
 const CALLER_CANCELLED: &str = "cancelled by the caller";
@@ -91,7 +90,7 @@ enum Target {
         cwd: Option<String>,
     },
     #[cfg(test)]
-    Fake(Arc<dyn Fn() -> super::tests::FakeTransport + Send + Sync>),
+    Fake(Arc<dyn Fn() -> tests::FakeTransport + Send + Sync>),
 }
 
 impl Target {
@@ -415,7 +414,7 @@ impl McpSession {
     #[cfg(test)]
     pub(super) async fn connect_fake(
         &self,
-        transport: impl Fn() -> super::tests::FakeTransport + Send + Sync + 'static,
+        transport: impl Fn() -> tests::FakeTransport + Send + Sync + 'static,
     ) -> Result<(), McpError> {
         self.connect_to(Target::Fake(Arc::new(transport))).await
     }
@@ -613,11 +612,14 @@ fn cancelled() -> McpError {
 }
 
 #[cfg(test)]
+#[path = "session_tests.rs"]
+pub(super) mod tests;
+
+#[cfg(test)]
 mod target_tests {
     use super::*;
-    // Catches: a run's refreshed token kept on the old connection, or an unchanged one reconnecting
-    // before every request. The host connects with the run's current credentials each time; this
-    // decides whether that is a new connection.
+    // Catches: a refreshed token kept on the old connection, or an unchanged one reconnecting
+    // before every request.
     #[tokio::test]
     async fn only_changed_credentials_are_a_new_connection() {
         let http = |token: &str| Target::Http {

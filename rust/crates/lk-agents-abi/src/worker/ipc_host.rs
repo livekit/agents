@@ -1,5 +1,3 @@
-//! The job processes as the host drives them: the parent's supervisor and pool of each process,
-//! the child's channel to its parent and the run of its one job, with the host objects they call.
 use std::any::Any;
 use std::sync::Arc;
 

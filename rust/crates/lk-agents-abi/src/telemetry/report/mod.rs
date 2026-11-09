@@ -1,8 +1,3 @@
-//! The session report (docs/internals/telemetry.md "Session report"): the one value a session's
-//! end produces, the recording options that decide its outputs, the tagger the application tags
-//! the session with, and the upload's header and summary. `lk_agents_core::telemetry::report`
-//! projects the report; `lk-agents-net` exports and uploads the projections.
-
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};

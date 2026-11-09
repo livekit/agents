@@ -1,5 +1,3 @@
-//! Provider metric accumulation and emission eligibility, independent of host event loops.
-
 use std::collections::VecDeque;
 
 use lk_agents_abi::metrics::base::{
@@ -9,7 +7,6 @@ use lk_agents_abi::metrics::provider::RecognitionUsageMissing;
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{LlmChunk, SpeechEvent, SpeechEventType, SynthesizedAudio};
 
-/// A host provider's model and provider name.
 fn host_metadata(model: String, provider: String) -> Option<Metadata> {
     Some(Metadata { model_name: Some(model), model_provider: Some(provider) })
 }

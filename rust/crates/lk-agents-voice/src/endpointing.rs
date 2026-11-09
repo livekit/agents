@@ -99,9 +99,7 @@ pub struct Dynamic {
     utterance_ended_at: Option<Ts>,
     agent_started_at: Option<Ts>,
     agent_ended_at: Option<Ts>,
-    /// `_speaking`: between the user's start and end of speech.
     speaking: bool,
-    /// `_agent_speaking`: between the agent's start and end of speech.
     agent_speaking: bool,
 }
 
@@ -230,7 +228,6 @@ impl Dynamic {
             }
         } else {
             let pause = self.between_utterance();
-            // `&&` -> `||` is an equivalent mutant: `(None, Some)` is unreachable.
             let no_agent_turn_between =
                 self.agent_started_at.is_none() && self.agent_ended_at.is_none();
             if pause > Duration::ZERO && no_agent_turn_between {
@@ -268,8 +265,7 @@ mod tests {
         Ts::from_nanos(ms * 1_000_000)
     }
 
-    // Catches: the user's end of speech clearing an agent turn still open, so the pause across
-    // that turn was learned as an intra-user pause and `min_delay` crept up.
+    // An agent turn still open must survive the user's end of speech, or `min_delay` creeps up.
     #[test]
     fn a_pause_across_an_agent_turn_is_not_learned() {
         let min = Duration::from_millis(500);

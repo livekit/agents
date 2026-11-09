@@ -1,5 +1,3 @@
-//! Codec and byte-pipe host contracts; native execution is supplied by the runtime.
-
 use crate::AudioFrame;
 
 /// An audio container a decoder reads, named as FFmpeg's demuxer is.

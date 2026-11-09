@@ -1,8 +1,3 @@
-//! One job runner as the host and the pool see it (`_core.JobSupervisor`): its launch through the
-//! host's launcher, its initialization, its one job, its close and its end, and the state they
-//! leave (status, running job, pid, exit code). Supervision continues whether or not anyone still
-//! awaits it.
-
 use crate::ipc::telemetry;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use parking_lot::Mutex;
@@ -23,6 +18,8 @@ use super::{
     HEALTH_CHECK_GRACE, Hello, InitError, RunnerFields, RunnerSupervisor, SupervisorCallbacks, secs,
 };
 use lk_agents_net::env::ProcessEnv;
+
+// Supervision continues whether or not anyone still awaits it.
 
 /// What the runner's supervision has established, read by the getters and stamped on its logs.
 #[derive(Default)]

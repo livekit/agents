@@ -1,5 +1,3 @@
-//! Bounded room observations and admitted SDK streams, using the shared source lifecycle.
-
 type RpcClosure = dyn Fn(&str, &str) -> String + Send + Sync;
 
 use parking_lot::Mutex;

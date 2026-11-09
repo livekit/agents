@@ -18,14 +18,14 @@ const UNPACED_TIME: f64 = 0.0;
 
 /// Counts syllable-like pieces used to pace transcript words: [`Liang`] by default.
 pub trait Hyphenator: Send + Sync {
-    /// `len(hyphenate_word(word))`. Never zero, including for the empty string.
+    /// The number of hyphenation pieces. Never zero, including for the empty string.
     fn hyphens(&self, word: &str) -> usize;
 }
 
 #[derive(Default)]
 struct Node {
     children: BTreeMap<char, Node>,
-    /// The pattern's points when a pattern ends at this node (`t[None]`).
+    /// The pattern's points when a pattern ends at this node.
     points: Option<Vec<u8>>,
 }
 
@@ -38,7 +38,7 @@ impl Table {
     fn build() -> Table {
         let mut tree = Node::default();
         for pattern in PATTERNS.split_whitespace() {
-            // One point before every character and one after the last, as the reference parses.
+            // One point before every character and one after the last.
             let mut points = Vec::new();
             let mut digits = String::new();
             let mut node = &mut tree;
@@ -56,7 +56,7 @@ impl Table {
         }
         let mut exceptions = BTreeMap::new();
         for ex in EXCEPTIONS.split_whitespace() {
-            // `[0] + [int(h == "-") for h in re.split(r"[a-z]", ex)]`.
+            // A point before the first letter, then 1 after each letter followed by a hyphen.
             let mut points = vec![0u8];
             let mut between = String::new();
             for c in ex.chars() {
@@ -104,8 +104,8 @@ fn hyphenation_points(table: &Table, lower: &str) -> Vec<u8> {
     for start in 0..work.len() {
         table.tree.raise_points(&work, start, &mut points);
     }
-    // "No hyphens in the first two chars or the last two." Point `i` comes before `work[i]`,
-    // and `work` has a `.` at each end.
+    // No hyphens in the first two chars or the last two. Point `i` comes before `work[i]`, and
+    // `work` has a `.` at each end.
     let n = points.len();
     for edge in [1, 2, n - 2, n - 3] {
         points[edge] = 0;
@@ -113,10 +113,10 @@ fn hyphenation_points(table: &Table, lower: &str) -> Vec<u8> {
     points
 }
 
-/// `hyphenate_word(word)`: the pieces, broken at the possible hyphenation points.
+/// The pieces of `word`, broken at the possible hyphenation points.
 pub fn hyphenate_word(word: &str) -> Vec<String> {
     let chars: Vec<char> = word.chars().collect();
-    // "Short words aren't hyphenated." Characters, not bytes.
+    // Short words are not hyphenated. Characters, not bytes.
     if chars.len() <= SHORT_WORD_CHARS {
         return vec![word.to_owned()];
     }
@@ -126,7 +126,7 @@ pub fn hyphenate_word(word: &str) -> Vec<String> {
         Some(p) => p.clone(),
         None => hyphenation_points(table, &lower),
     };
-    // `for c, p in zip(word, points[2:])`: the original characters, the folded word's points.
+    // The original characters with the lowercased word's points.
     let mut pieces = vec![String::new()];
     for (c, p) in chars.iter().zip(points.iter().skip(2)) {
         pieces.last_mut().expect("one piece at least").push(*c);
@@ -137,7 +137,7 @@ pub fn hyphenate_word(word: &str) -> Vec<String> {
     pieces
 }
 
-/// The pacer's hyphenator: Liang's syllable count, `len(hyphenate_word(word))`.
+/// The pacer's hyphenator: Liang's syllable count.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Liang;
 
@@ -163,7 +163,7 @@ pub(in crate::transcription) enum TranscriptSyncInput {
     },
     /// The audio leg's flush: the segment's audio is complete, possibly with none.
     AudioEnd,
-    /// `clear_buffer`: the newest segment, if none of its audio reached the sink, is cut.
+    /// The newest segment, if none of its audio reached the sink, is cut.
     Clear,
     Started,
     Progressed(Duration),
@@ -199,7 +199,7 @@ struct Segment {
     cleared: bool,
 }
 
-/// `_SegmentSynchronizerImpl`s in order. Each leg is an ordered stream of segments delimited by
+/// Segment pacers in order. Each leg is an ordered stream of segments delimited by
 /// its flushes: a segment's text is the next text not yet ended, its audio the next audio, so a
 /// segment the producer ended with no audio is one by construction even when its words arrive
 /// later (through a `transcription_node`). The sink's playback moves the oldest segment it owes.
@@ -241,7 +241,6 @@ impl TranscriptSyncSegments {
                     self.apply(i, TranscriptPacerEvent::Paused, &mut out);
                 }
             }
-            // Keeps the finished segment's own `Heard`.
             TranscriptSyncInput::Finished { position, interrupted } => {
                 return self.on_finished(position, interrupted);
             }
@@ -299,8 +298,8 @@ impl TranscriptSyncSegments {
         }
         let i = self.next(|s| !s.audio_ended);
         if self.segments[i].cleared {
-            // The cut speech's leg ended after its clear (seed 19354): a new segment
-            // here would pair the next speech's words with no audio.
+            // The cut speech's leg ended after its clear: a new segment here would pair the
+            // next speech's words with no audio.
             self.segments.remove(i);
             return;
         }
@@ -315,7 +314,6 @@ impl TranscriptSyncSegments {
         }
     }
 
-    /// `clear_buffer`: the newest segment is cut if none of its audio reached the sink.
     fn on_clear(&mut self, out: &mut Vec<TranscriptPacerEffect>) {
         if !self.segments.back().is_some_and(|s| !s.audio) {
             return;
@@ -340,7 +338,7 @@ impl TranscriptSyncSegments {
             self.apply(i, TranscriptPacerEvent::Close, out);
             self.segments.remove(i);
         }
-        // The reference's pacing loop takes its first word as the playback starts.
+        // The first word is taken as the playback starts.
         let Some(i) = self.playing() else { return };
         self.segments[i].started = true;
         if let Some(at) = self.segments[i].pacer.as_ref().map(TranscriptPacer::position) {
@@ -363,7 +361,6 @@ impl TranscriptSyncSegments {
             return out;
         }
         let segment = self.segments.remove(i).expect("playing is an index");
-        // No live pacer: nothing to report.
         let Some(pacer) = segment.pacer.filter(live) else { return out };
         // Audio with no words: no transcript, so the speech's own text stands.
         let had_text = pacer.saw_text();
@@ -435,8 +432,7 @@ impl TranscriptSyncSegments {
         self.segments.iter().position(|s| s.audio && !s.cut_below)
     }
 
-    /// Closing ends the text output's segment even with none open, as closing the reference's
-    /// idle `_SegmentSynchronizerImpl` does.
+    /// Closing ends the text output's segment even with none open.
     fn rotate(&mut self, out: &mut Vec<TranscriptPacerEffect>) {
         if self.segments.is_empty() {
             out.push(TranscriptPacerEffect::Flush);

@@ -1,5 +1,3 @@
-//! Native voice-turn storage capability. The voice executor owns when these effects run.
-
 use crate::StreamInput;
 use std::future::Future;
 use std::pin::Pin;

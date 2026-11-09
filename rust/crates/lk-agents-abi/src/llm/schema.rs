@@ -1,5 +1,3 @@
-//! Schema default validation errors.
-
 use crate::llm::provider_format::StrictError;
 pub const MAX_DEPTH: usize = 100;
 

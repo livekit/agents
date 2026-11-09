@@ -1,7 +1,3 @@
-//! Conversation evals (testing.md "Conversation evals"): the application's judges of one
-//! evaluation run concurrently on one conversation, through the host. The intent judge's prompt
-//! and the scoring are runtime support's.
-
 use std::sync::Arc;
 
 use crate::Llm;

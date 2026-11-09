@@ -1,5 +1,3 @@
-//! The endpoint client's generated records and acknowledged reply resources.
-
 use serde_json::{Map, Value};
 
 use crate::errors::ProviderError;

@@ -1,5 +1,3 @@
-//! Synchronous receive-side framing, clear epochs and segment identity.
-
 use std::collections::VecDeque;
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -23,7 +21,6 @@ pub fn frame_size(frame_size_ms: u32) -> Result<NonZeroU32, ReceiverEnd> {
         .ok_or_else(|| ReceiverEnd::Failed("frame_size_ms must be positive".into()))
 }
 
-/// The pause before a failed report is sent again.
 const REPORT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 /// A playback report to the agent (`lk.playback_started`/`lk.playback_finished`), addressed to
@@ -72,7 +69,7 @@ pub enum ReportStep {
     Failed(ReceiverEnd),
 }
 
-/// `_send_task`'s retry policy for one report.
+/// The retry policy for one report.
 #[derive(Debug)]
 pub struct ReportAttempts {
     started: bool,
@@ -81,7 +78,6 @@ pub struct ReportAttempts {
 }
 
 impl ReportAttempts {
-    /// Whether another attempt is allowed.
     pub fn pending(&self) -> bool {
         self.tried < self.max_retries
     }

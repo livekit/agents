@@ -1,6 +1,3 @@
-//! Every framework span, its start and end attributes and its events (`telemetry.md`, "Span
-//! API"). The registry, the consumer schema and the trace rules are generated from these.
-
 pub mod agent_turn;
 pub mod common;
 pub mod endpoint;
@@ -9,6 +6,8 @@ pub mod job;
 pub mod session;
 
 use crate::telemetry::decl::Declared;
+
+// The registry, the consumer schema and the trace rules are generated from these declarations.
 
 /// Every span declaration, for the DST's span rule: each recorded span sits under a parent its
 /// declaration allows. `lk-agents-codegen --check` rejects a span missing here.

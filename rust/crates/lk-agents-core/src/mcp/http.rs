@@ -1,6 +1,3 @@
-//! MCP's HTTP protocol decisions over response status, headers and the message kind: the runtime
-//! executes the exchange and reads bodies; these rules choose what each response means.
-
 /// The header naming the streamable HTTP session.
 pub const SESSION_HEADER: &str = "Mcp-Session-Id";
 

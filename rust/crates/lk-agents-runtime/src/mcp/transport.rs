@@ -1,5 +1,3 @@
-//! SDK transports whose readers and close the runtime tracks until they drain.
-
 use lk_agents_abi::SpawnerExt;
 use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;

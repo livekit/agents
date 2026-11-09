@@ -1,4 +1,3 @@
-//! Tool duplicate grouping and confirmation schema policy.
 pub use lk_agents_abi::llm::provider_format::tools::*;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -19,7 +18,7 @@ pub fn duplicate_key(name: &str, args: Option<&Value>, scope: DuplicateScope) ->
     (name.to_owned(), args_key)
 }
 
-/// `_check_duplicate`'s decision (`tool_executor.py:649`) for the host, without its effects.
+/// `_check_duplicate`'s decision for the host, without its effects.
 /// `in_flight` is `[(call_id, allow_cancellation)]` for calls with the same duplicate key. Returns
 /// `("proceed", None)`, `("cancel_then_proceed", [call_id, ..])`, `("reject", None)`,
 /// `("confirm", None)` or `("not_cancellable", name)`.

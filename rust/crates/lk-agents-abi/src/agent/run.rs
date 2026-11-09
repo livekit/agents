@@ -1,8 +1,3 @@
-//! One agent invocation as the host runs it (agents.md "Agent", "Streaming runs"): the request,
-//! the updates it streams, its settled result, and [`AgentRunner`], the class that runs an
-//! [`AgentDefinition`] against its model and [`AgentCallbacks`]. `lk-agents-core`'s `AgentRun`
-//! decides; the runtime implements the runner.
-
 use std::sync::Arc;
 
 use serde_json::Value;

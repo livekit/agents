@@ -1,14 +1,12 @@
-//! A host `io.AudioInput` / `VideoInput` / `AudioOutput` / `TextOutput` is its trait through the
-//! generated proxy, which calls the io class's own methods and reads its properties. A host sink
-//! reports its playback into the [`PlaybackTracker`] its `_tracker` holds, stamped on the
-//! session's clock by [`PlaybackTracker::anchor_to`].
-
 use crate::voice::rtc::TrackSid;
 use crate::{AudioFrame, TranscriptChunk, Ts, WallAnchor};
 use std::sync::Arc;
 use std::time::Duration;
 
 pub use crate::voice::rtc::AudioOutputCapabilities;
+
+// A host sink reports its playback into the `PlaybackTracker` its `_tracker` holds, stamped on
+// the session's clock by `PlaybackTracker::anchor_to`.
 
 /// `PlaybackFinishedEvent` (the ABI's).
 pub use crate::voice::room_io::PlaybackFinished;

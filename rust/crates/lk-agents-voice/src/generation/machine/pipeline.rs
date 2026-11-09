@@ -1,5 +1,3 @@
-//! A generation step's committed words, metrics and completion report.
-
 use super::llm::LlmGenerationData;
 use super::{
     FinishInputs, GenEvent, ReplyContext, ReplySource, TurnAccumulator, TurnOutcome, TurnStats,

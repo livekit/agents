@@ -1,11 +1,9 @@
-//! Ordered transcript synchronization work and private pacing results.
 use super::Heard;
 use super::machine::lifecycle::TranscriptOutput;
 use super::machine::pacer::TranscriptPacerWarning;
 use lk_agents_abi::{TranscriptChunk, Ts};
 
 /// The transcript synchronizer's ordered runtime work and heard-text reports.
-/// Segment matching and per-segment pacing remain private to this owner.
 pub enum TranscriptSyncEffect {
     /// A transcript word released against the audio playhead.
     PublishWord {

@@ -1,5 +1,3 @@
-//! Room ownership ports. Live SDK objects, queues and cleanup belong to the runtime.
-
 use crate::voice::io::{AudioInput, AudioOutput, Result, TextOutput, VideoInput};
 use crate::voice::room_io::{
     DeleteRoomRequested, ParticipantInfo, ParticipantLinked, ParticipantUnlinked, RoomIoConfig,

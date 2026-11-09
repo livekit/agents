@@ -1,6 +1,3 @@
-//! One independently polled socket writer. Framing and media conversion use admitted workers;
-//! a stalled peer cannot suspend the owner's timer or command dispatch.
-
 use super::wire::{EncodeError, WireShape};
 use crate::realtime::dialect::{NUM_CHANNELS, SAMPLE_RATE};
 use crate::realtime::machine::{Outgoing, ReplyKind};
@@ -12,6 +9,9 @@ use lk_agents_media::{AudioResampler, OnChange, Quality};
 use lk_agents_net::transport::WsSender;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+
+// The writer is polled independently, so a stalled peer cannot suspend the owner's timer or
+// command dispatch.
 
 /// Batches retain bounded control traffic while one previous batch is in I/O. Input is taken
 /// only once this queue is empty, so audio waits in its own channel, under its policy.

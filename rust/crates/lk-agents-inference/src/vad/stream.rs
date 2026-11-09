@@ -1,7 +1,3 @@
-//! Ordered VAD streams on admitted native workers. Construction, resampling, prediction and
-//! recurrent resets stay on the same worker; callers only enqueue audio on a `Now` media queue and
-//! pull events. A gap in the queue resets the detector, as a flush does.
-
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,6 +13,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::machine::{VadMachine, VadOptions, VadOutput, VadPredict, VadResult};
 use super::{VadModel, VadModelFactory};
+
+// Construction, resampling, prediction and recurrent resets stay on the same worker. A gap in the
+// queue resets the detector, as a flush does.
 
 /// A decision on old audio is a wrong one: past 500 ms of lag the detector restarts on the newest.
 const INPUT_POLICY: Policy = Policy::Now(Duration::from_millis(500));

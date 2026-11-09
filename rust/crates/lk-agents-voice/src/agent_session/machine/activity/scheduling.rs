@@ -1,6 +1,3 @@
-//! `_scheduling_task` and its queue: the [`SpeechScheduler`], the speech vocabulary, and the
-//! driver's scheduling, authorization, pause and `_current_speech` queries.
-
 use crate::agent_session::VoiceDriver;
 use crate::agent_session::effects::Timer;
 use crate::agent_session::machine::coordination::{PauseResult, VoiceCallback};
@@ -18,13 +15,11 @@ use std::time::Duration;
 use speech_scheduler::{NextSpeech, Requeue, SchedulingPass};
 pub use speech_scheduler::{SpeechScheduler, Status};
 
-/// The scheduling state: the speeches, the queue and the step keep their invariants behind
-/// methods; the driver reaches only the plain switches.
 mod speech_scheduler {
     use super::*;
 
-    /// `_scheduling_paused`: new speech refused (tool replies excepted), queued speech still plays,
-    /// every caller answered when nothing is outstanding.
+    /// New speech refused (tool replies excepted), queued speech still plays, every caller
+    /// answered when nothing is outstanding.
     #[derive(Debug)]
     struct Pause {
         closing: bool,
@@ -32,9 +27,8 @@ mod speech_scheduler {
         callers: Vec<PauseCause>,
     }
 
-    /// Where `_scheduling_task`'s loop is: waiting for `_speech_q`, sleeping out
-    /// `min_consecutive_speech_delay`, waiting for `_authorization_allowed`, or with a
-    /// `_current_speech`.
+    /// Where the scheduling loop is: idle, sleeping out `min_consecutive_speech_delay`, holding
+    /// authorization, or with a current speech.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum SchedulingStep {
         Idle,
@@ -43,11 +37,11 @@ mod speech_scheduler {
         Delaying {
             next: Option<SpeechId>,
         },
-        /// The head is chosen but authorization is held (AMD's `_authorization_paused`).
+        /// The head is chosen but authorization is held for AMD.
         AuthorizationPaused {
             next: SpeechId,
         },
-        /// Authorized (`_current_speech`): playing, or inside a tool.
+        /// Authorized: playing, or inside a tool.
         Current(SpeechId),
     }
 
@@ -81,22 +75,20 @@ mod speech_scheduler {
         span: Option<telemetry::AgentTurnSpan>,
     }
 
-    /// `AgentActivity`'s scheduling state (`_speech_q`, `_current_speech`, `_scheduling_paused`,
-    /// `_authorization_paused`, `_preemptive_generation`), and every live speech's state. Part of
-    /// the [`AgentActivity`](crate::agent_session::machine::activity::AgentActivity).
+    /// The speech queue, the current speech, the pauses, the preemptive generation, and every
+    /// live speech's state.
     #[derive(Debug)]
     pub struct SpeechScheduler {
         speeches: BTreeMap<SpeechId, Entry>,
-        /// `_speech_q`. Every speech has `SPEECH_PRIORITY_NORMAL` (nothing calls `say(priority=)`),
-        /// so the reference's priority queue is a queue.
+        /// Every speech has the same priority, so this is a plain queue.
         speech_q: VecDeque<SpeechId>,
         step: SchedulingStep,
         /// `None` until a speech has played out. Not `Ts::ZERO`, which would delay the first
         /// speech.
         last_playout: Option<Ts>,
         paused: Option<Pause>,
-        /// AMD's `_authorization_paused`: the head is chosen and held unauthorized. A flag, not a
-        /// counter: two pauses and one resume resume.
+        /// AMD's hold: the head is chosen and held unauthorized. A flag, not a counter: two
+        /// pauses and one resume resume.
         pub(crate) authorization_paused: bool,
         /// At most one live preemptive generation, with the transcript the model was asked about.
         preemptive_generation: Option<(SpeechId, String)>,
@@ -137,7 +129,6 @@ mod speech_scheduler {
             }
         }
 
-        /// `_current_speech`.
         pub fn current_speech(&self) -> Option<SpeechId> {
             match self.step {
                 SchedulingStep::Current(speech) => Some(speech),
@@ -279,7 +270,7 @@ mod speech_scheduler {
             }
         }
 
-        /// `_speech_q` in pop order.
+        /// The queue in pop order.
         pub fn speech_q(&self) -> &VecDeque<SpeechId> {
             &self.speech_q
         }
@@ -306,8 +297,8 @@ mod speech_scheduler {
             self.speech_q.push_back(speech);
         }
 
-        /// `_scheduling_task`'s pass: the owed gap expires where it is read, and the head is
-        /// authorized, armed behind the gap, or held for AMD.
+        /// The owed gap expires where it is read, and the head is authorized, armed behind the
+        /// gap, or held for AMD.
         /// `min_delay` is the effective `min_consecutive_speech_delay` (the driving agent's, else
         /// the session's), read at each pass.
         pub(super) fn scheduling_pass(
@@ -472,8 +463,7 @@ mod speech_scheduler {
             self.handover = None;
         }
 
-        /// `_pause_scheduling_task`: one more promise; the close's drain outranks the pause it
-        /// joins.
+        /// One more promise; the close's drain outranks the pause it joins.
         pub(super) fn pause(&mut self, cause: PauseCause) {
             match &mut self.paused {
                 Some(pause) => pause.callers.push(cause),
@@ -522,8 +512,8 @@ mod speech_scheduler {
             std::mem::take(&mut pause.callers)
         }
 
-        /// `_cancel_preemptive_generation`: the preflight goes; the live preemptive generation, if
-        /// it still has an entry, is discarded and returned for its interruption.
+        /// The preflight goes; the live preemptive generation, if it still has an entry, is
+        /// discarded and returned for its interruption.
         pub(super) fn cancel_preemptive_generation(&mut self) -> Option<SpeechId> {
             self.preflight = None;
             let (speech, _) = self.preemptive_generation.take()?;
@@ -643,7 +633,7 @@ mod speech_scheduler {
     }
 }
 
-/// Not `SpeechHandle::id`, the Python-visible string the pure tier cannot mint.
+/// Not the host-visible speech id string, which the core cannot mint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SpeechId(pub u64);
 
@@ -703,12 +693,12 @@ pub enum VoiceRunParticipation {
 /// Either way the speech is force-interrupted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, lk_agents_abi::Vocabulary)]
 pub enum Rejected {
-    /// Scheduling is paused (draining). The driver raises the reference's `RuntimeError` verbatim.
+    /// Scheduling is paused (draining).
     #[error(
         "cannot schedule new speech, the speech scheduling is draining/pausing, the speech will be cancelled"
     )]
     Draining,
-    /// The session is closing. The reference logs a warning and returns normally.
+    /// The session is closing: logged, not raised.
     #[error(
         "attempting to schedule a new SpeechHandle, but the speech_scheduler is not running, the speech will be cancelled"
     )]
@@ -786,9 +776,8 @@ pub fn reconcile_preemptive_generation(
 }
 
 impl VoiceDriver {
-    /// `_schedule_speech`. Every speech is born here: announced (`SpeechCreated`), recorded
-    /// (`ReplyCreated`), then queued, held as the preemptive generation, or refused: journalled,
-    /// interrupted (forced) and `false`.
+    /// Every speech is born here: announced, recorded, then queued, held as the preemptive
+    /// generation, or refused (journalled, force-interrupted, `false`).
     #[allow(
         clippy::too_many_arguments,
         reason = "Keep the operation’s existing explicit arguments"
@@ -803,9 +792,7 @@ impl VoiceDriver {
         host_asked: bool,
         voice_run: VoiceRunParticipation,
     ) -> bool {
-        // The reference announces every `say` and `_generate_reply` speech (turn replies and
-        // preemptive generations included) as user-initiated; only a generation the realtime
-        // server started on its own is not.
+        // Only a generation the realtime server started on its own is not user-initiated.
         let user_initiated = kind != SpeechKind::Realtime || host_asked;
         self.publish_event(SessionEvent::SpeechCreated { speech, kind, user_initiated });
         self.record_trace(SpeechStep::ReplyCreated { speech });
@@ -872,16 +859,15 @@ impl VoiceDriver {
         }
     }
 
-    /// One `_scheduling_task` pass per cycle, so `Authorized` lands next to the steps that led to
-    /// it; then the turn machine's `PreemptiveGeneration` asks.
+    /// One scheduling pass per cycle, so `Authorized` lands next to the steps that led to it;
+    /// then the turn machine's `PreemptiveGeneration` asks.
     pub(crate) fn advance_scheduling(&mut self, now: Ts) {
         self.run_scheduling_pass(now);
         self.activity.speech_scheduler.check_invariants(self.session.closing_past_edge());
     }
 
-    /// `_scheduling_task`: due interruption watchdogs, then the current speech. Its timers fire
-    /// here, wherever the pass runs, as `_scheduling_task` wakes between the loop's callbacks: a
-    /// watchdog due in the instant another timer fires goes off in that timer's pass.
+    /// Due interruption watchdogs, then the current speech. A watchdog due in the instant another
+    /// timer fires goes off in that timer's pass.
     fn run_scheduling_pass(&mut self, now: Ts) {
         let watchdog = |t| matches!(t, Timer::InterruptionTimeout(_));
         while let Some(Timer::InterruptionTimeout(speech)) = self.pop_due(now, watchdog) {
@@ -955,7 +941,7 @@ impl VoiceDriver {
     }
 
     /// The speech is over (`Done`, `Failed` or the watchdog): the current speech and its gap, then
-    /// `_on_pipeline_reply_done`'s `listening` when nothing speaks and nothing is in its tools.
+    /// `listening` when nothing speaks and nothing is in its tools.
     pub(super) fn speech_finished(&mut self, now: Ts, speech: SpeechId) {
         let Some((quiet, turn)) = self.activity.speech_scheduler.finish(speech, now) else {
             return;
@@ -979,9 +965,8 @@ impl VoiceDriver {
         }
     }
 
-    /// `_pause_scheduling_task`: new speech is refused (tool replies excepted) and queued speech
-    /// still plays; its caller is answered once nothing outstanding remains. Two pauses before the
-    /// drain completes are two promises; a closing session refuses (drops) it.
+    /// New speech is refused (tool replies excepted) and queued speech still plays; the caller is
+    /// answered once nothing outstanding remains. A closing session refuses it.
     pub(crate) fn pause_scheduling(&mut self, now: Ts, cause: PauseCause) {
         self.record_trace(SpeechStep::SchedulingPaused);
         if self.session.closing_past_edge() {
@@ -992,14 +977,14 @@ impl VoiceDriver {
         self.settle_scheduling_pause();
     }
 
-    /// `_resume_scheduling` at the handoff's swap: a preemptive generation for the old agent
-    /// is discarded, and only the pause the handoff (or the host's drain) caused is lifted.
     pub(crate) fn pause_scheduling_for_close(&mut self, now: Ts) {
         self.record_trace(SpeechStep::SchedulingPaused);
         self.activity.speech_scheduler.pause_for_close();
         self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
     }
 
+    /// At the handoff's swap: a preemptive generation for the old agent is discarded, and only
+    /// the pause the handoff (or the host's drain) caused is lifted.
     pub(crate) fn resume_scheduling(&mut self, now: Ts) {
         self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
         if let Some(callers) = self.activity.speech_scheduler.resume_activity_pause() {
@@ -1027,7 +1012,6 @@ impl VoiceDriver {
         }
     }
 
-    /// `_cancel_preemptive_generation`: a live preemptive generation is discarded.
     pub(crate) fn cancel_preemptive_generation(&mut self, now: Ts, reason: PreemptiveDiscard) {
         if let Some(speech) = self.activity.speech_scheduler.cancel_preemptive_generation() {
             self.discard_preemptive_generation(now, speech, reason);
@@ -1107,7 +1091,6 @@ impl VoiceDriver {
 }
 
 impl super::AgentActivity {
-    /// `_current_speech` and its state.
     pub(crate) fn current_speech(&self) -> Option<(SpeechId, &SpeechState)> {
         let scheduling = &self.speech_scheduler;
         scheduling.current_speech().and_then(|id| Some((id, scheduling.speech(id)?)))

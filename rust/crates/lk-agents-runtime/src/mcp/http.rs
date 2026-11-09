@@ -1,6 +1,3 @@
-//! MCP's HTTP protocol adapter over the shared exchange and SSE decoder. The SDK owns session
-//! recovery; transport attempts do not replay a tool POST with an uncertain outcome.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -25,6 +22,9 @@ use sse_stream::{Error as SseError, Sse};
 
 use super::McpError;
 use super::transport::TransportReceipt;
+
+// The SDK owns session recovery; transport attempts never replay a tool POST with an uncertain
+// outcome.
 
 type Error = StreamableHttpError<ApiError>;
 const BODY_LIMIT: usize = 16 << 20;

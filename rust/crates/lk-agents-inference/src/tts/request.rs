@@ -1,5 +1,3 @@
-//! Retrying TTS entry points. Input stays with the request until audio makes replay unsafe.
-
 use crate::{retry, telemetry};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::utils::stream::{Entry, ProviderStream};

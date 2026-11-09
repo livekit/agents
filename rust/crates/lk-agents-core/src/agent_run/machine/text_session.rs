@@ -1,9 +1,9 @@
-//! Session composition points. A parked invocation owns no host work: all non-delegated calls
-//! must have settled before its history can replace the invocation in saved routing state.
-
 use lk_agents_abi::{ChatItem, Ts};
 
 use super::{AgentRun, AgentRunEffect, CallId, Phase};
+
+// A parked invocation owns no host work: every non-delegated call must settle before its history
+// can replace the invocation in saved routing state.
 
 pub enum DelegationCheckpoint {
     Waiting,

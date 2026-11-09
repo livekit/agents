@@ -1,5 +1,3 @@
-//! The host's tokenization functions; the tokenizers are `lk_agents_core::tokenize`'s.
-
 /// The host's text tokenization functions (`tokenize.basic`, `tokenize.utils`).
 pub struct SpeechTokenizer;
 

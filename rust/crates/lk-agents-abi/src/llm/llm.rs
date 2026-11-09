@@ -1,9 +1,9 @@
-//! The seam is `LLM.chat()` (`llm/llm.py:149`), not `_run()`: the plugin builds its own `LLMStream`,
-//! so a host-backed provider keeps retry, metrics and channels in Python.
-
 use crate::errors::ProviderError;
 use crate::utils::stream::ProviderStream;
 use crate::{ApiConnectOptions, ChatContext, Extra, HostRef, LlmChunk};
+
+// The seam is `LLM.chat()`, not `_run()`: the plugin builds its own `LLMStream`, so a host-backed
+// provider keeps retry, metrics and channels in Python.
 
 /// Plain data: reflection and invocation stay Python. The host passes the dict of these keys.
 // The omission-only defaults below move to the record declaration with the records family.

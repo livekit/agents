@@ -1,5 +1,3 @@
-//! Bounded pre-connect admissions and single-owner PCM transfer.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use lk_agents_abi::voice::io::{IoError, Result};

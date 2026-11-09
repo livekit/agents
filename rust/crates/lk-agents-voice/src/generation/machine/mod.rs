@@ -1,4 +1,3 @@
-//! Synchronous generation owners. Effects are declared in the sibling effects module.
 use super::*;
 
 pub mod audio_playback;

@@ -1,5 +1,3 @@
-//! Retains each activation's native lease group; scope selection belongs to core.
-
 use super::group::Group;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::toolsets::{self, Lifetime, ToolsetGroup as _, ToolsetHooks};

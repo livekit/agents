@@ -1,5 +1,3 @@
-//! Closed vocabularies of the provider request schemas.
-
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]

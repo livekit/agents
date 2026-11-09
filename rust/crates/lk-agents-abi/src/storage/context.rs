@@ -1,5 +1,3 @@
-//! Persisted context scopes and the activation's field staging boundary.
-
 use serde_json::{Map, Value};
 
 use super::StorageError;

@@ -1,4 +1,3 @@
-//! Host-independent tool argument decoding and bounded recovery of incomplete model output.
 use lk_agents_abi::agent::ToolArgumentError;
 use serde_json::{Map, Value};
 use std::sync::LazyLock;

@@ -1,7 +1,3 @@
-//! The realtime core keeps the server's conversation in step with the session's: across
-//! reconnects, context edits and cancelled responses, it sends only frames the server takes, and
-//! what it tells the driver belongs to the response it names. Each case runs the core over the
-//! simulated server ([`super::sim`]).
 use std::time::SystemTime;
 
 use lk_agents_abi::{

@@ -319,3 +319,7 @@ impl IvrSystem {
         })));
     }
 }
+
+#[cfg(test)]
+#[path = "machine_tests.rs"]
+mod tests;

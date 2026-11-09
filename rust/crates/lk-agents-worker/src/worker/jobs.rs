@@ -1,6 +1,3 @@
-//! The worker's registration, job offers, assignments, launches and drain, decided on the
-//! worker's loop as each event arrives.
-
 use livekit_protocol as pb;
 use lk_agents_abi::ATTRIBUTE_AGENT_NAME;
 use std::collections::BTreeMap;

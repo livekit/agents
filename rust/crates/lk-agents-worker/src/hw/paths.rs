@@ -1,5 +1,3 @@
-//! Resolve the process's own cgroups through procfs, including nonstandard mounts and namespaces.
-
 use std::path::{Path, PathBuf};
 
 use super::cgroup::{CpuMonitorKind, cpu_count_v2};

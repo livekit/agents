@@ -1,6 +1,3 @@
-//! `RealtimeSession`'s body as a synchronous state machine. A caller `req_id` goes out as
-//! `metadata.client_event_id`; a rejection, timeout or cancel must leave a late `response.created` recognisable as stale.
-
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, SystemTime};
 
@@ -20,6 +17,9 @@ use lk_agents_abi::usage::TokenUsage;
 use std::cell::Cell;
 use std::sync::Arc;
 
+// A caller `req_id` goes out as `metadata.client_event_id`; a rejection, timeout or cancel must
+// leave a late `response.created` recognisable as stale.
+
 pub mod connection;
 mod context;
 use context::{CtxUpdate, DeferredCommand, Retired, RetirementQueue};
@@ -30,7 +30,8 @@ pub use effects::Outgoing;
 mod options;
 pub use options::{OptionsPatch, SessionOptions};
 #[cfg(test)]
-mod contract_tests;
+#[path = "machine_tests.rs"]
+mod tests;
 
 /// How many generated messages are remembered for truncation.
 pub(crate) const SPOKEN_REMEMBERED: usize = 32;

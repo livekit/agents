@@ -1,6 +1,3 @@
-//! The inference gateway's host functions. The server-side fallback entries are in [`fallback`];
-//! the gateway avatar's declaration in [`avatar_session`].
-
 pub mod avatar_session;
 pub mod fallback;
 pub mod models;

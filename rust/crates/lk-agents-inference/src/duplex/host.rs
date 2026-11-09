@@ -1,7 +1,3 @@
-//! `_core.DuplexRealtimeModel`, `_core.FixedGate` and `_core.AdaptiveNoiseGate`: the engine over the
-//! adapter's declared host views. The caller's audio goes into the plugin's input, its updates
-//! apply one after the other, its output audio and events are pulled here.
-
 use crate::telemetry;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

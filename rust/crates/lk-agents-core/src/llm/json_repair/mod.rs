@@ -1,5 +1,6 @@
-//! Native translation of json_repair v0.60.1's schema-free, non-streaming recovery path.
-//! Copyright (c) 2023 Stefano Baccianella. MIT; see fixtures/json_repair/LICENSE.
+// Translation of json_repair v0.60.1's schema-free, non-streaming recovery path.
+// Copyright (c) 2023 Stefano Baccianella. MIT; see fixtures/json_repair/LICENSE.
+
 use serde_json::{Map, Value};
 mod string;
 

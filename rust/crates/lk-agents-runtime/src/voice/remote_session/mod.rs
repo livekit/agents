@@ -1,5 +1,3 @@
-//! The remote session protocol on its live transport.
-
 #[cfg(test)]
 mod client;
 pub mod driver;
@@ -44,7 +42,7 @@ pub fn hosting(
     ))
 }
 
-/// Execute the one operation planned by the voice protocol core.
+/// Executes the one operation the voice protocol core planned.
 pub fn reply<'a>(
     port: &'a dyn SessionPort,
     request: &'a proto::SessionRequest,
@@ -83,8 +81,6 @@ pub fn reply<'a>(
         Ok(Some(answer))
     })
 }
-
-// Request execution and session-clock reply encoding.
 
 pub struct SessionHost {
     port: Arc<dyn SessionPort>,

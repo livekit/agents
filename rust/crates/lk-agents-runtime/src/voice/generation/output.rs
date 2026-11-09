@@ -1,9 +1,3 @@
-//! A generation owns its admitted output binding even when it is cancelled while awaiting it.
-//! Its activation re-targets it to the session's current outputs and opens the transcript chain.
-//! `OutputBinding` is the execution owner throughout acquisition, activation, and retirement.
-//! The pending-acquisition guard and late-settlement observer below are private stages of that
-//! same obligation; all reports use core's single `OutputBindingEvent` lifecycle protocol.
-
 use crate::telemetry;
 use crate::voice::nodes::OutputNodes;
 use crate::voice::session::SessionShared;
@@ -19,6 +13,8 @@ use lk_agents_voice::agent_session::machine::output::{OutputBindingEvent, Segmen
 use lk_agents_voice::agent_session::{Answer, RequestId};
 use lk_agents_voice::generation::GenEvent;
 use std::sync::{Arc, Weak};
+
+// A generation owns its admitted output binding even when cancelled while awaiting it.
 
 pub(super) struct OutputBinding {
     shared: Arc<SessionShared>,

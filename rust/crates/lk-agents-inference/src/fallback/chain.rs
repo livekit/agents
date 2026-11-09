@@ -1,7 +1,3 @@
-//! `FallbackChain`: the availability + background-recovery machine the LLM, STT and TTS adapters
-//! share. Scanned from index 0 on every request (`llm:274`), so a recovered primary takes the next
-//! one; probes re-issue the real request (`llm:174-200`, `stt:201-235`, `tts:504-531`).
-
 use crate::effects::FallbackChainEffect;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -27,6 +23,9 @@ use tokio::sync::oneshot;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::fallback::{ChainPolicy, conn_options_for_attempt};
+
+// Every request scans from index 0, so a recovered primary takes the next one; probes re-issue
+// the real request.
 
 #[async_trait]
 pub trait Backend: Send + Sync + 'static {
@@ -914,3 +913,7 @@ impl<T, S> RunningAttempt<T, S> {
         settled.map(|(_, state)| state)
     }
 }
+
+#[cfg(test)]
+#[path = "chain_tests.rs"]
+mod tests;

@@ -1,12 +1,3 @@
-//! One chat completion request as a synchronous machine: accepted at a supplied instant, it owns
-//! its [`Request`], the response assembly and the replay guard. The runtime performs the HTTP
-//! exchange an [`LlmRequestEffect::LlmRequestStart`] asks for and reports what the transport
-//! observed.
-//!
-//! The read limit runs only while the consumer is waiting for the next chunk: downstream
-//! backpressure is not remote inactivity. A failure is retried only while nothing visible was
-//! delivered, since a replay would repeat it.
-
 use crate::effects::LlmRequestEffect;
 use lk_agents_abi::Ts;
 use lk_agents_abi::resources::ResourceId;
@@ -15,6 +6,9 @@ pub use lk_agents_core::request::{AttemptFailure, Policy};
 use lk_agents_core::request::{Request, Step};
 
 use crate::llm::parse::{ChoiceAccumulator, TagFilter, WireChunk, usage_chunk};
+
+// The read limit runs only while the consumer waits for the next chunk: downstream backpressure
+// is not remote inactivity. A failure is retried only while nothing visible was delivered.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LlmRequestId(pub u64);

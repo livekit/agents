@@ -1,15 +1,10 @@
-//! Zeroed records the tests fill in field by field.
-//!
-//! The reference's models are pydantic with per-field defaults, so a Python test writes
-//! `LLMMetrics(duration=0.5, ...)` and lets the rest default. Rust has no such thing for
-//! structs with required fields, and spelling fifteen zeros at every call site would bury the one
-//! field a test is actually about -- which is precisely how a rollup test stops catching anything.
-
 use lk_agents_abi::metrics::base::{EotInferenceMetrics, InterruptionMetrics, Metadata};
 
 use crate::metrics::base::{
     AvatarMetrics, EouMetrics, LlmMetrics, RealtimeModelMetrics, SttMetrics, TtsMetrics, VadMetrics,
 };
+
+// Zeroed records, so a test spells only the field it is about.
 
 pub fn meta(provider: &str, model: &str) -> Option<Metadata> {
     Some(Metadata { model_name: Some(model.to_owned()), model_provider: Some(provider.to_owned()) })

@@ -1,6 +1,3 @@
-//! [`AgentRunner`], the host's class: each `run` starts one invocation ([`start`]) on the process
-//! runtime and hands its updates out as a stream whose drop cancels it.
-
 use parking_lot::Mutex;
 use std::sync::Arc;
 

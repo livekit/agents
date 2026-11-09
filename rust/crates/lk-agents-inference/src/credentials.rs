@@ -1,5 +1,3 @@
-//! Credential resolution for the inference gateway and its host constructors.
-
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::inference::GatewayCredentials;

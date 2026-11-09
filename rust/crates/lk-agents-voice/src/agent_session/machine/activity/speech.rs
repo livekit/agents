@@ -1,6 +1,3 @@
-//! Speech from request to release: `say`, `generate_reply` and the turn's reply through
-//! `start_speech`, the generation's reports, the agent state, and `wait_for_idle`.
-
 use crate::agent::{Source, Visibility};
 use crate::agent_session::effects::{GateCause, GateOp, SpeechHistory, Timer};
 use crate::agent_session::machine::activity::realtime::RealtimeReplyRole;
@@ -31,9 +28,8 @@ struct EndOfSpeech {
     interruption_enabled: bool,
 }
 
-/// A `say(stream)` the realtime model would speak itself (no TTS): the wire carries one text item.
 /// A text `say()` with no TTS while audio output is attached and enabled, refused before a handle
-/// exists (`AgentActivity.say`'s first `RuntimeError`).
+/// exists.
 pub(crate) const SAY_WITHOUT_TTS_REFUSED: &str = "trying to generate speech from text without a TTS model or a RealtimeSession that supports say(); add a TTS model to AgentSession to enable say()";
 
 pub(crate) struct SpeechSpec {
@@ -44,7 +40,7 @@ pub(crate) struct SpeechSpec {
     /// Already resolved against the session default: the loop does not re-resolve options.
     pub(crate) allow_interruptions: bool,
     pub(crate) add_to_chat_ctx: bool,
-    /// `generate_reply(tool_choice=)`. `None` is `NOT_GIVEN`, which is **not** `"none"`.
+    /// `None` is not given, which is not `"none"`.
     pub(crate) tool_choice: Option<lk_agents_abi::ToolChoice>,
     pub(crate) chat_ctx: Option<ChatContext>,
     /// `None` is `generate_reply(user_input=)` (`Source::UserInput`).
@@ -52,16 +48,15 @@ pub(crate) struct SpeechSpec {
     /// A hook's `UpdateInstructions`: the prompt for this one request, already rendered.
     pub(crate) instructions_override: Option<String>,
     pub(crate) toolset: Option<Arc<Toolset>>,
-    /// Its methods alone decide scheduling, priority and draining-queue entry.
     pub(crate) kind: SpeechKind,
-    /// Issued from inside the agent's `on_enter`, so `IGNORE_ON_ENTER` tools are withheld. Decided
-    /// by the host (an ambient context var the core may not read).
+    /// Issued from inside the agent's `on_enter`, so `IGNORE_ON_ENTER` tools are withheld. The
+    /// host decides it from a context var the core cannot read.
     pub(crate) on_enter: bool,
     /// The host asked by name (`say`/`generate_reply`) although the kind says otherwise: a
     /// realtime generation for a host request is `user_initiated` to the host.
     pub(crate) host_asked: bool,
     /// The decided turn this speech replies to: its `EOUMetrics` go out between the speech's
-    /// announcement and the user item, as the reference's `on_end_of_turn` emits them.
+    /// announcement and the user item.
     pub(crate) end_of_turn: Option<EndOfTurnInfo>,
     /// The id a host's `say()` / `generate_reply()` answered with: the speech is created under it.
     pub(crate) host_speech: Option<SpeechId>,
@@ -107,8 +102,8 @@ impl super::AgentActivity {
 
 impl VoiceDriver {
     pub(crate) fn on_speech(&mut self, now: Ts, cmd: SpeechCommand) {
-        // The host's speech during the drain is the arriving agent's (`_next_activity`); the
-        // leaving agent's own tools and hooks are refused by the paused scheduler, as before.
+        // The host's speech during the drain is the arriving agent's; the leaving agent's own
+        // tools and hooks are refused by the paused scheduler.
         if matches!(cmd, SpeechCommand::Say { .. } | SpeechCommand::GenerateReply { .. })
             && self.command_origin == VoiceCommandOrigin::Host
             && self.session.closing.is_none()
@@ -118,10 +113,8 @@ impl VoiceDriver {
         }
         match cmd {
             SpeechCommand::GenerateReply(request) => self.generate_reply(now, request),
-            // The model speaks a `say` only with no TTS to (`AgentActivity.say`); with one, a
-            // realtime session's `say` is synthesised like a pipeline's, audio and streams too.
-            // These arms must come *before* the pipeline arm: a guarded arm after its unguarded
-            // twin is dead code.
+            // The model speaks a `say` only with no TTS. These arms must come before the pipeline
+            // arm: a guarded arm after its unguarded twin is dead code.
             SpeechCommand::Say {
                 text: SayText::Text(text),
                 allow_interruptions,
@@ -163,7 +156,7 @@ impl VoiceDriver {
             SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, call } => {
                 self.say(now, text, allow_interruptions, add_to_chat_ctx, call)
             }
-            // The AMD system's authorization hold: the scheduling task keeps its head.
+            // AMD's authorization hold: the scheduler keeps its head.
             SpeechCommand::PauseAuthorization => {
                 self.record_trace(SpeechStep::AuthorizationPaused);
                 self.activity.speech_scheduler.authorization_paused = true;
@@ -183,7 +176,6 @@ impl VoiceDriver {
             SpeechCommand::SetAllowInterruptions { speech, allow } => {
                 self.set_allow_interruptions(speech, allow)
             }
-            // A background tool's later update or return: the pair, the event, the coalesced reply.
             SpeechCommand::ToolUpdate { invocation_id, operation, call_id, update } => {
                 self.on_tool_update(now, invocation_id, operation, call_id, update)
             }
@@ -276,7 +268,6 @@ impl VoiceDriver {
         self.answer_speech(call);
     }
 
-    /// Shared with the run's own replies.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn generate_reply_speech(
         &mut self,
@@ -313,19 +304,15 @@ impl VoiceDriver {
         )
     }
 
-    /// The reply to a decided user turn (`on_end_of_turn`'s `_generate_reply`). A preemptive
-    /// generation for another turn is discarded; adopted, the user item enters the conversation
-    /// stamped at the turn's onset.
+    /// The reply to a decided user turn. A preemptive generation for another turn is discarded;
+    /// adopted, the user item enters the conversation stamped at the turn's onset.
     pub(crate) fn reply_to_turn(&mut self, now: Ts, info: &EndOfTurnInfo, edits: TurnEdits) {
         self.activity.last_turn = Some(info.turn_id);
-        // A realtime session answers on its own socket, from the audio it heard: the buffer is
-        // committed when the server did not segment and the reply is asked for. The STT's words
-        // are neither sent nor kept ("ignore stt transcription for realtime model"); the server's
-        // own transcript fills the user item.
+        // A realtime session answers from the audio it heard: the STT's words are neither sent
+        // nor kept; the server's own transcript fills the user item.
         if self.activity.realtime().is_some() {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
-            // The commit of the server's buffer and the ask, as one request; its speech is
-            // announced now, so the metrics name it.
+            // Its speech is announced now, so the metrics name it.
             let speech = self.realtime_user_turn(now);
             self.emit_eou_metrics(info, speech);
             return;
@@ -342,12 +329,11 @@ impl VoiceDriver {
         {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
         }
-        // The person answers the expert question that owns their reply: forwarded, not replied to.
+        // An answer to a pending expert question is forwarded, not replied to.
         if self.forward_expert_reply(now, info, edits.user_text.as_deref()) {
             return;
         }
-        // A tool claimed this turn (`InputRequired(tool=)`): the reply calls it, a different
-        // request from any guessed one.
+        // A tool claimed this turn: the reply calls it, a different request from any guessed one.
         let claimed = self.activity.consume_claim();
         if claimed.is_some() && self.activity.speech_scheduler.preemptive_generation().is_some() {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
@@ -369,7 +355,6 @@ impl VoiceDriver {
                 Visibility::Both,
             );
             self.set_agent_state(self.step.now, AgentState::Thinking);
-            // The adopted preemptive generation is the turn's reply: the record names it.
             self.emit_eou_metrics(info, Some(preemptive));
             return;
         }
@@ -433,7 +418,7 @@ impl VoiceDriver {
         let mut user =
             ChatMessage::text(self.session.ids.mint("item"), Role::User, text, created_at);
         user.transcript_confidence = Some(info.transcript_confidence);
-        // `_init_metrics_from_end_of_turn`: the reply's `e2e_latency` is measured from here.
+        // The reply's `e2e_latency` is measured from here.
         let m = &info.metrics;
         let secs = |d: Option<std::time::Duration>| d.map(|d| d.as_secs_f64());
         user.metrics = lk_agents_abi::MetricsReport {
@@ -448,9 +433,7 @@ impl VoiceDriver {
         user
     }
 
-    /// Through the one write, in order with `thinking`.
-    /// The single admission point for every speech. The runtime launches accepted work after
-    /// this step settles.
+    /// The single admission point for every speech.
     pub(crate) fn start_speech(&mut self, now: Ts, spec: SpeechSpec) -> SpeechId {
         let wall = self.step.wall();
         let user_metrics = spec.new_message.as_ref().map(|m| m.metrics.clone());
@@ -461,7 +444,6 @@ impl VoiceDriver {
         // is not written.
         let record =
             spec.chat_ctx.clone().unwrap_or_else(|| self.session.chat_ctx.agent_chat_ctx());
-        // The agent's prompt for the modality, or a hook's edit for this turn.
         let instructions = spec
             .instructions_override
             .clone()
@@ -485,10 +467,8 @@ impl VoiceDriver {
             expressive,
         };
 
-        // A reply created while a speech is being cut is requested once that speech's item is on
-        // the record (the cut settles within the interruption watchdog). One created while a
-        // speech plays is requested now, on the record as it stands, as the reference's reply
-        // task copies the context at creation: the playing speech's item may be seconds away.
+        // A reply created while a speech is being cut waits for that speech's item. One created
+        // while a speech plays is requested now: the playing speech's item may be seconds away.
         let after = self
             .activity
             .current_speech()
@@ -499,8 +479,6 @@ impl VoiceDriver {
 
         self.activity.note_speech_agent(id, kind);
 
-        // A model reply runs as one `AgentRun`, which names its first step's message and adds
-        // the tools its output takes.
         let realtime = matches!(spec.source, ReplySource::Realtime);
         let opened = if is_reply || realtime {
             let budgets = self.activity.retries();
@@ -575,7 +553,6 @@ impl VoiceDriver {
 
         // Past the close's hard edge no generation is started.
         let past_edge = self.session.closing_past_edge();
-        // Announced, recorded and scheduled in `request`, the one place every speech passes.
         let admitted = self.schedule_speech(
             now,
             id,
@@ -629,9 +606,8 @@ impl VoiceDriver {
         if let Some(info) = &spec.end_of_turn {
             self.emit_eou_metrics(info, Some(id));
         }
-        // The reference's reply task adds the user item once its speech is scheduled: after the
-        // announcement, never for a refused speech. A preemptive generation plans against the
-        // message but does not commit it; `generate_reply` commits on adoption.
+        // The user item is added after the announcement, never for a refused speech. A
+        // preemptive generation commits it only on adoption.
         if let (Some(user), true) = (spec.new_message, admitted && kind.scheduled()) {
             let source = match spec.turn {
                 Some(turn) => Source::UserTurn { turn },
@@ -639,8 +615,7 @@ impl VoiceDriver {
             };
             self.commit_item(ChatItem::Message(user), source, Visibility::Both);
         }
-        // `thinking` when the generation exists, only for an admitted reply (`say()` goes straight
-        // to `speaking`; a refused or discarded preemptive generation never showed thinking).
+        // `thinking` only for an admitted reply: `say()` goes straight to `speaking`.
         if admitted && is_reply && kind.scheduled() && !past_edge {
             self.set_agent_state(self.step.now, AgentState::Thinking);
         }
@@ -708,7 +683,6 @@ impl VoiceDriver {
                 self.on_keyterm_answer(now, req, arguments, failed, metrics);
             }
 
-            // Reported by a task; said by the loop, which is the only place with the bus.
             GenEvent::Emit(ev) => self.publish_event(*ev),
 
             GenEvent::ToolsFinished { speech, step, end, answer } => {
@@ -717,7 +691,6 @@ impl VoiceDriver {
 
             // The reply's tools are done and it has a next step: behind whatever was queued.
             GenEvent::ToolStep { speech, step } => {
-                // `speech_handle._num_steps += 1`: the reply counts its own steps and reports each.
                 if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
                     let advanced = state.advance_step();
                     debug_assert_eq!(advanced, step, "the reply and the core disagree on its step");
@@ -743,11 +716,10 @@ impl VoiceDriver {
                 }
             }
             GenEvent::PlaybackStarted { speech } => {
-                // The launch hold is over for this speech: its first frame is out (I-06, I-07).
+                // The launch hold is over for this speech: its first frame is out.
                 self.activity.launching.remove(&speech);
                 self.record_trace(PlayoutStep::PlaybackStarted { speech });
-                // `_on_first_frame` listens on the sink's `playback_started`: the edge is the sink's
-                // report, not the words half's (which waits for its segment).
+                // The edge is the sink's report, not the words half's (which waits for its segment).
                 self.agent_started_speaking(now, speech);
             }
             GenEvent::LaunchReleased { speech } => {
@@ -833,8 +805,8 @@ impl VoiceDriver {
         ready
     }
 
-    /// `_on_first_frame`: `speaking` and `_on_start_of_agent_speech` (which enables interruption) at
-    /// the same instant, once per step.
+    /// `speaking` and the start of agent speech (which enables interruption) at the same instant,
+    /// once per step.
     fn agent_started_speaking(&mut self, now: Ts, speech: SpeechId) {
         if !self.activity.spoke.insert(speech) {
             return;
@@ -855,7 +827,7 @@ impl VoiceDriver {
         error: Box<lk_agents_abi::errors::ProviderError>,
     ) {
         self.activity.tools_in_flight.remove(&speech);
-        // Released by the close's edge already: the edge was its end (`CloseAct::Released`).
+        // Released by the close's edge already: the edge was its end.
         if self.activity.speech_was_released(speech) {
             return;
         }
@@ -908,8 +880,8 @@ impl VoiceDriver {
             };
             (ChatItem::Message(*msg), source)
         });
-        // The reference's realtime generation moves the agent's state before it adds the
-        // messages; the pipeline adds its message first.
+        // A realtime generation moves the agent's state before it adds the messages; the pipeline
+        // adds its message first.
         let realtime = kind == Some(SpeechKind::Realtime);
         if !realtime {
             self.commit_spoken(speech, item.take());
@@ -987,9 +959,8 @@ impl VoiceDriver {
         if let Some(state) = self.activity.speech_scheduler.speech(speech) {
             self.record_trace(SpeechStep::ItemsRecorded { speech, ids: state.item_ids().to_vec() });
         }
-        // **`speaking` belongs to the current speech**: releasing a refused `Say` or a discarded
-        // preemptive generation must not drop the agent out of `speaking` while another speech
-        // plays.
+        // `speaking` belongs to the current speech: releasing another must not drop the agent out
+        // of `speaking` while the current one plays.
         let was_current = self.activity.speech_scheduler.current_speech() == Some(speech);
         let eos = EndOfSpeech {
             interrupted,
@@ -1025,19 +996,15 @@ impl VoiceDriver {
         });
         self.activity.spoke.remove(&speech);
         self.activity.launching.remove(&speech);
-        // `_scheduling_task`'s post-await release: a finished speech that is the paused one drops
-        // the pause and resumes the sink, current or not (the floor left it at its last step).
-        // The release at `Authorized` can miss a pause taken in the same instant, which would
-        // leave the sink paused until the close.
+        // A finished paused speech drops the pause and resumes the sink, current or not: the
+        // release at authorization can miss a pause taken in the same instant.
         self.release_paused_speech(speech);
         for (request, answer) in self.activity.reply_released(speech) {
             self.answer(Some(request), answer);
         }
         self.activity.tools.dropped.retain(|(s, _), _| *s != speech);
-        // A close ending a speech with blocking tools still running: they are answered with the
-        // closing error before the speech's own `SpeechDone`; nothing is journalled after `close`.
-        // Their bodies are cancelled, as the reference's close cancels its tool tasks
-        // (`_ToolExecutor.aclose`): answered already, nothing would ever hear their end.
+        // A close answers still-running blocking tools with the closing error before the
+        // speech's own `SpeechDone`, and cancels their bodies: nothing would hear their end.
         if self.session.closing.is_some()
             && self.activity.speech_scheduler.contains(speech)
             && self.activity.tools.live(speech).next().is_some()
@@ -1051,21 +1018,16 @@ impl VoiceDriver {
             }
         }
         if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
-            // The host learns of the end only here, with the speech already `done()` (idempotent).
-            // A host `interrupt()` queued after the input that ended it arrives too late.
             state.mark_done(None);
             let view = state.view();
             let (outcome, error) = (view.outcome(), view.error().cloned());
             self.agent_turn_done(speech, outcome, error.clone());
             self.publish_event(SessionEvent::SpeechDone { speech, outcome });
-            // The run that owned it lets it go, and its verdict moves to this speech.
             self.run_speech_ended(speech, error);
         }
-        // The deferred tool reply's fate is read off the handle; the tools' fillers go with it.
         self.tool_reply_done(speech);
         self.fillers_speech_ended(speech);
-        // The handle leaves with the queue's entry (`speech_finished`, below); `speech_frames`
-        // keeps its entry: a call and output can land after the speech is done.
+        // History keeps its entry: a call and output can land after the speech is done.
         self.activity.speech_history.finish(speech);
         self.storage_speech_released(now, speech);
         self.speech_finished(now, speech);
@@ -1074,8 +1036,7 @@ impl VoiceDriver {
         self.realtime_replay(now, Some(speech));
     }
 
-    /// `_update_agent_state(next)`: the one door for agent-state writes, reading the audio-output
-    /// fact the warmup edge gates on at the instant of the edge.
+    /// The one door for agent-state writes.
     pub(crate) fn set_agent_state(&mut self, now: Ts, next: AgentState) -> Option<AgentState> {
         let audio_output_ready = self
             .activity
@@ -1096,7 +1057,6 @@ impl VoiceDriver {
     }
 }
 
-/// `Metadata(model_name="unknown", model_provider=<the turn_detection string>)`.
 fn mode_metadata(mode: &str) -> lk_agents_abi::metrics::base::Metadata {
     lk_agents_abi::metrics::base::Metadata {
         model_name: Some("unknown".to_owned()),

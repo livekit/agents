@@ -1,8 +1,3 @@
-//! One model reply's `AgentRun`: a coordinated invocation whose steps the reply task streams and
-//! whose calls run as the floor lets them. The run decides each step (call admission, approval,
-//! retries, output acceptance, when to ask or stop); the floor decides when calls start and what
-//! an interruption, `max_tool_steps` or a `function_tools_executed` handler leave of a step.
-
 use crate::agent::Source;
 use crate::agent_session::effects::VoiceEffect;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
@@ -26,6 +21,9 @@ use lk_agents_core::agent_run::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+
+// The run decides each step (admission, approval, retries, output acceptance); the floor decides
+// when calls start and what an interruption or step limit leaves of a step.
 
 /// A model reply's run, and what the floor and the reply task wait on from it.
 pub struct ReplyRun {
@@ -124,10 +122,9 @@ fn last(go: &ToolGo) -> bool {
 }
 
 impl VoiceDriver {
-    /// The run of a model reply about to start as `speech`: defined by the frame's agent over
-    /// the tools `toolset` offers (every function retains its installed policy
-    /// metadata) and the budgets `retries`. `task`: a `VoiceTask`'s agent holds the floor. The first step's assistant message id and
-    /// the tools it offers, or `None` when the definition cannot run.
+    /// The run of a model reply about to start as `speech`, over the tools `toolset` offers and
+    /// the budgets `retries`. `task`: a `VoiceTask`'s agent holds the floor. Returns the first
+    /// step's assistant message id and tools, or `None` when the definition cannot run.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_reply_run(
         &mut self,
@@ -172,8 +169,7 @@ impl VoiceDriver {
             }
         };
         let mut startup = run.handle(AgentRunEvent::Start, self.step.now);
-        // Extract only the initial plan needed by speech construction. Every remaining effect
-        // still goes through the ordinary owner after the reply record is installed.
+        // Only the initial plan is taken here; every other effect waits for the reply record.
         let first = startup
             .iter()
             .position(|effect| matches!(effect, AgentRunEffect::PlanRequest { .. }))
@@ -339,9 +335,7 @@ impl VoiceDriver {
                     "a reply's cleanup missed its deadline: {}",
                     pending.join(", ")
                 ),
-                // The voice lifecycle tells the calls' progress; prepared arguments are the call
-                // tasks', released when told they will not run; the session renders instructions
-                // and streams the requests.
+                // Handled elsewhere in the voice lifecycle.
                 AgentRunEffect::ToolArgumentsRelease { .. }
                 | AgentRunEffect::Emit(_)
                 | AgentRunEffect::ArgumentsRepaired { .. }
@@ -374,8 +368,6 @@ impl VoiceDriver {
         let (call_id, hosted) = (running.call.call_id, running.hosted);
         self.record_effect(VoiceEffect::CancelTool { call_id, hosted });
     }
-
-    // ------------------------------------------------------------------ calls
 
     /// A call of the reply's step is authorized to start: the run admits it as the floor
     /// stamped it, with the person's answers as they stand. Its id in the run, or `None` when the
@@ -474,8 +466,6 @@ impl VoiceDriver {
             self.reply_marked(speech, &call);
         }
     }
-
-    // ------------------------------------------------------------------ steps
 
     /// The words of `speech`'s step are in: the run reads them as the model's response.
     pub(crate) fn reply_spoken(&mut self, speech: SpeechId, text: Option<String>) {
@@ -639,8 +629,6 @@ impl VoiceDriver {
         }
     }
 
-    // ------------------------------------------------------------------ output
-
     /// An output candidate, validated by the reply's agent.
     fn validate_reply_output(
         &mut self,
@@ -684,8 +672,6 @@ impl VoiceDriver {
         }
         self.reply_event(speech, AgentRunEvent::OutputValidated { validation, verdict });
     }
-
-    // ------------------------------------------------------------------ templates
 
     /// A duplicate call's refusal, rendered by the reply's agent with the call's templates.
     fn render_refusal(
@@ -855,8 +841,7 @@ impl VoiceDriver {
         }
     }
 
-    /// Shared invocation cleanup deadlines remain owned by AgentRun, composed into the
-    /// voice driver's deadline rather than copied into a second timer registry.
+    /// The earliest cleanup deadline any reply's `AgentRun` owns.
     pub(crate) fn reply_wake_at(&self) -> Option<lk_agents_abi::Ts> {
         self.activity.tools.replies.values().filter_map(|reply| reply.run.wake_at()).min()
     }
