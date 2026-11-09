@@ -222,6 +222,13 @@ class _ParticipantAudioOutput(io.AudioOutput):
             self._volume_step = (volume - self._volume) / ramp_samples
 
     def _apply_volume(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
+        """Return ``frame`` scaled by the current volume.
+
+        While a ramp is in progress, the gain moves by ``_volume_step`` per sample toward
+        ``_target_volume`` and stops there; ``_volume`` keeps the gain reached at the end of
+        the frame. At unity gain the frame is returned as is; otherwise a new frame is built
+        and samples are clipped to the int16 range.
+        """
         start, target = self._volume, self._target_volume
         gain: float | np.ndarray
         if start == target:
