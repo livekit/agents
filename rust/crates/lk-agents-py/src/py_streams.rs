@@ -287,7 +287,7 @@ type Located = (Py<PyAny>, Py<PyAny>, Py<PyAny>);
 /// loop, never awaited. Scheduled from the blocking I/O pool, so a drop holding a lock never
 /// waits for the GIL. Lost only when the interpreter or the process runtime is gone.
 fn close_later(located: impl FnOnce(Python<'_>) -> PyResult<Located> + Send + 'static) {
-    let schedule = move || {
+    crate::py_calls::off_thread("closing an abandoned host stream", move || {
         let scheduled = Python::try_attach(|py| {
             let (iterator, event_loop, ctx) = located(py)?;
             schedule_aclose(py, iterator, event_loop, ctx)
@@ -295,10 +295,6 @@ fn close_later(located: impl FnOnce(Python<'_>) -> PyResult<Located> + Send + 's
         if let Some(Err(error)) = scheduled {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "closing an abandoned host stream failed: {error}");
         }
-    };
-    on_process(async move {
-        let pool = lk_agents_runtime::net::blocking_io::blocking_io();
-        let _ = pool.run((), schedule).await;
     });
 }
 
@@ -356,7 +352,7 @@ impl UnclaimedStream {
 impl Drop for UnclaimedStream {
     fn drop(&mut self) {
         let Some((mut started, ran_in)) = self.0.take() else { return };
-        started.cancel();
+        started.cancel_later();
         on_process(async move {
             if let Ok(value) = started.settled().await {
                 close_later(move |py| {
@@ -456,15 +452,25 @@ impl<I: Send + 'static> HostSink<I> {
     }
 
     fn schedule(&self, py: Python<'_>) -> PyResult<()> {
-        let shared = self.shared.clone();
-        let drain = pyo3::types::PyCFunction::new_closure(py, None, None, move |args, _| {
-            drain(args.py(), &shared);
-            PyResult::Ok(())
-        })?;
+        let (shared, lost) = (self.shared.clone(), self.shared.clone());
+        let release = move || {
+            let closed = lk_agents_abi::errors::ApiError::new("the host event loop closed");
+            lost.failure.send_replace(Some(closed.into()));
+            // Dropped after the guard: an item's host objects may run Python finalizers.
+            let _dropped = {
+                let mut queue = lost.queue.lock();
+                queue.scheduled = false;
+                std::mem::take(&mut queue.entries)
+            };
+        };
         let s = &self.shared;
-        access::EventLoop::call_soon_threadsafe(s.event_loop.bind(py))?
-            .call1((access::Context::run(s.ctx.bind(py))?, drain))?;
-        Ok(())
+        crate::py_calls::call_soon_or_lost(
+            py,
+            s.event_loop.bind(py),
+            Some(s.ctx.bind(py)),
+            move |py| drain(py, &shared),
+            release,
+        )
     }
 }
 

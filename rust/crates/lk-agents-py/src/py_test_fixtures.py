@@ -1079,3 +1079,12 @@ def detector_prediction(models_path):
         backchannel_probability=0.0,
     )
     return prediction
+
+
+def pending_forever():
+    import asyncio
+
+    async def forever():
+        await asyncio.Event().wait()
+
+    return forever

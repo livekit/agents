@@ -220,10 +220,10 @@ mod cancellation {
     use pyo3::prelude::*;
     use pyo3::types::{PyCFunction, PyTuple};
 
-    struct ManualLoop(Py<PyAny>);
+    pub(super) struct ManualLoop(pub(super) Py<PyAny>);
 
     impl ManualLoop {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             Python::initialize();
             Python::attach(|py| {
                 let globals = crate::py_test_support::fixture(py, "manual_loop");
@@ -231,7 +231,7 @@ mod cancellation {
             })
         }
 
-        fn tick(&self) {
+        pub(super) fn tick(&self) {
             Python::attach(|py| {
                 let globals = self.0.bind(py);
                 crate::py_test_support::call(py, "tick_loop", (globals,)).unwrap();
@@ -314,6 +314,110 @@ mod cancellation {
         host.tick();
         host.tick();
         assert!(!host.entered(), "cancellation during task publication was lost");
+    }
+}
+
+mod teardown {
+    //! A closing loop, and a drop holding a lock, never leave a waiter or a queue asleep.
+
+    use parking_lot::Mutex;
+    use pyo3::prelude::*;
+    use pyo3::types::PyTuple;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use super::cancellation::ManualLoop;
+    use lk_agents_abi::invoke::HostNotices as _;
+
+    fn pair(host: &ManualLoop) -> lk_agents_abi::HostRef {
+        Python::attach(|py| {
+            let globals = host.0.bind(py);
+            let pair = PyTuple::new(
+                py,
+                [globals.getattr("loop").unwrap(), globals.getattr("context").unwrap()],
+            )
+            .unwrap();
+            crate::py_objects::retain(pair.into_any().unbind())
+        })
+    }
+
+    fn start_forever(host: &ManualLoop) -> super::Started {
+        Python::attach(|py| {
+            let globals = host.0.bind(py);
+            let forever = crate::py_test_support::fixture(py, "pending_forever").unbind();
+            super::start_in(
+                py,
+                &globals.getattr("loop").unwrap(),
+                &globals.getattr("context").unwrap(),
+                move |py| forever.bind(py).call0(),
+            )
+            .unwrap()
+        })
+    }
+
+    fn close(host: &ManualLoop) {
+        Python::attach(|py| {
+            host.0.bind(py).getattr("loop").unwrap().call_method0("close").unwrap();
+        });
+    }
+
+    // Catches: a drop that attaches to the interpreter on the dropping thread, which deadlocks
+    // when that thread holds a lock a thread holding the GIL is waiting on.
+    #[test]
+    fn dropping_a_pending_call_under_a_lock_never_waits_for_the_gil() {
+        let host = ManualLoop::new();
+        let started = start_forever(&host);
+        let lock = Arc::new(Mutex::new(()));
+        let (locked, is_locked) = std::sync::mpsc::channel();
+        let (go, gone) = std::sync::mpsc::channel::<()>();
+        let (dropped, was_dropped) = std::sync::mpsc::channel();
+        let dropper = std::thread::spawn({
+            let lock = lock.clone();
+            move || {
+                let _held = lock.lock();
+                locked.send(()).unwrap();
+                gone.recv().unwrap();
+                drop(started);
+                dropped.send(()).unwrap();
+            }
+        });
+        is_locked.recv().unwrap();
+        let (attached, is_attached) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            Python::attach(|_| {
+                attached.send(()).unwrap();
+                // Bounded, so a regression fails the test instead of hanging the process.
+                drop(lock.try_lock_for(Duration::from_secs(3)));
+            })
+        });
+        is_attached.recv().unwrap();
+        go.send(()).unwrap();
+        let in_time = was_dropped.recv_timeout(Duration::from_secs(2)).is_ok();
+        holder.join().unwrap();
+        dropper.join().unwrap();
+        assert!(in_time, "dropping a pending call waited for the GIL under a lock");
+    }
+
+    // Catches: a drain the loop dropped unrun (it closed) leaving the queue marked scheduled, so
+    // every later notification waits silently for a drain that never comes.
+    #[test]
+    fn a_notification_queue_whose_loop_closed_is_released() {
+        let host = ManualLoop::new();
+        let context = pair(&host);
+        let notifier = super::Notifier::default();
+        let note = || -> super::HostCall {
+            Box::new(|py| Ok((py.import("builtins")?.getattr("print")?, PyTuple::empty(py), None)))
+        };
+        notifier.notify(context.clone(), "note", false, note());
+        assert!(notifier.0.queue.lock().scheduled);
+        close(&host);
+        let released = |notifier: &super::Notifier| {
+            let queue = notifier.0.queue.lock();
+            !queue.scheduled && queue.entries.is_empty()
+        };
+        assert!(released(&notifier), "the closed loop's drain left the queue scheduled");
+        notifier.notify(context, "note", false, note());
+        assert!(released(&notifier), "a notification after the loop closed was queued");
     }
 }
 

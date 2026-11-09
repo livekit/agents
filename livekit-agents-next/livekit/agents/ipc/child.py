@@ -311,16 +311,9 @@ def serve_parent(mp_cch: socket.socket | PipeEnd, host: Any) -> None:
     finally:
         # Full asyncio.run()-style teardown: a thread runner reuses the process.
         try:
-            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
-            for t in pending:
-                t.cancel()
-            if pending:
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.run_until_complete(loop.shutdown_default_executor())
+            aio.close_loop(loop)
         finally:
             asyncio.set_event_loop(None)
-            loop.close()
 
 
 @log_exceptions(logger=logger)

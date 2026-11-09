@@ -23,6 +23,7 @@ from ._generated.worker_options import ProcessOptions
 from .http import client as http_client
 from .job import JobExecutorType
 from .log import _add_global_log_fields, logger
+from .utils.aio import close_loop
 from .worker import AgentServer
 
 __all__ = ["run_app"]
@@ -266,15 +267,8 @@ async def _drain(server: AgentServer, timeout: float) -> None:
 
 def _close_loop(loop: asyncio.AbstractEventLoop, shutdown: _core.Shutdown) -> None:
     shutdown.begin()
-    tasks = asyncio.all_tasks(loop)
-    for task in tasks:
-        task.cancel()
-    results = loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-    loop.run_until_complete(loop.shutdown_asyncgens())
-    loop.run_until_complete(loop.shutdown_default_executor())
-    loop.close()
+    failures = close_loop(loop)
     shutdown.closed()
-    failures = [result for result in results if isinstance(result, Exception)]
     if failures:
         raise ExceptionGroup("event-loop task cleanup failed", failures)
 

@@ -468,6 +468,32 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
         await self._drain_to_close()
 
 
+def close_loop(loop: asyncio.AbstractEventLoop) -> list[Exception]:
+    """``asyncio.run()``'s teardown of ``loop``, then close it, returning what its tasks raised.
+
+    Cancelling runs again after the generators and the default executor shut down: a task they
+    started (a host call the framework is waiting on) is cancelled, never left pending in a
+    closed loop with its waiter asleep.
+    """
+    failures: list[Exception] = []
+
+    def cancel_all() -> None:
+        while tasks := [task for task in asyncio.all_tasks(loop) if not task.done()]:
+            for task in tasks:
+                task.cancel()
+            results = loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+            failures.extend(result for result in results if isinstance(result, Exception))
+
+    try:
+        cancel_all()
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.run_until_complete(loop.shutdown_default_executor())
+        cancel_all()
+    finally:
+        loop.close()
+    return failures
+
+
 __all__ = [
     "ChanClosed",
     "Chan",

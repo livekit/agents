@@ -764,3 +764,34 @@ async def test_voice_failure_keeps_input_requirements_on_the_raised_exception(
     )
     _on_run_failed(SimpleNamespace(), late)  # type: ignore[arg-type]
     assert raised.value.__dict__["input_requirements"] == requirements
+
+
+def test_a_task_started_while_the_loop_shuts_down_is_cancelled_before_it_closes() -> None:
+    import asyncio
+    from collections.abc import AsyncIterator
+
+    from livekit.agents.utils.aio import close_loop
+
+    loop = asyncio.new_event_loop()
+    started: list[asyncio.Task[None]] = []
+
+    async def generator() -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            # finalized by `shutdown_asyncgens`, after the first cancel pass
+            started.append(asyncio.get_running_loop().create_task(_forever()))
+
+    async def _forever() -> None:
+        await asyncio.Event().wait()
+
+    agen = generator()
+
+    async def first() -> None:
+        # inside the loop, so the loop registers the generator to finalize
+        await agen.__anext__()
+
+    loop.run_until_complete(first())
+    close_loop(loop)
+    assert loop.is_closed()
+    assert started and started[0].cancelled(), "a task left pending in the closed loop"

@@ -110,13 +110,20 @@ impl Started {
     pub(crate) fn cancel(&self) {
         self.in_flight.cancel();
     }
+
+    /// [`cancel`](Self::cancel), off the calling thread: for a drop, which may hold a lock.
+    pub(crate) fn cancel_later(&self) {
+        self.in_flight.cancel_later();
+    }
 }
 
 /// The host task of a call in flight, cancelled when the call is dropped before it settles.
 struct InFlight {
-    event_loop: Py<PyAny>,
+    event_loop: Arc<Py<PyAny>>,
     state: Arc<GilMutex<InFlightState>>,
     settled: Arc<AtomicBool>,
+    /// Set without the GIL, at once: a call not started yet never starts.
+    cancelled: Arc<AtomicBool>,
 }
 
 /// A lock taken only while attached, so the GIL always comes first: the inverse order, which
@@ -132,34 +139,116 @@ impl<T> GilMutex<T> {
 
 #[derive(Default)]
 struct InFlightState {
+    /// Strong: asyncio holds a pending task only weakly, and one awaiting what only it reaches
+    /// would be collected mid-call. A loop's teardown cancels it (`utils.aio.close_loop`).
     task: Option<Py<PyAny>>,
-    cancelled: bool,
 }
 
 impl InFlight {
+    /// On the calling thread: what a caller awaiting the call's settlement asks for.
     fn cancel(&self) {
+        if !self.settled.load(Ordering::SeqCst) {
+            self.cancelled.store(true, Ordering::SeqCst);
+            cancel_task(&self.event_loop, &self.state);
+        }
+    }
+
+    /// Off the calling thread, which may hold a lock a GIL holder waits on: what a drop asks for.
+    fn cancel_later(&self) {
         if self.settled.load(Ordering::SeqCst) {
             return;
         }
-        // A finalizing interpreter runs no more tasks: nothing is left to cancel.
-        let _ = Python::try_attach(|py| {
-            let task = {
-                let mut state = self.state.lock(py);
-                state.cancelled = true;
-                state.task.take()
-            };
-            let Some(task) = task else { return };
-            if let Ok(cancel) = access::Task::cancel(task.bind(py)) {
-                let _ = access::EventLoop::call_soon_threadsafe(self.event_loop.bind(py))
-                    .and_then(|call| call.call1((cancel,)));
-            }
-        });
+        self.cancelled.store(true, Ordering::SeqCst);
+        let (event_loop, state) = (self.event_loop.clone(), self.state.clone());
+        off_thread("cancelling a host call", move || cancel_task(&event_loop, &state));
     }
 }
 
 impl Drop for InFlight {
     fn drop(&mut self) {
-        self.cancel();
+        self.cancel_later();
+    }
+}
+
+/// Cancels the call's host task, once published and while it is alive.
+fn cancel_task(event_loop: &Py<PyAny>, state: &GilMutex<InFlightState>) {
+    // A finalizing interpreter runs no more tasks: nothing is left to cancel.
+    let _ = Python::try_attach(|py| {
+        let Some(task) = state.lock(py).task.take() else { return };
+        if let Ok(cancel) = access::Task::cancel(task.bind(py)) {
+            let _ = access::EventLoop::call_soon_threadsafe(event_loop.bind(py))
+                .and_then(|call| call.call1((cancel,)));
+        }
+    });
+}
+
+/// Runs `work` on the blocking I/O pool, off the calling thread: what a drop does under the GIL,
+/// so a drop holding a lock never waits for it. Lost only when the process runtime is gone.
+pub(crate) fn off_thread(what: &'static str, work: impl FnOnce() + Send + 'static) {
+    match process_handle() {
+        Ok(handle) => drop(handle.spawn(async move {
+            let _ = lk_agents_runtime::net::blocking_io::blocking_io().run((), work).await;
+        })),
+        Err(_) => {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "{what} skipped: no process runtime")
+        }
+    }
+}
+
+/// Schedules `drain` on `event_loop`, inside `ctx` when given. A loop that drops it unrun (it
+/// closed, or refused it) runs `lost` instead, so a queue never waits on a drain that will not
+/// come.
+pub(crate) fn call_soon_or_lost(
+    py: Python<'_>,
+    event_loop: &Bound<'_, PyAny>,
+    ctx: Option<&Bound<'_, PyAny>>,
+    drain: impl FnOnce(Python<'_>) + Send + 'static,
+    lost: impl FnOnce() + Send + 'static,
+) -> PyResult<()> {
+    let pending = Arc::new(Mutex::new(Unrun { drain: Some(drain), lost: Some(lost) }));
+    let queued = pending.clone();
+    let scheduled = (|| {
+        let callback = PyCFunction::new_closure(py, None, None, move |args, _| {
+            let drain = queued.lock().drain.take();
+            if let Some(drain) = drain {
+                drain(args.py());
+            }
+            PyResult::Ok(())
+        })?;
+        let call_soon = access::EventLoop::call_soon_threadsafe(event_loop)?;
+        match ctx {
+            Some(ctx) => call_soon.call1((access::Context::run(ctx)?, callback)),
+            None => call_soon.call1((callback,)),
+        }
+    })();
+    if let Err(e) = scheduled {
+        // Now, not when the error's traceback lets the callback go.
+        let lost = {
+            let mut pending = pending.lock();
+            pending.drain = None;
+            pending.lost.take()
+        };
+        if let Some(lost) = lost {
+            lost();
+        }
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// A scheduled drain, and what runs if it is dropped before it ran.
+struct Unrun<D, L: FnOnce()> {
+    drain: Option<D>,
+    lost: Option<L>,
+}
+
+impl<D, L: FnOnce()> Drop for Unrun<D, L> {
+    fn drop(&mut self) {
+        if self.drain.is_some()
+            && let Some(lost) = self.lost.take()
+        {
+            lost();
+        }
     }
 }
 
@@ -190,6 +279,7 @@ where
     let (sender, receiver) = oneshot::channel::<PyResult<Py<PyAny>>>();
     let state = Arc::new(GilMutex::<InFlightState>::default());
     let settled = Arc::new(AtomicBool::new(false));
+    let cancelled = Arc::new(AtomicBool::new(false));
     let deliver = {
         let sender = Arc::new(Mutex::new(Some(sender)));
         let settled = settled.clone();
@@ -200,7 +290,7 @@ where
             }
         }
     };
-    let task_slot = state.clone();
+    let (task_slot, was_cancelled) = (state.clone(), cancelled.clone());
     let call = Mutex::new(Some(call));
     let task_ctx = ctx.clone().unbind();
     let loop_ref = event_loop.clone().unbind();
@@ -210,7 +300,7 @@ where
         let Some(call) = call.lock().take() else {
             return Ok(());
         };
-        if task_slot.lock(py).cancelled {
+        if was_cancelled.load(Ordering::SeqCst) {
             deliver(Err(pyo3::exceptions::asyncio::CancelledError::new_err(())));
             return Ok(());
         }
@@ -244,12 +334,14 @@ where
             Ok(())
         })?;
         access::Task::add_done_callback(&future)?.call1((done,))?;
+        // Under the lock a cancel takes the task by: published first, or seen cancelled here.
         let cancel_now = {
             let mut state = task_slot.lock(py);
-            if !state.cancelled {
+            let cancelled = was_cancelled.load(Ordering::SeqCst);
+            if !cancelled {
                 state.task = Some(future.clone().unbind());
             }
-            state.cancelled
+            cancelled
         };
         if cancel_now {
             access::Task::cancel(&future)?.call0()?;
@@ -260,7 +352,12 @@ where
         .call1((access::Context::run(ctx)?, start))?;
     Ok(Started {
         receiver,
-        in_flight: InFlight { event_loop: event_loop.clone().unbind(), state, settled },
+        in_flight: InFlight {
+            event_loop: Arc::new(event_loop.clone().unbind()),
+            state,
+            settled,
+            cancelled,
+        },
     })
 }
 
@@ -499,26 +596,32 @@ impl Notifier {
             !std::mem::replace(&mut queue.scheduled, true)
         };
         if schedule && let Err(e) = Python::attach(|py| self.schedule(py, &context)) {
-            // Dropped after the guard: a dropped call's host objects may run Python finalizers.
-            let dropped = {
-                let mut queue = self.0.queue.lock();
-                queue.scheduled = false;
-                std::mem::take(&mut queue.entries)
-            };
-            drop(dropped);
+            // The drain was never queued: dropped, it already released the queue.
             log::warn!(target: lk_agents_abi::LOG_TARGET, "{label} failed: {e}");
         }
     }
 
     fn schedule(&self, py: Python<'_>, context: &HostRef) -> PyResult<()> {
-        let (event_loop, _) = captured_pair(py, context)?;
-        let notices = self.0.clone();
-        let drain = PyCFunction::new_closure(py, None, None, move |args, _| {
-            deliver(args.py(), &notices);
-            PyResult::Ok(())
-        })?;
-        access::EventLoop::call_soon_threadsafe(&event_loop)?.call1((drain,))?;
-        Ok(())
+        let (notices, lost) = (self.0.clone(), self.0.clone());
+        let release = move || {
+            // Dropped after the guard: a dropped call's host objects may run Python finalizers.
+            let dropped = {
+                let mut queue = lost.queue.lock();
+                queue.scheduled = false;
+                std::mem::take(&mut queue.entries)
+            };
+            if !dropped.is_empty() {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "{} notifications dropped: the host loop closed", dropped.len());
+            }
+        };
+        let event_loop = match captured_pair(py, context) {
+            Ok((event_loop, _)) => event_loop,
+            Err(e) => {
+                release();
+                return Err(e);
+            }
+        };
+        call_soon_or_lost(py, &event_loop, None, move |py| deliver(py, &notices), release)
     }
 }
 
