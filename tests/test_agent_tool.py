@@ -106,7 +106,7 @@ async def test_a_waiting_child_passes_its_question_up_and_resumes_on_the_next_ca
     assert second.status == "completed" and second.output == "Booked: B-7."
     resumed = child_model.requests[1].items
     assert any(
-        i.type == "message" and i.role == "assistant" and "For which date?" in i.text_content
+        i.type == "message" and i.role == "assistant" and i.text_content == "For which date?"
         for i in resumed
     ), "the child resumed with its own history"
     calls = [i for i in second.all_messages() if i.type == "function_call"]

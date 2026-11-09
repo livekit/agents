@@ -500,7 +500,9 @@ the same memory.
 expert references, routes human replies, and schedules presentation. The
 frontend attaches `RemoteAgent(...).as_tool()` through its agent's `tools=`
 and starts the live session. It does not construct a `TextSession` or pass
-backend `TextSessionState` to the session.
+backend `TextSessionState` to the session. A local `agent.as_tool()` on a call
+is an expert the same way: its child runs in process, and its progress,
+questions and result take this path ([local agents as tools](tools.md#local-agents-as-tools)).
 
 ## Conversation-owned inbox
 

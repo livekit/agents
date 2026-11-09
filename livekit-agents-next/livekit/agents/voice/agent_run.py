@@ -161,7 +161,9 @@ class _TextRun(Generic[Context_T]):
         self.llm_conn_options = conn_options
         self.agent_tools = tools_for_run(agent.tools, RunContext(function_call=None, run=self))
         self.tools = ToolContext(self.agent_tools)
-        self.runner: _core.AgentRunner | _core.TextSessionRunner | None = None
+        self.runner: (
+            _core.AgentRunner | _core.TextSessionRunner | _core._core_LocalInteraction | None
+        ) = None
         self._history = history
         self.execution_id: str | None = None
         self.frame_id: FrameId | None = None
