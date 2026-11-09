@@ -157,6 +157,8 @@ pub struct Setup {
     /// exceeded. `None` is no limit, the default.
     pub user_turn_max_words: Option<u32>,
     pub user_turn_max_ms: Option<u64>,
+    /// `turn_handling={"push_to_talk": True}`: turns open and end only on the host's calls.
+    pub push_to_talk: bool,
     /// `transcription_timeout`: how long after the detector's end of speech the driver waits for
     /// a transcript before giving up on one. `None` is the default of never.
     pub transcription_timeout_ms: Option<u64>,
@@ -475,6 +477,7 @@ impl Default for Setup {
             speech_gap_ms: None,
             user_turn_max_words: None,
             user_turn_max_ms: None,
+            push_to_talk: false,
             transcription_timeout_ms: None,
             tts: true,
             connect_ms: None,
@@ -703,6 +706,8 @@ pub struct Run {
     controls: BTreeMap<Slot, Control>,
     /// The `override_options` layers the host holds, oldest first, by the id the session minted.
     overrides: Vec<u64>,
+    /// The last `start_user_turn()`'s handle.
+    user_turn: Option<Arc<lk_agents_runtime::voice::session::UserTurn>>,
     /// Which output each flushed segment sits on, kept after the segment is gone.
     segments: BTreeMap<u32, u32>,
     /// Journal steps the probe stamped, waiting to be absorbed. The probe runs under the

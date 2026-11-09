@@ -389,6 +389,10 @@ pub struct TurnHandlingKwargs {
     /// User turn limit configuration. Use ``{"max_words": 50}`` to enable.
     #[host(default = None)]
     pub user_turn_limit: Option<UserTurnLimitKwargs>,
+    /// Push-to-talk: the user's turns open on ``start_user_turn()`` and end on its ``end()`` or
+    /// ``cancel()``. Outside a turn the microphone is ignored. Defaults to ``False``.
+    #[host(default = None)]
+    pub push_to_talk: Option<bool>,
 }
 
 /// Every option keyword of the reference's `AgentSession.__init__`, once. Host-object kwargs
@@ -467,7 +471,8 @@ debug_record!(InterruptionKwargs {
 debug_record!(UserTurnLimitKwargs { ; max_words, max_duration });
 
 debug_record!(TurnHandlingKwargs {
-    endpointing, interruption, preemptive_generation, user_turn_limit; turn_detection
+    endpointing, interruption, preemptive_generation, user_turn_limit, push_to_talk;
+    turn_detection
 });
 
 debug_record!(SessionKwargs {
@@ -616,6 +621,7 @@ pub struct ResolvedSessionOptions {
     pub interruption: ResolvedInterruption,
     pub preemptive_generation: ResolvedPreemptiveGeneration,
     pub user_turn_limit: ResolvedUserTurnLimit,
+    pub push_to_talk: bool,
     /// The `turn_detection` the session runs on; `None` is automatic selection.
     #[serde(serialize_with = "wire_some")]
     pub turn_detection_mode: Option<TurnDetection>,

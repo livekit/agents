@@ -214,6 +214,11 @@ pub enum Record {
         socket: u32,
         items: Vec<(u32, u64)>,
     },
+    /// The driver ended a provider stream's input: it is owed no audio from here.
+    InputEnded {
+        at: Observed,
+        slot: Slot,
+    },
     Forwarded {
         at: Observed,
         slot: Slot,
@@ -537,6 +542,11 @@ impl Registry {
         self.write(Record::HostBinding { at, object, thread });
     }
 
+    pub(super) fn record_input_ended(&self, slot: Slot) {
+        let at = self.stamps.next();
+        self.write(Record::InputEnded { at, slot });
+    }
+
     pub(super) fn record_forwarded(&self, slot: Slot, tags: Vec<crate::record::Tag>) {
         let at = self.stamps.next();
         self.write(Record::Forwarded { at, slot, tags });
@@ -738,6 +748,7 @@ impl StreamInput<AudioFrame> for Forward {
         Ok(())
     }
     fn end_input(&self) {
+        self.registry.record_input_ended(self.slot);
         if let Some(ended) = &self.ended {
             ended.notify_one();
         }

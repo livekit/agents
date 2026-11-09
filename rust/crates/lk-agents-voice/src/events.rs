@@ -2,8 +2,8 @@ use lk_agents_abi::voice::events::{AgentState, DiagnosticLevel, UserState};
 // The host records that are these events' payloads as they are.
 pub use lk_agents_abi::voice::events::{
     AgentBackchannelOpportunityEvent, EndOfSpeechEvent, ErrorSource, OverlapInterruptionEvent,
-    PreemptiveGenerationEvent, RunRefusal, SpeechOutcome, StartOfSpeechEvent,
-    UserTurnExceededEvent,
+    PreemptiveGenerationEvent, RunRefusal, SpeechOutcome, StartOfSpeechEvent, UserTurnEndedEvent,
+    UserTurnExceededEvent, UserTurnResult, UserTurnStartedEvent,
 };
 use lk_agents_abi::{SpeechEvent, Ts};
 use std::sync::Arc;
@@ -154,6 +154,9 @@ impl DiagnosticEvent {
 
 /// The sentences the core says; `tools/check-diagnostics.py` checks them verbatim.
 pub mod diagnostics {
+    pub const USER_TURN_END_TIMEOUT: &str =
+        "the released user turn's STT did not deliver every final in time; committing what arrived";
+
     pub const SCHEDULING_PAUSED: &str = "skipping reply to user input, speech scheduling is paused";
 
     /// The turn is dropped, the speech plays on.
@@ -285,6 +288,8 @@ pub enum SessionEvent {
     EndOfSpeech(EndOfSpeechEvent),
     PreemptiveGeneration(PreemptiveGenerationEvent),
     UserTurnExceeded(UserTurnExceededEvent),
+    UserTurnStarted(UserTurnStartedEvent),
+    UserTurnEnded(UserTurnEndedEvent),
     UserTranscriptionTimeout(TranscriptionTimeoutEvent),
     /// `on_backchannel_confirmed`: the driver clears the realtime model's buffered audio.
     BackchannelConfirmed,

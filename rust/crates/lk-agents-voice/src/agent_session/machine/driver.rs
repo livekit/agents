@@ -163,6 +163,9 @@ impl VoiceDriver {
         // The AEC warmup is *not* armed here but at the first `speaking` edge; armed now, it would
         // refuse every interruption for the session.
         self.publish_gate();
+        if self.session.config.effective().turn.push_to_talk() {
+            self.set_push_to_talk(now, true);
+        }
         // The away deadline runs from start: both are silent until somebody speaks.
         {
             // `start()`'s `_update_agent_state("listening")`: the host's first state edge.
@@ -509,6 +512,10 @@ impl VoiceDriver {
                     }
                 }
                 Timer::Commit => self.perform_pending_commit(now),
+                Timer::UserTurnEnd => self.user_turn_end_timed_out(now),
+                Timer::UserTurnTail => {
+                    self.route_user_turn(crate::data_plane::AudioInputRouterCommand::EndTail)
+                }
                 Timer::Hook(id) => self.hook_timed_out(now, id),
                 // `PausedSpeech` owns this one.
                 Timer::FalseInterruption => self.on_false_interruption_timeout(now),

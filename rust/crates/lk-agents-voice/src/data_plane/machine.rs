@@ -6,11 +6,20 @@ use lk_agents_abi::voice::rtc::silence_frame;
 use lk_agents_abi::{AudioFrame, Ts};
 use lk_agents_media::AudioByteStream;
 use lk_agents_media::{AudioResampler, OnChange, Quality};
+use std::collections::VecDeque;
+use std::time::Duration;
 
 // Routing state changes only through the decision core's `AudioInputRouterCommand`s.
 
 /// The length of each silence frame `FlushSttWithSilence` pushes, in seconds.
 const SILENCE_FLUSH_FRAME_SECONDS: f64 = 0.2;
+
+/// The audio kept from before a press (pre-roll) and fed after a release (tail): the press and
+/// release travel apart from the audio, so either can arrive a little early or late.
+pub const TURN_EDGE: Duration = Duration::from_millis(200);
+
+/// The audio an open turn holds for an STT stream still opening; beyond it the oldest goes.
+const TURN_BACKLOG: Duration = Duration::from_secs(30);
 
 /// Control inputs to the microphone fan-out. External commands enter through the owner's queue;
 /// the decision core's effects are applied in their batch before another frame is forwarded.
@@ -32,6 +41,23 @@ pub enum AudioInputRouterCommand {
     FlushSttWithSilence { frames: u32 },
     /// Answered with [`VoiceEvent::InputCensus`].
     ReportCensus,
+    /// While `true` and no user turn is open, no frame reaches any channel; the last
+    /// [`TURN_EDGE`] of audio is kept for the next turn.
+    SetPushToTalk(bool),
+    /// A user turn opens: the kept audio goes first, then the live audio. Until an STT sink is
+    /// installed, the turn's STT audio is held for it.
+    StartTurn,
+    /// The open turn is released: its STT sink leaves the channel and hears [`TURN_EDGE`] more
+    /// of audio, then has its input ended.
+    EndTurn,
+    /// The open turn is dropped: its STT sink leaves the channel and is aborted, its queued audio
+    /// never reaching the provider.
+    CancelTurn,
+    /// A released turn's STT sink is aborted, in its tail or after it.
+    Abort(ResourceId),
+    /// A released turn's tail ends now: the microphone went quiet (a client that stops sending
+    /// on release).
+    EndTail,
 }
 
 /// The counters the close journals, answered to [`AudioInputRouterCommand::ReportCensus`].
@@ -86,6 +112,50 @@ pub struct AudioInputRouter {
     last_input: Option<(u32, u16)>,
     /// The last forwarded frame's shape and the conversion's.
     input_shape: Option<(FrameShape, FrameShape)>,
+    turns: TurnGate,
+}
+
+/// Push-to-talk and user turns at the microphone.
+#[derive(Default)]
+struct TurnGate {
+    push_to_talk: bool,
+    open: bool,
+    /// Push-to-talk outside a turn: the last [`TURN_EDGE`] of microphone frames.
+    pre_roll: Edge,
+    /// The open turn's STT audio while no STT sink is installed.
+    backlog: Edge,
+    /// A released turn's STT sink and the audio it still hears.
+    tail: Option<(ResourceId, Duration)>,
+}
+
+impl TurnGate {
+    fn listening(&self) -> bool {
+        !self.push_to_talk || self.open
+    }
+}
+
+/// Frames and their total duration, trimmed from the front to a bound.
+#[derive(Default)]
+struct Edge {
+    frames: VecDeque<AudioFrame>,
+    held: Duration,
+}
+
+impl Edge {
+    fn push(&mut self, frame: AudioFrame, bound: Duration) {
+        self.held += length(&frame);
+        self.frames.push_back(frame);
+        while self.held > bound
+            && let Some(old) = self.frames.pop_front()
+        {
+            self.held = self.held.saturating_sub(length(&old));
+        }
+    }
+
+    fn take(&mut self) -> VecDeque<AudioFrame> {
+        self.held = Duration::ZERO;
+        std::mem::take(&mut self.frames)
+    }
 }
 
 impl AudioInputRouter {
@@ -99,6 +169,7 @@ impl AudioInputRouter {
             input_started: false,
             last_input: None,
             input_shape: None,
+            turns: TurnGate::default(),
         }
     }
 
@@ -115,6 +186,14 @@ impl AudioInputRouter {
                 if let Some(previous) = previous.filter(|p| *p != sink) {
                     effects.push(AudioInputRouterEffect::EndInput(previous));
                 }
+                if channel == AudioChannel::Stt {
+                    let held = self.turns.backlog.take().into_iter();
+                    effects.extend(held.map(|frame| AudioInputRouterEffect::PushFrame {
+                        sink,
+                        frame,
+                        delivery: Delivery::Head,
+                    }));
+                }
             }
             AudioInputRouterCommand::Remove(sink) => {
                 if let Some(slot) = self.slots.iter_mut().find(|s| s.sink == Some(sink)) {
@@ -128,13 +207,69 @@ impl AudioInputRouter {
                 self.report_gate_silence(&mut effects);
                 self.discard = discard;
             }
-            AudioInputRouterCommand::SetInputEnabled(enabled) => self.input_enabled = enabled,
+            AudioInputRouterCommand::SetInputEnabled(enabled) => {
+                self.input_enabled = enabled;
+                // Nothing more will be heard: the tail ends now.
+                if !enabled {
+                    self.end_tail(&mut effects);
+                }
+            }
             AudioInputRouterCommand::FlushSttWithSilence { frames } => {
                 self.flush_stt_with_silence(frames, &mut effects)
             }
             AudioInputRouterCommand::ReportCensus => effects.push(self.census()),
+            AudioInputRouterCommand::SetPushToTalk(on) => {
+                self.turns.push_to_talk = on;
+                self.turns.pre_roll.take();
+            }
+            AudioInputRouterCommand::StartTurn => {
+                self.turns.open = true;
+                for frame in self.turns.pre_roll.take() {
+                    self.fan_out(frame, Delivery::Live, &mut effects);
+                }
+            }
+            AudioInputRouterCommand::EndTurn => {
+                self.end_tail(&mut effects);
+                self.turns.open = false;
+                self.turns.backlog.take();
+                if let Some(sink) = self.slots[AudioChannel::Stt as usize].sink.take() {
+                    self.turns.tail = Some((sink, TURN_EDGE));
+                }
+            }
+            AudioInputRouterCommand::EndTail => self.end_tail(&mut effects),
+            AudioInputRouterCommand::Abort(sink) => {
+                if self.turns.tail.is_some_and(|(tail, _)| tail == sink) {
+                    self.turns.tail = None;
+                }
+                effects.push(AudioInputRouterEffect::AbortInput(sink));
+            }
+            AudioInputRouterCommand::CancelTurn => {
+                self.turns.open = false;
+                self.turns.backlog.take();
+                if let Some(sink) = self.slots[AudioChannel::Stt as usize].sink.take() {
+                    effects.push(AudioInputRouterEffect::AbortInput(sink));
+                }
+            }
         }
         effects
+    }
+
+    fn end_tail(&mut self, effects: &mut Vec<AudioInputRouterEffect>) {
+        if let Some((sink, _)) = self.turns.tail.take() {
+            effects.push(AudioInputRouterEffect::EndInput(sink));
+        }
+    }
+
+    /// A released turn's STT sink hears `frame`; the tail ends once it heard [`TURN_EDGE`].
+    fn feed_tail(&mut self, frame: &AudioFrame, effects: &mut Vec<AudioInputRouterEffect>) {
+        let Some((sink, left)) = &mut self.turns.tail else { return };
+        let frame = frame.clone();
+        *left = left.saturating_sub(length(&frame));
+        let (sink, done) = (*sink, left.is_zero());
+        effects.push(AudioInputRouterEffect::PushFrame { sink, frame, delivery: Delivery::Live });
+        if done {
+            self.end_tail(effects);
+        }
     }
 
     fn report_gate_silence(&mut self, effects: &mut Vec<AudioInputRouterEffect>) {
@@ -180,9 +315,10 @@ impl AudioInputRouter {
         AudioInputRouterEffect::ReportToSession(Box::new(VoiceEvent::InputCensus(census)))
     }
 
-    /// The session ended: every sink still installed has its input ended.
+    /// The session ended: every sink still installed has its input ended, and an open turn's.
     pub fn close(&mut self) -> Vec<AudioInputRouterEffect> {
-        let sinks = self.slots.iter_mut().filter_map(|slot| slot.sink.take());
+        let tail = self.turns.tail.take().map(|(sink, _)| sink);
+        let sinks = self.slots.iter_mut().filter_map(|slot| slot.sink.take()).chain(tail);
         sinks.map(AudioInputRouterEffect::EndInput).collect()
     }
 
@@ -206,18 +342,37 @@ impl AudioInputRouter {
                 VoiceEvent::InputStarted { at: now },
             )));
         }
-        self.input_shape = Some((FrameShape::of(&frame), self.conversion.frame_shape()));
+        self.feed_tail(&frame, &mut effects);
+        // Push-to-talk outside a turn: no channel hears it, the pre-roll keeps it.
+        if !self.turns.listening() {
+            self.turns.pre_roll.push(frame, TURN_EDGE);
+            return effects;
+        }
         let delivery = if head { Delivery::Head } else { Delivery::Live };
+        self.fan_out(frame, delivery, &mut effects);
+        effects
+    }
+
+    fn fan_out(
+        &mut self,
+        frame: AudioFrame,
+        delivery: Delivery,
+        effects: &mut Vec<AudioInputRouterEffect>,
+    ) {
+        self.input_shape = Some((FrameShape::of(&frame), self.conversion.frame_shape()));
+        // An open turn whose STT stream is still opening keeps its audio for it.
+        if self.turns.open && self.slots[AudioChannel::Stt as usize].sink.is_none() {
+            self.turns.backlog.push(frame.clone(), TURN_BACKLOG);
+        }
         // `Raw` channels: the source frame; the substitute has the room frame's shape.
         let raw_silence = self.discard.then(|| silence_like(&frame));
-        self.push(Feed::Raw, &frame, raw_silence.as_ref(), delivery, &mut effects);
+        self.push(Feed::Raw, &frame, raw_silence.as_ref(), delivery, effects);
         // `Converted` channels: the Rust detectors expect 16 kHz mono.
-        let Ok(ready) = self.conversion.convert(&frame) else { return effects };
+        let Ok(ready) = self.conversion.convert(&frame) else { return };
         for converted in ready {
             let substitute = self.discard.then(|| silence_like(&converted));
-            self.push(Feed::Converted, &converted, substitute.as_ref(), delivery, &mut effects);
+            self.push(Feed::Converted, &converted, substitute.as_ref(), delivery, effects);
         }
-        effects
     }
 
     fn push(
@@ -311,6 +466,10 @@ impl AudioFanOut {
     }
 }
 
+fn length(frame: &AudioFrame) -> Duration {
+    Duration::from_secs_f64(frame.duration().max(0.0))
+}
+
 /// A silence frame shaped like `frame`, so substituted channels keep that channel's rate.
 fn silence_like(frame: &AudioFrame) -> AudioFrame {
     silence_frame(frame.samples_per_channel, frame.sample_rate, frame.num_channels)
@@ -361,5 +520,82 @@ mod tests {
         assert_eq!(pushed(&head), [(vad, true), (eot, true)]);
         let live = router.on_frame(frame(), false, Ts::ZERO);
         assert_eq!(pushed(&live), [(vad, false), (eot, false)]);
+    }
+
+    /// A 20 ms live frame at 16 kHz mono, the shape that skips the conversion.
+    fn mic() -> AudioFrame {
+        silence_frame(320, 16_000, 1)
+    }
+
+    fn ended(effects: &[AudioInputRouterEffect]) -> Vec<(ResourceId, bool)> {
+        let ends = effects.iter().filter_map(|effect| match effect {
+            AudioInputRouterEffect::EndInput(sink) => Some((*sink, false)),
+            AudioInputRouterEffect::AbortInput(sink) => Some((*sink, true)),
+            _ => None,
+        });
+        ends.collect()
+    }
+
+    fn turn_router() -> (AudioInputRouter, ResourceId, ResourceId) {
+        let mut router = AudioInputRouter::new(16_000);
+        let (stt, vad) = (ResourceId(1), ResourceId(2));
+        router.handle(AudioInputRouterCommand::Install { channel: AudioChannel::Stt, sink: stt });
+        router.handle(AudioInputRouterCommand::Install { channel: AudioChannel::Vad, sink: vad });
+        router.handle(AudioInputRouterCommand::SetPushToTalk(true));
+        (router, stt, vad)
+    }
+
+    // Catches: audio outside a push-to-talk turn reaching the STT, the VAD or the interruption
+    // detector, or the press losing the words said just before it.
+    #[test]
+    fn push_to_talk_hears_nothing_outside_a_turn_and_keeps_a_pre_roll() {
+        let (mut router, stt, vad) = turn_router();
+        for _ in 0..20 {
+            assert!(pushed(&router.on_frame(mic(), false, Ts::ZERO)).is_empty());
+        }
+        let start = router.handle(AudioInputRouterCommand::StartTurn);
+        // 200 ms of 20 ms frames, to both sinks.
+        assert_eq!(pushed(&start).len(), 2 * 10);
+        assert!(pushed(&start).iter().all(|(sink, _)| *sink == stt || *sink == vad));
+        assert_eq!(pushed(&router.on_frame(mic(), false, Ts::ZERO)), [(stt, false), (vad, false)]);
+    }
+
+    // Catches: a release cutting the turn's last words, or a turn's STT left open after it.
+    #[test]
+    fn a_released_turn_hears_its_tail_then_its_input_ends() {
+        let (mut router, stt, _) = turn_router();
+        router.handle(AudioInputRouterCommand::StartTurn);
+        assert!(ended(&router.handle(AudioInputRouterCommand::EndTurn)).is_empty());
+        let mut tail = Vec::new();
+        for _ in 0..10 {
+            tail.extend(router.on_frame(mic(), false, Ts::ZERO));
+        }
+        assert_eq!(pushed(&tail), vec![(stt, false); 10], "the tail reaches the STT alone");
+        assert_eq!(ended(&tail), [(stt, false)]);
+        assert!(ended(&router.on_frame(mic(), false, Ts::ZERO)).is_empty());
+    }
+
+    // Catches: a cancelled turn's audio finalized by the provider (its input ended, not dropped).
+    #[test]
+    fn a_cancelled_turn_aborts_its_stt_input() {
+        let (mut router, stt, _) = turn_router();
+        router.handle(AudioInputRouterCommand::StartTurn);
+        router.on_frame(mic(), false, Ts::ZERO);
+        assert_eq!(ended(&router.handle(AudioInputRouterCommand::CancelTurn)), [(stt, true)]);
+        assert!(pushed(&router.on_frame(mic(), false, Ts::ZERO)).is_empty());
+    }
+
+    // Catches: a turn's first words lost while its STT stream is still opening.
+    #[test]
+    fn a_turn_holds_its_audio_for_an_stt_still_opening() {
+        let mut router = AudioInputRouter::new(16_000);
+        router.handle(AudioInputRouterCommand::StartTurn);
+        for _ in 0..3 {
+            router.on_frame(mic(), false, Ts::ZERO);
+        }
+        let stt = ResourceId(7);
+        let install = router
+            .handle(AudioInputRouterCommand::Install { channel: AudioChannel::Stt, sink: stt });
+        assert_eq!(pushed(&install), vec![(stt, true); 3]);
     }
 }

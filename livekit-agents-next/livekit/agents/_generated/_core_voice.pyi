@@ -41,7 +41,7 @@ from .avatar_queue import QueueEffects
 from .background_audio_wire import Sounds
 from .chat_items import ChatContent, ChatItem
 from .connect import APIConnectOptions, SessionConnectOptions
-from .events import AgentState, CloseReason, UserState
+from .events import AgentState, CloseReason, UserState, UserTurnResult
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
 from .llm import ChatChunk
 from .metrics import AvatarMetrics
@@ -462,6 +462,18 @@ class _core_RpcTracing(RpcInterceptor):
         next: Callable[[RpcInvocationData], Awaitable[str | None]],
     ) -> str | None: ...
 
+class UserTurn:
+    """An open user turn, as `start_user_turn()` hands it out."""
+    @property
+    def id(self) -> int: ...
+    async def end(self, *, reply: bool = True) -> UserTurnResult:
+        """Release the turn: it hears a little more audio, every final transcript arrives, then the
+        message is added and, unless `reply=False`, answered. Resolves once the message is in the
+        chat history, before the reply.
+        """
+    def cancel(self) -> None:
+        """Drop the turn: its audio is never transcribed. A no-op once the turn ended."""
+
 class SessionOptions:
     """`AgentSession(**kwargs)`'s options before the session holds them: the raw kwargs, read once,
     and the session layer they became (plus every `update_options` so far).
@@ -714,6 +726,10 @@ class VoiceSession:
         """`with_filler`'s exit; a no-op once the session closed."""
     def clear_user_turn(self) -> None:
         """`AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it."""
+    def start_user_turn(self) -> UserTurn:
+        """`start_user_turn()`: open a user turn now. It interrupts the agent, and only its `end()`
+        or `cancel()` closes it. Refused while another is open.
+        """
     def update_instructions(self, instructions: str) -> None:
         """`Agent.update_instructions()` on the agent that is already driving."""
     def set_io_enabled(

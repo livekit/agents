@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use lk_agents_abi::{RealtimeCommandKind, voice::events::UserState};
 use lk_agents_voice::{
-    agent_session::machine::activity::scheduling::SpeechId,
     agent_session::effects::{GateCause, GateOp, Timer},
+    agent_session::machine::activity::scheduling::SpeechId,
     events::{SessionEvent, SpeechOutcome},
     trace::{
         CoreStep, GenerationStep, InterruptCause, InterruptStep, PlayoutStep, RealtimeStep,
@@ -16,7 +16,7 @@ use crate::{
     check::{Check, Contract, Rule, Subject},
     input::{Input, RoomIn, RtEvent},
     record::{
-        Handle, Kind, Observed, Recording, SpeechView, StorageOperation, StorageStep,
+        Fault, Handle, Kind, Observed, Recording, Site, SpeechView, StorageOperation, StorageStep,
     },
 };
 
@@ -45,12 +45,14 @@ impl Rule for SpeechIsHeard {
             waited_on_a_stalled_voice,
             waited_on_a_voice_fed_after_its_open,
             waited_on_its_storage_receipt,
+            waited_on_a_voice_open_never_answered,
         ],
         counterexamples: &[
             silent_behind_a_paused_speech,
             silent_after_the_persons_utterance,
             silent_with_the_voice_due,
             silent_beside_anothers_stalled_voice,
+            silent_beside_a_recogniser_open_never_answered,
         ],
         probe: None,
     };
@@ -118,6 +120,7 @@ impl Rule for SpeechIsHeard {
         }
         for speech in r.host_view().speeches().into_iter().filter(SpeechView::is_known) {
             let Some(created) = speech.created_at() else { continue };
+            let made = created.at_ms;
             // A preemptive reply waits on the turn it guessed, which may never end: its bound runs
             // from the turn's end, when the driver took the guess.
             let created = if speech.is_speculative() {
@@ -180,7 +183,7 @@ impl Rule for SpeechIsHeard {
             }
             let why = (played || ended.is_some())
                 .then_some("heard or ended")
-                .or_else(|| waits_on(r, speech.id, deadline));
+                .or_else(|| waits_on(r, speech.id, made, deadline));
             check.expect_with(Subject::Speech(speech.id), why.is_some(), || {
                 format!(
                     "created at {} ms, silent and not done at {deadline} ms with nothing to wait on",
@@ -220,6 +223,8 @@ fn person_acted(r: &Recording, from: u64, to: u64) -> bool {
                 | Input::CommitUserTurn { .. }
                 | Input::CommitTurn { .. }
                 | Input::ClaimUserTurn {}
+                | Input::StartUserTurn {}
+                | Input::EndUserTurn { .. }
                 | Input::Run { .. }
                 | Input::GenerateReply { user_input: Some(_), .. }
                 | Input::Console { .. }
@@ -291,8 +296,18 @@ fn last_quiet(journal: &[&(Observed, Step)]) -> Option<u64> {
 }
 
 /// What a still-silent speech waits on at `deadline`, if anything holds.
-fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
+fn waits_on(r: &Recording, speech: u64, made: u64, deadline: u64) -> Option<&'static str> {
     let before = |a: &Observed| a.at_ms <= deadline;
+    // A model or voice open, or a node, that never answered once the speech was made: an
+    // unanswered request with no stream to show for it (seed 43's hung voice open).
+    let hung_open = r.faults().iter().any(|(at, site, fault)| {
+        *fault == Fault::Hang
+            && (made..=deadline).contains(&at.at_ms)
+            && matches!(site, Site::ChatOpen | Site::TtsOpen | Site::Node)
+    });
+    if hung_open {
+        return Some("a provider open never answered");
+    }
     let open = |kind: Kind| {
         r.opened()
             .iter()
@@ -338,8 +353,7 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
     let own = |nth: u32| {
         r.produced().iter().filter(|(_, tts, _, _)| *tts == nth).any(|(_, _, _, text)| {
             let text = text.trim();
-            !text.is_empty()
-                && (forwarded.contains(text) || asked.iter().any(|a| a.contains(text)))
+            !text.is_empty() && (forwarded.contains(text) || asked.iter().any(|a| a.contains(text)))
         })
     };
     // A voice asked before the bound whose first audio comes on its own clock after it: the
@@ -620,6 +634,31 @@ fn waited_on_its_storage_receipt() -> Recording {
         .storage(StorageStep::Requested { speech: 4, operation: settle })
         .later(BOUND_MS * 2)
         .done()
+}
+
+/// A `say` whose voice's open never answered (an injected hang): it waits on that request.
+fn waited_on_a_voice_open_never_answered() -> Recording {
+    silent_say_with_a_hang(Site::TtsOpen)
+}
+
+/// The same, the hang on the recogniser's open: nothing this speech waits on.
+fn silent_beside_a_recogniser_open_never_answered() -> Recording {
+    silent_say_with_a_hang(Site::SttOpen)
+}
+
+/// Speech 4, silent, and a hang struck at `site` a moment after it was made.
+fn silent_say_with_a_hang(site: Site) -> Recording {
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
+    let mut r = Authored::new()
+        // The case's own speaker, not the room's: nobody need subscribe.
+        .output(true)
+        .speech_created(4, SpeechKind::Say)
+        .speech(4, Handle::live())
+        .later(BOUND_MS * 2)
+        .done();
+    let made = r.host_view().speeches()[0].created_at().expect("the say was made");
+    r.record_fault(Observed::at(made.seq + 1, made.at_ms + 1), site, Fault::Hang);
+    r
 }
 
 /// The same voice due long before the bound, its audio never handed to the speaker.

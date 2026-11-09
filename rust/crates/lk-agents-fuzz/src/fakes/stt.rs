@@ -17,7 +17,8 @@ use crate::{
 };
 
 // A reopened stream stays addressable, so a late delivery to it is a recorded, rejected attempt
-// rather than a silent channel swap. Audio is recorded, never interpreted.
+// rather than a silent channel swap. Audio is recorded, never interpreted. As a real provider's,
+// a stream whose input ended still delivers the utterance it is in, and closes after its end.
 
 pub struct FakeStt {
     registry: Arc<Registry>,
@@ -51,6 +52,9 @@ struct Recognition {
     events: mpsc::UnboundedReceiver<Result<SpeechEvent, ProviderError>>,
     ended: Arc<Notify>,
     hazard: super::hazard::StreamHazard,
+    input_ended: bool,
+    /// Between a start of speech and its end.
+    speaking: bool,
 }
 
 impl Stt for FakeStt {
@@ -112,6 +116,8 @@ impl Stt for FakeStt {
                     events,
                     ended,
                     hazard: self.registry.stream_hazard(Site::SttNext, Site::SttClose),
+                    input_ended: false,
+                    speaking: false,
                 }) as SttSource,
             )))
         })
@@ -125,11 +131,28 @@ impl StreamOutput<SpeechEvent> for Recognition {
             if let Some(fault) = fault {
                 return strike(fault, Site::SttNext).await;
             }
-            // A real stream ends once its input has; otherwise a replaced stream stays open.
-            tokio::select! {
-                biased;
-                event = self.events.recv() => event.transpose(),
-                () = self.ended.notified() => Ok(None),
+            // A real stream ends once its input has and its utterance ended; otherwise a replaced
+            // stream stays open.
+            loop {
+                if self.input_ended && !self.speaking {
+                    return Ok(None);
+                }
+                let event = tokio::select! {
+                    biased;
+                    event = self.events.recv() => event,
+                    () = self.ended.notified(), if !self.input_ended => {
+                        self.input_ended = true;
+                        continue;
+                    }
+                };
+                if let Some(Ok(ev)) = &event {
+                    match ev.kind {
+                        lk_agents_abi::SpeechEventType::StartOfSpeech => self.speaking = true,
+                        lk_agents_abi::SpeechEventType::EndOfSpeech => self.speaking = false,
+                        _ => {}
+                    }
+                }
+                return event.transpose();
             }
         })
     }

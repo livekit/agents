@@ -2401,6 +2401,50 @@ impl CoreRpcTracing {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/session.rs.
+type UserTurnImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::UserTurn;
+
+/// An open user turn, as `start_user_turn()` hands it out.
+#[pyclass(frozen, name = "UserTurn", module = "livekit.agents.voice")]
+pub struct UserTurn(pub(crate) ::std::sync::Arc<UserTurnImpl>);
+
+#[pymethods]
+impl UserTurn {
+    #[getter]
+    fn id(&self, py: Python<'_>) -> PyResult<u64> {
+        crate::py_calls::check_pid()?;
+        let out =
+            py.detach(|| <UserTurnImpl as ::lk_agents_abi::voice::session::UserTurn>::id(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// Release the turn: it hears a little more audio, every final transcript arrives, then the
+    /// message is added and, unless `reply=False`, answered. Resolves once the message is in the
+    /// chat history, before the reply.
+    #[pyo3(signature = (*, reply = true))]
+    fn end<'py>(&self, py: Python<'py>, reply: bool) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let call = py.detach(|| <UserTurnImpl as ::lk_agents_abi::voice::session::UserTurn>::end(&self.0, reply)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        crate::py_calls::future_into_py(py, async move {
+            let out = call.await.map_err(|e: ::lk_agents_abi::voice::session::UserTurnFailed| <::lk_agents_abi::voice::session::UserTurnFailed as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    crate::generated::records::events::user_turn_result_to_py(py, out)?,
+                    py,
+                )
+            })
+        })
+    }
+
+    /// Drop the turn: its audio is never transcribed. A no-op once the turn ended.
+    fn cancel(&self, py: Python<'_>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| <UserTurnImpl as ::lk_agents_abi::voice::session::UserTurn>::cancel(&self.0));
+        Ok(())
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/session.rs.
 type SessionOptionsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::SessionOptions;
 
@@ -3499,6 +3543,14 @@ impl VoiceSession {
         crate::py_calls::check_pid()?;
         py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::clear_user_turn(&self.0)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
+    }
+
+    /// `start_user_turn()`: open a user turn now. It interrupts the agent, and only its `end()`
+    /// or `cancel()` closes it. Refused while another is open.
+    fn start_user_turn(&self, py: Python<'_>) -> PyResult<super::voice::UserTurn> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::start_user_turn(&self.0)).map_err(|e: ::lk_agents_abi::voice::session::UserTurnRefused| <::lk_agents_abi::voice::session::UserTurnRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        ::pyo3::PyResult::Ok(super::voice::UserTurn(out))
     }
 
     /// `Agent.update_instructions()` on the agent that is already driving.
@@ -12854,6 +12906,32 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::VoiceT
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::IdleRefused {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         SessionClosing::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::UserTurnRefused {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        match self {
+            Self::Session(inner) => crate::py_errors::HostException::to_py_err(inner),
+            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
+                self,
+            )),
+        }
+    }
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::UserTurnFailed {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        match self {
+            Self::Closed => crate::py_errors::host_exception(
+                "livekit.agents._core",
+                "SessionClosing",
+                ::std::string::ToString::to_string(self),
+            ),
+            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
+                self,
+            )),
+        }
     }
 }
 

@@ -103,6 +103,7 @@
     "TtsStreamAdapter",
     "Turn",
     "TurnDetectorStream",
+    "UserTurn",
     "VoiceAgent",
     "VoiceSession",
     "WARM_TRANSFER_IDENTITY",

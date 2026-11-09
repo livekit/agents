@@ -518,6 +518,7 @@ pub enum Answer {
     Idle(Result<(), IdleRefused>),
     Hold(Result<u64, IdleRefused>),
     Commit(Result<String, lk_agents_abi::voice::session::CommitSuperseded>),
+    UserTurn(Box<lk_agents_voice::agent_session::UserTurnAnswer>),
     Handoff(Result<(), ()>),
     Drain(Result<(), lk_agents_voice::agent_session::DrainRefused>),
     /// What a driver-run DTMF collection answered its `Start` with.
@@ -652,6 +653,8 @@ pub struct Recording {
     /// Frames the driver forwarded into a provider stream, tag-decoded: the microphone-to-provider
     /// link, made visible so a rule can hold injected VAD and STT events against the audio.
     forwarded: Vec<(Observed, Kind, u32, Vec<Tag>)>,
+    /// When the driver first ended each provider stream's input.
+    input_ended: std::collections::BTreeMap<(Kind, u32), Observed>,
     /// Each node the session opened, and the agent whose override it is.
     nodes: Vec<(Observed, String, NodeUse)>,
     storage: Vec<(Observed, StorageStep)>,
@@ -914,6 +917,10 @@ impl Recording {
     /// The driver answered the n-th call it owed.
     pub fn record_result(&mut self, at: Observed, answer: u32, result: Answer) {
         self.results.push((at, answer, result));
+    }
+
+    pub fn record_input_ended(&mut self, at: Observed, kind: Kind, nth: u32) {
+        self.input_ended.entry((kind, nth)).or_insert(at);
     }
 
     /// One chunk of audio the n-th synthesis stream produced.

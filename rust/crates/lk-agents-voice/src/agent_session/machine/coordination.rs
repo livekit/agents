@@ -382,6 +382,8 @@ impl VoiceDriver {
             | SessionEvent::AgentBackchannelOpportunity(_)
             | SessionEvent::PreemptiveGeneration(_)
             | SessionEvent::UserTranscriptionTimeout(_)
+            | SessionEvent::UserTurnStarted(_)
+            | SessionEvent::UserTurnEnded(_)
             | SessionEvent::BackchannelConfirmed
             | SessionEvent::OverlapInterruption(_)
             | SessionEvent::AgentFalseInterruption { .. }

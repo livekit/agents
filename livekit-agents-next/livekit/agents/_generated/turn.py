@@ -172,6 +172,10 @@ class TurnHandlingOptions(TypedDict, total=False):
     """Preemptive generation configuration. Use ``{"enabled": False}`` to disable."""
     user_turn_limit: UserTurnLimitOptions
     """User turn limit configuration. Use ``{"max_words": 50}`` to enable."""
+    push_to_talk: bool
+    """Push-to-talk: the user's turns open on ``start_user_turn()`` and end on its ``end()`` or
+    ``cancel()``. Outside a turn the microphone is ignored. Defaults to ``False``.
+    """
 
 
 EndpointingOptions.__module__ = "livekit.agents.voice.io"

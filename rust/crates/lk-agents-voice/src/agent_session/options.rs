@@ -211,6 +211,7 @@ pub const fn defaults(legs: &SessionLegs) -> AgentSessionOptions {
                 max_duration: Maybe::Given(None),
             },
             ivr_detection: Some(false),
+            push_to_talk: Some(false),
         },
         speech: SpeechOptions {
             max_tool_steps: Some(3),
@@ -390,6 +391,7 @@ pub fn resolved_session_options(
                     },
                 user_turn_limit: UserTurnLimitOptions { max_words, max_duration },
                 ivr_detection,
+                push_to_talk,
             },
         speech:
             SpeechOptions {
@@ -436,6 +438,7 @@ pub fn resolved_session_options(
             max_words: max_words.resolved(),
             max_duration: max_duration.resolved().map(secs),
         },
+        push_to_talk: push_to_talk.resolved(),
         turn_detection_mode: detection,
         endpointing_overrides: EndpointingOverrides {
             mode: overrides.mode,

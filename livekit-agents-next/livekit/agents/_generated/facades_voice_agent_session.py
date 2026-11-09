@@ -17,6 +17,7 @@ from ..voice.io import SpeechHandle
 if TYPE_CHECKING:
     from collections.abc import AsyncIterable, AsyncIterator, Sequence
 
+    from livekit.agents._core import UserTurn as HostUserTurn
     from livekit.agents._generated.expressive import ExpressiveOptions
     from livekit.agents.llm.tool_context import ToolChoice
 
@@ -192,6 +193,12 @@ class VoiceSession:
     def _clear_user_turn(self) -> None:
         """`AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it."""
         self._running.clear_user_turn()
+
+    def start_user_turn(self) -> HostUserTurn:
+        """Open a user turn now: it interrupts the agent, and only its `end()` or `cancel()` closes
+        it, whatever the turn detection. Refused while another is open.
+        """
+        return cast("HostUserTurn", self._running.start_user_turn())
 
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         """`AgentSession.interrupt(force=)`: the current and queued speeches up to the first

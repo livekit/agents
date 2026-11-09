@@ -6802,6 +6802,80 @@ pub mod events {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static USER_TURN_STARTED_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn user_turn_started_event_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::voice::events::UserTurnStartedEvent,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::voice::events::UserTurnStartedEvent { turn_id, created_at: _ } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("turn_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(turn_id, py)?)?;
+        crate::py_calls::call(
+            USER_TURN_STARTED_EVENT
+                .import(py, "livekit.agents._generated.events", "UserTurnStartedEvent")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static USER_TURN_ENDED_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn user_turn_ended_event_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::voice::events::UserTurnEndedEvent,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::voice::events::UserTurnEndedEvent {
+            turn_id,
+            cancelled,
+            empty,
+            created_at: _,
+        } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("turn_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(turn_id, py)?)?;
+        kwargs.set_item("cancelled", ::pyo3::IntoPyObjectExt::into_bound_py_any(cancelled, py)?)?;
+        kwargs.set_item("empty", ::pyo3::IntoPyObjectExt::into_bound_py_any(empty, py)?)?;
+        crate::py_calls::call(
+            USER_TURN_ENDED_EVENT
+                .import(py, "livekit.agents._generated.events", "UserTurnEndedEvent")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static USER_TURN_RESULT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn user_turn_result_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::voice::events::UserTurnResult,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::voice::events::UserTurnResult { message, empty } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "message",
+            match message {
+                None => py.None().into_bound(py),
+                Some(x) => crate::generated::records::chat_items::chat_message_to_py(py, x)?,
+            },
+        )?;
+        kwargs.set_item("empty", ::pyo3::IntoPyObjectExt::into_bound_py_any(empty, py)?)?;
+        crate::py_calls::call(
+            USER_TURN_RESULT
+                .import(py, "livekit.agents._generated.events", "UserTurnResult")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
     static CLOSE_REASON: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -14944,6 +15018,7 @@ pub mod session_options {
             interruption,
             preemptive_generation,
             user_turn_limit,
+            push_to_talk,
             turn_detection_mode,
             endpointing_overrides,
             max_tool_steps,
@@ -14984,6 +15059,10 @@ pub mod session_options {
                 py,
                 user_turn_limit,
             )?,
+        )?;
+        dict.set_item(
+            "push_to_talk",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(push_to_talk, py)?,
         )?;
         dict.set_item(
             "turn_detection_mode",
@@ -15912,6 +15991,12 @@ pub mod session_wire {
             }
             ::lk_agents_abi::voice::events::HostWire::UserTurnExceeded(x) => {
                 crate::generated::records::events::user_turn_exceeded_event_to_py(py, x)?
+            }
+            ::lk_agents_abi::voice::events::HostWire::UserTurnStarted(x) => {
+                crate::generated::records::events::user_turn_started_event_to_py(py, x)?
+            }
+            ::lk_agents_abi::voice::events::HostWire::UserTurnEnded(x) => {
+                crate::generated::records::events::user_turn_ended_event_to_py(py, x)?
             }
             ::lk_agents_abi::voice::events::HostWire::TranscriptionTimeout(x) => {
                 crate::generated::records::events::user_transcription_timeout_event_to_py(py, x)?
@@ -23361,6 +23446,12 @@ pub mod turn {
                 Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
                     (crate::generated::records::turn::user_turn_limit_options_from_py(v.as_any()))?,
                 ),
+                _ => None,
+            },
+            push_to_talk: match obj.get_item("push_to_talk")? {
+                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => {
+                    Some((v.as_any().extract::<bool>())?)
+                }
                 _ => None,
             },
         })

@@ -20,7 +20,9 @@ from .events import (
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     UserTranscriptionTimeoutEvent,
+    UserTurnEndedEvent,
     UserTurnExceededEvent,
+    UserTurnStartedEvent,
     _AgentBackchannelOpportunityEvent,
 )
 
@@ -312,6 +314,8 @@ HostWire: TypeAlias = (
     | _AgentBackchannelOpportunityEvent
     | PreemptiveGenerationEvent
     | UserTurnExceededEvent
+    | UserTurnStartedEvent
+    | UserTurnEndedEvent
     | UserTranscriptionTimeoutEvent
     | BackchannelConfirmedWire
     | OverlapInterruptionEvent

@@ -80,3 +80,5 @@ mod storage_fault;
 mod telephony;
 #[path = "tools_tests.rs"]
 mod tools;
+#[path = "user_turn_tests.rs"]
+mod user_turn;

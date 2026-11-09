@@ -66,6 +66,8 @@ pub struct VoiceRuntime {
     forwarder: AudioInputRouter,
     /// One refused-audio warning per active stream, retired when that input ends.
     push_warned: std::collections::BTreeSet<ResourceId>,
+    /// Each drained stream's abort, until its input ends or it is aborted.
+    drains: std::collections::BTreeMap<ResourceId, tokio_util::sync::CancellationToken>,
     recorder_observers: recorder::RecorderOutputs,
 
     /// Every source's events, in arrival order. Frames never come this way. A simulation swaps in
@@ -244,6 +246,7 @@ impl VoiceRuntime {
             peer,
             forwarder,
             push_warned: Default::default(),
+            drains: Default::default(),
             recorder_observers: Default::default(),
             queue,
             frames,
@@ -560,6 +563,12 @@ impl VoiceRuntime {
             | AudioInputRouterCommand::Remove(_)
             | AudioInputRouterCommand::SetGateDiscard(_)
             | AudioInputRouterCommand::FlushSttWithSilence { .. }
+            | AudioInputRouterCommand::SetPushToTalk(_)
+            | AudioInputRouterCommand::StartTurn
+            | AudioInputRouterCommand::EndTurn
+            | AudioInputRouterCommand::CancelTurn
+            | AudioInputRouterCommand::Abort(_)
+            | AudioInputRouterCommand::EndTail
             | AudioInputRouterCommand::ReportCensus => {}
         }
         let effects = self.forwarder.handle(command);
@@ -646,7 +655,16 @@ impl VoiceRuntime {
                         );
                     }
                 }
+                AudioInputRouterEffect::AbortInput(sink) => {
+                    self.push_warned.remove(&sink);
+                    // The drain closes the stream, then releases the sink.
+                    match self.drains.remove(&sink) {
+                        Some(abort) => abort.cancel(),
+                        None => resources.release(sink),
+                    }
+                }
                 AudioInputRouterEffect::EndInput(sink) => {
+                    self.drains.remove(&sink);
                     self.push_warned.remove(&sink);
                     if let Some(stream) = resources.audio_sink(sink) {
                         stream.end_input();

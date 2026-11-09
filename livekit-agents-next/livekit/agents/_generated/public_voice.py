@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+from .._core import UserTurn as UserTurn
 from .agent_authoring import AgentRetries as AgentRetries, ModelSettings as ModelSettings
 
 __all__: list[str] = [
     "AgentRetries",
     "ModelSettings",
+    "UserTurn",
 ]

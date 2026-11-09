@@ -288,14 +288,17 @@ impl VoiceRuntime {
     /// Drains an activated stream into the queue.
     pub(super) fn drain(&mut self, channel: AudioChannel, sink: ResourceId, stream: PendingLeg) {
         let shared = &self.shared;
-        let (time, closing) = (shared.time.clone(), shared.closing.clone());
+        let token = shared.closing.child_token();
+        self.drains.insert(sink, token.clone());
+        let abort = super::audio::Abort { token, resources: shared.resources.clone() };
+        let (time, ends) = (shared.time.clone(), (shared.closing.clone(), abort));
         match stream {
             PendingLeg::Stt(mut source) => {
                 source.report_retries(super::audio::report_to(self.reports.clone()));
                 super::audio::spawn_drain(
                     (&shared.tasks, shared.spawner.as_ref()),
                     time,
-                    closing,
+                    ends,
                     super::audio::tagged(sink, source),
                     self.reports.clone(),
                     (channel, sink),
@@ -304,7 +307,7 @@ impl VoiceRuntime {
             PendingLeg::Vad(source) => super::audio::spawn_drain(
                 (&shared.tasks, shared.spawner.as_ref()),
                 time,
-                closing,
+                ends,
                 source,
                 self.reports.clone(),
                 (channel, sink),

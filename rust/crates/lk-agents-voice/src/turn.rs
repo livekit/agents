@@ -23,12 +23,15 @@ pub struct TurnHandlingOptions {
     pub user_turn_limit: UserTurnLimitOptions,
     /// `ivr_detection`: a turn's outcome is also fed to the IVR machine.
     pub ivr_detection: Option<bool>,
+    /// Turns open and end only on `start_user_turn()` and its `end()` / `cancel()`.
+    pub push_to_talk: Option<bool>,
 }
 
 option_group!(TurnHandlingOptions {
     detection: Option<TurnDetection>,
     owner: TurnDetectionMode,
     ivr_detection: bool,
+    push_to_talk: bool,
 } groups(endpointing, interruption, preemptive, user_turn_limit));
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -111,6 +114,7 @@ pub fn turn_handling_layer(kw: &TurnHandlingKwargs) -> AgentSessionOptions {
         turn_detection,
         preemptive_generation,
         user_turn_limit,
+        push_to_talk,
     } = *kw;
     let mut o = AgentSessionOptions::default();
     if let Some(e) = endpointing {
@@ -128,6 +132,7 @@ pub fn turn_handling_layer(kw: &TurnHandlingKwargs) -> AgentSessionOptions {
     if let Some(m) = turn_detection.given().and_then(TurnDetectionKwarg::detection) {
         o.turn.detection = Maybe::Given(Some(m));
     }
+    o.turn.push_to_talk = push_to_talk;
     o
 }
 
@@ -141,7 +146,13 @@ pub fn agent_layer(
     use_tts_aligned_transcript: Option<bool>,
 ) -> AgentSessionOptions {
     let mut o = turn_handling
-        .map(|kw| turn_handling_layer(&TurnHandlingKwargs { user_turn_limit: None, ..*kw }))
+        .map(|kw| {
+            turn_handling_layer(&TurnHandlingKwargs {
+                user_turn_limit: None,
+                push_to_talk: None,
+                ..*kw
+            })
+        })
         .unwrap_or_default();
     // `Agent(turn_detection=None)` is given: automatic selection, not the session's mode.
     if turn_handling

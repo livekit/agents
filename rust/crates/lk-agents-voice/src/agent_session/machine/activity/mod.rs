@@ -28,6 +28,7 @@ mod spans;
 pub(crate) mod speech;
 mod tool_results;
 pub(crate) mod tools;
+pub(crate) mod user_turn;
 pub mod voice_task;
 
 /// How many of the latest speeches the driver remembers once settled (their agent, end, tool
@@ -314,6 +315,7 @@ pub struct ConfigDiff {
     pub turn_detection_mode: Option<crate::audio_recognition::TurnDetectionMode>,
     /// `timers.aec_warmup` changed.
     pub aec_warmup: Option<Option<Duration>>,
+    pub push_to_talk: Option<bool>,
 }
 
 impl DriverConfig {
@@ -375,6 +377,8 @@ impl DriverConfig {
                 .then_some(next.turn.owner()),
             aec_warmup: (next.timers.aec_warmup() != self.effective.timers.aec_warmup())
                 .then_some(next.timers.aec_warmup()),
+            push_to_talk: (next.turn.push_to_talk() != self.effective.turn.push_to_talk())
+                .then_some(next.turn.push_to_talk()),
         };
         self.effective = next;
         diff
@@ -577,8 +581,17 @@ impl VoiceDriver {
         if let ChatItem::FunctionCallOutput(output) = &item {
             self.session.experts.recorded(&output.call_id);
         }
+        let user_turn = match (&item, &source) {
+            (ChatItem::Message(message), Source::UserTurn { turn }) => {
+                Some((*turn, message.clone()))
+            }
+            _ => None,
+        };
         let commit = self.session.chat_ctx.commit(item, source, visibility, &agent);
         self.perform_commit(commit);
+        if let Some((turn, message)) = user_turn {
+            self.user_turn_message_added(turn, &message);
+        }
     }
 
     /// Items on the record changed in place: the host is told again of each under its own id,

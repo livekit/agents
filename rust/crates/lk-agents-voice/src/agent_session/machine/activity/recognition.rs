@@ -171,8 +171,10 @@ impl VoiceDriver {
             return;
         }
         // A swapped-out recogniser's items reach nothing; until the new stream lands the old one
-        // is the installed one.
-        if self.input.live_stt != Some(stream) {
+        // is the installed one. A released user turn's stream is heard until it closes.
+        if self.input.live_stt != Some(stream)
+            && self.session.user_turns.ending_stream() != Some(stream)
+        {
             self.record_trace(InputStep::LegItemDiscarded {
                 leg: lk_agents_abi::voice::events::Leg::Stt,
                 stream,
@@ -332,6 +334,9 @@ impl VoiceDriver {
                     ));
                 }
             }
+            TurnCommand::StartUser { id } => self.start_user_turn(now, id),
+            TurnCommand::EndUser { id, reply, call } => self.end_user_turn(now, id, reply, call),
+            TurnCommand::CancelUser { id } => self.cancel_user_turn(now, id),
             TurnCommand::SkipReplies(on) => self.session.amd_skips_replies = on,
             TurnCommand::Configure(patch) => {
                 let diff = self.session.config.configure(&patch);
@@ -351,7 +356,7 @@ impl VoiceDriver {
     /// A changed endpointing replaces the model; a changed turn detection mode reaches the turn
     /// machine.
     pub(crate) fn apply_config(&mut self, now: Ts, layer: ConfigLayer, diff: ConfigDiff) {
-        let ConfigDiff { endpointing, turn_detection_mode: mode, aec_warmup } = diff;
+        let ConfigDiff { endpointing, turn_detection_mode: mode, aec_warmup, push_to_talk } = diff;
         // Refine the mode first: the journalled config carries the machine's mode.
         let mode = match self.activity.realtime().map(|s| s.capabilities) {
             Some(caps) => self.reconcile_realtime_turn_detection(&caps),
@@ -365,9 +370,15 @@ impl VoiceDriver {
             self.activity.audio_recognition.set_endpointing(&e);
         }
         self.activity.audio_recognition.set_options(&self.session.config.effective);
-        if let Some(mode) = mode {
+        // Explicit turns hold the turn machine; the mode applies once they end.
+        if let Some(mode) = mode
+            && !self.explicit_turns()
+        {
             let eff = self.activity.audio_recognition.set_turn_detection_mode(now, mode);
             self.apply_recognition_effects(eff);
+        }
+        if let Some(on) = push_to_talk {
+            self.set_push_to_talk(now, on);
         }
         if let Some(duration) = aec_warmup
             && self.session.aec.set(duration)
@@ -435,6 +446,7 @@ impl VoiceDriver {
             }
             // A turn decided without a reply: a preemptive generation made for it has no owner.
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
+            self.user_turn_dropped(info.turn_id);
             return;
         }
         // User code is never cancelled: a newer turn waits for the older one's hook.
@@ -505,6 +517,7 @@ impl VoiceDriver {
             self.activity.last_turn = Some(info.turn_id);
             span.end(&mut self.telemetry, telemetry::UserTurnOutcome::Dropped);
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
+            self.user_turn_dropped(info.turn_id);
             return;
         }
         // A turn that asks for no reply commits its item without `on_user_turn_completed`.
@@ -523,7 +536,9 @@ impl VoiceDriver {
         let mut text = None;
         for edit in edits {
             match edit {
-                crate::agent::TurnEdit::StopResponse => return,
+                crate::agent::TurnEdit::StopResponse => {
+                    return self.user_turn_dropped(info.turn_id);
+                }
                 crate::agent::TurnEdit::UpdateUserMessage(t) => text = Some(t),
                 crate::agent::TurnEdit::UpdateInstructions(_)
                 | crate::agent::TurnEdit::ReplaceItems(_) => {}
@@ -567,6 +582,7 @@ impl VoiceDriver {
                 crate::agent::TurnEdit::StopResponse => {
                     self.activity.last_turn = Some(info.turn_id);
                     self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
+                    self.user_turn_dropped(info.turn_id);
                     return;
                 }
             }

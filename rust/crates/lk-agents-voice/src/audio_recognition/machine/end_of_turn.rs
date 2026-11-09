@@ -259,6 +259,8 @@ impl AudioRecognition {
             // Owned by other machines; the driver routes them directly.
             Timer::Close
             | Timer::Commit
+            | Timer::UserTurnEnd
+            | Timer::UserTurnTail
             | Timer::Hook(_)
             | Timer::FalseInterruption
             | Timer::AecWarmup
@@ -277,9 +279,36 @@ impl AudioRecognition {
     }
 
     /// Drops the turn and everything accumulated for it, including a running countdown and a
-    /// manual commit.
+    /// manual commit, and flushes the STT.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub fn clear_user_turn(&mut self, now: Ts) -> Vec<AudioRecognitionEffect> {
+        let mut eff = self.reset_user_turn(now);
+        // A stream swap clears the STT buffer from the previous user turn.
+        eff.push(AudioRecognitionEffect::FlushInput(StreamKind::Stt));
+        eff
+    }
+
+    /// A user turn released: its words commit now, with no endpointing delay. `None`: nothing
+    /// was said, and the turn is dropped with nothing committed.
+    #[must_use = "recognition effects must be applied before the next transition"]
+    pub fn release_user_turn(
+        &mut self,
+        now: Ts,
+        skip_reply: bool,
+    ) -> (Option<TurnId>, Vec<AudioRecognitionEffect>) {
+        let mut eff = self.promote_interim(None);
+        if self.audio_transcript.is_empty() {
+            eff.extend(self.reset_user_turn(now));
+            return (None, eff);
+        }
+        eff.extend(self.run_eou_detection(now, Start::Released { skip_reply }));
+        (Some(TurnId(self.turn_seq)), eff)
+    }
+
+    /// Drops the turn and everything accumulated for it, including a running countdown and a
+    /// manual commit; the STT stream is left as it is.
+    #[must_use = "recognition effects must be applied before the next transition"]
+    pub fn reset_user_turn(&mut self, now: Ts) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
         self.audio_transcript.clear();
         self.interim_transcript.clear();
@@ -301,9 +330,6 @@ impl AudioRecognition {
         eff.extend(self.reset_turn_limit());
         self.user_turn_start = None;
         eff.extend(self.reset_transcription_timeout());
-
-        // A stream swap clears the STT buffer from the previous user turn.
-        eff.push(AudioRecognitionEffect::FlushInput(StreamKind::Stt));
         eff
     }
 
@@ -603,9 +629,9 @@ impl AudioRecognition {
         start: Start,
     ) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
-        let manual = matches!(start, Start::Manual { .. });
+        let manual = matches!(start, Start::Manual { .. } | Start::Released { .. });
         let declared = match start {
-            Start::Manual { .. } => true,
+            Start::Manual { .. } | Start::Released { .. } => true,
             Start::Auto { declared } => declared || self.declared(),
         };
         // No transcript yet: the turn doesn't start, but the owner's declaration is remembered so
@@ -649,7 +675,7 @@ impl AudioRecognition {
             },
             skip_reply: match start {
                 Start::Auto { .. } => false,
-                Start::Manual { skip_reply } => skip_reply,
+                Start::Manual { skip_reply } | Start::Released { skip_reply } => skip_reply,
             },
             min_delay: self.endpointing.min_delay(),
             max_delay: self.endpointing.max_delay(),
@@ -668,7 +694,11 @@ impl AudioRecognition {
         if manual {
             // The detector is disabled for manual turn detection.
             eff.extend(self.cancel_prediction(prediction));
-            let fire_at = anchored(now, run.snapshot.last_speaking_time, run.min_delay);
+            // A released turn is over: no delay waits for more words.
+            let fire_at = match start {
+                Start::Released { .. } => now,
+                _ => anchored(now, run.snapshot.last_speaking_time, run.min_delay),
+            };
             // A closed turn arms nothing: the close's trailing commit is the words as they stand.
             if fire_at > now && !self.closed {
                 eff.extend(self.set_phase(Phase::ManualCommitted { run, fire_at, speaking }));

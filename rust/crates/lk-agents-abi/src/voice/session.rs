@@ -175,6 +175,52 @@ pub enum IdleRefused {
     Closing,
 }
 
+/// `start_user_turn()` refused.
+#[crate::host(error(kind = "RuntimeError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum UserTurnRefused {
+    #[error("a user turn is already open")]
+    AlreadyOpen,
+    #[error(transparent)]
+    #[host(delegate)]
+    Session(#[from] SessionRefused),
+}
+
+/// Why a user turn's `end()` has no result.
+#[crate::host(error(kind = "RuntimeError"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, crate::Vocabulary)]
+pub enum UserTurnFailed {
+    /// `cancel()`, or a second `end()`, came first.
+    #[error("the user turn already ended")]
+    Ended,
+    #[error("the session closed before the user turn ended")]
+    #[host(kind = "livekit.agents._core.SessionClosing")]
+    Closed,
+}
+
+/// An open user turn, as `start_user_turn()` hands it out.
+#[crate::host(class(name = "UserTurn", module = "livekit.agents.voice"))]
+pub trait UserTurn: Send + Sync + Sized + 'static {
+    #[host(getter)]
+    fn id(&self) -> u64;
+
+    /// Release the turn: it hears a little more audio, every final transcript arrives, then the
+    /// message is added and, unless `reply=False`, answered. Resolves once the message is in the
+    /// chat history, before the reply.
+    #[host(await)]
+    fn end(
+        &self,
+        #[host(kw, default = true)] reply: bool,
+    ) -> Result<
+        BoxFuture<'static, Result<crate::voice::events::UserTurnResult, UserTurnFailed>>,
+        SessionRefused,
+    >;
+
+    /// Drop the turn: its audio is never transcribed. A no-op once the turn ended.
+    #[host(call)]
+    fn cancel(&self);
+}
+
 /// A `commit_user_turn()` superseded by a newer one; the host's future is cancelled.
 #[crate::host(error(kind = "asyncio.CancelledError"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -487,6 +533,9 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// A speech `say()` / `generate_reply()` answers: the host's `_core.SpeechHandle`.
     #[host(class(name = "SpeechHandle"))]
     type Speech: Send + Sync + 'static;
+    /// What `start_user_turn()` answers.
+    #[host(class(name = "UserTurn"))]
+    type UserTurn: Send + Sync + 'static;
 
     /// Assemble a session; the loop begins at `start()`. `room` supplies runtime room I/O, or no
     /// RTC attachment; `options` is the session layer `SessionOptions(kwargs)` built (none is an
@@ -736,6 +785,11 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// `AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it.
     #[host(call)]
     fn clear_user_turn(&self) -> Result<(), SessionRefused>;
+
+    /// `start_user_turn()`: open a user turn now. It interrupts the agent, and only its `end()`
+    /// or `cancel()` closes it. Refused while another is open.
+    #[host(call)]
+    fn start_user_turn(&self) -> Result<std::sync::Arc<Self::UserTurn>, UserTurnRefused>;
 
     /// `Agent.update_instructions()` on the agent that is already driving.
     #[host(call)]

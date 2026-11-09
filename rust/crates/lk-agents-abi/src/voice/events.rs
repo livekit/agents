@@ -350,6 +350,51 @@ pub struct UserTurnExceededEvent {
     pub created_at: f64,
 }
 
+/// A user turn opened: `start_user_turn()`, or a client's press.
+#[crate::host(record(
+    module = "events",
+    name = "UserTurnStartedEvent",
+    emit,
+    constant(type = "user_turn_started")
+))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserTurnStartedEvent {
+    pub turn_id: u64,
+    // The host stamps this; the core has no wall clock.
+    #[host(skip, default_factory = "time.time")]
+    pub created_at: f64,
+}
+
+/// A user turn ended: released, or cancelled (by `cancel()`, or the session's close). A released
+/// turn's message reaches the history as any other (`conversation_item_added`).
+#[crate::host(record(
+    module = "events",
+    name = "UserTurnEndedEvent",
+    emit,
+    constant(type = "user_turn_ended")
+))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserTurnEndedEvent {
+    pub turn_id: u64,
+    pub cancelled: bool,
+    /// Released with nothing said: no message, no reply.
+    pub empty: bool,
+    // The host stamps this; the core has no wall clock.
+    #[host(skip, default_factory = "time.time")]
+    pub created_at: f64,
+}
+
+/// What a released user turn added to the conversation.
+#[crate::host(record(module = "events", name = "UserTurnResult", emit))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserTurnResult {
+    /// The user's message, in the chat history once `end()` returns; `None` when nothing was
+    /// said or `on_user_turn_completed` stopped it.
+    pub message: Option<crate::ChatMessage>,
+    /// Nothing was said: no message, no reply.
+    pub empty: bool,
+}
+
 // `//`, not `///`: the reference has no docstring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -778,6 +823,10 @@ pub enum HostWire {
     PreemptiveGeneration(PreemptiveGenerationEvent),
     #[host(event)]
     UserTurnExceeded(UserTurnExceededEvent),
+    #[host(event)]
+    UserTurnStarted(UserTurnStartedEvent),
+    #[host(event)]
+    UserTurnEnded(UserTurnEndedEvent),
     #[host(event)]
     TranscriptionTimeout(UserTranscriptionTimeout),
     #[host(ignored)]

@@ -49,6 +49,9 @@ impl Run {
             | Input::ClaimUserTurn { .. }
             | Input::ReleaseUserTurn { .. }
             | Input::CommitTurn { .. }
+            | Input::StartUserTurn { .. }
+            | Input::EndUserTurn { .. }
+            | Input::CancelUserTurn { .. }
             | Input::ClearTurn { .. } => self.call_turn(input),
             Input::ToolUpdate { .. }
             | Input::EndCall { .. }
@@ -227,6 +230,19 @@ impl Run {
                 api.send(TurnCommand::Commit { skip_reply: *skip_reply }).ok()?
             }
             Input::ClearTurn {} => api.clear_user_turn().ok()?,
+            Input::StartUserTurn {} => self.user_turn = Some(api.start_user_turn().ok()?),
+            Input::EndUserTurn { reply } => {
+                use lk_agents_abi::voice::session::UserTurn as _;
+                let reply = self.user_turn.as_ref()?.end(*reply).ok()?;
+                return Some(Pending::answer(AnswerWait::reply(reply, |r| {
+                    Answer::UserTurn(Box::new(r))
+                })));
+            }
+            Input::CancelUserTurn {} => {
+                use lk_agents_abi::voice::session::UserTurn as _;
+                self.user_turn.as_ref()?.cancel();
+                return self.loop_runs().then(Pending::default);
+            }
             _ => unreachable!(),
         }
         Some(Pending::default())

@@ -19,7 +19,10 @@ from .events import (
     UserState as UserState,
     UserStateChangedEvent as UserStateChangedEvent,
     UserTranscriptionTimeoutEvent as UserTranscriptionTimeoutEvent,
+    UserTurnEndedEvent as UserTurnEndedEvent,
     UserTurnExceededEvent as UserTurnExceededEvent,
+    UserTurnResult as UserTurnResult,
+    UserTurnStartedEvent as UserTurnStartedEvent,
 )
 from .session_events import (
     CloseEvent as CloseEvent,
@@ -48,6 +51,9 @@ __all__: list[str] = [
     "ToolReplyStatus",
     "ToolReplyUpdated",
     "UserTurnExceededEvent",
+    "UserTurnStartedEvent",
+    "UserTurnEndedEvent",
+    "UserTurnResult",
     "CloseReason",
     "OverlappingSpeechEvent",
     "SpeechCreatedEvent",

@@ -307,6 +307,8 @@ enum Start {
     Auto { declared: bool },
     /// `commit_user_turn`.
     Manual { skip_reply: bool },
+    /// A user turn's `end()`: what the turn holds commits now.
+    Released { skip_reply: bool },
 }
 
 fn user_transcript(ev: &SpeechEvent, is_final: bool, speaking: Option<bool>) -> SessionEvent {

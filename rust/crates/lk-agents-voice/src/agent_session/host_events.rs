@@ -180,6 +180,8 @@ impl SessionEvent {
             }
             SessionEvent::PreemptiveGeneration(e) => HostWire::PreemptiveGeneration(e.clone()),
             SessionEvent::UserTurnExceeded(e) => HostWire::UserTurnExceeded(e.clone()),
+            SessionEvent::UserTurnStarted(e) => HostWire::UserTurnStarted(e.clone()),
+            SessionEvent::UserTurnEnded(e) => HostWire::UserTurnEnded(e.clone()),
             SessionEvent::UserTranscriptionTimeout(e) => {
                 HostWire::TranscriptionTimeout(w::UserTranscriptionTimeout {
                     speech_duration: e.speech_duration.as_secs_f64(),

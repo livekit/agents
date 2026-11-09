@@ -150,6 +150,7 @@ impl super::Implementations for Selected {
     type RpcHandler = ::lk_agents_runtime::rtc::events::RpcHandler;
     type RoomRpcRouter = ::lk_agents_runtime::rtc::events::RoomRpcRouter;
     type RpcTracing = ::lk_agents_runtime::rtc::rpc::RpcTracing;
+    type UserTurn = ::lk_agents_runtime::voice::session::UserTurn;
     type SessionOptions = ::lk_agents_runtime::voice::SessionOptions;
     type VoiceSession = ::lk_agents_runtime::voice::VoiceSession;
     type SessionStart = ::lk_agents_runtime::voice::SessionStartPlans;

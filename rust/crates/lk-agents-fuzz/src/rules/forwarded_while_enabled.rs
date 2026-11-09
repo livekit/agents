@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use lk_agents_voice::agent_session::IoKind;
 use lk_agents_voice::agent_session::effects::DetectorCall;
-use lk_agents_voice::trace::{InputStep, RoomEventKind, RoomStep, Step};
+use lk_agents_voice::trace::{CoreStep, InputStep, RoomEventKind, RoomStep, Step, TurnStep};
 
 use crate::{
     authored::Authored,
@@ -13,7 +13,9 @@ use crate::{
 
 // Frames move through the pump on the driver's next turn while an enable or disable rides the
 // command queue to that same turn, so a frame that raced a switch or a gate change is left alone.
-// The STT leg hears silence while the gate is closed; VAD always hears the room.
+// The STT leg hears silence while the gate is closed; VAD always hears the room. Under push-to-talk
+// no stream is owed a frame outside a user turn, and a turn's release or cancel swaps the
+// recogniser's stream.
 
 pub struct ForwardedWhileEnabled;
 
@@ -52,6 +54,11 @@ impl Rule for ForwardedWhileEnabled {
                 Step::Input(InputStep::ModelsUpdated { stt_reopened, vad_reopened, .. }) => {
                     Some((*stt_reopened, *vad_reopened))
                 }
+                Step::Turn(
+                    TurnStep::UserTurnStarted { .. }
+                    | TurnStep::UserTurnReleased { .. }
+                    | TurnStep::UserTurnCancelled { .. },
+                ) => Some((true, false)),
                 _ => None,
             })
             .flat_map(|(at, (stt, vad))| {
@@ -94,8 +101,14 @@ impl Rule for ForwardedWhileEnabled {
             })
             .map(|(at, ())| at)
             .collect();
+        let unheard = push_to_talk_idle(r);
         for sent in inputs.accepted() {
             let Input::MicFrames { mic, chunks: Count(chunks) } = &sent.input else { continue };
+            // Ignored outside a push-to-talk turn, or racing a turn's edge in its driver turn; its
+            // chunks are still counted.
+            let ends =
+                inputs.rested_turn_after(sent.at).map(|turn| turn.ended.unwrap_or(Observed::END));
+            let ignored = idle_within(&unheard, sent.at, ends.unwrap_or(sent.at));
             let counter = next_chunk.entry(mic.nth).or_default();
             for _ in 0..*chunks {
                 let chunk = *counter % (Tag::MAX_CHUNK + 1);
@@ -107,6 +120,10 @@ impl Rule for ForwardedWhileEnabled {
                     continue;
                 }
                 pushed_enabled.entry((mic.nth, chunk)).or_insert(sent.at);
+                // Kept as a push-to-talk pre-roll at most: heard later or never.
+                if ignored {
+                    continue;
+                }
                 let dropped = unpublished.iter().find(|at| **at > sent.at).copied();
                 let replaced = mic_closed
                     .get(&mic.nth)
@@ -197,6 +214,36 @@ fn switched_in_its_turn(inputs: &InputsView, audio_input: &Switch, pushed: Obser
         .is_some_and(|turn| audio_input.changed_within(pushed, turn.ended.unwrap_or(Observed::END)))
 }
 
+/// When push-to-talk went idle (`true`) or listened again (`false`), in order: idle while it is on
+/// and no user turn is open.
+fn push_to_talk_idle(r: &Recording) -> Vec<(Observed, bool)> {
+    let (mut on, mut open, mut idle) = (false, false, false);
+    let mut edges = Vec::new();
+    for (at, step) in r.journal() {
+        match step {
+            Step::Core(CoreStep::ConfigApplied { effective, .. }) => {
+                on = effective.turn.push_to_talk.unwrap_or(false);
+            }
+            Step::Turn(TurnStep::UserTurnStarted { .. }) => open = true,
+            Step::Turn(TurnStep::UserTurnReleased { .. } | TurnStep::UserTurnCancelled { .. }) => {
+                open = false;
+            }
+            _ => continue,
+        }
+        if (on && !open) != idle {
+            idle = !idle;
+            edges.push((*at, idle));
+        }
+    }
+    edges
+}
+
+/// Whether push-to-talk was idle at `from` or went idle by `to`.
+fn idle_within(edges: &[(Observed, bool)], from: Observed, to: Observed) -> bool {
+    let idle_at_from = edges.iter().rfind(|(at, _)| *at <= from).is_some_and(|(_, idle)| *idle);
+    idle_at_from || edges.iter().any(|(at, idle)| *idle && *at > from && *at <= to)
+}
+
 /// The streams that listen to the microphone.
 const LISTENERS: [Kind; 2] = [Kind::Stt, Kind::Vad];
 
@@ -251,7 +298,7 @@ fn expect_reached(
             // not this path's to owe. A stream closed before the turn that moves the frame (a
             // recogniser failing) is owed nothing (seed 149497).
             let own_path = matches!(stream.detail(), Detail::AmdStt | Detail::PluginVad);
-            if !stream.open_throughout(pushed, moved_by) || own_path {
+            if !stream.listening_throughout(pushed, moved_by) || own_path {
                 continue;
             }
             check.expect_with(

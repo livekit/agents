@@ -23,6 +23,9 @@ pub enum AudioInputRouterEffect {
     },
     /// Ending, not dropping: dropping a host stream doesn't close it.
     EndInput(ResourceId),
+    /// Dropping without ending: the stream is closed before its input ends, so the provider is
+    /// never asked to finalize what it heard.
+    AbortInput(ResourceId),
     /// An input for the decision core, through the queue.
     ReportToSession(Box<VoiceEvent>),
 }

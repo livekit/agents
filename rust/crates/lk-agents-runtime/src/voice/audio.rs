@@ -80,22 +80,33 @@ impl VideoForwarding {
     }
 }
 
+/// A drain the session may drop before its stream ends: on `token`, the stream is closed, and
+/// only then is its sink released from `resources`, so its input never ends while the provider
+/// still listens and nothing it heard is finalized.
+pub struct Abort {
+    pub token: CancellationToken,
+    pub resources: crate::voice::resources::Resources,
+}
+
 /// Drain a provider source into the loop, close it once, then report the end with the stream's
 /// sink, which the loop removes if it is still installed: a sink of a closed stream would raise on
 /// every frame for the rest of the call.
 pub fn spawn_drain<T: Into<crate::voice::VoiceRuntimeEvent> + Send + 'static>(
     (tasks, spawner): (&Arc<lk_agents_net::task::TaskSet>, &dyn Spawner),
     time: Timebase,
-    closing: CancellationToken,
+    (closing, abort): (CancellationToken, Abort),
     mut source: Box<dyn StreamOutput<T>>,
     queue: Tx,
     (channel, sink): (AudioChannel, ResourceId),
 ) {
     tasks.spawn(spawner, "leg drain", async move {
-        let (cause, error) = forward_items(&mut *source, &closing, &queue).await;
+        let (cause, error) = forward_items(&mut *source, &closing, &abort.token, &queue).await;
         // Always, bounded on the session clock (dropping doesn't cancel a host stream).
         let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         let closed = source.close(deadline).await;
+        if cause == ChannelEndCause::Aborted {
+            abort.resources.release(sink);
+        }
         let leg = channel.leg();
         let _ =
             queue.send(ChannelEnd { leg, cause, sink: Some(sink), closed: Some(closed), error });
@@ -107,6 +118,7 @@ pub fn spawn_drain<T: Into<crate::voice::VoiceRuntimeEvent> + Send + 'static>(
 async fn forward_items<T: Into<crate::voice::VoiceRuntimeEvent> + Send + 'static>(
     source: &mut dyn StreamOutput<T>,
     closing: &CancellationToken,
+    abort: &CancellationToken,
     queue: &Tx,
 ) -> (ChannelEndCause, Option<lk_agents_abi::errors::ProviderError>) {
     loop {
@@ -115,6 +127,7 @@ async fn forward_items<T: Into<crate::voice::VoiceRuntimeEvent> + Send + 'static
             biased;
             item = source.next() => item,
             () = closing.cancelled() => return (ChannelEndCause::Closing, None),
+            () = abort.cancelled() => return (ChannelEndCause::Aborted, None),
         };
         match next {
             Ok(Some(item)) => {

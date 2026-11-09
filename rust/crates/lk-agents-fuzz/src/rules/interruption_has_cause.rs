@@ -137,7 +137,11 @@ fn user_input_before(inputs: &InputsView, at: Observed) -> bool {
         sent.at < at
             && matches!(
                 sent.input,
-                Input::ClaimUserTurn {} | Input::CommitUserTurn { .. } | Input::CommitTurn { .. }
+                Input::ClaimUserTurn {}
+                    | Input::CommitUserTurn { .. }
+                    | Input::CommitTurn { .. }
+                    | Input::StartUserTurn {}
+                    | Input::EndUserTurn { .. }
             )
     });
     recognized || claimed

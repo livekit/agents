@@ -143,6 +143,7 @@ class ResolvedSessionOptions(TypedDict):
     interruption: ResolvedInterruption
     preemptive_generation: ResolvedPreemptiveGeneration
     user_turn_limit: ResolvedUserTurnLimit
+    push_to_talk: bool
     turn_detection_mode: TurnDetectionMode | None
     """The `turn_detection` the session runs on; `None` is automatic selection."""
     endpointing_overrides: EndpointingOverrides

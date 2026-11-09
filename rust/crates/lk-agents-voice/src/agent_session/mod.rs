@@ -106,6 +106,8 @@ pub(crate) struct VoiceSessionState {
     pub(crate) storage: storage::StorageTurns,
     /// The frontend expert event queue, kept across agent replacements.
     pub(crate) experts: crate::experts::Experts,
+    /// `start_user_turn()`'s turn; it outlives a handoff.
+    pub(crate) user_turns: machine::activity::user_turn::UserTurns,
 }
 
 /// What the builder hands the session besides its options: the providers, the opening agent and
@@ -192,6 +194,7 @@ impl VoiceSessionState {
             item_turns: Default::default(),
             storage: storage::StorageTurns::new(storage_enabled),
             experts: Default::default(),
+            user_turns: Default::default(),
         }
     }
 

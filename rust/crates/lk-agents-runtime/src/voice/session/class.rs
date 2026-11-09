@@ -1,11 +1,12 @@
 use super::*;
 use crate::telemetry;
 use lk_agents_abi::llm::fallback::RealtimeLeg;
+use lk_agents_abi::voice::events::UserTurnResult;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput, VideoInput};
 use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::voice::session::{
     CommitSuperseded, IdleRefused, NotAnImage, NotInterruptible, UnknownCloseReason,
-    VoiceSessionArgs, VoiceTaskEnded,
+    UserTurnFailed, UserTurnRefused, VoiceSessionArgs, VoiceTaskEnded,
 };
 use lk_agents_abi::voice::session_options::{ResolvedSessionOptions, UpdateKwargs};
 use lk_agents_abi::{ChatItem, ToolSpec};
@@ -25,6 +26,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     type Env = lk_agents_net::env::ProcessEnv;
     type Options = SessionOptions;
     type Speech = SpeechHandle;
+    type UserTurn = UserTurn;
     type MicLeg = crate::room_io::RoomAudioInput;
     type CameraLeg = crate::room_io::RoomVideoInput;
 
@@ -764,6 +766,30 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let _ = self.send(SpeechCommand::ReleaseIdleHold { hold: HoldId(hold) });
     }
 
+    fn start_user_turn(&self) -> Result<Arc<UserTurn>, UserTurnRefused> {
+        let held = self.delivered.held_turn();
+        let turn = self.running(|r| {
+            let id = r.speech_ids.fetch_add(1, Ordering::Relaxed);
+            if !held.claim(id) {
+                return Ok(None);
+            }
+            let start = TurnCommand::StartUser { id };
+            if super::calls::send_command(&r.api, VoiceCommandOrigin::Host, start.into(), None)
+                .is_err()
+            {
+                held.release(id);
+                return Err(SessionRefused::LoopEnded);
+            }
+            Ok(Some(UserTurn {
+                id,
+                api: r.api.clone(),
+                ids: r.speech_ids.clone(),
+                held: held.clone(),
+            }))
+        })?;
+        turn.map(Arc::new).ok_or(UserTurnRefused::AlreadyOpen)
+    }
+
     fn claim_user_turn(&self) -> Result<(), SessionRefused> {
         self.send(SpeechCommand::ClaimUserTurn)
     }
@@ -935,5 +961,44 @@ impl VoiceSession {
                 })
                 .await;
         })
+    }
+}
+
+/// `start_user_turn()`'s handle: the turn's commands go to the loop that opened it.
+pub struct UserTurn {
+    id: u64,
+    api: Tx,
+    ids: Arc<std::sync::atomic::AtomicU64>,
+    held: super::delivered::HeldTurn,
+}
+
+impl lk_agents_abi::voice::session::UserTurn for UserTurn {
+    fn id(&self) -> u64 {
+        self.id
+    }
+
+    fn end(
+        &self,
+        reply: bool,
+    ) -> Result<BoxFuture<'static, Result<UserTurnResult, UserTurnFailed>>, SessionRefused> {
+        let id = RequestId(self.ids.fetch_add(1, Ordering::Relaxed));
+        let (call, answer) = super::calls::open(id, Answer::user_turn);
+        let command = TurnCommand::EndUser { id: self.id, reply, call: Some(call.id) };
+        super::calls::send_command(&self.api, VoiceCommandOrigin::Host, command.into(), Some(call))
+            .map_err(|_| SessionRefused::LoopEnded)?;
+        let (held, turn) = (self.held.clone(), self.id);
+        Ok(Box::pin(async move {
+            let result = answer.await.map_or(Err(UserTurnFailed::Closed), |result| *result);
+            held.release(turn);
+            result
+        }))
+    }
+
+    fn cancel(&self) {
+        let command = TurnCommand::CancelUser { id: self.id };
+        // A closed loop cancelled the turn already.
+        let _ =
+            super::calls::send_command(&self.api, VoiceCommandOrigin::Host, command.into(), None);
+        self.held.release(self.id);
     }
 }

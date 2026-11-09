@@ -218,6 +218,50 @@ quietly, or, when the block raised, adds a note to that error. Transfer,
 DTMF and `VoiceTask` interactions use the same mechanism; a task opens its
 overrides inside its own code and they are released when the task ends.
 
+## User turns and push-to-talk
+
+A user turn can be opened and closed from code, whatever the turn detection: a
+game key, a DTMF key, or the application's own endpointing.
+
+```python
+turn = session.start_user_turn()   # interrupts the agent; only end() or cancel() closes it
+...
+result = await turn.end()          # every final transcript arrives, then the message is added
+if not result.empty:
+    print(result.message.text_content)   # already in session.history; the reply follows
+
+turn = session.start_user_turn()
+turn.cancel()                      # nothing the turn heard is transcribed or kept
+```
+
+`end(reply=False)` adds the message and asks for no reply. A release keeps
+listening for about 200 ms of audio, since the release can arrive before the
+last words, then the recogniser finalizes what it heard. `end()` resolves once
+the message is in the history, before the reply, and at most about 5 s after the
+release: a recogniser that has not finished by then commits what arrived. A turn
+with nothing said adds no message and no reply (`result.empty`).
+
+One turn is open at a time: another `start_user_turn()` raises `RuntimeError`
+until the open one's `end()` resolved or it was cancelled. A handoff keeps the
+turn, and the agent active at `end()` answers it. Reaching `user_turn_limit` ends
+an open turn as a release would. The session's close cancels an open turn, and a
+pending `end()` raises. `user_turn_started` and `user_turn_ended` (`cancelled`,
+`empty`) are emitted for each turn.
+
+`turn_handling={"push_to_talk": True}` makes these the only turns: outside a turn
+the microphone reaches no recogniser, no voice activity detection and no
+interruption; the last ~200 ms before a press is kept and heard by the turn.
+Turn detection, endpointing, interruption and preemptive generation keep their
+settings and apply again when `push_to_talk` is turned off; turning it off ends
+an open turn as a release would.
+
+```python
+session = VoiceSession(stt=recognizer, turn_handling={"push_to_talk": True})
+session.update_options(turn_handling={"push_to_talk": False})   # hands-free, live
+async with session.override_options(turn_handling={"push_to_talk": True}):
+    await dictation_step()
+```
+
 ## A job's sessions
 
 A session started on the job's room (the default room inside a job), or on

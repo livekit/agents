@@ -84,9 +84,37 @@ impl lk_agents_abi::voice::session_effects::SessionState for SessionState {
 
 /// The latest delivered state, advanced by the host drain and read by the session.
 #[derive(Clone, Default)]
-pub struct Delivered(Arc<Mutex<Arc<SessionState>>>);
+pub struct Delivered(Arc<Mutex<Arc<SessionState>>>, HeldTurn);
+
+/// The user turn the host holds, from `start_user_turn()` until its `end()` answered, its
+/// `cancel()`, or its delivered `user_turn_ended`: while held, another start is refused.
+#[derive(Clone, Default)]
+pub struct HeldTurn(Arc<Mutex<Option<u64>>>);
+
+impl HeldTurn {
+    /// Whether `id` is held now; `false`: another turn is.
+    pub fn claim(&self, id: u64) -> bool {
+        let mut held = self.0.lock();
+        if held.is_some() {
+            return false;
+        }
+        *held = Some(id);
+        true
+    }
+
+    pub fn release(&self, id: u64) {
+        let mut held = self.0.lock();
+        if *held == Some(id) {
+            *held = None;
+        }
+    }
+}
 
 impl Delivered {
+    pub fn held_turn(&self) -> HeldTurn {
+        self.1.clone()
+    }
+
     pub fn latest(&self) -> Arc<SessionState> {
         Arc::clone(&self.0.lock())
     }
@@ -121,6 +149,7 @@ impl Delivered {
             HostWire::UserStateChanged(changed) => {
                 self.publish(|state| state.user_state = changed.new_state)
             }
+            HostWire::UserTurnEnded(ended) => self.1.release(ended.turn_id),
             _ => {}
         }
         self.latest()

@@ -396,6 +396,11 @@ pub trait VoiceSessionFacade {
     #[host(via = Running, native = clear_user_turn)]
     fn _clear_user_turn(&self) -> Result<(), super::session::SessionRefused>;
 
+    /// Open a user turn now: it interrupts the agent, and only its `end()` or `cancel()` closes
+    /// it, whatever the turn detection. Refused while another is open.
+    #[host(via = Running, annotation(ret = "livekit.agents._core.UserTurn"))]
+    fn start_user_turn(&self) -> Result<crate::HostRef, super::session::UserTurnRefused>;
+
     /// `AgentSession.interrupt(force=)`: the current and queued speeches up to the first
     /// uninterruptible; answers when they are done, or with the refusal.
     #[host(via = Running, future)]

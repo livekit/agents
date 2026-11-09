@@ -70,6 +70,8 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         speech_gap_ms: rng.bool().then(|| ms(rng)),
         user_turn_max_words: rng.bool().then(|| rng.u32(1..12)),
         user_turn_max_ms: rng.bool().then(|| ms(rng)),
+        // A niche setting: a few cases, most keep automatic turns.
+        push_to_talk: rng.u8(0..100) < 3,
         transcription_timeout_ms: rng.bool().then(|| ms(rng)),
         text_transforms: match rng.usize(0..4) {
             0 | 1 => None,

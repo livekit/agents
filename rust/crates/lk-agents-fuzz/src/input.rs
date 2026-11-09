@@ -396,7 +396,7 @@ plain_enum! {
     /// One field of the live session configuration, changed alone so a finding names it.
     Knob {
         Detection, MinEndpointing, MaxEndpointing, Interruptions, MinInterruptionWords, UserAway,
-        MaxToolSteps, UserTurnMaxWords,
+        MaxToolSteps, UserTurnMaxWords, PushToTalk,
     }
 }
 plain_enum! {
@@ -618,6 +618,12 @@ inputs! {
     PauseAuthorization { } leaf speech::PauseAuthorization;
     ResumeAuthorization { } leaf speech::ResumeAuthorization;
     CommitTurn { skip_reply: bool } leaf turn::Commit;
+    /// `start_user_turn()`: a turn opens; the driver keeps its handle.
+    StartUserTurn { } leaf turn::StartUser;
+    /// The last started turn's `end(reply=)`.
+    EndUserTurn { reply: bool } opens [Answer] leaf turn::EndUser;
+    /// The last started turn's `cancel()`.
+    CancelUserTurn { } leaf turn::CancelUser;
     ClearTurn { } leaf turn::Clear;
     /// One live option changed, alone, so a finding names the option that mattered.
     Configure { knob: Knob, mode: TurnMode, ms: Millis, on: bool, words: Count } leaf turn::Configure;

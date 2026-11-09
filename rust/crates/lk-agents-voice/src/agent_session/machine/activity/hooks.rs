@@ -473,6 +473,8 @@ pub enum TurnLimitSkip {
     Busy,
     /// The agent started speaking: the end of turn replied.
     AgentSpeaking,
+    /// A user turn was open: the limit ended it as a release would.
+    UserTurnEnded,
 }
 
 impl VoiceDriver {
@@ -481,10 +483,14 @@ impl VoiceDriver {
         &mut self,
         ev: &lk_agents_abi::voice::events::UserTurnExceededEvent,
     ) {
+        // An open user turn ends as a release would, whatever the callback is doing.
+        let user_turn = self.user_turn_limit_reached(self.step.now);
         let skip = if self.turn_limit_blocked() {
             Some(TurnLimitSkip::Paused)
         } else if matches!(self.activity.turn_limit, TurnLimit::Running(_)) {
             return self.record_trace(TurnStep::TurnLimitSkipped(TurnLimitSkip::Busy));
+        } else if user_turn {
+            Some(TurnLimitSkip::UserTurnEnded)
         } else if self.session.states.agent_state() == AgentState::Speaking {
             Some(TurnLimitSkip::AgentSpeaking)
         } else {

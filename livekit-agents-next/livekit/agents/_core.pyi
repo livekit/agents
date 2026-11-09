@@ -273,6 +273,7 @@ from ._generated._core_voice import (
     SttNodeEvents as SttNodeEvents,
     TextStreamSender as TextStreamSender,
     TtsNodeFrames as TtsNodeFrames,
+    UserTurn as UserTurn,
     VoiceSession as VoiceSession,
     WarmTransfer as WarmTransfer,
     _core_AvatarLifecycle as _core_AvatarLifecycle,

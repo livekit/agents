@@ -13,11 +13,14 @@ import time
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import StrEnum, unique
-from typing import Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 from numpy import float32, int16
 from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
+
+if TYPE_CHECKING:
+    from .chat_items import ChatMessage
 
 UserState: TypeAlias = Literal["speaking", "listening", "away"]
 """Whether the user is speaking, listening, or has gone away."""
@@ -175,6 +178,41 @@ class UserTurnExceededEvent:
     type: Literal["user_turn_exceeded"] = "user_turn_exceeded"
 
 
+@dataclass(kw_only=True, slots=True)
+class UserTurnStartedEvent:
+    """A user turn opened: `start_user_turn()`, or a client's press."""
+
+    turn_id: int
+    created_at: float = field(default_factory=time.time)
+    type: Literal["user_turn_started"] = "user_turn_started"
+
+
+@dataclass(kw_only=True, slots=True)
+class UserTurnEndedEvent:
+    """A user turn ended: released, or cancelled (by `cancel()`, or the session's close). A released
+    turn's message reaches the history as any other (`conversation_item_added`).
+    """
+
+    turn_id: int
+    cancelled: bool
+    empty: bool
+    """Released with nothing said: no message, no reply."""
+    created_at: float = field(default_factory=time.time)
+    type: Literal["user_turn_ended"] = "user_turn_ended"
+
+
+@dataclass(kw_only=True, slots=True)
+class UserTurnResult:
+    """What a released user turn added to the conversation."""
+
+    message: ChatMessage | None
+    """The user's message, in the chat history once `end()` returns; `None` when nothing was
+    said or `on_user_turn_completed` stopped it.
+    """
+    empty: bool
+    """Nothing was said: no message, no reply."""
+
+
 @unique
 class CloseReason(StrEnum):
     ERROR = "error"
@@ -229,5 +267,8 @@ ToolCallUpdated.__module__ = "livekit.agents.voice.events"
 ToolCallEnded.__module__ = "livekit.agents.voice.events"
 ToolReplyUpdated.__module__ = "livekit.agents.voice.events"
 UserTurnExceededEvent.__module__ = "livekit.agents.voice.events"
+UserTurnStartedEvent.__module__ = "livekit.agents.voice.events"
+UserTurnEndedEvent.__module__ = "livekit.agents.voice.events"
+UserTurnResult.__module__ = "livekit.agents.voice.events"
 CloseReason.__module__ = "livekit.agents.voice.events"
 OverlappingSpeechEvent.__module__ = "livekit.agents.voice.events"

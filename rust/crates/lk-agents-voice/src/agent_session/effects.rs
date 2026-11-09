@@ -181,6 +181,10 @@ pub enum Timer {
     Close,
     /// `commit_user_turn`'s `transcript_timeout`: the commit promotes a held interim.
     Commit,
+    /// A released user turn's STT stream has not delivered every final yet.
+    UserTurnEnd,
+    /// A released user turn's tail heard no audio for long: its input ends.
+    UserTurnTail,
     /// A callback the driver waits on: past it, the callback counts as failed.
     Hook(crate::agent_session::HookId),
     /// `audio_recognition._bounce_eou_task`.

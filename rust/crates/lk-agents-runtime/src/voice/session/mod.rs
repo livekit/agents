@@ -14,6 +14,7 @@ mod time;
 
 pub use builder::*;
 pub use calls::*;
+pub use class::UserTurn;
 pub use options::SessionOptions;
 pub use shared::*;
 pub use time::Timebase;

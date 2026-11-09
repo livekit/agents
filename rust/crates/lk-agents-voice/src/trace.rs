@@ -110,6 +110,28 @@ pub enum TurnStep {
     UserTurnClaims {
         depth: u32,
     },
+    /// `start_user_turn()`'s turn opened.
+    UserTurnStarted {
+        turn: u64,
+    },
+    /// A start found a turn open or the session closing: nothing opened.
+    UserTurnRefused {
+        turn: u64,
+    },
+    /// `end()`: the turn hears its tail and waits for its finals.
+    UserTurnReleased {
+        turn: u64,
+        reply: bool,
+    },
+    /// `cancel()`, or the close: nothing the turn heard is committed.
+    UserTurnCancelled {
+        turn: u64,
+    },
+    /// A released turn ended; `empty`: nothing was said.
+    UserTurnEnded {
+        turn: u64,
+        empty: bool,
+    },
     /// `TurnCommand::Commit` at its arm, after its flush and final wait.
     CommitRequested {
         skip_reply: bool,
@@ -833,6 +855,8 @@ pub enum ChannelEndCause {
     SourceEnded,
     Error,
     Closing,
+    /// Dropped by the session before its end (a cancelled user turn's STT).
+    Aborted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -868,6 +892,11 @@ impl Step {
                 TurnStep::PreemptiveReconciled { speech, .. } => Some(*speech),
                 TurnStep::EndOfTurn { .. }
                 | TurnStep::UserTurnClaims { .. }
+                | TurnStep::UserTurnStarted { .. }
+                | TurnStep::UserTurnRefused { .. }
+                | TurnStep::UserTurnReleased { .. }
+                | TurnStep::UserTurnCancelled { .. }
+                | TurnStep::UserTurnEnded { .. }
                 | TurnStep::CommitRequested { .. }
                 | TurnStep::CommitAnswered { .. }
                 | TurnStep::CommitSuperseded

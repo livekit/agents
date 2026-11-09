@@ -85,6 +85,7 @@ impl VoiceDriver {
         self.keyterms_step(now, crate::keyterm_detection::KeytermIn::Close);
         // Stopped before the drain so a key pressed during it is not collected.
         self.dtmf_step(crate::workflows::machine::dtmf::DtmfTaskEvent::Stop);
+        self.close_user_turn(now);
         // VoiceTasks end first: the agent the close exits is the one they suspended.
         self.close_voice_tasks(now);
         let exit = self.plan_exit();

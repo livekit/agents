@@ -150,6 +150,7 @@ pub enum Answer {
     Interrupt(Result<(), InterruptRefusal>),
 
     Commit(Result<String, CommitSuperseded>),
+    UserTurn(Box<UserTurnAnswer>),
     Idle(Result<(), IdleRefused>),
     Hold(Result<HoldId, IdleRefused>),
     Drain(Result<(), DrainRefused>),
@@ -163,6 +164,12 @@ pub enum Answer {
         >,
     ),
 }
+
+/// A user turn's `end()`: what it added, or why it has nothing.
+pub type UserTurnAnswer = Result<
+    lk_agents_abi::voice::events::UserTurnResult,
+    lk_agents_abi::voice::session::UserTurnFailed,
+>;
 
 macro_rules! answer_picks {
     ($($pick:ident: $variant:ident($payload:ty)),* $(,)?) => {
@@ -185,6 +192,7 @@ answer_picks! {
     tool_step: ToolStep(crate::tool_executor::StepNext),
     interrupt: Interrupt(Result<(), InterruptRefusal>),
     commit: Commit(Result<String, CommitSuperseded>),
+    user_turn: UserTurn(Box<UserTurnAnswer>),
     idle: Idle(Result<(), IdleRefused>),
     hold: Hold(Result<HoldId, IdleRefused>),
     drain: Drain(Result<(), DrainRefused>),
@@ -267,6 +275,12 @@ pub enum TurnCommand {
     },
     /// A realtime server buffer is cleared too.
     Clear,
+    /// `start_user_turn()`: turn `id` opens. The host refused a second open turn already.
+    StartUser { id: u64 },
+    /// `UserTurn.end(reply=)`, answered with [`Answer::UserTurn`].
+    EndUser { id: u64, reply: bool, call: Option<RequestId> },
+    /// `UserTurn.cancel()`.
+    CancelUser { id: u64 },
     /// Unnamed leaves keep their answer; a changed endpointing replaces the model (a running
     /// countdown keeps its deadline); `turn_detection=None` arrives as `Given(None)`.
     Configure(Box<crate::agent_session::options::AgentSessionOptions>),

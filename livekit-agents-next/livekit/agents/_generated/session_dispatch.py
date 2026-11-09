@@ -15,7 +15,9 @@ from .events import (
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     UserTranscriptionTimeoutEvent,
+    UserTurnEndedEvent,
     UserTurnExceededEvent,
+    UserTurnStartedEvent,
     _AgentBackchannelOpportunityEvent,
 )
 from .session_events import (
@@ -43,6 +45,8 @@ PUBLIC_EVENTS: dict[type, str] = {
     UserInputTranscribedEvent: "user_input_transcribed",
     SpeechCreatedEvent: "speech_created",
     UserTurnExceededEvent: "user_turn_exceeded",
+    UserTurnStartedEvent: "user_turn_started",
+    UserTurnEndedEvent: "user_turn_ended",
     UserTranscriptionTimeoutEvent: "user_transcription_timeout",
     AgentStateChangedEvent: "agent_state_changed",
     UserStateChangedEvent: "user_state_changed",
@@ -72,6 +76,8 @@ EventTypes = Literal[
     "speech_created",
     "function_tools_executed",
     "user_turn_exceeded",
+    "user_turn_started",
+    "user_turn_ended",
     "user_transcription_timeout",
     "agent_state_changed",
     "user_state_changed",
@@ -89,6 +95,8 @@ AgentEvent = Annotated[
     | SpeechCreatedEvent
     | FunctionToolsExecutedEvent
     | UserTurnExceededEvent
+    | UserTurnStartedEvent
+    | UserTurnEndedEvent
     | UserTranscriptionTimeoutEvent
     | AgentStateChangedEvent
     | UserStateChangedEvent

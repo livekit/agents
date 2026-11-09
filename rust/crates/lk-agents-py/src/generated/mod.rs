@@ -195,12 +195,14 @@ pub trait Implementations: 'static {
     type RpcHandler: ::lk_agents_abi::voice::rtc::ports::RpcHandler;
     type RoomRpcRouter: ::lk_agents_abi::voice::rtc::ports::RoomRpcRouter;
     type RpcTracing: ::lk_agents_abi::voice::rtc::rpc::RpcTracing;
+    type UserTurn: ::lk_agents_abi::voice::session::UserTurn;
     type SessionOptions: ::lk_agents_abi::voice::session::SessionOptions;
     type VoiceSession: ::lk_agents_abi::voice::session::VoiceSession<
             Options = Self::SessionOptions,
             MicLeg = Self::RoomAudioInput,
             CameraLeg = Self::RoomVideoInput,
             Speech = Self::SpeechHandle,
+            UserTurn = Self::UserTurn,
         >;
     type SessionStart: ::lk_agents_abi::voice::session_effects::SessionStart;
     type SessionState: ::lk_agents_abi::voice::session_effects::SessionState;
@@ -479,6 +481,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::RpcHandler>()?;
     m.add_class::<voice::CoreRoomRpcRouter>()?;
     m.add_class::<voice::CoreRpcTracing>()?;
+    m.add_class::<voice::UserTurn>()?;
     m.add_class::<voice::SessionOptions>()?;
     m.add_class::<voice::VoiceSession>()?;
     m.add_function(wrap_pyfunction!(voice::default_session_models, m)?)?;

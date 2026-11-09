@@ -238,6 +238,7 @@ impl VoiceDriver {
         let leg = end.leg;
         if let Some(stream) = end.sink {
             self.stt_stream_ended(stream);
+            self.user_turn_stream_ended(now, stream);
         }
         // Not `remove_sink`: the items the stream sent before its end are still consumed.
         let installed = self.input.sinks.iter().find(|(_, sink)| Some(**sink) == end.sink);

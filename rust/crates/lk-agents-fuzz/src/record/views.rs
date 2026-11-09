@@ -1108,6 +1108,13 @@ impl StreamView<'_, '_> {
         self.opened.at <= from && self.closed_at().is_none_or(|closed| closed > to)
     }
 
+    /// Open at `from` with its input not ended by `to`: owed the audio between. A stream whose
+    /// input ended may stay open to deliver what it heard.
+    pub fn listening_throughout(&self, from: Observed, to: Observed) -> bool {
+        let ended = self.view.r.input_ended.get(&(self.opened.kind, self.opened.nth));
+        self.open_throughout(from, to) && ended.is_none_or(|ended| *ended > to)
+    }
+
     /// Whether this stream heard the microphone frame after it was pushed.
     pub fn heard_after(&self, mic: u32, chunk: u16, pushed: Observed) -> bool {
         self.heard_at(mic, chunk).is_some_and(|last| last > pushed)

@@ -366,6 +366,7 @@ impl Run {
             records,
             controls: BTreeMap::new(),
             overrides: Vec::new(),
+            user_turn: None,
             segments: BTreeMap::new(),
             steps,
             livelock,
@@ -622,6 +623,7 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
                 max_words: Maybe::Given(setup.user_turn_max_words.map(i64::from)),
                 max_duration: Maybe::Given(setup.user_turn_max_ms.map(secs)),
             }),
+            push_to_talk: setup.push_to_talk.then_some(true),
         }),
         max_tool_steps: setup.max_tool_steps.map_or(3, i64::from),
         use_tts_aligned_transcript: setup.aligned_transcript.map_or(Maybe::NotGiven, Maybe::Given),
@@ -848,6 +850,7 @@ pub(super) fn patch(
         Knob::MinInterruptionWords => patch.turn.interruption.min_words = Some(words.0),
         Knob::UserAway => patch.timers.user_away = lk_agents_abi::Maybe::Given(delay),
         Knob::MaxToolSteps => patch.speech.max_tool_steps = Some(words.0),
+        Knob::PushToTalk => patch.turn.push_to_talk = Some(on),
         Knob::UserTurnMaxWords => {
             patch.turn.user_turn_limit.max_words = lk_agents_abi::Maybe::Given(Some(words.0));
         }
