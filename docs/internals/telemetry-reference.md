@@ -284,7 +284,7 @@ step's start, `preemptive_generation_discarded` (`lk.speech_id`).
 | `llm_request_run` | `llm_request` | `gen_ai.provider.name`, `gen_ai.request.model`, `lk.retry_count` (int); `lk.provider_request_ids` at the attempt's end |
 | `llm_fallback_adapter` | current | `gen_ai.provider.name`, `gen_ai.request.model` (next instance), `gen_ai.request.stream`, `gen_ai.output.type`, `lk.retry_count`; on success `lk.fallback.label`, `lk.fallback.index` (int), `gen_ai.response.model`, `gen_ai.provider.name` (served); one `llm_request` child per instance tried |
 | `tts_node` | `agent_turn` | the callback: `lk.response.ttfb` (s, from the text anchor) at the first audio frame. No model or provider: those are its `tts_request`'s, a child only where one is made (the default pipeline's, or `session.default.tts_node`'s for an override that runs it) |
-| `tts_request` (kind `CLIENT`) | current | `lk.tts.streaming` (bool), `lk.tts.label`, `gen_ai.provider.name`, `gen_ai.request.model`; after success `lk.pii.input_text`; `lk.tts_metrics` (JSON: `ttfb`, `characters_count`, `audio_duration`, ...); `lk.fallback.recovery` (bool) for a recovery probe |
+| `tts_request` (kind `CLIENT`) | current | `lk.tts.streaming` (bool), `lk.tts.label`, `gen_ai.provider.name`, `gen_ai.request.model`; after success `lk.pii.input_text`; `lk.tts_metrics` (JSON in the usage names: `ttfb`, `characters_count`, `audio_duration`, `input_tokens`, ...; an unmeasured value is omitted); `lk.fallback.recovery` (bool) for a recovery probe |
 | `tts_request_run` | `tts_request` | `gen_ai.provider.name`, `gen_ai.request.model`, `lk.retry_count`; `lk.provider_request_ids` |
 | `tts_fallback_adapter`, `tts_stream_adapter` | current | the `tts_request` start keys and `lk.retry_count`; fallback success adds `lk.fallback.label`, `lk.fallback.index`, `gen_ai.response.model` |
 | `realtime_inference` (kind `CLIENT`) | `agent_turn` | below |
@@ -311,7 +311,7 @@ step's start, `preemptive_generation_discarded` (`lk.speech_id`).
 | Key | Type | When |
 | --- | --- | --- |
 | `gen_ai.operation.name` = `generate_content`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.request.stream`, `gen_ai.output.type` (`speech`, `text`) | | start |
-| `lk.realtime_model_metrics` | JSON (`ttft` = `-1` when unmeasured, ...) | when the response's metrics arrive |
+| `lk.realtime_model_metrics` | JSON in the usage names (`ttft`, `connection_duration`, `input_tokens`, `input_audio_tokens`, `cache_read_tokens`, ...); an unmeasured value is omitted | when the response's metrics arrive |
 | `gen_ai.response.model`, `gen_ai.response.id` | string | same |
 | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.{text,audio,image}.input_tokens`, `gen_ai.usage.{text,audio}.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.{text,audio,image}.cache_read.input_tokens` | int | same |
 | `gen_ai.response.time_to_first_chunk` | s | same, when measured |

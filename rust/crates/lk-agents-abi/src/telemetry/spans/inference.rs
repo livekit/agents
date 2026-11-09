@@ -7,6 +7,7 @@ use crate::telemetry::decl::{
 };
 use crate::telemetry::instruments::GenAiTimeToFirstChunk;
 use crate::telemetry::semconv::otel;
+use crate::usage::TokenUsage;
 
 /// What a request to a provider records as: the provider says, its caller never guesses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -408,8 +409,63 @@ impl From<&Metadata> for ModelMetadata {
     }
 }
 
-/// `lk.llm_metrics`, which Cloud parses: `LLMMetrics` in the `TokenUsage` names (usage.md). An
-/// unmeasured value is omitted.
+/// A summary's tokens in the `TokenUsage` names (usage.md); a breakdown the provider did not
+/// report is omitted.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SummaryTokens {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_reasoning_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_text_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_audio_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_image_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_text_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_audio_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_image_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_text_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_audio_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_image_tokens: Option<u64>,
+}
+
+impl From<&TokenUsage> for SummaryTokens {
+    fn from(t: &TokenUsage) -> Self {
+        SummaryTokens {
+            input_tokens: t.input_tokens,
+            output_tokens: t.output_tokens,
+            total_tokens: t.total_tokens(),
+            cache_read_tokens: t.cache_read_tokens,
+            cache_write_tokens: t.cache_write_tokens,
+            output_reasoning_tokens: t.output_reasoning_tokens,
+            input_text_tokens: t.input_text_tokens,
+            input_audio_tokens: t.input_audio_tokens,
+            input_image_tokens: t.input_image_tokens,
+            output_text_tokens: t.output_text_tokens,
+            output_audio_tokens: t.output_audio_tokens,
+            output_image_tokens: t.output_image_tokens,
+            cache_read_text_tokens: t.cache_read_text_tokens,
+            cache_read_audio_tokens: t.cache_read_audio_tokens,
+            cache_read_image_tokens: t.cache_read_image_tokens,
+        }
+    }
+}
+
+/// `lk.llm_metrics`, which Cloud parses: `LLMMetrics` in the usage names. An unmeasured value is
+/// omitted.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename = "llm_metrics")]
 pub struct LlmMetricsSummary {
@@ -420,15 +476,8 @@ pub struct LlmMetricsSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ttft: Option<f64>,
     pub cancelled: bool,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_tokens: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_write_tokens: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_reasoning_tokens: Option<u64>,
-    pub total_tokens: u64,
+    #[serde(flatten)]
+    pub tokens: SummaryTokens,
     pub tokens_per_second: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speech_id: Option<String>,
@@ -438,7 +487,6 @@ pub struct LlmMetricsSummary {
 
 impl From<&LlmMetrics> for LlmMetricsSummary {
     fn from(m: &LlmMetrics) -> Self {
-        let t = &m.tokens;
         LlmMetricsSummary {
             label: m.label.clone(),
             request_id: m.request_id.clone(),
@@ -446,12 +494,7 @@ impl From<&LlmMetrics> for LlmMetricsSummary {
             duration: m.duration,
             ttft: m.ttft,
             cancelled: m.cancelled,
-            input_tokens: t.input_tokens,
-            output_tokens: t.output_tokens,
-            cache_read_tokens: t.cache_read_tokens,
-            cache_write_tokens: t.cache_write_tokens,
-            output_reasoning_tokens: t.output_reasoning_tokens,
-            total_tokens: t.total_tokens(),
+            tokens: SummaryTokens::from(&m.tokens),
             tokens_per_second: m.tokens_per_second,
             speech_id: m.speech_id.clone(),
             metadata: m.metadata.as_ref().map(ModelMetadata::from),
@@ -459,26 +502,30 @@ impl From<&LlmMetrics> for LlmMetricsSummary {
     }
 }
 
-/// `lk.tts_metrics`: `TTSMetrics` as 1.8.10's `model_dump_json()` wrote it. An unmeasured `ttfb`
-/// is `-1`.
+/// `lk.tts_metrics`: `TTSMetrics` in the usage names. An unmeasured value is omitted.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename = "tts_metrics")]
 pub struct TtsMetricsSummary {
     pub label: String,
     pub request_id: String,
     pub timestamp: f64,
-    pub ttfb: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttfb: Option<f64>,
     pub duration: f64,
     pub audio_duration: f64,
     pub cancelled: bool,
     pub characters_count: u32,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
+    #[serde(flatten)]
+    pub tokens: SummaryTokens,
     pub streamed: bool,
-    pub acquire_time: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acquire_time: Option<f64>,
     pub connection_reused: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub segment_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub speech_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<ModelMetadata>,
 }
 
@@ -488,15 +535,14 @@ impl From<&TtsMetrics> for TtsMetricsSummary {
             label: m.label.clone(),
             request_id: m.request_id.clone(),
             timestamp: m.timestamp,
-            ttfb: m.ttfb.unwrap_or(-1.0),
+            ttfb: m.ttfb,
             duration: m.duration,
             audio_duration: m.audio_duration,
             cancelled: m.cancelled,
             characters_count: m.characters_count,
-            input_tokens: m.tokens.input_tokens,
-            output_tokens: m.tokens.output_tokens,
+            tokens: SummaryTokens::from(&m.tokens),
             streamed: m.streamed,
-            acquire_time: m.acquire_time.unwrap_or(0.0),
+            acquire_time: m.acquire_time,
             connection_reused: m.connection_reused,
             segment_id: m.segment_id.clone(),
             speech_id: m.speech_id.clone(),
@@ -505,8 +551,8 @@ impl From<&TtsMetrics> for TtsMetricsSummary {
     }
 }
 
-/// `lk.realtime_model_metrics`: `RealtimeModelMetrics` as 1.8.10's `model_dump_json()` wrote it,
-/// its token details nested. An unmeasured `ttft` is `-1`.
+/// `lk.realtime_model_metrics`: `RealtimeModelMetrics` in the usage names, its token breakdown
+/// flat beside the totals. An unmeasured value is omitted.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename = "realtime_model_metrics")]
 pub struct RealtimeMetricsSummary {
@@ -514,80 +560,34 @@ pub struct RealtimeMetricsSummary {
     pub request_id: String,
     pub timestamp: f64,
     pub duration: f64,
-    pub session_duration: f64,
-    pub ttft: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection_duration: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttft: Option<f64>,
     pub cancelled: bool,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub total_tokens: u64,
+    #[serde(flatten)]
+    pub tokens: SummaryTokens,
     pub tokens_per_second: f64,
-    pub input_token_details: InputTokenDetails,
-    pub output_token_details: OutputTokenDetails,
-    pub acquire_time: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acquire_time: Option<f64>,
     pub connection_reused: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<ModelMetadata>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct InputTokenDetails {
-    pub audio_tokens: u64,
-    pub text_tokens: u64,
-    pub image_tokens: u64,
-    pub cached_tokens: u64,
-    /// Absent unless the provider split its cached tokens by modality.
-    pub cached_tokens_details: Option<CachedTokenDetails>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct CachedTokenDetails {
-    pub audio_tokens: u64,
-    pub text_tokens: u64,
-    pub image_tokens: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct OutputTokenDetails {
-    pub text_tokens: u64,
-    pub audio_tokens: u64,
-    pub image_tokens: u64,
 }
 
 impl From<&RealtimeModelMetrics> for RealtimeMetricsSummary {
     fn from(m: &RealtimeModelMetrics) -> Self {
-        let t = &m.tokens;
-        let n = |v: Option<u64>| v.unwrap_or(0);
-        let cached_split = t.cache_read_text_tokens.is_some()
-            || t.cache_read_audio_tokens.is_some()
-            || t.cache_read_image_tokens.is_some();
         RealtimeMetricsSummary {
             label: m.label.clone(),
             request_id: m.request_id.clone(),
             timestamp: m.timestamp,
             duration: m.duration,
-            session_duration: m.connection_duration.unwrap_or(0.0),
-            ttft: m.ttft.unwrap_or(-1.0),
+            connection_duration: m.connection_duration,
+            ttft: m.ttft,
             cancelled: m.cancelled,
-            input_tokens: t.input_tokens,
-            output_tokens: t.output_tokens,
-            total_tokens: t.total_tokens(),
+            tokens: SummaryTokens::from(&m.tokens),
             tokens_per_second: m.tokens_per_second,
-            input_token_details: InputTokenDetails {
-                audio_tokens: n(t.input_audio_tokens),
-                text_tokens: n(t.input_text_tokens),
-                image_tokens: n(t.input_image_tokens),
-                cached_tokens: n(t.cache_read_tokens),
-                cached_tokens_details: cached_split.then(|| CachedTokenDetails {
-                    audio_tokens: n(t.cache_read_audio_tokens),
-                    text_tokens: n(t.cache_read_text_tokens),
-                    image_tokens: n(t.cache_read_image_tokens),
-                }),
-            },
-            output_token_details: OutputTokenDetails {
-                text_tokens: n(t.output_text_tokens),
-                audio_tokens: n(t.output_audio_tokens),
-                image_tokens: n(t.output_image_tokens),
-            },
-            acquire_time: m.acquire_time.unwrap_or(0.0),
+            acquire_time: m.acquire_time,
             connection_reused: m.connection_reused,
             metadata: m.metadata.as_ref().map(ModelMetadata::from),
         }
@@ -609,34 +609,64 @@ mod tests {
     }
 
     // Catches: the `type` tag lost or moved, an old token name back, or an unmeasured value
-    // written as `-1`, `0` or null.
+    // written as `-1`, `0` or null, in any of the three summaries.
     #[test]
-    fn the_llm_summary_uses_the_usage_names_and_omits_what_was_not_measured() {
-        let mut m = LlmMetrics { ttft: None, metadata: None, ..crate::metrics::testkit::llm() };
-        m.tokens.cache_read_tokens = None;
-        m.tokens.cache_write_tokens = None;
-        m.tokens.output_reasoning_tokens = None;
-        let v = serde_json::to_value(LlmMetricsSummary::from(&m)).unwrap();
-        let o = v.as_object().unwrap();
-        assert_eq!(o.keys().next().map(String::as_str), Some("type"));
-        assert_eq!(v["type"].as_str(), Some("llm_metrics"));
-        for absent in [
-            "ttft",
-            "metadata",
-            "speech_id",
-            "cache_read_tokens",
-            "cache_write_tokens",
-            "output_reasoning_tokens",
-            "prompt_tokens",
-            "completion_tokens",
-        ] {
-            assert!(!o.contains_key(absent), "{absent}");
+    fn summaries_use_the_usage_names_and_omit_what_was_not_measured() {
+        let mut llm = LlmMetrics { ttft: None, metadata: None, ..crate::metrics::testkit::llm() };
+        llm.tokens = TokenUsage { input_tokens: 7, output_tokens: 3, ..TokenUsage::default() };
+        let tts = TtsMetrics {
+            ttfb: None,
+            acquire_time: None,
+            metadata: None,
+            tokens: llm.tokens.clone(),
+            ..crate::metrics::testkit::tts()
+        };
+        let realtime = RealtimeModelMetrics {
+            ttft: None,
+            connection_duration: None,
+            acquire_time: None,
+            metadata: None,
+            tokens: llm.tokens.clone(),
+            ..crate::metrics::testkit::realtime()
+        };
+        let summaries = [
+            ("llm_metrics", serde_json::to_value(LlmMetricsSummary::from(&llm)).unwrap()),
+            ("tts_metrics", serde_json::to_value(TtsMetricsSummary::from(&tts)).unwrap()),
+            (
+                "realtime_model_metrics",
+                serde_json::to_value(RealtimeMetricsSummary::from(&realtime)).unwrap(),
+            ),
+        ];
+        for (kind, v) in &summaries {
+            let o = v.as_object().unwrap();
+            assert_eq!(o.keys().next().map(String::as_str), Some("type"), "{kind}");
+            assert_eq!(v["type"].as_str(), Some(*kind));
+            assert_eq!(
+                (v["input_tokens"].as_u64(), v["output_tokens"].as_u64()),
+                (Some(7), Some(3))
+            );
+            assert_eq!(v["total_tokens"].as_u64(), Some(10), "{kind}");
+            for absent in [
+                "ttft",
+                "ttfb",
+                "acquire_time",
+                "connection_duration",
+                "session_duration",
+                "metadata",
+                "speech_id",
+                "cache_read_tokens",
+                "input_audio_tokens",
+                "prompt_tokens",
+                "completion_tokens",
+                "prompt_cached_tokens",
+                "input_token_details",
+            ] {
+                assert!(!o.contains_key(absent), "{kind}: {absent}");
+            }
         }
-        assert_eq!(v["input_tokens"].as_u64(), Some(m.tokens.input_tokens));
-        assert_eq!(v["output_tokens"].as_u64(), Some(m.tokens.output_tokens));
-        m.tokens.cache_read_tokens = Some(0);
-        m.ttft = Some(0.25);
-        let v = serde_json::to_value(LlmMetricsSummary::from(&m)).unwrap();
+        llm.tokens.cache_read_tokens = Some(0);
+        llm.ttft = Some(0.25);
+        let v = serde_json::to_value(LlmMetricsSummary::from(&llm)).unwrap();
         assert_eq!((v["cache_read_tokens"].as_u64(), v["ttft"].as_f64()), (Some(0), Some(0.25)));
     }
 }
