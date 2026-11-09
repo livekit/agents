@@ -25,7 +25,7 @@ pub mod interfaces {
 
     #[lk_agents_host_derive::host(interface(
         host = "asyncio.Task",
-        attrs(cancel, result, add_done_callback)
+        attrs(cancel, cancelled, result, add_done_callback)
     ))]
     pub struct Task;
 
@@ -120,10 +120,8 @@ impl Started {
 /// The host task of a call in flight, cancelled when the call is dropped before it settles.
 struct InFlight {
     event_loop: Arc<Py<PyAny>>,
-    state: Arc<GilMutex<InFlightState>>,
+    child: Arc<Child>,
     settled: Arc<AtomicBool>,
-    /// Set without the GIL, at once: a call not started yet never starts.
-    cancelled: Arc<AtomicBool>,
 }
 
 /// A lock taken only while attached, so the GIL always comes first: the inverse order, which
@@ -137,19 +135,58 @@ impl<T> GilMutex<T> {
     }
 }
 
+/// A started call's host task, shared by the call, the loop callback that publishes the task and
+/// the `_core` coroutine that started it.
 #[derive(Default)]
-struct InFlightState {
+struct Child {
     /// Strong: asyncio holds a pending task only weakly, and one awaiting what only it reaches
     /// would be collected mid-call. A loop's teardown cancels it (`utils.aio.close_loop`).
-    task: Option<Py<PyAny>>,
+    task: GilMutex<Option<Py<PyAny>>>,
+    /// Set without the GIL, at once: a call not started yet never starts.
+    cancelled: AtomicBool,
+}
+
+impl Child {
+    /// On the loop thread: cancelled now, its task once published.
+    fn cancel_on_loop(&self, py: Python<'_>) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        if let Some(task) = self.task.lock(py).take() {
+            let _ = access::Task::cancel(task.bind(py)).and_then(|cancel| cancel.call0());
+        }
+    }
+}
+
+tokio::task_local! {
+    /// The host calls the `_core` coroutine being polled started.
+    static STARTED: Arc<Children>;
+}
+
+/// The host calls a `_core` coroutine started: cancelled on the loop thread the moment its Python
+/// caller cancels it, so none outlives the caller's resumption.
+#[derive(Default)]
+struct Children(Mutex<Vec<std::sync::Weak<Child>>>);
+
+impl Children {
+    fn add(&self, child: &Arc<Child>) {
+        let mut children = self.0.lock();
+        children.retain(|child| child.strong_count() > 0);
+        children.push(Arc::downgrade(child));
+    }
+
+    fn cancel_on_loop(&self, py: Python<'_>) {
+        let children = std::mem::take(&mut *self.0.lock());
+        for child in children.iter().filter_map(std::sync::Weak::upgrade) {
+            child.cancel_on_loop(py);
+        }
+    }
 }
 
 impl InFlight {
     /// On the calling thread: what a caller awaiting the call's settlement asks for.
     fn cancel(&self) {
         if !self.settled.load(Ordering::SeqCst) {
-            self.cancelled.store(true, Ordering::SeqCst);
-            cancel_task(&self.event_loop, &self.state);
+            self.child.cancelled.store(true, Ordering::SeqCst);
+            cancel_task(&self.event_loop, &self.child);
         }
     }
 
@@ -158,9 +195,9 @@ impl InFlight {
         if self.settled.load(Ordering::SeqCst) {
             return;
         }
-        self.cancelled.store(true, Ordering::SeqCst);
-        let (event_loop, state) = (self.event_loop.clone(), self.state.clone());
-        off_thread("cancelling a host call", move || cancel_task(&event_loop, &state));
+        self.child.cancelled.store(true, Ordering::SeqCst);
+        let (event_loop, child) = (self.event_loop.clone(), self.child.clone());
+        off_thread("cancelling a host call", move || cancel_task(&event_loop, &child));
     }
 }
 
@@ -171,10 +208,10 @@ impl Drop for InFlight {
 }
 
 /// Cancels the call's host task, once published and while it is alive.
-fn cancel_task(event_loop: &Py<PyAny>, state: &GilMutex<InFlightState>) {
+fn cancel_task(event_loop: &Py<PyAny>, child: &Child) {
     // A finalizing interpreter runs no more tasks: nothing is left to cancel.
     let _ = Python::try_attach(|py| {
-        let Some(task) = state.lock(py).task.take() else { return };
+        let Some(task) = child.task.lock(py).take() else { return };
         if let Ok(cancel) = access::Task::cancel(task.bind(py)) {
             let _ = access::EventLoop::call_soon_threadsafe(event_loop.bind(py))
                 .and_then(|call| call.call1((cancel,)));
@@ -277,9 +314,9 @@ where
     F: for<'py> FnOnce(Python<'py>) -> PyResult<Bound<'py, PyAny>> + Send + 'static,
 {
     let (sender, receiver) = oneshot::channel::<PyResult<Py<PyAny>>>();
-    let state = Arc::new(GilMutex::<InFlightState>::default());
+    let child = Arc::new(Child::default());
+    let _ = STARTED.try_with(|started| started.add(&child));
     let settled = Arc::new(AtomicBool::new(false));
-    let cancelled = Arc::new(AtomicBool::new(false));
     let deliver = {
         let sender = Arc::new(Mutex::new(Some(sender)));
         let settled = settled.clone();
@@ -290,7 +327,7 @@ where
             }
         }
     };
-    let (task_slot, was_cancelled) = (state.clone(), cancelled.clone());
+    let task_slot = child.clone();
     let call = Mutex::new(Some(call));
     let task_ctx = ctx.clone().unbind();
     let loop_ref = event_loop.clone().unbind();
@@ -300,7 +337,7 @@ where
         let Some(call) = call.lock().take() else {
             return Ok(());
         };
-        if was_cancelled.load(Ordering::SeqCst) {
+        if task_slot.cancelled.load(Ordering::SeqCst) {
             deliver(Err(pyo3::exceptions::asyncio::CancelledError::new_err(())));
             return Ok(());
         }
@@ -336,10 +373,10 @@ where
         access::Task::add_done_callback(&future)?.call1((done,))?;
         // Under the lock a cancel takes the task by: published first, or seen cancelled here.
         let cancel_now = {
-            let mut state = task_slot.lock(py);
-            let cancelled = was_cancelled.load(Ordering::SeqCst);
+            let mut task = task_slot.task.lock(py);
+            let cancelled = task_slot.cancelled.load(Ordering::SeqCst);
             if !cancelled {
-                state.task = Some(future.clone().unbind());
+                *task = Some(future.clone().unbind());
             }
             cancelled
         };
@@ -352,12 +389,7 @@ where
         .call1((access::Context::run(ctx)?, start))?;
     Ok(Started {
         receiver,
-        in_flight: InFlight {
-            event_loop: Arc::new(event_loop.clone().unbind()),
-            state,
-            settled,
-            cancelled,
-        },
+        in_flight: InFlight { event_loop: Arc::new(event_loop.clone().unbind()), child, settled },
     })
 }
 
@@ -702,8 +734,20 @@ where
     let locals = generic::get_current_locals::<ProcessRuntime>(py)?;
     let pair = PyTuple::new(py, [locals.event_loop(py), locals.context(py)])?;
     let entered = crate::py_objects::retain(pair.into_any().unbind());
-    let fut = lk_agents_runtime::net::task::in_host_context(entered, fut);
-    generic::future_into_py_with_locals::<ProcessRuntime, _, _>(py, locals, fut)
+    let started = Arc::new(Children::default());
+    let fut =
+        lk_agents_runtime::net::task::in_host_context(entered, STARTED.scope(started.clone(), fut));
+    let future = generic::future_into_py_with_locals::<ProcessRuntime, _, _>(py, locals, fut)?;
+    // Added before the caller awaits it, so it runs before the caller resumes.
+    let on_done = PyCFunction::new_closure(py, None, None, move |args, _| {
+        let future = args.get_item(0)?;
+        if access::Task::cancelled(&future)?.call0()?.is_truthy()? {
+            started.cancel_on_loop(args.py());
+        }
+        PyResult::Ok(())
+    })?;
+    access::Task::add_done_callback(&future)?.call1((on_done,))?;
+    Ok(future)
 }
 
 /// The runtime's fork guard (`lk_agents_runtime::process::check_pid`) as a `RuntimeError`.

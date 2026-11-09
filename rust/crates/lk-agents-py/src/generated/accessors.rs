@@ -103,6 +103,9 @@ impl Task {
     pub fn cancel<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
         obj.as_any().getattr("cancel")
     }
+    pub fn cancelled<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("cancelled")
+    }
     pub fn result<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
         obj.as_any().getattr("result")
     }
