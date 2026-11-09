@@ -88,6 +88,8 @@ def on_early_word(word: dict) -> None:
 
 * The session's flush at end of turn sends `Finalize`; the answer is a final transcript
   (empty if everything was already final), so the session never waits on a timeout.
+* Words an earlier final already delivered are not repeated in later finals or interims
+  (for example a word cut by a flush and decoded again); the plugin checks word timings.
 * While audio is not flowing, a `KeepAlive` message holds the stream open. Silence would be
   billed as audio; `KeepAlive` is free.
 * Dropped connections are retried per `APIConnectOptions`. A bad or revoked key, or used-up

@@ -375,6 +375,10 @@ class SpeechStream(stt.SpeechStream):
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         self._carry = None
+        # end time and text of the last word delivered in a final, on this connection's
+        # audio clock (word times restart at 0 on every connection)
+        self._last_final_end = 0.0
+        self._last_final_word = ""
         self._finalize_outstanding = 0  # Finalize messages not yet answered on this connection
         self._draining = False
         self._drain_finalize = False  # the drain sent its own Finalize
@@ -468,6 +472,9 @@ class SpeechStream(stt.SpeechStream):
                 pending = not recv.done()
                 if pending:
                     recv.cancel()
+                # a cancel can still end in ChanClosed, and a cancelled wait() skips result():
+                # retrieve the outcome either way so it is never reported as unretrieved
+                recv.add_done_callback(_consume_result)
             if pending:
                 return None
             return recv.result()
@@ -569,6 +576,7 @@ class SpeechStream(stt.SpeechStream):
                 restart_clock()
             self._end_speech()
             closing = False
+            self._last_final_end, self._last_final_word = 0.0, ""
             self._finalize_outstanding = 0
             self._draining = False
             self._drain_finalize = False
@@ -737,9 +745,36 @@ class SpeechStream(stt.SpeechStream):
                 )
             logger.warning("Saidwire stream error %s: %s", code, data.get("err_msg"))
 
+    def _dedupe(self, data: dict[str, Any], *, persist: bool) -> dict[str, Any]:
+        """Drop words an earlier final on this connection already delivered.
+
+        A ``Finalize`` that lands mid-word can make the server repeat the word at the cut
+        ("coffee shops", then "shop", then "shops near me"), and a new segment can replay the
+        previous segment's tail. Word timings show what was already delivered. ``persist``
+        records the kept words (finals only; interims never move the mark).
+        """
+        channel = data.get("channel") or {}
+        alts = channel.get("alternatives") or []
+        if not alts or not alts[0].get("words"):
+            return data
+        kept, last_end, last_word = _dedupe_words(
+            alts[0]["words"], self._last_final_end, self._last_final_word
+        )
+        if persist:
+            self._last_final_end, self._last_final_word = last_end, last_word
+        if len(kept) == len(alts[0]["words"]):
+            return data
+        alt = dict(alts[0])
+        alt["words"] = kept
+        alt["transcript"] = " ".join(
+            (w.get("punctuated_word") or w.get("word") or "").strip() for w in kept
+        )
+        return {**data, "channel": {**channel, "alternatives": [alt, *alts[1:]]}}
+
     def _on_results(self, data: dict[str, Any]) -> None:
         self._request_id = (data.get("metadata") or {}).get("request_id", self._request_id)
         is_final = bool(data.get("is_final"))
+        data = self._dedupe(data, persist=is_final)
         alts = _to_speech_data(self._opts.language, data, self.start_time_offset)
         text = alts[0].text if alts else ""
         if text:
@@ -780,6 +815,49 @@ class SpeechStream(stt.SpeechStream):
         """True for the answer to the reconnect drain's own Finalize, which no session flush
         is waiting for (answers arrive in order, so it is the last one outstanding)."""
         return self._drain_finalize and self._finalize_outstanding == 1
+
+
+def _consume_result(task: asyncio.Future[Any]) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+# a word ending within this much of the last delivered word's end is a repeat
+_DEDUPE_OVERLAP_S = 0.02
+# a re-decoded cut word starts within this much of the last delivered word's end
+_DEDUPE_CUT_S = 0.35
+
+
+def _norm(word: dict[str, Any]) -> str:
+    return (word.get("punctuated_word") or word.get("word") or "").strip().lower().strip(".,?!;:")
+
+
+def _dedupe_words(
+    words: list[dict[str, Any]], last_end: float, last_word: str
+) -> tuple[list[dict[str, Any]], float, str]:
+    """Words not already delivered, and the new (end time, word) mark.
+
+    A word is dropped when it ends inside audio an earlier final covered, or when it is the
+    first new word, starts right at the last delivered word's end, and is that same word
+    decoded again (one is a prefix of the other: "shop" / "shops").
+    """
+    kept: list[dict[str, Any]] = []
+    for w in words:
+        start, end = float(w.get("start", 0.0)), float(w.get("end", 0.0))
+        norm = _norm(w)
+        if end <= last_end + _DEDUPE_OVERLAP_S:
+            continue
+        if (
+            not kept
+            and last_word
+            and norm
+            and start < last_end + _DEDUPE_CUT_S
+            and (norm.startswith(last_word) or last_word.startswith(norm))
+        ):
+            continue
+        kept.append(w)
+        last_end, last_word = max(last_end, end), norm
+    return kept, last_end, last_word
 
 
 def _timed(word: dict[str, Any], offset: float) -> TimedString:

@@ -956,6 +956,103 @@ async def test_aclose_closes_open_streams(server, session):
     assert len(server.conns) == 1
 
 
+def _results(words, *, is_final, from_finalize=False, speech_final=False):
+    """A Results message with these (word, start, end) words."""
+    ws = [
+        {"word": w.lower(), "punctuated_word": w, "start": st, "end": en, "confidence": 0.9}
+        for w, st, en in words
+    ]
+    return {
+        "type": "Results",
+        "is_final": is_final,
+        "speech_final": speech_final,
+        "from_finalize": from_finalize,
+        "start": ws[0]["start"] if ws else 0.0,
+        "duration": (ws[-1]["end"] - ws[0]["start"]) if ws else 0.0,
+        "channel": {
+            "alternatives": [
+                {"transcript": " ".join(w for w, _, _ in words), "confidence": 0.9, "words": ws}
+            ]
+        },
+    }
+
+
+async def _scripted(server, session, messages):
+    """Feed scripted server messages to a connected stream and return its events."""
+    s = saidwire.STT(api_key=KEY, base_url=server.url, http_session=session)
+    stream = s.stream()
+    for _ in range(100):
+        if server.conns:
+            break
+        await asyncio.sleep(0.02)
+    await asyncio.sleep(0.1)  # the connection's state reset has run
+    for m in messages:
+        stream._process_event(m)
+    stream.end_input()
+    return [e async for e in stream]
+
+
+def _texts(events, kind):
+    return [e.alternatives[0].text for e in events if e.type == kind and e.alternatives[0].text]
+
+
+async def test_dedupe_word_repeated_at_a_finalize_cut(server, session):
+    ev = await _scripted(
+        server,
+        session,
+        [
+            _results(
+                [("coffee", 0.2, 0.6), ("shops", 0.65, 1.0)], is_final=True, from_finalize=True
+            ),
+            _results([("shop", 0.9, 1.05)], is_final=True),
+            _results([("shops", 0.95, 1.1), ("near", 1.2, 1.4)], is_final=False),
+            _results([("shops", 0.95, 1.1), ("near", 1.2, 1.4), ("me.", 1.45, 1.6)], is_final=True),
+        ],
+    )
+    assert _texts(ev, E.FINAL_TRANSCRIPT) == ["coffee shops", "near me."]
+    assert _texts(ev, E.INTERIM_TRANSCRIPT) == ["near"]
+    last = [e for e in ev if e.type == E.FINAL_TRANSCRIPT and e.alternatives[0].text][-1]
+    assert list(last.alternatives[0].words or []) == ["near", "me."]
+
+
+async def test_dedupe_replayed_tail_while_silent(server, session):
+    ev = await _scripted(
+        server,
+        session,
+        [
+            _results([("Hello", 0.2, 0.5)], is_final=True, speech_final=True),
+            _results([("Hello", 0.2, 0.5)], is_final=False),  # replayed tail, user silent
+            _results([("Hello", 0.2, 0.5)], is_final=True),
+            _results([("Hi", 2.0, 2.2), ("again", 2.3, 2.6)], is_final=True),
+        ],
+    )
+    assert _texts(ev, E.FINAL_TRANSCRIPT) == ["Hello", "Hi again"]
+    assert _texts(ev, E.INTERIM_TRANSCRIPT) == []
+    # the replay opened no extra turn
+    assert [e.type for e in ev].count(E.START_OF_SPEECH) == 2
+
+
+async def test_dedupe_keeps_a_new_word_that_repeats(server, session):
+    # "no no": the same word again, later in the audio, is real speech
+    ev = await _scripted(
+        server,
+        session,
+        [
+            _results([("No", 0.2, 0.4)], is_final=True),
+            _results([("no.", 0.9, 1.1)], is_final=True),
+        ],
+    )
+    assert _texts(ev, E.FINAL_TRANSCRIPT) == ["No", "no."]
+
+
+def test_dedupe_words_helper():
+    w = [{"word": "shops", "start": 0.95, "end": 1.1}, {"word": "near", "start": 1.2, "end": 1.4}]
+    kept, end, last = saidwire.stt._dedupe_words(w, 1.0, "shops")
+    assert [x["word"] for x in kept] == ["near"] and end == 1.4 and last == "near"
+    kept, end, last = saidwire.stt._dedupe_words(w, 0.0, "")
+    assert len(kept) == 2
+
+
 async def test_prerecorded_recognize(server, session):
     s = saidwire.STT(api_key=KEY, base_url=server.url, http_session=session)
     ev = await s.recognize(frames(tone_pcm(16000, 3) + silence_pcm(16000, 0.3)))
