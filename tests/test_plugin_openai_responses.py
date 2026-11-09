@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Sequence
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,7 +11,15 @@ import aiohttp
 import httpx2 as httpx
 import pytest
 from openai.types import Reasoning
-from openai.types.responses import ResponseCreatedEvent, ResponseIncompleteEvent
+from openai.types.responses import (
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseIncompleteEvent,
+    ResponseOutputItemAddedEvent,
+    ResponseOutputItemDoneEvent,
+    ResponseTextDeltaEvent,
+)
+from openai.types.responses.response_stream_event import ResponseStreamEvent
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, llm as agents_llm
 from livekit.plugins.openai.responses.llm import (
@@ -415,7 +424,7 @@ class _ReplayResponsesWS:
 class _ReplayHTTPStream:
     """Minimal OpenAI AsyncStream stand-in for the HTTP Responses path."""
 
-    def __init__(self, events: list[ResponseCreatedEvent | ResponseIncompleteEvent]) -> None:
+    def __init__(self, events: Sequence[ResponseStreamEvent]) -> None:
         self._events = events
 
     async def __aenter__(self) -> _ReplayHTTPStream:
@@ -785,6 +794,105 @@ def _output_message(text: str) -> dict:
         "status": "completed",
         "content": [{"type": "output_text", "text": text, "annotations": []}],
     }
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+@pytest.mark.parametrize(
+    "added_fields, done_fields, expected",
+    [
+        pytest.param(
+            {"phase": "commentary"},
+            {"phase": "commentary"},
+            ["commentary", "hello", "commentary"],
+            id="commentary-at-both-boundaries",
+        ),
+        pytest.param(
+            {"phase": "final_answer"},
+            {},
+            ["final_answer", "hello"],
+            id="final-answer-at-start",
+        ),
+        pytest.param(
+            {"phase": None},
+            {"phase": "final_answer"},
+            ["hello", "final_answer"],
+            id="null-at-start",
+        ),
+        pytest.param(
+            {},
+            {"phase": "final_answer"},
+            ["hello", "final_answer"],
+            id="missing-at-start",
+        ),
+        pytest.param({}, {"phase": None}, ["hello"], id="no-phase"),
+    ],
+)
+async def test_output_message_phase_order(
+    transport_kind: str,
+    added_fields: dict[str, str | None],
+    done_fields: dict[str, str | None],
+    expected: list[str],
+) -> None:
+    message = _output_message("hello")
+    added = {
+        "type": "response.output_item.added",
+        "sequence_number": 1,
+        "output_index": 0,
+        "item": {**message, "status": "in_progress", "content": [], **added_fields},
+    }
+    delta = {**_TEXT_DELTA, "sequence_number": 2}
+    done = {
+        "type": "response.output_item.done",
+        "sequence_number": 3,
+        "output_index": 0,
+        "item": {**message, **done_fields},
+    }
+    completed = {
+        "type": "response.completed",
+        "sequence_number": 4,
+        "response": {
+            **_RESPONSE_CREATED["response"],
+            "status": "completed",
+            "output": [done["item"]],
+        },
+    }
+    if transport_kind == "websocket":
+        llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+        llm_model._ws = _ReplayResponsesWS(  # type: ignore[assignment]
+            [_RESPONSE_CREATED, added, delta, done, completed]
+        )
+    else:
+        client = MagicMock()
+        client._base_url = httpx.URL("https://api.openai.com/v1")
+        client.responses.create = AsyncMock(
+            return_value=_ReplayHTTPStream(
+                [
+                    ResponseCreatedEvent.model_validate(_RESPONSE_CREATED),
+                    ResponseOutputItemAddedEvent.model_validate(added),
+                    ResponseTextDeltaEvent.model_validate(delta),
+                    ResponseOutputItemDoneEvent.model_validate(done),
+                    ResponseCompletedEvent.model_validate(completed),
+                ]
+            )
+        )
+        llm_model = ResponsesLLM(model="gpt-4.1", client=client, use_websocket=False)
+
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+    try:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(max_retry=0)
+        ) as stream:
+            deltas = [chunk.delta async for chunk in stream if chunk.delta is not None]
+    finally:
+        await llm_model.aclose()
+
+    assert deltas == [
+        agents_llm.ChoiceDelta(role="assistant", content="hello")
+        if value == "hello"
+        else agents_llm.ChoiceDelta(role="assistant", extra={"openai": {"phase": value}})
+        for value in expected
+    ]
 
 
 def _output_function_call(call_id: str, name: str) -> dict:
