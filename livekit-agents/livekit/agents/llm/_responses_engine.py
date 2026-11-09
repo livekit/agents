@@ -593,18 +593,18 @@ class ResponsesLLMStream(llm.LLMStream):
         """Emit a known phase, suppressing repeats for this item in early-phase mode."""
         if item.phase is None:
             return None
-        metadata: dict[str, str] = {"phase": item.phase}
+        extra = {"openai": {"phase": item.phase}}
         if self._emit_phase_on_item_start:
             if self._message_phases.get(item.id) == item.phase:
                 return None
             self._message_phases[item.id] = item.phase
-            metadata["item_id"] = item.id
+            extra["openai_item"] = {"item_id": item.id, "phase": item.phase}
         return llm.ChatChunk(
             id=self._response_id,
             delta=llm.ChoiceDelta(
                 role="assistant",
                 content=None,
-                extra={"openai": metadata},
+                extra=extra,
             ),
         )
 
@@ -617,7 +617,8 @@ class ResponsesLLMStream(llm.LLMStream):
             metadata = {"item_id": event.item_id}
             if (phase := self._message_phases.get(event.item_id)) is not None:
                 metadata["phase"] = phase
-            extra = {"openai": metadata}
+            # Keep per-item data separate from the phase retained in chat history.
+            extra = {"openai_item": metadata}
         return llm.ChatChunk(
             id=self._response_id,
             delta=llm.ChoiceDelta(content=event.delta, role="assistant", extra=extra),

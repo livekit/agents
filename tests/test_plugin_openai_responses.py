@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,6 +22,8 @@ from openai.types.responses import (
 from openai.types.responses.response_stream_event import ResponseStreamEvent
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, llm as agents_llm
+from livekit.agents.voice import generation
+from livekit.agents.voice.io import ModelSettings
 from livekit.plugins.openai.responses.llm import (
     _WS_HEARTBEAT,
     LLM as ResponsesLLM,
@@ -819,9 +821,9 @@ def _phase_message_events(
     )
 
 
-async def _phase_stream_deltas(
+def _phase_stream_model(
     transport_kind: str, events: list[dict], early: bool | None = True
-) -> list[agents_llm.ChoiceDelta]:
+) -> ResponsesLLM:
     options = {} if early is None else {"emit_phase_on_item_start": early}
     completed = {
         "type": "response.completed",
@@ -857,6 +859,13 @@ async def _phase_stream_deltas(
         )
         llm_model = ResponsesLLM(client=client, use_websocket=False, **options)
 
+    return llm_model
+
+
+async def _phase_stream_deltas(
+    transport_kind: str, events: list[dict], early: bool | None = True
+) -> list[agents_llm.ChoiceDelta]:
+    llm_model = _phase_stream_model(transport_kind, events, early)
     chat_ctx = agents_llm.ChatContext.empty()
     chat_ctx.add_message(role="user", content="hi")
     try:
@@ -874,7 +883,10 @@ def _phase_delta(
     metadata = {"item_id": item_id}
     if phase is not None:
         metadata["phase"] = phase
-    return agents_llm.ChoiceDelta(role="assistant", content=content, extra={"openai": metadata})
+    extra = {"openai_item": metadata}
+    if content is None and phase is not None:
+        extra["openai"] = {"phase": phase}
+    return agents_llm.ChoiceDelta(role="assistant", content=content, extra=extra)
 
 
 @pytest.mark.parametrize("transport_kind", ["websocket", "http"])
@@ -979,6 +991,49 @@ async def test_output_message_phase_resets_on_response_created(transport_kind: s
         _phase_delta("msg_1", content="new"),
         _phase_delta("msg_1", "commentary"),
     ]
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+@pytest.mark.parametrize("consumer", ["collect", "voice"])
+async def test_unphased_output_preserves_aggregated_phase(
+    transport_kind: str, consumer: str
+) -> None:
+    phase = {"phase": "commentary"}
+    phased = _phase_message_events("msg_a", "Working", 0, phase, phase)
+    unphased = _phase_message_events("msg_b", " more", 1, {}, {})
+    llm_model = _phase_stream_model(transport_kind, [*phased, *unphased])
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+    stream = llm_model.chat(chat_ctx=chat_ctx, conn_options=APIConnectOptions(max_retry=0))
+
+    async def node(
+        _chat_ctx: agents_llm.ChatContext, _tools: list[agents_llm.Tool], _settings: ModelSettings
+    ) -> AsyncIterator[agents_llm.ChatChunk]:
+        async with stream:
+            async for chunk in stream:
+                yield chunk
+
+    try:
+        if consumer == "collect":
+            response = await stream.collect()
+            text, extra = response.text, response.extra
+        else:
+            task, data = generation.perform_llm_inference(
+                node=node,
+                chat_ctx=chat_ctx,
+                tool_ctx=agents_llm.ToolContext([]),
+                model_settings=ModelSettings(),
+            )
+            assert await task
+            text, extra = data.generated_text, data.generated_extra
+    finally:
+        await llm_model.aclose()
+
+    assert text == "Working more"
+    assert extra.get("openai") == phase
+    chat_ctx.add_message(role="assistant", content=text, extra=extra)
+    items, _ = chat_ctx.to_provider_format(format="openai.responses")
+    assert items[-1]["phase"] == "commentary"
 
 
 def _output_function_call(call_id: str, name: str) -> dict:

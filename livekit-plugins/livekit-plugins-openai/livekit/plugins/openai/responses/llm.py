@@ -118,11 +118,12 @@ class LLM(llm.LLM):
         ``emit_phase_on_item_start`` delivers an assistant message's phase (``commentary`` or
         ``final_answer``) before its text when the provider supplies it at item start. A phase
         first supplied or changed at item completion is delivered then. With this option on,
-        phase and text chunks carry the message's ``item_id`` in ``delta.extra["openai"]``.
-        Text chunks also carry ``phase`` there once known. Text streams immediately even when
-        its phase is unknown. Completion updates apply to that item and do not revise text
-        already emitted. Use the chunk's response ID and the item ID to correlate updates.
-        The default delivers phase metadata only at item completion.
+        phase and text chunks carry the message's ``item_id`` and any known ``phase`` in
+        ``delta.extra["openai_item"]``. Phase notifications also set ``delta.extra["openai"]["phase"]``
+        for chat history. Text streams immediately even when its phase is unknown. Completion
+        updates apply to that item and do not revise text already emitted. Use the chunk's
+        response ID and the item ID to correlate updates. The default delivers phase metadata
+        only at item completion.
         """
         super().__init__()
 
