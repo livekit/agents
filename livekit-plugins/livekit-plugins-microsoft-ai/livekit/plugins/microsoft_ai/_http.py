@@ -105,18 +105,20 @@ class HTTPClient:
             self.headers = dict(headers)
         else:
             selected_header = "Ocp-Apim-Subscription-Key"
-            if service == "STT":
+            if service in ("STT", "DECISION"):
                 configured_header = (
                     auth_header
                     if auth_header is not None
-                    else config.get("MICROSOFT_AI_STT_AUTH_HEADER")
+                    else config.get(f"MICROSOFT_AI_{service}_AUTH_HEADER")
                 )
+                default_header = "Authorization" if service == "STT" else "api-key"
                 selected_header = (
-                    configured_header if configured_header is not None else "Authorization"
+                    configured_header if configured_header is not None else default_header
                 )
                 if selected_header not in ("Authorization", "api-key"):
                     raise ValueError(
-                        "MICROSOFT_AI_STT_AUTH_HEADER/auth_header must be Authorization or api-key"
+                        f"MICROSOFT_AI_{service}_AUTH_HEADER/auth_header must be"
+                        " Authorization or api-key"
                     )
             key = config.required(api_key, f"MICROSOFT_AI_{service}_API_KEY")
             if any(ord(char) < 32 or ord(char) == 127 for char in key):

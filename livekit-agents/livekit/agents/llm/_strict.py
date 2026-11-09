@@ -225,7 +225,8 @@ def _ensure_strict_json_schema(
             non_null["type"] = [t, "null"] if isinstance(t, str) else t
             enum = non_null.get("enum")
             if is_list(enum):
-                enum.append(None)
+                # the list is shared with the `$defs` entry this branch was expanded from
+                non_null["enum"] = [*enum, None]
 
             json_schema = {
                 k: v for k, v in json_schema.items() if k not in ("anyOf", "oneOf")

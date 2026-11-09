@@ -12,6 +12,7 @@ from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.metrics import AgentSessionUsage
 from livekit.agents.voice import remote_session as remote_session_module
 from livekit.agents.voice.remote_session import (
+    TOPIC_SESSION_MESSAGES,
     RemoteSession,
     RoomSessionTransport,
     SessionHost,
@@ -445,15 +446,12 @@ def _fake_room(*, connected: bool = True, stream_error: Exception | None = None)
     room = MagicMock()
     room.isconnected = MagicMock(return_value=connected)
 
-    async def _stream_bytes(**kwargs):
+    async def _send_bytes(data, **kwargs):
         if stream_error is not None:
             raise stream_error
-        writer = MagicMock()
-        writer.write = AsyncMock()
-        writer.aclose = AsyncMock()
-        return writer
+        return MagicMock()
 
-    room.local_participant.stream_bytes = _stream_bytes
+    room.local_participant.send_bytes = _send_bytes
     return room
 
 
@@ -485,26 +483,53 @@ async def test_room_transport_serializes_concurrent_sends():
     overlapping = False
     in_flight = 0
 
-    async def _stream_bytes(**kwargs):
+    async def _send_bytes(data, **kwargs):
         nonlocal overlapping, in_flight
         in_flight += 1
         if in_flight > 1:
             overlapping = True
         await asyncio.sleep(0.01)  # a real send yields several times
         in_flight -= 1
-        writer = MagicMock()
-        writer.write = AsyncMock()
-        writer.aclose = AsyncMock()
-        return writer
+        return MagicMock()
 
     room = _fake_room()
-    room.local_participant.stream_bytes = _stream_bytes
+    room.local_participant.send_bytes = _send_bytes
     transport = RoomSessionTransport(room)
 
     await asyncio.gather(
         *(transport.send_message(agent_pb.AgentSessionMessage()) for _ in range(8))
     )
     assert not overlapping
+
+
+@pytest.mark.asyncio
+async def test_room_transport_sends_each_message_in_one_call():
+    """Each message is a single one-shot send, not an incremental stream.
+
+    A one-shot send lets the SDK put a small message in a single packet (and
+    compress a large one) for clients that support it; an incremental stream
+    always costs a header, a chunk and a trailer packet per message.
+    """
+    room = _fake_room()
+    room.local_participant.send_bytes = AsyncMock()
+    room.local_participant.stream_bytes = AsyncMock()
+    transport = RoomSessionTransport(room, remote_identity="user-1")
+
+    msg = agent_pb.AgentSessionMessage(
+        event=agent_pb.AgentSessionEvent(
+            agent_state_changed=agent_pb.AgentSessionEvent.AgentStateChanged(
+                old_state=agent_pb.AS_LISTENING, new_state=agent_pb.AS_SPEAKING
+            )
+        )
+    )
+    await transport.send_message(msg)
+
+    room.local_participant.stream_bytes.assert_not_called()
+    room.local_participant.send_bytes.assert_awaited_once()
+    args, kwargs = room.local_participant.send_bytes.await_args
+    assert args == (msg.SerializeToString(),)
+    assert kwargs["topic"] == TOPIC_SESSION_MESSAGES
+    assert kwargs["destination_identities"] == ["user-1"]
 
 
 class _FailingTransport(PairedTransport):

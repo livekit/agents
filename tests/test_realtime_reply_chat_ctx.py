@@ -42,6 +42,7 @@ class _FakeActivity(SimpleNamespace):
 
         super().__init__(
             _rt_session=rt_session,
+            _rt_chat_ctx_lock=asyncio.Lock(),
             _authorization_allowed=authorization_allowed,
             _user_silence_event=user_silence,
             # the fake model reports supports_overlapping_speech=False, so the caller gates
@@ -49,6 +50,8 @@ class _FakeActivity(SimpleNamespace):
             tools=[],
             _on_enter_ignored_tools=lambda tool_ctx: [],
             _tool_choice=None,
+            _rt_tool_choice_overridden=False,
+            _restore_rt_tool_choice=lambda: None,
             _agent=SimpleNamespace(_chat_ctx=llm.ChatContext.empty()),
             _session=SimpleNamespace(
                 _conversation_item_added=lambda msg: None,

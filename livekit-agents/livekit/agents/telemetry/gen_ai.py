@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextvars
 import json
 import os
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 from opentelemetry import trace
@@ -84,6 +84,50 @@ def mark_inference_span_recorded() -> None:
     """Called where an ``llm_request`` span is created, so the enclosing node stands down."""
     if (on_created := _on_inference_span_created.get()) is not None:
         on_created()
+
+
+# The `llm_request` span is created inside the LLMStream, after a custom `llm_node` has
+# handed off to `llm.chat()`, so the node cannot reach it through `get_current_span()`.
+# Attributes set here travel with the context into the stream's task instead.
+_llm_request_attributes: contextvars.ContextVar[Mapping[str, AttributeValue] | None] = (
+    contextvars.ContextVar("lk_llm_request_attributes", default=None)
+)
+
+
+def set_llm_request_attributes(attributes: Mapping[str, AttributeValue]) -> None:
+    """Set extra attributes on the ``llm_request`` spans of LLM calls started afterwards.
+
+    The ``llm_request`` span is the provider call (the "generation" in backends such as
+    Langfuse), and it is only created once ``LLM.chat()`` runs, so it is not the current
+    span inside ``llm_node``. Call this from an ``llm_node`` override before delegating to
+    ``Agent.default.llm_node`` (or calling ``LLM.chat()``) to annotate that span, e.g. to
+    link the generation to a prompt::
+
+        async def llm_node(self, chat_ctx, tools, model_settings):
+            gen_ai.set_llm_request_attributes(
+                {
+                    "langfuse.observation.prompt.name": "support-agent",
+                    "langfuse.observation.prompt.version": 3,
+                }
+            )
+            async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+                yield chunk
+
+    The attributes apply to every LLM call started later in the current context. Each
+    ``llm_node`` runs in its own asyncio task, so they do not outlive the node, and a
+    ``FallbackAdapter``'s background recovery probes, which are never served, do not get
+    them. Repeated calls merge, with later values taking precedence.
+
+    Args:
+        attributes: The span attributes to set on each ``llm_request`` span.
+    """
+    current = _llm_request_attributes.get() or {}
+    _llm_request_attributes.set({**current, **attributes})
+
+
+def llm_request_attributes() -> Mapping[str, AttributeValue]:
+    """The attributes set with :func:`set_llm_request_attributes` in the current context."""
+    return _llm_request_attributes.get() or {}
 
 
 def _is_system_message(item: ChatItem) -> bool:

@@ -412,6 +412,7 @@ class _LocalTransport:
             prob = float(await asyncio.to_thread(self._eot.predict, pcm_snapshot))
         except Exception:
             logger.exception("local audio EOT prediction failed")
+            prob = 1.0  # positive default, like the other local failures: commit after min_delay
         inference_duration = time.monotonic() - t0
 
         stream = self._stream_ref() if self._stream_ref is not None else None

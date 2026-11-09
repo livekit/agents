@@ -1,9 +1,11 @@
-# LemonSlice Avatar
+# Avatar
 
 A voice agent with a talking-head avatar you can swap mid-conversation.
 Pick a persona from the dropdown — Leila, Jess, a software engineer, a
-cat, a fox — and the agent's face, voice, and personality
-all change without dropping the call.
+cat, a fox, or a Tavus face — and the agent's face, voice, and personality
+all change without dropping the call. Each persona picks its avatar
+provider (`provider="lemonslice"` or `provider="tavus"` in
+[`personas.py`](./personas.py)), so you can switch providers mid-call too.
 
 Try it in the [LiveKit Playground](https://agents.livekit.io/?example=avatar).
 
@@ -26,9 +28,12 @@ Try it in the [LiveKit Playground](https://agents.livekit.io/?example=avatar).
 - **Hero motions** — for **Leila**, **Jess**, and **Mr Fox**, the LLM can
   trigger wave, dance, or turn via tool calls (one motion at a time,
   ~6 seconds each). They wave automatically when the session starts.
+- **Facial emotions** — for the **Tavus** persona, the LLM sets the
+  face's emotion (happiness, sadness, surprise, …) via a `set_emotion`
+  tool call as the mood of the conversation changes.
 - **LiveKit Inference** for STT + LLM (Deepgram Nova-3 + Gemini 3.5
-  Flash), Cartesia for TTS, [LemonSlice](https://lemonslice.com) for
-  the avatar video.
+  Flash), Cartesia for TTS, [LemonSlice](https://lemonslice.com) or
+  [Tavus](https://tavus.io) for the avatar video.
 
 ## Running it locally
 
@@ -39,6 +44,9 @@ You'll need:
 - A LemonSlice API key — get one from
   [lemonslice.com](https://lemonslice.com). Export it as
   `LEMONSLICE_API_KEY`.
+- For the Tavus persona, a Tavus API key exported as `TAVUS_API_KEY`.
+  Optionally set `TAVUS_FACE_ID` / `TAVUS_PAL_ID` (or `face_id` on the
+  persona); otherwise the stock pal is used.
 
 Then:
 
@@ -48,7 +56,8 @@ uv run agent.py dev
 ```
 
 Connect from any LiveKit client. The agent reads the starting persona
-from the job metadata; if no metadata is sent it defaults to Leila.
+from the job metadata (`{"set_avatar": "tavus"}` starts with Tavus);
+if no metadata is sent it defaults to Leila.
 
 ## Adding or editing personas
 

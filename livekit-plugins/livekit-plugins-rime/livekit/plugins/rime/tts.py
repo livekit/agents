@@ -18,6 +18,7 @@ import asyncio
 import copy
 import os
 import weakref
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import overload
 from urllib.parse import urlencode
@@ -45,9 +46,9 @@ from ._websocket_v1 import (
     DEFAULT_AUDIO_FORMAT,
     RimeAudioFormat,
     WebSocketProtocol,
-    model_from_websocket_url,
     validate_audio_format,
     validate_endpoint_host,
+    validate_websocket_url,
 )
 from ._websocket_v1_adapter import V1SynthesisOptions, WebSocketV1Adapter
 from .langs import TTSLangs
@@ -55,6 +56,7 @@ from .log import logger
 from .models import (
     MODEL_CODA,
     MODEL_MIST_V3,
+    CustomLexiconEntry,
     DefaultCodaVoice,
     DefaultMistVoice,
     TTSModels,
@@ -92,6 +94,7 @@ class _CodaOptions:
     top_p: NotGivenOr[float] = NOT_GIVEN
     max_tokens: NotGivenOr[int] = NOT_GIVEN
     speed_alpha: NotGivenOr[float] = NOT_GIVEN
+    custom_lexicon: list[CustomLexiconEntry] | None = None
 
 
 @dataclass
@@ -153,6 +156,23 @@ def _check_time_scale_factor_supported(
         raise ValueError("time_scale_factor is not supported by the mistv2 model")
 
 
+def _check_custom_lexicon_supported(
+    model: TTSModels | str,
+    custom_lexicon: NotGivenOr[Sequence[CustomLexiconEntry]],
+    *,
+    legacy_websocket: bool,
+) -> None:
+    if not is_given(custom_lexicon):
+        return
+    if model != MODEL_CODA:
+        raise ValueError("custom_lexicon requires the coda model")
+    if legacy_websocket:
+        raise ValueError(
+            "custom_lexicon is not supported by the legacy Rime WebSocket interface; "
+            "use websocket_url or HTTP"
+        )
+
+
 def _resolve_websocket_model(
     websocket_url: str,
     model: NotGivenOr[TTSModels | str],
@@ -160,20 +180,12 @@ def _resolve_websocket_model(
     allow_custom_endpoint: bool,
     current_model: TTSModels | str | None = None,
 ) -> TTSModels | str:
-    endpoint_model = model_from_websocket_url(
-        websocket_url, allow_custom_endpoint=allow_custom_endpoint
-    )
-    if endpoint_model is None:
-        if not is_given(model):
-            if current_model is not None:
-                return current_model
-            raise ValueError("model is required when websocket_url ends with /ws")
-        return model
-    if is_given(model):
-        raise ValueError("model is derived from websocket_url; omit model")
-    if endpoint_model == "mist":
-        return MODEL_MIST_V3
-    return endpoint_model
+    validate_websocket_url(websocket_url, allow_custom_endpoint=allow_custom_endpoint)
+    if not is_given(model):
+        if current_model is not None:
+            return current_model
+        raise ValueError("model is required when using websocket_url")
+    return model
 
 
 class TTS(tts.TTS):
@@ -182,11 +194,12 @@ class TTS(tts.TTS):
         self,
         *,
         websocket_url: str,
+        model: TTSModels | str,
         websocket_protocol: WebSocketProtocol = "binary",
-        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         speaker: NotGivenOr[str] = NOT_GIVEN,
         lang: TTSLangs | str = "eng",
         audio_format: RimeAudioFormat = DEFAULT_AUDIO_FORMAT,
+        custom_lexicon: NotGivenOr[Sequence[CustomLexiconEntry]] = NOT_GIVEN,
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
@@ -209,6 +222,7 @@ class TTS(tts.TTS):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        custom_lexicon: NotGivenOr[Sequence[CustomLexiconEntry]] = NOT_GIVEN,
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
         speed_alpha: NotGivenOr[float] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
@@ -238,6 +252,8 @@ class TTS(tts.TTS):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        # Coda over HTTP and v1 WebSocket
+        custom_lexicon: NotGivenOr[Sequence[CustomLexiconEntry]] = NOT_GIVEN,
         # Shared by Mist and Coda (HTTP and v1 WebSocket)
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
         # Supported by HTTP and the legacy ws3 interface
@@ -299,6 +315,11 @@ class TTS(tts.TTS):
             resolved_model = MODEL_CODA
 
         _check_time_scale_factor_supported(resolved_model, time_scale_factor)
+        _check_custom_lexicon_supported(
+            resolved_model,
+            custom_lexicon,
+            legacy_websocket=use_websocket and websocket_v1_url is None,
+        )
         if (
             websocket_v1_url is not None
             and not is_mist_model(resolved_model)
@@ -349,6 +370,9 @@ class TTS(tts.TTS):
                 top_p=top_p,
                 max_tokens=max_tokens,
                 speed_alpha=speed_alpha,
+                custom_lexicon=(
+                    copy.deepcopy(list(custom_lexicon)) if is_given(custom_lexicon) else None
+                ),
             )
         elif is_mist_model(resolved_model):
             self._opts.mist_options = _MistOptions(
@@ -452,6 +476,7 @@ class TTS(tts.TTS):
 
     def _v1_synthesis_options(self) -> V1SynthesisOptions:
         mist = self._opts.mist_options if is_mist_model(self._opts.model) else None
+        coda = self._opts.coda_options if self._opts.model == MODEL_CODA else None
         return V1SynthesisOptions(
             model=self._opts.model,
             speaker=self._opts.speaker,
@@ -467,6 +492,7 @@ class TTS(tts.TTS):
             phonemize_between_brackets=(
                 mist.phonemize_between_brackets if mist is not None else NOT_GIVEN
             ),
+            custom_lexicon=tuple(coda.custom_lexicon or ()) if coda is not None else (),
         )
 
     def _legacy_synthesis_options(self) -> LegacySynthesisOptions:
@@ -505,6 +531,7 @@ class TTS(tts.TTS):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        custom_lexicon: NotGivenOr[Sequence[CustomLexiconEntry]] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         audio_format: NotGivenOr[RimeAudioFormat | str] = NOT_GIVEN,
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
@@ -557,6 +584,11 @@ class TTS(tts.TTS):
             validate_endpoint_host(base_url, allow_custom_endpoint=self._allow_custom_endpoint)
 
         _check_time_scale_factor_supported(effective_model, time_scale_factor)
+        _check_custom_lexicon_supported(
+            effective_model,
+            custom_lexicon,
+            legacy_websocket=self._legacy_websocket_adapter is not None,
+        )
 
         # Each WS3 pool is bound to one URL. Replace it when URL options change.
         prev_ws_url = self._ws_url() if self._legacy_websocket_adapter is not None else None
@@ -603,6 +635,8 @@ class TTS(tts.TTS):
                 self._opts.coda_options.max_tokens = max_tokens
             if is_given(speed_alpha):
                 self._opts.coda_options.speed_alpha = speed_alpha
+            if is_given(custom_lexicon):
+                self._opts.coda_options.custom_lexicon = copy.deepcopy(list(custom_lexicon))
 
         elif is_mist_model(self._opts.model) and self._opts.mist_options is not None:
             if is_given(speed_alpha):
@@ -646,6 +680,9 @@ class ChunkedStream(tts.ChunkedStream):
         }
         format = "audio/pcm"
         payload["samplingRate"] = self._sample_rate
+        coda_opts = self._opts.coda_options
+        if self._opts.model == MODEL_CODA and coda_opts is not None and coda_opts.custom_lexicon:
+            payload["customLexicon"] = coda_opts.custom_lexicon
         if is_mist_model(self._opts.model) and self._opts.mist_options is not None:
             mist_opts = self._opts.mist_options
             if supports_reduce_latency(self._opts.model) and is_given(mist_opts.reduce_latency):

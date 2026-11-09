@@ -13,7 +13,7 @@ from livekit import rtc
 from ... import utils
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
-from ..io import AudioOutput, AudioOutputCapabilities, PlaybackFinishedEvent
+from ..io import AudioOutput, AudioOutputCapabilities, PlaybackFinishedEvent, _CaptureCancelledEvent
 from ._types import AudioReceiver, AudioSegmentEnd
 
 RPC_CLEAR_BUFFER = "lk.clear_buffer"
@@ -70,7 +70,8 @@ class DataStreamAudioOutput(AudioOutput):
         # a playback finished event is expected after the clear buffer rpc is performed
         # if not received after the timeout, we still mark the playout is done to avoid deadlock
         self._clear_buffer_timeout = clear_buffer_timeout
-        self._clear_buffer_timeout_handler: asyncio.TimerHandle | None = None
+        # Also includes completion of captures canceled behind the clear.
+        self._clear_buffer_atask: asyncio.Task[None] | None = None
 
         def _on_room_connected(fut: asyncio.Future[None]) -> None:
             if not self._start_atask and not fut.cancelled() and not fut.exception():
@@ -147,6 +148,18 @@ class DataStreamAudioOutput(AudioOutput):
         # we want to avoid OOM & outdated speech?
         await asyncio.shield(self._start_atask)
 
+        # Callers must serialize capture calls, including awaiting their cancellation.
+        # Finish the interrupted playback before newer audio can be queued.
+        while self._clear_buffer_atask is not None and not self._clear_buffer_atask.done():
+            try:
+                await asyncio.shield(self._clear_buffer_atask)
+            except asyncio.CancelledError:
+                task = asyncio.create_task(self._finish_cancelled_capture(self._clear_buffer_atask))
+                self._clear_buffer_atask = task
+                self._tasks.add(task)
+                task.add_done_callback(self._tasks.discard)
+                raise
+
         await super().capture_frame(frame)
 
         if not self._stream_writer:
@@ -168,6 +181,13 @@ class DataStreamAudioOutput(AudioOutput):
         await self._stream_writer.write(bytes(frame.data))
         self._pushed_duration += frame.duration
 
+    async def _finish_cancelled_capture(self, clear_task: asyncio.Task[None]) -> None:
+        """Finish the zero-audio segment reserved by wrappers for a canceled capture."""
+        await asyncio.shield(clear_task)
+        self._dispatch_playback_finished(
+            _CaptureCancelledEvent(playback_position=0, interrupted=True)
+        )
+
     def flush(self) -> None:
         """Mark end of current audio segment"""
         super().flush()
@@ -182,10 +202,17 @@ class DataStreamAudioOutput(AudioOutput):
         self._stream_writer = None
 
     def clear_buffer(self) -> None:
-        if not self._started:
+        if not self._started or not self._pending_playback_count:
+            return
+        if self._clear_buffer_atask is not None and not self._clear_buffer_atask.done():
             return
 
-        task = asyncio.create_task(self._clear_buffer_task(self._pushed_duration))
+        task = asyncio.create_task(
+            self._clear_buffer_task(self._pushed_duration, self.captured_playout_segments)
+        )
+        # With no fallback, later captures must not wait for remote completion.
+        if self._clear_buffer_timeout is not None:
+            self._clear_buffer_atask = task
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -199,7 +226,7 @@ class DataStreamAudioOutput(AudioOutput):
             "disable `AgentSession.resume_false_interruption` if you are using an avatar plugin."
         )
 
-    async def _clear_buffer_task(self, pushed_duration: float) -> None:
+    async def _clear_buffer_task(self, pushed_duration: float, captured_segments: int) -> None:
         timeout = self._clear_buffer_timeout
         try:
             await self._room.local_participant.perform_rpc(
@@ -211,20 +238,18 @@ class DataStreamAudioOutput(AudioOutput):
             logger.error("failed to perform clear buffer rpc", exc_info=e)
             timeout = 0  # mark playout done immediately if clear buffer rpc fails
 
-        def _on_timeout() -> None:
+        if timeout is None or not self._pending_playback_count:
+            return
+
+        try:
+            await asyncio.wait_for(self.wait_for_playout(), timeout)
+        except asyncio.TimeoutError:
             logger.warning(
                 "didn't receive playback finished event after clear buffer, marking playout as done arbitrarily"
             )
-            self.on_playback_finished(playback_position=pushed_duration, interrupted=True)
-            self._reset_playback_count()
-
-        if self._clear_buffer_timeout_handler:
-            self._clear_buffer_timeout_handler.cancel()
-
-        if timeout is not None:
-            self._clear_buffer_timeout_handler = asyncio.get_event_loop().call_later(
-                timeout, _on_timeout
-            )
+            finished_segments = self.captured_playout_segments - self._pending_playback_count
+            for _ in range(captured_segments - finished_segments):
+                self.on_playback_finished(playback_position=pushed_duration, interrupted=True)
 
     def _handle_playback_finished(self, data: rtc.RpcInvocationData) -> str:
         if data.caller_identity != self._destination_identity:
@@ -241,10 +266,6 @@ class DataStreamAudioOutput(AudioOutput):
             "playback finished event received",
             extra={"caller_identity": data.caller_identity},
         )
-
-        if self._clear_buffer_timeout_handler:
-            self._clear_buffer_timeout_handler.cancel()
-            self._clear_buffer_timeout_handler = None
 
         event = PlaybackFinishedEvent(**json.loads(data.payload))
         self.on_playback_finished(

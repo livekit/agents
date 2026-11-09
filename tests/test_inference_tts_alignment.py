@@ -102,6 +102,38 @@ async def test_cartesia_inference_preserves_word_separators() -> None:
     ]
 
 
+async def test_model_switch_mid_stream_keeps_the_stream_dialect() -> None:
+    websocket = _FakeWebSocket(
+        [
+            {"type": "session.created", "session_id": "session-1"},
+            {
+                "type": "output_audio",
+                "audio": base64.b64encode(b"\0\0" * 2400).decode(),
+            },
+            {"type": "done"},
+        ]
+    )
+    tts = TTS(
+        model="fishaudio/s2.1-pro",
+        api_key="test-key",
+        api_secret="test-secret",
+        base_url="https://example.livekit.cloud",
+    )
+    tts._pool = _FakePool(websocket, session_id="inference_connection")  # type: ignore[assignment]
+    tts._set_expressive(True)
+
+    async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0)) as stream:
+        # drama-3 lowers differently; this stream still sends s2.1-pro
+        tts.update_options(model="fishaudio/drama-3")
+        stream.push_text('<expr type="expression" label="sad"/> Sorry about that.')
+        stream.end_input()
+        _ = [event async for event in stream]
+
+    packets = [packet for packet in websocket.sent if packet["type"] == "input_transcript"]
+    assert [packet["transcript"] for packet in packets] == ["[very sad] Sorry about that. "]
+    assert packets[0]["generation_config"]["model"] == "fishaudio/s2.1-pro"
+
+
 async def test_connection_retains_header_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
     websocket = _FakeWebSocket([])
 
@@ -133,3 +165,71 @@ async def test_connection_retains_header_session_id(monkeypatch: pytest.MonkeyPa
     assert http_session.headers[HEADER_SESSION_ID] == "inference_connection"
     assert connection.session_id == "inference_connection"
     assert connection.ws is websocket
+
+
+def test_assemblyai_inference_claims_aligned_transcript_by_default() -> None:
+    # word_boundaries is on by default on the service, and the gateway forwards
+    # WordBoundaries as output_alignment, so the capability is on unless the
+    # caller turns it off.
+    def capabilities(extra_kwargs: dict[str, Any] | None = None) -> bool:
+        kwargs: dict[str, Any] = {"extra_kwargs": extra_kwargs} if extra_kwargs is not None else {}
+        return TTS(
+            model="assemblyai/assemblyai-tts-1",
+            api_key="test-key",
+            api_secret="test-secret",
+            base_url="https://example.livekit.cloud",
+            **kwargs,
+        ).capabilities.aligned_transcript
+
+    assert capabilities() is True
+    assert capabilities({"word_timestamps": True}) is True
+    assert capabilities({"word_timestamps": False}) is False
+    assert capabilities({"word_timestamps": "no"}) is True
+
+
+async def test_assemblyai_inference_preserves_the_words_as_sent() -> None:
+    # The gateway re-anchors each word onto the turn and appends the separator
+    # the service omits, so the SDK passes them through verbatim rather than
+    # adding another space the way it does for cartesia.
+    websocket = _FakeWebSocket(
+        [
+            {"type": "session.created", "session_id": "session-1"},
+            {
+                "type": "output_audio",
+                "audio": base64.b64encode(b"\0\0" * 2400).decode(),
+            },
+            {
+                "type": "output_alignment",
+                "words": [
+                    {"word": "hello ", "start": 0.0, "end": 0.2},
+                    {"word": "world. ", "start": 0.2, "end": 0.5},
+                ],
+            },
+            {"type": "done"},
+        ]
+    )
+    tts = TTS(
+        model="assemblyai/assemblyai-tts-1",
+        api_key="test-key",
+        api_secret="test-secret",
+        base_url="https://example.livekit.cloud",
+        extra_kwargs={"word_timestamps": True},
+    )
+    tts._pool = _FakePool(websocket, session_id="inference_connection")  # type: ignore[assignment]
+
+    async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0)) as stream:
+        stream.push_text("hello world.")
+        stream.end_input()
+        events = [event async for event in stream]
+
+    timed_transcript = [
+        timed_text
+        for event in events
+        for timed_text in event.frame.userdata[USERDATA_TIMED_TRANSCRIPT]
+    ]
+
+    assert list(map(str, timed_transcript)) == ["hello ", "world. "]
+    assert [(word.start_time, word.end_time) for word in timed_transcript] == [
+        (0.0, 0.2),
+        (0.2, 0.5),
+    ]
