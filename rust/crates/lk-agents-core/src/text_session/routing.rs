@@ -75,10 +75,7 @@ impl TextSessionConfig {
         Ok(())
     }
 
-    pub(super) fn validate_state(
-        &self,
-        state: &TextSessionState,
-    ) -> Result<(), RoutingError> {
+    pub(super) fn validate_state(&self, state: &TextSessionState) -> Result<(), RoutingError> {
         let invalid = |reason: &str| RoutingError::InvalidState(reason.into());
         if state.session_id.is_empty() || state.execution_id.is_empty() {
             return Err(invalid("missing session or execution identity"));
