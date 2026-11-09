@@ -1089,3 +1089,27 @@ mod live_gateway {
         );
     }
 }
+
+// Catches: a reconnect opening with the options the stream started with, silently reverting
+// every `update_options` the previous connection was sent.
+#[tokio::test]
+async fn a_reconnect_opens_with_the_options_updated_so_far() {
+    let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "session.created"}))]).keep_open());
+    let stt = stt(ws.clone());
+    let (sink, _source) = stt.stream_native(None, 0.0).unwrap().split();
+    let sent = |ws: &FakeWs, kind: &str| {
+        ws.sent_json().into_iter().filter(|f| f["type"] == json!(kind)).collect::<Vec<_>>()
+    };
+    let mut extra = serde_json::Map::new();
+    extra.insert("endpointing".into(), json!(300));
+    stt.update_options(Some("deepgram/nova-2"), Some("fr"), Some(&extra));
+    sink.push(frame(800)).unwrap();
+    until("sent the update", || sent(&ws, "session.update").len() == 1).await;
+
+    ws.feed(Ok(WsMessage::Closed));
+    until("reconnected", || sent(&ws, "session.create").len() == 2).await;
+    let create = &sent(&ws, "session.create")[1];
+    assert_eq!(create["model"], json!("deepgram/nova-2"), "{create}");
+    assert_eq!(create["settings"]["language"], json!("fr"), "{create}");
+    assert_eq!(create["settings"]["extra"]["endpointing"], json!(300), "{create}");
+}

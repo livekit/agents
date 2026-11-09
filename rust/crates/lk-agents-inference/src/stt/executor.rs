@@ -11,7 +11,8 @@ pub(super) struct SttStreamExecutor {
     pub(super) ws: Arc<dyn WsTransport>,
     pub(super) identification: Option<Headers>,
     pub(super) clock: Arc<dyn Clock>,
-    pub(super) create_frame: serde_json::Value,
+    /// The session keyterms when the stream opened; later ones arrive merged into `extra`.
+    pub(super) keyterms: Vec<String>,
     pub(super) opts: SttOptions,
     pub(super) vad: Option<Arc<dyn crate::abi::Vad>>,
     /// Seconds added to every timestamp: the caller's, plus the time spent on failed attempts, so
@@ -110,8 +111,9 @@ impl SttStreamExecutor {
     /// One connection. `Ok` when the stream ended, the caller gone or the input finished.
     async fn attempt(&mut self) -> Result<(), ApiError> {
         let (headers, request_id) = self.connection_headers()?;
+        let (opts, create_frame) = self.current_options()?;
         let query = url::form_urlencoded::Serializer::new(String::new())
-            .append_pair("model", self.opts.model.as_deref().unwrap_or(""))
+            .append_pair("model", opts.model.as_deref().unwrap_or(""))
             .finish();
         let url = format!("{}?{query}", join_url(&to_ws_url(&self.opts.base_url), "stt"));
         // `_speech_duration`: written by send, read by recv.
@@ -119,7 +121,7 @@ impl SttStreamExecutor {
             0,
             lk_agents_abi::resources::ResourceId(0),
             request_id,
-            self.opts.language.as_deref(),
+            opts.language.as_deref(),
             FINALIZATION_TIMEOUT,
             self.opts
                 .conn_options
@@ -138,7 +140,7 @@ impl SttStreamExecutor {
             &*self.clock,
             &self.opts.conn_options,
             WHAT,
-            &self.create_frame,
+            &create_frame,
         )
         .await?;
         let acquire_time = self.clock.now().saturating_duration_since(acquiring).as_secs_f64();
@@ -235,6 +237,20 @@ impl SttStreamExecutor {
         outcome.map_err(|error| {
             if machine.lock().replay_safe() { error } else { error.with_retryable(false) }
         })
+    }
+
+    /// The options as updated so far, and the `session.create` that opens with them: a reconnect
+    /// must not revert an update the previous connection was sent.
+    fn current_options(&self) -> Result<(SttOptions, serde_json::Value), ApiError> {
+        let mut opts = self.opts.clone();
+        let live = self.deferred.options.lock();
+        opts.model.clone_from(&live.model);
+        opts.language.clone_from(&live.language);
+        opts.extra_kwargs.extend(live.extra.clone());
+        // Once an `extra` was sent, it carries the session keyterms as they are now.
+        let keyterms = if live.extra.is_empty() { &self.keyterms[..] } else { &[] };
+        let frame = wire::session_create(&opts, keyterms)?;
+        Ok((opts, frame))
     }
 
     /// Gateway headers and the client's request identity, independent of gateway correlation.
@@ -570,7 +586,8 @@ impl RecvCtx {
     fn send_deferred_update(&self) -> Result<(), ApiError> {
         let extra = self.deferred.pending.lock().take();
         if let Some(extra) = extra {
-            let options = self.deferred.options.lock();
+            let mut options = self.deferred.options.lock();
+            options.extra.extend(extra.clone());
             if let Some(frame) = wire::session_update(
                 options.model.as_deref().unwrap_or(""),
                 options.language.as_deref(),

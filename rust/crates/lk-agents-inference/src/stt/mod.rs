@@ -370,6 +370,8 @@ impl GatewayStt {
             .validate()
             .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
         let keyterms = self.shared.session_keyterms.lock().clone();
+        // Checked now, so bad options fail the call rather than the first connect.
+        wire::session_create(&opts, &keyterms)?;
 
         let (audio, audio_rx) = AudioInput::new(self.shared.clock.clone());
         let (event_tx, event_rx) = mpsc::channel::<Result<SpeechEvent, ApiError>>(STREAM_QUEUE);
@@ -386,6 +388,7 @@ impl GatewayStt {
                 options: Mutex::new(stream::LiveOptions {
                     model: opts.model.clone(),
                     language: opts.language.clone(),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }),
@@ -396,7 +399,7 @@ impl GatewayStt {
             ws: self.shared.ws.clone(),
             identification: self.identity.for_connection(),
             clock: self.shared.clock.clone(),
-            create_frame: wire::session_create(&opts, &keyterms)?,
+            keyterms,
             vad: self.shared.vad.lock().clone(),
             offset: start_time_offset,
             opts,

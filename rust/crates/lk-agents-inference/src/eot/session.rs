@@ -212,6 +212,12 @@ impl EotSession {
         actions
     }
 
+    /// The driver stopped, however it ended: answer the pending prediction and every later one.
+    pub fn driver_stopped(&mut self, now: f64) -> Vec<EotAction> {
+        self.closed = true;
+        self.emit_default_for_inflight(now)
+    }
+
     /// A refused admission starts no transport. Default this prediction and let the next one
     /// request construction again.
     pub fn construction_refused(&mut self, now: f64, reason: &str) -> Vec<EotAction> {

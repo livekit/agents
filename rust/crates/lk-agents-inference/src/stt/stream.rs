@@ -13,6 +13,8 @@ pub(super) struct DeferredExtra {
 pub(super) struct LiveOptions {
     pub(super) model: Option<String>,
     pub(super) language: Option<String>,
+    /// Every `extra` sent so far, merged: a reconnect opens with it.
+    pub(super) extra: serde_json::Map<String, serde_json::Value>,
 }
 
 pub struct RecognitionInput {
@@ -49,6 +51,9 @@ impl StreamControl {
             }
             if let Some(language) = language {
                 options.language = Some(language.to_owned());
+            }
+            if let Some(extra) = extra {
+                options.extra.extend(extra.clone());
             }
             wire::session_update(
                 options.model.as_deref().unwrap_or(""),

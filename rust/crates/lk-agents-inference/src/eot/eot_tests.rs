@@ -959,3 +959,82 @@ async fn a_local_prediction_waits_for_a_media_pool_slot() {
     within("the local transport", running).await.unwrap().unwrap();
     assert_eq!(sink.resolves.lock()[0].1.probability, 0.9);
 }
+
+/// The local model's transport: answers the first request from inside `run`, then its run ends,
+/// with an error or a panic.
+struct EndingTransport {
+    listener: Arc<dyn PredictionListener>,
+    requested: tokio::sync::watch::Sender<Option<String>>,
+    panics: bool,
+}
+
+#[async_trait]
+impl EotTransport for EndingTransport {
+    fn session_id(&self) -> Option<String> {
+        None
+    }
+
+    fn run_inference(&self, request_id: &EotRequestId) {
+        self.requested.send_replace(Some(request_id.as_str().to_owned()));
+    }
+
+    fn push_frame(&self, _frame: &lk_agents_abi::AudioFrame) {}
+
+    fn flush(&self) {}
+
+    fn end_input(&self) {}
+
+    fn detach(&self) {}
+
+    async fn run(&self) -> Result<(), lk_agents_abi::errors::ApiError> {
+        let mut requested = self.requested.subscribe();
+        let id = requested.wait_for(Option::is_some).await.unwrap().clone().unwrap();
+        assert!(!self.panics, "the local model crashed");
+        let prediction = TransportPrediction {
+            probability: 0.25,
+            detection_delay: None,
+            inference_duration: None,
+            backchannel_probability: None,
+        };
+        self.listener.resolve(&id, prediction);
+        Err(lk_agents_abi::errors::ApiError::new("the local model died"))
+    }
+}
+
+fn ending_stream(panics: bool) -> crate::eot::DetectorStream {
+    let model = TurnDetectorModel::V1Mini;
+    let thresholds = Arc::new(Mutex::new(ThresholdOptions::new(model, None, None)));
+    let session = EotSession::new(model, Arc::clone(&thresholds), false);
+    let make: crate::eot::TransportFactory = Arc::new(move |_| {
+        crate::eot::MountedTransport::mount("mini", Arc::clone(&thresholds), |listener| {
+            let requested = tokio::sync::watch::channel(None).0;
+            Arc::new(EndingTransport { listener, requested, panics })
+        })
+    });
+    let spawner = lk_agents_net::task::TokioSpawner::current();
+    crate::eot::EotStream::open(session, 16_000, make, test_pool(), None, &spawner)
+}
+
+// Catches: a prediction reported just before the transport's run ended being dropped, and a
+// stopped run loop leaving every later prediction waiting forever.
+#[tokio::test]
+async fn a_transport_that_ends_answers_its_last_request_and_every_later_one() {
+    use lk_agents_abi::EotDetector as _;
+    let stream = ending_stream(false);
+    let cx = crate::telemetry::Cx::NONE;
+    let reported = within("the reported prediction", stream.predict(&cx, None)).await.unwrap();
+    assert_eq!(reported.end_of_turn_probability, 0.25);
+    let later = within("a prediction after the run", stream.predict(&cx, None)).await.unwrap();
+    assert_eq!(later.end_of_turn_probability, 1.0);
+}
+
+// Catches: a pending prediction and `aclose` waiting forever on a run loop that panicked.
+#[tokio::test]
+async fn a_run_loop_that_panics_settles_the_pending_prediction_and_close() {
+    use lk_agents_abi::EotDetector as _;
+    let stream = ending_stream(true);
+    let cx = crate::telemetry::Cx::NONE;
+    let pending = within("the pending prediction", stream.predict(&cx, None)).await.unwrap();
+    assert_eq!(pending.end_of_turn_probability, 1.0);
+    within("close", stream.aclose(&cx)).await;
+}

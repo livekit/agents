@@ -77,7 +77,8 @@ pub struct EotStream {
     on_metrics: Option<MetricsCallback>,
     /// A swap or prediction wakes a driver whose local construction was refused.
     swaps: watch::Sender<u64>,
-    settled: watch::Sender<bool>,
+    /// Cancelled once the run loop is gone, a panic or an abort included.
+    settled: tokio_util::sync::CancellationToken,
     id: ProviderId,
     /// The stream's run, which holds the stream until it ends: it outlives a close while model
     /// construction is still settling.
@@ -117,15 +118,15 @@ impl EotStream {
             media_pool,
             on_metrics,
             swaps: watch::channel(0).0,
-            settled: watch::channel(false).0,
+            settled: tokio_util::sync::CancellationToken::new(),
             id,
             runner: std::sync::OnceLock::new(),
         });
-        let owner = Arc::clone(&stream);
-        let settled = stream.settled.clone();
+        let stopped =
+            Stopped { stream: Arc::clone(&stream), _settled: stream.settled.clone().drop_guard() };
         let run = async move {
-            owner.run().await;
-            settled.send_replace(true);
+            stopped.stream.run().await;
+            drop(stopped);
         };
         let _ = stream.runner.set(lk_agents_abi::SpawnerExt::spawn(spawner, run));
         DetectorStream(stream)
@@ -230,7 +231,7 @@ impl EotStream {
     }
 
     /// `_run`: the mounted transport for its lifetime, remounted after a swap.
-    async fn run(self: Arc<Self>) {
+    async fn run(&self) {
         let mut swaps = self.swaps.subscribe();
         loop {
             swaps.borrow_and_update();
@@ -347,10 +348,17 @@ impl EotStream {
             std::future::pending::<()>().await
         };
         let outcome = tokio::select! {
-            r = shell.run() => Some(r),
-            _ = swaps.changed() => None,
+            biased;
             () = events => None,
+            _ = swaps.changed() => None,
+            r = shell.run() => Some(r),
         };
+        if outcome.is_some() {
+            // `run` ended the shell: what it reported before `End` still resolves its requests.
+            while let Some(ev) = shell.next_event().await {
+                self.on_event(&shell, ev);
+            }
+        }
         match outcome {
             // swapped: remount
             None => {
@@ -378,6 +386,22 @@ impl EotStream {
         Self::warn(warnings);
         shell.detach();
         if replaced { Next::Remount } else { Next::Stop }
+    }
+}
+
+/// Owned by the run loop: however it ends, the session stops waiting on it, then `aclose` wakes.
+struct Stopped {
+    stream: Arc<EotStream>,
+    _settled: tokio_util::sync::DropGuard,
+}
+
+impl Drop for Stopped {
+    fn drop(&mut self) {
+        let mut inner = self.stream.lock();
+        let actions = inner.session.driver_stopped(now());
+        let warnings = self.stream.apply(&mut inner, actions);
+        drop(inner);
+        EotStream::warn(warnings);
     }
 }
 
@@ -550,9 +574,6 @@ impl lk_agents_abi::EotDetector for DetectorStream {
             shell.detach();
         }
         lk_agents_abi::EotDetector::cancel_inference(self, false);
-        let mut settled = self.0.settled.subscribe();
-        Box::pin(async move {
-            let _ = settled.wait_for(|done| *done).await;
-        })
+        Box::pin(self.0.settled.cancelled())
     }
 }
