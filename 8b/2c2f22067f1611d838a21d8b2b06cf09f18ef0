@@ -1,0 +1,22 @@
+.oss-scanner/Dockerfile
+  s_e9db7b3f3c8f20::t_d45cdc6f604bde 27-28,44-51
+.oss-scanner/threat_model.md
+  s_e9db7b3f3c8f20::t_1249225fd29703 131-132
+  s_e9db7b3f3c8f20::t_d45cdc6f604bde 27-28,96-102,123-124,140-141,152-154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8b2c2f22067f1611d838a21d8b2b06cf09f18ef0",
+  "prompts": {},
+  "sessions": {
+    "s_e9db7b3f3c8f20": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1a75e-1fcb-7af0-81b6-8b0fac5927b6",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
