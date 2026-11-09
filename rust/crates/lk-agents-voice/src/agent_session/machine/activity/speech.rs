@@ -608,12 +608,21 @@ impl VoiceDriver {
         }
         // The user item is added after the announcement, never for a refused speech. A
         // preemptive generation commits it only on adoption.
-        if let (Some(user), true) = (spec.new_message, admitted && kind.scheduled()) {
-            let source = match spec.turn {
-                Some(turn) => Source::UserTurn { turn },
-                None => Source::UserInput { speech: id },
-            };
-            self.commit_item(ChatItem::Message(user), source, Visibility::Both);
+        match (spec.new_message, admitted && kind.scheduled()) {
+            (Some(user), true) => {
+                let source = match spec.turn {
+                    Some(turn) => Source::UserTurn { turn },
+                    None => Source::UserInput { speech: id },
+                };
+                self.commit_item(ChatItem::Message(user), source, Visibility::Both);
+            }
+            // A refused reply adds no user item: a released user turn waiting for it ends.
+            (Some(_), false) => {
+                if let Some(turn) = spec.turn {
+                    self.user_turn_dropped(turn);
+                }
+            }
+            (None, _) => {}
         }
         // `thinking` only for an admitted reply: `say()` goes straight to `speaking`.
         if admitted && is_reply && kind.scheduled() && !past_edge {

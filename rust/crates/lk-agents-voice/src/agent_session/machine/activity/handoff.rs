@@ -293,6 +293,7 @@ impl VoiceDriver {
             Some(HeldUserTurn { info: earlier, edits: earlier_edits }) => {
                 // The merged park is the undecided turn; the fresh park's id stays.
                 if edits.is_some() && earlier_edits.is_none() {
+                    self.user_turn_renamed(info.turn_id, earlier.turn_id);
                     info.turn_id = earlier.turn_id;
                 }
                 let mut words = earlier.new_transcript.trim().to_owned();

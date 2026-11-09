@@ -514,7 +514,7 @@ impl VoiceDriver {
                 Timer::Commit => self.perform_pending_commit(now),
                 Timer::UserTurnEnd => self.user_turn_end_timed_out(now),
                 Timer::UserTurnTail => {
-                    self.route_user_turn(crate::data_plane::AudioInputRouterCommand::EndTail)
+                    self.route_audio(crate::data_plane::AudioInputRouterCommand::EndTail)
                 }
                 Timer::Hook(id) => self.hook_timed_out(now, id),
                 // `PausedSpeech` owns this one.

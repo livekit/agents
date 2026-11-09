@@ -246,7 +246,8 @@ until the open one's `end()` resolved or it was cancelled. A handoff keeps the
 turn, and the agent active at `end()` answers it. Reaching `user_turn_limit` ends
 an open turn as a release would. The session's close cancels an open turn, and a
 pending `end()` raises. `user_turn_started` and `user_turn_ended` (`cancelled`,
-`empty`) are emitted for each turn.
+`empty`) are emitted for each turn; once the session ended a turn itself (the turn limit,
+`push_to_talk` turned off), that turn's `end()` raises `RuntimeError`.
 
 `turn_handling={"push_to_talk": True}` makes these the only turns: outside a turn
 the microphone reaches no recogniser, no voice activity detection and no

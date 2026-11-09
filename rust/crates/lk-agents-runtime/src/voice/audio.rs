@@ -107,6 +107,8 @@ pub fn spawn_drain<T: Into<crate::voice::VoiceRuntimeEvent> + Send + 'static>(
         if cause == ChannelEndCause::Aborted {
             abort.resources.release(sink);
         }
+        // Done: the session prunes the abort of a drain that finished.
+        abort.token.cancel();
         let leg = channel.leg();
         let _ =
             queue.send(ChannelEnd { leg, cause, sink: Some(sink), closed: Some(closed), error });

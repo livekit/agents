@@ -246,3 +246,30 @@ fn a_muted_release_ends_its_tail_on_time() {
     let run = played(&push_to_talk(), inputs);
     assert_eq!(ends(&run).first().and_then(ok_message).as_deref(), Some("two coffees please"));
 }
+
+// Catches: a turn started from code without push-to-talk reusing the listening stream, whose
+// final for words said before the press then joined the turn.
+#[test]
+fn a_turn_from_code_hears_nothing_said_before_it() {
+    let setup = Setup { stt: true, turn: TurnMode::Manual, ..Setup::default() };
+    let inputs = vec![
+        Input::SttStart { stt: Ref::new(0) },
+        Input::StartUserTurn {},
+        wait(50),
+        Input::SttFinal {
+            utterance: Ref::new(0),
+            text: UserText("earlier words".into()),
+            speaker: None,
+        },
+        Input::SttEnd { utterance: Ref::new(0) },
+        mic(20),
+        Input::SttStart { stt: Ref::new(1) },
+        Input::SttFinal { utterance: Ref::new(1), text: UserText("book it".into()), speaker: None },
+        Input::EndUserTurn { reply: false },
+        mic(30),
+        Input::SttEnd { utterance: Ref::new(1) },
+        wait(500),
+    ];
+    let run = played(&setup, inputs);
+    assert_eq!(ends(&run).first().and_then(ok_message).as_deref(), Some("book it"));
+}

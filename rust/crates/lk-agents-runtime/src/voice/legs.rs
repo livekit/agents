@@ -289,6 +289,7 @@ impl VoiceRuntime {
     pub(super) fn drain(&mut self, channel: AudioChannel, sink: ResourceId, stream: PendingLeg) {
         let shared = &self.shared;
         let token = shared.closing.child_token();
+        self.drains.retain(|_, abort| !abort.is_cancelled());
         self.drains.insert(sink, token.clone());
         let abort = super::audio::Abort { token, resources: shared.resources.clone() };
         let (time, ends) = (shared.time.clone(), (shared.closing.clone(), abort));

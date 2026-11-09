@@ -67,11 +67,7 @@ impl VoiceDriver {
         self.session.config.effective().turn.push_to_talk()
     }
 
-    pub(crate) fn route_user_turn(&mut self, command: AudioInputRouterCommand) {
-        self.route(command);
-    }
-
-    fn route(&mut self, command: AudioInputRouterCommand) {
+    pub(crate) fn route_audio(&mut self, command: AudioInputRouterCommand) {
         self.record_effect(VoiceEffect::UpdateAudioInputRouting(command));
     }
 
@@ -97,7 +93,7 @@ impl VoiceDriver {
         if !on && let Some(id) = self.session.user_turns.open.as_ref().map(|turn| turn.id) {
             self.end_user_turn(now, id, true, None);
         }
-        self.route(AudioInputRouterCommand::SetPushToTalk(on));
+        self.route_audio(AudioInputRouterCommand::SetPushToTalk(on));
         self.sync_turn_mode(now);
     }
 
@@ -109,9 +105,18 @@ impl VoiceDriver {
         // Words heard before the press belong to no turn.
         let eff = self.activity.audio_recognition.reset_user_turn(now);
         self.apply_recognition_effects(eff);
+        // A stream that listened before the press may still be finishing words said before it:
+        // the turn gets a fresh one, and its first audio waits for it. Under push-to-talk the
+        // stream heard nothing outside a turn.
+        if !self.push_to_talk()
+            && let Some(heard) = self.input.live_stt.take()
+        {
+            self.input.sinks.remove(&AudioChannel::Stt);
+            self.route_audio(AudioInputRouterCommand::Remove(heard));
+        }
         self.session.user_turns.open = Some(OpenTurn { id, ending: None });
         self.sync_turn_mode(now);
-        self.route(AudioInputRouterCommand::StartTurn);
+        self.route_audio(AudioInputRouterCommand::StartTurn);
         self.claim_user_turn(now);
         if self.input.live_stt.is_none() {
             self.reopen_stt();
@@ -134,7 +139,7 @@ impl VoiceDriver {
             self.input.sinks.remove(&AudioChannel::Stt);
         }
         turn.ending = Some(Ending { stream, reply, call, decided: None });
-        self.route(AudioInputRouterCommand::EndTurn);
+        self.route_audio(AudioInputRouterCommand::EndTurn);
         self.release_user_turn(now);
         self.record_trace(TurnStep::UserTurnReleased { turn: id, reply });
         if stream.is_none() {
@@ -151,7 +156,7 @@ impl VoiceDriver {
             return;
         }
         self.session.user_turns.open = None;
-        self.route(AudioInputRouterCommand::CancelTurn);
+        self.route_audio(AudioInputRouterCommand::CancelTurn);
         if self.input.live_stt.take().is_some() {
             self.input.sinks.remove(&AudioChannel::Stt);
         }
@@ -170,13 +175,13 @@ impl VoiceDriver {
         self.clear_deadline_if_set(Timer::UserTurnTail);
         match turn.ending {
             None => {
-                self.route(AudioInputRouterCommand::CancelTurn);
+                self.route_audio(AudioInputRouterCommand::CancelTurn);
                 self.drop_user_turn_words(now);
                 self.release_user_turn(now);
             }
             Some(ending) => {
                 if let Some(stream) = ending.stream {
-                    self.route(AudioInputRouterCommand::Abort(stream));
+                    self.route_audio(AudioInputRouterCommand::Abort(stream));
                 }
                 self.answer(ending.call, Answer::UserTurn(Box::new(Err(UserTurnFailed::Closed))));
             }
@@ -211,7 +216,7 @@ impl VoiceDriver {
         let Some(stream) = self.ending_mut().and_then(|ending| ending.stream.take()) else {
             return;
         };
-        self.route(AudioInputRouterCommand::Abort(stream));
+        self.route_audio(AudioInputRouterCommand::Abort(stream));
         self.publish_event(SessionEvent::Diagnostic(crate::events::DiagnosticEvent::warning(
             crate::events::diagnostics::USER_TURN_END_TIMEOUT,
         )));
@@ -233,6 +238,13 @@ impl VoiceDriver {
         }
     }
 
+    /// The recogniser's turn `from` was merged into `to`, which now carries its words.
+    pub(crate) fn user_turn_renamed(&mut self, from: TurnId, to: TurnId) {
+        if let Some(ending) = self.ending_mut().filter(|ending| ending.decided == Some(from)) {
+            ending.decided = Some(to);
+        }
+    }
+
     fn ending_mut(&mut self) -> Option<&mut Ending> {
         self.session.user_turns.open.as_mut()?.ending.as_mut()
     }
@@ -246,7 +258,7 @@ impl VoiceDriver {
         if let Some(turn) = &mut self.activity.user_turn {
             turn.retriggered(&mut self.telemetry, released);
         }
-        let (decided, eff) = self.activity.audio_recognition.release_user_turn(now, !reply);
+        let (decided, eff) = self.activity.audio_recognition.commit_release(now, !reply);
         match decided {
             // Named before the effects run: the message may be added within them.
             Some(turn) => {

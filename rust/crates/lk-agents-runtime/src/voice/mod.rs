@@ -66,7 +66,7 @@ pub struct VoiceRuntime {
     forwarder: AudioInputRouter,
     /// One refused-audio warning per active stream, retired when that input ends.
     push_warned: std::collections::BTreeSet<ResourceId>,
-    /// Each drained stream's abort, until its input ends or it is aborted.
+    /// Each drained stream's abort, until it is aborted or its drain finished (cancelled then).
     drains: std::collections::BTreeMap<ResourceId, tokio_util::sync::CancellationToken>,
     recorder_observers: recorder::RecorderOutputs,
 
@@ -657,14 +657,13 @@ impl VoiceRuntime {
                 }
                 AudioInputRouterEffect::AbortInput(sink) => {
                     self.push_warned.remove(&sink);
-                    // The drain closes the stream, then releases the sink.
+                    // A running drain closes the stream, then releases the sink.
                     match self.drains.remove(&sink) {
-                        Some(abort) => abort.cancel(),
-                        None => resources.release(sink),
+                        Some(abort) if !abort.is_cancelled() => abort.cancel(),
+                        _ => resources.release(sink),
                     }
                 }
                 AudioInputRouterEffect::EndInput(sink) => {
-                    self.drains.remove(&sink);
                     self.push_warned.remove(&sink);
                     if let Some(stream) = resources.audio_sink(sink) {
                         stream.end_input();

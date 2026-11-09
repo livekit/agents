@@ -288,10 +288,10 @@ impl AudioRecognition {
         eff
     }
 
-    /// A user turn released: its words commit now, with no endpointing delay. `None`: nothing
+    /// A released user turn: its words commit now, with no endpointing delay. `None`: nothing
     /// was said, and the turn is dropped with nothing committed.
     #[must_use = "recognition effects must be applied before the next transition"]
-    pub fn release_user_turn(
+    pub fn commit_release(
         &mut self,
         now: Ts,
         skip_reply: bool,
