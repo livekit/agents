@@ -202,6 +202,7 @@ mod tests {
                 max_retries: 3,
             },
             user_turn_limit: o::ResolvedUserTurnLimit { max_words: None, max_duration: None },
+            push_to_talk: false,
             turn_detection_mode: None,
             endpointing_overrides: o::EndpointingOverrides::default(),
             max_tool_steps: 3,
