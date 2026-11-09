@@ -92,13 +92,12 @@ class InferenceProcExecutor(SupervisedProc):
                 self._pch,
                 proto.InferenceRequest(request_id=request_id, method=method, data=data),
             )
-        except Exception:
+            inf_resp = await fut
+        finally:
+            self._active_requests.pop(request_id, None)
             if not fut.done():
                 fut.cancel()
-            self._active_requests.pop(request_id, None)
-            raise
 
-        inf_resp = await fut
         if inf_resp.error:
             raise RuntimeError(f"inference of {method} failed: {inf_resp.error}")
 

@@ -33,5 +33,9 @@ class _InferenceRunner(ABC, _RunnerMeta):
 
     @abstractmethod
     def run(self, data: bytes) -> bytes | None:
-        """Run inference on the given data."""
+        """Run inference on the given data.
+
+        Requests from different jobs may run concurrently on the shared inference
+        thread pool, so runner implementations must be thread-safe.
+        """
         ...

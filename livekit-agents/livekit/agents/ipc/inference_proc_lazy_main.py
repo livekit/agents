@@ -82,16 +82,26 @@ class _InferenceProc:
 
     @log_exceptions(logger=logger)
     async def entrypoint(self, cch: aio.ChanReceiver[Message]) -> None:
-        async for msg in cch:
-            if isinstance(msg, proto.InferenceRequest):
-                await self._handle_inference_request(msg)
+        inference_tasks: set[asyncio.Task[None]] = set()
+        try:
+            async for msg in cch:
+                if isinstance(msg, proto.InferenceRequest):
+                    task = asyncio.create_task(self._handle_inference_request(msg))
+                    inference_tasks.add(task)
+                    task.add_done_callback(inference_tasks.discard)
 
-            if isinstance(msg, proto.ShutdownRequest):
-                await self._client.send(proto.Exiting(reason=msg.reason))
-                break
+                if isinstance(msg, proto.ShutdownRequest):
+                    # Responses are correlated by request ID, so completed inferences may
+                    # finish out of order. Drain everything accepted before shutting down.
+                    if inference_tasks:
+                        await asyncio.gather(*inference_tasks)
+                    await self._client.send(proto.Exiting(reason=msg.reason))
+                    break
 
-            if isinstance(msg, proto.DumpStackTraceRequest):
-                _dump_stack_traces_impl()
+                if isinstance(msg, proto.DumpStackTraceRequest):
+                    _dump_stack_traces_impl()
+        finally:
+            await aio.cancel_and_wait(*inference_tasks)
 
     async def _handle_inference_request(self, msg: proto.InferenceRequest) -> None:
         loop = asyncio.get_running_loop()
