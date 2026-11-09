@@ -1,6 +1,10 @@
-# Shared purity policy for ABI, core, voice and media.
-# Selected explicitly with CLIPPY_CONF_DIR by architecture/check.py and its compiler fixtures.
-# Other packages are outside this policy; see architecture/README.md.
+# The purity policy for ABI, core, voice and media: decisions consume supplied data and time.
+
+# Tests may unwrap, print and debug (AGENTS.md "Idiomatic Rust").
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
 
 disallowed-methods = [
   { path = "tokio::runtime::Handle::spawn", reason = "Execute tasks and retain synchronization only in runtime." },
@@ -17,7 +21,6 @@ disallowed-methods = [
   { path = "rand::random_iter", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "rand::random_bool", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "rand::random_ratio", reason = "Supply deterministic inputs; keep live resources in runtime." },
-  { path = "rand::make_rng", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "rand::Rng::sample", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "rand::Rng::sample_iter", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "rand::Rng::fill", reason = "Supply deterministic inputs; keep live resources in runtime." },
@@ -27,9 +30,7 @@ disallowed-methods = [
   { path = "rand_core::TryRngCore::try_next_u64", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "rand_core::TryRngCore::try_fill_bytes", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "rand::SeedableRng::from_os_rng", reason = "Supply deterministic inputs; keep live resources in runtime." },
-  { path = "rand::SeedableRng::from_entropy", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "rand_core::SeedableRng::from_os_rng", reason = "Supply deterministic inputs; keep live resources in runtime." },
-  { path = "rand_core::SeedableRng::from_entropy", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "std::thread::Scope::spawn", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "std::time::Instant::elapsed", reason = "Supply deterministic inputs; keep live resources in runtime." },
   { path = "std::time::SystemTime::elapsed", reason = "Supply deterministic inputs; keep live resources in runtime." },

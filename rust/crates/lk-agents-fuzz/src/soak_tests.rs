@@ -1,6 +1,13 @@
 //! Long conversations: leaks only visible at turn fifty, read as the live residue at each close.
 //! Sized by `VOICE_SOAK_SEEDS` and `VOICE_SOAK_BUDGET` (default eight callers of ~40 turns).
 //! A call that never reaches its close, or an unknown finding, fails the soak by seed.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "the DST harness: a broken fake is a test failure, and runs report to stdout"
+)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use lk_agents_fuzz::{

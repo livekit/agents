@@ -20,23 +20,8 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 # The attribute reader: one parse of the language, shared with the expansions.
 lk-agents-bindgen = { path = "../lk-agents-bindgen" }
 
-[[example]]
-name = "architecture-fixtures"
-path = "../../architecture/fixtures.rs"
-
-[[example]]
-name = "io-fixtures"
-path = "../../architecture/io/fixtures.rs"
-
 [dev-dependencies]
-# The I/O policy's fixtures name Tokio's blocking-pool entries.
-tokio = { workspace = true, features = ["fs", "net", "io-std", "rt-multi-thread"] }
-tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
-futures = "0.3"
-rand = "0.9"
 uuid = { version = "1", features = ["v4"] }
-crossbeam-channel = "0.5"
-parking_lot = "0.12"
-# The purity policy's fixtures name the recording crate's scoped-span API.
-lk-agents-abi = { path = "../../crates/lk-agents-abi" }
-lk-agents-telemetry = { path = "../../crates/lk-agents-telemetry" }
+
+[lints]
+workspace = true

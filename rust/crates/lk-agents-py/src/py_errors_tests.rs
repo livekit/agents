@@ -1,5 +1,7 @@
 //! Captured exception lifetimes in an interpreter isolated from callback tests.
 
+#![allow(clippy::unwrap_used, reason = "integration test")]
+
 use _core::py_calls;
 
 #[path = "py_test_support.rs"]

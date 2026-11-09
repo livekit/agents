@@ -457,21 +457,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-channel"
-version = "0.5.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.8.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
-
-[[package]]
 name = "crypto-common"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1576,6 +1561,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lk-agents-check"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "lk-agents-cli"
 version = "0.1.0"
 dependencies = [
@@ -1599,19 +1594,11 @@ dependencies = [
 name = "lk-agents-codegen"
 version = "0.1.0"
 dependencies = [
- "crossbeam-channel",
- "futures",
- "lk-agents-abi",
  "lk-agents-bindgen",
- "lk-agents-telemetry",
- "parking_lot",
  "proc-macro2",
  "quote",
- "rand 0.9.5",
  "serde_json",
  "syn 2.0.119",
- "tokio",
- "tokio-tungstenite 0.30.0",
  "uuid",
 ]
 
@@ -1754,6 +1741,7 @@ dependencies = [
  "indexmap",
  "inventory",
  "lk-agents-abi",
+ "lk-agents-host-derive",
  "lk-agents-runtime",
  "log",
  "parking_lot",

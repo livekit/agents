@@ -6,7 +6,8 @@
     clippy::disallowed_methods,
     clippy::disallowed_types,
     clippy::disallowed_macros,
-    reason = "Build tooling reads native configuration; core purity applies to product code."
+    clippy::print_stdout,
+    reason = "a build script reads native configuration and talks to Cargo through stdout"
 )]
 
 mod blingfire;
@@ -101,7 +102,9 @@ const CONFIGURE: &[&str] = &[
 ];
 
 fn build_vendored() -> std::path::PathBuf {
-    let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let manifest = std::path::PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"),
+    );
     let pin =
         std::fs::read_to_string(manifest.join("vendor/ffmpeg.pin")).expect("vendor/ffmpeg.pin");
     let version = pin

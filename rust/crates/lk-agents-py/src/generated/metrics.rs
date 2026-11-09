@@ -5,8 +5,7 @@
 //!
 //! The `metrics` classes.
 
-// A host signature takes the parameters it declares.
-#![allow(clippy::too_many_arguments)]
+#![allow(clippy::too_many_arguments, reason = "a host signature takes the parameters it declares")]
 
 use pyo3::prelude::*;
 

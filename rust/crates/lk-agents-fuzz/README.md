@@ -92,8 +92,7 @@ subject kind. A campaign passing its gate can still contain known violations. Ke
 baseline shrinking; turn fixes into production regressions.
 
 The [launch gate](launch-gate.sh) runs a much broader suite than a local seed or small campaign.
-It needs the repository environment and cargo-nextest. The [known-bug benchmark](bench/known_bugs.sh)
-compares search policies against reverted fixes in a copied tree.
+It needs the repository environment and cargo-nextest.
 
 For design detail, read [TEST_STRATEGY.md](../lk-agents-voice/TEST_STRATEGY.md).
 [COVERAGE.md](COVERAGE.md) contains dated measurements, not a live capability inventory.

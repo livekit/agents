@@ -16,49 +16,6 @@ use record::{check_default, record_entry, record_target, unit_enum};
 // A named type is found through the crate's modules and `use`s, aliases expanded with their
 // generic arguments, and classified by its declaration; anything else fails naming it.
 
-/// The declarations that still cross as a tuple, by diagnostic location. It only shrinks: a row
-/// no declaration meets is stale.
-const TUPLE_BASELINE: &str = include_str!("../../../tuple-baseline.json");
-
-/// The baselined tuple declarations met by this run.
-static TUPLES_MET: std::sync::Mutex<std::collections::BTreeSet<String>> =
-    std::sync::Mutex::new(std::collections::BTreeSet::new());
-
-fn tuple_baseline() -> std::collections::BTreeSet<&'static str> {
-    TUPLE_BASELINE
-        .lines()
-        .filter_map(|l| l.trim().trim_end_matches(',').strip_prefix('"')?.strip_suffix('"'))
-        .collect()
-}
-
-#[cfg(test)]
-thread_local! {
-    /// A test exercising the tuple conversions the baselined declarations still use.
-    pub(crate) static TUPLES_IN_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-fn tuple_baselined(at: &str) -> bool {
-    #[cfg(test)]
-    if TUPLES_IN_TEST.get() {
-        return true;
-    }
-    let baselined = tuple_baseline().contains(at);
-    if baselined {
-        TUPLES_MET.lock().expect("unpoisoned").insert(at.to_owned());
-    }
-    baselined
-}
-
-/// After the ABI resolved: every tuple baseline row still names a tuple declaration.
-pub fn check_tuple_baseline() -> Result<(), String> {
-    let met = TUPLES_MET.lock().expect("unpoisoned");
-    let stale: Vec<_> = tuple_baseline().into_iter().filter(|row| !met.contains(*row)).collect();
-    match stale.is_empty() {
-        true => Ok(()),
-        false => Err(format!("stale tuple-baseline.json rows:\n{}", stale.join("\n"))),
-    }
-}
-
 /// Every `#[host(class)]` of the crate, in module order.
 pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
     let mut out = Declarations::default();
@@ -760,10 +717,20 @@ impl Resolver<'_> {
         };
         match shape {
             Shape::Tuple(items) if items.is_empty() => Ok(Ty::Unit),
-            Shape::Tuple(_) if !tuple_baselined(at) => Err(format!(
-                "{at}: no tuple crosses the boundary: a value with more than one field is a #[host(record)]"
-            )),
-            Shape::Tuple(items) => Ok(Ty::Tuple(items.iter().map(|item| self.classify(item, at)).collect::<Result<_, _>>()?)),
+            Shape::Tuple(items) => {
+                let items = items.iter().map(|item| self.classify(item, at)).collect::<Result<Vec<_>, _>>()?;
+                let scalar = |t: &Ty| match t {
+                    Ty::Str | Ty::Float | Ty::Int(_) => true,
+                    Ty::List(byte) => **byte == Ty::Int(Int::U8),
+                    _ => false,
+                };
+                match items.len() == 2 && items.iter().all(scalar) {
+                    true => Ok(Ty::Tuple(items)),
+                    false => Err(format!(
+                        "{at}: only a pair of strings, bytes or numbers crosses as a tuple: declare a #[host(record)]"
+                    )),
+                }
+            }
             Shape::Named { found: Found::Item { module, item }, args }
                 if let Some(duplex) = self.declared_duplex(*module, *item, args, at)? => Ok(duplex),
             Shape::SelfType => Ok(Ty::This),
@@ -1153,10 +1120,6 @@ fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
         syn::Item::Const(i) => &i.attrs,
         _ => &[],
     }
-}
-
-pub(crate) fn derives_host(attrs: &[syn::Attribute]) -> bool {
-    derives(attrs, "Host")
 }
 
 pub(crate) fn derives(attrs: &[syn::Attribute], name: &str) -> bool {

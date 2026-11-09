@@ -419,7 +419,7 @@ impl Iterator for ProjectionItems {
             Self::Context { items, .. } => items.next(),
             Self::Mirror { remote, cursor, remaining } => {
                 let id = cursor.take()?;
-                let item = remote.get(&id).unwrap().clone();
+                let item = remote.get(&id)?.clone();
                 *cursor = remote.next_id(&id).map(str::to_owned);
                 *remaining -= 1;
                 Some(item)

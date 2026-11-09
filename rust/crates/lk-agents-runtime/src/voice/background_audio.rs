@@ -672,7 +672,7 @@ impl FileInput {
                 Err(error) => return Some(Err(error)),
             }
         }
-        match self.decoder.as_mut().unwrap().next().await {
+        match self.decoder.as_mut().expect("the decoder was opened above").next().await {
             Ok(Some(frame)) => Some(Ok(lk_agents_media::pcm_samples(&frame.data))),
             Ok(None) => None,
             Err(error) => Some(Err(error)),
@@ -762,7 +762,7 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
             if let Some(output) = output.as_ref() {
                 return Ok(output.publication.sid().clone());
             }
-            let (source, publication) = participant
+            let lk_agents_abi::voice::rtc::PublishedAudioTrack { source, publication } = participant
                 .publish_audio_track(
                     &telemetry::Cx::NONE,
                     TrackPublishOptions {

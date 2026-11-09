@@ -216,6 +216,14 @@ pub struct SpeechSteering {
 
 use std::collections::BTreeMap;
 
+/// Text with its expressive markup stripped, and the tags taken out of it.
+#[crate::host(record(module = "tts", path = "livekit.agents.tts", dataclass, emit))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkupSplit {
+    pub text: String,
+    pub tags: Vec<ExpressiveTag>,
+}
+
 #[crate::host(functions(pid = false))]
 pub trait MarkupFunctions {
     #[host(function, pid = true)]
@@ -224,7 +232,7 @@ pub trait MarkupFunctions {
     fn supported_nonverbals(provider: String) -> crate::MarkupInfo;
     /// Strip every provider's expressive XML markup; brackets are prose and stay.
     #[host(function, path = "livekit.agents.tts")]
-    fn split_all_markup(text: String) -> (String, Vec<ExpressiveTag>);
+    fn split_all_markup(text: String) -> MarkupSplit;
     #[host(function, path = "livekit.agents.tts")]
     fn strip_all_markup(text: String) -> String;
     #[host(function)]
@@ -232,7 +240,7 @@ pub trait MarkupFunctions {
     /// Strip only the `<expr/>` dialect, returning the clean text and its markers; the
     /// provider-native tags stay in the words.
     #[host(function, path = "livekit.agents.tts")]
-    fn split_expr_markup(text: String) -> (String, Vec<ExpressiveTag>);
+    fn split_expr_markup(text: String) -> MarkupSplit;
     #[host(function)]
     fn to_xml(
         tag_name: String,

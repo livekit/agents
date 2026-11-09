@@ -1,9 +1,9 @@
 name: Native cache portability
 
+# Weekly: the native cache rarely changes, and three OSes per pull request cost more than they catch.
 on:
-  push:
-    branches: [v2.0]
-  pull_request:
+  schedule:
+    - cron: "41 6 * * 1"
   workflow_dispatch:
 
 permissions:

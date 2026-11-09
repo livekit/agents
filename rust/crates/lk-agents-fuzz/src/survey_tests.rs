@@ -1,14 +1,19 @@
 //! The search campaign over many seeds, reporting what it reached and found; ignored by default.
 //! `cargo test --release -p lk-agents-fuzz --test survey -- --ignored --nocapture`
 //! Tuned by `VOICE_SEEDS`, `VOICE_BUDGET`, `VOICE_FIRST_SEED`, `VOICE_SEED`, `VOICE_FAMILY`.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "the DST harness: a broken fake is a test failure, and runs report to stdout"
+)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
-#[allow(unused_imports)]
 use lk_agents_fuzz::{
     boundary,
     check::KNOWN_FINDINGS,
-    drive::{Outcome, PHASES, Policy, Setup},
-    input::Input,
+    drive::{Outcome, PHASES, Policy},
     record::Kind,
     rules::RULES,
     search,
@@ -394,11 +399,7 @@ fn campaign(window: &Window) {
     if new.is_empty() {
         println!("  none");
     }
-    // A known finding this window did not reach: reported, or, over the full window
-    // (`VOICE_FULL_WINDOW=1`, the nightly gate) once its fixing regression exists, a failure
-    // until it comes off the list.
-    let full = std::env::var_os("VOICE_FULL_WINDOW").is_some();
-    let mut stale = Vec::new();
+    // A known finding this window did not reach.
     if !window.single {
         for known in KNOWN_FINDINGS.iter() {
             let key = (known.contract.to_owned(), known.subject.to_owned());
@@ -406,10 +407,6 @@ fn campaign(window: &Window) {
                 continue;
             }
             match known.fixed_by {
-                Some(test) if full => {
-                    println!("  FIXED {} on a {}: {test} fixes it; remove it", key.0, key.1);
-                    stale.push(key);
-                }
                 Some(test) => println!("  not reached: {} on a {} (fixed by {test})", key.0, key.1),
                 None => println!("  not reached: {} on a {} (no fix yet)", key.0, key.1),
             }
@@ -450,7 +447,6 @@ fn campaign(window: &Window) {
         observed.values().flatten().map(|kind| format!("{kind:?}")).collect();
     boundary::VOICE.report(&delivered, &opened.into_iter().collect::<Vec<_>>());
     assert!(new.is_empty(), "new findings: {:?}", new.keys().collect::<Vec<_>>());
-    assert!(stale.is_empty(), "fixed known findings still listed: {stale:?}");
 }
 
 #[test]

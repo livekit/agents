@@ -44,7 +44,10 @@ pub trait InferenceEot: Send + Sync + Sized + 'static {
     /// `turn-detector-v1` connects to the gateway at `base_url`; `local_fallback` lets it degrade
     /// to the mini model, which `local_model` builds when the build links none.
     #[host(new)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the Python constructor's keyword arguments"
+    )]
     fn new(
         env: &Self::Env,
         model: TurnDetectorModel,
@@ -151,7 +154,10 @@ pub trait InterruptionDetector: Send + Sync + Sized + 'static {
     /// `base_url`, `api_key` and `api_secret` default to the inference ladders over the server's
     /// settings (`inference_credentials`).
     #[host(new)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the Python constructor's keyword arguments"
+    )]
     fn new(
         env: &Self::Env,
         #[host(kw, default = None)] threshold: Option<f64>,

@@ -1,4 +1,9 @@
 //! The realtime machine's context-sync CPU step budgets, in their own process.
+#![allow(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "integration test that prints its measurements"
+)]
 #![cfg(unix)]
 
 mod support {

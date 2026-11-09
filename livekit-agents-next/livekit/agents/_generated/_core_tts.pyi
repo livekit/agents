@@ -14,20 +14,27 @@ from livekit.agents.tts import TTS, AudioEmitter
 from .connect import APIConnectOptions
 from .expressive import SpeechSteeringOptions
 from .stream_pacer import SentenceStreamPacer, TextPacing
-from .tts import ExpressiveTag, MarkupInfo, SegmentCount, SynthesizedAudio, TTSCapabilities
+from .tts import (
+    ExpressiveTag,
+    MarkupInfo,
+    MarkupSplit,
+    SegmentCount,
+    SynthesizedAudio,
+    TTSCapabilities,
+)
 
 def chat_message_text_content(parts: Sequence[str], assistant: bool) -> str | None: ...
 
 def supported_nonverbals(provider: str) -> MarkupInfo: ...
 
-def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
+def split_all_markup(text: str) -> MarkupSplit:
     """Strip every provider's expressive XML markup; brackets are prose and stay."""
 
 def strip_all_markup(text: str) -> str: ...
 
 def strip_expr_markup(text: str) -> str: ...
 
-def split_expr_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
+def split_expr_markup(text: str) -> MarkupSplit:
     """Strip only the `<expr/>` dialect, returning the clean text and its markers; the
     provider-native tags stay in the words.
     """

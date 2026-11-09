@@ -51,3 +51,6 @@ path = "src/survey_tests.rs"
 [[test]]
 name = "regressions"
 path = "src/regressions_tests.rs"
+
+[lints]
+workspace = true

@@ -666,7 +666,7 @@ pub trait InterruptionGateFunctions {
     /// `AgentActivity._resolve_interruption_detection`: whether to build the detector, and if not,
     /// why. Constructing it stays the host's.
     #[host(function)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python function's keyword arguments")]
     fn resolve_interruption_detector(
         #[host(kw)] stt_aligned_transcript: Option<bool>,
         stt_streaming: Option<bool>,

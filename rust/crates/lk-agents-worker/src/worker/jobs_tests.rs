@@ -26,7 +26,7 @@ fn register_marks_the_permission_as_an_agent() {
     let Some(pb::worker_message::Message::Register(r)) = msg.message else {
         panic!("wrong variant")
     };
-    #[allow(deprecated)]
+    #[allow(deprecated, reason = "the server still reads the deprecated `agent` permission")]
     let is_agent = r.allowed_permissions.unwrap().agent;
     assert!(is_agent);
 }

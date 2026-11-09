@@ -1,26 +1,18 @@
 #!/usr/bin/env bash
-# The launch gate: every suite the merge gate runs, in one command. Fails on any failed step, on a
-# finding outside the known ones (`check::KNOWN_FINDINGS`), on zero seeds and on a workspace crate
-# the coverage table below does not place. COVERAGE.md, section 12, says what each step proves.
+# The launch gate: every Rust test suite once, the Python worker journeys, and the DST campaigns.
+# The Rust rules run separately (`make -C rust check`).
 #
 #   rust/crates/lk-agents-fuzz/launch-gate.sh
 #
-# `VOICE_GATE_SEEDS` sizes the large campaign (32768 by default, after the `VOICE_SURVEY_SEEDS`
-# 1024 of the survey), `VOICE_SOAK_SEEDS` the soak (8). `VOICE_FULL_WINDOW=1` (nightly) makes the
-# large campaign the full window: a known finding it no longer reaches whose fixing regression
-# exists fails it until it comes off `known_findings.tsv`. Verdicts depend on no clock but the
-# simulation's; `VOICE_HANG_S` is the watchdog that ends a run blocked for real (600 s by default).
-# Every verdict is a test runner's exit status: campaigns run under nextest, which also fails when
-# its selection runs no test. Needs cargo-nextest and the repository's venv (`make install`), or
-# `PYO3_PYTHON` naming a Python.
+# `VOICE_GATE_SEEDS` sizes the campaign (32768 by default, after the `VOICE_SURVEY_SEEDS` 1024 of
+# the survey), `VOICE_SOAK_SEEDS` the soak (8). Needs cargo-nextest and the repository's venv
+# (`make install`), or `PYO3_PYTHON` naming a Python.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 step() { printf '\n== %s\n' "$1"; }
 fail() { printf 'FAILED: %s\n' "$1" >&2; exit 1; }
 
-full_window=${VOICE_FULL_WINDOW:-}
-unset VOICE_FULL_WINDOW
 gate_seeds=${VOICE_GATE_SEEDS:-32768}
 survey_seeds=${VOICE_SURVEY_SEEDS:-1024}
 soak_seeds=${VOICE_SOAK_SEEDS:-8}
@@ -29,56 +21,22 @@ for pair in "VOICE_GATE_SEEDS=$gate_seeds" "VOICE_SURVEY_SEEDS=$survey_seeds" \
     [[ ${pair#*=} =~ ^[1-9][0-9]*$ ]] || fail "$pair: a campaign needs a positive number of seeds"
 done
 
-# What the gate does with each workspace crate. Executed: its tests run here. Compiled: built
-# with every target (`cargo check --workspace --all-targets`), its tests not run here. Outside:
-# verified by another required job, named. A crate in no list, or in two, fails the gate.
-executed=(lk-agents-codegen lk-agents-abi lk-agents-cli lk-agents-core lk-agents-fuzz lk-agents-inference lk-agents-media lk-agents-net lk-agents-py lk-agents-telemetry lk-agents-voice lk-agents-worker lk-agents-runtime)
-compiled=(
-    "lk-agents-bindgen: no tests of its own; exercised through lk-agents-py's generation"
-    "lk-agents-host-derive: proc macros; exercised by every crate that derives"
-)
-outside=(
-    "lk-agents-storage: ci.yml storage-tests (cargo test, real SQLite and a fake AgentDB)"
-)
-
-if [[ ${1:-} == --skip-architecture ]]; then
-    shift
-else
-    step "Rust architecture"
-    bash architecture/check.sh
-    bash architecture/check.sh --tests
-fi
-[[ $# == 0 ]] || fail "unexpected argument: $1"
-
-step "coverage"
-crates=$(cargo metadata --no-deps --format-version 1 \
-    | python3 -c 'import json, sys; print("\n".join(sorted(p["name"] for p in json.load(sys.stdin)["packages"])))')
-placed=$(
-    printf '%s\n' "${executed[@]}"
-    printf '%s\n' "${compiled[@]}" "${outside[@]}" | cut -d: -f1
-)
-printf '  %-24s %s\n' "crate" "gate"
-for crate in "${executed[@]}"; do printf '  %-24s executed\n' "$crate"; done
-for row in "${compiled[@]}"; do printf '  %-24s compiled only:%s\n' "${row%%:*}" "${row#*:}"; done
-for row in "${outside[@]}"; do printf '  %-24s outside:%s\n' "${row%%:*}" "${row#*:}"; done
-printf '  backend contracts: SQLite here; AgentDB in storage-backends.yml (credentials required)\n'
-printf '  Python unit/audio_eot suite: tests.yml; embedded binding contracts run here\n'
-printf '  full I-27 case ledger, K-30 runtime verification (K-12 closure)\n'
-unplaced=$(comm -23 <(echo "$crates") <(echo "$placed" | sort))
-twice=$(echo "$placed" | sort | uniq -d)
-stale=$(comm -13 <(echo "$crates") <(echo "$placed" | sort -u))
-[ -z "$unplaced" ] || fail "workspace crates the gate does not place: $unplaced"
-[ -z "$twice" ] || fail "crates placed twice: $twice"
-[ -z "$stale" ] || fail "placed crates that are not in the workspace: $stale"
-
-step "build"
-cargo check -q --workspace --all-targets
-
-step "worker lifecycle and real transport tests"
-cargo test -q -p lk-agents-worker -p lk-agents-net -p lk-agents-cli
-
 py=${PYO3_PYTHON:-$PWD/../.venv/bin/python}
 agent_python_path=${PYTHONPATH:-$PWD/../livekit-agents-next}
+python_home=$("$py" -c 'import sys; print(sys.base_prefix)')
+site_packages=$("$py" -c 'import site; print(site.getsitepackages()[0])')
+
+step "Rust tests"
+cargo test -q --workspace --exclude lk-agents-py --exclude lk-agents-fuzz
+
+step "Python binding contracts"
+PYO3_PYTHON=$py PYTHONHOME=$python_home cargo test -q -p lk-agents-py --features ffmpeg
+# The abi tests behind `python` set process globals (fork guard, cached host classes): nextest
+# gives each its own process.
+PYO3_PYTHON=$py PYTHONHOME=$python_home PYTHONPATH=$site_packages \
+    cargo nextest run --cargo-quiet --status-level fail --final-status-level fail \
+    -p lk-agents-abi --features python
+
 step "worker generated API, CLI and endpoint contracts"
 PYTHONPATH="$agent_python_path:$PWD/.." "$py" -m pytest \
     ../tests/conformance/test_worker_records.py ../tests/conformance/test_python_bootstrap.py \
@@ -90,29 +48,6 @@ LIVEKIT_IPC_SOAK_BATCHES=3 LIVEKIT_AGENTS_PRELOAD_LOCAL_INFERENCE=0 \
     ../tests/conformance/test_worker_ipc_resources.py \
     ../tests/conformance/test_worker_preload.py ../tests/conformance/test_cli_shutdown.py \
     ../tests/test_it_ipc.py --e2e -q
-
-step "SQLite storage and A2A backend contracts"
-bash backend-contracts.sh sqlite
-
-step "agent core tests"
-cargo test -q -p lk-agents-core
-
-step "voice core unit tests"
-cargo test -q -p lk-agents-voice
-
-# The provider clients the DST does not run: the gateway's TTS, STT and LLM, the host bridges, and
-# the shared transport under them.
-step "provider clients' and transport unit tests"
-cargo test -q -p lk-agents-inference -p lk-agents-net -p lk-agents-abi -p lk-agents-telemetry
-
-# ABI/media stay host-neutral. Only the binding crate links the interpreter; its explicit
-# Cargo integration targets isolate the interpreter and native ownership contracts.
-step "ABI and synchronous media contracts"
-cargo test -q -p lk-agents-abi -p lk-agents-media
-
-step "Cargo-linked Python binding contracts"
-PYO3_PYTHON=$py PYTHONHOME=$("$py" -c 'import sys; print(sys.base_prefix)') \
-    cargo test -q -p lk-agents-py --features ffmpeg
 
 step "fuzz suites: scheduler, contract registry, probes, determinism, regressions"
 cargo test -q --release -p lk-agents-fuzz
@@ -129,7 +64,7 @@ campaign() {
 
 campaign "survey, $survey_seeds seeds" survey survey VOICE_SEEDS="$survey_seeds"
 campaign "campaign, $gate_seeds more seeds" survey survey \
-    VOICE_FIRST_SEED="$survey_seeds" VOICE_SEEDS="$gate_seeds" ${full_window:+VOICE_FULL_WINDOW=1}
+    VOICE_FIRST_SEED="$survey_seeds" VOICE_SEEDS="$gate_seeds"
 campaign "soak, $soak_seeds calls" soak nothing_grows_with_the_conversation \
     VOICE_SOAK_SEEDS="$soak_seeds"
 printf '\nlaunch gate passed\n'

@@ -133,8 +133,9 @@ impl MarkupFunctions for SpeechMarkup {
     fn supported_nonverbals(provider: String) -> lk_agents_abi::MarkupInfo {
         lk_agents_abi::MarkupInfo { nonverbals: self::nonverbals_of(&provider) }
     }
-    fn split_all_markup(text: String) -> (String, Vec<ExpressiveTag>) {
-        self::split_all_markup(&text)
+    fn split_all_markup(text: String) -> lk_agents_abi::tts::markup::MarkupSplit {
+        let (text, tags) = self::split_all_markup(&text);
+        lk_agents_abi::tts::markup::MarkupSplit { text, tags }
     }
     fn strip_all_markup(text: String) -> String {
         self::strip_all_markup(&text)
@@ -142,8 +143,9 @@ impl MarkupFunctions for SpeechMarkup {
     fn strip_expr_markup(text: String) -> String {
         self::strip_expr_markup(&text)
     }
-    fn split_expr_markup(text: String) -> (String, Vec<ExpressiveTag>) {
-        self::split_expr_markup(&text)
+    fn split_expr_markup(text: String) -> lk_agents_abi::tts::markup::MarkupSplit {
+        let (text, tags) = self::split_expr_markup(&text);
+        lk_agents_abi::tts::markup::MarkupSplit { text, tags }
     }
     fn to_xml(
         tag_name: String,

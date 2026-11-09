@@ -164,7 +164,7 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     /// released. `interruption` merges over the session's and takes no `mode`, which is set with
     /// `VoiceSession(turn_handling=)`.
     #[host(call)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
     fn update_options(
         &self,
         #[host(kw)] stt: crate::Maybe<Option<crate::HostRef>>,
@@ -182,7 +182,7 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     /// taking its value from the topmost layer that sets it, named by the id returned, refused as
     /// `update_options` refuses.
     #[host(call)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
     fn override_options(
         &self,
         #[host(kw)] stt: crate::Maybe<Option<crate::HostRef>>,
@@ -339,7 +339,7 @@ pub trait VoiceSessionFacade {
             tts = "..voice._session_bindings._tts_model"
         )
     )]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
     fn update_options(
         &self,
         #[host(kw)] stt: crate::Maybe<Option<crate::HostRef>>,

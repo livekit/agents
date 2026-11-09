@@ -68,3 +68,6 @@ media-blingfire = ["lk-agents-media/blingfire"]
 # Test-only: what a deterministic simulation installs on a session (`VoiceSession::probe`) and
 # reads back from it. Enabled by the fuzzer.
 dst = []
+
+[lints]
+workspace = true

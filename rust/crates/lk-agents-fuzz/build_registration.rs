@@ -1,5 +1,11 @@
 //! Checks test-source reachability from the explicit Cargo and regression targets.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "the DST harness: a broken fake is a test failure, and runs report to stdout"
+)]
+
 use std::{collections::BTreeSet, fs, path::Path};
 
 /// Root test files are either isolated Cargo targets or included by the regression target.

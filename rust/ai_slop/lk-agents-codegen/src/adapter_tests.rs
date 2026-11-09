@@ -1,4 +1,4 @@
-use crate::decl::tests::{read, read_with_tuples, refuse};
+use crate::decl::tests::{read, refuse};
 use crate::decl::*;
 
 #[test]
@@ -212,9 +212,9 @@ fn declared_class_instances_are_accepted_by_batch_operations() {
 
 #[test]
 fn transparent_tuple_values_use_shared_shape_checks_and_accept_iterable_batches() {
-    let declarations = read_with_tuples(r#"
+    let declarations = read(r#"
         #[crate::host(record(module = "tokenize", extract, emit, transparent))]
-        pub enum Token { Text(String), Span((String, usize, usize)) }
+        pub enum Token { Text(String), Span((usize, usize)) }
         #[crate::host(proxy(host = "livekit.agents.tokenize.Tokenizer"))]
         pub trait Tokenizer: Send + Sync {
             #[host(call)] fn tokenize(&self, text: &str) -> Result<Vec<Token>, crate::errors::HostError>;
@@ -223,20 +223,20 @@ fn transparent_tuple_values_use_shared_shape_checks_and_accept_iterable_batches(
     let shell = crate::records::conversions(&declarations).unwrap().text;
     assert!(shell.contains("obj.is_instance_of::<::pyo3::types::PyTuple>()"), "{shell}");
     assert!(
-        shell.contains("tuple.len() != 3") && shell.contains("expected a tuple of 3 items"),
+        shell.contains("tuple.len() != 2") && shell.contains("expected a tuple of 2 items"),
         "{shell}"
     );
-    let tuple = Ty::Tuple(vec![Ty::Str, Ty::Int(Int::Usize), Ty::Int(Int::Usize)]);
+    let tuple = Ty::Tuple(vec![Ty::Int(Int::Usize), Ty::Int(Int::Usize)]);
     let shared =
         crate::adapter::from_object("obj", &tuple, "\"Token.Span\"", "Token.Span").unwrap();
-    assert!(shell.contains("tuple.get_item(2)?") && shell.contains(&shared), "{shell}");
+    assert!(shell.contains("tuple.get_item(1)?") && shell.contains(&shared), "{shell}");
     let models = crate::records::python(&declarations).unwrap();
     let model = &models.iter().find(|model| model.path == "tokenize.py").unwrap().text;
-    assert!(model.contains("Token: TypeAlias = str | tuple[str, int, int]"), "{model}");
+    assert!(model.contains("Token: TypeAlias = str | tuple[int, int]"), "{model}");
     let adapters = crate::adapter::emit(&declarations).unwrap();
     let adapter = &adapters.iter().find(|adapter| adapter.path == "llm.rs").unwrap().text;
     assert!(adapter.contains("try_iter()") && adapter.contains("token_from_py"), "{adapter}");
-    let ambiguous = read_with_tuples(
+    let ambiguous = read(
         r#"
         #[crate::host(record(module = "tokenize", extract, transparent))]
         pub enum Two { First((String, usize)), Second((usize, usize)) }
@@ -396,10 +396,10 @@ fn dictionary_records_use_their_declared_model_in_both_directions() {
 
 #[test]
 fn callable_annotations_follow_the_declared_call_and_its_iterable_result_reader() {
-    let declarations = read_with_tuples(r#"
+    let declarations = read(r#"
         use std::sync::Arc;
         #[crate::host(record(module = "tokens", extract, emit, transparent))]
-        pub enum Token { Text(String), Span((String, usize, usize)) }
+        pub enum Token { Text(String), Span((usize, usize)) }
         #[crate::host(proxy(host = "collections.abc.Callable"))]
         pub trait Callback: Send + Sync {
             #[host(call, name = "__call__")]

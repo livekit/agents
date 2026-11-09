@@ -33,6 +33,7 @@ where
     let mut reader = Reader { input, error: None };
     let mut error = ErrBuf::new();
     let decoder = Handle::open(name.as_deref(), out_channels, &limits, &mut reader, &mut error)?;
+    // SAFETY: `decoder` is a live handle from lk_dec_open; the getters only read it.
     let source = unsafe {
         AudioFormat::new(
             lk_dec_src_rate(decoder.0).max(0) as u32,
@@ -50,6 +51,8 @@ where
         limits,
         error: None,
     };
+    // SAFETY: `output`, `reader` and `error` outlive the call, and the callbacks run synchronously
+    // on this thread, so the opaque pointer is the only access to `output` while they do.
     let rc = unsafe {
         lk_dec_run(
             decoder.0,
@@ -82,6 +85,7 @@ extern "C" fn read<R: std::io::Read>(opaque: *mut c_void, data: *mut u8, size: c
     // SAFETY: `reader` lives until the native decoder is freed. FFmpeg calls this synchronously
     // on the invoking thread; its output buffer is valid for `size` bytes.
     let reader = unsafe { &mut *(opaque as *mut Reader<'_, R>) };
+    // SAFETY: FFmpeg's buffer is valid and exclusively ours for `size` bytes during this call.
     let bytes = unsafe { std::slice::from_raw_parts_mut(data, size as usize) };
     let result =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reader.input.read(bytes)));
@@ -140,6 +144,7 @@ where
     // SAFETY: `output` lives through lk_dec_run and native teardown. PCM is borrowed only
     // for this synchronous callback. Catching panics prevents unwinding across the C ABI.
     let output = unsafe { &mut *(opaque as *mut Output<'_, F>) };
+    // SAFETY: FFmpeg's PCM buffer holds `size` initialized samples for this call.
     let samples = unsafe { std::slice::from_raw_parts(data, size as usize) };
     let error =
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| output.push(samples))) {

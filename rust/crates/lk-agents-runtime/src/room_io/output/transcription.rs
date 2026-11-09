@@ -409,19 +409,19 @@ impl TextOutput for ParticipantTranscriptionOutput {
     }
     fn capture_text<'a>(
         &'a self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
-            self.capture_timed(&telemetry::Cx::NONE, &TranscriptChunk::new(text)).await
-        })
+        let cx = cx.clone();
+        Box::pin(async move { self.capture_timed(&cx, &TranscriptChunk::new(text)).await })
     }
 
     fn capture_timed<'a>(
         &'a self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         text: &'a TranscriptChunk,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        let cx = cx.clone();
         Box::pin(async move {
             let (shown, refused) = {
                 let mut writer = self.writer.lock();
@@ -445,11 +445,7 @@ impl TextOutput for ParticipantTranscriptionOutput {
             if let Some(next) = &self.next_in_chain
                 && !shown.is_empty()
             {
-                next.capture_timed(
-                    &telemetry::Cx::NONE,
-                    &TranscriptChunk { text: shown, ..text.clone() },
-                )
-                .await?;
+                next.capture_timed(&cx, &TranscriptChunk { text: shown, ..text.clone() }).await?;
             }
             Ok(())
         })

@@ -63,7 +63,12 @@ impl Resolver<'_> {
                             let syn::Type::Path(ty) = &*imp.self_ty else { continue };
                             let name =
                                 voc::text(at, &object.nested, "name")?.unwrap_or_else(|| {
-                                    ty.path.segments.last().unwrap().ident.to_string()
+                                    ty.path
+                                        .segments
+                                        .last()
+                                        .expect("a type path has a segment")
+                                        .ident
+                                        .to_string()
                                 });
                             hosts.push(format!("livekit.agents._core.{name}"));
                         }

@@ -29,7 +29,15 @@ pub struct Resampler {
     num_channels: u32,
 }
 
+// SAFETY: the handle is owned solely by this value and used only through `&mut self`; soxr
+// keeps no thread affinity, and `FFT_CACHE` serializes the one state handles share.
 unsafe impl Send for Resampler {}
+
+/// Takes a non-null error soxr returned.
+fn message(err: *const c_char) -> String {
+    // SAFETY: soxr's errors are static NUL-terminated string literals.
+    unsafe { CStr::from_ptr(err) }.to_string_lossy().into_owned()
+}
 
 impl Resampler {
     pub fn new(
@@ -50,6 +58,7 @@ impl Resampler {
         // The writer. A poisoned lock guards no state of ours, so it is not a reason to refuse.
         let _cache = FFT_CACHE.write().unwrap_or_else(|e| e.into_inner());
 
+        // SAFETY: the specs and `err` are live locals, read only during soxr_create.
         let ptr = unsafe {
             let mut io = soxr_sys::soxr_io_spec(
                 soxr_sys::soxr_datatype_t_SOXR_INT16_I,
@@ -65,9 +74,7 @@ impl Resampler {
         };
 
         if !err.is_null() {
-            return Err(ResampleError::Create(
-                unsafe { CStr::from_ptr(err) }.to_string_lossy().into_owned(),
-            ));
+            return Err(ResampleError::Create(message(err)));
         }
         if ptr.is_null() {
             // soxr documents that it sets `err`; a null handle would otherwise segfault on `push`.
@@ -112,6 +119,7 @@ impl Resampler {
         let _cache = FFT_CACHE.read().unwrap_or_else(|e| e.into_inner());
 
         // `soxr_delay` is the filter's residual; sizing on ratio alone makes soxr silently emit less.
+        // SAFETY: `self.ptr` is the non-null handle `new` checked, live until `Drop`.
         let delay = unsafe { soxr_sys::soxr_delay(self.ptr) };
         // `+ 1` is a margin against a `ceil` rounding edge, not load-bearing.
         let max_out = ((in_frames as f64 * ratio).ceil() as usize) + (delay.ceil() as usize) + 1;
@@ -123,6 +131,7 @@ impl Resampler {
 
         let mut idone: usize = 0;
         let mut odone: usize = 0;
+        // SAFETY: `input` holds `in_frames` frames and `out` was sized above for `max_out` frames.
         let err = unsafe {
             soxr_sys::soxr_process(
                 self.ptr,
@@ -135,9 +144,7 @@ impl Resampler {
             )
         };
         if !err.is_null() {
-            return Err(ResampleError::Process(
-                unsafe { CStr::from_ptr(err) }.to_string_lossy().into_owned(),
-            ));
+            return Err(ResampleError::Process(message(err)));
         }
         Ok(&self.out[..odone * nch])
     }
@@ -155,6 +162,7 @@ impl Resampler {
         let _cache = FFT_CACHE.read().unwrap_or_else(|e| e.into_inner());
 
         let mut odone: usize = 0;
+        // SAFETY: a null input asks soxr to flush; `out` holds `cap` frames.
         let err = unsafe {
             soxr_sys::soxr_process(
                 self.ptr,
@@ -167,16 +175,13 @@ impl Resampler {
             )
         };
         if !err.is_null() {
-            return Err(ResampleError::Process(
-                unsafe { CStr::from_ptr(err) }.to_string_lossy().into_owned(),
-            ));
+            return Err(ResampleError::Process(message(err)));
         }
 
+        // SAFETY: `self.ptr` is a live handle owned by `self`.
         let err = unsafe { soxr_sys::soxr_clear(self.ptr) };
         if !err.is_null() {
-            return Err(ResampleError::Process(
-                unsafe { CStr::from_ptr(err) }.to_string_lossy().into_owned(),
-            ));
+            return Err(ResampleError::Process(message(err)));
         }
         Ok(&self.out[..odone * nch])
     }
@@ -184,6 +189,7 @@ impl Resampler {
 
 impl Drop for Resampler {
     fn drop(&mut self) {
+        // SAFETY: the sole owner frees the handle once, here.
         unsafe { soxr_sys::soxr_delete(self.ptr) }
     }
 }

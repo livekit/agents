@@ -1,26 +1,26 @@
 /// Interpreter interface namespaces. Generated inherent methods perform the declared
 /// imports and member access; they accept Python objects without asserting their runtime type.
 pub mod interfaces {
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         host = "collections.abc.AsyncIterable",
         attrs(aiter(name = "__aiter__"))
     ))]
     pub struct AsyncIterable;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         host = "collections.abc.AsyncIterator",
         attrs(anext(name = "__anext__"))
     ))]
     pub struct AsyncIterator;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         protocol = "supports aclose()",
         attrs(aclose),
         protocols(matches(required(aclose)))
     ))]
     pub struct AsyncClose;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         protocol = "framework host stream input",
         attrs(
             push(name = "_core_push"),

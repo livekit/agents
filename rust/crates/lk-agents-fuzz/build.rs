@@ -1,5 +1,12 @@
 //! Registers every `src/rules/*.rs` (except `mod.rs`) in `RULES`, in file-name order; the rule
 //! type is the file name in CamelCase, so adding a rule is adding a file.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "a build script fails the build on a bad source tree and talks to Cargo through stdout"
+)]
+
 use std::{env, fs, path::Path};
 
 mod build_calibration;

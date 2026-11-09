@@ -91,12 +91,14 @@ impl ErrBuf {
 
 /// `(major, minor, micro)` of the linked libavcodec.
 pub fn avcodec_version() -> (u32, u32, u32) {
+    // SAFETY: a pure query of the linked library, with no arguments or state.
     let v = unsafe { lk_avcodec_version() };
     (v >> 16, (v >> 8) & 0xFF, v & 0xFF)
 }
 
 /// `(major, minor, micro)` of the linked libavformat.
 pub fn avformat_version() -> (u32, u32, u32) {
+    // SAFETY: a pure query of the linked library, with no arguments or state.
     let v = unsafe { lk_avformat_version() };
     (v >> 16, (v >> 8) & 0xFF, v & 0xFF)
 }

@@ -1,10 +1,13 @@
 /// Interpreter interface namespaces. Generated inherent methods perform the declared
 /// imports and member access; they accept Python objects without asserting their runtime type.
 pub mod interfaces {
-    #[lk_agents_abi::host(interface(module = "logging", attrs(get_logger(name = "getLogger"))))]
+    #[lk_agents_host_derive::host(interface(
+        module = "logging",
+        attrs(get_logger(name = "getLogger"))
+    ))]
     pub struct LoggingModule;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         host = "logging.Logger",
         attrs(
             get_effective_level(name = "getEffectiveLevel"),
@@ -15,16 +18,16 @@ pub mod interfaces {
     ))]
     pub struct Logger;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         host = "logging.LogRecord",
         attrs(created(write), msecs(write), exc_text(write))
     ))]
     pub struct LogRecord;
 
-    #[lk_agents_abi::host(interface(module = "atexit", attrs(register)))]
+    #[lk_agents_host_derive::host(interface(module = "atexit", attrs(register)))]
     pub struct AtExitModule;
 
-    #[lk_agents_abi::host(interface(module = "livekit.agents._core", attrs(flush_logs)))]
+    #[lk_agents_host_derive::host(interface(module = "livekit.agents._core", attrs(flush_logs)))]
     pub struct CoreModule;
 }
 

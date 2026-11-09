@@ -30,7 +30,7 @@ from .llm_provider_options import ProviderEndpoint, ResponseFormat
 from .mcp import MCPToolOptions, ResolvedToolOptions
 from .metrics import RealtimeModelMetrics
 from .provider_data import TOOL_BEHAVIOR, ProviderFormat, ToolSchema
-from .provider_format import ConvertedItem
+from .provider_format import ConvertedItem, ProviderMessages
 from .realtime import RealtimeCapabilities
 from .realtime_options import (
     AudioTranscription,
@@ -389,7 +389,7 @@ async def to_provider_format(
     inject_dummy_user_message: bool = True,
     inject_trailing_user_message: bool = False,
     thought_signatures: Mapping[str, bytes | bytearray | memoryview | list[int]] | None = None,
-) -> tuple[list[object], object]: ...
+) -> ProviderMessages: ...
 
 def convert_mid_conversation_instructions(
     items: Sequence[ChatItem],

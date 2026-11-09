@@ -27,3 +27,6 @@ libc = "0.2"
 [[test]]
 name = "shutdown"
 path = "src/shutdown_tests.rs"
+
+[lints]
+workspace = true

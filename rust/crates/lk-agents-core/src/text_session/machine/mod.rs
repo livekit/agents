@@ -265,7 +265,7 @@ impl TextSession {
         }
         match event {
             TextSessionEvent::Start(message) if matches!(self.phase, Phase::NotStarted) => {
-                let frame = self.state.frames.get_mut(&self.state.active_frame_id).unwrap();
+                let frame = self.active_frame_mut();
                 record_delivered(frame, message.clone());
                 // An answered read-back is now ordinary history. AgentRun alone decides whether
                 // a repeated validated call consumes it; a model argument cannot grant approval.
@@ -293,7 +293,7 @@ impl TextSession {
             TextSessionEvent::DialogueDelivered { invocation_id, message }
                 if self.is_current(&invocation_id) =>
             {
-                let frame = self.state.frames.get_mut(&self.state.active_frame_id).unwrap();
+                let frame = self.active_frame_mut();
                 record_delivered(frame, message);
             }
             TextSessionEvent::InvocationReleased { invocation_id, delivered } if matches!(&self.phase, Phase::Releasing(invocation, _) if invocation.id == invocation_id) =>
@@ -338,6 +338,11 @@ impl TextSession {
 
     fn is_current(&self, invocation_id: &str) -> bool {
         self.phase.invocation().is_some_and(|i| i.id == invocation_id)
+    }
+
+    /// `new` checks the active frame exists and every transition keeps it.
+    fn active_frame_mut(&mut self) -> &mut SessionFrame {
+        self.state.frames.get_mut(&self.state.active_frame_id).expect("the active frame exists")
     }
 
     fn invoke(
@@ -698,9 +703,10 @@ impl TextSession {
                     matches!(i,
             ChatItem::FunctionCall(c) if c.call_id == p.parent.call_id)
                 })
-                .unwrap()
+                .unwrap_or(usize::MAX)
         });
-        let frame = self.state.frames.get_mut(&invocation.frame_id).unwrap();
+        let frame =
+            self.state.frames.get_mut(&invocation.frame_id).expect("the invoked frame exists");
         frame.history = history;
         frame.pending_calls = pending;
         effects.push(TextSessionEffect::InvocationParked {
@@ -730,7 +736,7 @@ impl TextSession {
                 Some(message)
             })
             .collect();
-        let frame = self.state.frames.get_mut(&self.state.active_frame_id).unwrap();
+        let frame = self.active_frame_mut();
         for message in received {
             record_delivered(frame, message);
         }

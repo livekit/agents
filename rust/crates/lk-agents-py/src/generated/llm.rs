@@ -5,8 +5,7 @@
 //!
 //! The `llm` classes.
 
-// A host signature takes the parameters it declares.
-#![allow(clippy::too_many_arguments)]
+#![allow(clippy::too_many_arguments, reason = "a host signature takes the parameters it declares")]
 
 use pyo3::prelude::*;
 
@@ -1815,23 +1814,7 @@ pub fn to_provider_format<'py>(
         let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::prepare_provider_format(&env, format, items, images, inject_dummy_user_message, inject_trailing_user_message, thought_signatures).await.map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
         Python::attach(|py| {
             ::pyo3::IntoPyObjectExt::into_py_any(
-                {
-                    let (x0, x1) = out;
-                    ::pyo3::types::PyTuple::new(
-                        py,
-                        [
-                            ::pyo3::types::PyList::new(
-                                py,
-                                x0.into_iter()
-                                    .map(|x| crate::py_values::value_to_py(py, &x))
-                                    .collect::<PyResult<Vec<_>>>()?,
-                            )?
-                            .into_any(),
-                            crate::py_values::value_to_py(py, &x1)?,
-                        ],
-                    )?
-                    .into_any()
-                },
+                crate::generated::records::provider_format::provider_messages_to_py(py, out)?,
                 py,
             )
         })
@@ -5146,7 +5129,10 @@ impl crate::py_errors::HostException for ::lk_agents_abi::llm::chat_context::Rem
 
 impl crate::py_errors::HostException for ::lk_agents_abi::llm::mcp::McpError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(unreachable_patterns)]
+        #[allow(
+            unreachable_patterns,
+            reason = "the fallback arm is dead when every variant has its own"
+        )]
         match self {
             Self::Unavailable => crate::py_errors::host_exception(
                 "livekit.agents.llm.tool_context",
@@ -5182,7 +5168,10 @@ impl crate::py_errors::HostException for ::lk_agents_abi::llm::mcp::McpError {
 
 impl crate::py_errors::HostException for ::lk_agents_abi::llm::provider_format::StrictError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(unreachable_patterns)]
+        #[allow(
+            unreachable_patterns,
+            reason = "the fallback arm is dead when every variant has its own"
+        )]
         match self {
             Self::NotAnObject { .. } => {
                 ::pyo3::exceptions::PyTypeError::new_err(::std::string::ToString::to_string(self))
@@ -5207,7 +5196,10 @@ impl crate::py_errors::HostException
     for ::lk_agents_abi::llm::realtime::RealtimeConfigurationError
 {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(unreachable_patterns)]
+        #[allow(
+            unreachable_patterns,
+            reason = "the fallback arm is dead when every variant has its own"
+        )]
         match self {
             Self::Api(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Host(inner) => crate::py_errors::HostException::to_py_err(inner),
@@ -5220,7 +5212,10 @@ impl crate::py_errors::HostException
 
 impl crate::py_errors::HostException for ::lk_agents_abi::llm::schema::SchemaError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(unreachable_patterns)]
+        #[allow(
+            unreachable_patterns,
+            reason = "the fallback arm is dead when every variant has its own"
+        )]
         match self {
             Self::Strict(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::NotAnObject { .. } => {

@@ -712,13 +712,12 @@ mod tests {
     fn returned_capabilities_inherit_context_inside_containers() {
         for (call, cx) in [("#[host(await)] async", ", cx: &Cx"), ("#[host(call)]", "")] {
             let source = proxy(&format!(
-                "{call} fn acquire(&self{cx}) -> Result<(Option<std::sync::Arc<dyn Callbacks>>, Vec<std::sync::Arc<dyn Callbacks>>), HostError>; #[host(await)] async fn ping(&self, cx: &Cx) -> Result<(), HostError>;",
+                "{call} fn acquire(&self{cx}) -> Result<Vec<Option<std::sync::Arc<dyn Callbacks>>>, HostError>; #[host(await)] async fn ping(&self, cx: &Cx) -> Result<(), HostError>;",
             ));
-            let decls =
-                crate::decl::tests::read_with_tuples(&source).expect("nested capabilities resolve");
+            let decls = crate::decl::tests::read(&source).expect("nested capabilities resolve");
             let p = &decls.proxies[0];
             let emitted = super::method(p, &p.methods[0]).expect("emits");
-            assert_eq!(emitted.matches("CallbacksProxy::in_context").count(), 2);
+            assert_eq!(emitted.matches("CallbacksProxy::in_context").count(), 1);
             assert!(!emitted.contains("CallbacksProxy::from_host"));
             assert!(emitted.contains(
                 "host_context(&crate::py_calls::calling_context(&self.context)).cloned()"

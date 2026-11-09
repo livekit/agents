@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::pin::pin;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::task::{Poll, Waker};
 use std::time::{Duration, SystemTime};
 
@@ -109,22 +109,27 @@ impl VirtualClock {
         VirtualClock { state: Default::default() }
     }
 
+    /// The state is plain data, valid even after a panicking holder.
+    fn lock(&self) -> MutexGuard<'_, Virtual> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Going backwards is a test bug, not a runtime condition, so it panics.
     pub fn advance(&self, d: Duration) {
-        let s = self.state.lock().unwrap();
+        let s = self.lock();
         let at = s.now.saturating_add(d);
         Self::move_to(s, at);
     }
 
     /// Panics on a backwards jump.
     pub fn advance_to(&self, at: Ts) {
-        let s = self.state.lock().unwrap();
+        let s = self.lock();
         assert!(at >= s.now, "VirtualClock cannot go backwards: {:?} -> {:?}", s.now, at);
         Self::move_to(s, at);
     }
 
     /// Wakes every parked wait outside the lock; each re-reads the time it waits for.
-    fn move_to(mut s: std::sync::MutexGuard<'_, Virtual>, at: Ts) {
+    fn move_to(mut s: MutexGuard<'_, Virtual>, at: Ts) {
         s.now = at;
         let parked = std::mem::take(&mut s.parked);
         drop(s);
@@ -140,12 +145,12 @@ impl Default for VirtualClock {
 
 impl Clock for VirtualClock {
     fn now(&self) -> Ts {
-        self.state.lock().unwrap().now
+        self.lock().now
     }
 
     fn wait_until(&self, at: Ts) -> crate::BoxFuture<'_, ()> {
         Box::pin(std::future::poll_fn(move |cx| {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.lock();
             if s.now >= at {
                 return Poll::Ready(());
             }
@@ -158,7 +163,7 @@ impl Clock for VirtualClock {
     }
 
     fn wall(&self) -> SystemTime {
-        let mut s = self.state.lock().unwrap();
+        let mut s = self.lock();
         let tracking = s.wall_origin + Duration::from_nanos(s.now.as_nanos());
         s.last_wall = if tracking > s.last_wall { tracking } else { s.last_wall + TICK_EPSILON };
         s.last_wall

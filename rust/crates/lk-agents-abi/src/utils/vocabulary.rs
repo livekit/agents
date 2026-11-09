@@ -25,7 +25,7 @@ mod tests {
     use super::*;
     use lk_agents_host_derive::Vocabulary;
 
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "never constructed; only its derived vocabulary is probed")]
     #[derive(Vocabulary)]
     enum ProbeCommand {
         Say,

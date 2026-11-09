@@ -101,8 +101,7 @@ pub enum ImageSource {
     Frame(Arc<dyn RtcVideoFrame>),
 }
 
-// `bare_urls`: the `///` below is a Python docstring, and the reference writes the URL bare.
-#[allow(rustdoc::bare_urls)]
+#[allow(rustdoc::bare_urls, reason = "the docstring is Python's and writes the URL bare")]
 /// ImageContent is used to input images into the ChatContext on supported LLM providers / plugins.
 ///
 /// You may need to consult your LLM provider's documentation on supported URL types.
@@ -534,8 +533,10 @@ pub struct AgentConfigUpdate {
     pub tools: Option<HostRef>,
 }
 
-// Not boxed: boxing `ChatMessage` would cost an allocation per message on the warm read path.
-#[allow(clippy::large_enum_variant)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "boxing ChatMessage would cost an allocation per message on the warm read path"
+)]
 #[crate::host(record(module = "chat_items", transparent, discriminator = "type", extract, emit))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
@@ -762,7 +763,6 @@ pub struct MergeInsertion {
 pub trait ChatContextPlans {
     /// `ChatContext.copy` as an index plan over the host's own items.
     #[host(function, name = "chat_ctx_copy_plan")]
-    #[allow(clippy::too_many_arguments)]
     fn copy_plan(
         items: Vec<ChatItem>,
         #[host(kw, default = false)] exclude_function_call: bool,

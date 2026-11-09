@@ -19,6 +19,7 @@ from .tts import (
     ChunkedStream as ChunkedStream,
     ExpressiveTag as ExpressiveTag,
     MarkupInfo as MarkupInfo,
+    MarkupSplit as MarkupSplit,
     SynthesizeStream as SynthesizeStream,
     SynthesizedAudio as SynthesizedAudio,
     TTS as TTS,
@@ -29,6 +30,7 @@ from .tts_availability import AvailabilityChangedEvent as AvailabilityChangedEve
 
 __all__: list[str] = [
     "ExpressiveTag",
+    "MarkupSplit",
     "TTSCapabilities",
     "MarkupInfo",
     "SynthesizedAudio",

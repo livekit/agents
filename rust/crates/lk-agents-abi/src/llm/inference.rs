@@ -23,7 +23,10 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     /// settings; with `endpoint`, an OpenAI-compatible provider called with its own key and no
     /// LiveKit header.
     #[host(new)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the Python constructor's keyword arguments"
+    )]
     fn new(
         env: &Self::Env,
         model: String,
@@ -70,7 +73,7 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     /// Opens a completion of `chat_ctx`; no I/O until the first pull. Its requests carry this
     /// view's job identification and `inference_class`, else the client's class.
     #[host(call)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
     fn chat(
         &self,
         #[host(kw)] chat_ctx: HostChatContext,
@@ -154,7 +157,10 @@ pub trait InferenceLlmFacade {
         ),
         resolve(extra_kwargs = "builtins.dict")
     )]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the Python constructor's keyword arguments"
+    )]
     fn new(
         model: String,
         #[host(kw, default = None)] provider: Option<String>,

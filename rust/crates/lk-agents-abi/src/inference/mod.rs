@@ -120,7 +120,6 @@ pub trait InferenceModels {
 
     /// The turn detector a host constructs.
     #[host(function)]
-    #[allow(clippy::too_many_arguments)]
     fn eot_select(
         version: Option<String>,
         hosted: bool,

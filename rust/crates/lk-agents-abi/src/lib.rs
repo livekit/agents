@@ -1,8 +1,3 @@
-#![allow(
-    clippy::disallowed_macros,
-    reason = "Clippy checks macro bans at crate scope; exact legacy macro sites are ratcheted."
-)]
-
 //! The provider seam and the data vocabulary every other crate is written against. Native providers
 //! and host plugins implement the same traits. Nothing here performs I/O, spawns or blocks.
 
@@ -13,7 +8,8 @@ pub use ::a2a as a2a_protocol;
 /// The `livekit.agent` records (chat items, threads) the declared records are built from.
 pub use livekit_protocol;
 pub use lk_agents_host_derive::Vocabulary;
-pub use lk_agents_host_derive::host;
+// Not re-exported: only ABI declares exports (AGENTS.md "Bindings and the host").
+pub(crate) use lk_agents_host_derive::host;
 
 /// So `lk_agents_abi::X` in an expansion resolves in ABI as in every other crate.
 extern crate self as lk_agents_abi;

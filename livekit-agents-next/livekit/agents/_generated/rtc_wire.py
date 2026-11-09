@@ -3,6 +3,7 @@
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
 #     rust/crates/lk-agents-abi/src/voice/rtc/mod.rs
+#     rust/crates/lk-agents-abi/src/voice/rtc/capabilities.rs
 #     rust/crates/lk-agents-abi/src/voice/rtc/media.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -23,6 +24,7 @@ from livekit.rtc import (
 )
 
 if TYPE_CHECKING:
+    from livekit.agents.voice.room_io import AudioSource, TrackPublication
     from livekit.rtc import VideoFrameEvent as _HostVideoFrameRef
 
     from .rtc_frames import AudioFrame
@@ -142,6 +144,14 @@ class PlaybackInfo:
 @dataclass
 class AudioOutputCapabilities:
     pause: bool
+
+
+@dataclass
+class PublishedAudioTrack:
+    """A published audio source and the publication controlling its lifetime."""
+
+    source: AudioSource
+    publication: TrackPublication
 
 
 @dataclass(kw_only=True, slots=True)

@@ -610,7 +610,7 @@ impl Worker {
 /// The agent's participant may publish, subscribe, send data and update its metadata. `agent:
 /// true` marks it as an agent (deprecated in the proto, still read by the server).
 fn permissions_proto() -> pb::ParticipantPermission {
-    #[allow(deprecated)] // `agent`, see above
+    #[allow(deprecated, reason = "the server still reads the deprecated `agent`")]
     pb::ParticipantPermission {
         can_subscribe: true,
         can_publish: true,

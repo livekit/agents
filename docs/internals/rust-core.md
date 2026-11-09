@@ -1847,67 +1847,12 @@ benchmarked on this workspace.
 
 ### Enforcement
 
-Enforcement must cover:
-
-- No pyo3 outside `lk-agents-py`; no executor dependencies in sans-I/O crates or
-  ABI; no dependency of a core or an async I/O crate on the runtime.
-- Every Rust-to-host call goes through HostInvoker, except log forwarding in
-  `lk-agents-py`: no crate other than `lk-agents-py` calls host code, and async
-  I/O crates hold only ABI-declared proxy traits.
-- Handwritten `#[host(...)]` and API export metadata only in ABI; retired derive and standalone
-  class/binding/export declaration forms rejected; interpreter-local interface metadata only in the owning backend.
-- No handwritten `#[pyclass]`, `#[pymethods]`, `#[pyfunction]`, `#[napi]` or
-  `#[pymodule]` outside generated output and registration shells.
-- Generated host conversions and proxies in `lk-agents-py`; the HostInvoker
-  lifecycle and async bridges in runtime; never in ABI or subject crates.
-- Generated forwarding modules and matching stubs.
-- Runtime executor modules (`voice/`, `room_io/`, `avatar/`, `rtc/`) contain no
-  Tokio spawn, timer, socket or runtime-handle use and no unbiased `select!`
-  ([effect execution](#effect-execution)); boundary adapters hold their sockets
-  behind a port.
-
-Codegen `--check` enforces export placement and generated output, failing with
-the file and item. The dependency check resolves the closure of `lk-agents-abi`,
-`lk-agents-core`, `lk-agents-voice` and `lk-agents-media` with all of their own
-features; a dependent's closure carries only the features that dependent enables. Those
-closures must contain no runtime, executor, async transport or host SDK: no
-tokio, futures, pyo3, async-trait, reqwest, tungstenite, rusqlite, `livekit` or
-`livekit-ffi`. `livekit-protocol` records remain allowed. The dependency direction
-is `py -> runtime -> sans-I/O and async I/O crates -> abi` (including the launcher: `runtime -> cli -> worker/net/abi`), with the composition
-edges `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core` and
-`net -> core`, `py -> abi`, async I/O crates `-> net`,
-`fuzz -> sans-I/O crates + abi` and `fuzz -> runtime` described above;
-core never depends on storage. These dependency bans apply to the sans-I/O
-crates and ABI, not to runtime, the async I/O crates (storage included), fuzz
-support, language bindings or build tools. pyo3 is banned from every closure except `lk-agents-py`'s.
-
-The shared [`rust/architecture/clippy.toml`](../../rust/architecture/clippy.toml)
-configures `disallowed-methods`, `disallowed-types` and `disallowed-macros`.
-The architecture checker selects this config explicitly with `CLIPPY_CONF_DIR`
-and runs Clippy only for `lk-agents-core`, `lk-agents-voice`, `lk-agents-abi`
-and `lk-agents-media`. Packages requiring a different policy use a separate
-Clippy invocation with their own config and explicit package list.
-Media has two exempt modules: its optional thread pool, added only for a measured
-need, is its one allowed spawn site, and `media_queue` holds a lock and a waker
-(no thread, no spawn, no ambient clock) and records an audio queue's drop and
-catch-up metrics on the clock it is given. Storage, inference, worker and net are
-unrestricted async crates. Banned constructs include task/thread spawns,
-`select!`/`join!`, ambient monotonic/wall clocks, random or UUID generation,
-environment/process reads, unbounded tokio/std/futures/crossbeam channels,
-locks, host-shared atomics and randomly ordered hash collections in decision
-state. Supplied inputs and runtime-owned resources keep decisions deterministic.
-The file-length check reads git-tracked `.rs` files, skips generated-marker
-files and rejects handwritten files over 1,250 lines.
-
-Existing violations are recorded in checked-in baselines; clippy exemptions
-also require `#[allow(...)]` with a reason. Baselines may only shrink by
-violation kind and location identity. Removing an old violation cannot excuse
-a different one, and neither baseline identities nor exemptions may grow or
-broaden. Each check has deliberately failing inputs, including replacement of
-an old violation with a new identity. The shared enforcement step is
-[`rust/architecture/check.sh`](../../rust/architecture/check.sh), invoked by CI
-and the launch gate. They also invoke it with `--tests` to test the checkers.
-Run it from any directory in a full Git checkout.
+The rules and how each is enforced live in one list: the "Rust architecture rules" section of
+[`AGENTS.md`](../../AGENTS.md). `make -C rust check` runs every automatic one: `cargo fmt`, Clippy
+with `[workspace.lints]` and the two policies in `rust/check/` (`purity/clippy.toml` for ABI, core,
+voice and media; `io/clippy.toml` for the crates beside the host), the `rust/check` crate (crate
+graph, banned dependencies, binding placement, executor modules, file length) and the generated
+drift checks. No rule has a baseline.
 
 ## Common runtime primitives
 

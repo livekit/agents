@@ -17,3 +17,6 @@ quote = "1"
 proc-macro2 = "1"
 # The attribute language, and the `host_kind` a declared error carries.
 lk-agents-bindgen = { path = "../lk-agents-bindgen" }
+
+[lints]
+workspace = true

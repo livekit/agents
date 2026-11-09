@@ -287,7 +287,11 @@ struct Inner {
 /// when the last clone drops. The connection's own tasks hold it without the drop guard, so they
 /// do not keep it open.
 #[derive(Clone)]
-pub struct Conn(Arc<Inner>, #[allow(dead_code)] Option<Arc<CloseOnDrop>>);
+pub struct Conn(
+    Arc<Inner>,
+    #[allow(dead_code, reason = "held only for its drop, which closes the connection")]
+    Option<Arc<CloseOnDrop>>,
+);
 
 struct CloseOnDrop(std::sync::Weak<Inner>);
 

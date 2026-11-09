@@ -87,7 +87,7 @@ impl<T: Transport<RoleClient> + 'static> Transport<RoleClient> for Observed<T> {
         &mut self,
         item: ClientJsonRpcMessage,
     ) -> impl Future<Output = Result<(), McpError>> + Send + 'static {
-        let send = self.inner.as_mut().unwrap().send(item);
+        let send = self.inner.as_mut().expect("rmcp never sends after close").send(item);
         let receipt = self.receipt.clone();
         async move {
             send.await.map_err(|e| {
@@ -98,7 +98,10 @@ impl<T: Transport<RoleClient> + 'static> Transport<RoleClient> for Observed<T> {
         }
     }
     async fn receive(&mut self) -> Option<ServerJsonRpcMessage> {
-        self.inner.as_mut().unwrap().receive().await
+        match &mut self.inner {
+            Some(inner) => inner.receive().await,
+            None => None,
+        }
     }
     async fn close(&mut self) -> Result<(), McpError> {
         if let Some(mut inner) = self.inner.take() {
@@ -160,7 +163,9 @@ impl StdioTransport {
             command.current_dir(cwd);
         }
         let mut child = command.spawn().map_err(conn)?;
-        let io = AsyncRwTransport::new(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        let stdout = child.stdout.take().expect("stdout is piped");
+        let stdin = child.stdin.take().expect("stdin is piped");
+        let io = AsyncRwTransport::new(stdout, stdin);
         Ok(Self { io, child })
     }
 }

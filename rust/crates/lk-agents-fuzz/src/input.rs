@@ -542,7 +542,7 @@ macro_rules! inputs {
             pub fn needs(&self) -> Vec<(Kind, u32)> {
                 match self {
                     $(Input::$name { $($field),* } => {
-                        #[allow(unused_mut)]
+                        #[allow(unused_mut, reason = "a variant with no referenced field never pushes")]
                         let mut out = Vec::new();
                         $(if let Some(r) = Referenced::reference($field) { out.push(r); })*
                         out

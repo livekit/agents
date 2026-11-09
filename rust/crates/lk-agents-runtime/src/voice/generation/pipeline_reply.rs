@@ -139,7 +139,7 @@ pub(crate) enum StepOutcome {
 
 /// One step's words folded into its outcome, the generation marked done, and the step reported
 /// spoken **before its tools run**: `wait_for_playout` from a tool waits for the words before it.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "the step's outcome parts, each consumed once")]
 fn finish_step(
     shared: &SessionShared,
     handle: &SpeechHandle,
@@ -165,7 +165,7 @@ fn finish_step(
 }
 
 /// [`finish_step`], with the provider's ids for the assistant message's metrics.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "the step's outcome parts, each consumed once")]
 pub(crate) fn finish_step_with(
     shared: &SessionShared,
     handle: &SpeechHandle,

@@ -345,8 +345,9 @@ impl ProcessResource {
         }
         #[cfg(unix)]
         {
-            // SAFETY: waitid initializes siginfo_t and WNOWAIT retains our child for reaping.
+            // SAFETY: siginfo_t is plain old data, valid when zeroed.
             let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            // SAFETY: waitid writes into a live siginfo_t; WNOWAIT leaves our child for reaping.
             let rc = unsafe {
                 libc::waitid(
                     libc::P_PID,
@@ -470,7 +471,8 @@ mod windows {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
     use std::os::fd::IntoRawFd;

@@ -40,12 +40,12 @@ impl ServerItemsWork {
                     source.next_id(pending.item_id.as_str())
                 }
                 .map(str::to_owned);
-                self.items.front_mut().unwrap().next = next;
+                self.items.front_mut().expect("`pending` is the front item").next = next;
                 return false;
             }
             None => machine.desired.tail_id().map(str::to_owned),
         };
-        let item = source.get(pending.item_id.as_str()).unwrap().clone();
+        let item = source.get(pending.item_id.as_str()).expect("checked present above").clone();
         self.items.pop_front();
         let _ = machine.desired.insert(previous.as_deref(), item);
         self.items.is_empty()

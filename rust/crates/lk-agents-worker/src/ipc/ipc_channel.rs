@@ -183,12 +183,14 @@ fn preamble() -> [u8; PREAMBLE] {
 
 /// Whether the peer's preamble names this protocol.
 fn check_peer(peer: &[u8; PREAMBLE]) -> Result<(), ChannelError> {
-    let (magic, version) = peer.split_at(MAGIC.len());
+    let (magic, version) =
+        peer.split_last_chunk::<4>().expect("the preamble ends in a four-byte version");
     if magic != MAGIC {
         return Err(ChannelError::Malformed("the IPC peer is not a LiveKit agents process".into()));
     }
-    if version != VERSION.to_be_bytes() {
-        return Err(ChannelError::Version(u32::from_be_bytes(version.try_into().unwrap())));
+    let version = u32::from_be_bytes(*version);
+    if version != VERSION {
+        return Err(ChannelError::Version(version));
     }
     Ok(())
 }

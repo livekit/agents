@@ -204,7 +204,7 @@ pub trait ChatContextDict {
     /// ``{"items": [...]}``, each item's JSON dump. Media content needs its exclusion; with
     /// ``strip_markup`` the ``<expr/>`` dialect is stripped from assistant messages.
     #[host(function)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python function's keyword arguments")]
     fn chat_ctx_to_dict(
         items: Vec<crate::ChatItem>,
         #[host(kw, default = true)] exclude_image: bool,

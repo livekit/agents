@@ -136,16 +136,16 @@ impl io::AudioInput for RoomAudioInput {
 
     fn next_frame(
         &self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, io::Result<Option<lk_agents_abi::AudioFrame>>> {
-        self.0.next_frame(&telemetry::Cx::NONE)
+        self.0.next_frame(cx)
     }
 
     fn next_input(
         &self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, io::Result<Option<io::InputFrame>>> {
-        self.0.next_input(&telemetry::Cx::NONE)
+        self.0.next_input(cx)
     }
 
     fn on_attached(&self) {
@@ -182,10 +182,10 @@ impl io::VideoInput for RoomVideoInput {
 
     fn next_frame(
         &self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, io::Result<Option<lk_agents_abi::voice::rtc::VideoFrameRef>>>
     {
-        self.0.next_frame(&telemetry::Cx::NONE)
+        self.0.next_frame(cx)
     }
 
     fn on_attached(&self) {

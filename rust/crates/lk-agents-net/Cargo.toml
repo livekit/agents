@@ -59,3 +59,6 @@ sysinfo.workspace = true
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util", "net", "io-util"] }
 # Regenerates `export/otlp/proto.rs` (an ignored test); already in the lock through livekit-protocol.
 prost-build = "0.14"
+
+[lints]
+workspace = true

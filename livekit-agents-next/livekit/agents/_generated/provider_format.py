@@ -7,9 +7,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
+from pydantic import JsonValue
+
 from .chat_items import ChatItem
 
 # Record declarations:
+
+
+@dataclass
+class ProviderMessages:
+    """A conversation in a provider's request format: its messages, and the data the dialect hoists
+    out of band (`None` for OpenAI).
+    """
+
+    messages: list[JsonValue]
+    data: JsonValue
 
 
 @dataclass

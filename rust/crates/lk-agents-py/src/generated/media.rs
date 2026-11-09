@@ -5,8 +5,7 @@
 //!
 //! The `media` classes.
 
-// A host signature takes the parameters it declares.
-#![allow(clippy::too_many_arguments)]
+#![allow(clippy::too_many_arguments, reason = "a host signature takes the parameters it declares")]
 
 use pyo3::prelude::*;
 
@@ -806,7 +805,10 @@ impl crate::py_errors::HostException for ::lk_agents_abi::media::images::ImageEr
 
 impl crate::py_errors::HostException for ::lk_agents_abi::EmitterError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(unreachable_patterns)]
+        #[allow(
+            unreachable_patterns,
+            reason = "the fallback arm is dead when every variant has its own"
+        )]
         match self {
             Self::UnsupportedMime(..) => ::pyo3::exceptions::PyNotImplementedError::new_err(
                 ::std::string::ToString::to_string(self),

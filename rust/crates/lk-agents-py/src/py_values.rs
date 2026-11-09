@@ -1,49 +1,52 @@
 /// Interpreter interface namespaces. Generated inherent methods perform the declared
 /// imports and member access; they accept Python objects without asserting their runtime type.
 pub mod interfaces {
-    #[lk_agents_abi::host(interface(host = "builtins.memoryview", attrs(cast)))]
+    #[lk_agents_host_derive::host(interface(host = "builtins.memoryview", attrs(cast)))]
     pub struct MemoryView;
 
-    #[lk_agents_abi::host(interface(host = "livekit.agents.inference.TurnDetector"))]
+    #[lk_agents_host_derive::host(interface(host = "livekit.agents.inference.TurnDetector"))]
     pub struct TurnDetector;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         module = "livekit.agents.types",
         attrs(not_given(name = "NotGiven"), not_given_value(name = "NOT_GIVEN"))
     ))]
     pub struct AgentsTypesModule;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         host = "livekit.agents.voice.room_io.AudioInputOptions",
         attrs(auto_gain_control, noise_cancellation)
     ))]
     pub struct AudioInputOptions;
 
-    #[lk_agents_abi::host(interface(module = "time", attrs(time, perf_counter)))]
+    #[lk_agents_host_derive::host(interface(module = "time", attrs(time, perf_counter)))]
     pub struct TimeModule;
 
-    #[lk_agents_abi::host(interface(module = "pydantic_core", attrs(to_jsonable_python)))]
+    #[lk_agents_host_derive::host(interface(module = "pydantic_core", attrs(to_jsonable_python)))]
     pub struct PydanticCoreModule;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         module = "livekit.agents.llm.utils",
         attrs(_value_text, to_openai_response_format)
     ))]
     pub struct LlmUtilsModule;
 
-    #[lk_agents_abi::host(interface(module = "livekit.agents._bindings", attrs(tool_specs)))]
+    #[lk_agents_host_derive::host(interface(
+        module = "livekit.agents._bindings",
+        attrs(tool_specs)
+    ))]
     pub struct BindingsModule;
 
-    #[lk_agents_abi::host(interface(module = "numpy", attrs(asarray, int16, float32)))]
+    #[lk_agents_host_derive::host(interface(module = "numpy", attrs(asarray, int16, float32)))]
     pub struct NumpyModule;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         host = "livekit.agents.voice.background_audio.BuiltinAudioClip",
         attrs(path)
     ))]
     pub struct BuiltinAudioClip;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         host = "livekit.protocol.agent.Job",
         attrs(serialize_to_string(name = "SerializeToString"), from_string(name = "FromString"))
     ))]

@@ -1,5 +1,7 @@
 //! The job channel over its real transport, in its own binary for the allocation recorder.
 
+#![allow(clippy::unwrap_used, reason = "integration test")]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::time::Duration;
@@ -26,10 +28,12 @@ unsafe impl GlobalAlloc for RecordingAllocator {
                 record.set(Some(max.max(layout.size())));
             }
         });
+        // SAFETY: the caller upholds `alloc`'s contract, forwarded unchanged.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: `ptr` came from `System` through this allocator with this `layout`.
         unsafe { System.dealloc(ptr, layout) }
     }
 
@@ -39,6 +43,7 @@ unsafe impl GlobalAlloc for RecordingAllocator {
                 record.set(Some(max.max(size)));
             }
         });
+        // SAFETY: `ptr` came from `System` through this allocator with this `layout`.
         unsafe { System.realloc(ptr, layout, size) }
     }
 }

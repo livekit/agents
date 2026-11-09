@@ -29,7 +29,10 @@ pub trait InferenceStt: Stt + Sized + 'static {
     /// endpoints client-side (Speechmatics, OpenAI), which gets a default one from
     /// `vad_models` when none is given; a model that endpoints server-side ignores it.
     #[host(new)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the Python constructor's keyword arguments"
+    )]
     fn new(
         env: &Self::Env,
         vad_models: Arc<dyn VadModels>,
@@ -142,7 +145,10 @@ pub trait InferenceSttFacade {
         ),
         resolve(vad = ".._bindings.core_leg")
     )]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the Python constructor's keyword arguments"
+    )]
     fn new(
         #[host(default = None)] model: Option<String>,
         #[host(kw, default = None)] language: Option<String>,

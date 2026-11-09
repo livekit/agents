@@ -63,7 +63,7 @@ pub struct InterruptionOptions {
 impl InterruptionOptions {
     /// The reference's constructor arguments, already resolved by the caller through the shared
     /// URL and credential helpers. An empty resolved key or secret is rejected.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python constructor's arguments")]
     pub fn new(
         threshold: Option<f64>,
         min_interruption_duration: f64,

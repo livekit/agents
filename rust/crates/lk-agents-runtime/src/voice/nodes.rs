@@ -758,11 +758,12 @@ impl Tts for Node<dyn Tts> {
     /// One text, through the node all the same.
     fn synthesize<'a>(
         &'a self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
+        let cx = cx.clone();
         Box::pin(async move {
-            let (sink, source) = self.stream(&telemetry::Cx::NONE, false).await?.split();
+            let (sink, source) = self.stream(&cx, false).await?.split();
             sink.push(text.to_owned()).map_err(final_error)?;
             sink.end_input();
             Ok(source)
@@ -814,11 +815,11 @@ impl Stt for Node<dyn Stt> {
     /// `stt_node` is a stream; a batch recognition is the provider's.
     fn recognize(
         &self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         buffer: &[AudioFrame],
         language: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
-        self.below.recognize(&telemetry::Cx::NONE, buffer, language)
+        self.below.recognize(cx, buffer, language)
     }
 
     fn stream(

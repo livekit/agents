@@ -821,7 +821,10 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
     /// else `AZURE_OPENAI_ENDPOINT`; for OpenAI, `OPENAI_API_KEY` and `OPENAI_BASE_URL`, else
     /// OpenAI's. `dialect`, `label` and `gateway` are the provider class's own.
     #[host(new)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the Python constructor's keyword arguments"
+    )]
     fn new(
         env: &Self::Env,
         #[host(kw, default = None)] model: Option<String>,
@@ -857,7 +860,7 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
     fn capabilities(&self) -> RealtimeCapabilities;
     /// The given options; every live session sends what changed.
     #[host(call)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
     fn update_options(
         &self,
         #[host(kw)] voice: Maybe<Voice>,
@@ -918,7 +921,10 @@ pub trait OpenAIRealtimeModelFacade {
     /// Raises:
     ///     ValueError: If the credentials or the Azure endpoint are missing.
     #[host(new, annotation(model = ".realtime_options.RealtimeModels | str | None"))]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the Python constructor's keyword arguments"
+    )]
     fn new(
         #[host(kw, default = None)] model: Option<String>,
         #[host(default = None)] voice: Option<Voice>,
@@ -953,7 +959,7 @@ pub trait OpenAIRealtimeModelFacade {
     fn capabilities(&self) -> RealtimeCapabilities;
 
     /// Change the model's options; every live session sends what changed.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
     fn update_options(
         &self,
         #[host(kw)] voice: Maybe<Voice>,

@@ -140,7 +140,7 @@ pub trait ServerRuntime: Send + Sync + Sized + 'static {
     /// receives every other stream for `routes`. `asyncio_debug`: the job runners' loops run in
     /// debug mode.
     #[host(await)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
     async fn run(
         &self,
         #[host(kw)] devmode: bool,

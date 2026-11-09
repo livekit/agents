@@ -291,7 +291,7 @@ impl<P> State<P> {
             return false;
         }
         self.requests.remove(&request);
-        let entry = self.processes.get_mut(&id).unwrap();
+        let entry = self.processes.get_mut(&id).expect("a reserved process stays in the table");
         entry.phase = Phase::Running;
         entry.request = None;
         true
@@ -469,7 +469,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
             requests.get(id).is_some_and(|request| request.state == ReservationState::Waiting)
         });
         while !st.ready.is_empty() && !st.pending.is_empty() {
-            let first = *st.pending.front().unwrap();
+            let first = *st.pending.front().expect("the loop runs while pending is not empty");
             if st.processes.values().any(|p| p.request == Some(first) && p.phase == Phase::Retiring)
             {
                 // The head reservation must finish cleanup before any replacement is assigned.
@@ -477,9 +477,11 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
                 // while the head remains blocked, starving the runtime and growing the pool.
                 return;
             }
-            let process_id = st.ready.pop_front().unwrap();
-            let request_id = st.pending.pop_front().unwrap();
-            let request = st.requests.get_mut(&request_id).unwrap();
+            let process_id = st.ready.pop_front().expect("the loop runs while ready is not empty");
+            let request_id =
+                st.pending.pop_front().expect("the loop runs while pending is not empty");
+            let request =
+                st.requests.get_mut(&request_id).expect("pending holds only live reservations");
             request.state = ReservationState::Reserved(process_id);
             request.acquire_attempts = 0;
             let job = (request.job_id.clone(), request_id);
@@ -488,7 +490,8 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
                     process.request = None;
                 }
             }
-            let process = st.processes.get_mut(&process_id).unwrap();
+            let process =
+                st.processes.get_mut(&process_id).expect("ready holds only live processes");
             process.phase = Phase::Reserved;
             process.request = Some(request_id);
             process.job = Some(job);
@@ -506,8 +509,14 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
                 None if st.initializing.len() < CONCURRENT_INITIALIZATIONS => self.create(st),
                 None => break,
             };
-            st.requests.get_mut(&request_id).unwrap().acquire_attempts += 1;
-            st.processes.get_mut(&process_id).unwrap().request = Some(request_id);
+            st.requests
+                .get_mut(&request_id)
+                .expect("pending holds only live reservations")
+                .acquire_attempts += 1;
+            st.processes
+                .get_mut(&process_id)
+                .expect("the process was just found or created")
+                .request = Some(request_id);
         }
         if !st.draining && st.refill_paused_until.is_none() {
             let unassigned = st
@@ -644,7 +653,8 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
             })
         });
         if let Some(request_id) = waiting {
-            let request = st.requests.get_mut(&request_id).unwrap();
+            let request =
+                st.requests.get_mut(&request_id).expect("`waiting` names a live reservation");
             if reserved {
                 request.launch_attempts += 1;
             }
@@ -868,7 +878,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
         st.pending.clear();
         let reservations: Vec<_> = st.requests.keys().copied().collect();
         for id in reservations {
-            let request = st.requests.get_mut(&id).unwrap();
+            let request = st.requests.get_mut(&id).expect("ids were just read from the table");
             request.state =
                 ReservationState::Failed(LaunchError::Admission(PoolAdmissionError::Closed));
             let job_id = request.job_id.clone();

@@ -163,7 +163,10 @@ impl RemoteInteraction {
     /// Builds every initial/subsequent/answer message through the same policy. Caller history
     /// here is explicitly supplied and already validated; implicit thread history requires the
     /// local proof. A capability only controls understanding of the explicit data part.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each input is an independent part of the message policy"
+    )]
     pub fn message(
         &mut self,
         text: String,

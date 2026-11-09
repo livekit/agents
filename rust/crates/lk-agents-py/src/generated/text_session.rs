@@ -5,8 +5,7 @@
 //!
 //! The `text_session` classes.
 
-// A host signature takes the parameters it declares.
-#![allow(clippy::too_many_arguments)]
+#![allow(clippy::too_many_arguments, reason = "a host signature takes the parameters it declares")]
 
 use pyo3::prelude::*;
 
@@ -232,7 +231,10 @@ impl crate::py_errors::HostException for ::lk_agents_abi::text_session::RoutingE
 
 impl crate::py_errors::HostException for ::lk_agents_abi::text_session::TextSessionError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(unreachable_patterns)]
+        #[allow(
+            unreachable_patterns,
+            reason = "the fallback arm is dead when every variant has its own"
+        )]
         match self {
             Self::Routing(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Run(inner) => crate::py_errors::HostException::to_py_err(inner),

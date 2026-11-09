@@ -60,7 +60,7 @@ impl LocalParticipant for StalledLocal {
         options: TrackPublishOptions,
     ) -> lk_agents_abi::BoxFuture<
         'a,
-        Result<(Arc<dyn AudioSource>, Arc<dyn TrackPublication>), RtcError>,
+        Result<lk_agents_abi::voice::rtc::PublishedAudioTrack, RtcError>,
     > {
         Box::pin(async move {
             self.inner.publish_audio_track(&lk_agents_abi::telemetry::Cx::NONE, options).await

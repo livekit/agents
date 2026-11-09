@@ -192,7 +192,8 @@ fn headers(
     ] {
         if let Some(value) = value {
             headers.insert(
-                HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                HeaderName::from_bytes(name.as_bytes())
+                    .expect("the header names are valid literals"),
                 HeaderValue::from_str(&value)
                     .map_err(|error| Error::UnexpectedServerResponse(error.to_string().into()))?,
             );

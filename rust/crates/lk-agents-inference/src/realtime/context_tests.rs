@@ -1,4 +1,5 @@
 //! Bounds temporary allocation while diffing realtime conversation histories.
+#![allow(clippy::print_stdout, reason = "integration test that prints its measurements")]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -17,15 +18,18 @@ static ALLOCATED: AtomicUsize = AtomicUsize::new(0);
 unsafe impl GlobalAlloc for CountAllocations {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCATED.fetch_add(layout.size(), Ordering::Relaxed);
+        // SAFETY: the caller's layout contract is forwarded to System unchanged.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: `ptr` came from System.alloc with this layout, as the caller guarantees.
         unsafe { System.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         ALLOCATED.fetch_add(new_size, Ordering::Relaxed);
+        // SAFETY: `ptr` and `layout` came from System, as the caller guarantees.
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 }

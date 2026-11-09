@@ -651,8 +651,6 @@ Lessons taken from agent-store's simulation and gosim:
   `NO_PROGRESS_STEPS` (20 x the busiest instant measured, 6,262 loop steps) steps at one virtual instant, in the journal or in its own loop,
   is stopped there and reported as `virtual_time_advances`. Before, such a run hung the whole
   campaign.
-- **Judge by known bugs, with the protocol fixed before the run** (gosim's benchmark,
-  agent-store's held-out findings): `bench/known_bugs.sh`, section 12.
 - **Bursts and same-instant orderings** (gosim's scheduling policy): the case owns the driver's
   queue; a quarter of the seeds deliver in arrival order, a quarter by BasicPOS, half by BasicPOS
   with the transitional task bridge (`drive::queue::Policy`); section 8.
@@ -798,9 +796,7 @@ the regression tests), the 1,024-seed survey, a campaign on the next window (`VO
 32,768 by default) and the soak (`VOICE_SOAK_SEEDS`, 8). Every verdict is a runner's exit status:
 the campaigns run under nextest, which fails a selection that runs no test, and zero seeds are
 refused. It fails on any finding outside `src/known_findings.tsv` (open findings keyed by
-contract and subject kind; CI rejects an added line), on a soak residue, and, nightly
-(`VOICE_FULL_WINDOW=1`), on a known finding the full window no longer reaches once its fixing
-regression exists. Each campaign prints its boundary (`src/boundary.rs`): the cores it steps, the
+contract and subject kind) and on a soak residue. Each campaign prints its boundary (`src/boundary.rs`): the cores it steps, the
 fakes, what still runs as tasks, and the runtime adapters left to K-30's verification. About five
 minutes on a laptop (the 32,768-seed campaign is three). Not in the gate yet (K-12 closure):
 `pytest --unit --audio_eot`, the binding conformance suite, backend contracts, IPC stress and the
@@ -856,9 +852,6 @@ cargo llvm-cov report --release --summary-only | grep lk-agents-voice/src
 
 Next:
 
-- **The known-bug benchmark** (`bench/known_bugs.sh`) reintroduces each fixed bug in a copy of
-  the tree and measures every queue policy's hit ratio on matched seeds; a change to `drive/` or
-  `fakes/` records its `--compare` against the commit before it (K-14).
 - **Generated**: add the phase columns of section 5, have each rule register the (promise,
   operation, phase) cells it judges, write sections 3 and 4 from what the survey observed, and
   fail a test when this file is stale (agent-store's `dst/COVERAGE.md` and `TestCoverageMatrix`).

@@ -44,7 +44,10 @@ pub trait InferenceAvatar: Send + Sync + Sized + 'static {
     /// `model` is `"provider"` or `"provider/<avatar_id>"`. The identity defaults to
     /// `"<provider>-inference-avatar"`, the name to the identity. Starts nothing.
     #[host(new)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the Python constructor's keyword arguments"
+    )]
     fn new(
         env: &Self::Env,
         model: String,

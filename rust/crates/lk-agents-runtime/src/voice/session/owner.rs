@@ -425,7 +425,7 @@ impl Inner {
         }
         if let Some(startup) = self.startup.get() {
             startup.storage.aclose().await;
-            startup.host.closed(&telemetry::Cx::NONE).await;
+            startup.host.closed(&startup.trace).await;
         }
         if let Err(error) = self.finish_recording().await {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "the session recording could not finish: {error}");

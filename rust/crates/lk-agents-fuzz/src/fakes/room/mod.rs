@@ -2,7 +2,8 @@ use lk_agents_abi::voice::rtc::RoomEventSink;
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::rtc::capabilities::{
-    AudioSource, LocalParticipant, RemoteParticipant, RtcRoom, TextStreamWriter, TrackPublication,
+    LocalParticipant, PublishedAudioTrack, RemoteParticipant, RtcRoom, TextStreamWriter,
+    TrackPublication,
 };
 use lk_agents_abi::voice::rtc::{
     ByteStreamIngress, ConnectionState, DisconnectReason, ParticipantIdentity, ParticipantKind,
@@ -612,8 +613,7 @@ impl LocalParticipant for FakeLocalParticipant {
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
         opts: TrackPublishOptions,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<(Arc<dyn AudioSource>, Arc<dyn TrackPublication>)>>
-    {
+    ) -> lk_agents_abi::BoxFuture<'a, Result<PublishedAudioTrack>> {
         Box::pin(async move {
             self.check()?;
             let sid =
@@ -629,7 +629,7 @@ impl LocalParticipant for FakeLocalParticipant {
             }
             self.bus.emit(RoomEvent::LocalTrackPublished { publication: publication.clone() });
             let _ = self.publications_flow.subscribe().wait_for(|flowing| *flowing).await;
-            Ok((source as Arc<dyn AudioSource>, publication as Arc<dyn TrackPublication>))
+            Ok(PublishedAudioTrack { source, publication })
         })
     }
 

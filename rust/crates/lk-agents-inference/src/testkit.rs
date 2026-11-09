@@ -298,7 +298,7 @@ pub mod fallback {
 
     impl PolicyProvider {
         fn record(&self) {
-            self.calls.try_send(self.conn).unwrap();
+            self.calls.try_send(self.conn).expect("the test's call log has room and a reader");
         }
     }
 

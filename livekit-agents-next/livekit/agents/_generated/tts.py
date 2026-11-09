@@ -51,6 +51,14 @@ class ExpressiveTag(TypedDict):
 
 
 @dataclass
+class MarkupSplit:
+    """Text with its expressive markup stripped, and the tags taken out of it."""
+
+    text: str
+    tags: list[ExpressiveTag]
+
+
+@dataclass
 class SegmentCount:
     """A streamed synthesis's segments: the flushes asked for (`expected`) and the segments pushed."""
 
@@ -107,6 +115,8 @@ class TTSError(BaseModel):
 
 
 ExpressiveTag.__module__ = "livekit.agents.tts"
+MarkupSplit.__annotations__ = get_annotations(MarkupSplit, eval_str=True)
+MarkupSplit.__module__ = "livekit.agents.tts"
 TTSCapabilities.__annotations__ = get_annotations(TTSCapabilities, eval_str=True)
 TTSCapabilities.__module__ = "livekit.agents.tts"
 MarkupInfo.__annotations__ = get_annotations(MarkupInfo, eval_str=True)

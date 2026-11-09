@@ -189,11 +189,11 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
             });
             Some(quote::quote! {
                 #[doc = concat!("The variants of `", stringify!(#name), "`, without their payloads.")]
-                #[allow(missing_docs)]
+                #[allow(missing_docs, reason = "each variant mirrors a documented variant")]
                 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
                 #vis enum #k { #( #decls ),* }
                 impl #name {
-                    #[allow(missing_docs)]
+                    #[allow(missing_docs, reason = "documented on the derived enum")]
                     #vis fn kind(&self) -> #k {
                         match self { #( #pats => #values ),* }
                     }
@@ -202,7 +202,7 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
         }
         (None, Some(path)) => Some(quote::quote! {
             impl #name {
-                #[allow(missing_docs)]
+                #[allow(missing_docs, reason = "documented on the derived enum")]
                 #vis fn kind(&self) -> #path {
                     match self { #( #pats => #path::#variants ),* }
                 }
@@ -212,22 +212,22 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
     };
     let expanded = quote::quote! {
         #kind
-        #[allow(non_snake_case, missing_docs)]
+        #[allow(non_snake_case, missing_docs, reason = "keys are named for their variants")]
         #[doc = concat!("One zero-sized key per variant of `", stringify!(#name), "`: what a generator implements `Covers<K>` for.")]
         #vis mod #module {
-            #( #[allow(missing_docs)] pub struct #variants; )*
+            #( #[allow(missing_docs, reason = "one key per documented variant")] pub struct #variants; )*
             /// Every variant, in declaration order.
             pub const NAMES: &[&str] = &[ #( #names ),* ];
         }
         #[doc = concat!("Compiles only when `G` covers or skips every variant of `", stringify!(#name), "`. Reference it from the harness.")]
-        #[allow(dead_code)]
+        #[allow(dead_code, reason = "referenced only by a harness")]
         #vis fn #assert_fn<G, S>()
         where
             G: #( #bounds )+*,
         {
         }
         #[doc = concat!("Every variant, covered or skipped, in declaration order, for the coverage count and for sampling.")]
-        #[allow(dead_code)]
+        #[allow(dead_code, reason = "referenced only by a harness")]
         #vis fn #coverage_fn<G, S>() -> ::std::vec::Vec<(&'static str, ::lk_agents_abi::utils::vocabulary::Coverage<S>)>
         where
             G: #( #bounds2 )+*,

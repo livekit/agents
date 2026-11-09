@@ -32,3 +32,6 @@ thiserror.workspace = true
 
 [dev-dependencies]
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde", "testkit"] }
+
+[lints]
+workspace = true

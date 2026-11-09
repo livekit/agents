@@ -49,6 +49,14 @@ pub trait SearchIndex: Send + Sized + 'static {
     fn search(&self, query: String, docs: Vec<Self::Document>, limit: i64) -> Vec<usize>;
 }
 
+/// The tool a `call_tool` names and the parameters it passes (an object, or its JSON string).
+#[crate::host(record(module = "tool_search", dataclass, emit))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolProxyCall {
+    pub name: String,
+    pub parameters: serde_json::Value,
+}
+
 #[crate::host(functions(pid = false))]
 pub trait ToolSearch {
     #[host(class(name = "SearchDocument"))]
@@ -78,5 +86,5 @@ pub trait ToolSearch {
     fn tool_proxy_arguments(
         arguments: serde_json::Value,
         known: Vec<String>,
-    ) -> Result<(String, serde_json::Value), ToolSearchError>;
+    ) -> Result<ToolProxyCall, ToolSearchError>;
 }

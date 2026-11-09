@@ -1,3 +1,9 @@
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "a media_queue is a lock and a waker shared by a producer and a consumer, recording its own metrics"
+)]
+
 mod audio;
 mod core;
 mod metrics;

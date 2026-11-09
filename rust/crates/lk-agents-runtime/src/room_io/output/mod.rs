@@ -465,7 +465,7 @@ impl ParticipantAudioOutput {
             // Creation belongs to the output, even when the caller abandons start(). Close drains
             // this task before releasing its handles, so a late SID can always be unpublished.
             started.push(tasks.spawn(spawner, "track creation", async move {
-                let (source, publication) =
+                let lk_agents_abi::voice::rtc::PublishedAudioTrack { source, publication } =
                     match room.local().publish_audio_track(&telemetry::Cx::NONE, options).await {
                         Ok(published) => published,
                         Err(error) => {

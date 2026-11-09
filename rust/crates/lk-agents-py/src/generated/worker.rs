@@ -5,8 +5,7 @@
 //!
 //! The `worker` classes.
 
-// A host signature takes the parameters it declares.
-#![allow(clippy::too_many_arguments)]
+#![allow(clippy::too_many_arguments, reason = "a host signature takes the parameters it declares")]
 
 use pyo3::prelude::*;
 
@@ -3370,7 +3369,10 @@ impl crate::py_errors::HostException for ::lk_agents_abi::worker::TokenRefused {
 
 impl crate::py_errors::HostException for ::lk_agents_abi::worker::http::ExchangeError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(unreachable_patterns)]
+        #[allow(
+            unreachable_patterns,
+            reason = "the fallback arm is dead when every variant has its own"
+        )]
         match self {
             Self::Closed(..) => ::pyo3::exceptions::PyConnectionError::new_err(
                 ::std::string::ToString::to_string(self),
@@ -3384,7 +3386,10 @@ impl crate::py_errors::HostException for ::lk_agents_abi::worker::http::Exchange
 
 impl crate::py_errors::HostException for ::lk_agents_abi::worker::ipc_host::WorkerError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(unreachable_patterns)]
+        #[allow(
+            unreachable_patterns,
+            reason = "the fallback arm is dead when every variant has its own"
+        )]
         match self {
             Self::Invalid(..) => {
                 ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))

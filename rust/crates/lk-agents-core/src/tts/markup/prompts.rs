@@ -1,5 +1,3 @@
-#![allow(clippy::doc_markdown)]
-
 // Byte-identical to `tts/_provider_format.py`; `{}` in a `_TMPL` is a `format!` hole.
 
 pub(crate) const EXPR_PREAMBLE: &str = concat!(

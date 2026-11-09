@@ -146,7 +146,7 @@ impl Crate {
                                 .join(path);
                             let children = if path.file_name().is_some_and(|name| name == "mod.rs")
                             {
-                                path.parent().unwrap().to_path_buf()
+                                path.parent().expect("a mod.rs has a directory").to_path_buf()
                             } else {
                                 path.with_extension("")
                             };

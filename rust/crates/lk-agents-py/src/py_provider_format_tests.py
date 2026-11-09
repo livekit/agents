@@ -19,7 +19,7 @@ pytestmark = pytest.mark.unit
 @pytest.mark.parametrize("provider", ["google", "aws"])
 async def test_provider_image_bytes_are_materialized_for_the_sdk(provider: ProviderFormat) -> None:
     image = ImageContent(id="image", image="https://example.test/image.png")
-    messages, _ = await _core.to_provider_format(
+    formatted = await _core.to_provider_format(
         provider,
         [ChatMessage(role="user", content=[image])],
         images={
@@ -28,6 +28,7 @@ async def test_provider_image_bytes_are_materialized_for_the_sdk(provider: Provi
             )
         },
     )
+    messages = formatted.messages
     if provider == "google":
         from google.genai import types
 

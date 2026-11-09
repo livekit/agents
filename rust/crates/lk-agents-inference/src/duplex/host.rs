@@ -257,8 +257,9 @@ impl HostSession {
         instructions: Option<String>,
         tool_choice: Option<lk_agents_abi::ToolChoice>,
         tx: mpsc::UnboundedSender<Option<DuplexEvent>>,
+        cx: telemetry::Cx,
     ) {
-        if let Err(e) = view.generate(&telemetry::Cx::NONE, instructions, tool_choice).await {
+        if let Err(e) = view.generate(&cx, instructions, tool_choice).await {
             let error = RealtimeError { message: e.message, code: None };
             let _ = tx.send(Some(DuplexEvent::Session(Event::GenerateReplyFailed(
                 GenerateReplyFailed { req_id, error },
@@ -277,6 +278,7 @@ impl HostSession {
                     instructions,
                     tool_choice,
                     self.tx.clone(),
+                    self.job_cx(),
                 ));
             }
             DuplexCommand::UpdateInstructions(_)
@@ -299,6 +301,11 @@ impl HostSession {
         *self.cx.lock() = Some(cx);
     }
 
+    /// The job span `observe` set, if any.
+    fn job_cx(&self) -> telemetry::Cx {
+        self.cx.lock().clone().unwrap_or(telemetry::Cx::NONE)
+    }
+
     /// `None` once the session is closed.
     pub(super) async fn next_event(&self) -> Option<DuplexEvent> {
         let event = self.events.lock().await.recv().await.flatten();
@@ -314,7 +321,8 @@ impl HostSession {
     pub(super) async fn aclose(&self) {
         // Cancelled, not awaited.
         drop(std::mem::take(&mut *self.tasks.lock()));
-        self.view.aclose(&telemetry::Cx::NONE).await;
+        let cx = self.job_cx();
+        self.view.aclose(&cx).await;
     }
 }
 

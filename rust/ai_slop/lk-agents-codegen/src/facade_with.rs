@@ -36,7 +36,10 @@ impl Module<'_> {
     }
 
     /// `exit = m`: an `async with` entered by the native call `enter` on `target`.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is one part of the declared context manager"
+    )]
     pub(super) fn context_manager(
         &mut self,
         native: &Class,

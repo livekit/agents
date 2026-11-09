@@ -7,6 +7,7 @@ pub mod http;
 pub mod sql;
 pub mod storage;
 #[cfg(feature = "testing")]
+#[allow(clippy::unwrap_used, reason = "test fixtures: a failure fails the test")]
 pub mod testing;
 pub mod thread;
 pub mod voice;

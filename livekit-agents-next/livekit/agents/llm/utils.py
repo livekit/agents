@@ -428,7 +428,7 @@ async def to_chat_ctx(
         for content in item.content
         if isinstance(content, ImageContent)
     }
-    messages, data = await _core.to_provider_format(
+    formatted = await _core.to_provider_format(
         format,
         chat_ctx.items,
         images=images,
@@ -437,9 +437,8 @@ async def to_chat_ctx(
         thought_signatures=thought_signatures,
     )
     cls = _DATA.get(format)
-    return cast("ProviderMessages", messages), cls(
-        **cast("dict[str, Any]", data)
-    ) if cls is not None else None
+    data = cls(**cast("dict[str, Any]", formatted.data)) if cls is not None else None
+    return cast("ProviderMessages", formatted.messages), data
 
 
 def to_fnc_ctx(

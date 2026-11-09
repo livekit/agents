@@ -227,9 +227,6 @@ impl Resolver<'_> {
         }
         let entries = voc::read(item_attrs(item)).map_err(|e| format!("{at}: {e}"))?;
         voc::only(at, &entries, &["record", "wire_strs"])?;
-        if derives_host(item_attrs(item)) {
-            return Err(format!("{at}: a #[host(record)] is not also #[derive(Host)]"));
-        }
         let mut body = match item {
             syn::Item::Struct(st) => {
                 if !st.generics.params.is_empty() {

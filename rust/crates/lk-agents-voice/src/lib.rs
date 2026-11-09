@@ -1,8 +1,3 @@
-#![allow(
-    clippy::disallowed_macros,
-    reason = "Clippy checks macro bans at crate scope; exact legacy macro sites are ratcheted."
-)]
-
 //! Voice conversation decisions over supplied events and time; the runtime executes their effects.
 //! Start with [`agent_session::machine::VoiceDriver`], the ordered session coordinator.
 

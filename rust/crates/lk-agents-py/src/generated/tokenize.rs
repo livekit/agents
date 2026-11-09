@@ -5,8 +5,7 @@
 //!
 //! The `tokenize` classes.
 
-// A host signature takes the parameters it declares.
-#![allow(clippy::too_many_arguments)]
+#![allow(clippy::too_many_arguments, reason = "a host signature takes the parameters it declares")]
 
 use pyo3::prelude::*;
 
@@ -815,17 +814,7 @@ pub fn tool_proxy_arguments<'py>(
     crate::py_calls::check_pid()?;
     let arguments = crate::py_values::value_from_py(arguments.as_any(), "arguments")?;
     let out = py.detach(|| <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_proxy_arguments(arguments, known)).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as crate::py_errors::HostException>::to_py_err(&e))?;
-    ::pyo3::PyResult::Ok({
-        let (x0, x1) = out;
-        ::pyo3::types::PyTuple::new(
-            py,
-            [
-                ::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?,
-                crate::py_values::value_to_py(py, &x1)?,
-            ],
-        )?
-        .into_any()
-    })
+    crate::generated::records::tool_search::tool_proxy_call_to_py(py, out)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.

@@ -41,7 +41,7 @@ pub fn host_kind(attr: TokenStream, item: &syn::Item) -> syn::Result<TokenStream
     };
     let Some(body) = read(attr, item, None)?.kind else { return Ok(TokenStream::new()) };
     Ok(quote! {
-        #[allow(dead_code)]
+        #[allow(dead_code, reason = "read only by the generated bindings")]
         impl #ident {
             /// The host exception class `#[host(kind)]` names for this value.
             pub fn host_kind(&self) -> &str { #body }
@@ -264,14 +264,14 @@ fn read(attr: TokenStream, item: &syn::Item, to_host: Option<ToHost<'_>>) -> syn
             }
         }
         let kind = Some(quote! {
-            #[allow(unreachable_patterns)]
+            #[allow(unreachable_patterns, reason = "the fallback arm is dead when every variant has its own")]
             match self { #(#kind_arms)* _ => #default_kind, }
         });
         if arms.is_empty() {
             (default, kind)
         } else {
             let raise = quote! {
-                #[allow(unreachable_patterns)]
+                #[allow(unreachable_patterns, reason = "the fallback arm is dead when every variant has its own")]
                 match self { #(#arms)* _ => #default, }
             };
             (raise, kind)

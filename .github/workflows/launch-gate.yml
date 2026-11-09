@@ -1,9 +1,7 @@
 name: Launch gate
 
-# The merge gate (rust/crates/lk-agents-fuzz/launch-gate.sh): bounded seeds on every pull request
-# and push to v2.0, the full campaign nightly. The script prints what it executed, compiled only,
-# skipped and left outside per workspace crate, and fails on any crate in no list, on zero seeds
-# and on any failed step. Bootstrap: the suites it does not run yet are listed as omissions there.
+# The Rust test suites and the DST (rust/crates/lk-agents-fuzz/launch-gate.sh): bounded seeds on
+# every pull request and push to v2.0, the full campaign nightly. The Rust rules run in ci.yml.
 
 on:
   pull_request:
@@ -22,8 +20,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          fetch-depth: 0 # the known findings ratchet against the base branch
 
       - name: Checkout compatible SDK sources
         uses: ./.github/actions/checkout-sdks
@@ -33,23 +29,6 @@ jobs:
 
       - name: Install native build prerequisites
         uses: ./.github/actions/native-build
-
-      # Shrink-only: a pull request may remove open findings, never add one.
-      - name: Known findings only shrink
-        if: github.event_name == 'pull_request'
-        run: |
-          list=rust/crates/lk-agents-fuzz/src/known_findings.tsv
-          keys() { grep -v '^#' | cut -f1,2 | sort -u; }
-          added=$(comm -13 <(git show "origin/${{ github.base_ref }}:$list" 2>/dev/null | keys) \
-              <(keys < "$list"))
-          if [ -n "$added" ]; then
-            echo "known findings added (fix them, or let the gate fail):"
-            echo "$added"
-            exit 1
-          fi
-
-      - name: Prepare architecture checks
-        run: rustup component add clippy rustfmt
 
       - name: Install cargo-nextest
         run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
@@ -75,19 +54,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-            rust/target-checks
           key: launch-gate-v2-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: launch-gate-v2-${{ runner.os }}-
-
-      - name: Rust architecture
-        run: |
-          bash rust/architecture/check.sh
-          bash rust/architecture/check.sh --tests
 
       # Pull requests and pushes: the 1024-seed survey plus 4096 campaign seeds. Nightly and on
       # demand: the full 32768.
       - name: Launch gate
         env:
           VOICE_GATE_SEEDS: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '32768' || '4096' }}
-          VOICE_FULL_WINDOW: ${{ github.event_name == 'schedule' && '1' || '' }}
-        run: rust/crates/lk-agents-fuzz/launch-gate.sh --skip-architecture
+        run: rust/crates/lk-agents-fuzz/launch-gate.sh

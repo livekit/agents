@@ -1,4 +1,0 @@
-{
-  "nesting:rust/crates/lk-agents-voice/src/keyterm_detection/machine.rs:record_keyterms_spec": 5,
-  "nesting:rust/crates/lk-agents-worker/src/http/exchange.rs:impl Request::next": 5
-}

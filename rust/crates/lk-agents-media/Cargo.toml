@@ -46,3 +46,6 @@ tempfile = "3"
 [[test]]
 name = "cache"
 path = "build/cache_tests.rs"
+
+[lints]
+workspace = true

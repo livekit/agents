@@ -531,7 +531,7 @@ impl FakeAvatarWorker {
     /// The avatar worker in its room `name`, joined to the agent's room as `avatar`, on the
     /// production receiver and runner; the runner takes ready events in the order `schedule`
     /// seeds.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "the production runner's inputs, one per port")]
     pub async fn start(
         spawner: Arc<dyn lk_agents_abi::Spawner>,
         agent: Arc<FakeRoom>,

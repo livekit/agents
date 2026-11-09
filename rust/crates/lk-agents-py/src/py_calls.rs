@@ -1,42 +1,42 @@
 /// Interpreter interface namespaces. Generated inherent methods perform the declared
 /// imports and member access; they accept Python objects without asserting their runtime type.
 pub mod interfaces {
-    #[lk_agents_abi::host(interface(module = "asyncio", attrs(get_running_loop)))]
+    #[lk_agents_host_derive::host(interface(module = "asyncio", attrs(get_running_loop)))]
     pub struct AsyncioModule;
 
-    #[lk_agents_abi::host(interface(module = "contextvars", attrs(copy_context)))]
+    #[lk_agents_host_derive::host(interface(module = "contextvars", attrs(copy_context)))]
     pub struct ContextVarsModule;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         module = "inspect",
         attrs(isawaitable, iscoroutine, getattr_static)
     ))]
     pub struct InspectModule;
 
-    #[lk_agents_abi::host(interface(host = "contextvars.Context", attrs(copy, run)))]
+    #[lk_agents_host_derive::host(interface(host = "contextvars.Context", attrs(copy, run)))]
     pub struct Context;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         host = "asyncio.AbstractEventLoop",
         attrs(call_soon_threadsafe),
         methods(create_task(args(coro, context(kw))))
     ))]
     pub struct EventLoop;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         host = "asyncio.Task",
         attrs(cancel, result, add_done_callback)
     ))]
     pub struct Task;
 
-    #[lk_agents_abi::host(interface(module = "lk_agents_host", attrs(awaiting)))]
+    #[lk_agents_host_derive::host(interface(module = "lk_agents_host", attrs(awaiting)))]
     pub struct AwaitableAdapterModule;
 
-    #[lk_agents_abi::host(interface(module = "traceback", attrs(format_exception)))]
+    #[lk_agents_host_derive::host(interface(module = "traceback", attrs(format_exception)))]
     pub struct TracebackModule;
 
     /// The host's current OpenTelemetry span, read at an entry and activated for a call.
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         module = "livekit.agents.telemetry",
         attrs(_activate, _current)
     ))]

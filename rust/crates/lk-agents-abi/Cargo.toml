@@ -55,3 +55,6 @@ serde = []
 # The zeroed metrics records tests fill in field by field (`metrics::testkit`), and host frames
 # without a host (`utils::video::FakeFrame`).
 testkit = []
+
+[lints]
+workspace = true

@@ -352,7 +352,8 @@ class ChunkedStream(tts.ChunkedStream):
         parts: list[dict[str, Any]] = []
         stripped_a_marker = False
         for span in spans:
-            words, markers = split_expr_markup(span)
+            split = split_expr_markup(span)
+            words, markers = split.text, split.tags
             stripped_a_marker |= any(t["type"] == "expression" for t in markers)
             if not (words := words.strip()):
                 continue

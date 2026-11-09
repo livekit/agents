@@ -1,4 +1,5 @@
 use lk_agents_abi::errors::Invalid;
+use lk_agents_abi::llm::provider_format::host::ProviderMessages;
 use lk_agents_abi::llm::provider_format::vocabulary::GeminiToolBehavior;
 use lk_agents_abi::llm::provider_format::{
     ProviderFormat, SerializedImage, StrictError, ToolSchema,
@@ -24,8 +25,8 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
         inject_dummy_user_message: bool,
         inject_trailing_user_message: bool,
         thought_signatures: Option<BTreeMap<String, Vec<u8>>>,
-    ) -> Result<(Vec<Value>, Value), Invalid> {
-        lk_agents_media::pool::media_pool()
+    ) -> Result<ProviderMessages, Invalid> {
+        let (messages, data) = lk_agents_media::pool::media_pool()
             .try_spawn(lk_agents_media::pool::JobClass::Formatting, move || {
                 provider_format::host::to_provider_format(
                     format,
@@ -38,7 +39,8 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
             })
             .map_err(|error| Invalid(error.to_string()))?
             .await
-            .map_err(|error| Invalid(error.to_string()))?
+            .map_err(|error| Invalid(error.to_string()))??;
+        Ok(ProviderMessages { messages, data })
     }
     fn convert_mid_conversation_instructions(
         items: Vec<ChatItem>,

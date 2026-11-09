@@ -268,7 +268,7 @@ impl VoiceDriver {
         self.answer_speech(call);
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors generate_reply's keyword arguments")]
     pub(crate) fn generate_reply_speech(
         &mut self,
         now: Ts,
@@ -844,7 +844,10 @@ impl VoiceDriver {
 
     /// Releases the current speech and moves the state (`thinking` while tools run, else
     /// `listening`). `add_to_chat_ctx=False` keeps the item out of the conversation only.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one completed step's inputs, delivered together by the executor"
+    )]
     pub(crate) fn step_spoken(
         &mut self,
         now: Ts,

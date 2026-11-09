@@ -808,7 +808,6 @@ impl VoiceDriver {
         self.begin_closing(now, close);
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn realtime_tools_done(
         &mut self,
         now: Ts,

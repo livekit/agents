@@ -11,7 +11,10 @@ fn thread_cpu() -> Duration {
     let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
     // SAFETY: the OS writes the calling thread's CPU time to this valid timespec.
     assert_eq!(unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) }, 0);
-    Duration::new(time.tv_sec.try_into().unwrap(), time.tv_nsec.try_into().unwrap())
+    Duration::new(
+        time.tv_sec.try_into().expect("CPU time is non-negative"),
+        time.tv_nsec.try_into().expect("nanoseconds are below one second"),
+    )
 }
 
 #[cfg(unix)]
@@ -56,7 +59,7 @@ async fn text_turns_can_be_formatted_while_all_image_workers_are_busy() {
         image_permits.push(permit);
     }
     assert!(!image_permits.is_empty());
-    let (messages, _) = <crate::llm::algorithms::LlmAlgorithms as lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::prepare_provider_format(
+    let formatted = <crate::llm::algorithms::LlmAlgorithms as lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::prepare_provider_format(
         &ProcessEnv::current_runtime(),
         lk_agents_abi::llm::provider_format::ProviderFormat::OpenAi,
         vec![ChatMessage::text("user", Role::User, "hello", std::time::UNIX_EPOCH).into()],
@@ -67,7 +70,7 @@ async fn text_turns_can_be_formatted_while_all_image_workers_are_busy() {
     )
     .await
     .expect("text turns must not compete with long image encodes");
-    assert_eq!(messages[0]["content"], "hello");
+    assert_eq!(formatted.messages[0]["content"], "hello");
 }
 
 #[tokio::test]

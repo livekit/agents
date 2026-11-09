@@ -472,21 +472,16 @@ impl AmdSystem {
         let tx = self.tx.clone();
         let peer = self.peer.clone();
         let tasks = self.tasks.clone();
+        let cx = self.cx.clone();
         self.tasks.spawn(self.peer.spawner.as_ref(), "amd tap open", async move {
             if peer.closing.is_cancelled() || tx.is_closed() {
                 return;
             }
             // Let an admitted host open settle so its successful result can acquire ownership.
             let options = stt.conn_options().unwrap_or_default();
-            let result = lk_agents_inference::stt::stream(
-                stt,
-                options,
-                peer.time.clock(),
-                &telemetry::Cx::NONE,
-                None,
-                None,
-            )
-            .await;
+            let result =
+                lk_agents_inference::stt::stream(stt, options, peer.time.clock(), &cx, None, None)
+                    .await;
             let outcome = match result {
                 Ok(Some(pair)) => {
                     let (sink, source) = pair.split();
@@ -688,7 +683,7 @@ async fn forward_transcripts(
 /// The classification task, an `llm_request` under the detector's `amd` span. A cancelled run
 /// reports nothing. A native source may be abandoned mid-poll; a host stream may not, so the
 /// cancel waits for the chunk.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "the spawned task owns each input it moves in")]
 async fn classify(
     time: crate::voice::session::Timebase,
 

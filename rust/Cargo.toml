@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "ai_slop/*"]
+members = ["crates/*", "ai_slop/*", "check"]
 # The Python binding is a member (so -p lk-agents-py works) but not a default member.
 # Its embedded CPython contracts run in a dedicated invocation. PyO3 exists only in that
 # crate; linking it never adds a host feature or interpreter dependency to the sans-I/O crates.
@@ -26,6 +26,17 @@ default-members = [
 edition = "2024"
 rust-version = "1.90"
 license = "Apache-2.0"
+
+[workspace.lints.clippy]
+# Every rule is in AGENTS.md "Rust architecture rules"; `make check` denies warnings.
+allow_attributes_without_reason = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+self_named_module_files = "warn"
+todo = "warn"
+undocumented_unsafe_blocks = "warn"
+unimplemented = "warn"
+unwrap_used = "warn"
 
 [workspace.dependencies]
 # --- dependencies the pure cores may take (no tokio, reqwest, prost, pyo3, no C++) ---
@@ -115,10 +126,3 @@ opt-level = 1
 debug = 1
 # Test binaries use the same target-specific symbol policy in .cargo/config.toml.
 # The previous unpacked policy produced thousands of orphan objects per integration test.
-
-# Source parsing dominates repeated checks. Optimize the checker and its dependencies
-# without changing the runtime's development profile.
-[profile.check-tools]
-inherits = "dev"
-opt-level = 1
-debug = 0

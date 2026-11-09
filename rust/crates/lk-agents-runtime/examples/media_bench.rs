@@ -147,7 +147,7 @@ mod bench {
                 }
             }
         });
-        started.await.unwrap();
+        started.await.expect("the heartbeat signals readiness before it can end");
         (stop, task, observations)
     }
 
@@ -171,8 +171,8 @@ mod bench {
         let samples = task.await?;
         let mut lag = distribution(samples.lag);
         lag["serviced_wakeups"] = json!(samples.serviced);
-        let p999 = lag["p999_ms"].as_f64().unwrap();
-        let max = lag["max_ms"].as_f64().unwrap();
+        let p999 = lag["p999_ms"].as_f64().ok_or("the heartbeat collected too few observations")?;
+        let max = lag["max_ms"].as_f64().expect("distribution always reports max_ms");
         lag["gate_20ms"] =
             json!({"p999_limit_ms":4.,"max_exclusive_ms":10.,"passed":p999<=4. && max<10.});
         lag["observation_kind"] = json!("anchored_1ms_deadlines_including_missed_ticks");
@@ -285,7 +285,7 @@ mod bench {
         let lag = stop_heartbeat(stop, heartbeat).await?;
         let result = json!({
             "kind": "background_file_decoder",
-            "format": path.extension().unwrap().to_string_lossy(),
+            "format": path.extension().expect("the fixtures are .wav and .ogg files").to_string_lossy(),
             "requested": count,
             "waves": waves,
             "admitted": count * waves - refused,

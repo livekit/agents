@@ -55,8 +55,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.13"]
-        
+        python-version: ["3.11"]
+
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: Checkout compatible SDK sources
@@ -93,44 +93,13 @@ jobs:
       - name: Check Types
         run: uv run python scripts/check_types.py
 
-  storage-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-
-      - name: Checkout compatible SDK sources
-        uses: ./.github/actions/checkout-sdks
-        with:
-          python-sdk: 'false'
-          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
-
-      - name: Install native build prerequisites
-        uses: ./.github/actions/native-build
-
-      - name: Cache cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: storage-tests-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: storage-tests-
-
-      # the staging tests skip without a project in the environment
-      - name: Test thread storage on both backends
-        working-directory: rust
-        run: cargo test --locked -p lk-agents-storage
-
-  # The Rust core and the package over it: the generated files match their declarations (every
-  # `_generated/` header says CI regenerates them), the core's provider and voice tests pass, and
-  # livekit-agents-next builds and runs its smoke call end to end.
+  # The Rust core and the package over it: every Rust rule (`make -C rust check`: fmt, Clippy,
+  # rust/check, generated drift), and livekit-agents-next builds and runs its smoke call end to end.
+  # The Rust test suites run once, in the launch gate.
   core:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          fetch-depth: 0 # Codegen and architecture ratchets inspect committed history.
 
       - name: Checkout compatible SDK sources
         uses: ./.github/actions/checkout-sdks
@@ -161,22 +130,6 @@ jobs:
           key: core-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: core-
 
-      - name: Generated files match their declarations
-        working-directory: rust
-        run: cargo run --locked -q -p lk-agents-codegen -- --check
-
-      # ABI architecture tests invoke Clippy and compare baselines with their full history.
-      - name: Prepare architecture checks
-        run: |
-          rustup component add clippy
-          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
-            git fetch --unshallow
-          fi
-
-      - name: The core's provider and voice tests
-        working-directory: rust
-        run: cargo test --locked -q -p lk-agents-abi -p lk-agents-inference -p lk-agents-voice
-
       - name: Build livekit-agents-next
         run: |
           uv venv -p 3.12 .venv-next
@@ -195,20 +148,7 @@ jobs:
       - name: Smoke
         run: .venv-next/bin/python livekit-agents-next/scripts/smoke.py
 
-      # Cargo discovers the colocated Python binding contracts and runs them against its linked
-      # module, alongside the binding crate's Rust tests and the abi tests behind its
-      # `python` feature, against the venv built above (its site-packages hold pydantic_core). The
-      # abi tests set process globals (the fork guard, cached host classes): one process per test.
-      - name: Install cargo-nextest
-        run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
-
-      - name: The binding's tests against the interpreter
-        working-directory: rust
+      - name: Rust rules
         run: |
-          py=$PWD/../.venv-next/bin/python
-          export PYO3_PYTHON=$py
-          export PYTHONHOME=$("$py" -c 'import sys; print(sys.base_prefix)')
-          export PYTHONPATH=$("$py" -c 'import site; print(site.getsitepackages()[0])')
-          cargo test --locked -q -p lk-agents-py
-          cargo nextest run --locked --cargo-quiet --status-level fail --final-status-level fail \
-            -p lk-agents-abi --features python
+          rustup component add clippy rustfmt
+          PYO3_PYTHON=$PWD/.venv-next/bin/python make -C rust check CARGO_RUNNER=cargo

@@ -4,8 +4,8 @@ use super::*;
 use std::ops::ControlFlow;
 impl Parser {
     fn member(&self, mut i: isize) -> bool {
-        if self.at(i).is_some_and(quote) {
-            let q = closing(self.at(i).unwrap());
+        if let Some(q) = self.at(i).filter(|c| quote(*c)) {
+            let q = closing(q);
             i = self.skip(&[q], i + 1);
             if self.at(i).is_none() {
                 return false;
@@ -28,8 +28,7 @@ impl Parser {
             Some('{' | '[') => return Comma::OpensContainer,
             _ => {}
         }
-        if self.at(i).is_some_and(quote) {
-            let q = self.at(i).unwrap();
+        if let Some(q) = self.at(i).filter(|c| quote(*c)) {
             let end = self.skip(&[q], i + 1);
             return if self.at(end).is_some() && self.at(self.scroll(end + 1)) == Some(':') {
                 Comma::EndsValue
@@ -317,9 +316,11 @@ impl Parser {
             _ => e,
         });
         self.index += 1;
-        while s.out.ends_with('\\') && self.at(0).is_some_and(|c| c == s.right || c == '\\') {
+        while s.out.ends_with('\\')
+            && let Some(c) = self.at(0).filter(|c| *c == s.right || *c == '\\')
+        {
             s.out.pop();
-            s.out.push(self.at(0).unwrap());
+            s.out.push(c);
             self.index += 1;
         }
         Some(ControlFlow::Continue(()))
@@ -335,7 +336,7 @@ impl Parser {
         if code.len() != n || !code.chars().all(|c| c.is_ascii_hexdigit()) {
             return None;
         }
-        let u = u32::from_str_radix(&code, 16).unwrap();
+        let u = u32::from_str_radix(&code, 16).ok()?;
         if HIGH_SURROGATES.contains(&u)
             && self.at((n + 1) as isize) == Some('\\')
             && self.at((n + 2) as isize) == Some('u')
@@ -418,8 +419,7 @@ impl Parser {
     fn quote_lookahead(&self, s: &StringScan) -> isize {
         let mut i = 1;
         let mut comma_ends_value = true;
-        while self.at(i).is_some_and(|c| c != s.right && c != s.left) {
-            let ch = self.at(i).unwrap();
+        while let Some(ch) = self.at(i).filter(|c| *c != s.right && *c != s.left) {
             if comma_ends_value && ch.is_alphabetic() {
                 comma_ends_value = false;
             }
@@ -445,8 +445,7 @@ impl Parser {
             return Some(s.keep(self, s.right));
         }
         let mut i = self.skip(&[s.right], i + 1) + 1;
-        while self.at(i).is_some_and(|c| c != ':') {
-            let ch = self.at(i).unwrap();
+        while let Some(ch) = self.at(i).filter(|c| *c != ':') {
             if matches!(ch, ',' | ']' | '}') || (ch == s.right && self.at(i - 1) != Some('\\')) {
                 break;
             }

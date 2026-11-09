@@ -197,14 +197,13 @@ impl Walk<'_> {
             let Some(variants) = schema.get(union_key).and_then(Value::as_array) else { continue };
 
             // Drop `{}`, which strict mode rejects for having no type (`Union[Literal[...], Any]`, #5137).
-            let variants: Vec<Value> =
+            let mut variants: Vec<Value> =
                 variants.iter().filter(|v| !is_empty_object(v)).cloned().collect();
 
             match variants.len() {
                 // Hoist the survivor into the parent; its keys beat the parent's.
                 1 => {
-                    let only =
-                        self.child(&[union_key, "0"], variants.into_iter().next().unwrap())?;
+                    let only = self.child(&[union_key, "0"], variants.remove(0))?;
                     if let Value::Object(only) = only {
                         schema.extend(only);
                     }
@@ -229,11 +228,11 @@ impl Walk<'_> {
 
     /// Hoist a one-element `allOf` (pydantic's `$ref`-with-description wrapper).
     fn all_of(&mut self, schema: &mut Object) -> Result<(), StrictError> {
-        let Some(all_of) = schema.get("allOf").and_then(Value::as_array).cloned() else {
+        let Some(mut all_of) = schema.get("allOf").and_then(Value::as_array).cloned() else {
             return Ok(());
         };
         if all_of.len() == 1 {
-            let only = self.child(&["allOf", "0"], all_of.into_iter().next().unwrap())?;
+            let only = self.child(&["allOf", "0"], all_of.remove(0))?;
             if let Value::Object(only) = only {
                 schema.extend(only);
             }

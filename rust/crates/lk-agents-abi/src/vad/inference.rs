@@ -40,7 +40,10 @@ pub trait InferenceVad: Send + Sync + Sized + 'static {
     /// `deactivation_threshold` is `max(activation_threshold - 0.15, 0.01)` when `None`. Only the
     /// `"silero"` model exists.
     #[host(new)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the Python constructor's keyword arguments"
+    )]
     fn new(
         env: &Self::Env,
         model_factory: Arc<dyn VadModels>,
@@ -104,7 +107,6 @@ pub trait InferenceVadFacade {
     ///     deactivation_threshold: The probability below which speech ends;
     ///         ``activation_threshold - 0.15`` by default.
     #[host(new, not_given)]
-    #[allow(clippy::too_many_arguments)]
     fn new(
         #[host(kw, default = "silero")] model: crate::inference::models::VadModelName,
         #[host(default = 0.05)] min_speech_duration: f64,

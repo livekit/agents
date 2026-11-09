@@ -24,8 +24,8 @@ everything to Rust.
 4. **Telemetry is spelled `telemetry::`.** Outside the telemetry modules, every
    telemetry touchpoint is a path that starts with `telemetry::`: no telemetry
    item is imported under a short name. A reader who cares only about the logic
-   skips those lines; `rust/architecture/check.sh` rejects a `use` of a
-   telemetry item outside a telemetry module. Telemetry is output only: logic
+   skips those lines; review rejects a `use` of a telemetry item outside a
+   telemetry module. Telemetry is output only: logic
    never reads telemetry state, and removing every `telemetry::` line leaves
    behavior unchanged.
 5. **Standards first.** Model requests, tool calls and agent invocations follow
@@ -230,7 +230,7 @@ else. Calls that run in place (`call`, `read_once`, `bind`) and notifications
 activate no span and take none. Log forwarding is the one host entry outside
 HostInvoker and runs no application code. Within `lk-agents-py`, Python objects
 are called only from `py_calls.rs`, `py_streams.rs`, `py_logging.rs` and
-generated output (`rust/architecture/check.sh`).
+generated output (`make -C rust check`).
 
 **Streams behave as `async for` does in Python.** A generator body runs only
 when it is pulled, so a stream a host call returns (a node override's async
@@ -839,7 +839,6 @@ A key moves to protocol only when a second producer emits it.
 | Compile errors (I/O) | a key or event a declaration does not hold (`start`, `event` and `measure` take only declarations), an end of the wrong type, a span ended twice (`end` consumes it), telemetry steering control flow (`end` returns nothing) |
 | `lk-agents-codegen --check` | declarations out of sync with generated outputs, `Content<T>` outside `lk.pii.*`, unknown semconv keys, a span missing from `spans::SPANS` |
 | Clippy | a panic (`unwrap`, `expect`, `panic!`) in a telemetry module: telemetry never fails the agent |
-| `rust/architecture/check.sh` (`cx-none`) | new work run under `Cx::NONE`: each use outside tests is counted per file and only shrinks |
 | `ScopedSpan` itself | GenAI message content recorded with capture off: every `GENAI_CONTENT` key is dropped at the span's end, whatever the emitter wrote |
 | `weaver registry check` (`Telemetry registry` workflow) | a `semconv` constant or declared reference that a pinned registry does not define; an invalid registry |
 | DST span rules | every recorded span, scoped or manual, ends exactly once, under a declared parent and within it unless `outlives_parent`; a failed manual span is never recorded as cancelled; nothing reaches the close sweep |

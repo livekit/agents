@@ -5,8 +5,7 @@
 //!
 //! The `tts` classes.
 
-// A host signature takes the parameters it declares.
-#![allow(clippy::too_many_arguments)]
+#![allow(clippy::too_many_arguments, reason = "a host signature takes the parameters it declares")]
 
 use pyo3::prelude::*;
 
@@ -49,23 +48,7 @@ pub fn split_all_markup<'py>(
             text,
         )
     });
-    ::pyo3::PyResult::Ok({
-        let (x0, x1) = out;
-        ::pyo3::types::PyTuple::new(
-            py,
-            [
-                ::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?,
-                ::pyo3::types::PyList::new(
-                    py,
-                    x1.into_iter()
-                        .map(|x| crate::generated::records::tts::expressive_tag_to_py(py, x))
-                        .collect::<PyResult<Vec<_>>>()?,
-                )?
-                .into_any(),
-            ],
-        )?
-        .into_any()
-    })
+    crate::generated::records::tts::markup_split_to_py(py, out)
 }
 
 #[pyfunction]
@@ -109,23 +92,7 @@ pub fn split_expr_markup<'py>(
             text,
         )
     });
-    ::pyo3::PyResult::Ok({
-        let (x0, x1) = out;
-        ::pyo3::types::PyTuple::new(
-            py,
-            [
-                ::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?,
-                ::pyo3::types::PyList::new(
-                    py,
-                    x1.into_iter()
-                        .map(|x| crate::generated::records::tts::expressive_tag_to_py(py, x))
-                        .collect::<PyResult<Vec<_>>>()?,
-                )?
-                .into_any(),
-            ],
-        )?
-        .into_any()
-    })
+    crate::generated::records::tts::markup_split_to_py(py, out)
 }
 
 #[pyfunction]
@@ -1273,7 +1240,10 @@ impl ::lk_agents_abi::Tts for TtsProxy {
 
 impl crate::py_errors::HostException for ::lk_agents_abi::tts::streams::DrainError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(unreachable_patterns)]
+        #[allow(
+            unreachable_patterns,
+            reason = "the fallback arm is dead when every variant has its own"
+        )]
         match self {
             Self::Pull(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Emitter(inner) => crate::py_errors::HostException::to_py_err(inner),

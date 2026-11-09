@@ -16,6 +16,8 @@ parking_lot.workspace = true
 pyo3.workspace = true
 log.workspace = true
 lk-agents-abi = { path = "../lk-agents-abi" }
+# `#[host(interface(..))]`: the binding's own interpreter-local interfaces.
+lk-agents-host-derive = { path = "../../ai_slop/lk-agents-host-derive" }
 # `ffmpeg` stays this crate's own feature (below): as a dependency feature it would unify across
 # the workspace and make every workspace test build compile ffmpeg.
 lk-agents-runtime = { path = "../lk-agents-runtime", features = [
@@ -59,3 +61,6 @@ path = "src/py_bindings_tests.rs"
 [[test]]
 name = "py_adapters"
 path = "src/py_adapter_tests.rs"
+
+[lints]
+workspace = true

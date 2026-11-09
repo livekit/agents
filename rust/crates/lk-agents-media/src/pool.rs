@@ -1,3 +1,9 @@
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "media's worker pool is the one threaded module of the sans-I/O cores"
+)]
+
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::future::Future;

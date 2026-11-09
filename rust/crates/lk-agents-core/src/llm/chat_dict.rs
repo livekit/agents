@@ -37,7 +37,7 @@ pub fn item_to_dict(
 pub struct ChatDict;
 
 impl ChatContextDict for ChatDict {
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "implements the ABI chat_ctx_to_dict signature")]
     fn chat_ctx_to_dict(
         items: Vec<ChatItem>,
         exclude_image: bool,

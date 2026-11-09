@@ -97,7 +97,7 @@ pub fn fill_sends(imp: &mut syn::ItemImpl) -> syn::Result<()> {
                     syn::ReturnType::Default => syn::parse_quote!({ let _ = self.send(#send); }),
                     syn::ReturnType::Type(_, t) if result_ok(t).is_some() => {
                         // `?` converts the refusal; it is the identity when the two types agree.
-                        attrs.push(syn::parse_quote!(#[allow(clippy::needless_question_mark)]));
+                        attrs.push(syn::parse_quote!(#[allow(clippy::needless_question_mark, reason = "`?` converts the refusal when the error types differ")]));
                         syn::parse_quote!({ ::core::result::Result::Ok(self.send(#send)?) })
                     }
                     syn::ReturnType::Type(..) => {

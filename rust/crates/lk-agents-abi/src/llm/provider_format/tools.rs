@@ -88,10 +88,12 @@ pub enum DuplicateMode {
 ///                      guarantee; put that in the tool body.
 #[cfg_attr(doctest, doc = "```")]
 //
-// The reference's docstring, verbatim. The `allow`: RST's `::` block is Python, not Rust, and
-// fencing it would put backticks into the generated Python docstring. The `cfg_attr(doctest)`
-// fences exist only for `cargo test --doc`, which the codegen never reads.
-#[allow(rustdoc::invalid_rust_codeblocks)]
+// The reference's docstring, verbatim. The `cfg_attr(doctest)` fences exist only for
+// `cargo test --doc`, which the codegen never reads.
+#[allow(
+    rustdoc::invalid_rust_codeblocks,
+    reason = "the RST `::` block is Python; fencing it would put backticks into the docstring"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[crate::host(record(
     module = "tool_context",
@@ -110,8 +112,7 @@ pub enum DuplicateScope {
     NameAndArgs,
 }
 
-// `bare_urls`: the `///` below is a Python docstring, and the reference writes the URL bare.
-#[allow(rustdoc::bare_urls)]
+#[allow(rustdoc::bare_urls, reason = "the docstring is Python's and writes the URL bare")]
 /// Represents the raw function schema format used in LLM function calling APIs.
 ///
 /// This structure directly maps to OpenAI's function definition format as documented at:

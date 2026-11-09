@@ -10,7 +10,7 @@ from typing import Self
 
 from .tokenizer import ReplacedWords, TokenizerToken, TokenSpan
 from .tool_context import RawFunctionDescription
-from .tool_search import SearchFields
+from .tool_search import SearchFields, ToolProxyCall
 
 def split_words(
     text: str,
@@ -153,4 +153,4 @@ def tool_search_schema(search_description: str, query_description: str) -> RawFu
 def call_tool_schema(description: str) -> RawFunctionDescription:
     """`ToolProxyToolset`'s `call_tool` raw schema."""
 
-def tool_proxy_arguments(arguments: object, known: Sequence[str]) -> tuple[str, object]: ...
+def tool_proxy_arguments(arguments: object, known: Sequence[str]) -> ToolProxyCall: ...

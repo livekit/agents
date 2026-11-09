@@ -17,3 +17,6 @@ rand = "0.9"
 
 [dev-dependencies]
 lk-agents-abi = { path = "../lk-agents-abi", features = ["testkit"] }
+
+[lints]
+workspace = true

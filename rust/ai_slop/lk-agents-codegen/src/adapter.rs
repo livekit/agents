@@ -118,7 +118,7 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
     for family in &sorted {
         let classes: Vec<&Class> = decls.classes.iter().filter(|c| c.family == *family).collect();
         let mut text = format!(
-            "{HEADER}//!\n//! The `{family}` classes.\n\n// A host signature takes the parameters it declares.\n#![allow(clippy::too_many_arguments)]\n\nuse pyo3::prelude::*;\n"
+            "{HEADER}//!\n//! The `{family}` classes.\n\n#![allow(clippy::too_many_arguments, reason = \"a host signature takes the parameters it declares\")]\n\nuse pyo3::prelude::*;\n"
         );
         for c in classes {
             text.push('\n');
@@ -303,7 +303,8 @@ fn type_name(parts: &[&str]) -> String {
         .filter(|part| !part.is_empty())
         .map(|part| {
             let mut chars = part.chars();
-            chars.next().unwrap().to_uppercase().collect::<String>() + chars.as_str()
+            chars.next().expect("empty parts are filtered").to_uppercase().collect::<String>()
+                + chars.as_str()
         })
         .collect()
 }

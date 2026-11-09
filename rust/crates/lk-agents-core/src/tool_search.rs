@@ -257,7 +257,7 @@ impl abi::ToolSearch for ToolDiscovery {
     fn tool_proxy_arguments(
         arguments: Value,
         known: Vec<String>,
-    ) -> Result<(String, Value), ToolSearchError> {
+    ) -> Result<abi::ToolProxyCall, ToolSearchError> {
         let refuse = |message: String| Err(ToolSearchError(message));
         let name = match arguments.get("name") {
             None | Some(Value::Null) => String::new(),
@@ -277,7 +277,7 @@ impl abi::ToolSearch for ToolDiscovery {
                 "unknown tool '{name}', use tool_search to discover available tools"
             ));
         }
-        Ok((name, parameters))
+        Ok(abi::ToolProxyCall { name, parameters })
     }
 }
 

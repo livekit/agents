@@ -1,7 +1,7 @@
 use super::*;
 
 /// libopus through ffmpeg's ogg muxer. Interleaved `i16` in, ogg pages out.
-#[allow(clippy::box_collection)]
+#[allow(clippy::box_collection, reason = "the C write callback holds the Vec's address")]
 pub struct OggOpusEncoder {
     enc: *mut LkEncoder,
     /// Boxed so its address survives a move: the C write callback holds a pointer to it.
@@ -22,6 +22,7 @@ extern "C" fn write_trampoline(opaque: *mut c_void, bytes: *const u8, len: c_int
     }
     // SAFETY: `opaque` is the boxed `Vec<u8>` above, alive for as long as the encoder is.
     let out = unsafe { &mut *(opaque as *mut Vec<u8>) };
+    // SAFETY: the muxer passes `len` readable bytes, borrowed only for this call.
     out.extend_from_slice(unsafe { std::slice::from_raw_parts(bytes, len as usize) });
 }
 
@@ -45,8 +46,10 @@ impl OggOpusEncoder {
         if enc.is_null() {
             return Err(err.take("lk_enc_open"));
         }
+        // SAFETY: `enc` is the non-null handle lk_enc_open just returned.
         let frame_size = unsafe { lk_enc_frame_size(enc) }.max(0) as usize;
         if frame_size == 0 {
+            // SAFETY: `enc` is freed once here and never stored, so `Drop` cannot free it again.
             unsafe { lk_enc_free(enc) };
             return Err(CodecError::Ffmpeg {
                 op: "lk_enc_open",
@@ -100,6 +103,7 @@ impl OggOpusEncoder {
             // up to 20 ms, as ffmpeg's own audio fifo does.
             self.pending.resize(block, 0);
             let mut err = ErrBuf::new();
+            // SAFETY: `pending` was just resized to exactly `block` samples, what lk_enc_push reads.
             let rc = unsafe {
                 lk_enc_push(self.enc, self.pending.as_ptr(), err.as_mut_ptr(), ERRLEN as c_int)
             };
@@ -109,6 +113,7 @@ impl OggOpusEncoder {
             self.pending.clear();
         }
         let mut err = ErrBuf::new();
+        // SAFETY: `self.enc` is live until `Drop`; `err` outlives the call.
         let rc = unsafe { lk_enc_finish(self.enc, err.as_mut_ptr(), ERRLEN as c_int) };
         if rc < 0 {
             return Err(err.take("lk_enc_finish"));
@@ -121,6 +126,7 @@ impl Drop for OggOpusEncoder {
     fn drop(&mut self) {
         if !self.enc.is_null() {
             // No trailer on drop: an unfinished encoder is an abandoned recording.
+            // SAFETY: the handle is non-null, owned solely by `self`, and nulled after the free.
             unsafe { lk_enc_free(self.enc) };
             self.enc = std::ptr::null_mut();
         }

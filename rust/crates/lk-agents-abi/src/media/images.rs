@@ -73,7 +73,6 @@ pub trait ImageFunctions {
     type Env;
 
     #[host(function)]
-    #[allow(clippy::too_many_arguments)]
     async fn encode_image(
         env: &Self::Env,
         frame: Arc<dyn RtcVideoFrame>,

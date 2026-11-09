@@ -10267,6 +10267,38 @@ pub mod provider_format {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/llm/provider_format/host.rs.
+    static PROVIDER_MESSAGES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn provider_messages_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::provider_format::host::ProviderMessages,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::provider_format::host::ProviderMessages { messages, data } =
+            value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "messages",
+            ::pyo3::types::PyList::new(
+                py,
+                messages
+                    .into_iter()
+                    .map(|x| crate::py_values::value_to_py(py, &x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item("data", crate::py_values::value_to_py(py, &data)?)?;
+        crate::py_calls::call(
+            PROVIDER_MESSAGES
+                .import(py, "livekit.agents._generated.provider_format", "ProviderMessages")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/provider_format/host.rs.
     static CONVERTED_ITEM: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -13549,6 +13581,34 @@ pub mod rtc_wire {
             pause: crate::py_values::attr_with(obj, "AudioOutputCapabilities", "pause", |v| {
                 v.extract::<bool>()
             })?,
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/capabilities.rs.
+    static PUBLISHED_AUDIO_TRACK: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn published_audio_track_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::voice::rtc::PublishedAudioTrack> {
+        let py = obj.py();
+        if !obj.is_instance(PUBLISHED_AUDIO_TRACK.import(
+            py,
+            "livekit.agents._generated.rtc_wire",
+            "PublishedAudioTrack",
+        )?)? {
+            return Err(super::not_a(obj, "PublishedAudioTrack"));
+        }
+        Ok(::lk_agents_abi::voice::rtc::PublishedAudioTrack {
+            source: crate::py_values::attr_with(obj, "PublishedAudioTrack", "source", |v| {
+                crate::generated::voice::AudioSourceProxy::from_host(v.as_any())
+            })?,
+            publication: crate::py_values::attr_with(
+                obj,
+                "PublishedAudioTrack",
+                "publication",
+                |v| crate::generated::voice::TrackPublicationProxy::from_host(v.as_any()),
+            )?,
         })
     }
 
@@ -22535,6 +22595,27 @@ pub mod tool_search {
             ::lk_agents_abi::tokenize::search::SearchFields { name, description, parameters };
         Ok(value)
     }
+
+    // Declared in rust/crates/lk-agents-abi/src/tokenize/search.rs.
+    static TOOL_PROXY_CALL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn tool_proxy_call_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::tokenize::search::ToolProxyCall,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::tokenize::search::ToolProxyCall { name, parameters } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
+        kwargs.set_item("parameters", crate::py_values::value_to_py(py, &parameters)?)?;
+        crate::py_calls::call(
+            TOOL_PROXY_CALL
+                .import(py, "livekit.agents._generated.tool_search", "ToolProxyCall")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
 }
 
 pub mod transcript {
@@ -22682,6 +22763,34 @@ pub mod tts {
         dict.set_item("type", ::pyo3::IntoPyObjectExt::into_bound_py_any(kind, py)?)?;
         dict.set_item("value", ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)?)?;
         Ok(dict.into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/markup.rs.
+    static MARKUP_SPLIT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn markup_split_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::tts::markup::MarkupSplit,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::tts::markup::MarkupSplit { text, tags } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+        kwargs.set_item(
+            "tags",
+            ::pyo3::types::PyList::new(
+                py,
+                tags.into_iter()
+                    .map(|x| crate::generated::records::tts::expressive_tag_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        crate::py_calls::call(
+            MARKUP_SPLIT.import(py, "livekit.agents._generated.tts", "MarkupSplit")?.as_any(),
+            (),
+            Some(&kwargs),
+        )
     }
 
     // Declared in rust/crates/lk-agents-abi/src/tts/streams.rs.

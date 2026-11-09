@@ -334,14 +334,12 @@ class ToolProxyToolset(ToolSearchToolset):
     async def _handle_call(self, ctx: RunContext[Any], raw_arguments: dict[str, object]) -> Any:
         if self._tool_ctx is None:
             raise RuntimeError("toolset not initialized, call setup() first")
-        name, parameters = _core.tool_proxy_arguments(
-            raw_arguments, list(self._tool_ctx.function_tools)
-        )
-        fnc_tool = self._tool_ctx.function_tools[name]
+        call = _core.tool_proxy_arguments(raw_arguments, list(self._tool_ctx.function_tools))
+        fnc_tool = self._tool_ctx.function_tools[call.name]
 
         fnc_args, fnc_kwargs = prepare_function_arguments(
             fnc=fnc_tool,
-            json_arguments=cast(str | dict[str, object], parameters),
+            json_arguments=cast(str | dict[str, object], call.parameters),
             call_ctx=ctx,
         )
         result = fnc_tool(*fnc_args, **fnc_kwargs)

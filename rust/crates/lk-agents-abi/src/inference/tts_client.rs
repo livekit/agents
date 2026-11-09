@@ -104,7 +104,10 @@ pub trait InferenceTtsFacade {
             encoding = ".inference_tts.TTSEncoding"
         )
     )]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the Python constructor's keyword arguments"
+    )]
     fn new(
         model: String,
         #[host(kw, default = None)] voice: Option<String>,

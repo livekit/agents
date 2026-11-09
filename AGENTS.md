@@ -36,9 +36,9 @@ make check            # Run all checks (format-check, lint, type-check)
 
 Rust commands live in `rust/Makefile`:
 ```bash
-make -C rust clippy        # Shared purity policy for ABI, core, voice and media
+make -C rust clippy        # Clippy with the purity, I/O and base policies, denying warnings
 make -C rust check         # Workspace Clippy, boundaries and codegen
-make -C rust test-checks   # Checker counterexamples and codegen tests
+make -C rust test-checks   # rust/check and codegen tests
 ```
 
 ### Testing
@@ -258,117 +258,123 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - Use `make check` and `make fix` before committing
 
 ## Rust architecture rules
-- Python binding contracts live beside their implementation in `lk-agents-py/src/*_tests.py`.
-  The `py_bindings` Cargo integration target discovers them and runs pytest in an embedded
-  interpreter with the freshly linked Rust module installed as `livekit.agents._core`.
-  Run this crate's Rust and Python contracts together with
-  `uv run --no-sync cargo test --manifest-path rust/Cargo.toml -p lk-agents-py --features ffmpeg`.
-  Keep assertions as ordinary Python, without embedded source strings or separate extension
-  builds. Keep tests of native ownership, reference registries and Rust cancellation internals
-  in Rust. Do not also collect the colocated Python files in the standalone Python test gate.
-  Rust tests load host fixtures from `py_test_fixtures.py` through the shared test-only loader;
-  pass values to named Python functions instead of assembling source strings or using `eval`.
-  Fixtures return explicit objects, not `locals()` dictionaries or namespace-update protocols.
-  Public-package tests share `py_test_support::install_package(_core::register)` so model, proxy
-  and Python-contract tests all use the Cargo-linked module rather than an installed extension.
-- Keep out-of-line Rust tests in sibling `*_tests.rs` files named for the subject (for example,
-  `avatar_tests.rs`), not test-only source directories or `*_integration_tests.rs` names.
-  Keep small local tests inline instead of creating tiny files; group larger suites by behavior
-  within the 1,250-line limit. Declare integration targets in `Cargo.toml` so their names and
-  process isolation stay explicit even when their source files live beside the implementation.
-- Dependency direction is `lk-agents-py -> lk-agents-runtime -> sans-I/O and async I/O crates ->
-  lk-agents-abi`; `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core`,
-  `net -> core`, `net -> media`, `py -> abi`, `runtime -> cli -> worker/net/abi`, async I/O
-  crates `-> net`, `voice/media/net/inference/worker/runtime/fuzz -> telemetry` (span recording,
-  which depends only on abi), `fuzz -> sans-I/O crates + abi`, `fuzz -> runtime` (the DST runs the runtime's real
-  executors over faked ports, the fake room among them) are allowed composition edges.
-  `lk-agents-py` depends only on the runtime and ABI (the runtime re-exports the
-  implementations generated adapters select). ABI never depends on subjects or runtime; cores
-  and async I/O crates never depend on runtime, `lk-agents-py` or host adapters. Core never
-  depends on `lk-agents-storage`: its A2A decisions use ABI-declared storage records and errors,
-  and the runtime's A2A door executes them through storage.
-- The sans-I/O crates (`lk-agents-core`, `-voice`, `-media`) and `lk-agents-abi`
-  have no executor, async transport or SDK dependency in their resolved dependency closure:
-  no tokio, futures, pyo3, async-trait, reqwest, tungstenite, rusqlite, `livekit` or
-  `livekit-ffi`. `livekit-protocol` records remain allowed. The check resolves abi, core, voice
-  and media with their own features. These dependency bans do not apply to runtime, the async
-  I/O crates (`lk-agents-net`, `-inference`, `-worker`, `-storage`), fuzz support, language
-  bindings or build tools.
-- pyo3 exists only in `lk-agents-py`. Every Rust-to-host call goes through HostInvoker with
-  the Invocation captured at its operation's entry and its declared scopes, and every awaited
-  call names the span it runs under (`cx: &telemetry::Cx`, `telemetry::Cx::NONE` for none);
-  async I/O crates hold only ABI-declared proxy traits. Log forwarding is the one host entry outside
-  HostInvoker: `log` lines are queued without the GIL and `lk-agents-py`'s drain thread forwards
-  them to Python's `logging`, so logging anywhere, under any lock, never waits for the GIL.
-- The GIL boundary (rust-core.md "The GIL boundary"): every generated synchronous Python entry
-  releases the GIL (`py.detach`) for its Rust call, except a mutable class's methods and a
-  getter declared `attached`; Rust never calls the host (proxy, sink, HostInvoker) while it
-  holds a lock, and drops host objects after the guard. Locks are plain `parking_lot`. The I/O
-  Clippy policy (`rust/architecture/io/clippy.toml`) bans std's poisoning `Mutex`/`RwLock`
-  there, and every entry to Tokio's blocking pool
-  (`spawn_blocking`, `block_in_place`, `tokio::fs`, `lookup_host`): blocking work runs on the
-  media pool or `lk_agents_net::blocking_io`, and names resolve through `lk_agents_net::dns`.
-- Rust owns telemetry: spans, metrics and report records are typed declarations in
-  `lk-agents-abi`, recorded through `lk-agents-telemetry` and exported over OTLP by
-  `lk_agents_net::export`, with the session report upload. The cores' Clippy policy bans the
-  recording crate's async half (`ScopedSpan`, `Tracer`, `start`/`end`/`measure`).
-  Every telemetry touchpoint outside a telemetry module is spelled `telemetry::` (no imported
-  telemetry names) and is output only. I/O crates open `ScopedSpan`s (`#[telemetry::span]`,
-  `telemetry::start`); in sans-I/O crates the entity a span describes owns it in a `span` field,
-  opened and ended through `self.telemetry`. No key is a string literal at an emitter.
-  Python only adapts the OpenTelemetry API.
-  See `docs/internals/telemetry.md`.
-- The runtime owns the process Tokio runtime and fork guard and lends them as one
-  `lk_agents_net::env::ProcessEnv` value: a declared class declares `#[host(env)] type Env;` and
-  the generated binding passes the runtime's value to it; no `Env` type parameters.
-- Runtime executor modules (`voice/`, `room_io/`, `avatar/`, `rtc/`) use no Tokio runtime
-  (`tokio::spawn`, `tokio::time`, `tokio::net`, `Handle`, `Runtime`): they spawn and sleep only
-  through the injected `Spawner` and `Clock`, so the DST runs them on its deterministic
-  scheduler. Tokio sync primitives are allowed; every `select!` is `biased;`. Sockets live in
-  boundary adapters (the SDK room, the console's TCP port) that the DST replaces with port fakes.
-- A decision subject in core or voice is `mod.rs` (records, configuration, re-exports),
-  `machine` (the synchronous owners: inputs in, effects out) and `effects.rs` (the effect enums,
-  its output); see rust-core.md "Effect and machine source layout".
-- Move executors into the runtime by splitting: decisions stay in voice/core as synchronous
-  state machines emitting effects; the runtime keeps pumps, node calls, timers and output
-  binding. Never move a decision-bearing module into the runtime wholesale.
-- The shared `rust/architecture/clippy.toml`, explicitly selected for core, voice, ABI and media,
-  uses `disallowed-methods`, `disallowed-types` and `disallowed-macros` to reject spawns,
-  `select!`/`join!`, ambient clocks/entropy/environment/process reads,
-  unbounded channels, locks, host-shared atomics and randomly ordered decision state.
-  Media has two exempt modules: its optional thread pool, added only for a measured need, is
-  its one allowed spawn site, and `media_queue` holds a lock and a waker (no thread, no spawn,
-  no ambient clock) and records an audio queue's drop and catch-up metrics on the clock it is
-  given. Storage, inference, worker and net are unrestricted async crates.
-  Supply time and IDs as inputs; keep live resources and execution in runtime or the async I/O
-  crates.
-- Audio into a consumer goes through a `media_queue` (`CatchUp` or `Now`); a bounded channel
-  with fatal overflow is not allowed for audio, and local pressure is never a non-retryable error.
-- Errors: an error's type distinguishes only what some caller branches on; everything else is
-  its message. The shared kinds are `ApiError` (provider, network, transport), `StorageError`,
-  `HostError` (a typed `HostErrorKind` the adapter classifies once, never an exception name),
-  cancellation (`ApiErrorKind::Cancelled`, `StorageError::Cancelled`, `HostErrorKind::Cancelled`)
-  and invalid input or configuration. No `Result<_, String>` and no decision on an error's
-  message; a new variant needs a caller that matches on it.
-- Every git-tracked handwritten `.rs` file stays within 1,250 lines; files with the generated
-  marker are skipped. Split by responsibility when moving code.
-- Production functions nest at most 4 braces below their body (`nesting-baseline.json` holds
-  the existing deeper ones and only shrinks).
-- Python-host machinery that needs no pyo3 lives beside the bindings in `lk-agents-py`: log
-  forwarding and the event-loop stall detector (py-spy over the process's own memory).
-- Backend-local `#[host(interface(...))]` unit structs live beside their adapter in `lk-agents-py`; this metadata
-  cannot introduce public native exports or provider calls and resolves through the shared binding
-  model. Generated output is never a declaration-discovery input.
-- Handwritten export declarations (`#[host]` and export metadata) live only in `lk-agents-abi`.
-  Handwritten `#[pyclass]`, `#[pymethods]`,
-  `#[pyfunction]` and `#[pymodule]` belong only in generated output or the module registration shell.
-  The retired `#[derive(Host)]` record pipeline and standalone `#[class]`, `#[binding]` and
-  `#[export]` forms cannot introduce declarations. All records and interfaces use the resolved
-  declaration model. Generated files are never edited manually; `lk-agents-codegen --check` rejects placement violations
-  and generated drift.
-- Existing violations have checked-in baselines; clippy exemptions also carry `#[allow(...)]`
-  with a reason. Baselines shrink by violation kind and location identity, never by count:
-  removing one violation does not permit another. Never add or broaden an exemption.
-- Run `rust/architecture/check.sh` for dependency, clippy, baseline and file-length enforcement;
-  CI and the launch gate also run `rust/architecture/check.sh --tests`. Every check has
-  deliberately failing fixtures.
+
+Tags: **[check]** fails in `make -C rust check` (the `rust/check` crate or codegen), **[lint]** is
+Clippy (`[workspace.lints]` or a `rust/check/*/clippy.toml` policy), **[review]** is on reviewers.
+`docs/internals/rust-core.md` explains the design behind each rule. No rule has a baseline: fix
+the violation, or allow one site with `#[allow(lint, reason = "...")]`.
+
+### Crate graph
+- Each crate depends only on the workspace crates listed for it in `rust/check/src/graph.rs`. [check]
+- Dependencies flow `py -> runtime -> cores and I/O crates -> abi`, never backwards. [check]
+- Only `lk-agents-py` depends on the runtime; core never depends on storage. [check]
+
+### Sans-I/O cores (abi, core, voice, media)
+- No tokio, futures, pyo3, async-trait, reqwest, hyper, tungstenite, rusqlite or LiveKit SDK in
+  their resolved dependency tree; `livekit-protocol` records are fine. [check]
+- Never read the clock: time comes in as an input. [lint]
+- Never generate randomness or UUIDs: seeds and IDs come in as inputs. [lint]
+- Never spawn tasks or threads, and never use `select!` or `join!`. [lint]
+- Never read environment variables or process state. [lint]
+- No locks, atomics or unbounded channels. [lint]
+- Decision state uses `BTreeMap`/`BTreeSet` or `IndexMap`, never `HashMap`/`HashSet`. [lint]
+- A decision subject is `mod.rs` (records), `machine` (inputs in, effects out) and `effects.rs`
+  (its effect enums). [review]
+- Decisions stay in the core; the runtime only executes effects. Never move a decision-bearing
+  module into the runtime. [review]
+- Media's thread pool (`pool.rs`) and `media_queue` are the only exempt modules. [lint]
+
+### Runtime executors and the DST
+- Executor modules (`runtime/src/{voice,room_io,avatar,rtc}`) spawn and sleep only through the
+  injected `Spawner` and `Clock`: no `tokio::spawn`, `tokio::time`, `tokio::net` or `Handle`. [check]
+- Every `select!` is `biased;`, and a data branch (`next()`, `recv()`) comes before a branch that
+  runs the producer (`run()`), so queued data is read first. [check]
+- Sockets live only in boundary adapters, which the DST replaces with port fakes. [review]
+- The DST runs the runtime's real executors over faked ports, never re-implementations. [review]
+- Every bug found in a real room is a DST gap: add the fake or invariant that reproduces it first. [review]
+- The fakes model "committed, then the answer was lost or cancelled" and "the provider sent N
+  items, then failed", not only "the operation failed". [review]
+- Every run checks that each lease is released or renewed, each node input stream is closed,
+  each final transcript is delivered, and nothing is applied twice. [review]
+- Each cancellation bug gets a DST case that reproduces it before it is fixed. [review]
+
+### Async I/O crates (runtime, net, inference, worker, storage, py, telemetry)
+- Lock with `parking_lot`, never `std::sync::Mutex`/`RwLock`. [lint]
+- Never use Tokio's blocking pool (`spawn_blocking`, `block_in_place`, `tokio::fs`, Tokio stdio):
+  run blocking work on `lk_agents_net::blocking_io` or the media pool. [lint]
+- Resolve names with `lk_agents_net::dns` and connect websockets with `lk_agents_net::websocket`. [lint]
+- Never wrap a write or send in `timeout`: time out reads only. [review]
+- Audio into a consumer goes through a `media_queue`, never a bounded channel that errors when full. [review]
+
+### Cancellation safety
+- A `select!` branch awaits only something safe to drop: `recv`, `changed`, `notified`, a sleep,
+  a cancellation token, or a `&mut` to a future pinned outside the loop. [review]
+- Never take an item and then await in the same branch: race readiness, take after the race. [review]
+- After a branch that ends the loop wins, drain what is already queued before acting on it. [review]
+- A future that has acquired something (a lease, a stream, a track, a call) runs to completion or
+  holds a drop guard that releases it. [review]
+- A timeout never cuts off a call's own cleanup: bound an operation once, not again from outside. [review]
+- Retry or fall back only while nothing has been sent downstream; after the first item, a failure
+  is final. [review]
+- Rebuild state on reconnect from the current options, never by replaying old frames. [review]
+
+### Bindings and the host
+- pyo3 appears only in `lk-agents-py`. [check]
+- Handwritten `#[host(...)]` and export declarations live only in `lk-agents-abi`. [check]
+- `#[pyclass]`, `#[pymethods]`, `#[pyfunction]` and `#[pymodule]` appear only in generated code
+  and the module registration shell. [check]
+- Rust calls Python only through HostInvoker (`py_calls.rs`, `py_streams.rs`) and log forwarding
+  (`py_logging.rs`). [check]
+- Never call the host while holding a lock; drop host objects after the guard. [review]
+- Every synchronous Python entry releases the GIL; only a getter may be `attached`. [check]
+- Every awaited host call takes `cx: &telemetry::Cx`. Pass the enclosing span; `Cx::NONE` only
+  for per-item stream calls and background loops with no owning operation. [check, review]
+- A tuple crosses the boundary only as a pair of strings, bytes or numbers (a header, an env entry, a
+  start/end range); anything else is a record. [check]
+- Python that only forwards to `_core` is generated; handwritten Python is host-specific logic. [review]
+- A plugin base class implements every proxy method. [check]
+- The runtime lends the process Tokio runtime as one `ProcessEnv` (`#[host(env)] type Env;`). [review]
+
+### Generated code
+- Generated files start with `//! GENERATED FILE -- DO NOT EDIT.` and are never edited by hand. [check]
+- `lk-agents-codegen --check` and `thread_api.py --check` fail on drift, missing or stale files. [check]
+- A missing accessor or conversion is fixed in the schema or the generator, never by a
+  handwritten copy. [review]
+
+### Telemetry
+- Spans, metrics and keys are declared once in ABI; no key is a string literal at an emitter. [review]
+- Keys are unique, histogram bounds increase, and content keys sit under `lk.pii.*`. [check]
+- Write `telemetry::Item`; never import telemetry names directly. [review]
+- Sans-I/O crates never use `ScopedSpan`, `Tracer` or `start`/`end`/`measure`. [lint]
+
+### Errors
+- An error type distinguishes only what some caller branches on; the rest is its message. [review]
+- Shared kinds: `ApiError`, `StorageError`, `HostError` (typed `HostErrorKind`), cancellation,
+  and invalid input. A new variant needs a caller that matches on it. [review]
+- No `Result<_, String>`, and never decide anything from an error's message. [review]
+- Any failure after a write was sent is `StorageError::Uncertain`, never `Unavailable`. [review]
+- Writes are idempotent by request id: an uncertain write is retried with the same id. [review]
+- A re-sent write that finds itself already applied reports success. [review]
+- `Uncertain` reaches the caller only when retries ran out and the outcome is still unknown. [review]
+- Local pressure is never a non-retryable error. [review]
+
+### Idiomatic Rust
+- Every crate uses `[workspace.lints]`; the workspace builds with zero warnings. [lint]
+- No `.unwrap()` outside tests and fuzz: use `?`, a typed error, or `expect("why it holds")`. [lint]
+- Every `#[allow]` carries `reason = "..."`. [lint]
+- Every `unsafe` block has a `// SAFETY:` comment; unsafe stays in narrow FFI and codec adapters. [lint]
+- No `dbg!`, `todo!`, `unimplemented!` or `println!` in library code. [lint]
+- Use `name/mod.rs` for a module with children; never `name.rs` beside a `name/` directory. [lint]
+- Use fields, not getters and setters, unless a method protects an invariant. [review]
+- Name events and effects for their domain (`VoiceEffect`), never bare `Effect`. [review]
+- Closed sets are ABI enums with generated strings, never string compares. [review]
+
+### Layout and tests
+- Handwritten `.rs` files stay within 1,250 lines; split by responsibility. [check]
+- Out-of-line tests live in sibling `*_tests.rs` files named for their subject; keep small tests
+  inline. [review]
+- Python binding contracts live beside their implementation in `lk-agents-py/src/*_tests.py`
+  and run through the `py_bindings` Cargo target:
+  `uv run --no-sync cargo test --manifest-path rust/Cargo.toml -p lk-agents-py --features ffmpeg`. [review]
+- Rust tests load host fixtures from `py_test_fixtures.py` through the shared loader; never
+  assemble Python source strings or use `eval`. [review]

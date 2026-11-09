@@ -90,3 +90,6 @@ path = "src/realtime/machine/context/context_tests.rs"
 [[test]]
 name = "eot"
 path = "src/eot_tests.rs"
+
+[lints]
+workspace = true

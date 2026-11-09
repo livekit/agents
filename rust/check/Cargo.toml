@@ -1,0 +1,17 @@
+[package]
+name = "lk-agents-check"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "The architecture rules Clippy and codegen do not cover (AGENTS.md)."
+
+[dependencies]
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+serde_json = { workspace = true }
+syn = { version = "2", features = ["full", "parsing", "printing"] }
+
+[lints]
+workspace = true

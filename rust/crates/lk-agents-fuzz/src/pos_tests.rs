@@ -1,6 +1,13 @@
 //! Partial-order sampling benchmark comparing queue policies; ignored, a measurement not a check.
 //! `cargo test --release -p lk-agents-fuzz --test pos -- --ignored --nocapture bench`
 //! (tuned by `VOICE_SEEDS`, `VOICE_WINDOWS`, `VOICE_SCHEDULES`, `VOICE_SETUPS`).
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "the DST harness: a broken fake is a test failure, and runs report to stdout"
+)]
+
 use std::collections::BTreeSet;
 
 use fastrand::Rng;

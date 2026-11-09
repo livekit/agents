@@ -58,3 +58,6 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", 
 [[test]]
 name = "ipc_channel"
 path = "src/ipc/ipc_channel_tests.rs"
+
+[lints]
+workspace = true

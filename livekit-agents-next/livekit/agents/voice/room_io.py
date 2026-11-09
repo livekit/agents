@@ -122,7 +122,7 @@ class LocalParticipant:
 
     async def _core_publish_audio_track(
         self, opts: rtc_wire.TrackPublishOptions
-    ) -> tuple[AudioSource, TrackPublication]:
+    ) -> rtc_wire.PublishedAudioTrack:
         source = rtc.AudioSource(
             opts.sample_rate, opts.num_channels, queue_size_ms=opts.queue_size_ms
         )
@@ -136,7 +136,9 @@ class LocalParticipant:
             except BaseException as cleanup_error:
                 error.add_note(f"Unpublished audio source cleanup failed: {cleanup_error!r}")
             raise
-        return AudioSource(source), self._room._publication(publication)
+        return rtc_wire.PublishedAudioTrack(
+            source=AudioSource(source), publication=self._room._publication(publication)
+        )
 
     def _core_register_rpc_method(self, method: str, handler: _core.RpcHandler) -> None:
         self.sdk.register_rpc_method(

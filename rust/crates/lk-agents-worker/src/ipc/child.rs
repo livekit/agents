@@ -91,7 +91,7 @@ impl ParentWatch {
                 }
                 permit = self.inbox.reserve(), if self.pending.is_some() => {
                     let Ok(permit) = permit else { return Ok(()) };
-                    permit.send(self.pending.take().unwrap());
+                    permit.send(self.pending.take().expect("the branch runs only while a message is pending"));
                 }
                 msg = self.channel.recv(), if self.pending.is_none() => {
                     self.pending = Some(msg?);

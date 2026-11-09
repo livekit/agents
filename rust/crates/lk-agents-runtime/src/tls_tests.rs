@@ -1,5 +1,7 @@
 //! TLS trust across net, storage and worker transports, each CA mode in its own process.
 
+#![allow(clippy::unwrap_used, reason = "integration test")]
+
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;

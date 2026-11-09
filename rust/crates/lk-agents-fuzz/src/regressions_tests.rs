@@ -1,5 +1,11 @@
 //! Regression suites grouped by behavior, linked once for deterministic simulation tests.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "the DST harness: a broken fake is a test failure, and runs report to stdout"
+)]
+
 mod playout {
     //! The successful speaker in workflow regressions: report real queued PCM as the clock advances.
     use lk_agents_fuzz::drive::Run;

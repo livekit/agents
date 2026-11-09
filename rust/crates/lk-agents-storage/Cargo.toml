@@ -58,3 +58,6 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "m
 httparse = "1"
 # The fake AgentDB server's side of the data plane.
 tokio-tungstenite = { version = "0.30", default-features = false }
+
+[lints]
+workspace = true

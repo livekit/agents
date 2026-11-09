@@ -9,9 +9,20 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias
+
+from pydantic import JsonValue
 
 if TYPE_CHECKING:
     from livekit.agents._generated.toolset_events import SearchItem as _HostSearchFields
 
 SearchFields: TypeAlias = "_HostSearchFields"
+
+
+@dataclass
+class ToolProxyCall:
+    """The tool a `call_tool` names and the parameters it passes (an object, or its JSON string)."""
+
+    name: str
+    parameters: JsonValue

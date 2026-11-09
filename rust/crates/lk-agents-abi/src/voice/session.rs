@@ -538,7 +538,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// provider swap, not a handoff. Each leg is three-state; a given one goes under the agent's
     /// node when it overrides one.
     #[host(call)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
     fn update_models(
         &self,
         #[host(kw)] llm: Maybe<Option<Arc<dyn Llm>>>,
@@ -656,7 +656,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// tools stay), refused on a realtime model as `chat_ctx` is. Sent from the agent's
     /// `on_enter`, it is that hook's reply.
     #[host(call)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
     fn generate_reply(
         &self,
         #[host(kw, default = None)] user_input: Option<String>,
@@ -717,7 +717,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// `RunContext.with_filler(..)` entered for tool `call_id` of `speech_id`: after `delay` s
     /// idle say or ask `source`, then repeat every `interval`. Returns the scope's number.
     #[host(call)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
     fn filler_start(
         &self,
         call_id: String,

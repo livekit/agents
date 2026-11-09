@@ -29,7 +29,7 @@ pub trait LlmAlgorithms {
         #[host(default = true)] inject_dummy_user_message: bool,
         #[host(default = false)] inject_trailing_user_message: bool,
         #[host(default = None)] thought_signatures: Option<BTreeMap<String, Vec<u8>>>,
-    ) -> Result<(Vec<Value>, Value), Invalid>;
+    ) -> Result<ProviderMessages, Invalid>;
     #[host(function, pid = true)]
     fn convert_mid_conversation_instructions(
         items: Vec<ChatItem>,
@@ -76,6 +76,15 @@ pub trait LlmAlgorithms {
     fn parse_function_arguments(raw: &str) -> Result<Map<String, Value>, Invalid>;
     #[host(function)]
     fn inject_confirm_duplicate(parameters: &Value) -> Map<String, Value>;
+}
+
+/// A conversation in a provider's request format: its messages, and the data the dialect hoists
+/// out of band (`None` for OpenAI).
+#[crate::host(record(module = "provider_format", dataclass, emit))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderMessages {
+    pub messages: Vec<Value>,
+    pub data: Value,
 }
 
 /// One item of a converted conversation: the item at `index`, or `rewritten` in its place.

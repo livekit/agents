@@ -19,13 +19,13 @@ BUILD_ARGS ?=
 help:
 	@printf '%s\n' \
 		'make build         Build every workspace crate, including FFmpeg' \
-		'make check         Check compilation, Clippy, boundaries and codegen' \
+		'make check         Run every automatic rule: fmt, Clippy, rust/check and codegen drift' \
 		'make python        Rebuild the Python extension in place (run make install first)' \
 		'make python-debug  Rebuild the Python extension with native debug symbols' \
 		'make format        Format the Rust workspace' \
 		'make format-check  Check Rust formatting' \
-		'make clippy        Run the shared purity policy on ABI, core, voice and media' \
-		'make test-checks   Test the checkers and code generator' \
+		'make clippy        Run Clippy with the purity, I/O and base policies, denying warnings' \
+		'make test-checks   Test rust/check and the code generator' \
 		'' \
 		'Rust commands use mbx by default; pass CARGO_RUNNER=cargo to bypass it.'
 
@@ -44,8 +44,11 @@ build check clippy test-checks: | require-cargo-runner
 build:
 	"$(CARGO_RUNNER)" build --locked --workspace --features lk-agents-py/ffmpeg $(BUILD_ARGS)
 
-check:
-	bash architecture/check.sh
+# AGENTS.md "Rust architecture rules": every [check] and [lint] rule.
+check: format-check clippy
+	"$(CARGO_RUNNER)" run --locked -q -p lk-agents-check
+	"$(CARGO_RUNNER)" run --locked -q -p lk-agents-codegen -- --check
+	python3 ai_slop/lk-agents-codegen/thread_api.py --check
 
 python:
 	cd "$(ROOT)/livekit-agents-next" && "$(MATURIN)" develop --skip-install --locked $(BUILD_ARGS)
@@ -64,12 +67,18 @@ format:
 format-check:
 	cargo fmt -- --check
 
-# One config for this explicit package group. Other policies get separate invocations.
-# This is a diagnostic pass; architecture also validates exemptions and baselines.
+PURITY := -p lk-agents-abi -p lk-agents-core -p lk-agents-voice -p lk-agents-media
+IO := -p lk-agents-runtime -p lk-agents-worker -p lk-agents-net -p lk-agents-inference \
+	-p lk-agents-storage -p lk-agents-py -p lk-agents-cli -p lk-agents-telemetry
+BASE := -p lk-agents-fuzz -p lk-agents-codegen -p lk-agents-bindgen -p lk-agents-host-derive \
+	-p lk-agents-check
+CLIPPY := "$(CARGO_RUNNER)" clippy --locked --no-deps --all-targets --all-features
+
+# One Clippy policy per invocation: rust/check/purity, rust/check/io, then rust/clippy.toml.
 clippy:
-	CLIPPY_CONF_DIR="$(CURDIR)/architecture" "$(CARGO_RUNNER)" clippy \
-		--locked --no-deps --all-targets \
-		-p lk-agents-abi -p lk-agents-core -p lk-agents-voice -p lk-agents-media
+	CLIPPY_CONF_DIR="$(CURDIR)/check/purity" $(CLIPPY) $(PURITY) -- -D warnings
+	CLIPPY_CONF_DIR="$(CURDIR)/check/io" $(CLIPPY) $(IO) -- -D warnings
+	$(CLIPPY) $(BASE) -- -D warnings
 
 test-checks:
-	bash architecture/check.sh --tests
+	"$(CARGO_RUNNER)" test --locked -q -p lk-agents-check -p lk-agents-codegen --bins

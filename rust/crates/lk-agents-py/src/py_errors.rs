@@ -1,51 +1,55 @@
 /// Interpreter interface namespaces. Generated inherent methods perform the declared
 /// imports and member access; they accept Python objects without asserting their runtime type.
 pub mod interfaces {
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         host = "builtins.BaseException",
         attrs(add_note, traceback(name = "__traceback__"))
     ))]
     pub struct BaseException;
 
-    #[lk_agents_abi::host(interface(host = "livekit.agents._bindings.APIError"))]
+    #[lk_agents_host_derive::host(interface(host = "livekit.agents._bindings.APIError"))]
     pub struct ApiError;
 
-    #[lk_agents_abi::host(interface(host = "livekit.agents._bindings.APIStatusError"))]
+    #[lk_agents_host_derive::host(interface(host = "livekit.agents._bindings.APIStatusError"))]
     pub struct ApiStatusError;
 
-    #[lk_agents_abi::host(interface(host = "livekit.agents._bindings.APIConnectionError"))]
+    #[lk_agents_host_derive::host(interface(host = "livekit.agents._bindings.APIConnectionError"))]
     pub struct ApiConnectionError;
 
-    #[lk_agents_abi::host(interface(host = "livekit.agents._bindings.APITimeoutError"))]
+    #[lk_agents_host_derive::host(interface(host = "livekit.agents._bindings.APITimeoutError"))]
     pub struct ApiTimeoutError;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         host = "livekit.agents._generated.storage_errors.ThreadNotFound"
     ))]
     pub struct ThreadNotFound;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         host = "livekit.agents._generated.storage_errors.StorageUnavailable"
     ))]
     pub struct StorageUnavailable;
 
-    #[lk_agents_abi::host(interface(host = "livekit.agents._generated.storage_errors.LeaseLost"))]
+    #[lk_agents_host_derive::host(interface(
+        host = "livekit.agents._generated.storage_errors.LeaseLost"
+    ))]
     pub struct LeaseLost;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         host = "livekit.agents._generated.storage_errors.VersionConflict"
     ))]
     pub struct VersionConflict;
 
-    #[lk_agents_abi::host(interface(
+    #[lk_agents_host_derive::host(interface(
         host = "livekit.agents._generated.storage_errors.NotSerializable"
     ))]
     pub struct NotSerializable;
 
-    #[lk_agents_abi::host(interface(host = "livekit.agents._generated.storage_errors.TooLarge"))]
+    #[lk_agents_host_derive::host(interface(
+        host = "livekit.agents._generated.storage_errors.TooLarge"
+    ))]
     pub struct TooLarge;
 
-    #[lk_agents_abi::host(interface(host = "livekit.rtc.RpcError", attrs(code)))]
+    #[lk_agents_host_derive::host(interface(host = "livekit.rtc.RpcError", attrs(code)))]
     pub struct RpcError;
 }
 

@@ -229,7 +229,6 @@ impl VoiceDriver {
     }
 
     /// A blocking call leaves the running set; a detached one stays until its `ToolUpdate::Final`.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn on_tool_ended(
         &mut self,
         now: Ts,

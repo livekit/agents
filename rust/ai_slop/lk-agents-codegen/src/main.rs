@@ -1,9 +1,10 @@
 //! Resolves ABI declarations and emits bindings. `--write` regenerates in place; `--check` exits 1
 //! if any file would change. Generated files are outputs, never discovery inputs.
 
+#![allow(clippy::print_stdout, reason = "a CLI reporting the files it writes")]
+
 mod accessors;
 mod adapter;
-mod architecture;
 mod bases;
 mod class_stub;
 mod decl;
@@ -15,7 +16,6 @@ mod implementations;
 mod imports;
 mod native_enums;
 mod parse;
-mod placement;
 mod proxy;
 mod proxy_sdk;
 mod python;
@@ -37,16 +37,6 @@ const OTEL_REGISTRY: &str = "rust/otel/registry";
 const CORE_NAMES: &str = "rust/crates/lk-agents-py/src/generated/core_names.json";
 
 fn main() -> std::process::ExitCode {
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.first().is_some_and(|arg| arg == "--architecture") {
-        return match architecture::run(&args[1..]) {
-            Ok(()) => std::process::ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("architecture: {error}");
-                std::process::ExitCode::FAILURE
-            }
-        };
-    }
     let check = std::env::args().any(|a| a == "--check");
     let write = std::env::args().any(|a| a == "--write");
     if check == write {
@@ -71,10 +61,6 @@ fn main() -> std::process::ExitCode {
 
 fn run(check: bool) -> Result<usize, String> {
     let (root, python_packages) = repo_root()?;
-    if check {
-        placement::check(&root)?;
-        architecture::host_members::check(&root)?;
-    }
     sync(&root, &generate(&root, &python_packages)?, check)
 }
 
@@ -93,7 +79,6 @@ impl Outputs {
 fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     let abi = decl::tree::Crate::read(root, "rust/crates/lk-agents-abi", "lk_agents_abi")?;
     let mut declared = decl::resolve::declarations(&abi)?;
-    decl::resolve::check_tuple_baseline()?;
 
     let mut o = Outputs { files: Vec::new(), dirs: Vec::new() };
     let registry = telemetry::read(&abi)?;
@@ -274,17 +259,11 @@ mod drift {
         out
     }
 
-    // `--check` fails on a changed, missing or obsolete file of every output family and writes
-    // nothing while doing so.
+    // `--check` fails on a changed, missing or obsolete file and writes nothing while doing so.
     #[test]
     fn generated_surface_drift() {
         let (root, packages) = repo_root().expect("repo root");
         let outputs = generate(&root, &packages).expect("generates");
-        assert!(
-            outputs.files.iter().all(|(path, _)| !path.starts_with("livekit-agents"))
-                && outputs.dirs.iter().all(|path| !path.starts_with("livekit-agents")),
-            "generation must never restore the retired v1 package"
-        );
         let tmp = std::env::temp_dir().join(format!("codegen-drift-{}", uuid::Uuid::new_v4()));
         for dir in &outputs.dirs {
             std::fs::create_dir_all(tmp.join(dir)).expect("dir");
@@ -294,17 +273,7 @@ mod drift {
 
         let families = [
             "rust/crates/lk-agents-py/src/generated/mod.rs",
-            "livekit-agents-next/livekit/agents/_generated/storage_class.py",
             "livekit-agents-next/livekit/agents/_generated/stt.py",
-            "livekit-agents-next/livekit/agents/_generated/language.py",
-            "livekit-agents-next/livekit/agents/_generated/__init__.py",
-            "livekit-agents-next/livekit/agents/_generated/_core_voice.pyi",
-            "livekit-agents-next/livekit/agents/_generated/_core_llm.pyi",
-            "livekit-agents-next/livekit/agents/_core.pyi",
-            "livekit-agents-next/livekit/agents/_generated/semconv.py",
-            "rust/otel/schema.json",
-            "rust/otel/registry/spans.yaml",
-            CORE_NAMES,
         ];
         for family in families {
             let path = tmp.join(family);

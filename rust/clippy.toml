@@ -1,0 +1,6 @@
+# The base Clippy configuration; the sans-I/O and I/O crates use rust/check/{purity,io}.
+# Tests may unwrap, print and debug (AGENTS.md "Idiomatic Rust").
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true

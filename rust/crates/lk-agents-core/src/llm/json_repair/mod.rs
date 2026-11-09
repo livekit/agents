@@ -53,8 +53,8 @@ fn merge_into_previous_array(prev: &mut Vec<Value>, next: Vec<Value>) {
     let lengths: Vec<usize> = prev.iter().filter_map(|v| v.as_array().map(Vec::len)).collect();
     let width = lengths.first().copied().filter(|n| *n > 0 && lengths.iter().all(|x| x == n));
     let Some(width) = width else {
-        if next.len() == 1 && next[0].is_array() {
-            prev.extend(next[0].as_array().unwrap().clone());
+        if let [Value::Array(inner)] = next.as_slice() {
+            prev.extend(inner.iter().cloned());
         } else {
             prev.extend(next);
         }
@@ -154,8 +154,9 @@ impl Parser {
                     if !tuple
                         && let Value::Array(ref mut a) = arr
                         && a.len() == 1
+                        && let Some(only) = a.pop()
                     {
-                        arr = a.pop().unwrap();
+                        arr = only;
                     }
                     break arr;
                 }
@@ -270,8 +271,7 @@ impl Parser {
             p.ws();
             while p.at(0).is_some_and(|c| c != end && c != '}') {
                 let before = p.index;
-                let value = if p.at(0).is_some_and(quote) {
-                    let q = p.at(0).unwrap();
+                let value = if let Some(q) = p.at(0).filter(|c| quote(*c)) {
                     let i = p.skip(&[q], 1);
                     let i = p.scroll(i + 1);
                     if p.at(i) == Some(':') { p.object() } else { p.string() }
@@ -467,8 +467,7 @@ impl Parser {
             let comma = self.at(self.scroll(0)) == Some(',') || self.at(back) == Some(',');
             let next = self.json();
             if truthy(&next) {
-                if !comma && same(values.last().unwrap(), &next) || !truthy(values.last().unwrap())
-                {
+                if values.last().is_some_and(|last| !comma && same(last, &next) || !truthy(last)) {
                     values.pop();
                 }
                 values.push(next);
@@ -476,7 +475,10 @@ impl Parser {
                 self.index += 1;
             }
         }
-        if values.len() == 1 { values.pop().unwrap() } else { Value::Array(values) }
+        match <[Value; 1]>::try_from(values) {
+            Ok([only]) => only,
+            Err(values) => Value::Array(values),
+        }
     }
 }
 /// The input nests deeper than the repair follows.

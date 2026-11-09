@@ -13,3 +13,6 @@ description = "The `#[host(..)]` attribute language, read once for the proc macr
 syn = { version = "2", default-features = false, features = ["derive", "full", "parsing", "printing", "clone-impls"] }
 quote = "1"
 proc-macro2 = "1"
+
+[lints]
+workspace = true

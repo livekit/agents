@@ -5,8 +5,7 @@
 //!
 //! The `recorder` classes.
 
-// A host signature takes the parameters it declares.
-#![allow(clippy::too_many_arguments)]
+#![allow(clippy::too_many_arguments, reason = "a host signature takes the parameters it declares")]
 
 use pyo3::prelude::*;
 
@@ -162,7 +161,10 @@ inventory::submit! {
 
 impl crate::py_errors::HostException for ::lk_agents_abi::recorder::RecordingFailure {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(unreachable_patterns)]
+        #[allow(
+            unreachable_patterns,
+            reason = "the fallback arm is dead when every variant has its own"
+        )]
         match self {
             Self::Io(..) => {
                 ::pyo3::exceptions::PyOSError::new_err(::std::string::ToString::to_string(self))

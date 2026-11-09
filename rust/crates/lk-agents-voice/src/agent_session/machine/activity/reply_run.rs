@@ -125,7 +125,6 @@ impl VoiceDriver {
     /// The run of a model reply about to start as `speech`, over the tools `toolset` offers and
     /// the budgets `retries`. `task`: a `VoiceTask`'s agent holds the floor. Returns the first
     /// step's assistant message id and tools, or `None` when the definition cannot run.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_reply_run(
         &mut self,
         speech: SpeechId,
@@ -541,7 +540,6 @@ impl VoiceDriver {
 
     /// The run's next step, planned: on the session's record as published, with what the run
     /// recorded since its last step (an output's feedback) for this request only.
-    #[allow(clippy::too_many_arguments)]
     fn reply_planned(
         &mut self,
         speech: SpeechId,

@@ -82,8 +82,12 @@ impl TextSession {
                 transferred_message_ids: Default::default(),
                 merge_chat_history,
             };
-            self.state.frames.get_mut(&parent_id).unwrap().pending_calls[0].status =
-                ChildCallStatus::Running { frame_id: frame_id.clone() };
+            self.state
+                .frames
+                .get_mut(&parent_id)
+                .expect("a pending call's parent frame exists")
+                .pending_calls[0]
+                .status = ChildCallStatus::Running { frame_id: frame_id.clone() };
             self.state.frames.insert(frame_id.clone(), frame);
             self.state.ancestors.push(parent_id);
             self.state.active_frame_id = frame_id;
@@ -120,20 +124,25 @@ impl TextSession {
         effects: &mut Vec<TextSessionEffect>,
     ) {
         let active_id = self.state.active_frame_id.clone();
-        let frame = self.state.frames.get_mut(&active_id).unwrap();
+        let frame = self.active_frame_mut();
         frame.history = result.all_messages.clone();
         frame.pending_calls = approvals;
         frame.answer_tool = match &result.outcome {
             RunOutcome::InputRequired(ask) => ask.answer_tool.clone(),
             _ => None,
         };
-        if result.interrupted
-            || matches!(result.outcome, RunOutcome::InputRequired { .. })
-            || frame.parent.is_none()
-        {
-            self.finish(Ok(TextSessionTurn { result, state: self.state.clone() }), effects);
-            return;
-        }
+        let parent_call = match frame.parent.clone() {
+            Some(parent)
+                if !result.interrupted
+                    && !matches!(result.outcome, RunOutcome::InputRequired { .. }) =>
+            {
+                parent
+            }
+            _ => {
+                self.finish(Ok(TextSessionTurn { result, state: self.state.clone() }), effects);
+                return;
+            }
+        };
         let output = output.or_else(|| match &result.outcome {
             RunOutcome::Completed { output: lk_agents_abi::agent::run::Output::Text(text) } => {
                 Some(Value::String(text.clone()))
@@ -147,7 +156,6 @@ impl TextSession {
             );
             return;
         };
-        let parent_call = frame.parent.clone().unwrap();
         let pending = self.state.frames[&parent_call.frame_id]
             .pending_calls
             .iter()
@@ -171,9 +179,10 @@ impl TextSession {
             return;
         }
         // Move, rather than alias, the two frames while transferring dialogue.
-        let mut child = self.state.frames.remove(&active_id).unwrap();
+        let mut child = self.state.frames.remove(&active_id).expect("the active frame exists");
         child.completed = true;
-        let parent = self.state.frames.get_mut(&parent_call.frame_id).unwrap();
+        let parent =
+            self.state.frames.get_mut(&parent_call.frame_id).expect("the parent frame exists");
         transfer(&mut child, parent);
         self.state.frames.insert(active_id, child);
         self.state.active_frame_id = parent_call.frame_id;
@@ -190,7 +199,10 @@ impl TextSession {
         effects: &mut Vec<TextSessionEffect>,
     ) -> Result<(), RoutingError> {
         let stamp = self.stamp(now);
-        let parent = self.state.frames.get_mut(&pending.parent.frame_id).unwrap();
+        let parent =
+            self.state.frames.get_mut(&pending.parent.frame_id).ok_or_else(|| {
+                RoutingError::InvalidState("pending call has no parent frame".into())
+            })?;
         if parent.history.iter().any(|item| {
             matches!(item,
             ChatItem::FunctionCallOutput(o) if o.call_id == pending.parent.call_id)

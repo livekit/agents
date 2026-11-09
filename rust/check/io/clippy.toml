@@ -1,5 +1,10 @@
-# The I/O policy for runtime, worker, net, inference, storage and py: the crates that run beside
-# the host. Selected with CLIPPY_CONF_DIR by architecture/check.py; see architecture/README.md.
+# The I/O policy for the crates that run beside the host.
+
+# Tests may unwrap, print and debug (AGENTS.md "Idiomatic Rust").
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
 
 disallowed-types = [
   { path = "std::sync::Mutex", reason = "Use parking_lot::Mutex: it does not poison." },
@@ -22,9 +27,6 @@ disallowed-methods = [
   { path = "tokio_tungstenite::connect_async", reason = "It resolves on Tokio's blocking pool: use lk_agents_net::websocket::connect_with_limit." },
   { path = "tokio_tungstenite::connect_async_with_config", reason = "It resolves on Tokio's blocking pool: use lk_agents_net::websocket::connect_with_limit." },
   { path = "tokio_tungstenite::connect_async_tls_with_config", reason = "It resolves on Tokio's blocking pool: use lk_agents_net::websocket::connect_with_limit." },
-  { path = "tokio::io::stdin", reason = "Tokio's stdio runs on its blocking pool." },
-  { path = "tokio::io::stdout", reason = "Tokio's stdio runs on its blocking pool." },
-  { path = "tokio::io::stderr", reason = "Tokio's stdio runs on its blocking pool." },
   { path = "tokio::fs::canonicalize", reason = "Tokio's files run on its blocking pool: use std::fs on lk_agents_net::blocking_io." },
   { path = "tokio::fs::copy", reason = "Tokio's files run on its blocking pool: use std::fs on lk_agents_net::blocking_io." },
   { path = "tokio::fs::create_dir", reason = "Tokio's files run on its blocking pool: use std::fs on lk_agents_net::blocking_io." },

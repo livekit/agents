@@ -1,6 +1,3 @@
-/// A published audio source and the publication controlling its lifetime.
-pub type PublishedAudioTrack = (Arc<dyn AudioSource>, Arc<dyn TrackPublication>);
-
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -14,6 +11,14 @@ use super::{
     StreamTextOptions, TrackPublishOptions, TrackSid, TrackSource, Transcription,
 };
 use crate::{AudioFrame, StreamOutput};
+
+/// A published audio source and the publication controlling its lifetime.
+#[crate::host(record(module = "rtc_wire", dataclass, deferred, extract))]
+#[derive(Clone)]
+pub struct PublishedAudioTrack {
+    pub source: Arc<dyn AudioSource>,
+    pub publication: Arc<dyn TrackPublication>,
+}
 
 /// A connected room: an `rtc.Room`, called through its `room_io.Room` adapter (one per SDK room),
 /// which holds it as its `sdk`, its event bus and its RPC router. Reads of the SDK room address
