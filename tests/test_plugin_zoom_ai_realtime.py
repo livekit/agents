@@ -278,6 +278,7 @@ async def test_first_event_is_one_complete_session_update(
 
     assert conn.protocol == "voice-agent.zoom.v2"
     assert conn.headers["Authorization"] == f"Bearer {API_KEY}"
+    assert conn.headers["x-zm-trackingid"].startswith("zoom_ai_community_livekit_")
     first = conn.events[0]
     assert first["type"] == "session.update"
     s = first["session"]

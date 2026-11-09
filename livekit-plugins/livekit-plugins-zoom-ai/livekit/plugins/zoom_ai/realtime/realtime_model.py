@@ -43,7 +43,6 @@ import contextlib
 import json
 import os
 import time
-import uuid
 import weakref
 from collections import deque
 from collections.abc import Iterator
@@ -65,6 +64,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from ..log import logger
+from ..stt import _tracking_id
 from ..version import __version__
 
 DEFAULT_URL = "wss://api.zoom.us/v2/ws/aiservices/voice-agent/live"
@@ -701,7 +701,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
             self._reply_queue.clear()
 
     async def _connect(self) -> aiohttp.ClientWebSocketResponse:
-        tracking_id = str(uuid.uuid4())
+        tracking_id = _tracking_id()
         headers = {
             "Authorization": f"Bearer {self._opts.api_key}",
             "User-Agent": USER_AGENT,
