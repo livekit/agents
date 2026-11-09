@@ -16,6 +16,18 @@ end state; these parts are not built:
   recognizing a cancellation, a new request or an ambiguous answer instead of forwarding it
   ([routing the person's reply](voice-session.md#routing-the-persons-reply)) is not built.
 
+## A call's thread
+
+[threads.md](threads.md) describes the end state; these parts wait on other repositories:
+
+- **Web console.** Its `@livekit/protocol` lacks `RoomAgentDispatch.threadId`, which is dropped
+  as an unknown field, so web-console calls run in memory until the package is bumped.
+- **Terminal console.** `lk agent console` sets no `thread_id` on its simulated job; the Go CLI
+  needs to create the thread and pass it.
+- **Protocol pin.** rust-sdks carries the `thread_id` fields as a local regeneration; re-pin to
+  the livekit/protocol#1958 merge, and use `agent.Job(thread_id=)` in tests once
+  livekit/python-sdks#929 lands.
+
 ## Public API to revisit
 
 - Whether `Working` ([tools](tools.md#what-a-tool-returns)) and `ctx.execution_id`
