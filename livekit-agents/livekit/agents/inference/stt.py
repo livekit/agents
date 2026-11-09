@@ -1225,7 +1225,7 @@ class SpeechStream(stt.SpeechStream):
 
                     for frame in frames:
                         self._speech_duration += frame.duration
-                        base64_audio = base64.b64encode(frame.data).decode("ascii")
+                        base64_audio = base64.b64encode(frame.data).decode("utf-8")
                         audio_msg = {
                             "type": "input_audio",
                             "audio": base64_audio,
