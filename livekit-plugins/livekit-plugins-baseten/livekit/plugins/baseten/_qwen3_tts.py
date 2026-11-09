@@ -663,7 +663,7 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
                 if not waiter.done():
                     waiter.cancel()
             if not done:
-                raise APITimeoutError("Qwen3 synthesis read timed out", phase="read")
+                raise APITimeoutError("Qwen3 synthesis read timed out", timeout="read")
 
     def _emit_timestamps(
         self,

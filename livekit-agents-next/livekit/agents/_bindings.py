@@ -334,7 +334,7 @@ async def api_connect_options_total_deadline(self: APIConnectOptions) -> AsyncIt
     """Bound an operation, retries included, by ``total_timeout``.
 
     Raises:
-        APITimeoutError: with ``phase="total"`` once the limit expires.
+        APITimeoutError: with ``timeout="total"`` once the limit expires.
     """
 
     deadline = asyncio.timeout(self.total_timeout)
@@ -345,7 +345,7 @@ async def api_connect_options_total_deadline(self: APIConnectOptions) -> AsyncIt
         if not deadline.expired():
             raise
         raise APITimeoutError(
-            "Operation exceeded total_timeout", retryable=False, phase="total"
+            "Operation exceeded total_timeout", retryable=False, timeout="total"
         ) from e
 
 

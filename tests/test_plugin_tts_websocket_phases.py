@@ -86,7 +86,7 @@ async def test_silent_tts_upgrade_reports_read_timeout(provider: str, silent_upg
                     with pytest.raises(APITimeoutError) as error:
                         async for _ in stream:
                             pass
-                assert error.value.phase == "read"
+                assert error.value.timeout == "read"
         finally:
             await tts.aclose()
 
@@ -110,4 +110,4 @@ async def test_rtzr_silent_upgrade_reports_read_timeout(silent_upgrade: str) -> 
         async with asyncio.timeout(0.5):
             with pytest.raises(APITimeoutError) as error:
                 await client.connect_websocket({}, conn_options=options)
-        assert error.value.phase == "read"
+        assert error.value.timeout == "read"

@@ -63,7 +63,7 @@ async def test_read_limit_tracks_pending_synthesis(mode: str) -> None:
                             with pytest.raises(APITimeoutError) as error:
                                 async for _ in stream:
                                     pass
-                            assert error.value.phase == "read"
+                            assert error.value.timeout == "read"
                         else:
                             assert (
                                 sum([audio.frame.samples_per_channel async for audio in stream]) > 0

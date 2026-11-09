@@ -137,7 +137,7 @@ pub struct RealtimeModelError {
     pub req_id: Option<String>,
     /// The provider's error code, when it has one -- the same reason [`RealtimeError::code`] exists.
     pub code: Option<String>,
-    /// Native transport failure, emitted with its category and timeout phase. Host failures
+    /// Native transport failure, emitted with its category and the timeout that expired. Host failures
     /// already carry their captured exception through the host-error boundary.
     pub provider_error: Option<crate::errors::ApiError>,
 }

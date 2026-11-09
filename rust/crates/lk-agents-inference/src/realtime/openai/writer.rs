@@ -1,7 +1,7 @@
 use super::wire::{EncodeError, WireShape};
 use crate::realtime::dialect::{NUM_CHANNELS, SAMPLE_RATE};
 use crate::realtime::machine::{Outgoing, ReplyKind};
-use lk_agents_abi::errors::{ApiError, TimeoutPhase};
+use lk_agents_abi::errors::{ApiError, Timeout};
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ApiConnectOptions, Clock, Elapsed, Ts};
 use lk_agents_media::AudioByteStream;
@@ -179,7 +179,7 @@ impl Writer {
             Ok(Err(error)) => {
                 return Err(lk_agents_net::transport::connect_error("realtime writer", error));
             }
-            Err(Elapsed) => return Err(ApiError::timed_out(TimeoutPhase::Write)),
+            Err(Elapsed) => return Err(ApiError::timed_out(Timeout::Write)),
         }
         let Some((req_id, kind)) = frame.response else { return Ok(()) };
         let sent = ResponseSent { generation: self.generation, at: self.clock.now(), req_id, kind };

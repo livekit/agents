@@ -502,7 +502,7 @@ impl RecvCtx {
         match received {
             Ok(msg) => Ok(msg),
             Err(TransportError::Timeout) if self.awaiting_ack => {
-                Err(ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Read))
+                Err(ApiError::timed_out(lk_agents_abi::errors::Timeout::Read))
             }
             Err(err) => Err(connect_error(WHAT, err)),
         }

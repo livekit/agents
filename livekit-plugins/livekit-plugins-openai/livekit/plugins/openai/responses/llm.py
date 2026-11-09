@@ -200,7 +200,7 @@ class _ResponsesWebsocket:
             except (TimeoutError, APITimeoutError) as e:
                 self._pool.remove(ws)
                 raise APITimeoutError(
-                    "OpenAI Responses WebSocket write timed out", phase="write"
+                    "OpenAI Responses WebSocket write timed out", timeout="write"
                 ) from e
             except Exception as e:
                 self._pool.remove(ws)  # discard the failed socket

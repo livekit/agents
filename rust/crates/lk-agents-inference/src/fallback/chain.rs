@@ -299,7 +299,7 @@ impl<B: Backend> FallbackChain<B> {
             return Err(ApiError::cancelled("fallback closed").into());
         }
         if deadline.is_some_and(|at| self.clock.now() >= at) {
-            return Err(ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Total).into());
+            return Err(ApiError::timed_out(lk_agents_abi::errors::Timeout::Total).into());
         }
         if self.refresh_health() {
             self.observer.all_unavailable();
@@ -740,9 +740,7 @@ impl<B: Backend, S, F> AttemptLaunch<B, S, F> {
             return Some(ApiError::cancelled("fallback cancelled").into());
         }
         self.deadline.is_some_and(|at| now >= at).then(|| {
-            ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Total)
-                .with_retryable(false)
-                .into()
+            ApiError::timed_out(lk_agents_abi::errors::Timeout::Total).with_retryable(false).into()
         })
     }
 }

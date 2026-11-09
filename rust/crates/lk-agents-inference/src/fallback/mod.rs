@@ -31,23 +31,23 @@ pub fn caller_default() -> ApiConnectOptions {
 }
 
 /// What a child sees on a real attempt: `dataclasses.replace(conn_options, max_retry=0,
-/// timeout=attempt_timeout)`. The reference's `timeout` bounded each phase, so the attempt
-/// timeout caps every phase limit; the caller's total stays the operation's total, or a
+/// timeout=attempt_timeout)`. The reference's `timeout` bounded each limit, so the attempt
+/// timeout caps every one; the caller's total stays the operation's total, or a
 /// listening STT stream would be cut once it outlived one attempt's timeout.
 pub fn conn_options_for_attempt(
     caller: &ApiConnectOptions,
     policy: &ChainPolicy,
 ) -> ApiConnectOptions {
-    let phase = |limit: Option<f64>| match (policy.attempt_timeout, limit) {
+    let capped = |limit: Option<f64>| match (policy.attempt_timeout, limit) {
         (Some(attempt), Some(limit)) => Some(attempt.min(limit)),
         (attempt, limit) => attempt.or(limit),
     };
     ApiConnectOptions {
         max_retry: 0,
-        pool_timeout: phase(caller.pool_timeout),
-        connect_timeout: phase(caller.connect_timeout),
-        write_timeout: phase(caller.write_timeout),
-        read_timeout: phase(caller.read_timeout),
+        pool_timeout: capped(caller.pool_timeout),
+        connect_timeout: capped(caller.connect_timeout),
+        write_timeout: capped(caller.write_timeout),
+        read_timeout: capped(caller.read_timeout),
         retry_interval: policy.retry_interval.unwrap_or(caller.retry_interval),
         ..*caller
     }

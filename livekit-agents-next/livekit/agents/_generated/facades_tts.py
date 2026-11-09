@@ -46,7 +46,7 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
         Args:
             tts: The TTS, in order of preference.
             max_retry_per_tts: Retries of each before moving to the next.
-            attempt_timeout: Caps each phase of one attempt; ``None`` keeps the caller's
+            attempt_timeout: Caps each limit of one attempt; ``None`` keeps the caller's
                 ``conn_options`` limits.
             sample_rate: The output rate; the highest of the TTS by default, the others
                 resampled.

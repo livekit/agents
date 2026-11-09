@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use super::{AttemptFailure, Policy, Retry, Step};
-use lk_agents_abi::errors::{ApiError, ApiErrorKind, TimeoutPhase};
+use lk_agents_abi::errors::{ApiError, ApiErrorKind, Timeout};
 use lk_agents_abi::{ApiConnectOptions, HOST_TEARDOWN_TIMEOUT, Ts};
 
 // Phase timeouts (connect, write, read) restart on transport progress; total runs from acceptance
@@ -69,8 +69,7 @@ impl Request {
             open: BTreeMap::new(),
         };
         if attempts.total_deadline.is_some_and(|deadline| deadline <= now) {
-            steps
-                .push(Step::GiveUp(ApiError::timed_out(TimeoutPhase::Total).with_retryable(false)));
+            steps.push(Step::GiveUp(ApiError::timed_out(Timeout::Total).with_retryable(false)));
         } else {
             attempts.launch(0, now, steps);
         }
@@ -78,7 +77,7 @@ impl Request {
     }
 
     /// Whole requests retried on the options' allowance and backoff alone, by an owner whose
-    /// requests enforce their own phase and total limits (a voice reply's model and synthesis).
+    /// requests enforce their own connection and total limits (a voice reply's model and synthesis).
     /// The first attempt is running.
     pub fn retrying(options: &ApiConnectOptions, now: Ts) -> Self {
         let policy = Policy {
@@ -324,19 +323,19 @@ impl Request {
             steps.push(if self.retiring {
                 Step::Unresolved
             } else {
-                Step::GiveUp(ApiError::timed_out(TimeoutPhase::Total).with_retryable(false))
+                Step::GiveUp(ApiError::timed_out(Timeout::Total).with_retryable(false))
             });
             return;
         }
         match self.phase {
             Phase::Waiting { attempt, at } if at <= now => self.launch(attempt, now, steps),
             Phase::Attempting { attempt, stage } => {
-                if let Some((at, phase)) = self.stage_deadline(stage, expecting)
+                if let Some((at, limit)) = self.stage_deadline(stage, expecting)
                     && at <= now
                 {
                     self.unresolved |= self.sent();
                     self.stop(attempt, now, steps);
-                    self.fail(attempt, ApiError::timed_out(phase), Duration::ZERO, now, steps);
+                    self.fail(attempt, ApiError::timed_out(limit), Duration::ZERO, now, steps);
                 }
             }
             _ => {}
@@ -405,18 +404,18 @@ impl Request {
         }
     }
 
-    fn stage_deadline(&self, stage: Stage, expecting: Option<Ts>) -> Option<(Ts, TimeoutPhase)> {
+    fn stage_deadline(&self, stage: Stage, expecting: Option<Ts>) -> Option<(Ts, Timeout)> {
         let p = &self.policy;
         match stage {
             Stage::Connecting { since } => {
-                p.connect_timeout.map(|t| (since.saturating_add(t), TimeoutPhase::Connect))
+                p.connect_timeout.map(|t| (since.saturating_add(t), Timeout::Connect))
             }
             Stage::Writing { since } => {
-                p.write_timeout.map(|t| (since.saturating_add(t), TimeoutPhase::Write))
+                p.write_timeout.map(|t| (since.saturating_add(t), Timeout::Write))
             }
             Stage::Reading { last_progress } => {
                 let waiting_since = expecting?.max(last_progress);
-                p.read_timeout.map(|t| (waiting_since.saturating_add(t), TimeoutPhase::Read))
+                p.read_timeout.map(|t| (waiting_since.saturating_add(t), Timeout::Read))
             }
         }
     }

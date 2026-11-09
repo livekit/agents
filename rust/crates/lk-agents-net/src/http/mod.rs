@@ -106,7 +106,7 @@ pub fn extract_quota_usage<'a>(
 const ERROR_BODY_LIMIT: usize = 64 * 1024;
 
 /// One client for the process: keep-alive connections are shared by every request. No reqwest
-/// timeout is set: the request core times each phase.
+/// timeout is set: the request core times each limit.
 pub struct GatewayHttp {
     client: reqwest::Client,
 }

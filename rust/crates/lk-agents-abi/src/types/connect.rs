@@ -19,7 +19,7 @@ pub struct ApiConnectOptionsError {
 
 /// Per-operation connection policy: retries, their interval and the limit of each wait.
 ///
-/// The five phase limits are seconds, finite and non-negative, `None` disabling one: `pool` waits
+/// The five limits are seconds, finite and non-negative, `None` disabling one: `pool` waits
 /// for transport capacity, `connect` for a usable connection (DNS and TLS included), `write`
 /// without progress while sending, `read` without progress while a response is expected, `total`
 /// the whole operation (admission, retries and fallback). Each phase defaults to 10 s; `total`

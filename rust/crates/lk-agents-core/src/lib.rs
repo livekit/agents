@@ -6,7 +6,7 @@
 //! - [`assertions`]: the run event assertions `result.expect` walks.
 //! - [`agent_run`]: `AgentRun`, one invocation's model/tool/output machine, and the LLM request
 //!   planning it and VoiceSession share.
-//! - [`request`]: the retry machine: phase limits, retry and cleanup.
+//! - [`request`]: the retry machine: connection limits, retry and cleanup.
 //! - [`tool_outcome`]: the outcome table, what a tool's classified outcome records and asks for.
 //! - [`tool_calls`]: one step's tool calls, from arguments to recorded outcomes.
 //! - [`approval`]: the approval gate's identity, marks and read-back.

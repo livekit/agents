@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use lk_agents_abi::errors::{ApiError, TimeoutPhase};
+use lk_agents_abi::errors::{ApiError, Timeout};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics};
 use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy};
 use lk_agents_net::transport::{
@@ -213,7 +213,7 @@ impl CloudTransport {
             Err(Elapsed) => {
                 let message = Some("turn detector connection timed out".to_owned());
                 let error =
-                    ApiError { phase: Some(TimeoutPhase::Connect), ..ApiError::timeout(message) };
+                    ApiError { timeout: Some(Timeout::Connect), ..ApiError::timeout(message) };
                 return Err(error.with_retryable(false));
             }
             Ok(Err(e)) => return Err(socket_error(e)),

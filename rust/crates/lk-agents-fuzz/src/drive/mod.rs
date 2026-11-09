@@ -273,7 +273,7 @@ impl Setup {
             500,
             3_000,
             conn.interval_ms,
-            // The connect options' phase timeout, the close's transcript wait, the away timer.
+            // The connect options' limits, the close's transcript wait, the away timer.
             10_000,
             2_000,
             15_000,

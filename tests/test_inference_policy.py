@@ -134,7 +134,7 @@ async def test_native_zero_call_deadline_expires_before_network_io(modality: str
             async with source:
                 async for _ in source:
                     pytest.fail("an expired call cannot produce output")
-        assert exc.value.phase == "total"
+        assert exc.value.timeout == "total"
     finally:
         await source.aclose()
         await provider.aclose()
@@ -160,7 +160,7 @@ async def test_native_provider_default_applies_when_a_call_omits_options(modalit
             async with source:
                 async for _ in source:
                     pytest.fail("an expired default policy cannot produce output")
-        assert exc.value.phase == "total"
+        assert exc.value.timeout == "total"
     finally:
         await source.aclose()
         await provider.aclose()

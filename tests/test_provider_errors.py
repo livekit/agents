@@ -138,7 +138,7 @@ async def test_host_retry_exhaustion_reports_attempts_and_retains_the_last_cause
 
 
 async def test_host_retry_exhaustion_preserves_the_original_timeout_phase() -> None:
-    original = APITimeoutError("response stalled", phase="read")
+    original = APITimeoutError("response stalled", timeout="read")
     provider = _FailingLLM(original)
     try:
         with pytest.raises(APITimeoutError) as error:
@@ -149,7 +149,7 @@ async def test_host_retry_exhaustion_preserves_the_original_timeout_phase() -> N
                 await stream.collect()
         assert provider.attempts == 2
         assert error.value is original
-        assert error.value.phase == "read"
+        assert error.value.timeout == "read"
     finally:
         await provider.aclose()
 
@@ -180,7 +180,7 @@ def test_generated_exception_classes_keep_public_identity_and_pickle_state() -> 
         APIError("failure", body={"detail": 1}, retryable=False),
         APIStatusError("limited", status_code=429, request_id="request", body={"detail": 2}),
         APIConnectionError(),
-        APITimeoutError(phase="read", retryable=False),
+        APITimeoutError(timeout="read", retryable=False),
         AssignmentTimeoutError("assignment"),
         StreamStateError("stream"),
         StorageError("storage"),

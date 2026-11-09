@@ -72,13 +72,13 @@ class APIConnectionError(APIError):
 
 
 class APITimeoutError(APIConnectionError):
-    "An API request timed out; phase names the expired connection limit."
+    "An API request timed out; timeout names the expired connection limit."
     __module__ = "livekit.agents._bindings"
-    phase: Literal['pool', 'connect', 'read', 'write', 'total'] | None
+    timeout: Literal['pool', 'connect', 'read', 'write', 'total'] | None
 
-    def __init__(self, message: str = "Request timed out.", *, retryable: bool = True, phase: Literal['pool', 'connect', 'read', 'write', 'total'] | None = None) -> None:
+    def __init__(self, message: str = "Request timed out.", *, retryable: bool = True, timeout: Literal['pool', 'connect', 'read', 'write', 'total'] | None = None) -> None:
         super().__init__(message, retryable=retryable)
-        self.phase = phase
+        self.timeout = timeout
 
 
 class StreamStateError(RuntimeError):

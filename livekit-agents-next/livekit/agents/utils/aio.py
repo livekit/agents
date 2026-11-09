@@ -405,7 +405,7 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
                 await self._connect_lock.acquire()
         except TimeoutError as exc:
             raise APITimeoutError(
-                "Timed out waiting for connection capacity", phase="pool"
+                "Timed out waiting for connection capacity", timeout="pool"
             ) from exc
         try:
             await self._drain_to_close()
@@ -416,7 +416,7 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
             except TimeoutError as exc:
                 # a connect_cb whose transport has no finer phases bounds it by connect_timeout
                 raise APITimeoutError(
-                    "Timed out establishing a connection", phase="connect"
+                    "Timed out establishing a connection", timeout="connect"
                 ) from exc
         finally:
             self._connect_lock.release()

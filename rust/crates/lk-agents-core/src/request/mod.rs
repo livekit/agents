@@ -1,4 +1,4 @@
-//! The retry machine every retried request shares: phase limits, retry allowance and backoff,
+//! The retry machine every retried request shares: connection limits, retry allowance and backoff,
 //! total deadline and cleanup, decided on supplied time.
 
 use lk_agents_abi::errors::{ApiError, ApiErrorKind};
@@ -78,7 +78,7 @@ impl AttemptFailure {
     }
 }
 
-/// The attempt owner gave up. Timeouts retain their phase and caller-owned cause.
+/// The attempt owner gave up. Timeouts keep the limit that expired and the caller-owned cause.
 pub fn terminal_failure(
     kind: RequestKind,
     error: &ApiError,

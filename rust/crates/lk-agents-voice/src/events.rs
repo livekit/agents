@@ -66,7 +66,7 @@ fn journal_error(
                 retryable: *retryable,
                 status_code: *status_code,
                 request_id: None,
-                phase: None,
+                timeout: None,
                 cause: None,
             })
         }

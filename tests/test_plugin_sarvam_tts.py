@@ -190,7 +190,7 @@ class _FakeSocket:
             async with asyncio.timeout(timeout):
                 reply = await self._replies.get()
         except TimeoutError as e:
-            raise APITimeoutError("read timed out", phase="read") from e
+            raise APITimeoutError("read timed out", timeout="read") from e
         return http.WebSocketMessage(http.WebSocketMessageType.TEXT, json.dumps(reply))
 
     async def close(self) -> None:

@@ -118,7 +118,7 @@ async def test_discovery_timeout_keeps_its_phase(peer: Peer) -> None:
     try:
         with pytest.raises(APITimeoutError) as error:
             await client.send("Check")
-        assert error.value.phase == "read"
+        assert error.value.timeout == "read"
     finally:
         await client.aclose()
 
@@ -133,7 +133,7 @@ async def test_timeout_after_progress_keeps_phase_without_replaying(peer: Peer) 
         assert (await anext(reply)).state == "working"
         with pytest.raises(APITimeoutError) as error:
             await anext(reply)
-        assert error.value.phase == "read"
+        assert error.value.timeout == "read"
         assert (
             sum(rpc is not None and rpc["method"].startswith("Send") for _, _, rpc in peer.requests)
             == 1
@@ -343,7 +343,7 @@ async def test_total_deadline_cancels_remote_work_behind_an_unread_progress_queu
         with pytest.raises(APITimeoutError) as error:
             async for _ in reply:
                 pass
-        assert error.value.phase == "total"
+        assert error.value.timeout == "total"
     finally:
         await client.aclose()
 

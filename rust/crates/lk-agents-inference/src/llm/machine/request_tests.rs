@@ -4,7 +4,7 @@ use std::time::Duration;
 use super::*;
 use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::errors::ApiError;
-use lk_agents_abi::errors::{ApiErrorKind, TimeoutPhase};
+use lk_agents_abi::errors::{ApiErrorKind, Timeout};
 
 const LLM: ResourceId = ResourceId(7);
 const ID: LlmRequestId = LlmRequestId(1);
@@ -201,7 +201,7 @@ fn the_read_limit_counts_remote_silence_only_while_the_consumer_waits() {
     let effects = request.handle(LlmRequestEvent::Wake, at(80_000));
     assert_eq!(effects[0], cancelled(0));
     let err = finished(&effects).unwrap().clone().unwrap_err();
-    assert_eq!((err.kind, err.phase), (ApiErrorKind::Timeout, Some(TimeoutPhase::Read)));
+    assert_eq!((err.kind, err.timeout), (ApiErrorKind::Timeout, Some(Timeout::Read)));
 }
 
 // Catches: one timer for the whole exchange, or a timeout reported without its phase.
@@ -211,14 +211,14 @@ fn connect_and_write_limits_report_their_own_phase() {
     let effects = request.handle(LlmRequestEvent::Wake, at(10_000));
     assert_eq!(effects[0], cancelled(0));
     assert!(
-        matches!(&effects[1], LlmRequestEffect::AttemptFailed { error, .. } if error.phase == Some(TimeoutPhase::Connect))
+        matches!(&effects[1], LlmRequestEffect::AttemptFailed { error, .. } if error.timeout == Some(Timeout::Connect))
     );
     request.handle(LlmRequestEvent::Wake, at(10_100));
     request.handle(LlmRequestEvent::Connected { attempt: 1 }, at(11_000));
     assert_eq!(request.wake_at(), Some(at(14_000)));
     let effects = request.handle(LlmRequestEvent::Wake, at(14_000));
     assert!(
-        matches!(&effects[1], LlmRequestEffect::AttemptFailed { error, .. } if error.phase == Some(TimeoutPhase::Write))
+        matches!(&effects[1], LlmRequestEffect::AttemptFailed { error, .. } if error.timeout == Some(Timeout::Write))
     );
 }
 
@@ -234,7 +234,7 @@ fn the_total_limit_spans_every_attempt_and_stops_the_request() {
     let effects = request.handle(LlmRequestEvent::Wake, at(3_000));
     assert_eq!(effects[0], cancelled(1));
     let err = finished(&effects).unwrap().clone().unwrap_err();
-    assert_eq!((err.phase, err.retryable), (Some(TimeoutPhase::Total), false));
+    assert_eq!((err.timeout, err.retryable), (Some(Timeout::Total), false));
     request.handle(LlmRequestEvent::Failed { attempt: 1, failure: failure() }, at(3_001));
     assert!(request.handle(LlmRequestEvent::Wake, at(9_000)).iter().all(|e| !matches!(
         e,
@@ -316,7 +316,7 @@ fn an_expired_acceptance_budget_never_authorizes_the_first_exchange() {
         !effects.iter().any(|effect| matches!(effect, LlmRequestEffect::LlmRequestStart { .. }))
     );
     let error = finished(&effects).expect("terminal outcome").as_ref().unwrap_err();
-    assert_eq!(error.phase, Some(TimeoutPhase::Total));
+    assert_eq!(error.timeout, Some(Timeout::Total));
 }
 
 // Catches: the time to first token latched on the failed attempt's metadata-only chunk, or

@@ -4,7 +4,7 @@ use crate::effects::TtsSynthesisEffect;
 use base64::Engine as _;
 use futures_util::future::{Either, select};
 use lk_agents_abi::Ts;
-use lk_agents_abi::errors::TimeoutPhase;
+use lk_agents_abi::errors::Timeout;
 use lk_agents_abi::metrics::base::ConnectionAcquired;
 use lk_agents_net::transport::{TransportError, WsMessage, connect_error};
 use std::pin::pin;
@@ -104,7 +104,7 @@ impl Pump {
         {
             Either::Left(_) => return Ok(()),
             Either::Right((Either::Left(_), _)) => {
-                return Err(ApiError::timed_out(TimeoutPhase::Total));
+                return Err(ApiError::timed_out(Timeout::Total));
             }
             Either::Right((Either::Right((opened, _)), _)) => opened,
         };
@@ -271,7 +271,7 @@ impl Pump {
         {
             Either::Left(_) => return Ok(Flow::End(SynthesisEnd::Stopped)),
             Either::Right((Either::Left(_), _)) => {
-                return Err(ApiError::timed_out(TimeoutPhase::Total));
+                return Err(ApiError::timed_out(Timeout::Total));
             }
             Either::Right((Either::Right((sent, _)), _)) => sent,
         };
@@ -352,9 +352,9 @@ impl Pump {
             Either::Left(_) => Err(ApiError::new("TTS synthesis cancelled")),
             Either::Right((Either::Left(_), _)) => {
                 Err(ApiError::timed_out(if total_deadline.is_some_and(|at| clock.now() >= at) {
-                    TimeoutPhase::Total
+                    Timeout::Total
                 } else {
-                    TimeoutPhase::Write
+                    Timeout::Write
                 }))
             }
             Either::Right((Either::Right((result, _)), _)) => {

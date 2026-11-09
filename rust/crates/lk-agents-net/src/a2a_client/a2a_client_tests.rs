@@ -11,7 +11,7 @@ use crate::env::ProcessEnv;
 use crate::source::Pulled;
 use a2a::{JsonRpcRequest, JsonRpcResponse, Message, Part, PartContent, Role};
 use lk_agents_abi::a2a::metadata::REASON_KEY;
-use lk_agents_abi::errors::{ApiErrorKind, ProviderError, TimeoutPhase};
+use lk_agents_abi::errors::{ApiErrorKind, ProviderError, Timeout};
 use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed};
 use lk_agents_core::a2a::client::{ClientError, TaskUpdate};
@@ -766,7 +766,7 @@ async fn client_close_waits_for_the_original_cancel_settlement_past_the_old_clea
 }
 
 #[tokio::test]
-async fn discovery_rpc_and_cancel_stalls_keep_their_timeout_phase() {
+async fn discovery_rpc_and_cancel_stalls_name_their_timeout() {
     for (scenario, total, cancel) in [
         (Scenario::StalledCardHeaders, false, false),
         (Scenario::StalledCardBody, false, false),
@@ -804,7 +804,7 @@ async fn discovery_rpc_and_cancel_stalls_keep_their_timeout_phase() {
             panic!("transport error lost its API error type");
         };
         assert_eq!(error.kind, ApiErrorKind::Timeout);
-        assert_eq!(error.phase, Some(if total { TimeoutPhase::Total } else { TimeoutPhase::Read }));
+        assert_eq!(error.timeout, Some(if total { Timeout::Total } else { Timeout::Read }));
         client.aclose().await;
         let requests = peer.finish().await;
         assert!(
@@ -832,7 +832,7 @@ async fn stalled_acknowledged_stream_retains_read_timeout_through_the_reply_sour
             Ok(Pulled::Item(update)) => assert!(!update.state.is_terminal()),
             Err(ProviderError::Local(error)) => {
                 assert_eq!(error.kind, ApiErrorKind::Timeout);
-                assert_eq!(error.phase, Some(TimeoutPhase::Read));
+                assert_eq!(error.timeout, Some(Timeout::Read));
                 break;
             }
             other => panic!("stalled stream lost the typed timeout: {other:?}"),

@@ -159,7 +159,7 @@ async def _timeout_of(call: Callable[[], Awaitable[object]]) -> str | None:
     with pytest.raises(APITimeoutError) as raised:
         async with asyncio.timeout(3):
             await call()
-    return raised.value.phase
+    return raised.value.timeout
 
 
 async def _get(session: HttpSession, url: str, options: APIConnectOptions) -> None:

@@ -293,7 +293,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                                     piece, eos=idx == len(pieces) - 1, generation_id=gen_id
                                 )
                         except TimeoutError:
-                            raise APITimeoutError(phase="write") from None
+                            raise APITimeoutError(timeout="write") from None
                     except BaseException:
                         pending_gens.discard(gen_id)
                         raise
@@ -314,7 +314,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     # Preserve partial audio when the provider omits its final marker.
                     if got_audio:
                         break
-                    raise APITimeoutError(phase="read") from None
+                    raise APITimeoutError(timeout="read") from None
                 if event is None:
                     raise APIConnectionError("palabra tts session closed unexpectedly")
                 if isinstance(event, ServerError):
@@ -350,7 +350,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 async with asyncio.timeout(self._conn_options.connect_timeout):
                     await session.__aenter__()
             except TimeoutError:
-                raise APITimeoutError(phase="connect") from None
+                raise APITimeoutError(timeout="connect") from None
             tasks = [
                 asyncio.create_task(_input_task()),
                 asyncio.create_task(_send_task(session)),

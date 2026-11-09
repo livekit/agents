@@ -817,7 +817,7 @@ async fn a_call_policy_replaces_native_stt_defaults_without_mutating_the_client(
 }
 
 #[tokio::test]
-async fn input_after_a_terminal_timeout_preserves_its_phase() {
+async fn input_after_a_terminal_timeout_keeps_its_limit() {
     let ws = Arc::new(FakeWs::hanging());
     let mut options = opts();
     options.conn_options =
@@ -838,7 +838,7 @@ async fn input_after_a_terminal_timeout_preserves_its_phase() {
     assert_eq!(error.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Timeout));
     let error = sink.flush().expect_err("input cannot revive a failed operation");
     let ProviderError::Local(error) = error else { panic!("a native failure") };
-    assert_eq!(error.phase, Some(lk_agents_abi::errors::TimeoutPhase::Total));
+    assert_eq!(error.timeout, Some(lk_agents_abi::errors::Timeout::Total));
     source.close(lk_agents_abi::Ts::from_nanos(u64::MAX)).await;
 }
 

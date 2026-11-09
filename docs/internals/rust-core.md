@@ -197,11 +197,11 @@ audio; it does not authorize playback, route room tracks, or report what a perso
 | Crate | Responsibility |
 | --- | --- |
 | `lk-agents-abi` | Public export declarations and typed boundary records: chat items, events, effects, errors and resource descriptions; contracts and data, plus the hand-written Python plugin bases (`stt.py`, `tts.py`, `llm.py`, `realtime.py`, `vad.py`) beside their proxy traits |
-| `lk-agents-core` | Shared AgentRun, request planning, the attempt machine every retried request shares (phase limits, retry allowance and backoff, total deadline, cleanup), tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification; chat formatting, tool-argument processing, JSON repair, tool search and deterministic run/event assertions; speech tokenization and expressive markup (`lk_agents_core::tokenize`, `lk_agents_core::tts`); telemetry destination policy, metric admission and session report records (`lk_agents_core::telemetry`); no voice lifecycle or transport dependency |
+| `lk-agents-core` | Shared AgentRun, request planning, the attempt machine every retried request shares (connection limits, retry allowance and backoff, total deadline, cleanup), tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification; chat formatting, tool-argument processing, JSON repair, tool search and deterministic run/event assertions; speech tokenization and expressive markup (`lk_agents_core::tokenize`, `lk_agents_core::tts`); telemetry destination policy, metric admission and session report records (`lk_agents_core::telemetry`); no voice lifecycle or transport dependency |
 | `lk-agents-voice` | Frontend/session lifecycle, recognition, speech scheduling, interruption, IVR, AMD and media coordination; transcript pacing decisions; composes agent execution from `lk-agents-core` |
 | `lk-agents-storage` | Async I/O: all database interaction: schema and statements, the AgentDB and SQLite backends, retries, fencing, lease renewal and lost-acknowledgment resolution; every failure is a typed error: the database's `Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound` and `VersionConflict`, the caller's `Invalid`, `NotSerializable`, `TooLarge` and `Unauthorized`, and `Cancelled` |
 | `lk-agents-media` | Synchronous decoding, encoding, TTS audio framing, image preparation and conversion, resampling, media filters, recording files and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime; the one worker pool primitive (bounded plain threads with per-class admission) and the process's media pool |
-| `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; telemetry's export (`lk_agents_net::export`): the OTLP exporter for every telemetry destination and the process's exporter slot, the LiveKit Cloud session report and recording upload with its own bounded admission, the host span (`_core.TelemetrySpan`) and `Tagger` classes and event-loop stall recording; the process environment value (`lk_agents_net::env::ProcessEnv`) and the process's blocking I/O pool |
+| `lk-agents-net` | Async I/O: the shared transport: HTTP with per-limit deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; telemetry's export (`lk_agents_net::export`): the OTLP exporter for every telemetry destination and the process's exporter slot, the LiveKit Cloud session report and recording upload with its own bounded admission, the host span (`_core.TelemetrySpan`) and `Tagger` classes and event-loop stall recording; the process environment value (`lk_agents_net::env::ProcessEnv`) and the process's blocking I/O pool |
 | `lk-agents-telemetry` | Span recording: `Trace` and `ManualSpan` for sans-I/O machines; the process `Tracer`, `Cx`'s recorder, `ScopedSpan` and `start`/`end`/`event`/`measure` for async work. Depends only on ABI; no executor or transport |
 | `lk-agents-inference` | Async I/O: provider clients for LLM, STT, TTS, VAD and EOT models, interruption, realtime, duplex and avatars, with their retry, fallback and reconnect execution; provider-side media execution: the TTS audio emitter (decode admission, drift timer, segment finalization), the streaming decoder's bounded output queue and provider image preparation on the media pool; speech stream adapters; evaluation judge orchestration |
 | `lk-agents-worker` | Async I/O: worker registration and job assignment, IPC, process pool and supervision, and endpoint byte-stream dispatch |
@@ -240,7 +240,7 @@ ABI, and the runtime's A2A door executes them by calling storage.
 
 `lk-agents-net` is the one shared async transport and hosts the delegation A2A
 client: inference, the worker and the AgentDB backend use its HTTP client with
-declared phase deadlines, SSE decoding, WebSocket connect, owned task handles
+declared per-limit deadlines, SSE decoding, WebSocket connect, owned task handles
 and gateway token signing rather than building their own. The delegation
 client executes the client decisions of `lk_agents_core::a2a`.
 
@@ -1245,9 +1245,9 @@ catchable Python and Node types. Keep `APIError`, `APIStatusError`,
 Do not collapse domain errors into one generic runtime exception.
 
 An API error carries its message, retry eligibility, optional status code,
-request ID, response body and cause. Timeout errors also carry a typed `phase`:
+request ID, response body and cause. Timeout errors also carry a typed `timeout`, the limit that expired:
 `pool`, `connect`, `read`, `write` or `total`. A foreign SDK timeout
-whose phase is unavailable uses an absent phase, never a guessed one. Preserve
+that does not say which uses an absent one, never a guessed one. Preserve
 the operation identity in the correlated failure event. Error messages are for
 people; policy uses typed categories and fields, not class-name strings or
 message parsing.
@@ -1273,7 +1273,7 @@ Model-facing tool results and externally returned client errors use safe
 rendering that does not expose credentials, raw bodies or tracebacks.
 
 Conformance cases cover subtype matching, fields, original exception identity,
-causes, multiple observers, foreign errors, timeout phases, cancellation and
+causes, multiple observers, foreign errors, timeouts, cancellation and
 safe public error rendering. Retry disposition is tested in the protocol core,
 not in exception conversion.
 
@@ -2298,7 +2298,7 @@ resolved policy; plugins do not maintain parallel definitions.
 | `total_timeout` | Entire operation, including admission, retries and fallback |
 
 Each timeout accepts a finite nonnegative duration in seconds or `None` to
-disable that limit. Keep phase defaults at 10 seconds and `total_timeout=None`.
+disable that limit. Keep the limits' defaults at 10 seconds and `total_timeout=None`.
 Keep `max_retry=3` and `retry_interval=2.0`; `max_retry` counts additional attempts
 after the initial attempt. Retry counts are nonnegative integers. Reject invalid
 values at the generated boundary before starting work.
@@ -2338,7 +2338,7 @@ duplication. Preserve idempotency identity across retries where supported.
 Model connection options do not implicitly retry tools or business actions.
 
 Transport adapters, in Rust the shared `lk-agents-net` client, enforce the
-declared timeout scopes and preserve timeout phase and cause in errors. Implement missing transport support or reject an unsupported
+declared timeout scopes and preserve the expired limit and cause in errors. Implement missing transport support or reject an unsupported
 applicable option before I/O; never silently substitute a different scope.
 HTTPX phase controls are not an overall deadline, and Reqwest's pool idle timeout
 is not a pool acquisition timeout. See the [HTTPX timeout definitions](https://www.python-httpx.org/advanced/timeouts/)

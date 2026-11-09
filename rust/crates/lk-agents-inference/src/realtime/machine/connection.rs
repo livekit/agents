@@ -1,5 +1,5 @@
 use crate::effects::RealtimeConnectionEffect;
-use lk_agents_abi::errors::{ApiError, TimeoutPhase};
+use lk_agents_abi::errors::{ApiError, Timeout};
 use lk_agents_abi::{ApiConnectOptions, Ts};
 use lk_agents_core::request::{Policy, Request, Step};
 use std::collections::BTreeMap;
@@ -261,7 +261,7 @@ impl RealtimeConnection {
     fn expire(&mut self, now: Ts) -> Vec<RealtimeConnectionEffect> {
         let mut effects = self.close(now);
         effects.push(RealtimeConnectionEffect::Failed {
-            error: ApiError::timed_out(TimeoutPhase::Total).with_retryable(false),
+            error: ApiError::timed_out(Timeout::Total).with_retryable(false),
         });
         effects
     }
@@ -333,7 +333,7 @@ mod tests {
         assert!(effects.contains(&RealtimeConnectionEffect::Close { generation: 1 }));
         assert!(
             effects.iter().any(|effect| matches!(effect, RealtimeConnectionEffect::Retry { error }
-            if error.kind == ApiErrorKind::Timeout && error.phase == Some(TimeoutPhase::Connect)))
+            if error.kind == ApiErrorKind::Timeout && error.timeout == Some(Timeout::Connect)))
         );
         assert_eq!(connection.next_deadline(), Some(at(1100)));
         connection.released(1, at(1000));
@@ -372,7 +372,7 @@ mod tests {
         connection.connected(2, at(600));
         assert_eq!(connection.next_deadline(), Some(at(2000)));
         assert!(connection.tick(at(2000)).iter().any(|effect| matches!(effect,
-            RealtimeConnectionEffect::Failed { error } if error.phase == Some(TimeoutPhase::Total))));
+            RealtimeConnectionEffect::Failed { error } if error.timeout == Some(Timeout::Total))));
         assert!(connection.start(at(2100)).is_empty());
     }
 

@@ -23594,16 +23594,16 @@ pub mod types {
 
     // Declared in rust/crates/lk-agents-abi/src/errors/api.rs.
 
-    pub fn timeout_phase_to_py<'py>(
+    pub fn timeout_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::errors::TimeoutPhase,
+        value: ::lk_agents_abi::errors::Timeout,
     ) -> PyResult<Bound<'py, PyAny>> {
         let value = match value {
-            ::lk_agents_abi::errors::TimeoutPhase::Pool => "pool",
-            ::lk_agents_abi::errors::TimeoutPhase::Connect => "connect",
-            ::lk_agents_abi::errors::TimeoutPhase::Read => "read",
-            ::lk_agents_abi::errors::TimeoutPhase::Write => "write",
-            ::lk_agents_abi::errors::TimeoutPhase::Total => "total",
+            ::lk_agents_abi::errors::Timeout::Pool => "pool",
+            ::lk_agents_abi::errors::Timeout::Connect => "connect",
+            ::lk_agents_abi::errors::Timeout::Read => "read",
+            ::lk_agents_abi::errors::Timeout::Write => "write",
+            ::lk_agents_abi::errors::Timeout::Total => "total",
         };
         ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }

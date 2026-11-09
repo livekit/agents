@@ -230,7 +230,7 @@ async fn a_handshake_that_never_completes_is_reported_as_a_connection_timeout_on
         Event::Error(err) => {
             let error = err.provider_error.expect("typed provider error retained");
             assert_eq!(error.kind, lk_agents_abi::errors::ApiErrorKind::Timeout);
-            assert_eq!(error.phase, Some(lk_agents_abi::errors::TimeoutPhase::Connect));
+            assert_eq!(error.timeout, Some(lk_agents_abi::errors::Timeout::Connect));
             assert!(!err.recoverable, "no retry budget: there is nothing to resume");
         }
         other => panic!("expected the connection timeout, got {other:?}"),
@@ -483,7 +483,7 @@ async fn realtime_send_stall_fires_write_deadline_without_starting_remote_read_t
     };
     let provider = error.provider_error.expect("native timeout category is retained");
     assert_eq!(provider.kind, lk_agents_abi::errors::ApiErrorKind::Timeout);
-    assert_eq!(provider.phase, Some(lk_agents_abi::errors::TimeoutPhase::Write));
+    assert_eq!(provider.timeout, Some(lk_agents_abi::errors::Timeout::Write));
     session.aclose().await;
 }
 
@@ -643,10 +643,7 @@ async fn realtime_total_deadline_during_handshake_retains_its_total_phase() {
         panic!("expected total timeout");
     };
     assert!(!error.recoverable);
-    assert_eq!(
-        error.provider_error.unwrap().phase,
-        Some(lk_agents_abi::errors::TimeoutPhase::Total)
-    );
+    assert_eq!(error.provider_error.unwrap().timeout, Some(lk_agents_abi::errors::Timeout::Total));
     session.aclose().await;
 }
 

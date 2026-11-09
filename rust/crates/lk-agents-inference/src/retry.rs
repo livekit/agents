@@ -35,11 +35,9 @@ pub async fn stream<T: Send + 'static>(
         Err(_) => (
             None,
             Some(
-                lk_agents_abi::errors::ApiError::timed_out(
-                    lk_agents_abi::errors::TimeoutPhase::Total,
-                )
-                .with_retryable(false)
-                .into(),
+                lk_agents_abi::errors::ApiError::timed_out(lk_agents_abi::errors::Timeout::Total)
+                    .with_retryable(false)
+                    .into(),
             ),
         ),
     };
@@ -96,7 +94,7 @@ impl<T: Send + 'static> State<T> {
             Err(_) => {
                 self.ended = true;
                 let error: ProviderError = lk_agents_abi::errors::ApiError::timed_out(
-                    lk_agents_abi::errors::TimeoutPhase::Total,
+                    lk_agents_abi::errors::Timeout::Total,
                 )
                 .with_retryable(false)
                 .into();

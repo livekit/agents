@@ -96,7 +96,7 @@ async def test_recognition_passive_listening_does_not_start_read_timeout() -> No
         stream.end_input()
         with pytest.raises(APITimeoutError) as error:
             await anext(stream)
-        assert error.value.phase == "read"
+        assert error.value.timeout == "read"
     finally:
         await stream.aclose()
 
@@ -234,7 +234,7 @@ async def test_core_owned_recognition_keeps_completion_and_read_deadlines(comple
             stream.end_input()
             with pytest.raises(APITimeoutError) as error:
                 await anext(stream)
-            assert error.value.phase == "read"
+            assert error.value.timeout == "read"
         else:
             with pytest.raises(APIConnectionError, match="completion"):
                 await anext(stream)
@@ -251,11 +251,11 @@ async def test_recognition_admission_preserves_the_terminal_timeout_cause(ended:
     try:
         with pytest.raises(APITimeoutError) as failed_read:
             await anext(stream)
-        assert failed_read.value.phase == "total"
+        assert failed_read.value.timeout == "total"
         for admit in (lambda: stream.push_frame(frame), stream.flush):
             with pytest.raises(APITimeoutError) as failed_input:
                 admit()
-            assert failed_input.value.phase == "total"
+            assert failed_input.value.timeout == "total"
     finally:
         await stream.aclose()
 

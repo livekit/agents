@@ -85,7 +85,7 @@ backpressure do not count as remote inactivity. The total deadline starts
 when the operation is accepted and does not restart on progress or retry.
 Unsupported applicable timeout settings fail before I/O.
 
-A fallback adapter's `attempt_timeout` caps each phase of a backend attempt;
+A fallback adapter's `attempt_timeout` caps each limit of a backend attempt;
 it does not limit the duration of a healthy stream. The operation's
 `total_timeout` still bounds retries and fallback together.
 
@@ -94,8 +94,8 @@ it does not limit the duration of a healthy stream. The operation's
 `APIError`, `APIStatusError`, `APIConnectionError`, `APITimeoutError` and
 `StreamStateError` are exported from `livekit.agents`. Status errors retain
 `status_code`, `request_id` and the diagnostic `body`. A timeout is a
-connection error; its `phase` is `"pool"`, `"connect"`, `"write"`, `"read"`
-or `"total"`, or `None` when the failing layer cannot identify it. Provider
+connection error; its `timeout` names the limit that expired: `"pool"`, `"connect"`,
+`"write"`, `"read"` or `"total"`, or `None` when the failing layer cannot identify it. Provider
 errors keep their class and diagnostic cause through an agent run.
 
 `retryable` permits retry consideration; it does not establish safe replay.
@@ -177,8 +177,8 @@ names, and failures are framework errors, never the transport's exceptions.
 | `WebSocketMessage` | `type` (`WebSocketMessageType.TEXT`, `BINARY` or `CLOSE`), `data` (`str` text, `bytes` binary, the close reason), `json()` |
 
 A transport failure raises `APIConnectionError`; a transport error on a socket
-raises it from `receive()`. A limit that expires raises `APITimeoutError` with
-its `phase`: `pool` while waiting for a connection, `connect` for DNS, TCP and
+raises it from `receive()`. A limit that expires raises `APITimeoutError` naming
+it in `timeout`: `pool` while waiting for a connection, `connect` for DNS, TCP and
 TLS, `write` while a request body or frame waits for the transport, `read` while
 a response or handshake is expected and when `receive(timeout=)` expires. A
 non-2xx response is returned, so the plugin can read its body.

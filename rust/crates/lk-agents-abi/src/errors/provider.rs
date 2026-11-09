@@ -55,7 +55,7 @@ impl ProviderError {
                 retryable: api_kind.is_some() && *retryable,
                 status_code: *status_code,
                 request_id: None,
-                phase: None,
+                timeout: None,
                 cause: None,
             },
         }

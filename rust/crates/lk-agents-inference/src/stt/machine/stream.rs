@@ -2,7 +2,7 @@ use super::transcript::TranscriptMachine;
 use crate::effects::SttStreamEffect;
 use crate::stt::wire::Incoming;
 use lk_agents_abi::Ts;
-use lk_agents_abi::errors::{ApiError, TimeoutPhase};
+use lk_agents_abi::errors::{ApiError, Timeout};
 use lk_agents_abi::resources::ResourceId;
 use std::time::Duration;
 
@@ -85,7 +85,7 @@ impl SttStream {
         if self.total_deadline.is_some_and(|deadline| now >= deadline) {
             self.finished = true;
             return vec![SttStreamEffect::Finished(Err(
-                ApiError::timed_out(TimeoutPhase::Total).with_retryable(false)
+                ApiError::timed_out(Timeout::Total).with_retryable(false)
             ))];
         }
         if self.finalization_deadline.is_some_and(|deadline| now >= deadline) {

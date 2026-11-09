@@ -80,11 +80,11 @@ pub trait ApiErrorFunctions {
 
 /// The wait an `APITimeoutError` bounded, as `APIConnectOptions` names its limits. Absent when the
 /// failing layer does not say (a foreign SDK timeout), never guessed. Its wire string is the
-/// Python value of `APITimeoutError.phase`.
+/// Python value of `APITimeoutError.timeout`.
 #[crate::host(record(module = "types", emit))]
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TimeoutPhase {
+pub enum Timeout {
     Pool,
     Connect,
     Read,
@@ -109,7 +109,7 @@ pub enum TimeoutPhase {
             kwargs(retryable, status_code, request_id)
         ),
         Connection(class = "livekit.agents._bindings.APIConnectionError", kwargs(retryable)),
-        Timeout(class = "livekit.agents._bindings.APITimeoutError", kwargs(retryable, phase)),
+        Timeout(class = "livekit.agents._bindings.APITimeoutError", kwargs(retryable, timeout)),
     )
 ))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -122,7 +122,7 @@ pub struct ApiError {
     pub status_code: Option<i64>,
     pub request_id: Option<String>,
     /// [`ApiErrorKind::Timeout`] only.
-    pub phase: Option<TimeoutPhase>,
+    pub timeout: Option<Timeout>,
     /// The failure this one was raised from: the host exception's `__cause__`.
     #[source]
     pub cause: Option<Box<ProviderError>>,
@@ -137,7 +137,7 @@ impl ApiError {
             retryable: true,
             status_code: None,
             request_id: None,
-            phase: None,
+            timeout: None,
             cause: None,
         }
     }
@@ -155,7 +155,7 @@ impl ApiError {
             retryable: retryable_for_status(status_code, retryable),
             status_code: Some(status_code),
             request_id,
-            phase: None,
+            timeout: None,
             cause: None,
         }
     }
@@ -167,7 +167,7 @@ impl ApiError {
             retryable: true,
             status_code: None,
             request_id: None,
-            phase: None,
+            timeout: None,
             cause: None,
         }
     }
@@ -179,7 +179,7 @@ impl ApiError {
             retryable: true,
             status_code: None,
             request_id: None,
-            phase: None,
+            timeout: None,
             cause: None,
         }
     }
@@ -193,11 +193,11 @@ impl ApiError {
         )
     }
 
-    /// An `APITimeoutError` for the wait `phase` bounded.
-    pub fn timed_out(phase: TimeoutPhase) -> Self {
+    /// An `APITimeoutError` for the wait `timeout` bounded.
+    pub fn timed_out(timeout: Timeout) -> Self {
         Self {
-            phase: Some(phase),
-            ..Self::timeout(Some(format!("Request timed out ({} timeout).", phase.as_str())))
+            timeout: Some(timeout),
+            ..Self::timeout(Some(format!("Request timed out ({} timeout).", timeout.as_str())))
         }
     }
 

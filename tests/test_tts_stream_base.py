@@ -171,7 +171,7 @@ async def test_stalled_provider_response_expires_in_the_read_phase() -> None:
                 async with provider.synthesize("hello", conn_options=options) as stream:
                     async for _ in stream:
                         pytest.fail("the provider never answered")
-        assert failure.value.phase == "read"
+        assert failure.value.timeout == "read"
     finally:
         await provider.aclose()
 

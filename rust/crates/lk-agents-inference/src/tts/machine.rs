@@ -1,7 +1,7 @@
 use crate::effects::TtsSynthesisEffect;
 use std::{collections::BTreeSet, time::Duration};
 
-use lk_agents_abi::errors::{ApiError, TimeoutPhase};
+use lk_agents_abi::errors::{ApiError, Timeout};
 use lk_agents_abi::metrics::base::ConnectionAcquired;
 use lk_agents_abi::{SynthesizedAudio, Ts};
 
@@ -94,9 +94,9 @@ impl TtsSynthesis {
             && !matches!(event, TtsSynthesisEvent::Cancel)
         {
             let phase = if self.total_deadline.is_some_and(|deadline| now >= deadline) {
-                TimeoutPhase::Total
+                Timeout::Total
             } else {
-                TimeoutPhase::Read
+                Timeout::Read
             };
             return self.fail(ApiError::timed_out(phase));
         }
@@ -387,7 +387,7 @@ mod tests {
         );
         assert!(
             matches!(core.handle(TtsSynthesisEvent::Wake, Ts::from_nanos(1_500_000_000)).as_slice(),
-            [TtsSynthesisEffect::Finished(Err(error)), TtsSynthesisEffect::TtsCancel] if error.phase == Some(TimeoutPhase::Total) && error.request_id.as_deref() == Some("request"))
+            [TtsSynthesisEffect::Finished(Err(error)), TtsSynthesisEffect::TtsCancel] if error.timeout == Some(Timeout::Total) && error.request_id.as_deref() == Some("request"))
         );
     }
 }

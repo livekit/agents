@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use lk_agents_abi::errors::{ApiError, ProviderError, TimeoutPhase};
+use lk_agents_abi::errors::{ApiError, ProviderError, Timeout};
 use lk_agents_abi::{ApiConnectOptions, Ts};
 use std::sync::Arc;
 
@@ -47,7 +47,7 @@ pub fn connect_error(what: &str, err: TransportError) -> ApiError {
             }
         }
         TransportError::Timeout => ApiError {
-            phase: Some(TimeoutPhase::Connect),
+            timeout: Some(Timeout::Connect),
             ..ApiError::timeout(Some(format!("{what} connection timed out.")))
         },
         other => ApiError::connection(Some(format!("failed to connect to {what}: {other}"))),
@@ -64,7 +64,7 @@ pub async fn within<T>(
 }
 
 /// STT's and TTS's opening: connect within `conn_options.connect_timeout` (a stalled handshake is
-/// a retryable connect-phase `APITimeoutError`), then send the session-create frame. Failures map
+/// a retryable `APITimeoutError` naming the connect limit), then send the session-create frame. Failures map
 /// through [`connect_error`].
 pub async fn open_ws(
     ws: &dyn WsTransport,
@@ -209,7 +209,7 @@ mod tests {
 
         let err = connect_error("LiveKit Inference STT", TransportError::Timeout);
         assert_eq!(err.kind, ApiErrorKind::Timeout);
-        assert_eq!(err.phase, Some(TimeoutPhase::Connect));
+        assert_eq!(err.timeout, Some(Timeout::Connect));
         assert!(err.retryable);
 
         let err = connect_error("LiveKit Inference STT", TransportError::Connect("dns".into()));

@@ -24,7 +24,7 @@ from .._bindings import (
     create_api_error_from_http,
     redacted_cause,
 )
-from .._generated.types import TimeoutPhase
+from .._generated.types import Timeout
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
@@ -334,7 +334,7 @@ class WebSocket:
             # aiohttp treats 0 as no limit; the smallest positive float expires at the first wait
             msg = await self._ws.receive(timeout=5e-324 if timeout == 0 else timeout)
         except TimeoutError as e:
-            raise APITimeoutError("read timed out", phase="read") from e
+            raise APITimeoutError("read timed out", timeout="read") from e
         except (aiohttp.ClientError, OSError) as e:
             raise APIConnectionError("websocket receive failed") from redacted_cause(e)
         match msg.type:
@@ -359,7 +359,7 @@ class WebSocket:
             async with asyncio.timeout(self._write_timeout):
                 await send
         except TimeoutError as e:
-            raise APITimeoutError("write timed out", phase="write") from e
+            raise APITimeoutError("write timed out", timeout="write") from e
         except (aiohttp.ClientError, OSError) as e:
             raise APIConnectionError("websocket send failed") from redacted_cause(e)
 
@@ -374,14 +374,14 @@ class _Deadline:
         self,
         options: APIConnectOptions,
         timeout: asyncio.Timeout,
-        after_connect: TimeoutPhase | None,
+        after_connect: Timeout | None,
     ) -> None:
         self._options = options
         self._timeout = timeout
         self.after_connect = after_connect
-        self.limit: TimeoutPhase | None = None
+        self.limit: Timeout | None = None
 
-    def set_limit(self, limit: TimeoutPhase | None) -> None:
+    def set_limit(self, limit: Timeout | None) -> None:
         if self._timeout.expired():
             return  # keep the limit that fired; an expired asyncio.Timeout cannot be rescheduled
         self.limit = limit
@@ -406,7 +406,7 @@ _current = contextvars.ContextVar[_Deadline | None]("http_deadline", default=Non
 
 @contextlib.asynccontextmanager
 async def _under_limits(
-    options: APIConnectOptions, after_connect: TimeoutPhase | None, request_id_header: str | None
+    options: APIConnectOptions, after_connect: Timeout | None, request_id_header: str | None
 ) -> AsyncIterator[_Deadline]:
     try:
         async with asyncio.timeout(None) as timeout:
@@ -417,7 +417,7 @@ async def _under_limits(
             finally:
                 _current.reset(token)
     except aiohttp.SocketTimeoutError as e:  # aiohttp's own read limit
-        raise APITimeoutError("read timed out", phase="read") from e
+        raise APITimeoutError("read timed out", timeout="read") from e
     except aiohttp.ClientResponseError as e:  # a rejected websocket handshake
         raise create_api_error_from_http(
             e.message, status=e.status, request_id=_request_id(e.headers, request_id_header)
@@ -425,7 +425,7 @@ async def _under_limits(
     except TimeoutError as e:
         if not timeout.expired() or deadline.limit is None:
             raise
-        raise APITimeoutError(f"{deadline.limit} timed out", phase=deadline.limit) from e
+        raise APITimeoutError(f"{deadline.limit} timed out", timeout=deadline.limit) from e
     except (aiohttp.ClientError, OSError) as e:
         raise APIConnectionError("request failed") from redacted_cause(e)
 
@@ -434,9 +434,7 @@ def _request_id(headers: Mapping[str, str] | None, header: str | None) -> str | 
     return headers.get(header) if headers is not None and header is not None else None
 
 
-def _trace_hook(
-    limit: TimeoutPhase | None, connected: bool = False
-) -> Callable[..., Awaitable[None]]:
+def _trace_hook(limit: Timeout | None, connected: bool = False) -> Callable[..., Awaitable[None]]:
     async def hook(*_: object) -> None:
         if (deadline := _current.get()) is not None:
             deadline.set_limit(deadline.after_connect if connected else limit)

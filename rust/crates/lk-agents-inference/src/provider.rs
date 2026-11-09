@@ -543,7 +543,7 @@ mod executor_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lk_agents_abi::errors::TimeoutPhase;
+    use lk_agents_abi::errors::Timeout;
 
     fn at(seconds: u64) -> u64 {
         seconds * 1_000_000_000
@@ -597,7 +597,7 @@ mod tests {
         assert_eq!(operation.ready(at(300)), Ok(false));
         operation.input_ended(at(300));
         let error = operation.ready(at(302)).unwrap_err();
-        assert_eq!(error.phase, Some(TimeoutPhase::Read));
+        assert_eq!(error.timeout, Some(Timeout::Read));
     }
 
     // Catches: a synthesis read deadline charging the application's input pauses, one that
@@ -622,7 +622,7 @@ mod tests {
         operation.observe_response(ResponseObservation::Audio, at(31));
         assert_eq!(operation.ready(at(32)), Ok(false), "after the final input, audio is progress");
         let error = operation.ready(at(33)).unwrap_err();
-        assert_eq!((error.kind, error.phase), (ApiErrorKind::Timeout, Some(TimeoutPhase::Read)));
+        assert_eq!((error.kind, error.timeout), (ApiErrorKind::Timeout, Some(Timeout::Read)));
     }
 
     // Catches: a read deadline after delivered output replaying the request, which would repeat
@@ -637,7 +637,7 @@ mod tests {
                 assert_eq!(operation.ready(0), Ok(true));
                 operation.expect_response(0);
                 let error = operation.ready(at(1)).unwrap_err();
-                assert_eq!(error.phase, Some(TimeoutPhase::Read));
+                assert_eq!(error.timeout, Some(Timeout::Read));
                 let expected = if delivered && kind != RequestKind::SttStream {
                     RetryDecision::Raise
                 } else {
@@ -656,7 +656,7 @@ mod tests {
     fn sdk_timeouts_retry_without_creating_a_second_transport_interruption() {
         let options = ApiConnectOptions { max_retry: 1, ..Default::default() };
         let mut operation = AttemptMachine::new(RequestKind::Llm, options, 0).unwrap();
-        let timeout = ApiError::timed_out(TimeoutPhase::Read);
+        let timeout = ApiError::timed_out(Timeout::Read);
         assert_eq!(operation.ready(0), Ok(true));
         assert_eq!(
             operation.failure(timeout.clone().into(), false, at(1)).unwrap(),
@@ -685,7 +685,7 @@ mod tests {
         assert_eq!(operation.ready(at(4)), Ok(true));
         operation.response(true, at(4));
         let error = operation.ready(at(5)).unwrap_err();
-        assert_eq!(error.phase, Some(TimeoutPhase::Total));
+        assert_eq!(error.timeout, Some(Timeout::Total));
     }
 
     #[test]
@@ -699,7 +699,7 @@ mod tests {
         let mut operation = AttemptMachine::new(RequestKind::SttStream, options, 0).unwrap();
         assert_eq!(operation.ready(0), Ok(true));
         operation.expect_response(0);
-        assert_eq!(operation.ready(at(1)).unwrap_err().phase, Some(TimeoutPhase::Read));
+        assert_eq!(operation.ready(at(1)).unwrap_err().timeout, Some(Timeout::Read));
         assert_eq!(
             operation.failure(ApiError::connection(None).into(), false, at(1)).unwrap(),
             RetryDecision::Retry(0.1)
@@ -724,7 +724,7 @@ mod tests {
         assert_eq!(operation.ready(0), Ok(true));
         operation.input_ended(0);
         let error = operation.ready(at(1)).unwrap_err();
-        assert_eq!((error.phase, error.retryable), (Some(TimeoutPhase::Read), false));
+        assert_eq!((error.timeout, error.retryable), (Some(Timeout::Read), false));
         assert_eq!(operation.failure(error.clone().into(), false, at(1)), Err(error));
         assert_eq!(operation.wake_at(), None, "no attempt follows");
     }
@@ -736,7 +736,7 @@ mod tests {
         let options =
             ApiConnectOptions { max_retry: 1, connect_timeout: Some(0.5), ..Default::default() };
         let mut operation = AttemptMachine::new(RequestKind::SttStream, options, 0).unwrap();
-        let timeout = ApiError::timed_out(TimeoutPhase::Read);
+        let timeout = ApiError::timed_out(Timeout::Read);
         assert_eq!(operation.ready(0), Ok(true));
         assert_eq!(
             operation.failure(timeout.clone().into(), false, at(1)).unwrap(),
@@ -755,7 +755,7 @@ mod tests {
         assert_eq!(operation.ready(0), Ok(true));
         assert!(operation.succeeded(0).is_err());
         operation.input_ended(0);
-        assert_eq!(operation.ready(0).unwrap_err().phase, Some(TimeoutPhase::Read));
+        assert_eq!(operation.ready(0).unwrap_err().timeout, Some(Timeout::Read));
         assert!(operation.failure(ApiError::connection(None).into(), false, 0).is_err());
     }
 

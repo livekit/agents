@@ -33,7 +33,7 @@ use std::{
 use lk_agents_abi::{
     ApiConnectOptions, BoxFuture, ChatContext, ChatItem, Clock, OwnedTask, Realtime,
     RealtimeCommand, RealtimeSession, Spawner, SpawnerExt, Ts,
-    errors::{ApiError, ProviderError, TimeoutPhase},
+    errors::{ApiError, ProviderError, Timeout},
     llm::realtime::{
         Event, GenerateReplyFailed, InputSpeechStopped, RealtimeCapabilities, RealtimeError,
         SessionReconnected,
@@ -177,7 +177,7 @@ impl Realtime for FakeRealtime {
             let bound = ApiConnectOptions::default().connect_timeout.map(Duration::from_secs_f64);
             let gives_up = bound
                 .filter(|b| setup.connect >= *b)
-                .map(|b| (now.saturating_add(b), ApiError::timed_out(TimeoutPhase::Connect)));
+                .map(|b| (now.saturating_add(b), ApiError::timed_out(Timeout::Connect)));
             let opened = now.saturating_add(setup.connect);
             let socket = Arc::new(Socket {
                 setup,

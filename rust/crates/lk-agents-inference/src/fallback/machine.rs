@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use lk_agents_abi::Ts;
-use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError, TimeoutPhase};
+use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError, Timeout};
 use lk_agents_abi::resources::ResourceId;
 
 use lk_agents_core::request::{Policy, Request, Step};
@@ -14,7 +14,7 @@ use lk_agents_core::request::{Policy, Request, Step};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChainPolicy {
     pub max_retry_per_backend: u32,
-    /// Caps each phase of an attempt; `None` keeps the caller's limits (TTS's default).
+    /// Caps each limit of an attempt; `None` keeps the caller's limits (TTS's default).
     pub attempt_timeout: Option<f64>,
     /// Replaces `conn_options.retry_interval`; `None` keeps the caller's.
     pub retry_interval: Option<f64>,
@@ -239,11 +239,9 @@ impl ChainRequest {
         if self.deadline.is_some_and(|deadline| now >= deadline) {
             let mut effects = self.cancel_active(now);
             self.phase = Phase::Finished;
-            effects.push(FallbackChainEffect::Finished(Err(ApiError::timed_out(
-                TimeoutPhase::Total,
-            )
-            .with_retryable(false)
-            .into())));
+            effects.push(FallbackChainEffect::Finished(Err(ApiError::timed_out(Timeout::Total)
+                .with_retryable(false)
+                .into())));
             return effects;
         }
         let phase = std::mem::replace(&mut self.phase, Phase::Finished);

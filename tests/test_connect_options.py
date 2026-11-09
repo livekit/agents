@@ -284,5 +284,5 @@ async def test_total_timeout_spans_every_retry_of_an_operation() -> None:
     options = APIConnectOptions(max_retry=100, retry_interval=0.05, total_timeout=0.3)
     with pytest.raises(APITimeoutError) as error:
         await model.recognize([_frame()], conn_options=options)
-    assert error.value.phase == "total"
+    assert error.value.timeout == "total"
     assert 1 < model.attempts < options.max_retry

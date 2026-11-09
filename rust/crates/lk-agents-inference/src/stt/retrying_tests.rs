@@ -1,5 +1,5 @@
 use super::*;
-use lk_agents_abi::errors::{ApiError, TimeoutPhase};
+use lk_agents_abi::errors::{ApiError, Timeout};
 use lk_agents_abi::stt::types::SttCapabilities;
 use parking_lot::Mutex;
 
@@ -292,11 +292,7 @@ async fn total_timeout_ends_retried_recognitions_and_streams() {
     assert!(
         matches!(
             error,
-            ProviderError::Local(ApiError {
-                phase: Some(TimeoutPhase::Total),
-                retryable: false,
-                ..
-            })
+            ProviderError::Local(ApiError { timeout: Some(Timeout::Total), retryable: false, .. })
         ),
         "{error:?}"
     );
@@ -309,11 +305,7 @@ async fn total_timeout_ends_retried_recognitions_and_streams() {
     assert!(
         matches!(
             error,
-            ProviderError::Local(ApiError {
-                phase: Some(TimeoutPhase::Total),
-                retryable: false,
-                ..
-            })
+            ProviderError::Local(ApiError { timeout: Some(Timeout::Total), retryable: false, .. })
         ),
         "{error:?}"
     );

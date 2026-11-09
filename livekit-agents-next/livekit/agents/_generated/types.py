@@ -16,10 +16,10 @@ from typing_extensions import TypedDict
 #     rust/crates/lk-agents-abi/src/types/identity.rs
 
 
-TimeoutPhase: TypeAlias = Literal["pool", "connect", "read", "write", "total"]
+Timeout: TypeAlias = Literal["pool", "connect", "read", "write", "total"]
 """The wait an `APITimeoutError` bounded, as `APIConnectOptions` names its limits. Absent when the
 failing layer does not say (a foreign SDK timeout), never guessed. Its wire string is the
-Python value of `APITimeoutError.phase`.
+Python value of `APITimeoutError.timeout`.
 """
 
 

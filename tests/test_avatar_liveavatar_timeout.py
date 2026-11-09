@@ -27,6 +27,6 @@ async def test_websocket_handshake_obeys_read_timeout():
         try:
             with pytest.raises(APITimeoutError) as error:
                 await asyncio.wait_for(avatar._main_task(), 0.5)
-            assert error.value.phase == "read"
+            assert error.value.timeout == "read"
         finally:
             release.set()

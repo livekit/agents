@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use lk_agents_abi::errors::{ApiErrorKind, TimeoutPhase};
+use lk_agents_abi::errors::{ApiErrorKind, Timeout};
 use lk_agents_abi::{ChatContext, Clock, Closed};
 use lk_agents_inference::llm::gateway::{GatewayLlm, LlmChunks};
 use lk_agents_inference::llm::machine::Policy;
@@ -310,7 +310,7 @@ async fn requests_omit_the_unused_gateway_session_header() {
     assert_eq!(peer.requests.load(Ordering::SeqCst), 3);
 }
 
-// Catches: a stalled stream waited on forever, a read timeout reported without its phase or as
+// Catches: a stalled stream waited on forever, a read timeout reported without naming its limit or as
 // retryable after visible output, or the stalled connection left open.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stream_stalled_after_output_times_out_on_read_and_releases_its_connection() {
@@ -323,8 +323,8 @@ async fn a_stream_stalled_after_output_times_out_on_read_and_releases_its_connec
     let mut chunks = open(&llm, policy(3, 300));
     let err = text(&mut chunks).await.unwrap_err();
     assert_eq!(
-        (err.kind, err.phase, err.retryable),
-        (ApiErrorKind::Timeout, Some(TimeoutPhase::Read), false)
+        (err.kind, err.timeout, err.retryable),
+        (ApiErrorKind::Timeout, Some(Timeout::Read), false)
     );
     assert_eq!(chunks.close(deadline(1_000)).await, Closed::Clean);
     eventually("the stalled connection was never released", || {

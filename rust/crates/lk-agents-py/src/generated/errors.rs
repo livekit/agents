@@ -197,12 +197,10 @@ impl crate::py_errors::HostException for ::lk_agents_abi::errors::ApiError {
                         )?;
                         ::pyo3::types::PyDictMethods::set_item(
                             kwargs,
-                            "phase",
-                            match ::std::clone::Clone::clone(&self.phase) {
+                            "timeout",
+                            match ::std::clone::Clone::clone(&self.timeout) {
                                 None => py.None().into_bound(py),
-                                Some(x) => {
-                                    crate::generated::records::types::timeout_phase_to_py(py, x)?
-                                }
+                                Some(x) => crate::generated::records::types::timeout_to_py(py, x)?,
                             },
                         )?;
                         ::std::result::Result::Ok(())

@@ -30,7 +30,7 @@ async def test_pool_wait_expires_without_interrupting_the_connecting_caller():
         await connecting.wait()
         with pytest.raises(APITimeoutError) as error:
             await pool.get(conn_options=NO_POOL_WAIT)
-        assert error.value.phase == "pool"
+        assert error.value.timeout == "pool"
         assert not first.done()
         release.set()
         connection = await first

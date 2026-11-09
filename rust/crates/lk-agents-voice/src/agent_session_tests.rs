@@ -79,15 +79,15 @@ use lk_agents_core::tts::markup::ChatMessageExt;
 use std::sync::Arc;
 
 #[test]
-fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_session_error() {
+fn realtime_transport_timeout_keeps_its_limit_and_request_identity_on_session_error() {
     use crate::agent_session::effects::VoiceEffect;
     use crate::agent_session::machine::activity::realtime::RealtimeWake;
     use lk_agents_abi::Ts;
-    use lk_agents_abi::errors::{ApiError, ApiErrorKind, TimeoutPhase};
+    use lk_agents_abi::errors::{ApiError, ApiErrorKind, Timeout};
     use lk_agents_abi::llm::realtime as rt;
 
     let driver = &mut realtime_driver();
-    let mut timeout = ApiError::timed_out(TimeoutPhase::Connect);
+    let mut timeout = ApiError::timed_out(Timeout::Connect);
     timeout.request_id = Some("handshake-7".into());
     driver.on_realtime(
         Ts::ZERO,
@@ -113,7 +113,7 @@ fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_session_er
         panic!("a native transport error changed to a host error");
     };
     assert_eq!(error.kind, ApiErrorKind::Timeout);
-    assert_eq!(error.phase, Some(TimeoutPhase::Connect));
+    assert_eq!(error.timeout, Some(Timeout::Connect));
     assert_eq!(error.request_id.as_deref(), Some("handshake-7"));
 }
 

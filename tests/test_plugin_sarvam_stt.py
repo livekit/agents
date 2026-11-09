@@ -161,7 +161,7 @@ async def test_sarvam_stt_stream_run_does_not_retry_on_timeout() -> None:
     async def _raise_timeout() -> None:
         nonlocal attempts
         attempts += 1
-        raise APITimeoutError("simulated timeout", phase="connect")
+        raise APITimeoutError("simulated timeout", timeout="connect")
 
     stream._run_connection = _raise_timeout  # type: ignore[method-assign]
     stream._build_log_context = lambda: {}  # type: ignore[method-assign]

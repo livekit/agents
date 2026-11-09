@@ -5,7 +5,7 @@ pub(crate) mod side_table;
 
 pub use api::{
     ApiError, ApiErrorFunctions, ApiErrorKind, DEFAULT_CONNECTION_MESSAGE, DEFAULT_TIMEOUT_MESSAGE,
-    TRANSIENT_CLIENT_STATUSES, TimeoutPhase, http_error_message, http_reason, retryable_for_status,
+    TRANSIENT_CLIENT_STATUSES, Timeout, http_error_message, http_reason, retryable_for_status,
 };
 mod host;
 pub use host::{CapturedError, HostError, HostErrorKind, HostResult};
@@ -52,11 +52,11 @@ impl From<JobPanicked> for std::io::Error {
             retryable(ty = "bool", default = true, inherited),
             body(ty = "object | None", default = None, hidden, inherited)
         ), base_args(message, body, retryable), str = "_connection_error_str"),
-    APITimeoutError(base = "APIConnectionError", doc = "An API request timed out; phase names the expired connection limit.",
+    APITimeoutError(base = "APIConnectionError", doc = "An API request timed out; timeout names the expired connection limit.",
         fields(
             message(ty = "str", positional, default = "Request timed out.", inherited),
             retryable(ty = "bool", default = true, inherited),
-            phase(ty = "Literal['pool', 'connect', 'read', 'write', 'total'] | None", default = None)
+            timeout(ty = "Literal['pool', 'connect', 'read', 'write', 'total'] | None", default = None)
         ), base_args(message, retryable)),
     StreamStateError(base = "RuntimeError", doc = "A stream was pulled while another pull was still in flight."),
     CLIError(base = "Exception"),
