@@ -342,11 +342,8 @@ impl GatewayTts {
             .finish();
         let pump = Pump {
             connections: self.connections.clone(),
-            background: lk_agents_net::owned::Background::new(
-                self.tasks.clone(),
-                self.spawner.clone(),
-                clock.clone(),
-            ),
+            tasks: self.tasks.clone(),
+            spawner: self.spawner.clone(),
             session_id,
             ws: self.ws.clone(),
             url: format!("{}?{query}", join_url(&to_ws_url(&opts.base_url), "tts")),
@@ -656,7 +653,8 @@ const MAX_PENDING_TEXT_BYTES: usize = 64 * 1024;
 struct Pump {
     connections: Arc<Mutex<Connections>>,
     /// Where a checked-out connection dropped unreleased is closed.
-    background: lk_agents_net::owned::Background,
+    tasks: Arc<TaskSet>,
+    spawner: Arc<dyn Spawner>,
     session_id: Option<String>,
     ws: Arc<dyn WsTransport>,
     url: String,

@@ -2,10 +2,9 @@ use super::wire::{ErrorCode, Incoming};
 use super::*;
 use base64::Engine as _;
 use futures_util::future::{Either, select};
+use lk_agents_abi::Ts;
 use lk_agents_abi::errors::Timeout;
 use lk_agents_abi::metrics::base::ConnectionAcquired;
-use lk_agents_abi::{Closed, Ts};
-use lk_agents_net::owned::Owned;
 use lk_agents_net::transport::{TransportError, WsMessage, connect_error};
 use std::collections::BTreeSet;
 use std::pin::pin;
@@ -51,8 +50,43 @@ enum Event {
 }
 
 /// A pooled connection checked out of the pool: dropped unreleased (a stop while opening, a
-/// cancelled pump), it is forgotten by the pool and closed.
-type Checkout = Owned<(u64, Connection)>;
+/// cancelled pump), it is forgotten by the pool and closed in the background.
+struct Checkout {
+    held: Option<(u64, Connection)>,
+    connections: Arc<Mutex<Connections>>,
+    tasks: Arc<TaskSet>,
+    spawner: Arc<dyn Spawner>,
+}
+
+impl Checkout {
+    fn connection(&mut self) -> &mut Connection {
+        &mut self.held.as_mut().expect("a checkout holds its connection until released").1
+    }
+
+    /// Back to the pool for the next synthesis.
+    fn give_back(mut self) {
+        if let Some((id, connection)) = self.held.take() {
+            self.connections.lock().give_back(id, connection);
+        }
+    }
+
+    async fn close(mut self) {
+        if let Some((id, connection)) = self.held.take() {
+            self.connections.lock().forget(id);
+            connection.sender.close().await;
+        }
+    }
+}
+
+impl Drop for Checkout {
+    fn drop(&mut self) {
+        if let Some((id, connection)) = self.held.take() {
+            self.connections.lock().forget(id);
+            let close = async move { connection.sender.close().await };
+            let _ = self.tasks.try_spawn(self.spawner.as_ref(), "tts connection close", close);
+        }
+    }
+}
 
 /// One synthesis's progress on its connection: the segments it delivered and its deadlines.
 struct Synthesis {
@@ -300,7 +334,7 @@ impl Pump {
         };
         let (mut checkout, acquired) = opened?;
         synthesis.connection = Some(acquired);
-        let (_, connection) = &mut *checkout;
+        let connection = checkout.connection();
         let outcome = self
             .drive(&mut synthesis, connection.receiver.as_mut(), connection.sender.as_ref())
             .await;
@@ -313,21 +347,12 @@ impl Pump {
 
     /// Holds a connection checked out of the pool until it is given back or closed.
     fn checkout(&self, id: u64, connection: Connection) -> Checkout {
-        let (connections, clock) = (self.connections.clone(), self.clock.clone());
-        Owned::new(
-            &self.background,
-            (id, connection),
-            Box::new(move |(id, connection): (u64, Connection), deadline| {
-                Box::pin(async move {
-                    connections.lock().forget(id);
-                    let close = connection.sender.close();
-                    match lk_agents_abi::before(clock.as_ref(), Some(deadline), close).await {
-                        Ok(()) => Closed::Clean,
-                        Err(_) => Closed::TimedOut,
-                    }
-                })
-            }),
-        )
+        Checkout {
+            held: Some((id, connection)),
+            connections: self.connections.clone(),
+            tasks: self.tasks.clone(),
+            spawner: self.spawner.clone(),
+        }
     }
 
     /// Takes a pooled connection opened for this configuration; the expired ones, and one opened
@@ -359,11 +384,10 @@ impl Pump {
             && !self.stopped.is_cancelled()
             && !self.audio_tx.is_closed()
         {
-            let (id, connection) = checkout.into_inner();
-            self.connections.lock().give_back(id, connection);
+            checkout.give_back();
             return;
         }
-        let _ = checkout.close().await;
+        checkout.close().await;
     }
 
     fn publish_failure(&self, error: &ApiError) {
