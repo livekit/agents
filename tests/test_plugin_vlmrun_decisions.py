@@ -97,10 +97,10 @@ def test_missing_api_key_fails_at_construction() -> None:
 
 def test_key_and_gateway_url_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VLMRUN_API_KEY", "vlm-env")
-    monkeypatch.setenv("VLMRUN_GATEWAY_BASE_URL", "https://gw.example.com/v1")
+    monkeypatch.setenv("VLMRUN_GATEWAY_BASE_URL", "https://user:secret@gw.example.com/v1")
     model = vlmrun.DecisionModel(model="qwen/qwen3.5-0.8b")
     assert (model.model, model.provider) == ("qwen/qwen3.5-0.8b", "gw.example.com")
-    assert model._url == "https://gw.example.com/typesafe/v1/systemone"
+    assert model._url == "https://user:secret@gw.example.com/typesafe/v1/systemone"
     assert model._headers["Authorization"] == "Bearer vlm-env"
 
 

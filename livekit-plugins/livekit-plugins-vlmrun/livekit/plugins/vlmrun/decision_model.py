@@ -68,7 +68,9 @@ class DecisionModel(llm.DecisionModel):
         self._model = model
         root = gateway_url(base_url)
         self._url = f"{root}/typesafe/v1/systemone"
-        self._provider = urlsplit(root).netloc
+        # Host and port only: netloc would carry user:password@ into telemetry.
+        parts = urlsplit(root)
+        self._provider = f"{parts.hostname}:{parts.port}" if parts.port else (parts.hostname or "")
         self._headers = client_headers(key)
         self._session = http_session
 
