@@ -1,5 +1,3 @@
-//! Serialize typed realtime effects at the transport boundary.
-
 use super::wire::{
     self, AudioConfig, AudioFormat, AudioInput, AudioOutput, ClientEvent, Session, SessionConfig,
 };

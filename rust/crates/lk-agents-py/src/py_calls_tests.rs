@@ -1,5 +1,3 @@
-//! Interpreter call, context, cancellation and future-bridging regressions.
-
 use super::*;
 
 mod invocation {

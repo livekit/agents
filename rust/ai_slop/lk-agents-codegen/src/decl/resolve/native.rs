@@ -1,6 +1,3 @@
-//! `Arc<dyn Trait>` of a `#[host(native)]` trait: the host classes registered for it cross as
-//! themselves; there is no host proxy.
-
 use super::*;
 
 impl Resolver<'_> {
@@ -54,8 +51,7 @@ impl Resolver<'_> {
                     }
                 }
                 let entries = voc::read(&registrations).map_err(|e| format!("{at}: {e}"))?;
-                // Legacy object exports register `as_dyn(Trait = method)` in the same registry
-                // as a declared class's `native = Trait`; reuse that identity for the annotation.
+                // `as_dyn(Trait = method)` shares the registry of a class's `native = Trait`.
                 if let syn::Item::Impl(imp) = candidate
                     && let Some(object) = voc::find(&entries, "object")
                     && let Some(as_dyn) = voc::find(&object.nested, "as_dyn")

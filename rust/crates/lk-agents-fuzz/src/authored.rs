@@ -1,14 +1,3 @@
-//! Hand-written recordings, for the examples and counterexamples every contract must carry.
-//!
-//! No driver runs here. A real recording is what the harness saw; these are recordings the
-//! driver never produced -- most importantly the ones it must never produce, so that a rule which
-//! cannot fail is caught on the day it is written rather than the year nobody notices.
-//!
-//! The facts are written with the same production types a real recording holds, in the order they
-//! happened, so a rule cannot tell an authored recording from a real one. Only the provenance
-//! differs, and that is the point: a counterexample validates the checker, never the runtime.
-//! Nothing outside `rules/` should use this.
-
 use lk_agents_abi::FunctionCall;
 use lk_agents_voice::{
     agent_session::machine::activity::scheduling::{SpeechId, SpeechKind},
@@ -24,11 +13,10 @@ use crate::{
     },
 };
 
-/// Builds a `Recording` fact by fact, as if a driver had produced it.
-///
-/// Each call takes the next stamp, so the order of the calls is the order of occurrence. That is
-/// the whole interface: a rule that depends on ordering is tested by writing the facts in the
-/// wrong order, which is what most counterexamples here are.
+// Hand-written recordings for the rules' examples and counterexamples. They use the production
+// types a real recording holds, so a rule cannot tell them apart; only `rules/` uses this.
+
+/// Builds a `Recording` fact by fact; the order of the calls is the order of occurrence.
 #[derive(Default)]
 pub struct Authored {
     recording: Recording,
@@ -45,8 +33,6 @@ impl Authored {
         self.seq += 1;
         Observed::at(self.seq, self.seq + self.later_ms)
     }
-
-    // --- the host's side -----------------------------------------------------------------------
 
     pub fn host(mut self, event: Host) -> Self {
         let at = self.next();
@@ -100,8 +86,6 @@ impl Authored {
         }))
     }
 
-    // --- the driver's side ---------------------------------------------------------------------
-
     /// The legs' retry budgets the session was built with.
     pub fn conn(mut self, conn: crate::drive::ConnSetup, chunked_tts: bool) -> Self {
         self.recording.set_conn(conn, chunked_tts);
@@ -124,8 +108,6 @@ impl Authored {
         self.recording.record_handle(speech, handle);
         self
     }
-
-    // --- what the run opened -------------------------------------------------------------------
 
     /// Open a resource of this kind, returning the builder. Its index is the next of its kind,
     /// exactly as in a real run, so the `nth` a rule reads is predictable from the call order.
@@ -181,8 +163,6 @@ impl Authored {
         self.recording.close(at, kind, nth);
         self
     }
-
-    // --- what left the session -------------------------------------------------------------------
 
     pub fn sink(mut self, sink: Sink) -> Self {
         let at = self.next();
@@ -246,8 +226,6 @@ impl Authored {
         self
     }
 
-    // --- what the case did -----------------------------------------------------------------------
-
     /// The case sent this input, and it was taken.
     pub fn sent(self, input: Input) -> Self {
         self.attempted(input, true)
@@ -296,15 +274,11 @@ impl Authored {
         self
     }
 
-    /// The runner applied one more input after everything so far.
-    ///
-    /// An `Advance`, because a rule that gives the driver "one input of grace" counts only inputs
-    /// that yield to the executor.
+    /// The runner applied one more input: an `Advance`, because a rule's "one input of grace"
+    /// counts only inputs that yield to the executor.
     pub fn then_act(self) -> Self {
         self.sent(Input::Advance { ms: crate::input::Millis(1) })
     }
-
-    // --- where the run got to ---------------------------------------------------------------------
 
     /// The test had answered everything the driver was waiting on.
     pub fn everything_answered(mut self) -> Self {

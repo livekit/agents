@@ -1,10 +1,3 @@
-//! The voice session's span entities (`telemetry.md`, "Sans-I/O: the entity owns its span";
-//! `telemetry-reference.md`, "Span trees"). Each entity a span describes owns it and the driver's
-//! [`Trace`] (`self.telemetry`) opens and ends it: the user turns ([`user_turn`]), the agent turns
-//! ([`agent_turn`]), and the session's own spans and its callbacks' ([`session`]). Ended spans
-//! leave each step as records on `SessionEvent::Telemetry`; work that continues in the runtime
-//! gets its parent's `SpanContext`.
-
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub(crate) mod agent_turn;
@@ -29,7 +22,6 @@ pub(crate) use lk_agents_telemetry::span::{ManualSpan, Reserved, Trace, seeded_i
 pub(crate) use session::{AmdDetection, Arriving, Blocking, Holding, HookSpan, ItemTurns, Under};
 pub(crate) use user_turn::{Endpointing, Stt, UserTurnSpan};
 
-// The declarations and records logic code names, under `telemetry::` (`telemetry.md`, rule 4).
 pub(crate) use lk_agents_abi::telemetry::record::{Record, SpanContext};
 pub(crate) use lk_agents_abi::telemetry::report::SessionReport;
 pub(crate) use lk_agents_abi::telemetry::spans::session::{

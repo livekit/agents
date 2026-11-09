@@ -39,10 +39,6 @@ async fn until(what: &str, mut cond: impl FnMut() -> bool) {
     .await;
 }
 
-// ---------------------------------------------------------------------------------------------
-// Ports recorder
-// ---------------------------------------------------------------------------------------------
-
 #[derive(Default)]
 struct Recorder {
     events: Mutex<Vec<AvailabilityChanged>>,
@@ -66,10 +62,6 @@ impl ChainObserver for Recorder {
         self.all_unavailable.fetch_add(1, Ordering::SeqCst);
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// A scripted backend
-// ---------------------------------------------------------------------------------------------
 
 /// What the next `open`/drain pair should do; the last entry repeats forever.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,10 +180,6 @@ impl Backend for Fake {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Harness
-// ---------------------------------------------------------------------------------------------
-
 struct Rig {
     chain: Arc<FallbackChain<Fake>>,
     rec: Arc<Recorder>,
@@ -253,10 +241,6 @@ async fn run_once(rig: &Rig, slot: RecoveryMode) -> (Result<usize, ProviderError
         .await;
     (out, drained)
 }
-
-// ---------------------------------------------------------------------------------------------
-// The behaviours worth pinning
-// ---------------------------------------------------------------------------------------------
 
 // Catches: a cursor. `llm/fallback_adapter.py:274` restarts at index 0 on every request.
 #[tokio::test]

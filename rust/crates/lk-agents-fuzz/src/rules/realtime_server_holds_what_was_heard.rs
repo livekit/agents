@@ -1,9 +1,3 @@
-//! What the realtime server remembers the agent saying is what the person heard of it.
-//!
-//! A reply the person cut short is truncated on the server where the playout stopped, and one
-//! they heard none of is deleted: otherwise the model later refers to words nobody heard. Judged
-//! on what the server held as the session closed its connection, for each message of a generation
-//! whose playout had ended (finished or cut) before the session was asked to close.
 use std::collections::BTreeMap;
 
 use crate::{
@@ -15,6 +9,9 @@ use crate::{
 
 /// Rounding between the playout's position and the frames it covers.
 const SLACK_MS: u64 = 20;
+
+// Otherwise the model later refers to words nobody heard. Judged on what the server held at the
+// close, for generations whose playout ended before the close was asked.
 
 pub struct RealtimeServerHoldsWhatWasHeard;
 

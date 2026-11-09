@@ -1,6 +1,3 @@
-//! Generation's inputs forwarded by the runtime: segment text into planning, and the moments a
-//! generation reports to the session machines.
-
 use lk_agents_abi::errors::ProviderError;
 
 use super::{ReplyPlan, TurnOutcome};
@@ -102,8 +99,7 @@ pub enum GenEvent {
     LaunchReleased {
         speech: SpeechId,
     },
-    /// A `kind` request of `speech` was sent, to `provider`'s `model` (usage.md "Counting": a
-    /// request counts when it starts).
+    /// A `kind` request of `speech` was sent, to `provider`'s `model`; it counts from here.
     RequestStarted {
         speech: SpeechId,
         kind: lk_agents_core::usage::ModelKind,

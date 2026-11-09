@@ -1,10 +1,3 @@
-//! `VoiceTask.run()` returns the value one of the task's tools completed it with, as validated.
-//!
-//! The host's task runner validates a `Completed` against the agent's `output_type` and hands
-//! over the value; the core never makes one up. So every value `run()` returned is the one a
-//! completed call reported, a call answered `Completed` before the value came back, each such
-//! value is returned at most once, and a value comes back exactly when a task ended completed:
-//! a task ended any other way returns none.
 use lk_agents_abi::voice::session::VoiceTaskEnded;
 use lk_agents_voice::trace::{HandoffStep, Step};
 
@@ -15,6 +8,8 @@ use crate::{
     input::{AgentText, Input, Ref, ToolAnswer},
     record::{Answer, Recording},
 };
+
+// The host's runner validates a `Completed` against `output_type`; the core never makes a value up.
 
 pub struct VoiceTaskReturnsItsValue;
 

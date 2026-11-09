@@ -1,8 +1,3 @@
-//! `stt/fallback_adapter.py`. Streaming recovery is a live tee, not a replayed request: the probe
-//! hears a copy of the live audio (`stt:341-361`) and recovers on a non-empty `FINAL_TRANSCRIPT`
-//! (`stt:456-466`), so [`Backend::Req`] carries an [`InputTee`]. One availability flag serves two
-//! recovery slots, hence one [`FallbackChain`] with a [`RecoveryMode`] argument. Each attempt binds the resolved policy immediately before opening its provider.
-
 use crate::telemetry;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,9 +25,8 @@ use crate::fallback::chain::{
 };
 use crate::fallback::channel::{ServeAttempt, forward, probe_next};
 
-// ---------------------------------------------------------------------------------------------
-// The live input tee
-// ---------------------------------------------------------------------------------------------
+// Streaming recovery is a live tee, not a replayed request: a probe hears a copy of the live audio
+// and recovers on a non-empty final transcript.
 
 type InputProbe = (u64, Arc<dyn StreamInput<AudioFrame>>);
 
@@ -237,10 +231,6 @@ impl StreamInput<AudioFrame> for TeeSink {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// The backend
-// ---------------------------------------------------------------------------------------------
-
 #[derive(Clone)]
 pub enum SttReq {
     /// `_recognize_impl`. `Arc` because recovery replays the same buffer (`stt:217-222`).
@@ -399,10 +389,6 @@ impl SttBackend {
         verdict
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// The adapter
-// ---------------------------------------------------------------------------------------------
 
 /// `stt:79-93`, field for field; `offline_recognize` is not merged, as in the reference.
 pub fn merge_capabilities(entries: &[SttCapabilities]) -> SttCapabilities {
@@ -713,6 +699,10 @@ impl ServeAttempt<SttBackend, SpeechEvent> for SttLeg {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "stt_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 mod preroll_tests {

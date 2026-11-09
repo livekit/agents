@@ -55,8 +55,6 @@ mod side_tables {
         });
     }
 
-    // ------------------------------------------------------------------------ the side tables
-
     /// The table drained and counted; the drain is what decrefs.
     fn outstanding() -> usize {
         exception_table().drain();
@@ -126,8 +124,8 @@ mod side_tables {
     }
 
     // Catches: `capture(PyErr)` capturing a different object, an exception outside the taxonomy
-    // treated as retryable (`llm/llm.py:287` only retries `APIError`), or a raising `__str__`
-    // taking the capture down.
+    // treated as retryable (only `APIError` is retried), or a raising `__str__` taking the
+    // capture down.
     fn a_pyerr_is_captured_as_its_own_value_and_is_not_retryable() {
         Python::initialize();
         Python::attach(|py| {
@@ -157,35 +155,6 @@ mod side_tables {
             assert_eq!(err.message(), "");
             assert!(!err.retryable());
             assert!(raise_original(py, err.host_ref().unwrap()).value(py).is(&exc));
-        });
-    }
-}
-
-mod session_bridge {
-    //! The leaves and lists as their own impls cross them, and the call schemas the RTC seam sends.
-    use _core::py_values::value_to_py;
-    use pyo3::prelude::*;
-    use pyo3::types::PyDict;
-
-    fn attach<T>(f: impl FnOnce(Python<'_>) -> T) -> T {
-        Python::initialize();
-        Python::attach(f)
-    }
-
-    // Catches: a provider payload's tagged bytes reaching the host as a dict, or a user dict with
-    // more than the one key mistaken for bytes.
-    #[test]
-    fn a_tagged_bytes_leaf_reads_back_as_bytes_and_nothing_else_does() {
-        attach(|py| {
-            let tag = lk_agents_abi::llm::provider_format::BYTES_TAG;
-            let v = value_to_py(
-                py,
-                &serde_json::json!({"img": {tag: "AQID"}, "other": {tag: "AQID", "x": 1}}),
-            )
-            .unwrap();
-            let img = v.get_item("img").unwrap();
-            assert_eq!(img.cast::<pyo3::types::PyBytes>().unwrap().as_bytes(), &[1, 2, 3]);
-            assert!(v.get_item("other").unwrap().is_instance_of::<PyDict>());
         });
     }
 }

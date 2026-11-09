@@ -1,5 +1,3 @@
-//! Contracts of the resolved declaration model and its generated adapters.
-
 #[test]
 fn emit_only_enum_variants_do_not_require_exception_readers() {
     let decls = crate::decl::tests::read(

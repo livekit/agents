@@ -222,8 +222,6 @@ fn a_usage_chunk_carries_no_delta() {
     assert!(!got.has_response());
 }
 
-// ------------------------------------------------------------------ the thinking filter
-
 fn strip_all(filter: &mut TagFilter, chunks: &[&str]) -> String {
     let mut out = String::new();
     for (i, chunk) in chunks.iter().enumerate() {

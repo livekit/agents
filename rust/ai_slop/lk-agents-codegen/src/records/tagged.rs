@@ -1,10 +1,8 @@
-//! Tagged dict unions (`record(.., typed_dict, tag = "type")`): an enum crossing as a plain dict
-//! whose tag key names the variant, as ASGI messages do. A variant reads from any of its tags and
-//! emits its first; variants sharing a tag are told apart by which one's first key holds a value,
-//! exactly one of them. A key reads its `default` or Rust default (`missing_default`) when absent,
-//! an `Option` key `None`; any other key is required.
 use super::{emit, read};
 use crate::decl::{Field, RecordBody, RecordDecl, Ty, Variant, VariantShape};
+
+// A variant reads from any of its tags and emits its first; variants sharing a tag are told apart
+// by which one's first key holds a value.
 
 pub(super) fn record(r: &RecordDecl) -> Result<String, String> {
     let (RecordBody::Variants(variants), Some(key)) = (&r.body, &r.tag) else {

@@ -1,12 +1,8 @@
-//! The plugin base classes (the Python classes plugins subclass for STT, TTS, LLM, VAD and
-//! realtime, and their streams): hand-written Python beside the proxy trait whose host class each
-//! is, `#[host(proxy(host = "..", base = "tts.py"))]`. A file is written into the generated module
-//! of its name after the module's records: its imports merged into the module's, the rest
-//! verbatim. Every call a proxy declares must be a method of its host class there, so a trait
-//! method the base class does not answer is a codegen error rather than a runtime one.
-
 use crate::decl::{Declarations, Proxy, ProxyCall};
 use std::path::Path;
+
+// Every call a proxy declares must be a method of its base class, so a missing method is a
+// codegen error rather than a runtime one.
 
 /// What one module gains: its classes, the imports they need, and their public names.
 pub struct Bases {

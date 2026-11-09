@@ -1,6 +1,3 @@
-//! The runtime's room performers over FakeRoom, in what the DST's room legs do not reach: SDK
-//! failures and stalls, cancelled and racing waiters, reattachment races, overload bounds and the
-//! pre-connect buffer's edges.
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::io::{
     AudioInput, AudioOutput, AudioOutputExt, PlaybackFinished, TextOutput, VideoInput,
@@ -70,8 +67,6 @@ fn fake_room(name: &str) -> (Arc<FakeRoom>, Arc<VirtualClock>) {
     std::mem::forget(rtc);
     (room, clock)
 }
-
-// ------------------------------------------------------------------------------ RoomIo
 
 fn config() -> RoomIoConfig {
     RoomIoConfig {
@@ -446,8 +441,6 @@ async fn a_transcript_burst_leaves_the_room_audio_output_open() {
     );
 }
 
-// ------------------------------------------------------------------------- the microphone
-
 /// A microphone whose SDK processing the test controls.
 struct Processed {
     track: Arc<FakeTrackPublication>,
@@ -763,8 +756,6 @@ async fn preconnect_uses_session_format_and_never_replays_failed_processing() {
     }
 }
 
-// ------------------------------------------------------------------------ the pre-connect buffer
-
 fn pcm_info(track: &str, rate: &str, channels: &str) -> StreamInfo {
     StreamInfo {
         id: track.into(),
@@ -864,8 +855,6 @@ async fn preconnect_duration_is_bounded_before_transfer() {
     );
     handler.aclose().await;
 }
-
-// ------------------------------------------------------------------------- the agent's track
 
 fn audio_output(room: Arc<FakeRoom>, clock: Arc<VirtualClock>) -> Arc<ParticipantAudioOutput> {
     let spawner = Arc::new(TokioSpawner::current());

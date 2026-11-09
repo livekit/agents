@@ -1,10 +1,3 @@
-//! `#[host(facade(..))]` traits as Python classes (docs/internals/rust-core.md "Facades"): one
-//! module `_generated/<family>_facades.py` per declaring family. A class subclasses its `base`,
-//! takes its `#[host(new)]` parameters with their ABI defaults and builds its native object from
-//! them, then its base from the native getters `base_args` names. A method forwards to the native
-//! method of its name, or `via` a delegate; a stream's `_run` is its base's native pump over the
-//! owner's operation.
-
 use crate::class_stub::{Dir, Imports, py_literal};
 use crate::decl::{Class, Declarations, FacadeClass, FacadeMethod, Method, MethodKind, Param, Ty};
 

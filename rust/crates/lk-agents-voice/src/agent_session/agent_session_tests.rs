@@ -1,4 +1,10 @@
-//! Session decisions over a decision core no executor runs.
+use super::*;
+use crate::agent_session::lifecycle::SessionStartPlans;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
+use crate::events::SessionEvent;
+use lk_agents_abi::errors::ProviderError;
+use lk_agents_core::tts::markup::ChatMessageExt;
+use std::sync::Arc;
 
 #[test]
 fn conversation_updates_publish_once_per_cycle_and_include_view_only_edits() {
@@ -69,14 +75,6 @@ fn terminal_provider_release_does_not_reacquire_resources_from_stale_selection_s
         1
     );
 }
-
-use super::*;
-use crate::agent_session::lifecycle::SessionStartPlans;
-use crate::agent_session::machine::activity::scheduling::SpeechId;
-use crate::events::SessionEvent;
-use lk_agents_abi::errors::ProviderError;
-use lk_agents_core::tts::markup::ChatMessageExt;
-use std::sync::Arc;
 
 #[test]
 fn realtime_transport_timeout_keeps_its_limit_and_request_identity_on_session_error() {
@@ -236,7 +234,7 @@ fn late_realtime_transcript_keeps_its_source_without_starting_another_speech() {
     assert_eq!(correction.created_at, source_time);
 }
 
-// Catches (voice-session.md "releases the lane within 30 seconds"): a speech whose tasks were
+// Catches: a speech whose tasks were
 // aborted (the interruption watchdog, `cancel_tasks`) reports neither done nor failed, so its
 // lane was never released and the store renewed its lease until the call closed.
 #[test]
@@ -265,7 +263,7 @@ fn a_speech_ended_without_its_turn_releases_the_lane_within_30_s() {
 
 // Catches: a `say` whose step reported spoken after the close's hard edge released it read its
 // kind off the scheduler's entry, gone with the release, so its item was committed as a reply's,
-// naming no voice (`items_carry_their_payload`, survey seed 114526; fixed in b1936ecfe).
+// naming no voice (`items_carry_their_payload`, survey seed 114526).
 #[test]
 fn a_say_released_before_its_step_reports_keeps_its_source() {
     use crate::agent::Source;
@@ -438,7 +436,7 @@ fn an_overlap_verdict_reports_its_interruption_metrics() {
 }
 
 // Catches: a recognition stream's usage report arriving after a later stream also ended was
-// counted as a request of its own (5168d8080).
+// counted as a request of its own.
 #[test]
 fn a_late_usage_report_never_creates_a_request() {
     use crate::audio::Tagged;

@@ -1,4 +1,3 @@
-//! The setup: what a session is built with.
 use fastrand::Rng;
 use lk_agents_abi::voice::session_options::TextTransformSet;
 
@@ -9,6 +8,8 @@ use crate::{
     },
     input::{AGENT_TURNS, DELAYS_MS, NAMES, TurnMode},
 };
+
+// A new switch is drawn after all existing ones, so every seed keeps the setup it drew before.
 
 /// How often, in a hundred sessions, the pipeline has a recogniser, and has a voice.
 const VOICED: u8 = 90;
@@ -127,15 +128,13 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
             },
         };
     }
-    // Drawn last, so a seed draws the same setup as before the switch existed.
     setup.keyterm_detection = (rng.u8(0..100) < 35).then(|| KeytermDetectionSetup {
         stt_takes_keyterms: rng.u8(0..100) < 80,
         turn_interval: rng.u32(0..3),
         max_keyterms: rng.bool().then(|| rng.usize(0..4)),
         timeout_ms: rng.bool().then(|| DELAYS_MS[rng.usize(0..DELAYS_MS.len())]),
     });
-    // The room's camera, drawn last too. The host's camera wins over the room's, as
-    // `session.input.video` does: a seed that draws the room's has none of its own.
+    // The host's camera wins over the room's, as `session.input.video` does.
     setup.room_camera = setup.room_legs.is_some() && rng.u8(0..100) < 40;
     setup.video &= !setup.room_camera;
     setup.nodes = (rng.u8(0..100) < 30).then(|| NodeSetup {
@@ -145,11 +144,9 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         llm_text: None,
         transcription: false,
     });
-    // The measured recogniser the transcripts follow, drawn last too.
     setup.stt_model = rng.usize(0..super::STT_MODELS.len());
     // Most voices take a real voice's time to start; some answer at once.
     setup.tts_latency = (rng.u8(0..100) < 80).then(|| rng.u64(..));
-    // The realtime server's detector and its own dice, drawn last too.
     if let Some(realtime) = setup.realtime.as_mut() {
         realtime.semantic = rng.bool();
         realtime.seed = rng.u64(..);
@@ -158,10 +155,9 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         realtime.tool_calls = rng.bool().then(|| rng.u8(0..=100));
         realtime.text_only = rng.u8(0..100) < 25;
         realtime.fallback = rng.u8(0..100) < 30;
-        // A duplex model now and then, from the model's own dice: the draws after it are kept.
+        // From the model's own dice, so the draws after it are kept.
         realtime.duplex = realtime.seed % 100 < 15;
     }
-    // The legs' retry budgets, and a voice that does not stream, drawn last too.
     setup.conn = rng.bool().then(|| ConnSetup {
         stt: rng.u32(0..4),
         llm: rng.u32(0..4),
@@ -169,17 +165,13 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         interval_ms: DELAYS_MS[rng.usize(0..DELAYS_MS.len())],
     });
     setup.chunked_tts = rng.u8(0..100) < 30;
-    // drawn last, so every other part of a seed's setup stays what it was
     setup.avatar_fps = if rng.bool() { 25 } else { 40 };
     setup.avatar_latency_ms = rng.u64(1..1000 / setup.avatar_fps);
-    // The opening agent's transcription node, drawn last too; the agents a handoff installs flip
-    // it and their other nodes by name (`overrides`). The realtime audio node is not drawn yet:
-    // what the node yields after the core flushed the segment lands in a segment of its own.
+    // The opening agent's transcription node; handoff agents flip nodes by name (`overrides`).
     if let Some(nodes) = setup.nodes.as_mut() {
         nodes.transcription = rng.bool();
     }
-    // The voice's word alignment, and the session's and the agents' say on using it, drawn last
-    // too. Most aligning voices stamp their words; some advertise it and send none.
+    // Most aligning voices stamp their words; some advertise alignment and send none.
     setup.tts_alignment = match rng.u8(0..100) {
         0..40 => TtsAlignment::None,
         40..85 => TtsAlignment::Words,
@@ -192,14 +184,11 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     };
     setup.aligned_transcript = said(rng);
     setup.agent_aligned_transcript = said(rng);
-    // Drawn last: one setup in ten has tool bodies that refuse their cancellation.
     setup.tools_refuse_cancel = rng.u8(0..100) < 10;
-    // Drawn last: one setup in ten stores its lane and loses the lease at one of its first answers.
+    // The lane's lease is lost at one of the first answers.
     setup.storage_lost_at = (rng.u8(0..100) < 10).then(|| rng.u32(1..6));
-    // Drawn last: a third of the room's microphones go through processors that fail. A broken
-    // model, license or connection fails a while, at worst for the rest of the call; a glitch
-    // fails one frame now and then; a processor flapping at the edge of its budget is the rarest.
-    // Gain control is on in half of them.
+    // A broken model, license or connection fails a span; a glitch fails a rare frame; a
+    // processor flapping at the edge of its budget is the rarest.
     let faults = |rng: &mut Rng| match rng.u8(0..100) {
         0..50 => Faults::Span {
             from: rng.u32(0..60),

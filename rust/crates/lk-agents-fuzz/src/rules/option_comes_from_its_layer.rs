@@ -1,15 +1,3 @@
-//! Each live option takes its value from the topmost `override_options` layer that sets it, else
-//! from the active agent's `turn_handling`, else from the session's `update_options`, else from
-//! what the session started with.
-//!
-//! voice-session.md "Temporary overrides". The oracle rebuilds the layers from the host's own
-//! calls, read off the inputs and never off the core's layers: each accepted `Configure`,
-//! `Override` and `ReleaseOverride` applies when its command enters the loop, and each install of
-//! an agent (`AgentUpdated`) brings the `turn_handling` its handoff asked for, in order; a
-//! `VoiceTask`'s agent sets none, and a task's end brings its parent's back. The bottom layer is
-//! the first `ConfigApplied`, the session as it started. Every later `ConfigApplied` is judged on
-//! the endpointing delays and the turn detection, the options a host layers; one an agent install
-//! brings is judged at that install.
 use std::time::Duration;
 
 use lk_agents_abi::Maybe;
@@ -26,6 +14,11 @@ use crate::{
     input::{AgentText, AgentTurn, Input, Knob, Millis, TurnMode},
     record::{Answer, Observed, Recording},
 };
+
+// Precedence: topmost override, the active agent's `turn_handling`, `update_options`, then the
+// session's start (the first `ConfigApplied`). The oracle rebuilds the layers from the host's
+// inputs, never from the core's own layers. A `VoiceTask`'s agent sets none; its end restores the
+// parent's.
 
 pub struct OptionComesFromItsLayer;
 
@@ -124,7 +117,7 @@ impl Rule for OptionComesFromItsLayer {
     }
 }
 
-/// What a host call says for `knob`, as voice-session.md and the reference define it: a turn
+/// What a host call says for `knob`, as the reference defines it: a turn
 /// detection mode (`None` reverting to automatic selection) or an endpointing delay. The other
 /// options are not judged.
 fn said(knob: Knob, mode: TurnMode, ms: Millis) -> Leaves {

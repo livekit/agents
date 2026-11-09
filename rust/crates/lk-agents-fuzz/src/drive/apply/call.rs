@@ -1,4 +1,3 @@
-//! Host calls grouped by the input family and the resources each call returns.
 use super::Pending as AnswerWait;
 use super::*;
 use lk_agents_abi::voice::session::FillerSource;

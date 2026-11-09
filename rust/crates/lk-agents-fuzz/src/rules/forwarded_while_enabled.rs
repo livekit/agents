@@ -1,13 +1,3 @@
-//! Microphone audio the case pushed while input was enabled reached every recognition and
-//! voice-activity stream that was open; nothing the case pushed while input was disabled reached
-//! any of them.
-//!
-//! Frames move through the audio pump on the driver's next turn, so each is judged after that
-//! turn. An enable or disable rides the command queue to that same turn while the frames go
-//! straight to the pump, so a frame pushed between a switch and the driver's turn that applies it,
-//! or one that raced a disable or a gate change inside its own turn, is left alone. The
-//! STT leg hears silence while the gate is closed, which the journal publishes; VAD always hears
-//! the room.
 use std::collections::BTreeMap;
 
 use lk_agents_voice::agent_session::IoKind;
@@ -20,6 +10,10 @@ use crate::{
     input::{Count, Input, Ref},
     record::{Detail, InferenceView, InputsView, Kind, Observed, Recording, Switch, Tag, Window},
 };
+
+// Frames move through the pump on the driver's next turn while an enable or disable rides the
+// command queue to that same turn, so a frame that raced a switch or a gate change is left alone.
+// The STT leg hears silence while the gate is closed; VAD always hears the room.
 
 pub struct ForwardedWhileEnabled;
 
@@ -170,9 +164,6 @@ impl Rule for ForwardedWhileEnabled {
     }
 }
 
-/// Whether the path's last switch before a frame was pushed had not yet reached the driver: the
-/// switch waits on the command queue for the driver's next turn while the frame goes straight to
-/// the pump, so the two land in the same turn in either order.
 /// Until when a frame pushed at `pushed` was on its way to the streams: until one heard it, or,
 /// never heard, until its microphone forwarded anything after it. That can be past the pump's
 /// turn: a room microphone holds its frames while it waits for the pre-connect buffer.
@@ -188,6 +179,9 @@ fn on_its_way(inference: &InferenceView, (mic, chunk): (u32, u16), pushed: Obser
     arrived.or_else(forwarding).unwrap_or(Observed::END)
 }
 
+/// Whether the path's last switch before a frame was pushed had not yet reached the driver: the
+/// switch waits on the command queue while the frame goes straight to the pump, so the two land
+/// in the same turn in either order.
 fn switching(inputs: &InputsView, audio_input: &Switch, pushed: Observed) -> bool {
     audio_input
         .last_change(pushed)
@@ -275,15 +269,6 @@ fn expect_reached(
     }
 }
 
-/// The two provider legs the pump feeds from the microphone; the Rust-native detectors are not
-/// fakes and record nothing.
-/// The recording, indexed once per check. This rule runs after every input over the whole
-/// recording, and a conversation pushes ten frames a beat to three streams: read by linear scans
-/// per chunk it was cubic in the run's length and most of a survey's wall time; read through
-/// these three tables it is linear.
-/// One frame pushed while input was enabled at `pushed` reached every stream open for its
-/// whole journey.
-/// The windows in which the gate fed the STT leg silence, read off its publishes.
 fn frames(chunks: u32) -> Input {
     Input::MicFrames { mic: Ref::new(0), chunks: Count(chunks) }
 }

@@ -1,6 +1,5 @@
-//! Discovers the rules: every `src/rules/*.rs` except `mod.rs` becomes a module and an entry in
-//! `RULES`, in file-name order; the rule type is the file name in CamelCase. Cargo reruns this whenever the directory changes, so adding a
-//! rule is adding a file. The generated code is `include!`d by `src/rules/mod.rs`.
+//! Registers every `src/rules/*.rs` (except `mod.rs`) in `RULES`, in file-name order; the rule
+//! type is the file name in CamelCase, so adding a rule is adding a file.
 use std::{env, fs, path::Path};
 
 mod build_calibration;

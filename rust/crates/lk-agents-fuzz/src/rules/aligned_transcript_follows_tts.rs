@@ -1,16 +1,3 @@
-//! `use_tts_aligned_transcript`: the transcript is the voice's own stamped words exactly when the
-//! option (the agent's, else the session's) is on, and a synchroniser shows each at its stamp.
-//!
-//! Off, nothing forwarded carries a stamp: the transcript is the model's text. On, every word
-//! forwarded with a stamp is one the voice stamped, with that stamp (a voice that does not stream
-//! is stamped by the session's stream adapter, sentence by sentence); and a synthesised speech
-//! that completed through untouched outputs, its voice stamping every word and never failing,
-//! forwarded the voice's words, not the model's. A voice that advertises alignment and stamps
-//! nothing falls back to the model's text (judged by `text_conservation`).
-//!
-//! With a synchroniser, each word shown starts where the voice stamped it: the first token of a
-//! stamped word at the stamp, the rest of it (punctuation the tokeniser splits off) no earlier.
-//! Words are matched to stamps by position in the text, whitespace ignored.
 use lk_agents_voice::{
     agent_session::machine::activity::scheduling::SpeechId,
     trace::{GenerationStep, PlayoutStep, Step},
@@ -21,6 +8,11 @@ use crate::{
     check::{Check, Contract, Rule},
     record::{Handle, Recording, Shown, TranscriptSetup},
 };
+
+// The option is the agent's, else the session's. A non-streaming voice is stamped by the stream
+// adapter, one stamp per sentence. A voice that advertises alignment but stamps nothing falls back
+// to the model's text (`text_conservation` judges that). Shown words match stamps by position in
+// the text, whitespace ignored; split-off punctuation may show later than its word's stamp.
 
 /// What float arithmetic may leave between a stamp and the pacer's start, in seconds.
 const EPSILON: f64 = 1e-6;

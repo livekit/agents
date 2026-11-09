@@ -1,7 +1,3 @@
-//! The facade forms around a native object handed in: a constructor given the native object
-//! (`from_native`), and the context-manager form (`exit = m`), whose target is read once at entry
-//! so the exit reaches the object that entered even when a delegate is read per call.
-
 use super::{Module, def, with_doc};
 use crate::class_stub::Dir;
 use crate::decl::{Class, Exit, ExitCall, FacadeClass, FacadeMethod, Method, MethodKind, Ty};

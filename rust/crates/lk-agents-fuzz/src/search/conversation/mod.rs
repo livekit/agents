@@ -1,26 +1,3 @@
-//! The search: a person on a phone, talking turn by turn to the agent, while the developer's
-//! program calls the API and the models, outputs and room do what real ones do, failures
-//! included.
-//!
-//! The uniform sampler reaches the second half of a chain by luck. A person on a phone does not:
-//! they speak, a detector and a recogniser report what they heard in a fixed order with
-//! provider-shaped delays, the agent answers, and they speak again -- sometimes over the agent.
-//! This mode drives the microphone that way, so the sequences the turn machine was written for
-//! (start of speech, a final, an end of speech, an endpointing delay) happen every turn rather
-//! than once in ten runs.
-//!
-//! Everything an actor does follows from what it observed: a recogniser transcribes only audio
-//! the driver forwarded to it, a speaker reports only audio it was handed, the person answers what
-//! they heard. What varies is drawn once per run and holds for its length: who is on the line
-//! (the [`Persona`]), the developer's program (the [`Host`]), how the models, outputs and room
-//! behave and fail ([`Providers`]), and how random the run is ([`randomness`]): before
-//! each move the conversation makes, a run may first make uniform moves -- any legal row, no
-//! actor behind it -- at a rate from almost never to almost always, so the search spans a pure conversation, a
-//! pure uniform sampler, and everything between. Uniform moves are labelled in the case
-//! ([`Case::random`](crate::drive::Case::random)).
-//!
-//! There are no per-variant weights: every attempt at aiming the search at a variant was measured
-//! on the survey's yardstick and lost.
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     ops::{Range, RangeInclusive},
@@ -60,19 +37,13 @@ use providers::{SttKnobs, recogniser, recogniser_noise};
 
 use speaker::Playback;
 
-// ==============================================================================================
-// Who is on the line
-// ==============================================================================================
-//
-// One caller per run, and the stretches of microphone they produce.
+// Every actor acts only on what it observed: a recogniser transcribes only audio forwarded to it,
+// a speaker reports only audio it was handed. Persona, Host, Providers and the uniform-move rate
+// are drawn once per run. There are no per-variant weights: every attempt to aim at a variant
+// lost on the survey's yardstick.
 
-/// Who is on the line, drawn once per run. These rates are a person's, not the search's: an
-/// impatient caller talks over most replies and a patient one over few, one detector is mostly
-/// right and another often wrong, and a run is one such person for its whole length. Each rate is
-/// drawn from a range wide enough that every kind of caller is some run's caller, and bounded so
-/// that every caller is still a caller: a run whose every stretch is noise, or whose every reply
-/// is talked over, reaches nothing the driver does with a conversation, and a run is the unit
-/// the search pays for.
+/// Who is on the line, drawn once per run. Each rate's range is bounded so every caller is still
+/// a caller: a run of only noise, or only talking over, reaches nothing of a conversation.
 #[derive(Clone, Copy, Debug)]
 struct Persona {
     /// How often the person pauses before speaking rather than starting straight away.
@@ -167,13 +138,6 @@ const JITTER_MS: Range<u64> = 10..60;
 /// How long a gap stalls: from a network hiccup to a stall the driver's own timers notice.
 const STALL_MS: Range<u64> = 100..500;
 
-// ==============================================================================================
-// What the providers say about a stretch
-// ==============================================================================================
-//
-// The detector and the recogniser report what they heard around a stretch of speech, with
-// provider-shaped delays; the predictor and the voice have failure modes of their own.
-
 /// A provider's word about a speech segment, and when it is due, measured from the segment's
 /// start. Made into an `Input` only when it is sent, because the utterance an STT verdict names
 /// does not exist until `SttStart` has been applied.
@@ -235,17 +199,9 @@ const CALL_MEDIAN_MS: f64 = 300_000.0;
 const CALL_SPREAD: f64 = 1.2;
 const CALL_LENGTH_MS: RangeInclusive<f64> = 20_000.0..=7_200_000.0;
 
-// ==============================================================================================
-// The developer's program
-// ==============================================================================================
-
-/// The developer's program, drawn once per run. Modelled by two rates so far: how often a call
-/// lands unprompted before a stretch of speech, and how often one lands inside a window --
-/// while the person speaks or barges in, while the agent thinks, runs a tool or speaks -- the
-/// call at the wrong moment, which developers write. A reactive form, handlers firing on journal families and drawing from the host's rows,
-/// was measured on 2026-09-23 and lost on variants and findings while failing most runs: a
-/// handler that draws uniformly from the API is not a program, and a program needs a model of
-/// what handlers do that this crate does not have yet.
+/// The developer's program, drawn once per run: how often a call lands unprompted before a
+/// stretch of speech, and how often one lands inside a window (the person speaking, the agent
+/// thinking, running a tool or speaking), the call at the wrong moment.
 #[derive(Clone, Debug)]
 struct Host {
     /// The chance of an unprompted call before a stretch of speech.
@@ -267,9 +223,8 @@ struct Host {
 
 impl Host {
     /// Most programs call the API now and then; three in ten are busy ones, updating the agent
-    /// every turn or speaking on every event. The busy tier is where calling any method at any
-    /// moment gets exercised: without it, measured on 2026-10-22 at 512 seeds, 136 of 520
-    /// (call, phase) cells were never reached, against 24 with a uniform sampler alongside.
+    /// every turn or speaking on every event. The busy tier is what reaches most (call, phase)
+    /// cells.
     fn draw(rng: &mut Rng) -> Self {
         let busy = rng.u8(0..100) < 30;
         Host {
@@ -283,15 +238,9 @@ impl Host {
     }
 }
 
-// ==============================================================================================
-// What goes wrong around the call
-// ==============================================================================================
-
 /// How the models, the outputs and the room behave this run: how fast, how flaky, how they fail.
-/// Each failure kind has its own coin and its own stream off the seed, so some runs are clean and
-/// others full of one kind of trouble, and adding a kind never moves another's draw (agent-store's
-/// swarm hunt). The fakes stay dumb: this is what the case tells them, so the case is still the
-/// whole of what happened.
+/// Each failure kind has its own coin and stream off the seed, so adding a kind never moves
+/// another's draw. The fakes stay dumb: the case still holds the whole of what happened.
 #[derive(Clone, Copy, Debug)]
 struct Providers {
     /// How slow every model answers, in percent of typical latencies.
@@ -361,8 +310,8 @@ impl Providers {
 /// How random the run is: uniform moves per move the conversation makes, on average. Drawn flat
 /// over orders of magnitude, from one in ten thousand (a conversation with nothing random in it)
 /// to a thousand (uniform moves with a conversation step now and then), so every decade gets as
-/// many seeds as every other. A flat draw of a probability instead spent nearly every seed in
-/// runs a random close ended early: measured on 2026-10-22, interruptions went unreached.
+/// many seeds as every other. A flat probability spends most seeds in runs a random close ends
+/// early.
 pub fn randomness(seed: u64) -> f64 {
     10f64.powf(Rng::with_seed(seed ^ 0x636f_6865_7265_6e63).f64() * 7.0 - 4.0)
 }
@@ -403,13 +352,6 @@ const RESTORES: u8 = 5;
 /// returned.
 const AMD_LEFT: u8 = 30;
 
-// ==============================================================================================
-// The beat, and the agent's turn
-// ==============================================================================================
-//
-// A conversation advances a beat at a time: the frames, the detector's tick, the clock. Between
-// the person's stretches the agent gets its turn: the model, the tools, the playout.
-
 /// One beat of microphone time: a beat's frames in one `MicFrames`, one detector tick, then the
 /// clock moves by the beat. A real detector reports every 32 ms, but three inputs per 32 ms beat
 /// spend a 150-input budget on a second and a half of audio; 100 ms buys several turns.
@@ -427,10 +369,6 @@ const THINK_MS: Range<u64> = 100..600;
 
 /// Rounds of answering what the agent's reply owes: the model, then synthesis, then playout.
 const REPLY_ROUNDS: usize = 3;
-
-// ==============================================================================================
-// Running one conversation
-// ==============================================================================================
 
 /// Drive a conversation from a seed: speech segments with provider verdicts around them, agent
 /// replies between them, until the budget of applied inputs runs out; then close the session down

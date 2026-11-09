@@ -1,9 +1,3 @@
-//! `Agent.llm_node`, `tts_node` and `stt_node` overridden as the defaults are: each request
-//! opens the provider below, as `Agent.default.llm_node` does; `transcription_node`
-//! passes what it reads down the leg below. What the provider then does is the
-//! case's, so the node path is exercised with every answer the plain one gets. Each opening is
-//! recorded with the agent whose override it is: a request at its call, a transcript segment
-//! at its first input, which is where the host's node is invoked.
 use std::sync::Arc;
 
 use lk_agents_abi::SpawnerExt as _;
@@ -18,14 +12,17 @@ use lk_agents_abi::{
 
 use crate::record::NodeUse;
 
+// Node overrides behave as the defaults, so the node path sees every answer the plain path gets.
+// A request is recorded at its call, a transcript segment at its first input, where the host
+// invokes its node.
+
 pub struct FakeNodes {
     registry: Arc<super::Registry>,
-    /// The agent whose overrides these are.
     agent: String,
     llm: Option<Arc<dyn Llm>>,
     tts: Option<Arc<dyn Tts>>,
     stt: Option<Arc<dyn Stt>>,
-    /// What the `llm_node` answers itself instead of calling the model.
+    /// The `llm_node`'s own answer instead of calling the model.
     llm_text: Option<&'static str>,
 }
 
@@ -45,7 +42,6 @@ impl FakeNodes {
         self.registry.node_used(&self.agent, node);
     }
 
-    /// The node's invocation as the host makes it: recorded at its first input.
     fn invocation(&self, node: NodeUse) -> Invocation {
         Invocation {
             registry: self.registry.clone(),
@@ -56,7 +52,6 @@ impl FakeNodes {
     }
 }
 
-/// A node's own answer: one `str`, as the host glue hands it over.
 struct NodeText(Option<&'static str>);
 
 impl StreamOutput<LlmChunk> for NodeText {
@@ -78,7 +73,7 @@ impl StreamOutput<LlmChunk> for NodeText {
 
 impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for NodeText {}
 
-/// One invocation of a host node at a time: recorded as it opens, at its first input.
+/// One host node invocation at a time, recorded at its first input.
 struct Invocation {
     registry: Arc<super::Registry>,
     agent: String,
@@ -98,7 +93,6 @@ impl Invocation {
     }
 }
 
-/// What the host's text node hands its drain: a delta, or the segment's end.
 struct EchoText(
     tokio::sync::mpsc::UnboundedSender<Option<TranscriptChunk>>,
     Invocation,
@@ -154,8 +148,7 @@ fn missing(leg: &str) -> ProviderError {
 }
 
 impl NodeFactory for FakeNodes {
-    /// `transcription_node` as the default: each delta down the leg below, in order, and the
-    /// segment's flush after its last one.
+    /// `transcription_node` as the default: each delta down the leg below, then the flush.
     fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<TranscriptChunk>>();
         let completion = tokio::sync::watch::channel(None).0;

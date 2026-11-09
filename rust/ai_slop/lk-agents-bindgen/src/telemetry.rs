@@ -1,7 +1,3 @@
-//! The telemetry declaration language, read once for the proc macros and the generator: the role
-//! attributes (`#[span]`, `#[event]`, `#[metric]`, `#[record]`) and the field attributes of
-//! `#[derive(Attrs)]` (`#[attr]`, `#[attrs]`, `#[span_id]`).
-
 use proc_macro2::TokenStream;
 use syn::parse::{Parse, ParseStream, Parser};
 

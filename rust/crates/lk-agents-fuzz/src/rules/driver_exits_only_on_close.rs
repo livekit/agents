@@ -1,10 +1,3 @@
-//! The driver loop ends only because a close was begun.
-//!
-//! Usually that is the host's `Close`, but the session closes itself too: past
-//! `max_unrecoverable_errors` consecutive unrecoverable errors on one leg it begins closing with
-//! `CloseReason::Error`. Either way the driver journals `CloseStep::Requested` before it winds
-//! down, so that step is what this rule looks for. A loop that ends with neither is a loop that
-//! died, and so is one that panicked, close or not.
 use lk_agents_voice::trace::{CloseStep, Step};
 
 use crate::{
@@ -13,6 +6,9 @@ use crate::{
     input::Input,
     record::Recording,
 };
+
+// The session also closes itself past `max_unrecoverable_errors` on one leg. Either way the driver
+// journals `CloseStep::Requested` first, so that step is the evidence of a close.
 
 pub struct DriverExitsOnlyOnClose;
 

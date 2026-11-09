@@ -1,4 +1,3 @@
-//! A speech waits for the storage receipt even if the commit is slow or fails.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},

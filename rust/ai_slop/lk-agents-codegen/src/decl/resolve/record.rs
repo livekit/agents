@@ -1,5 +1,3 @@
-//! Record schema resolution and field validation.
-
 use super::*;
 
 impl Resolver<'_> {
@@ -971,9 +969,7 @@ pub(super) fn record_target(
     };
     let extract = voc::find(&record.nested, "extract").is_some();
     let emit = voc::find(&record.nested, "emit").is_some();
-    // Explicit model declarations need no converter until a native entry actually uses them.
-    // This includes subclassed Pydantic bases, host-facing configuration/event records and
-    // `Literal` aliases (unit-only enums).
+    // Explicit model kinds need no converter until a native entry uses them.
     if !extract
         && !emit
         && !literal

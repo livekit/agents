@@ -1,4 +1,3 @@
-//! Seeded storage errors and slow commits exercised through the real voice executor.
 use lk_agents_abi::storage::StorageError;
 use lk_agents_fuzz::{
     drive::{ConnSetup, Run, Setup, simulate},

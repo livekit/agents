@@ -1,8 +1,3 @@
-//! The session's own spans, opened and ended through `self.telemetry`: `agent_session` (the
-//! session's), `session_start` (the opening's), `session_close` (the close's) and `amd` (the
-//! detection's), the session's events, the turn span of each chat item, and the close that ends
-//! every span the session's entities still own.
-
 use crate::agent::Source;
 use crate::agent_session::{AmdSpan, VoiceDriver};
 use crate::events::ErrorEvent;

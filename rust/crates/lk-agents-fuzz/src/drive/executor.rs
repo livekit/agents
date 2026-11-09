@@ -1,8 +1,3 @@
-//! Gives the real runtime queue owner to the deterministic harness, which runs its own loop
-//! ([`Session`]): `VoiceRuntime::serve` and `VoiceRuntime::close`, over the same injected provider/SDK ports
-//! and session Clock/Spawner as production. The harness only chooses what reaches the loop's queue
-//! and when.
-
 use lk_agents_abi::voice::io::InputFrame;
 use lk_agents_abi::{BoxFuture, Spawner, Stt, Vad};
 use lk_agents_runtime::voice::VoiceRuntimeEvent;
@@ -16,6 +11,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use tokio::sync::{mpsc, oneshot};
+
+// The harness runs the real `VoiceRuntime::serve` and `close` over production's ports, clock and
+// spawner; it only chooses what reaches the loop's queue and when.
 
 pub(crate) struct Handover {
     factory: Executor,

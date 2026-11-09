@@ -187,3 +187,7 @@ impl AgentRun {
         self.phase = Phase::Done;
     }
 }
+
+#[cfg(test)]
+#[path = "cancellation_tests.rs"]
+mod tests;

@@ -1,17 +1,3 @@
-//! `AgentRun` driven directly, event by event, with no executor: each test plays the runtime's
-//! part and asserts the effects and the settled result.
-//!
-//! The shared driver, model steps, tools, outputs and managed checkpoints live here; questions,
-//! coordinated (voice) runs and cancellation have sibling files.
-
-#[path = "agent_run_cancellation_tests.rs"]
-mod cancellation;
-#[path = "agent_run_questions_tests.rs"]
-mod questions;
-#[path = "agent_run_voice_tests.rs"]
-mod voice;
-
-use lk_agents_abi::agent::ToolTemplate;
 use std::time::Duration;
 
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
@@ -395,7 +381,7 @@ fn a_tool_that_asks_for_no_reply_ends_the_turn() {
 }
 
 // Catches: a tool returning `None` ending the turn; `None` is a value the model reads and goes
-// on from (tools.md), unlike an explicit no-reply result.
+// on from, unlike an explicit no-reply result.
 #[test]
 fn none_return_continues() {
     let mut d = Driver::new(text_agent(vec![string_tool("log_visit", "note")]), "log it", vec![]);

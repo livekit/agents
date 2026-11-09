@@ -1,6 +1,3 @@
-//! `_realtime_generation_task`: one step of a realtime reply, the generation's events played as
-//! segments through the active audio output.
-
 use super::ReplyExecution;
 use crate::voice::generation::forward::{TextLeg, first_text_started_speaking};
 use crate::voice::generation::pipeline_reply::{Finished, StepOutcome, finish_step_with};
@@ -46,26 +43,23 @@ pub(crate) async fn realtime_generation_task(
     wake: &Tx,
     speeches: &crate::voice::SpeechTasks,
 ) -> Result<StepOutcome, DriverError> {
-    // The authorization, per step: the server's deltas queue meanwhile. It stops a server turn
-    // talking over a `say()`, and a tool follow-up over what became current while tools ran.
+    // Per-step authorization: keeps a server turn from talking over a `say()` or a newer speech.
     let authorized = tokio::select! {
         biased;
         () = handle.wait_for_interrupted() => false,
         () = handle.wait_for_step_authorized(ctx.plan.step) => true,
     };
     if !authorized {
-        // Interrupted while parked. Nothing of it was heard: what the server already said of it is deleted.
+        // Interrupted while parked: nothing was heard, so the server's messages are deleted.
         let unheard = unheard_messages(std::iter::from_fn(|| events.try_recv().ok()));
         if !unheard.is_empty() {
             let _ = wake.send(RealtimeWake::Heard { speech: handle.id(), cuts: unheard });
         }
         return Ok(StepOutcome::Released);
     }
-    // The follow-up step waits for its own grant.
 
     let span = shared.realtime_spans.start(shared, ctx.span);
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.plan.user_metrics.clone());
-    // The calls run as they arrive, alongside the playout.
     let mut tools = ToolStep::new(speeches.clone());
     let mut generation = Generation {
         shared,
@@ -76,8 +70,7 @@ pub(crate) async fn realtime_generation_task(
         state: RealtimeGeneration::default(),
         tools: &mut tools,
         text_out: None,
-        // A text message is voiced by the TTS when one plays into the audio output
-        // (`"audio" not in msg_modalities and self.tts`).
+        // A text-only message is voiced by the TTS when one plays into the audio output.
         tts: ctx.resources.tts.clone(),
         voiced: None,
         backlog: std::collections::VecDeque::new(),
@@ -153,8 +146,7 @@ pub(crate) async fn realtime_generation_task(
     }
     let interrupted = generation.state.interrupted(handle.interrupted());
     if interrupted {
-        // What the server holds of its reply is cut to what the caller heard; a message they heard
-        // none of is gone (`truncate`, after `_realtime_generation_task`'s playout).
+        // The server's reply is truncated to what the caller heard.
         generation.drain_started();
         let cuts = generation.state.cuts();
         let _ = wake.send(RealtimeWake::Heard { speech: handle.id(), cuts });
@@ -170,12 +162,10 @@ pub(crate) async fn realtime_generation_task(
     if let Some(span) = span {
         shared.realtime_spans.end(span, response_id.as_deref());
     }
-    // An empty follow-up round: the reply ends on the step already spoken.
     if !received {
         return Ok(StepOutcome::Released);
     }
-    // The transcript *is* the provider's: the words committed are the ones the voice said, or,
-    // cut, what the synchroniser says was heard of them (`_ForwardOutput.forwarded_text`).
+    // When cut, the committed words are what the synchroniser says was heard.
     if interrupted {
         acc.record(&heard.text);
     } else {
@@ -184,15 +174,12 @@ pub(crate) async fn realtime_generation_task(
         }
     }
     let has_calls = !tools.is_empty();
-    // No model timings on the message, as the reference's realtime message carries none: the
-    // response's own metrics hold its ttft.
+    // No model timings on the message: the response's own metrics hold its ttft.
     let stats = TurnStats::default();
-    // The speech's interruption decides it, as the pipeline's step does: a reply whose audio the
-    // output cut still has its tools running.
+    // A reply whose audio was cut still has its tools running.
     let tools_running = has_calls && !handle.interrupted();
-    // `assistant_metrics["provider_request_ids"] = [generation_ev.response_id]` (`:4168-4169`).
     let request_ids = response_id.map(|id| vec![id]);
-    // The server's id, as `_realtime_generation_task` commits it: it fills the placeholder.
+    // The server's id replaces the placeholder.
     let message_id = message_id.unwrap_or_else(|| ctx.plan.message_id.clone());
     let finished = finish_step_with(
         shared,
@@ -234,7 +221,6 @@ fn deliver_realtime(
     finished: Finished,
 ) -> StepOutcome {
     let speech = handle.id();
-    // The outputs went to the server with the commit (`finish_tools`).
     let (ask, tool_choice) = match next {
         Some(StepNext::Reply(next)) => (true, next.planned.tool_choice),
         // The user barged in over the tool call: the answer is committed and not spoken.
@@ -406,7 +392,7 @@ impl Generation<'_> {
                 self.unvoice().await;
                 None
             }
-            // The voice is lost: the session's error, as a pipeline reply's spent synthesis is.
+            // The voice is lost: report it as the session's error.
             Err(error) => {
                 if let Some(tts) = &self.tts {
                     tts.failed(error.clone(), false);
@@ -440,9 +426,8 @@ impl Segment for Generation<'_> {
 
     /// Ends once the generation is over or its next message's first event is held back.
     async fn playout_controls(&mut self) {
-        // Service one cancellation-safe control event per poll, so even a continuously ready
-        // provider cannot starve the playback receipt/deadline polled beside this future.
-        // The first next-media event stays in the existing backlog until its binding is admitted.
+        // One control event per poll, so a continuously ready provider cannot starve the playback
+        // receipt polled beside this future. Next-media events wait until their binding is admitted.
         let mut deferred_media = false;
         std::future::poll_fn(|cx| {
             if self.state.finished() || deferred_media {
@@ -689,3 +674,7 @@ fn response(
         }),
     }
 }
+
+#[cfg(test)]
+#[path = "realtime_generation_tests.rs"]
+mod tests;

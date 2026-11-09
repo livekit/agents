@@ -1,13 +1,10 @@
-//! Speech regression tests.
-
 mod console_reply_plays_out {
     //! A console reply settles on the CLI's playback receipt.
     use lk_agents_fuzz::drive::{Case, Setup, run};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, SayInput};
 
-    // Catches: the console refusing the CLI's unkeyed `AudioPlaybackFinished` (0ef7f361b): every
-    // spoken reply waited out its playback deadline and failed "playback report timed out", which the
-    // rules excused as a sink that lost its receipt. The CLI acks each flush it plays.
+    // Catches: the console refusing the CLI's unkeyed `AudioPlaybackFinished`, so every spoken reply
+    // waited out its playback deadline. The CLI acks each flush it plays.
     #[test]
     fn a_console_say_finishes_on_the_cli_receipt() {
         let setup = Setup { console: true, ..Setup::default() };
@@ -44,8 +41,7 @@ mod cut_node_words_open_no_segment {
     // after the person cut the speech, then ended its audio leg as an unvoiced segment before the
     // node had settled; the cut cancelled the node, so the synchroniser took that audio end with no
     // words, and the empty segment took the next speech's words and showed them whole before their
-    // audio (`transcript_follows_audio`, campaign seed 24984; its case minimised under its schedule
-    // and policy).
+    // audio (`transcript_follows_audio`, campaign seed 24984, minimised).
     #[test]
     fn the_next_speech_words_wait_for_their_audio() {
         let setup = Setup {
@@ -254,10 +250,8 @@ mod cut_reply_keeps_heard_words {
     const TEXT: &str = "One, two, three, four, five, six, seven, eight, nine, ten, eleven, twelve.";
 
     // Catches: a cut speech reading the synchroniser's words only if the output's report of the cut
-    // landed within a few scheduler hops. A host audio source reports from the host's loop, later
-    // than that, so the reply was committed whole: on real calls every interrupted reply's history
-    // held words the caller never heard (the room's transcript, paced, stopped where the audio did).
-    // The reference awaits the output's playout event for the synchronised transcript.
+    // landed within a few scheduler hops; a host audio source reports later, so interrupted replies
+    // were committed whole with words the caller never heard.
     #[test]
     fn a_cut_reply_is_committed_as_heard() {
         let setup = Setup { sync_transcription: true, lagging_output: true, ..Setup::default() };
@@ -312,8 +306,7 @@ mod host_interrupt_lands_on_every_end {
     // Catches: an `interrupt()` asked of a `say()` handle before its speech existed was held by the
     // handle and sent once the loop created the speech, which the loop had created done (`say()` with
     // no TTS is refused): the host read the speech interrupted forever while the core had journalled
-    // no interruption (`interrupted_handle_is_journalled`, survey seed 453 once the DST held a
-    // call's handle from its return).
+    // no interruption (`interrupted_handle_is_journalled`, survey seed 453).
     #[test]
     fn an_interrupt_of_a_speech_created_done_lands_nowhere() {
         let inputs = [
@@ -355,7 +348,7 @@ mod lost_voice_ends_its_audio_once {
     // Catches: a synthesis failing after its audio played reported its segment as heard with no audio,
     // so the segment ended its audio leg a second time as an unvoiced one; the synchroniser paired the
     // next speech's words with that empty audio and showed them all before any of their audio played
-    // (`transcript_follows_audio`, campaign seed 20655; a7e9506e9).
+    // (`transcript_follows_audio`, campaign seed 20655).
     #[test]
     fn the_next_speech_words_follow_its_own_audio() {
         let text = |t: &str| AgentText(t.into());
@@ -501,7 +494,7 @@ mod playout_finish_lost {
     // Catches: a reply whose model failed after its words and a tool call, its words still played,
     // then cut with the cut's report lost, ended its agent_turn interrupted with no
     // lk.playout.position: the failed step reported itself spoken without where its audio stopped
-    // (`spans_nest_and_end`, survey seed 544). The turn records the progress the output confirmed.
+    // (`spans_nest_and_end`, survey seed 544).
     #[test]
     fn a_cut_turn_whose_model_failed_reports_where_its_audio_stopped() {
         use lk_agents_abi::telemetry::record::{Record, Value};
@@ -562,9 +555,9 @@ mod playout_finish_lost {
     }
 
     // Catches: a realtime reply cut while its output had lost the playout's reports, the cut's
-    // receipt included, ended its agent_turn interrupted with no lk.playout.position: only a sink
-    // receipt reported where a message stopped (`spans_nest_and_end`, survey seed 378). An
-    // unreported cut reports the progress the output confirmed, a lower bound.
+    // receipt included, ended its agent_turn interrupted with no lk.playout.position
+    // (`spans_nest_and_end`, survey seed 378). An unreported cut reports the confirmed progress, a
+    // lower bound.
     #[test]
     fn a_realtime_turn_cut_without_its_receipt_reports_the_confirmed_position() {
         use lk_agents_abi::telemetry::record::{Record, Value};
@@ -695,8 +688,7 @@ mod playout_finish_lost {
 
     // Catches: the lost-finish margin started at the playout's next periodic look, up to a margin after
     // the report that completed what the output owed, so a lost finish held the speech for twice the
-    // margin and the DST's release phase, waiting only on a journalled due time, never saw it go quiet
-    // (DST seed 6883 with finishes lost after a reset).
+    // margin (DST seed 6883 with finishes lost after a reset).
     #[test]
     fn a_lost_finish_is_due_a_margin_after_the_last_report() {
         let inputs = [
@@ -729,8 +721,7 @@ mod playout_finish_lost {
     // Catches: the speaker's own finish arriving after the playout's lost-finish margin had settled
     // the segment for it was refused by the output fake, which had already let the segment go: the
     // segment stayed open past the close and read as a leak (`nothing_left_live`, campaign seed
-    // 11256, its output replaced). A late report of a finish the product settled still ends the
-    // segment.
+    // 11256).
     #[test]
     fn a_finish_reported_after_the_margin_settles_the_segment() {
         let inputs = vec![
@@ -837,10 +828,8 @@ mod reply_behind_tool_step {
     use lk_agents_voice::trace::{GenerationStep, Step};
 
     // Catches: a reply created while a speech played waited for that speech to finish before planning
-    // its request. A speech whose tools answered as its step ended goes on to a follow-up step, which
-    // needs the floor; the new reply had taken the floor and waited for the speech's end, so both
-    // waited until the replan's bound (the interruption timeout and a second): six seconds of dead air
-    // (`speech_settles`, survey seed 14338). The reply is planned once the step is recorded.
+    // its request, while that speech's follow-up step waited for the floor: both waited until the
+    // replan's bound, six seconds of dead air (`speech_settles`, survey seed 14338).
     #[test]
     fn a_reply_behind_a_tool_step_asks_its_model_at_once() {
         let setup = Setup { tools: vec!["lookup".into()], ..Setup::default() };
@@ -903,9 +892,8 @@ mod reply_during_playout {
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
     use lk_agents_fuzz::record::Kind;
 
-    // Catches: since c43d27219, `generate_reply` while the previous reply still spoke interrupted it
-    // and never issued its own LLM request, its handle never settling (coordinator report, real
-    // room). A reply asked for during a long playout must reach its model.
+    // Catches: `generate_reply` while the previous reply still spoke interrupted it and never issued
+    // its own LLM request, its handle never settling.
     #[test]
     fn a_reply_asked_during_playout_reaches_its_model() {
         let setup = Setup::default();
@@ -948,7 +936,7 @@ mod shown_words_follow_their_playback {
     // Catches: after a sink reset the rest of a speech's audio plays as a segment of its own, whose
     // reports the speech's playout dropped as another key's: its played position stayed where the
     // reset left it, and the words that playback released were journalled against it, ahead of the
-    // audio (`transcript_follows_audio`, campaign seed 13704; d5f0e2ff9).
+    // audio (`transcript_follows_audio`, campaign seed 13704).
     #[test]
     fn the_rest_after_a_sink_reset_is_the_speechs_playback() {
         let text = |t: &str| AgentText(t.into());
@@ -1006,9 +994,7 @@ mod skip_reply_turn_no_hook {
 
     // Catches: a turn that asks for no reply (`commit_user_turn(skip_reply=True)`, or one AMD
     // consumed) was parked on the developer's `on_user_turn_completed` like any other, its item
-    // committed only once the hook answered and stamped with its delay. The reference commits the
-    // item and returns before the hook (found by `parity.py`'s payload comparison: the AMD scenario's
-    // user item carried an `on_user_turn_completed_delay` the reference's has not).
+    // committed only once the hook answered and stamped with its delay.
     #[test]
     fn a_skip_reply_turn_runs_no_hook() {
         let setup = Setup {

@@ -1,13 +1,3 @@
-//! Everything the test can send the driver, declared once.
-//!
-//! One table, one line per input, saying what it carries, what tends to come of it, and which
-//! production command it becomes. The `Input` enum, availability, how one is made, and the proof
-//! that no production leaf was forgotten are all generated from it.
-//!
-//! **Dependencies live in the field types.** A field typed `Ref<Filler>` needs a filler something
-//! earlier opened, and comes out `None` when none is live, so the input is simply unavailable and
-//! no availability rule is written twice. `Ref` counts from the run's own history, so a recorded
-//! case resolves the same way every time it runs.
 use std::marker::PhantomData;
 
 use fastrand::Rng;
@@ -24,14 +14,11 @@ use lk_agents_voice::agent_session::{
 
 use crate::record::{Kind, Live};
 
-// ==============================================================================================
-// References: the only way an input names something the run already has
-// ==============================================================================================
+// Dependencies live in the field types: a `Ref<Filler>` field makes `None` when no filler is
+// live, so the input is unavailable without a separate availability rule.
 
-/// The n-th resource of kind `K` this run opened, counting from zero.
-///
-/// An index rather than an identity so that a case reproduces: the driver mints a different
-/// `SpeechId` every run, but "the third speech this run opened" is the same thing both times.
+/// The n-th resource of kind `K` this run opened, counting from zero: an index rather than an
+/// identity, so a case reproduces although ids differ per run.
 pub struct Ref<K> {
     pub nth: u32,
     kind: PhantomData<fn() -> K>,
@@ -61,10 +48,6 @@ impl<K: Resource> std::fmt::Debug for Ref<K> {
 }
 
 /// The n-th resource of kind `K` this run opened and has since closed: what a late answer names.
-///
-/// A host answers a hook after the driver stopped waiting for it -- the bound ran out, a newer
-/// turn superseded it, the close abandoned it -- and the driver has to take that in its stride.
-/// Drawn from what is gone, never from what is live, so the row means what it says.
 pub struct Gone<K> {
     pub nth: u32,
     kind: PhantomData<fn() -> K>,
@@ -143,18 +126,8 @@ resources!(
     Generation
 );
 
-// ==============================================================================================
-// Making a value
-// ==============================================================================================
-//
-// The words, the randomness and the making all live here rather than with the search,
-// because they are what an input is made of. The search decides which runs to do; it should not
-// be the thing this table has to import from.
-
-// The words and durations a case is built from.
-//
-// Realistic on purpose: sentence-length agent turns, disfluent user turns, and unnormalised text,
-// because normalisation, tokenisation and chunk boundaries are where a driver goes wrong.
+// Realistic on purpose: normalisation, tokenisation and chunk boundaries are where a driver
+// goes wrong.
 
 /// What the agent says.
 pub const AGENT_TURNS: &[&str] = &[
@@ -165,8 +138,7 @@ pub const AGENT_TURNS: &[&str] = &[
     "I'm sorry, I didn't catch that. Could you say the last four digits again?",
     "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14.",
     "That's outside what I can do here, so I'll pass you to someone who can.",
-    // Unnormalised on purpose: abbreviations, symbols, numbers and case the driver must
-    // decide how to chunk and speak.
+    // Unnormalised on purpose.
     "Dr. Alvarez is at 1600 Pennsylvania Ave. NW, Ste. 200 -- call (202) 555-0147 ext. 12.",
     "Ref #A1B2-C3D4; ETA ~15 min; cost is EUR 12.50 (approx. USD 13.60).",
     "Yes... no, wait -- actually, let me check that again.",
@@ -200,10 +172,6 @@ pub const NAMES: &[&str] =
     &["lookup_order", "transfer", "billing_agent", "caller", "sip_1", "agent-2"];
 
 /// Samples values, knowing what the run still holds.
-///
-/// The two halves belong together: almost every choice here is a choice *among what is live*, and
-/// the ones that are not still need the same randomness. The seed lives outside, in the campaign,
-/// because it spans a whole run while the live set changes with every input.
 pub struct Sampler<'a> {
     live: &'a Live,
     rng: &'a mut Rng,
@@ -235,10 +203,8 @@ impl<'a> Sampler<'a> {
     }
 }
 
-/// How one value of this type is made, when an input that carries it is being sampled.
-///
-/// `None` means there is nothing to point at, which is how an input becomes unavailable without
-/// anyone writing an availability rule for it.
+/// How one value of this type is sampled; `None` means there is nothing to point at, which makes
+/// the input unavailable.
 pub trait Make: Sized {
     fn make(s: &mut Sampler<'_>) -> Option<Self>;
 }
@@ -490,12 +456,8 @@ plain_enum! {
     Role { System, User, Assistant }
 }
 
-// ==============================================================================================
-// The table
-// ==============================================================================================
-
-/// Something a field can be a reference to. Only `Ref` is; everything else says so by saying
-/// nothing, which is what lets the table find an input's references without inspecting types.
+/// Something a field can be a reference to. Only `Ref` is; every other field type uses the
+/// default `None`.
 pub trait Referenced {
     fn reference(&self) -> Option<(Kind, u32)> {
         None
@@ -615,7 +577,6 @@ macro_rules! inputs {
 }
 
 inputs! {
-    // --- what the host program calls ----------------------------------------------------------
     /// `say()`: speak these words, no model.
     Say { text: AgentText, input: SayInput, allow: Option<bool>, to_ctx: bool }
         opens [Speech, Stream, Answer] leaf speech::Say;
@@ -689,19 +650,17 @@ inputs! {
     /// `VoiceTask(agent=...).run()` awaited inside this running tool's body: `agent` takes the floor
     /// with the agent's tools, opening with a reply when `reply` (no `on_enter`).
     /// The body waits on it; answering the tool first is the await cancelled. Made by the
-    /// conversation's tool bodies, not drawn uniformly: a run without tasks draws as before.
+    /// conversation's tool bodies, never drawn uniformly.
     VoiceTask { tool: Ref<Tool>, agent: String, reply: bool } opens [Answer] leaf command::VoiceTask never true;
     /// The answering-machine detector's host calls (`amd_start_*`, `amd_settle`, `execute()`,
     /// `aclose()`), which reach its own system rather than the driver: no command leaf.
     Amd { input: AmdInput };
     Run { user_input: Option<UserText> } leaf command::Run;
 
-    // --- what the case feeds into a stream a call opened --------------------------------------
     FeedText { stream: Ref<Stream>, text: AgentText };
     FeedAudio { stream: Ref<Stream>, chunks: Count };
     FeedEnd { stream: Ref<Stream> };
 
-    // --- what a controlled dependency answers -------------------------------------------------
     LlmText { chat: Ref<Chat>, text: AgentText };
     LlmToolCall { chat: Ref<Chat>, name: String, args: ToolArgs } opens [Tool];
     LlmEnd { chat: Ref<Chat> };
@@ -721,9 +680,8 @@ inputs! {
     VadInference { vad: Ref<Vad>, probability: Confidence, speaking: bool, duration: Millis };
     VadStart { vad: Ref<Vad>, speech_ms: Millis };
     VadEnd { vad: Ref<Vad>, silence_ms: Millis };
-    /// The predictor's verdict on a prediction the driver asked for: how likely the turn is over.
-    /// The predictor's answer: how likely the turn is over, and -- from a model that scores it --
-    /// how fitting a backchannel would be at this pause.
+    /// The predictor's answer: how likely the turn is over, and, from a model that scores it, how
+    /// fitting a backchannel would be at this pause.
     EotAnswer { prediction: Ref<Prediction>, probability: Confidence, backchannel: Option<Confidence> };
     /// The predictor fails that request instead.
     EotFail { prediction: Ref<Prediction> };
@@ -743,9 +701,8 @@ inputs! {
     /// The speaker began emitting this segment: the first of its audio is leaving for the
     /// listener. Legal from the segment's first frame; the driver marks the agent as speaking here.
     PlayoutStarted { segment: Ref<Segment> };
-    /// The voice provider goes down, or comes back: while down, every synthesis the driver opens
-    /// fails at the open. A synthesis lives inside one input's application -- text in, audio out,
-    /// closed -- so a failure has to be standing to land on one; this is that standing failure.
+    /// The voice provider goes down, or comes back: while down, every synthesis fails at the
+    /// open. A synthesis lives inside one input's application, so only a standing failure lands.
     TtsOutage { down: bool };
     /// The speaker finished this segment. Refused by the output while the segment is still taking
     /// frames: nothing has finished playing before it was flushed.
@@ -771,7 +728,6 @@ inputs! {
     /// The console's CLI asks the session something. Refused by a session with no console.
     Console { ask: ConsoleAsk };
 
-    // --- the clock, and waiting for something the driver owes ---------------------------------
     /// Virtual time passes with nobody acting.
     Advance { ms: Millis };
     /// Wait for one answer the driver owes a caller.
@@ -781,7 +737,6 @@ inputs! {
     /// Wait for the driver loop to end.
     AwaitExit { };
 
-    // --- the runner's own phase boundaries, never sampled --------------------------------------
     /// The case stops adding work; from here the runner releases what is pending.
     Release { } never true;
     /// Nothing is left to release; from here outcomes are only awaited.

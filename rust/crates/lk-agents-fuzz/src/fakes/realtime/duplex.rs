@@ -1,17 +1,3 @@
-//! A full-duplex speech model (`DuplexRealtimeAdapter`) at the `Realtime` boundary: the events the
-//! adapter hands the driver, as its segmenter makes them of the model's stream.
-//!
-//! The model speaks when asked: an utterance opens a generation with its first sound and its
-//! audio arrives at playback pace; each word reaches the driver once the audio nears it, stamped
-//! with its place in the utterance; the first silent frame closes the generation. Its text runs
-//! behind its audio, as a duplex model's tokens do: now and then the last words of an utterance
-//! arrive only after it ended, and each becomes a generation of its own attributed to the
-//! completed speech (`TranscriptAttribution`). What the person says reaches the model as heard
-//! audio; a barge-in is the model's own business. The adapter's record of the conversation is
-//! append-only: what the driver gives it, and what the model said.
-//!
-//! The session is a resource (`Kind::Realtime`) the case's server events cannot reach, and every
-//! utterance is one too (`Kind::Generation`), its audio tagged with it, until it ends.
 use lk_agents_core::llm::history::ChatContextExt;
 use std::{
     collections::VecDeque,
@@ -37,7 +23,11 @@ use crate::{
     record::{Detail, Kind, Tag},
 };
 
-/// One model frame: its own frames are this long.
+// A full-duplex model (`DuplexRealtimeAdapter`) as its segmenter reports it. Its text runs behind
+// its audio, as a duplex model's tokens do: an utterance's last words may arrive after it ended,
+// each then a generation of its own attributed to the completed speech (`TranscriptAttribution`).
+// Barge-in is the model's own business, so the case's server events cannot reach the session.
+
 const FRAME_MS: u64 = 100;
 /// How long the model takes to start speaking once asked.
 const FIRST_AUDIO_MS: std::ops::Range<u64> = 250..900;
@@ -49,7 +39,6 @@ const LATE_TEXT: u64 = 35;
 const TEXT_LEAD_MS: u64 = 200;
 /// An ask the model has not answered with speech by then fails (the adapter's reply timeout).
 const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
-/// The adapter's generation ids.
 const ID_PREFIX: &str = "duplex_";
 
 pub struct FakeDuplex {
@@ -72,8 +61,6 @@ impl FakeDuplex {
     }
 }
 
-/// What a duplex adapter reports: it transcribes no user audio, replies to no tool output by
-/// itself, and takes context, instruction and tool updates.
 fn capabilities() -> RealtimeCapabilities {
     RealtimeCapabilities {
         message_truncation: false,
@@ -102,7 +89,7 @@ impl Realtime for FakeDuplex {
         capabilities()
     }
 
-    /// Turn detection is the model's own: it is never asked to be off.
+    /// Turn detection is the model's own and never turned off.
     fn session(
         &self,
         _: lk_agents_abi::telemetry::Cx,
@@ -141,21 +128,32 @@ impl Realtime for FakeDuplex {
     }
 }
 
-/// What the model sends, at its instant.
 enum Output {
     /// An utterance's first sound: its generation opens.
-    Opened { utterance: Slot },
-    /// One frame of an utterance's speech.
-    Audio { utterance: Slot, chunk: u16 },
-    /// A word of the utterance, `start` seconds into it.
-    Word { utterance: Slot, word: String, start: f64 },
+    Opened {
+        utterance: Slot,
+    },
+    Audio {
+        utterance: Slot,
+        chunk: u16,
+    },
+    /// A word, `start` seconds into the utterance.
+    Word {
+        utterance: Slot,
+        word: String,
+        start: f64,
+    },
     /// The utterance's first silent frame: its generation ends.
-    Silence { utterance: Slot },
+    Silence {
+        utterance: Slot,
+    },
     /// A word of an ended utterance, its text arriving after its sound.
-    Late { utterance: Slot, word: String },
+    Late {
+        utterance: Slot,
+        word: String,
+    },
 }
 
-/// The generation an utterance opened.
 struct Open {
     utterance: Slot,
     id: String,
@@ -168,9 +166,8 @@ struct State {
     commands: VecDeque<RealtimeCommand>,
     /// The startup configuration went out (the replay ends with the tools).
     configured: bool,
-    /// The adapter's record of the conversation.
+    /// Append-only: what the driver gives it, and what the model said.
     chat_ctx: ChatContext,
-    /// What the model sends next, in time order.
     outputs: VecDeque<(Ts, Output)>,
     /// The ask the next utterance answers, and when it fails unanswered.
     pending_reply: Option<(String, Ts)>,
@@ -178,7 +175,7 @@ struct State {
     speaking: Option<(Ts, Ts)>,
     next_id: u32,
     open: Option<Open>,
-    /// The last utterance that ended, and its generation: what its late words are attributed to.
+    /// The last ended utterance and its generation, which its late words are attributed to.
     last_spoken: Option<(Slot, String)>,
     events: VecDeque<Event>,
     over: bool,
@@ -198,7 +195,6 @@ impl State {
         }
     }
 
-    /// A generation's message: started, its modalities settled, `text` said, done.
     fn opened(&mut self, id: &str, req_id: Option<String>) {
         let response_id = Some(id.to_owned());
         let message_id = id.to_owned();
@@ -277,7 +273,7 @@ impl Model {
         }
     }
 
-    /// Everything due now; then the next instant anything is.
+    /// Runs everything due now; returns the next instant anything is.
     fn advance(&self, st: &mut State) -> Option<Ts> {
         loop {
             let now = self.clock.now();
@@ -302,7 +298,6 @@ impl Model {
         }
     }
 
-    /// The adapter's handling of the driver's commands.
     fn command(&self, st: &mut State, now: Ts, cmd: RealtimeCommand) {
         match cmd {
             RealtimeCommand::PushAudio(p) => {
@@ -312,7 +307,7 @@ impl Model {
                     self.registry.record_forwarded(*slot, tags);
                 }
             }
-            // Append-only: the update's items replace the record, whatever the model keeps.
+            // The update replaces the record, whatever the model itself keeps.
             RealtimeCommand::UpdateChatCtx(u) => {
                 let mut chat_ctx = u.chat_ctx.copy(&CopyOptions {
                     exclude_handoff: true,
@@ -326,7 +321,7 @@ impl Model {
             }
             RealtimeCommand::UpdateTools(_) => st.configured = true,
             RealtimeCommand::PushItem(p) => st.chat_ctx.insert(*p.item),
-            // The reply is the next speech to open; a newer ask supersedes the one waiting.
+            // The next speech to open answers; a newer ask supersedes the one waiting.
             RealtimeCommand::GenerateReply(g) => {
                 st.fail_reply("a newer ask superseded this one");
                 st.pending_reply = Some((g.req_id, now.saturating_add(REPLY_TIMEOUT)));
@@ -342,8 +337,7 @@ impl Model {
                     st.pending_reply = None;
                 }
             }
-            // Instructions it takes as they come; input is consumed continuously, barge-in and
-            // the output timeline are the model's own.
+            // Input is consumed continuously; barge-in and the output timeline are the model's.
             RealtimeCommand::UpdateInstructions(_)
             | RealtimeCommand::Say(_)
             | RealtimeCommand::CommitAudio(_)
@@ -353,8 +347,8 @@ impl Model {
         }
     }
 
-    /// One utterance from `at`: its frames at playback pace, then its first silent frame; its
-    /// words a little ahead of their sound, the trailing ones of a late transcript well after it.
+    /// Plans one utterance from `at`: frames at playback pace, then a silent frame; words a little
+    /// ahead of their sound, the trailing ones of a late transcript well after it.
     fn speak(&self, st: &mut State, at: Ts) {
         let spoken: Vec<&str> =
             AGENT_TURNS.iter().copied().filter(|t| !t.trim().is_empty()).collect();
@@ -380,7 +374,6 @@ impl Model {
                 let due = end.saturating_add(Duration::from_millis(after));
                 out.push((due, Output::Late { utterance, word }));
             } else {
-                // With the first frame its text has arrived for and its sound is near.
                 let frame = begin.saturating_sub(TEXT_LEAD_MS).div_ceil(FRAME_MS).max(1);
                 let start = begin as f64 / 1000.0;
                 out.push((after(frame * FRAME_MS), Output::Word { utterance, word, start }));
@@ -478,7 +471,6 @@ fn frame(generation: u32, chunk: u16) -> AudioFrame {
 
 struct Session {
     model: Arc<Model>,
-    /// The model's pump; cancelled at the close or with the session.
     abort: OwnedTask,
 }
 

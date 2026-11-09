@@ -1,15 +1,3 @@
-//! What a rule reads: four views over one recording.
-//!
-//! A run is inputs in and outputs out. [`Recording::inputs_view`] is what the case sent. The other
-//! three views are the driver's output, seen from three places: [`Recording::host_view`] is what
-//! developer code saw, [`Recording::internal_view`] is what the driver wrote about itself, and
-//! [`Recording::inference_view`] is what the models received. A rule reads the views its
-//! guarantee names and nothing else in this crate; a rule that reads only the host view is a
-//! public contract, one that reads two views is a correspondence claim between two accounts of
-//! the same output.
-//!
-//! Every noun and question here is taken from a guarantee sentence. Stamps are ordered, so "the
-//! speech was created before it was announced done" is `created < done` and nothing else.
 /// The audio generations retained by one realtime socket at an observation.
 pub type HeldRealtimeAudio = (Observed, u32, Vec<(u32, u64)>);
 
@@ -33,34 +21,31 @@ use super::{
 };
 use crate::{check::Subject, input::Input};
 
+// A rule reads only the views its guarantee names: one view is a public contract, two views a
+// correspondence claim between two accounts of the same output.
+
 impl Recording {
     /// What the case sent.
     pub fn inputs_view(&self) -> InputsView<'_> {
         InputsView(self)
     }
 
-    /// What developer code saw: session events, the API calls it awaited, handles, the outputs it
-    /// attached, the tool bodies its runner ran. One of the three places the driver's output can be seen.
+    /// What developer code saw: session events, awaited API calls, handles, attached outputs and
+    /// the tool bodies its runner ran.
     pub fn host_view(&self) -> HostView<'_> {
         HostView(self)
     }
 
-    /// What the driver wrote about itself: its decisions, refusals and timers. The second place
-    /// the driver's output can be seen, and the only one where its reasoning is.
+    /// What the driver wrote about itself: its decisions, refusals and timers.
     pub fn internal_view(&self) -> InternalView<'_> {
         InternalView(self)
     }
 
-    /// What the models received: the frames, requests and text the driver sent them. The third
-    /// place the driver's output can be seen.
+    /// What the models received: the frames, requests and text the driver sent them.
     pub fn inference_view(&self) -> InferenceView<'_> {
         InferenceView::new(self)
     }
 }
-
-// ==============================================================================================
-// Inputs
-// ==============================================================================================
 
 /// What the case sent: every input, taken or refused, in order.
 #[derive(Clone, Copy)]
@@ -349,10 +334,6 @@ impl Window {
         self.from <= to && self.to.is_none_or(|end| end >= from)
     }
 }
-
-// ==============================================================================================
-// The host's view
-// ==============================================================================================
 
 /// What developer code saw.
 #[derive(Clone, Copy)]
@@ -803,10 +784,6 @@ fn closed_at(r: &Recording, opened: &Opened) -> Option<Observed> {
         .map(|(at, ..)| *at)
 }
 
-// ==============================================================================================
-// The driver's own view
-// ==============================================================================================
-
 /// What the driver wrote about itself: its journal, verbatim.
 #[derive(Clone, Copy)]
 pub struct InternalView<'a>(&'a Recording);
@@ -1021,10 +998,6 @@ impl<'a> SpeechTrace<'a> {
     }
 }
 
-// ==============================================================================================
-// The models' view
-// ==============================================================================================
-
 /// What the models received: every stream the driver opened to one, and what went down it.
 #[derive(Clone, Copy)]
 pub struct InferenceView<'a> {
@@ -1179,10 +1152,6 @@ pub struct Heard<'a> {
     pub stream: u32,
     pub tags: &'a [Tag],
 }
-
-// ==============================================================================================
-// What a finding is about
-// ==============================================================================================
 
 impl From<&SpeechView<'_>> for Subject {
     fn from(speech: &SpeechView<'_>) -> Self {

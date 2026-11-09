@@ -1,10 +1,3 @@
-//! [`VoiceRuntime`](crate::voice::VoiceRuntime) executes a session's two cores through its
-//! [`QueueOwner`](crate::voice::session::QueueOwner): the decision core
-//! ([`VoiceDriver`](lk_agents_voice::agent_session::VoiceDriver)) and the data plane
-//! ([`AudioInputRouter`](lk_agents_voice::data_plane::AudioInputRouter)). Its
-//! [`run`](crate::voice::VoiceRuntime::run) loop steps them and performs their effects.
-//! A simulation runs this same loop over fake ports, putting into its queue the events its
-//! deterministic scheduler chooses, one at a time.
 pub mod amd;
 mod audio;
 pub mod background_audio;
@@ -61,6 +54,8 @@ pub use session::{SessionOptions, VoiceSession};
 const READER_HANDOFF_FRAMES: usize = 50;
 pub use speech_handle::SpeechHandle;
 
+/// Steps a session's decision core (`VoiceDriver`) and data plane (`AudioInputRouter`) and
+/// performs their effects. The DST runs this same loop over fake ports.
 pub struct VoiceRuntime {
     publications: session::shared::Publications,
     driver: VoiceDriver,
@@ -492,7 +487,7 @@ impl VoiceRuntime {
     fn command(&mut self, command: AudioInputRouterCommand) {
         match command {
             AudioInputRouterCommand::SetSource(input) => self.set_source(input),
-            // The host object is told, as `AgentInput.set_audio_enabled` does.
+            // The host object is told too.
             AudioInputRouterCommand::SetInputEnabled(enabled) => {
                 let resources = &self.shared.resources;
                 if let Some(input) =
@@ -669,9 +664,5 @@ async fn read_audio(
 }
 
 #[cfg(test)]
-#[path = "../voice_tests.rs"]
+#[path = "voice_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "../voice_telemetry_tests.rs"]
-mod telemetry_tests;

@@ -1,19 +1,3 @@
-//! The transcript forwarded for a speech is the text the case gave it, in order; a speech that
-//! completed normally forwarded all of it.
-//!
-//! The text is the case's own: the `Say` payload, the accepted `FeedText` chunks of the stream a
-//! `say` opened, the audio transcript, or the LLM text accepted on the speech's chat requests
-//! (attributed through `Detail::Chat`). Forwarded text is the journal's `TranscriptForwarded`.
-//! Whitespace is ignored on both sides because the TTS leg re-segments text at sentences.
-//!
-//! A speech whose transcript is the voice's aligned words (`use_tts_aligned_transcript`) forwards
-//! what the voice said, which `aligned_transcript_follows_tts` judges instead.
-//!
-//! A speech whose transcript path the case closed forwards nothing from then on, which is the
-//! documented behaviour and not a loss. The sink is re-read for every segment, so a detach
-//! part-way through a speech suppresses the rest of it, and the completion clause therefore
-//! applies only to speeches whose path was live for their whole life. The prefix clause always
-//! applies: it holds vacuously when nothing was forwarded.
 use std::collections::BTreeMap;
 
 use lk_agents_voice::{
@@ -29,6 +13,10 @@ use crate::{
         Answer, Detail, Handle, HostView, InferenceView, InputsView, Kind, Recording, SpeechView,
     },
 };
+
+// Whitespace is ignored because the TTS leg re-segments text at sentences. Aligned transcripts are
+// `aligned_transcript_follows_tts`'s to judge. The sink is re-read per segment, so a path detached
+// mid-speech suppresses the rest: completion is judged only for paths live throughout.
 
 pub struct TextConservation;
 

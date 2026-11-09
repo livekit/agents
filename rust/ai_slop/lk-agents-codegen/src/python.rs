@@ -1,5 +1,3 @@
-//! Python presentation over the resolved declarations: authored plugin bases and constants.
-//! Record models and their codecs are emitted by `records` from that same model.
 use crate::decl::ConstValue;
 use crate::decl::{Declarations, RecordBody};
 

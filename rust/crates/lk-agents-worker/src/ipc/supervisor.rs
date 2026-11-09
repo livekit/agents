@@ -1,7 +1,3 @@
-//! One job runner's supervisor: an actor that launches it through its executor, then owns the
-//! channel, the initialization, pings, memory samples, the shutdown and stop deadlines and the
-//! runner's cleanup. It never asks whether the runner is a process or a thread.
-
 use lk_agents_net::clock::unix_now_ms;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::sync::Arc;
@@ -1120,3 +1116,7 @@ impl Driver {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "supervisor_tests.rs"]
+mod tests;

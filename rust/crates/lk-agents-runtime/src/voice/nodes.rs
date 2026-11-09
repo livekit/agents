@@ -1,8 +1,3 @@
-//! The session's registered nodes over the host's `_SessionNodes` (`_core.AgentNodes`). The core
-//! feeds each node its input, drains its output and calls nothing but the node. [`Nodes`]: a
-//! registered `llm_node`, `tts_node` or `stt_node` as the leg the session runs, speaking as the
-//! provider below it. The default nodes they may run are `default_nodes`.
-
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -34,6 +29,7 @@ fn node_id(prefix: &str) -> String {
     format!("{prefix}{}", NODE_IDS.fetch_add(1, Ordering::Relaxed))
 }
 
+/// The session's registered nodes over the host's `_SessionNodes`.
 pub struct AgentNodes {
     host: Arc<dyn SessionNodes>,
     clock: Arc<dyn Clock>,
@@ -157,8 +153,6 @@ fn llm_chunk(chunk: NodeChunk) -> LlmChunk {
         NodeChunk::Chunk(chunk) => chunk,
     }
 }
-
-// ----------------------------------------------------------------------------- streamed nodes
 
 /// Opens the node invocations of one transcription leg.
 struct Opener {
@@ -354,8 +348,6 @@ impl Drop for TranscriptionNode {
         self.cancel();
     }
 }
-
-// ----------------------------------------------------------------------------- streams
 
 /// What the core hands a node as its input: the node reads what was pushed until the input ends.
 /// Admission is bounded; a stalled or closed consumer refuses further input.
@@ -838,158 +830,15 @@ impl Stt for Node<dyn Stt> {
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
     > {
-        // The stream outlives every turn: it runs under the activity that opened it, as the
-        // reference's STT pump does.
+        // The stream outlives every turn: it runs under the activity that opened it.
         let cx = cx.clone();
         Box::pin(async move { duplex(self.host.stt_node(&cx).await).map(Some) })
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use lk_agents_abi::ProviderStream as _;
-
-    #[test]
-    fn node_input_refuses_overflow_and_stops_accepting_after_either_half_closes() {
-        let (sink, source) = channel();
-        for item in 0..256 {
-            sink.push(item).unwrap();
-        }
-        assert!(sink.push(256).is_err());
-        drop(source);
-        assert!(sink.push(257).is_err());
-
-        let (sink, _source) = channel();
-        sink.end_input();
-        assert!(sink.push(0).is_err());
-    }
-
-    // Catches: a node's output metered as one call when the default node it ran metered its
-    // provider's (a non-streaming TTS's sentences, as the reference's `ChunkedStream`s report
-    // theirs), or those records read twice; a node that ran no default node metered at all; the
-    // call in flight when the node is cut not ended.
-    #[test]
-    fn a_tts_node_reports_the_calls_its_default_node_made() {
-        let calls = Arc::new(NodeCalls::default());
-        let (_, input) = channel::<SynthesizedAudio>();
-        let mut node = Mapped { source: Box::new(input), map: |a| a, calls: Some(calls.clone()) };
-        assert!(node.take_call_metrics(false).is_none(), "no default node ran yet");
-        assert_eq!(node.take_call_metrics(true), Some(vec![]), "its own audio is no call");
-        let record = AgentMetrics::Tts(lk_agents_abi::metrics::testkit::tts());
-        let ledger = Arc::new(Mutex::new(vec![record.clone(), record]));
-        let cut = Arc::new(AtomicBool::new(false));
-        let take: CallLedger = {
-            let (ledger, cut) = (ledger.clone(), cut.clone());
-            Arc::new(move |in_flight| {
-                cut.fetch_or(in_flight, Ordering::Relaxed);
-                std::mem::take(&mut *ledger.lock())
-            })
-        };
-        calls.record(Some(take));
-        assert_eq!(node.take_call_metrics(false).map(|r| r.len()), Some(2));
-        assert_eq!(node.take_call_metrics(true).map(|r| r.len()), Some(0));
-        assert!(cut.load(Ordering::Relaxed), "the call in flight is ended");
-        let streamed = Arc::new(NodeCalls::default());
-        streamed.record(None);
-        let mut node =
-            Mapped { source: Box::new(channel::<()>().1), map: |a| a, calls: Some(streamed) };
-        assert!(node.take_call_metrics(true).is_none(), "a one-call stream: the node meters");
-    }
-
-    // Catches: a `stt_node` that reads slower than the call failing its input, or replaying more
-    // than its bound once it catches up.
-    #[tokio::test]
-    async fn a_slow_stt_node_keeps_the_newest_ten_seconds_and_never_refuses() {
-        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-        let (sink, mut source) = audio_channel(clock, telemetry::Cx::NONE);
-        for n in 0..1200u16 {
-            sink.push(AudioFrame::new(n.to_le_bytes().repeat(160), 16_000, 1, 160)).unwrap();
-        }
-        sink.end_input();
-        let mut heard = Duration::ZERO;
-        let mut last = Vec::new();
-        while let Some(frame) = source.next().await.unwrap() {
-            heard += lk_agents_abi::voice::rtc::frame_duration(&frame);
-            last = frame.data.to_vec();
-        }
-        assert_eq!(heard, Duration::from_secs(10));
-        assert!(last.ends_with(&1199u16.to_le_bytes()), "the newest audio is kept");
-        assert!(sink.push(AudioFrame::new(vec![0; 320], 16_000, 1, 160)).is_err());
-    }
-
-    struct Below;
-
-    impl Llm for Below {
-        fn label(&self) -> String {
-            "below".to_owned()
-        }
-
-        fn chat<'a>(
-            &'a self,
-            _cx: &telemetry::Cx,
-            _req: &'a ChatRequest,
-        ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
-            unreachable!("the node makes the request")
-        }
-    }
-
-    /// A node whose provider gave up after its own retries.
-    struct GaveUp;
-
-    impl NodeFactory for GaveUp {
-        fn text_node(
-            &self,
-            _below: Arc<dyn TextOutput>,
-        ) -> Result<Arc<dyn lk_agents_abi::voice::nodes::TextNode>, HostError> {
-            unreachable!()
-        }
-
-        fn llm_node<'a>(
-            &'a self,
-            _cx: &telemetry::Cx,
-            _req: &'a ChatRequest,
-        ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
-            Box::pin(async move { Err(lk_agents_abi::errors::ApiError::new("down").into()) })
-        }
-
-        fn tts_node(
-            &self,
-            _cx: &telemetry::Cx,
-            _: bool,
-        ) -> lk_agents_abi::BoxFuture<
-            '_,
-            Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
-        > {
-            Box::pin(async move { Err(lk_agents_abi::errors::ApiError::new("down").into()) })
-        }
-
-        fn stt_node(
-            &self,
-            _cx: &telemetry::Cx,
-        ) -> lk_agents_abi::BoxFuture<
-            '_,
-            Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,
-        > {
-            Box::pin(async move { Err(lk_agents_abi::errors::ApiError::new("down").into()) })
-        }
-    }
-
-    // Catches: a node the engine's attempt loop retries (the node's code would run again on top
-    // of the retries its provider already made), or a node that hides its provider from metrics.
-    #[tokio::test]
-    async fn a_node_speaks_as_its_provider_and_its_failure_is_final() {
-        let nodes = Nodes { llm: Some(Arc::new(GaveUp)), ..Nodes::default() };
-        let llm = nodes.llm(Arc::new(Below));
-        assert_eq!(llm.label(), "below");
-        let error = llm
-            .chat(&telemetry::Cx::NONE, &ChatRequest::default())
-            .await
-            .err()
-            .expect("the node failed");
-        assert!(!error.retryable(), "the engine would run the node again");
-    }
-}
+#[path = "nodes_tests.rs"]
+mod tests;
 
 /// VoiceRuntime callback snapshot; the decision core carries only its registered identity.
 #[derive(Default, Clone)]

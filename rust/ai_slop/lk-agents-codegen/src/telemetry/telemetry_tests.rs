@@ -1,6 +1,3 @@
-//! The telemetry registry: what the reader accepts and refuses, what each output says, and that
-//! the declarations cover what livekit-agents 1.8.10 sends.
-
 use crate::decl::tree::Crate;
 use crate::telemetry::{self, Content, Encoding, Parent, Registry, Wire};
 use lk_agents_bindgen::telemetry::{SpanKind, Unmeasured};
@@ -349,8 +346,8 @@ const RENAMED: [(&str, &str); 2] = [("lk.room_sid", "lk.room_id"), ("lk.track_si
 /// Spans whose kind changed from 1.8.10's `INTERNAL`, on purpose.
 const NEW_KINDS: [&str; 5] =
     ["llm_request", "tts_request", "realtime_inference", "rpc_handler", "rpc_call"];
-/// The request keys 1.8.10 copied onto its node spans, decided out (QUESTIONS 90): a node span
-/// describes its callback; the model and provider are only its request's.
+/// The request keys 1.8.10 copied onto its node spans: a node span describes its callback; the
+/// model and provider are only its request's.
 const NODE_REQUEST_KEYS: [(&str, &str); 4] = [
     ("llm_node", "gen_ai.request.model"),
     ("llm_node", "gen_ai.provider.name"),

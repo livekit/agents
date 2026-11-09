@@ -1,4 +1,3 @@
-//! Stream contracts are resolved by their ABI declarations, never by short type names.
 use super::*;
 
 impl Resolver<'_> {

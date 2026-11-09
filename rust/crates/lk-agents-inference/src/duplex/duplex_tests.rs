@@ -30,8 +30,6 @@ fn up(gate: &mut dyn AudioGate, level: f64) -> bool {
     gate.update(&frame(level)).unwrap()
 }
 
-// ------------------------------------------------------------------------------------ the gate
-
 #[test]
 fn gate_stays_closed_on_silence_and_steady_room_tone() {
     let mut g = adaptive();
@@ -149,8 +147,6 @@ fn gate_decides_on_audio_duration_not_on_frame_count() {
     assert_eq!(decisions[0], decisions[1]);
     assert!(decisions[0][12] && !decisions[0][29]);
 }
-
-// ------------------------------------------------------------------------------- the segmenter
 
 struct Fake {
     seg: Segmenter,

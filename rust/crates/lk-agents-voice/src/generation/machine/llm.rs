@@ -1,5 +1,3 @@
-//! Generated words, streaming segments and per-request model observations.
-
 use crate::generation::SpeechSegmentEvent;
 use crate::transcription::VisibleStream;
 use lk_agents_abi::metrics::base::LlmMetrics;

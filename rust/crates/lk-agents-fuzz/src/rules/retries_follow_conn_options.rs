@@ -1,11 +1,3 @@
-//! A failed model or voice request is retried as the session's `conn_options` say, and no further.
-//!
-//! The budgets are the session's (`SessionConnectOptions`): an `llm_conn_options` or
-//! `tts_conn_options` the driver ignored retries on its own defaults. Each failed attempt is the
-//! session's `error` event, `recoverable` exactly when a retry follows it. A voice that does not
-//! stream is spoken sentence by sentence, and a sentence that fails is synthesized again, on its
-//! own budget, even after the reply's earlier sentences were heard: the reference's adapter retries
-//! each sentence's synthesis, and the reply's voice does not stop at the first transient failure.
 use std::collections::BTreeMap;
 
 use lk_agents_voice::{
@@ -20,6 +12,10 @@ use crate::{
     input::{Input, Ref},
     record::{Kind, Recording},
 };
+
+// Each failed attempt is an `error` event, `recoverable` exactly when a retry follows. A
+// non-streaming voice retries each failed sentence on its own budget, even after earlier ones
+// were heard, as the reference's adapter does.
 
 pub struct RetriesFollowConnOptions;
 

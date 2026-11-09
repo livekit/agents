@@ -1,5 +1,3 @@
-//! `perform_audio_forwarding`: one segment's frames pushed to the sink, and what the sink reports.
-
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::AudioFrame;
@@ -298,8 +296,7 @@ impl Playing<'_> {
                 AudioPlaybackEvent::InterruptionChecked { interrupted: handle.interrupted() }
             }
             AudioPlaybackEffect::ReadSource => {
-                // One pending source read, with sink reports folded beside it. Source callbacks
-                // settle only after that borrow has ended.
+                // Source callbacks settle only after the read's borrow has ended.
                 let next = self.watched(segment.next()).await;
                 self.settle(segment);
                 AudioPlaybackEvent::SourceRead { next, interrupted: handle.interrupted() }
@@ -365,8 +362,7 @@ impl Playing<'_> {
             }
             AudioPlaybackEffect::FinishCut { heard, reported } => {
                 self.drain(segment);
-                // Journal the physical receipt, even if clear arrived after playback finished. A
-                // cut the output never reported stopped no earlier than the progress it confirmed.
+                // A cut the output never reported stopped no earlier than the progress it confirmed.
                 match (self.state.has_started(), reported) {
                     (true, Some(interrupted)) => self.finished(heard.position, interrupted),
                     (true, None) => self.shared.report(GenEvent::PlayedTo {
@@ -420,8 +416,7 @@ impl Playing<'_> {
     fn played_out<S: Segment>(&mut self, segment: &mut S, ev: &PlaybackFinished) {
         self.drain(segment);
         self.sink_call(SinkCall::End);
-        // Cut before its first frame left: never started, so no finish. Journalled as the sink
-        // reported it: a segment cut below earlier makes the speech incomplete, not this finish.
+        // Cut before its first frame left: never started, so no finish.
         if self.state.has_started() || !(ev.interrupted && ev.playback_position.is_zero()) {
             self.finished(ev.playback_position, ev.interrupted);
         }
@@ -534,7 +529,6 @@ impl Playing<'_> {
                 Some(Ok(())) => {
                     self.state
                         .captured(self.out.tracker().current_segment(), frame_duration(frame));
-                    // The recording's agent channel, placed by the sink's own segment reports.
                     if let Some(tap) = self.shared.recorder_tap() {
                         tap.recorder.capture_frame(tap.now(), frame);
                     }

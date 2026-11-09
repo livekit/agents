@@ -1,11 +1,3 @@
-//! Each failing span of an input processor is one recoverable `AudioProcessing` error naming that
-//! processor: never lost, never repeated, never invented.
-//!
-//! The fake stream knows the truth: it records each span as it hands its reader the failure
-//! that opens it. A span is owed its error once the driver had a whole turn to take it before
-//! the session finished closing, as a room event is; a close that cut it off may leave it
-//! unsaid. A failure never costs its frame, which reaches the recognizer as any other:
-//! `forwarded_while_enabled` holds every pushed frame to that.
 use std::collections::BTreeMap;
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -20,6 +12,9 @@ use crate::{
     input::{Count, Input, Millis, Ref, RoomIn},
     record::{Host, Recording},
 };
+
+// The fake stream records each span as it hands its reader the opening failure. A span is owed
+// its error once the driver had a whole turn before the close finished, as a room event is.
 
 pub struct ProcessorSpanIsOneError;
 

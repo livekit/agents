@@ -1,15 +1,6 @@
-//! Long conversations: what only shows up at turn fifty. A resource the driver opens and never
-//! closes, a counter that only climbs, a timer re-armed on every turn -- none of it is visible in
-//! the two or three turns a survey run affords, and all of it is visible as a live-resource count
-//! that keeps growing when the conversation does not.
-//!
-//! `VOICE_SOAK_SEEDS` and `VOICE_SOAK_BUDGET` size it; the default is eight callers of about forty
-//! turns each.
-//!
-//! Every call must reach its close, so the residue is read off every one: a call that stopped
-//! before it (a livelock, a release phase that never went quiet, a close that never finished)
-//! fails the soak, by seed with why, rather than being left out of the oracle. A long call's
-//! findings outside the known ones fail the soak as they fail the survey.
+//! Long conversations: leaks only visible at turn fifty, read as the live residue at each close.
+//! Sized by `VOICE_SOAK_SEEDS` and `VOICE_SOAK_BUDGET` (default eight callers of ~40 turns).
+//! A call that never reaches its close, or an unknown finding, fails the soak by seed.
 use std::collections::{BTreeMap, BTreeSet};
 
 use lk_agents_fuzz::{

@@ -1,7 +1,3 @@
-//! Every tool call the history records carries JSON arguments: a call whose arguments the model
-//! wrote malformed (a chat-template token leaked into them, the JSON cut short) is recorded as it
-//! ran, repaired. The next request sends the history back to the model, and a provider refuses
-//! invalid JSON there.
 use lk_agents_abi::ChatItem;
 use lk_agents_voice::{events::SessionEvent, trace::Step};
 
@@ -10,6 +6,8 @@ use crate::{
     check::{Check, Contract, Rule, Subject},
     record::Recording,
 };
+
+// The next request sends the history back, and a provider refuses invalid JSON there.
 
 pub struct ToolCallArgumentsAreJson;
 

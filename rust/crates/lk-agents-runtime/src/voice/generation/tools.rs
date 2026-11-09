@@ -1,5 +1,3 @@
-//! `perform_tool_executions`: a step's calls, run as they arrive and answered in the model's order.
-
 use super::ReplyExecution;
 use crate::telemetry;
 use crate::voice::session::SessionShared;
@@ -71,8 +69,6 @@ impl ToolStep {
                 let _ = tx.send(None);
                 return;
             };
-            // The callbacks run with the host's object for the speech.
-            // The callbacks run in the speech's turn; the body in its own `function_tool`.
             let host = host.map(|mut host| {
                 host.invocation.speech = Some(handle.object());
                 host
@@ -80,7 +76,6 @@ impl ToolStep {
             let host = host.map(|host| *host);
             let call = HostedCall { shared: &shared, speech, host, bodies, description, turn };
             let (execution, outcome) = call.run(*item, *first, &handle, completion).await;
-            // Recorded as it arrives; the step answers the calls in the model's order.
             let message = execution.ended_message();
             let (call_id, end) = (execution.call.call_id.clone(), execution.end);
             let call = Some(id);
@@ -153,8 +148,7 @@ impl HostedCall<'_> {
                         let outcome = ToolOutcome::Internal;
                         return (answer(&one, outcome.clone().into(), wall()), outcome);
                     };
-                    // The speech waits on the body until it answers or detaches: awaiting the
-                    // speech from inside it is refused meanwhile.
+                    // Awaiting the speech from inside its own body is refused meanwhile.
                     handle.tool_blocking(&h.invocation, &one.call_id, &one.name);
                     let report = run_body(self, h, &args, &one, completion).await;
                     handle.tool_returned(&h.invocation, &one.call_id);
@@ -225,7 +219,6 @@ async fn run_body(
 ) -> ToolReport {
     let (shared, speech) = (site.shared, site.speech);
     let description = site.description.as_deref();
-    // The body runs in its `function_tool`, under the speech's turn.
     let span = site.turn.map(|turn| {
         let cx = shared.trace.clone().under::<telemetry::AgentTurn>(turn);
         crate::telemetry::function_tool(&cx, call, &h.invocation.agent_name, description)
@@ -252,8 +245,7 @@ async fn run_body(
         _guard: guard,
     };
     site.bodies.spawn(speech, "host tool body", body.run(span, progress, tx));
-    // The close cancels the body, which owns its cleanup from there: a body refusing its
-    // cancellation runs to the close's bound on its own, its call answered as cancelled.
+    // A body refusing cancellation runs to the close's bound on its own, answered as cancelled.
     tokio::select! { biased;
         report = rx => report.unwrap_or_else(|_| ToolOutcome::Cancelled.into()),
         () = shared.closing.cancelled() => ToolOutcome::Cancelled.into(),
@@ -351,9 +343,8 @@ impl ToolBody {
                 ToolOutcome::Internal.into()
             }
         };
-        // Cancellation ends execution, including any later completion validation. A refusing
-        // callable may eventually return successfully while it unwinds, but that must not start
-        // a new callback under an operation already cancelled by the core.
+        // A refusing callable may still succeed while it unwinds; that must not start a new
+        // callback under an operation the core already cancelled.
         let tool_bodies = &self.shared.tool_bodies;
         if tool_bodies.cancellation_requested(invocation) || self.shared.closing.is_cancelled() {
             return ToolOutcome::Cancelled.into();
@@ -405,23 +396,21 @@ pub(crate) async fn run_tools(
     forwarded_text_empty: bool,
     continues: bool,
 ) -> Option<StepNext> {
-    // A never-adopted preemptive generation's calls never started and are owed nothing; a `say`
-    // has no run.
+    // A never-adopted preemptive generation owes nothing; a `say` has no run.
     let model = matches!(ctx.plan.source, ReplySource::Llm | ReplySource::Realtime);
     if !handle.scheduled() || (tools.is_empty() && !model) {
         return None;
     }
 
-    // Read **before** the executions are awaited; the read after is a different behaviour. The
-    // speech's interruption, not the step's.
+    // Read before the executions are awaited: the speech's interruption, not the step's.
     let interrupted_before_tools = handle.interrupted();
 
-    // Awaited in the model's order: they ran concurrently, so this is a join, not a sequence.
+    // Awaited in the model's order; they ran concurrently.
     let mut executions = Vec::with_capacity(tools.calls.len());
     for d in tools.calls {
         let execution = match d.rx.await {
             Ok(Some(out)) => out,
-            // Dropped unrun: the reference returns before executing, so it is owed nothing.
+            // Dropped unrun: owed nothing.
             Ok(None) => continue,
             // Aborted or panicked: never a hole, since the step pairs by index.
             Err(_) => {

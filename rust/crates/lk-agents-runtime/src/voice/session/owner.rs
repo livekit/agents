@@ -1,6 +1,3 @@
-//! Executes admitted lifetime operations. The owner exists before any room or provider opens;
-//! cancelling a host waiter does not abandon startup or finalization.
-
 use super::{SessionOptions, VoiceSession, options::Providers, storage::SessionStorage};
 use crate::recording::SessionRecorder;
 use crate::telemetry;
@@ -32,6 +29,8 @@ use lk_agents_voice::agent_session::options::{RECORDING_ALL_OFF, validate_sessio
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock, Weak};
 use tokio::sync::{OnceCell, watch};
+
+// Cancelling a host waiter does not abandon startup or finalization.
 
 #[cfg(test)]
 #[path = "owner_tests.rs"]
@@ -529,8 +528,8 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
                     None => (None, Default::default()),
                 };
                 let trace = self.0.env.tracer.root().continuing(cx.span()).with_job(job);
-                // `agent_session` and `session_start` from `start()`: the room connects and the
-                // first agent's toolsets set up under them before the driver opens them.
+                // Reserved here: the room connects and toolsets set up under them before the
+                // driver opens them.
                 let cx = &trace;
                 let session = telemetry::reserve::<telemetry::AgentSession>(cx);
                 let start = telemetry::reserve::<telemetry::SessionStart>(

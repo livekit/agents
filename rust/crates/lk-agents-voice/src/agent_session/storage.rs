@@ -1,5 +1,3 @@
-//! Storage receipts precede model reads and reply settlement; I/O stays in the executor.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
@@ -11,9 +9,10 @@ use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::events::SessionEvent;
 use crate::generation::TurnOutcome;
 
+// Storage receipts precede model reads and reply settlement.
+
 /// How long a speech that ended without reporting its turn (its tasks aborted by the
-/// interruption watchdog or `cancel_tasks`) may still report it before its lane is released
-/// (voice-session.md: "within 30 seconds").
+/// interruption watchdog or `cancel_tasks`) may still report it before its lane is released.
 pub(crate) const LANE_RELEASE_BOUND: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
@@ -111,7 +110,7 @@ impl VoiceDriver {
     }
 
     /// The lane's lease is lost: the call goes on in memory, as one whose thread could not be
-    /// loaded does (voice-session.md: storage failures never end the call). What its speeches
+    /// loaded does: storage failures never end the call. What its speeches
     /// say is still heard; no turn from here on takes the lane or commits.
     pub(crate) fn storage_lost(&mut self, speech: SpeechId) {
         if self.session.storage.enabled {

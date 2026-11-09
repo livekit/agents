@@ -1,8 +1,5 @@
-//! `cargo run -p lk-agents-codegen -- --write` (in `rust/`): resolve ABI declarations and emit bindings.
-//! `--write` regenerates in place; `--check` exits 1 if any file would change (CI).
-//!
-//! Declaration discovery follows Rust modules. ABI owns the shared contracts; each language
-//! backend owns its interpreter interfaces. Generated files are outputs, never discovery inputs.
+//! Resolves ABI declarations and emits bindings. `--write` regenerates in place; `--check` exits 1
+//! if any file would change. Generated files are outputs, never discovery inputs.
 
 mod accessors;
 mod adapter;
@@ -27,22 +24,16 @@ mod shape_error;
 mod surface;
 mod telemetry;
 #[cfg(test)]
-#[path = "telemetry_tests.rs"]
-mod telemetry_tests;
-#[cfg(test)]
-#[path = "codegen_tests.rs"]
+#[path = "main_tests.rs"]
 mod tests;
 
 use std::path::{Path, PathBuf};
 
-/// The authoritative v2 Python project. Generation must not recreate the retired v1 package.
 const PYTHON_PACKAGES: &[&str] = &["livekit-agents-next"];
 const PYTHON_GENERATED: &str = "livekit/agents/_generated";
-/// Where `_core.pyi` sits, beside the extension.
 const PYTHON_CORE: &str = "livekit/agents";
-/// The Weaver registry's generated definitions.
 const OTEL_REGISTRY: &str = "rust/otel/registry";
-/// The names `dir(_core)` returns, which the registration test of `lk-agents-py` reads.
+// Read by the registration test of `lk-agents-py`.
 const CORE_NAMES: &str = "rust/crates/lk-agents-py/src/generated/core_names.json";
 
 fn main() -> std::process::ExitCode {
@@ -87,7 +78,6 @@ fn run(check: bool) -> Result<usize, String> {
     sync(&root, &generate(&root, &python_packages)?, check)
 }
 
-/// Everything codegen writes, by path under the repo root.
 struct Outputs {
     files: Vec<(PathBuf, String)>,
     /// Directories holding nothing but generated files: any other file there is obsolete.
@@ -210,7 +200,6 @@ const INIT: &str = "# GENERATED DIRECTORY -- every file here is written by `carg
 # `public_<module>.py`: the names the ABI places there with `path = \"..\"`, which its\n\
 # `__all__` lists, so a name's public path is its declaration's.\n";
 
-/// Generated Rust is formatted as the workspace's `cargo fmt` would format it.
 fn rustfmt(root: &Path, text: &str) -> Result<String, String> {
     use std::io::Write;
     let mut child = std::process::Command::new("rustfmt")
@@ -244,8 +233,7 @@ fn put(path: &Path, text: &str, check: bool) -> Result<usize, String> {
     Ok(0)
 }
 
-/// From `CARGO_MANIFEST_DIR`, not the cwd, so output lands in the same place wherever it runs.
-/// Returns the repo root and the Python projects under it (of [`PYTHON_PACKAGES`]).
+// From `CARGO_MANIFEST_DIR`, not the cwd, so output lands in the same place wherever it runs.
 fn repo_root() -> Result<(PathBuf, Vec<&'static str>), String> {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     loop {

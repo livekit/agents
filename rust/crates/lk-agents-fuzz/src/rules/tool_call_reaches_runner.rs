@@ -1,15 +1,3 @@
-//! A tool call's body runs exactly when the shared tool machine admitted it.
-//!
-//! `hosted` is the dispatch decision: `CallStarted { hosted: true }` means the driver handed the
-//! call to a runner, `hosted: false` that it is answered in place (a name the request never
-//! offered). A hosted call's body runs only once the machine admits it (`CallAdmitted`): an
-//! approval's read-back, refused arguments or a refused duplicate run nothing. So an admitted call
-//! must reach the runner, a body must never run unadmitted, and an unhosted call never runs.
-//!
-//! Admission happens inside the call's task, so a task that never runs never admits, and that
-//! looks like a read-back. What tells them apart is the answer: a hosted call, run or not, ends
-//! before its step finishes. One that started (the host told `ToolExecutionUpdated::Started`) and
-//! ended no way at all was dropped by its task (9f070e85f).
 use lk_agents_voice::trace::{Step, ToolStep};
 
 use crate::{
@@ -17,6 +5,11 @@ use crate::{
     check::{Check, Contract, Rule, Subject},
     record::Recording,
 };
+
+// `hosted: false` is a call answered in place (a name the request never offered). Admission
+// happens inside the call's task, so a task that never ran looks like a read-back; the difference
+// is that a hosted call always ends before its step finishes, and one that started and never
+// ended was dropped by its task.
 
 pub struct ToolCallReachesRunner;
 

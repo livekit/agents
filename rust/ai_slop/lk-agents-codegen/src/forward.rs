@@ -1,6 +1,3 @@
-//! Str classes: Python `str` subclasses whose every member is one core call, written from the ABI
-//! declarations, so no hand-written module only forwards.
-
 use crate::decl::*;
 use crate::python::{Out, docstring};
 

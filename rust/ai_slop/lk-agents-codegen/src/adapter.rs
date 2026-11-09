@@ -1,18 +1,11 @@
-//! The pyo3 adapters of the declared classes, and the declared proxies ([`crate::proxy`]), written
-//! into the registration shell (`lk-agents-py/src/generated/`): one module per ABI subject, plus `mod.rs` with the
-//! `Implementations` trait and its generated concrete selection. Selection comes from actual Rust
-//! trait implementations; missing or ambiguous selections fail generation, and missing methods
-//! fail compilation.
-//!
-//! Each parameter crosses by its declared kind: a kind pyo3 extracts itself (scalars, strings,
-//! lists, declared records) is a typed parameter; JSON, JSON objects and host proxies are taken as
-//! objects and converted here with the parameter's name as the error path.
-
 use crate::decl::{
     Class, Declarations, Export, Form, HostForm, Literal, Method, MethodKind, Param, Proxy, Record,
     RecordDecl, Sink, Ty,
 };
 use crate::python::Out;
+
+// `Implementations` selection comes from actual Rust trait implementations: a missing or ambiguous
+// one fails generation.
 
 /// Python's private class prefix is metadata, not a Rust identifier convention.
 pub(crate) fn class_ident(name: &str) -> String {
@@ -574,7 +567,6 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
     Ok(s)
 }
 
-/// `///` lines at `indent`.
 fn doc(lines: &[String], indent: &str) -> String {
     lines
         .iter()
@@ -582,7 +574,6 @@ fn doc(lines: &[String], indent: &str) -> String {
         .collect()
 }
 
-/// The stream classes a class's methods hand out, once each.
 /// A record's `_core` functions: its persistence codec, its omitted fields' computations.
 pub(crate) fn functions(r: &RecordDecl) -> Vec<String> {
     let mut out = Vec::new();
@@ -897,7 +888,6 @@ fn input(at: &str, p: &Param) -> Result<(String, Option<String>), String> {
     }
 }
 
-/// Convert a supplied value while preserving the existing omission sentinel.
 fn maybe_input(value: &str, inner: &Ty, path: &str, at: &str) -> Result<String, String> {
     Ok(format!("{value}.map(|value| {})?", from_object("value", inner, path, at)?))
 }
@@ -1190,3 +1180,7 @@ pub fn rust_names(text: &str) -> String {
     }
     out
 }
+
+#[cfg(test)]
+#[path = "adapter_tests.rs"]
+mod tests;

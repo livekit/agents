@@ -1,4 +1,3 @@
-//! A realtime reply asked once a tool finished reads the tool's output.
 use lk_agents_voice::trace::{RealtimeStep, Step, ToolStep};
 
 use crate::{

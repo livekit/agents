@@ -1,6 +1,5 @@
-//! Generated callable arguments, async functions and native class contracts.
-
-use super::*;
+use crate::decl::tests::{read, read_with_tuples, refuse};
+use crate::decl::*;
 
 #[test]
 fn async_module_functions_own_arguments_and_await_the_implementation() {
@@ -130,7 +129,7 @@ fn declared_mutable_classes_preserve_python_identity_and_subclassing() {
     assert!(adapter.contains("fn update(&mut self"), "{adapter}");
 }
 
-// Pure exports retain their pre-declaration fork behavior; resource entries keep the guard.
+// Catches: a pure export gaining the fork guard, or a resource entry losing it.
 #[test]
 fn fork_guards_follow_group_defaults_and_entry_overrides() {
     let declarations = read(
@@ -494,7 +493,7 @@ fn pure_wire_string_enum_map_keys_emit_in_the_rust_map_order_and_reject_host_inp
         "fn values(values: BTreeMap<Field, Vec<String>>);",
     );
     assert!(read(&input).unwrap_err().contains("Field` is not declared for input"));
-    // Existing explicit string conversion (RequestKind's declaration) must retain input.
+    // An explicit string conversion keeps input.
     let legacy = input
         .replace("#[crate::host(wire_strs)]", "#[crate::host(string)] #[crate::host(wire_strs)]");
     let declarations = read(&legacy).expect("explicit host input wins over pure wire metadata");
@@ -815,7 +814,7 @@ fn static_class_calls_construct_values_and_compare_borrowed_instances() {
 }
 #[test]
 fn annotated_aliases_keep_their_boundary_contract_instead_of_expanding_private_storage() {
-    let declarations = super::read(
+    let declarations = read(
         r#"
         pub struct Handle<T>(T);
         pub enum Media {}

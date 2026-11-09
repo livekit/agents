@@ -1,6 +1,3 @@
-//! The retry machine every retried request shares: connection limits, retry allowance and backoff,
-//! total deadline and cleanup, decided on supplied time.
-
 use lk_agents_abi::errors::{ApiError, ApiErrorKind};
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{ApiConnectOptions, ApiConnectOptionsError};

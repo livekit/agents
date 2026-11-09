@@ -1,5 +1,3 @@
-//! Metrics regression tests.
-
 mod llm_tokens_per_second {
     //! A reply's LLM rate is its completion tokens over the streaming window.
     use lk_agents_abi::{ChatItem, Role};
@@ -10,8 +8,7 @@ mod llm_tokens_per_second {
 
     // Catches: `llm_node_tps` counted chunks over the time since the request started, so it read
     // the model's time to first token as slowness, and a provider sending one chunk per word or per
-    // sentence moved it tenfold. The reference divides `usage.completion_tokens` by the time from the
-    // first to the last text chunk (`generation.py`).
+    // sentence moved it tenfold.
     #[test]
     fn the_rate_is_completion_tokens_over_the_streaming_window() {
         let setup = Setup { tts: false, ..Setup::default() };
@@ -86,9 +83,7 @@ mod model_metrics_reported {
             .collect()
     }
 
-    // Catches: no `VADMetrics` at all. The reference's `VADStream._metrics_monitor_task` reports one
-    // per `1 / update_interval` inferences (a second of audio), as `parity.py update_endpointing`
-    // shows.
+    // Catches: no `VADMetrics` at all; one is due per `1 / update_interval` inferences.
     #[test]
     fn a_second_of_vad_inferences_is_one_record() {
         let setup = Setup { vad: true, ..Setup::default() };
@@ -111,8 +106,7 @@ mod model_metrics_reported {
         assert_eq!(vad, vec![32]);
     }
 
-    // Catches: AMD's classification left unmetered. The reference's classifier calls the session's
-    // LLM, whose `LLMStream` reports an `LLMMetrics` like any reply's (`parity.py amd_machine`).
+    // Catches: AMD's classification left unmetered; its LLM call reports `LLMMetrics` like a reply.
     #[test]
     fn an_amd_classification_is_metered() {
         let setup = Setup {
@@ -158,9 +152,8 @@ mod node_text_not_metered {
     use lk_agents_fuzz::input::{Input, Millis};
     use lk_agents_voice::events::SessionEvent;
 
-    // Catches: the core metering the node's output rather than the model call: a node returning a
-    // `str` got an `LLMMetrics` the reference never emits (it meters the `LLMStream`, and such a node
-    // opens none).
+    // Catches: the core metering the node's output rather than the model call, so a node returning a
+    // `str` got an `LLMMetrics`.
     #[test]
     fn a_node_answering_text_itself_is_not_metered() {
         let nodes = NodeSetup {
@@ -196,7 +189,7 @@ mod node_text_not_metered {
     }
 
     // A synthesized segment must feed and flush the same transcription node whose completion it
-    // awaits. Opening a fresh node for each playback phase stranded the original drain (seed 354).
+    // awaits; a fresh node per playback phase stranded the original drain (seed 354).
     #[test]
     fn a_synthesized_segment_settles_its_transcription_node_before_close() {
         use lk_agents_fuzz::drive::{Case, Outcome, finish};
@@ -293,8 +286,7 @@ mod preemptive_reply_latency {
 
     // Catches: a preemptive reply started before its user turn was committed, so it never learned
     // the turn's metrics and its message had no `e2e_latency`; with preemptive generation on (the
-    // default) no reply on a call had one. The reference writes the turn's metrics onto the
-    // preemptive generation's user message when it adopts it.
+    // default) no reply on a call had one.
     #[test]
     fn an_adopted_preemptive_reply_has_its_latency() {
         let setup = Setup {
@@ -357,9 +349,7 @@ mod turn_metrics_name_models {
     use lk_agents_voice::events::SessionEvent;
 
     // Catches: the user and assistant messages committed without `stt_metadata`, `llm_metadata` and
-    // `tts_metadata`. The reference stamps each with the provider's `metrics_metadata`
-    // (`_init_metrics_from_end_of_turn`, `_pipeline_reply_task_impl`); on a real call every chat item,
-    // and the turn metrics exported from them, had no model name.
+    // `tts_metadata`, so every chat item and the turn metrics exported from them had no model name.
     #[test]
     fn a_spoken_turn_and_its_reply_name_their_models() {
         let setup = Setup { vad: true, stt: true, turn: TurnMode::Stt, ..Setup::default() };
@@ -420,10 +410,8 @@ mod user_turn_metrics {
     use lk_agents_voice::events::SessionEvent;
 
     // Catches: the user message built with an empty `MetricsReport`, though the turn's anchors and
-    // delays were computed for the EOU metrics. The reference's `_init_metrics_from_end_of_turn`
-    // stamps them on the message, and the reply's `e2e_latency` is measured from its
-    // `stopped_speaking_at`: with them gone no reply on a call had an end-to-end latency, and the
-    // session report showed no turn timings.
+    // delays were computed for the EOU metrics, so no reply had an `e2e_latency` and the session
+    // report showed no turn timings.
     #[test]
     fn a_spoken_turn_carries_its_metrics() {
         let setup = Setup { vad: true, stt: true, turn: TurnMode::Stt, ..Setup::default() };

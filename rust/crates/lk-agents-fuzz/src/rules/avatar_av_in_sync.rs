@@ -1,16 +1,12 @@
-//! The avatar's audio and video stay in sync: each frame period the generator lip-syncs to its
-//! audio goes out with that audio, and they play within one synchronizer queue plus one frame of
-//! each other.
-//!
-//! The bound is `rtc.AVSynchronizer`'s. Audio plays as soon as it is pushed behind at most
-//! `queue_size_ms` already queued; video waits in a queue of `fps * queue_size_ms` frames and
-//! shows on the frame clock, so up to one queue plus one frame period late. A runner that drops,
-//! holds back or reorders one side drifts past it within a few frames.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
     record::{AvatarFrameLabel, AvatarStep, Observed, Recording},
 };
+
+// The bound is `rtc.AVSynchronizer`'s: audio plays once pushed behind at most `queue_size_ms`,
+// video waits in a queue of `fps * queue_size_ms` frames on the frame clock, so up to one queue
+// plus one frame period late.
 
 pub struct AvatarAvInSync;
 

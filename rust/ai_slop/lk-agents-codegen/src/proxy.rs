@@ -1,18 +1,9 @@
-//! The declared proxies (`#[host(proxy)]` traits whose methods declare their calls), written into
-//! their subject's adapter module: `<Trait>Proxy` implements the ABI trait over a host object.
-//!
-//! Each call dispatches through the runtime's HostInvoker (`lk_agents_runtime::host`), entered
-//! by `crate::host` in a copy of a captured host context: the one its `#[host(context)]`
-//! parameter carries (refused when it lacks a scope the call `requires`), else the one the proxy
-//! captured when it was taken from the host, else (taken with no running loop) the one of the
-//! operation driving the call. Generation refuses a host call emitted any other way. Every parameter crosses by its declared kind and the result is read by its
-//! declared kind; a host failure becomes the declared error. `read_once` values are read when the
-//! proxy is taken; a `bind` method returns a copy whose awaited calls pass the bound value last,
-//! and whose `read_once` member of that value's `Option` reads it back, handed out through its
-//! declared native wrapper when it names one.
-
 use crate::adapter::from_object;
 use crate::decl::{HostForm, Param, Proxy, ProxyCall, ProxyMethod, Record, Target, Ty};
+
+// A call's context: its `#[host(context)]` parameter (refused when it lacks a required scope),
+// else the one the proxy captured, else the driving operation's. Generation refuses a host call
+// that bypasses HostInvoker.
 
 pub fn proxy(p: &Proxy) -> Result<String, String> {
     let name = format!("{}Proxy", p.rust_name);
@@ -288,13 +279,11 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             .collect::<String>();
         format!("Some({{ let kwargs = ::pyo3::types::PyDict::new(py); {set}kwargs }})")
     };
-    // Every call dispatches through the runtime's HostInvoker, entered by `crate::host`.
     let host_call = format!(
         "::std::boxed::Box::new(move |py| {{\n                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; {}] = [{}];\n{bound}                Ok(({callable}, ::pyo3::types::PyTuple::new(py, args)?, {kwargs}))\n            }})",
         args.len(),
         args.join(", "),
     );
-    // What the call runs in: its own context parameter, else the context the proxy captured.
     let scope = match m.context {
         Some(i) if m.params[i].by_ref => m.params[i].name.clone(),
         Some(i) => format!("&{}", m.params[i].name),
@@ -306,8 +295,8 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         .map(|s| format!("::lk_agents_abi::invoke::Scope::{s}"))
         .collect::<Vec<_>>()
         .join(", ");
-    // A host stream it returns is pulled in a copy of the context its call ran in, with the
-    // call's span current, so a generator's body records under the same span as the call.
+    // A returned host stream pulls under the call's context and span, so a generator's body
+    // records under the call's span.
     let stream_context = |err: &str| {
         format!(
             "                let Some(context) = context.as_ref() else {{\n                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err(\"{label}: the call captured no host context\")));\n                }};\n                let context = &out.returned_context(py, context).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n"

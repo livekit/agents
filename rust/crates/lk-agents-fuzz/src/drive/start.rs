@@ -1,8 +1,3 @@
-//! Building the session through the host API, and the product objects a case's words become.
-//!
-//! [`Run::start`] assembles a real `VoiceSession` over the fake room and the fakes, as a host does,
-//! and installs the probe before `start()`. Below it are the constructors the start and the calls
-//! share: an agent, a history, a patch, built from the case's terms.
 use super::*;
 use lk_agents_abi::voice::console::ConsolePort;
 use lk_agents_abi::voice::session::{VoiceSession as _, VoiceSessionArgs};
@@ -10,9 +5,8 @@ use lk_agents_abi::voice::session::{VoiceSession as _, VoiceSessionArgs};
 impl Run {
     /// Build a session through the host's API, over the fake room and the fakes, and start it.
     ///
-    /// The probe is installed before `start()`, so the first step the driver decides is stamped
-    /// from the same counter as everything else the case observes. That one counter is what makes
-    /// the recording a happens-before order rather than a pile of clocks.
+    /// The probe is installed before `start()`, so the driver's first step is stamped from the
+    /// same counter as everything else, keeping the recording a happens-before order.
     pub async fn start(setup: &Setup, schedule: u64, policy: Policy) -> Run {
         let time = Timebase::of_clock(Arc::new(lk_agents_runtime::net::clock::SimClock::new()));
         let stamps = Stamps::new(time.clone());
@@ -275,9 +269,8 @@ impl Run {
         let (runtime_tx, runtime_rx) = oneshot::channel();
         {
             let (steps, step_stamps, livelock) = (steps.clone(), stamps.clone(), livelock.clone());
-            // A step that journals forever never returns to the run's loop, which counts its own
-            // iterations: the observer is the only one that sees it, and stops it the only way
-            // anything can stop a step, by unwinding out of it.
+            // A step that journals forever never returns to the run's loop: only the observer sees
+            // it, and stops it by unwinding out of it.
             let mut instant = (tokio::time::Instant::now(), 0u32);
             let step = Box::new(move |step: &Step| {
                 let now = tokio::time::Instant::now();
@@ -398,9 +391,8 @@ impl Run {
         run.record.set_transcript(TranscriptSetup {
             synchronized: setup.sync_transcription,
             aligned: setup.agent_aligned_transcript.or(setup.aligned_transcript) == Some(true),
-            // A streaming voice stamping its words. A voice that does not stream is adapted sentence
-            // by sentence, the adapter stamping: not held to it (seed 31412, a three-line text,
-            // came back with no stamp).
+            // A chunked voice's adapter stamps sentence by sentence and is not held to it (seed
+            // 31412 came back with no stamp).
             stamps: setup.tts_alignment == TtsAlignment::Words && !setup.chunked_tts,
             adapted: setup.chunked_tts,
             late_reports: setup.avatar,

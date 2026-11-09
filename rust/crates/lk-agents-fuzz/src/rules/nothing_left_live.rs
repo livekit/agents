@@ -1,12 +1,3 @@
-//! Nothing a turn opened is still open once the driver has exited.
-//!
-//! The soak's oracle, held over every run rather than eight long ones. A floor hold, a tool body,
-//! a hook call, a filler, a segment awaiting its playout report, an utterance, a prediction, a
-//! realtime turn or a stream a `say` opened belongs to a turn; a driver that exits with one still
-//! open has left it with nobody to release, answer or stop it. What lives as long as the session
-//! (the legs, the outputs, the socket) is rightly still there, and speeches, answers and provider
-//! streams have contracts of their own (`speech_settles`, `api_calls_return`,
-//! `provider_streams_closed`).
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
@@ -14,6 +5,10 @@ use crate::{
     input::{AgentText, Input, Millis, Ref},
     record::{Kind, Phase, Recording},
 };
+
+// Session-lifetime resources (legs, outputs, socket) rightly remain; speeches, answers and
+// provider streams are judged by `speech_settles`, `api_calls_return` and
+// `provider_streams_closed`.
 
 pub struct NothingLeftLive;
 

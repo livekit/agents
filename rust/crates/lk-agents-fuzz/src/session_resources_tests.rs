@@ -1,5 +1,3 @@
-//! Lifecycle regression tests.
-
 mod live_options {
     //! A live option change reaches the next reply.
     use lk_agents_fuzz::drive::{Case, Setup, run};
@@ -67,9 +65,8 @@ mod path_needs_both_switches {
     use lk_agents_voice::agent_session::IoKind;
 
     // Catches: the harness reading a leg's two independent switches as one, so enabling the
-    // transcription leg after detaching its output read as the path reopening. A speech spoken with
-    // no text output then looked like it lost its words (`text_conservation`, and the same misread of
-    // the audio input behind most `forwarded_while_enabled` findings).
+    // transcription leg after detaching its output read as the path reopening (false
+    // `text_conservation` and `forwarded_while_enabled` findings).
     #[test]
     fn enabling_a_detached_leg_does_not_reopen_it() {
         let inputs = [
@@ -144,8 +141,8 @@ mod pause_outlives_its_speech {
     // Catches: the paused reply interrupted and a queued say taking the floor; the pause was released
     // only for a paused speech still current when it ended, and the floor leaves a speech at its last
     // step, so the speaker stayed paused and every later speech waited until the close
-    // (`speech_settles`, survey seed 4919). The host's fake output only records a pause, so only the
-    // room's own leg showed it.
+    // (`speech_settles`, survey seed 4919). The host's fake output only records a pause, so this
+    // runs on the room's own leg.
     #[test]
     fn the_queued_speech_plays_after_a_paused_one_is_interrupted() {
         let mut inputs = vec![
@@ -338,10 +335,9 @@ mod replaced_inputs {
     use lk_agents_fuzz::input::{Input, Millis, Models};
     use lk_agents_fuzz::record::Kind;
 
-    // Catches: the fakes ignoring `end_input` and the harness keeping a replaced microphone open. A
-    // real stream ends once its input does; the fake never did, so the conversation kept speaking
-    // into the first recogniser, whose audio had moved to the new one, and every final it held back
-    // for want of audio left the caller unheard (soak seeds 0, 1, 3 and 6 heard 0 to 4 turns of 40).
+    // Catches: the fakes ignoring `end_input` and the harness keeping a replaced microphone open, so
+    // the conversation kept speaking into the first recogniser and the caller went unheard (soak
+    // seeds 0, 1, 3 and 6).
     #[test]
     fn replaced_inputs_close() {
         let inputs = [
@@ -443,8 +439,8 @@ mod replaced_output_detached {
 }
 
 mod replaced_output_mid_step {
-    //! A replaced output still gets what the reference sends it: the rest of a step already running,
-    //! and a synchroniser's closing flushes; the swap itself interrupts nothing.
+    //! A replaced output still gets the rest of a step already running and a synchroniser's closing
+    //! flushes; the swap itself interrupts nothing.
     use lk_agents_abi::voice::events::AgentState;
     use lk_agents_fuzz::check::check_all;
     use lk_agents_fuzz::drive::{Case, Run, Setup, run, simulate};
@@ -485,9 +481,8 @@ mod replaced_output_mid_step {
         clean(setup, inputs);
     }
 
-    // Catches: a sink swap force-interrupting the speech playing into the old output. Replacement takes
-    // effect at a segment boundary and does not interrupt speech (voice-session.md "Output handover
-    // policy"): the playing segment finishes on its original output.
+    // Catches: a sink swap force-interrupting the speech playing into the old output. Replacement
+    // takes effect at a segment boundary: the playing segment finishes on its original output.
     #[test]
     fn a_swap_lets_the_playing_speech_finish() {
         let inputs = [
@@ -667,9 +662,8 @@ mod sink_reset_reports_cut {
     use lk_agents_voice::events::SessionEvent;
 
     // Catches: the fake output resetting its count without reporting the segment it owed, which no
-    // sink does (the reference's `DataStreamAudioOutput` reports it finished, then resets). The
-    // wrapper above it kept counting the segment, so the speech waiting on it, or the next one,
-    // waited until the close (`speech_settles`, survey seed 755; `synthesized_speech_is_played`).
+    // real sink does, so the speech waiting on it waited until the close (`speech_settles`, survey
+    // seed 755).
     #[test]
     fn a_reset_releases_the_speech_waiting_on_playout() {
         let inputs = [
@@ -750,7 +744,7 @@ mod swap_ends_the_servers_turn {
     // Catches: the finish ended a person the realtime server had heard start, but read only a dropped
     // connection as taking that turn along; after a fatal error the fallback swapped in a fresh
     // session that never heard them, refused the stop every round, and the run hit its budget
-    // (`session_settles`, survey seeds 21875, 26055, 31823; 05ed23451).
+    // (`session_settles`, survey seeds 21875, 26055, 31823).
     #[test]
     fn a_swap_after_the_server_heard_the_person_lets_the_run_go_quiet() {
         let setup = Setup {

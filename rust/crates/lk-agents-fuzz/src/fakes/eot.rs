@@ -1,6 +1,3 @@
-//! End-of-turn prediction: the third observer of the person's audio, and the only one the driver
-//! *asks* rather than listens to. Each `predict` is a request the case answers, like a tool call;
-//! left unanswered it times out, which is a real provider outcome the driver must handle.
 use std::{sync::Arc, time::Duration};
 
 use lk_agents_abi::tokenize::language::{ThresholdOptions, ThresholdOverride, TurnDetectorModel};
@@ -13,18 +10,16 @@ use crate::{
     record::{Detail, Kind},
 };
 
-/// The detector's own unlikely threshold, every language, as a user's `unlikely_threshold=0.5`:
-/// between the sampled confidences 45 and 55 and above the mini model's stock table (en 0.36), so
-/// a turn judged by any table but the detector's is visible.
+/// The detector's unlikely threshold for every language. It sits between the sampled confidences
+/// 45 and 55 and above the mini model's stock table (en 0.36), so a turn judged by any other
+/// table is visible.
 pub const THRESHOLD: f64 = 0.5;
 
-/// What an unanswered prediction waits before failing when the driver set no timeout of its own.
-/// Virtual time, so it costs nothing to reach.
+/// Timeout of an unanswered prediction when the driver sets none (virtual time).
 const UNBOUNDED_WAIT: Duration = Duration::from_secs(30);
 
 pub struct FakeEot {
     registry: Arc<Registry>,
-    /// The leg itself, so the frames pushed into it are recorded against a nameable resource.
     slot: Slot,
 }
 
@@ -65,7 +60,6 @@ impl EotDetector for FakeEot {
             self.registry.mark_closed(slot);
             match waited {
                 Ok(Ok(answer)) => answer,
-                // The case never answered, or the driver moved on: a prediction that did not arrive.
                 _ => Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(
                     "end-of-turn prediction did not arrive",
                 ))),

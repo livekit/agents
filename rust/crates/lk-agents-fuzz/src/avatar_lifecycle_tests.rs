@@ -1,5 +1,3 @@
-//! An agent's `AvatarSession` lifecycle over FakeRoom: the join wait and its timeout, the join and
-//! playback-latency metrics, the close on the job's shutdown and the participant's removal.
 use lk_agents_abi::errors::{HostError, RefRegistry};
 use lk_agents_abi::metrics::base::AvatarMetrics;
 use lk_agents_abi::voice::avatar::{AvatarHost, AvatarJoinError, AvatarLifecycle as _};

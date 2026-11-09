@@ -103,3 +103,7 @@ impl AgentRun {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "coordinated_tests.rs"]
+mod tests;

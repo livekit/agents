@@ -469,8 +469,6 @@ impl Server {
         Some(event)
     }
 
-    // --- what the server does of its own accord ------------------------------------------------
-
     /// True when a real server could do this now.
     pub fn exo(&mut self, now: Ts, what: Exo) -> bool {
         match what {
@@ -493,8 +491,6 @@ impl Server {
             }
         }
     }
-
-    // --- the pieces ----------------------------------------------------------------------------
 
     /// The buffer becomes a user item: `committed`, the item, and its transcription later.
     fn commit(&mut self, now: Ts, item: String) {

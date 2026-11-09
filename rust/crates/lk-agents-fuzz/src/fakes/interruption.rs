@@ -1,6 +1,3 @@
-//! The adaptive interruption detector: the fourth observer of the person, and the one that
-//! judges overlaps. The driver tells it when the agent speaks and when an overlap starts; it
-//! answers with a verdict the case chose. Its audio, like every other leg's, is recorded.
 use std::sync::{Arc, Mutex, OnceLock};
 
 use lk_agents_abi::{
@@ -25,8 +22,7 @@ pub struct FakeInterruption {
     slot: OnceLock<Slot>,
     verdicts: mpsc::UnboundedSender<LegEvent<OverlapVerdict>>,
     pending: tokio::sync::Mutex<mpsc::UnboundedReceiver<LegEvent<OverlapVerdict>>>,
-    /// The overlap the driver most recently opened. A verdict names it, so the judge can tell an
-    /// answer to the current overlap from a stale one.
+    /// The overlap a verdict names, so a stale answer is distinguishable from a current one.
     overlap: Mutex<Option<ReqId>>,
 }
 
@@ -40,8 +36,7 @@ impl FakeInterruption {
             pending: tokio::sync::Mutex::new(receiver),
             overlap: Mutex::new(None),
         });
-        // Lives for the session, so the case addresses it by one `nth` and every verdict goes
-        // down its one channel; the port itself is the control.
+        // One port per session: the case addresses it by a single `nth`.
         let slot = registry.register(
             Kind::Interruption,
             Detail::None,
@@ -56,7 +51,7 @@ impl FakeInterruption {
     }
 }
 
-/// The detector as a host hands it to `VoiceSession(interruption_detector=)`: opened at `start()`.
+/// `VoiceSession(interruption_detector=)`, opened at `start()`.
 pub struct FakeInterruptionSource(pub Arc<Registry>);
 
 impl InterruptionSource for FakeInterruptionSource {

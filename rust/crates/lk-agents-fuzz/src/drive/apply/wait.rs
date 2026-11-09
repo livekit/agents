@@ -1,14 +1,8 @@
-//! Awaiting answers and advancing the session scheduler to completion.
-
 use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 
 use super::super::executor::Polled;
 use super::*;
 use crate::record::{Task, TaskEnd};
-
-// ==============================================================================================
-// Waiting
-// ==============================================================================================
 
 /// How long one awaited thing gets, in virtual milliseconds. Not a production SLA: every fake
 /// answers the moment it is released, so anything still pending after this is stuck.

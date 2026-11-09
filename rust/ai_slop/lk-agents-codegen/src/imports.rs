@@ -1,8 +1,5 @@
-//! Merging one generated module's top-level imports into another's header, as ruff's isort
-//! (`combine-as-imports`, order by type) would write them: a module imported by both keeps one
-//! statement with the union of its names; any other statement joins its section in order.
-
-/// Merge generated import headers, retaining the scope of typing-only imports.
+/// Merge generated import headers as ruff's isort (`combine-as-imports`, order by type) would,
+/// retaining the scope of typing-only imports.
 pub fn merge(header: &str, extra: &str) -> Result<String, String> {
     let Some((extra_runtime, added)) = extra.split_once("if TYPE_CHECKING:\n") else {
         return merge_scope(header, extra);

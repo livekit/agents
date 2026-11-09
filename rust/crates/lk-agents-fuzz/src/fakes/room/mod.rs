@@ -1,5 +1,3 @@
-//! The room the DST runs the runtime's room executors in: the ABI room capabilities in memory,
-//! recording what was done and playing out on the run's clock, as the LiveKit SDK behaves.
 use lk_agents_abi::voice::rtc::RoomEventSink;
 
 use lk_agents_abi::errors::ProviderError;
@@ -200,7 +198,6 @@ impl FakeRoom {
             FakeRemoteParticipant::new(identity, sid, kind, self.bus.clone(), self.host.clone());
         self.state.lock().unwrap().participants.push(p.clone());
         self.bus.emit(RoomEvent::ParticipantConnected { participant: p.clone() });
-        // a fake participant is active as it joins
         self.bus.emit(RoomEvent::ParticipantActive { participant: p.clone() });
         p
     }
@@ -855,7 +852,7 @@ pub struct RecordedTextStream {
     pub opts: StreamTextOptions,
     pub chunks: Vec<String>,
     pub closed: bool,
-    /// The header written at close: `lk.transcription_final`, `lk.expression`, …
+    /// The header written at close: `lk.transcription_final`, `lk.expression`, ...
     pub close_attributes: BTreeMap<String, String>,
 }
 

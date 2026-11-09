@@ -21,9 +21,6 @@ pub use tts::{
     FallbackTts, Token, TokenLog, TtsBackend, TtsReq, merge_capabilities as merge_tts_capabilities,
 };
 
-#[cfg(test)]
-mod adapter_tests;
-
 /// `DEFAULT_FALLBACK_API_CONNECT_OPTIONS` (`llm:17`, `stt:27`, `tts:31`): the adapter is the retry
 /// loop. `retry_interval` drops to the dataclass default (2.0), as in the reference.
 pub fn caller_default() -> ApiConnectOptions {

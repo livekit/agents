@@ -1,31 +1,3 @@
-//! One connection's realtime server, at the level the session reports it: what a LiveKit
-//! Inference realtime model (the OpenAI Realtime server behind it) does with the session's
-//! requests, as the real one was measured doing it (`calibration.json`), and what it refuses.
-//! This model reproduces the outcomes that reach the driver.
-//!
-//! Each happening's delay after its cause is drawn from those measurements (`fakes::delay`, which
-//! also strays to deadlines and stalls on random runs), so a reply is created about
-//! 100 ms after it is asked, its message 300 ms later, its audio in 400 ms deltas faster than real
-//! time, and its end while the person is still hearing most of it -- which is what makes a server
-//! onset over a finished generation the common barge-in, not a rare one. The server answers
-//! requests in the order they came.
-//!
-//! It holds the conversation: items by id and kind, a reply's message placed when it is added
-//! (after any item that arrived first), deleted and truncated on the session's word (a truncation
-//! cuts what the message holds); a reply reads what the conversation holds when it is asked. One
-//! reply at a time: a second request over an active one is refused, a cancel frees the
-//! conversation at once (a reply asked in the same breath is created before the cancelled one's
-//! end), and a cancelled reply keeps streaming what it had generated before the cancel landed.
-//! Under server VAD an onset needs audio the session sent; it cancels the reply in progress, and
-//! the end of the turn commits the buffer and, with no reply active, opens one. The transcription
-//! completes asynchronously, before or after the reply's events.
-//!
-//! What the real server refuses it refuses, with the real code, and reports each refusal as a
-//! [`Breach`] with whether the driver already knew better when it asked (it had been told the
-//! state that makes the request invalid) or merely raced an event on its way. So are two answers
-//! the server gives from the wrong state: a reply asked in the same breath before the tool output
-//! it should read, and a cancel landing on the server's reply to the person's turn before
-//! anything prompted it.
 use std::{collections::BTreeMap, time::Duration};
 
 use fastrand::Rng;
@@ -39,8 +11,17 @@ use crate::{
     record::{Breach, Tag},
 };
 
-/// The error codes the server refuses a request with, as the real one does,
-/// and the words a speech that failed on one carries: such a speech failed on the server's word.
+// One connection's OpenAI Realtime server behind LiveKit Inference, with measured delays: a reply
+// is created ~100 ms after it is asked, its audio arrives in 400 ms deltas faster than real time,
+// and it ends while the person still hears most of it, which makes a server onset over a finished
+// generation the common barge-in. Requests are answered in order, one reply at a time; a
+// cancelled reply keeps streaming what it generated before the cancel landed.
+// Each refusal, with the real code, is a [`Breach`] saying whether the driver already knew better
+// or merely raced an event, as are two wrong-state answers: a reply asked in the same breath
+// before the tool output it should read, and a cancel of the server's own turn reply that nothing
+// prompted.
+
+/// The error codes the server refuses a request with, which a speech that failed on one carries.
 pub const REFUSALS: &[&str] = &[
     "conversation_already_has_active_response",
     "Conversation already has an active response",
@@ -54,8 +35,8 @@ pub const REFUSALS: &[&str] = &[
 /// The nominal length of a full audio delta, as the real server sends nearly all of them.
 pub const DELTA_MS: u64 = 400;
 
-/// What the server is told to do of its own accord: the person's speech as its VAD hears it, and
-/// the ways a real server goes wrong. Mirrors `RtEvent`, which is how a case says it.
+/// What the server does of its own accord: its VAD hearing the person, and the ways a real server
+/// goes wrong. Mirrors the case's `RtEvent`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Exo {
     SpeechStarted,
@@ -197,9 +178,8 @@ pub struct Response {
     pub text: String,
     /// The tool call it makes, `(item, name)`.
     pub function_call: Option<(String, String)>,
-    /// What the session was told: created, the message, its end.
-    /// Created on the server, and when the driver was told so (a reply cancelled before it was
-    /// created never is).
+    /// Created on the server, and when the driver was told so (a reply cancelled before creation
+    /// never is).
     created: bool,
     told_created: Option<Ts>,
     announced: bool,
@@ -209,7 +189,6 @@ pub struct Response {
     finished: Option<Ts>,
     /// The session was told the person started speaking while it generated: a reason to cancel.
     prompted: bool,
-    /// Delivered audio, ms.
     audio_ms: u64,
     /// The run's generation, registered when the session was told it was created.
     pub source: Option<u32>,
@@ -225,7 +204,6 @@ pub use crate::calibration::realtime::{
     SPEECH_STOPPED_LAG_SERVER,
 };
 
-/// One connection's server: its conversation, input buffer and responses.
 pub struct Server {
     rng: Rng,
     timing: Timing,
@@ -243,7 +221,6 @@ pub struct Server {
     items: Vec<Item>,
     next_item: u32,
     pub responses: Vec<Response>,
-    /// The response the server is generating: at most one.
     active: Option<u32>,
     /// The user item the VAD opened with `speech_started`.
     speaking: Option<String>,
@@ -320,8 +297,7 @@ impl Server {
         self.pending.keys().next().map(|(t, _)| *t)
     }
 
-    /// The next happening due at `now`, as the session is told it: what telling it means to the
-    /// server's own bookkeeping is done here.
+    /// The next happening due at `now`, with the server's bookkeeping for telling it.
     pub fn pop(&mut self, now: Ts) -> Option<Happening> {
         self.breathe(now);
         let (&key, _) = self.pending.iter().next().filter(|((t, _), _)| *t <= now)?;
@@ -397,7 +373,6 @@ impl Server {
             .collect()
     }
 
-    /// The ids of what it holds, in order.
     pub fn ids(&self) -> Vec<String> {
         self.items.iter().map(|i| i.id.clone()).collect()
     }
@@ -409,8 +384,6 @@ impl Server {
     pub fn holds_call(&self, call_id: &str) -> bool {
         self.items.iter().any(|i| i.function_call && i.call_id.as_deref() == Some(call_id))
     }
-
-    // --- what the session asks ------------------------------------------------------------
 
     /// An item the session creates after `previous` (`None`: at the end).
     pub fn create(&mut self, now: Ts, item: &ChatItem, previous: Option<String>) {
@@ -611,8 +584,6 @@ impl Server {
         }
     }
 
-    // --- what the server does of its own accord ------------------------------------------
-
     /// True when a real server could do this now.
     pub fn exo(&mut self, now: Ts, what: Exo) -> bool {
         match what {
@@ -703,8 +674,6 @@ impl Server {
             }
         }
     }
-
-    // --- the pieces ------------------------------------------------------------------------
 
     /// The buffer becomes a user item, and its transcription follows.
     fn commit(&mut self, now: Ts, item: String) {
@@ -906,8 +875,8 @@ impl Server {
         }
     }
 
-    /// How long the server takes to answer a request: drawn from what was measured, and never before its
-    /// answer to an earlier one -- it takes the session's requests in order.
+    /// A measured answer lag, never before the answer to an earlier request: requests are taken in
+    /// order.
     fn answer_lag(&mut self, now: Ts) -> u64 {
         self.answer_after(now, &ERROR_AFTER_CLIENT)
     }

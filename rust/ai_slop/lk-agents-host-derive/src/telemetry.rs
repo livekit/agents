@@ -1,13 +1,7 @@
-//! The telemetry declarations (`lk_agents_abi::telemetry::decl`): `#[derive(Attrs)]`,
-//! `#[derive(SpanValue)]` and the role attributes `#[span]`, `#[event]`, `#[metric]` and
-//! `#[record]`. The attribute language is read by `lk_agents_bindgen::telemetry`, which the
-//! generator shares.
-
 use lk_agents_bindgen::telemetry::{self as t, Field, InstrumentKind, Role, SpanKind, Unmeasured};
 use proc_macro2::TokenStream;
 use quote::quote;
 
-/// The declarations' module, as every crate names it.
 fn decl() -> TokenStream {
     quote!(::lk_agents_abi::telemetry::decl)
 }

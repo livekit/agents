@@ -1,11 +1,6 @@
-//! `livekit.agents._core` -- the PyO3 binding.
-//!
-//! Pure glue: every class, function and exception `_core` holds is declared in `lk-agents-abi`
-//! (`#[host(..)]`) and generated here by `lk-agents-codegen`; `#[pymodule]` registers them.
-//!
-//! Importing this module must start nothing (§1.13): everything that starts lives behind
-//! `init(role)`, and every runtime entry calls `check_pid()` first, so a fork-inherited core raises
-//! instead of deadlocking.
+//! `livekit.agents._core`, the PyO3 binding generated from `lk-agents-abi` declarations.
+//! Importing it starts nothing: everything that starts lives behind `init(role)`, and every runtime
+//! entry calls `check_pid()` first, so a fork-inherited core raises instead of deadlocking.
 
 use pyo3::prelude::*;
 
@@ -22,8 +17,7 @@ pub use lk_agents_runtime::{inference, process, worker};
 
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Nothing here may spawn, connect, or allocate a runtime. The core's `log` lines reach the
-    // Python logger of the same name from import on (installing a logger starts nothing).
+    // Nothing here may spawn, connect, or allocate a runtime.
     register(m)
 }
 
@@ -37,8 +31,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod surface_tests {
     use super::*;
 
-    /// Every name `dir(livekit.agents._core)` returns, minus dunders. The file's `about` says how
-    /// to regenerate it.
+    /// Every name `dir(livekit.agents._core)` returns, minus dunders.
     fn frozen_names() -> Vec<String> {
         let file: serde_json::Value =
             serde_json::from_str(include_str!("generated/core_names.json")).unwrap();

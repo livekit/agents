@@ -1,8 +1,11 @@
-//! Voice execution contracts: core effects, correlated failures, queue priority and accepted views.
-
 use super::*;
+use crate::telemetry::tests::{ENTRYPOINT, Records, labels};
 use crate::voice::session::{DriverBuilder, Journal, SessionExecutor, SessionHandle, Timebase};
+use lk_agents_abi::metrics::base::AgentMetrics;
+use lk_agents_abi::telemetry::decl::Value;
+use lk_agents_abi::telemetry::record::{JobKey, SpanContext};
 use lk_agents_voice::agent_session::*;
+use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::trace::Step;
 use parking_lot::Mutex;
 use std::future::Future as _;
@@ -870,5 +873,182 @@ async fn successful_vad_results_close_when_refused_or_unread() {
         assert_eq!(runtime.shared.resources.live().len(), 1, "VAD sink remained registered");
         runtime.close().await;
         assert!(runtime.shared.resources.live().is_empty());
+    }
+}
+
+const JOB: &str = "AJ_1";
+
+pub(crate) async fn traced(name: &str) -> (VoiceRuntime, Arc<Records>) {
+    let records = Arc::new(Records::default());
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let time = Timebase::from_virtual(clock.clone());
+    let config = lk_agents_voice::agent_session::machine::activity::DriverConfig::new(
+        Default::default(),
+        lk_agents_voice::agent_session::options::SessionLegs::none(),
+    );
+    let spawner = Arc::new(lk_agents_net::task::TokioSpawner::current());
+    let mut builder = DriverBuilder::new("agent".into(), time, spawner, config);
+    builder.session_id = Some(name.into());
+    builder.tracer = lk_agents_telemetry::Tracer::new(records.clone(), clock, 5);
+    builder.trace =
+        builder.tracer.root().continuing(Some(ENTRYPOINT)).with_job(Some(JobKey(JOB.into())));
+    let mut executor = Executor::new(builder.time.clone(), builder.spawner.clone());
+    let (cores, _handle) = builder.start(&mut executor).await.unwrap();
+    (executor.into_runtime(cores), records)
+}
+
+// Catches: the session's spans leaving the job's trace or its Cloud scope.
+#[tokio::test(start_paused = true)]
+async fn the_session_joins_the_jobs_trace() {
+    let (runtime, _records) = traced("joined").await;
+    let start = runtime.driver.session_start_span().expect("session_start is open");
+    assert_eq!(start.trace_id, 3, "the session continues the entrypoint's trace");
+    assert_eq!(runtime.shared.trace.job(), Some(&JobKey(JOB.into())));
+}
+
+// Catches: a session dropped without its close (a cut-off loop) losing its spans, the
+// `agent_session` the dashboard hangs every row on among them.
+#[tokio::test(start_paused = true)]
+async fn a_session_dropped_without_its_close_still_exports_its_spans() {
+    let (runtime, records) = traced("abandoned").await;
+    assert!(records.spans().iter().all(|s| s.name != "agent_session"), "still open");
+    drop(runtime);
+    let spans = records.spans();
+    let names: Vec<_> = spans.iter().map(|s| s.name.as_ref()).collect();
+    assert!(names.contains(&"agent_session"), "{names:?}");
+    assert!(names.contains(&"session_start"), "{names:?}");
+}
+
+// Catches: usage counted under GenAI labels instead of the model labels, a zero counted, or
+// the connection time missing its reuse label.
+#[tokio::test(start_paused = true)]
+async fn usage_counters_carry_the_model_labels() {
+    let (mut runtime, records) = traced("usage").await;
+    let mut tts = lk_agents_abi::metrics::testkit::tts();
+    tts.metadata = lk_agents_abi::metrics::testkit::meta("cartesia", "sonic");
+    tts.characters_count = 12;
+    tts.audio_duration = 0.0;
+    tts.acquire_time = Some(0.2);
+    tts.connection_reused = true;
+    runtime.deliver_session_event(SessionEvent::MetricsCollected {
+        metrics: Box::new(AgentMetrics::Tts(tts)),
+        speech: None,
+        counted: false,
+    });
+    let characters = records.measurements("lk.agents.usage.tts_characters");
+    assert_eq!(characters.len(), 1);
+    assert_eq!(
+        labels(&characters[0]),
+        [
+            ("model_provider".to_owned(), Value::String("cartesia".into())),
+            ("model_name".to_owned(), Value::String("sonic".into())),
+        ]
+    );
+    assert_eq!(characters[0].job, Some(JobKey(JOB.into())));
+    assert!(records.measurements("lk.agents.usage.tts_audio_duration").is_empty());
+    let acquire = records.measurements("lk.agents.connection.acquire_time");
+    assert!(
+        labels(&acquire[0]).contains(&("connection_reused".into(), Value::String("true".into())))
+    );
+}
+
+/// A job whose room connection records the span it ran under.
+#[derive(Default)]
+struct Job(Mutex<Vec<Option<SpanContext>>>);
+
+impl lk_agents_abi::worker::job::SessionJob for Job {
+    fn connect(
+        &self,
+        cx: &lk_agents_abi::telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), lk_agents_abi::errors::HostError>> {
+        self.0.lock().push(cx.span());
+        Box::pin(async { Ok(()) })
+    }
+    fn enable_recording(&self) -> Result<bool, lk_agents_abi::errors::HostError> {
+        unreachable!("only the session owner joins its job")
+    }
+    fn claim_primary(
+        &self,
+        _: lk_agents_abi::HostRef,
+    ) -> Result<bool, lk_agents_abi::errors::HostError> {
+        unreachable!("only the session owner joins its job")
+    }
+    fn recording_dir(&self) -> Result<String, lk_agents_abi::errors::HostError> {
+        unreachable!("only the session owner joins its job")
+    }
+    fn init_recording(
+        &self,
+        _: std::collections::BTreeMap<String, bool>,
+    ) -> Result<(), lk_agents_abi::errors::HostError> {
+        unreachable!("only the session owner joins its job")
+    }
+    fn run(&self) -> Arc<dyn lk_agents_abi::worker::ipc_host::JobExecution> {
+        unreachable!("only the session owner joins its job")
+    }
+    fn server_env(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, String>, lk_agents_abi::errors::HostError> {
+        unreachable!("only an avatar calls the job's RoomService")
+    }
+}
+
+// Catches: the room connecting before `session_start` exists, so `room_connect` parents to the
+// job instead of the session's start; the driver drawing spans other than those `start()`
+// reserved, which the startup work already ran under; or a session span recording its own session
+// id instead of the call's conversation (its thread).
+#[tokio::test(start_paused = true)]
+async fn startup_runs_under_the_spans_start_reserved() {
+    use lk_agents_abi::telemetry::spans::session::{AgentSession, SessionStart};
+    let records = Arc::new(Records::default());
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let tracer = lk_agents_telemetry::Tracer::new(records.clone(), clock.clone(), 5);
+    let env = lk_agents_net::env::ProcessEnv {
+        tracer: tracer.clone(),
+        ..lk_agents_net::env::ProcessEnv::current_runtime()
+    };
+    let time = Timebase::from_virtual(clock);
+    let room = crate::room_io::FixedRoom { rtc: None, time, pool: None };
+    let job = Arc::new(Job::default());
+    let args = lk_agents_abi::voice::session::VoiceSessionArgs {
+        agent: "agent".into(),
+        job: Some(job.clone()),
+        ..Default::default()
+    };
+    let session = <VoiceSession as lk_agents_abi::voice::session::VoiceSession>::new(
+        &env,
+        Arc::new(room),
+        args,
+        None,
+    )
+    .unwrap();
+    let trace = (tracer.root().continuing(Some(ENTRYPOINT)))
+        .with_job(Some(JobKey(JOB.into())))
+        .with_conversation(Some("AT_thread"));
+    let reserved = crate::telemetry::reserve::<AgentSession>(&trace);
+    let start = crate::telemetry::reserve::<SessionStart>(
+        &trace.clone().under::<AgentSession>(reserved.context),
+    );
+    let opening = lk_agents_voice::telemetry::Opening { session: reserved, start, activity: None };
+    session.trace_under(trace, Default::default(), opening);
+    use lk_agents_abi::voice::session::VoiceSession as _;
+    session.start().unwrap().await.unwrap();
+    assert_eq!(*job.0.lock(), [Some(start.context)], "the room connects under session_start");
+    session.close_session(lk_agents_abi::voice::events::CloseReason::UserInitiated, false).await;
+    let spans = records.spans();
+    let named = |name: &str| spans.iter().find(|s| s.name == name).expect(name).clone();
+    let root = named("agent_session");
+    assert_eq!((root.context, root.parent), (reserved.context, Some(ENTRYPOINT.span_id)));
+    assert_eq!(root.start_unix_nanos, reserved.start, "the session starts at start()");
+    let started = named("session_start");
+    assert_eq!((started.context, started.parent), (start.context, Some(root.context.span_id)));
+    let key = lk_agents_abi::telemetry::semconv::otel::GEN_AI_CONVERSATION_ID;
+    for span in &spans {
+        let conversation = span.attributes.iter().find(|(k, _)| k == key).map(|(_, v)| v);
+        assert_eq!(
+            conversation,
+            Some(&lk_agents_abi::telemetry::record::Value::String("AT_thread".into())),
+            "{}",
+            span.name
+        );
     }
 }

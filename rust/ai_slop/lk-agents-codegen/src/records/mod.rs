@@ -1,18 +1,10 @@
-//! The `#[host(record)]` records: their pyo3 conversions, free functions in the registration shell
-//! (`lk-agents-py/src/generated/records.rs`, a module per model module: the ABI crate holds no host
-//! code), and their models, written into `_generated/<module>.py` as keyword-only, slotted
-//! dataclasses, frozen (hashable) only when the Rust type derives `Hash`.
-//!
-//! A record crosses as an instance of its model, never a dict: a struct is one class; a
-//! data-variant enum one class per variant, the class being the tag, plus a union alias; a
-//! unit-only enum a `Literal` of its strings. Reading an object of another class, or `None` where
-//! the field is not optional, fails naming `Record.field`; a declared default is the model's, so it
-//! applies to an omitted keyword only.
-
 mod boundary;
 mod emit;
 mod models;
 mod tagged;
+#[cfg(test)]
+#[path = "records_tests.rs"]
+mod tests;
 pub(crate) use emit::{as_result, emit};
 pub use models::{merge, python};
 
@@ -22,6 +14,9 @@ use crate::decl::{
     Declarations, Field, HostForm, Record, RecordBody, RecordDecl, Ty, Variant, VariantShape,
 };
 use crate::python::Out;
+
+// A record crosses as an instance of its model, never a dict. A declared default is the model's,
+// so it applies to an omitted keyword only.
 
 const PACKAGE: &str = "livekit.agents._generated";
 

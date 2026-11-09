@@ -1,9 +1,3 @@
-//! A speech that asked for synthesis and finished normally had audio played.
-//!
-//! A liveness rule, and deliberately cause-agnostic. It does not say what went wrong, only that
-//! the thing the speech existed to do never happened. A dropped chunk, a stalled pipe, a race that
-//! loses the playback report, an output swapped at the wrong instant -- every one of those shows
-//! up here as the same absence, which is what lets this catch failures nobody wrote a rule for.
 use lk_agents_voice::{
     agent_session::machine::activity::scheduling::SpeechId,
     events::{ErrorSource, SessionEvent},
@@ -15,6 +9,8 @@ use crate::{
     check::{Check, Contract, Rule},
     record::{Handle, Recording},
 };
+
+// Deliberately cause-agnostic, so it catches failures nobody wrote a rule for.
 
 pub struct SynthesizedSpeechIsPlayed;
 

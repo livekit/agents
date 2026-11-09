@@ -1,14 +1,12 @@
-//! Approval (tools.md "Approval"): a `needs_approval` tool's call runs only as the repeat of a
-//! read-back the person answered, with the same validated arguments, and each answer is consumed
-//! once. History records [`APPROVAL_KEY`] (`asked`, `granted`) and the [`APPROVAL_IDENTITY_KEY`]
-//! of the validated arguments. Only calls answered by the current invocation can grant a repeat.
-
 use std::collections::BTreeSet;
 
 use lk_agents_abi::agent::ArgumentIdentity;
 use lk_agents_abi::llm::tool_executor::Approval;
 use lk_agents_abi::{ChatItem, FunctionCall};
 use serde_json::Value;
+
+// A `needs_approval` call runs only as the repeat of a read-back the person answered in this
+// invocation, with the same validated arguments; each answer is consumed once.
 
 /// `FunctionCall.extra` key: `asked` when the call returned the read-back, `granted` when it ran
 /// on the person's answer.

@@ -1,12 +1,3 @@
-//! Every SDK object the room hands the session is bound to the host's event loop: created on it,
-//! and taken in the context of the call that produced it.
-//!
-//! A real SDK media stream binds the loop it is created on, and a stream writer runs its calls in
-//! the context it was taken in. The core reaches the host on its own thread, where no loop runs:
-//! a declared `call` runs there, and so does the read of an awaited call's reply. An object bound
-//! there fails in a real room ("no running event loop"), or reads and writes on no loop at all. The
-//! room fake binds each object where the adapters bind it (`fakes::room::HostLoop`) and records
-//! where; a binding on the core's thread is the finding.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
@@ -15,6 +6,10 @@ use crate::{
     input::{AgentText, Count, Input, Millis, Ref, RoomIn, SayInput},
     record::Recording,
 };
+
+// A real SDK stream binds the loop it is created on, and a writer runs in the context it was taken
+// in. The core's own thread runs no loop, so an object bound there fails in a real room ("no
+// running event loop"). The room fake records where each object was bound.
 
 pub struct HostObjectsBindOnTheirLoop;
 

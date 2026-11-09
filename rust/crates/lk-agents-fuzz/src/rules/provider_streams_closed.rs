@@ -1,4 +1,3 @@
-//! After the session closed, every provider stream it opened was explicitly closed.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule},

@@ -933,10 +933,6 @@ enum Outcome {
     Fatal(lk_agents_abi::llm::realtime::RealtimeModelError),
 }
 
-// =============================================================================================
-// The `lk-agents-abi` seam
-// =============================================================================================
-
 impl lk_agents_abi::Realtime for OpenAIRealtime {
     fn label(&self) -> String {
         OpenAIRealtime::label(self)

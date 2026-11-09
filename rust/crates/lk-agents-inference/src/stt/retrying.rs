@@ -1,6 +1,3 @@
-//! Retrying recognition entry points. The plugin runs one attempt; the request owns reopening
-//! and preserves a single output stream across attempts.
-
 use crate::telemetry;
 use std::ops::ControlFlow;
 use std::sync::Arc;

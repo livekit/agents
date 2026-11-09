@@ -1,7 +1,3 @@
-//! A retained attachment may finish its old segment; retirement ends that permission.
-//!
-//! Physical attachment callbacks are the boundary facts. A host object can have overlapping
-//! attachments, so one detach cannot retire a different attachment of that same object.
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
 
 use crate::{
@@ -10,6 +6,9 @@ use crate::{
     input::Input,
     record::{Handle, Recording, Sink, Tag},
 };
+
+// A host object can have overlapping attachments, so one detach cannot retire another attachment
+// of the same object.
 
 pub struct OutputReplacementIsClean;
 
@@ -38,7 +37,7 @@ impl Rule for OutputReplacementIsClean {
         for output in host.outputs() {
             let Some(replaced_at) = output.replaced_at() else { continue };
             // Work under way at the replacement keeps its binding: pause and resume target it
-            // after another output is selected (voice-session.md, "Output handover policy").
+            // after another output is selected.
             let retained = |at| {
                 speeches.iter().any(|s| {
                     s.created_at().is_some_and(|c| c < replaced_at)

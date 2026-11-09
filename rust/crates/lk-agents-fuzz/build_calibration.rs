@@ -1,7 +1,8 @@
-//! Provider distributions are interpolated deciles of the measured samples.
 use std::{env, fs, path::Path};
 
 use serde_json::Value;
+
+// Provider distributions are interpolated deciles of the measured samples.
 
 fn deciles(samples: &Value) -> [u64; 11] {
     let mut samples: Vec<f64> = samples

@@ -1,6 +1,3 @@
-//! The `.pyi` of the declared classes, one per ABI subject (`_generated/_core_<subject>.pyi`),
-//! re-exported by `_core.pyi`. Written from the same IR as the adapters.
-
 use crate::decl::{
     Class, Declarations, Form, HostForm, Literal, Method, MethodKind, Proxy, ProxyCall, RecordDecl,
     Ty,
@@ -476,7 +473,7 @@ pub(crate) fn parameters(c: &Class, m: &Method, imports: &mut Imports) -> Vec<(S
         .collect()
 }
 
-/// The existing item-shape policy reads a concrete PyList; child records keep input types.
+// The item-shape check reads a concrete list; child records keep input types.
 fn strict_list_input(c: &Class, ty: &Ty, imports: &mut Imports) -> String {
     match ty {
         Ty::Optional(inner) => format!("{} | None", strict_list_input(c, inner, imports)),

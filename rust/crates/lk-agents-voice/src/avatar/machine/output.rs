@@ -1,5 +1,3 @@
-//! Avatar output admission and route retirement. Time, writers, RPC and tasks belong to runtime.
-
 use std::collections::BTreeMap;
 use std::time::Duration;
 

@@ -1,15 +1,3 @@
-//! Every task the session spawned finishes, without panicking, once the session has closed.
-//!
-//! The session's own close drains its tasks against the cleanup bound and cancels what is still
-//! running there: the drain's stragglers are named as it reports them. The run then joins every
-//! other task once the session exited. A task still pending when no other work is left anywhere
-//! is waiting on something only it, or nothing, can end: it would hold whatever it owns for the
-//! life of the process. The runner stops waiting on it and records it as stuck, naming the line
-//! that spawned it. A task that panicked died with whatever it was doing half done.
-//!
-//! One straggler is owed to the host, not the session: a tool call whose body refused its
-//! cancellation runs on until the close's bound cancels it. Each refusal excuses one late
-//! `host tool body`; `close_completes_at_its_bound` judges that the close still ended on time.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
@@ -17,6 +5,10 @@ use crate::{
     input::{AgentText, Input, Millis, Ref},
     record::{Recording, TaskEnd},
 };
+
+// A task still pending when nothing else can run waits on something that never comes and would
+// hold what it owns for the life of the process. Each tool body that refused its cancellation
+// excuses one late `host tool body`: that straggler is the host's, not the session's.
 
 pub struct EveryTaskFinishes;
 

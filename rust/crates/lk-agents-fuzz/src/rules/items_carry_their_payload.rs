@@ -1,11 +1,3 @@
-//! What the host is told about a turn is whole: the payloads, not just that something happened.
-//!
-//! An assistant message of a step cut short says it was interrupted; a pipeline reply's timed at the LLM (`llm_node_ttft`) names that model
-//! (`llm_metadata`), one timed at the voice (`tts_node_ttfb`) names the voice (`tts_metadata`); a
-//! user turn transcribed while a recognition stream was open names the STT (`stt_metadata`), as
-//! 9024425d9 restored. Every item was created within the session and no later than announced.
-//! Each model's metrics record carries its label, a wall-clock timestamp within the session,
-//! durations that are not negative, and the speech id of the speech it is attributed to.
 use std::{
     collections::BTreeMap,
     time::{Duration, SystemTime},
@@ -27,6 +19,10 @@ use crate::{
     check::{Check, Contract, Rule, Subject},
     record::{Kind, Observed, Recording},
 };
+
+// A message names each model its metrics timed: `llm_node_ttft` the LLM (`llm_metadata`),
+// `tts_node_ttfb` the voice (`tts_metadata`), a user turn with an open recognition stream the STT
+// (`stt_metadata`).
 
 /// The clock's nudges (distinct stamps for one instant) stay well inside this.
 const SLACK: Duration = Duration::from_millis(1);
@@ -267,7 +263,7 @@ fn a_named_reply() -> Recording {
     recorded(false).journal(reply(false, named())).done()
 }
 
-/// The LLM timed the reply, and the item names no model: 9024425d9's loss.
+/// The LLM timed the reply, and the item names no model.
 fn a_reply_naming_no_model() -> Recording {
     recorded(false).journal(reply(false, None)).done()
 }

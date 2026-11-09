@@ -1,5 +1,6 @@
-//! The native JSON-RPC door against the shared backend contract.
-
+use super::Admission;
+use super::serve::serve;
+use super::{Door, MAX_PAYLOAD_BYTES};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,8 +17,6 @@ use lk_agents_abi::worker::http::{
     EndpointRequest, ExchangeError, ExchangeEvent, ExchangeMessage, HttpExchange, HttpScheme,
     RequestHead,
 };
-use lk_agents_runtime::a2a::door::serve::serve;
-use lk_agents_runtime::a2a::door::{Door, MAX_PAYLOAD_BYTES};
 use lk_agents_storage::testing::{Backend, Store};
 use serde_json::{Value, json};
 
@@ -724,3 +723,18 @@ lk_agents_storage::contract!(
     a_streaming_method_answers_sse_and_echoes_the_extension,
     thread_authority_is_checked_on_every_request
 );
+
+#[test]
+fn handler_and_payload_capacity_recover_when_operations_finish() {
+    let admission = Admission { max_handlers: 2, max_bytes: 16, ..Admission::default() };
+    let first = admission.try_exchange(9).unwrap();
+    assert!(admission.try_exchange(8).is_none());
+    assert!(admission.try_exchange(usize::MAX).is_none());
+    let second = admission.try_exchange(7).unwrap();
+    assert!(admission.try_exchange(0).is_none());
+    drop(first);
+    assert!(admission.try_exchange(9).is_some());
+    drop(second);
+    assert_eq!(admission.budget.lock().handlers, 0);
+    assert_eq!(admission.budget.lock().bytes, 0);
+}

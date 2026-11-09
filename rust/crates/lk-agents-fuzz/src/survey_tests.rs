@@ -1,32 +1,6 @@
-//! A campaign over many seeds, reporting what it reached and what it found.
-//!
-//! Ignored by default: this is the search, not part of `cargo test`.
+//! The search campaign over many seeds, reporting what it reached and found; ignored by default.
 //! `cargo test --release -p lk-agents-fuzz --test survey -- --ignored --nocapture`
-//!
-//! Release, because a conversation is thousands of clock advances each carrying ten frames of
-//! audio through the driver, and that path is sixteen times slower unoptimised. The numbers are
-//! identical either way.
-//!
-//! One search, `search::explore`: a person on a phone, the developer's program, and models,
-//! outputs and a room that behave and fail as real ones do, at a randomness drawn per seed from a
-//! pure conversation to a pure uniform sampler. Its three numbers -- variants reached, distinct
-//! edges, distinct findings -- are the yardstick every change to the search is measured by, at 64
-//! seeds on three windows and at 256. Everything is also broken down by decade of randomness: what
-//! each decade reaches, what only it reaches, and what it costs, so the distribution is
-//! measured rather than chosen.
-//!
-//! - `VOICE_SEEDS` (32) and `VOICE_BUDGET` (3000 inputs) size a campaign. A beat of conversation
-//!   is three inputs and a reply takes seconds of beats; at 450 most runs ended before the agent
-//!   finished speaking, and 1500 took findings from 37 to 101 for thirteen seconds (2026-10-22).
-//!   At 1500 half the runs still ended on the budget, about forty seconds into a call whose median
-//!   is five minutes; 3000 found seven findings 1500 never reached, at twice the time (2026-10-27).
-//! - `VOICE_FIRST_SEED` moves the seed window, which is how the noise floor is measured.
-//! - `VOICE_SEED=4372` runs that one seed and prints its setup, every failure in full and the
-//!   journal variants it reached. A seed is the whole of a run: nothing carries over from the
-//!   seeds before it, so every finding is reported with the one-line command that reruns it.
-//! - `VOICE_FAMILY=Decided` opens one journal family variant by variant. A finding outside the
-//!   known ones fails the survey.
-//! - `VOICE_TRACE=1` (any run) narrates every input as it is applied.
+//! Tuned by `VOICE_SEEDS`, `VOICE_BUDGET`, `VOICE_FIRST_SEED`, `VOICE_SEED`, `VOICE_FAMILY`.
 use std::collections::{BTreeMap, BTreeSet};
 
 #[allow(unused_imports)]
@@ -199,12 +173,9 @@ fn run_all(window: &Window) -> Vec<(u64, Outcome, std::time::Duration)> {
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(&seed) = seeds.get(i) else { break mine };
-                        // A fresh setup per seed, from the seed alone: three journal families
-                        // exist only under legs the default setup never builds. Fresh every
-                        // time: mutating the campaign's most novel cases instead was measured on
-                        // 2026-09-23 and lost a fifth of the edges and a quarter of the findings
-                        // at every scale; the generator, not a mutator, is where novelty comes
-                        // from.
+                        // A fresh setup per seed: some journal families exist only under legs
+                        // the default setup never builds, and mutating novel cases instead
+                        // measured fewer edges and findings.
                         let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
                         let began = std::time::Instant::now();
                         let outcome = match window.policy {

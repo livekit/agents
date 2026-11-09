@@ -1,5 +1,3 @@
-//! `perform_llm_inference`: the words half of a step, streamed as segments, with its retries.
-
 use super::ReplyExecution;
 use super::tools::ToolStep;
 use crate::telemetry;
@@ -46,8 +44,7 @@ pub(super) async fn produce_segments(
                 send_segment(&tx, text);
             }
         }
-        // The caller's frames are the segment, with words or without (`_tts_task` forwards
-        // `audio` whatever the text).
+        // The caller's frames are the segment, with words or without.
         ReplySource::Audio { text, .. } => send_segment(&tx, text),
         ReplySource::TextStream => forward_text_stream(handle, &tx).await,
     }
@@ -111,15 +108,14 @@ async fn chat_request(
             .as_ref()
             .map_or_else(|| ctx.resources.toolset.host.clone(), |t| t.host.clone()),
         tools_host_extra: ctx.resources.tools_host_extra.clone(),
-        // `plan_request` already applied the on-enter exclusion: the list *this step* may call.
+        // Already filtered by `plan_request` to the tools this step may call.
         tools: ctx.plan.request.tools.clone(),
         conn_options: shared.conn.llm.unwrap_or_default(),
         ..ChatRequest::default()
     }
 }
 
-/// `perform_llm_inference`: one step's words and tool calls from the model, retried per the
-/// request's budget while nothing has been produced.
+/// One step's words and tool calls, retried per the request's budget while nothing was produced.
 struct LlmInference<'a> {
     shared: &'a Arc<SessionShared>,
     handle: &'a Arc<SpeechHandle>,
@@ -131,12 +127,9 @@ struct LlmInference<'a> {
 impl LlmInference<'_> {
     async fn run(mut self) -> Result<LlmGenerationData, DriverError> {
         let (shared, handle) = (self.shared, self.handle);
-        // Held for the step: a mid-reply handoff must not move the model under a request on the
-        // wire.
+        // Held for the step: a mid-reply handoff must not swap the model under a live request.
         let llm = self.ctx.resources.llm.clone().ok_or(DriverError::Missing("llm"))?;
         let req = chat_request(shared, handle, self.ctx).await;
-        // The step's `llm_node`, one `llm_request` in it, its attempts each an `llm_request_run`.
-        // A registered `llm_node` runs under the node span and makes its own request, if any.
         let node = LlmNodeTrace::start(shared, self.ctx.span, &req);
         let mut trace = telemetry::LlmTrace::start(node.cx(shared), llm.as_ref(), &req);
         let attempt = trace.attempt();
@@ -226,7 +219,7 @@ impl LlmInference<'_> {
     ) -> Result<(), ProviderError> {
         self.request_finished(ended.as_ref().err());
         report_llm_metrics(data, ended.is_err(), self.shared, self.handle);
-        // Always, on every path: dropping does not cancel a host stream, and `close` consumes it.
+        // Dropping does not cancel a host stream; `close` must run on every path.
         let deadline = self.shared.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         let _ = stream.close(deadline).await;
         ended

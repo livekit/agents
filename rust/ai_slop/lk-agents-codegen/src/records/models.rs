@@ -1,13 +1,9 @@
-//! The records' Python models: `_generated/<module>.py` per declared module, merged with the
-//! authored presentation of the same name.
-
 use super::*;
 use crate::class_stub::{Imports, docstring, py_literal};
 use crate::decl::Route;
 
-/// A authored presentation with the declared records of the same module: their imports merged
-/// into the presentation header and their models right after it, so authored base classes naming a record
-/// find it defined; a record reusing an authored name is refused.
+/// An authored presentation merged with the declared records of its module: imports into its
+/// header, models right after it. A record reusing an authored name is refused.
 pub fn merge(presentation: &str, models: &str) -> Result<String, String> {
     const FUTURE: &str = "from __future__ import annotations\n\n";
     let body = models.split_once(FUTURE).map_or(models, |(_, body)| body);
@@ -242,12 +238,10 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
     Ok(out)
 }
 
-/// `X.__module__ = "<path>"` for each class of a record with a public module, after every class:
-/// `repr`, `pickle` and the docs report the import path users write, not `_generated.*`. An alias
-/// (`Literal`, union) has no settable `__module__`.
-///
-/// Evaluate the annotation expressions before changing module identity, without recursively
-/// resolving forward references inside callback signatures to modules still being initialized.
+/// `X.__module__ = "<path>"` for each class of a record with a public module, so `repr` and
+/// `pickle` report the public path. An alias (`Literal`, union) has no settable `__module__`.
+// Annotations are evaluated before the module identity changes, without resolving forward
+// references into modules still being initialized.
 fn public_paths(records: &[&RecordDecl], runtime: &mut Imports) -> String {
     let mut lines = Vec::new();
     for r in records {
@@ -975,9 +969,7 @@ fn model(
     }
 }
 
-/// A record's computed views, answered by `_core`; a pydantic model's are host hooks
-/// (`_bindings`), properties or methods, run on the host's own object without crossing. Their
-/// annotations are the type checker's, except a toggle's class, which it tests at run time.
+/// A record's computed views: answered by `_core`, or a pydantic model's host hooks.
 fn properties(r: &RecordDecl, runtime: &mut Imports, typing: &mut Imports) -> String {
     let mut s = String::new();
     for member in &r.members {

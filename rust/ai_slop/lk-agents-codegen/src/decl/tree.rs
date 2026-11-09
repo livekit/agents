@@ -1,9 +1,7 @@
-//! The ABI crate as rustc lays it out: modules found from `src/lib.rs` through `mod` items, each
-//! with its items and its `use` names, and path resolution over them. This is how declarations are
-//! discovered (no source list) and how a type a declaration names is found (never by its last
-//! segment).
-
 use std::path::Path;
+
+// Declarations are discovered through `mod` items from `src/lib.rs` (no source list), and a named
+// type is found by path resolution, never by its last segment.
 
 /// One module of the crate. `path` is from the crate root: `["llm", "llm"]`.
 pub struct Module {
@@ -354,8 +352,7 @@ impl Crate {
         ))
     }
 
-    /// Public re-exports of external items or crates, used to reach implementations through
-    /// the runtime facade without adding dependencies to a language backend.
+    /// Public re-exports of external items or crates.
     pub fn external_exports(&self) -> Result<Vec<(Vec<String>, String)>, String> {
         let mut exports = Vec::new();
         let mut queue = std::collections::VecDeque::from([0]);
@@ -382,8 +379,7 @@ impl Crate {
         Ok(exports)
     }
 
-    /// External wildcard imports. A workspace reader can expand these from the referenced
-    /// module's public names before resolving implementations across crate boundaries.
+    /// External wildcard imports, as `(module, path, public)`.
     pub fn external_globs(&self) -> Result<Vec<(usize, Vec<String>, bool)>, String> {
         let mut globs = Vec::new();
         for (m, module) in self.modules.iter().enumerate() {
@@ -433,8 +429,6 @@ impl Crate {
         true
     }
 
-    /// Resolve a data constant without evaluating Rust code. Only literals, arrays, record
-    /// literals, references, option constructors and aliases to those constants are accepted.
     /// `Enum::Variant` naming a variant of a crate enum: the enum's name and the variant's.
     pub fn enum_variant(&self, module: usize, path: &syn::Path) -> Option<(String, String)> {
         let mut prefix = path.clone();

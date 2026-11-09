@@ -1,5 +1,3 @@
-//! Input regression tests.
-
 mod duplex_late_transcript {
     //! A duplex model's words that arrive after the sound they describe still enter the conversation.
     use lk_agents_abi::{ChatItem, Role};
@@ -61,8 +59,7 @@ mod eot_asks_again_after_resumed_speech {
     use lk_agents_voice::trace::Step::Emitted;
 
     // Catches: speech resuming in the segment cancelled only a pending prediction and kept an answered
-    // one, so no pause after it asked again and the turn was judged by a mid-sentence answer. The
-    // reference drops `_turn_detector_prediction_fut` whatever its state (`_on_vad_event`).
+    // one, so no pause after it asked again and the turn was judged by a mid-sentence answer.
     #[test]
     fn the_pause_after_resumed_speech_asks_again() {
         let setup = Setup { vad: true, stt: true, eot: true, ..Setup::default() };
@@ -140,10 +137,7 @@ mod eot_judged_by_detector_thresholds {
     use lk_agents_voice::{events::SessionEvent, trace::Step::Emitted};
 
     // Catches: the session judging every prediction against `ThresholdOptions::new(V1Mini, None,
-    // None)` (en 0.36) whatever the detector held: `unlikely_threshold=0.001` was ignored, and a
-    // question the mini model scored 0.34 waited the full `max_delay` on 7-10% of turns where the
-    // reference replied at once (agents-bench, 2026-10-27, "Is there a vegetarian option on the
-    // menu?").
+    // None)` (en 0.36) whatever the detector held, so a configured `unlikely_threshold` was ignored.
     #[test]
     fn a_prediction_is_judged_by_the_detectors_threshold() {
         let setup = Setup { vad: true, stt: true, eot: true, ..Setup::default() };
@@ -206,10 +200,8 @@ mod late_mic_released {
     use lk_agents_fuzz::drive::{Case, Policy, Setup, run};
     use lk_agents_fuzz::input::{Input, Millis};
 
-    // Catches: a microphone attached in the step before the close left in the resource table. The
-    // core registers it and queues its source switch; the loop stopped before the runtime took the
-    // switch, and the runtime's finish applied it to the forwarder alone, so the id it held was never
-    // released (survey seed 2303, every_resource_released).
+    // Catches: a microphone attached in the step before the close left in the resource table
+    // (survey seed 2303, every_resource_released).
     #[test]
     fn a_mic_attached_at_the_close_is_released() {
         let inputs = vec![
@@ -241,10 +233,8 @@ mod manual_turn_closed_empty {
     use lk_agents_fuzz::input::{Input, Millis, TurnMode};
     use lk_agents_voice::events::SessionEvent;
 
-    // Catches: the close's trailing commit skipped when the turn held no words. The reference's close
-    // always runs `_commit_user_turn`, and in manual turn detection `_run_eou_detection` proceeds with
-    // an empty transcript, so the history ends with the (empty) user turn, as in `parity.py
-    // update_turn_detection`.
+    // Catches: the close's trailing commit skipped when the turn held no words; in manual turn
+    // detection the history must end with the (empty) user turn.
     #[test]
     fn a_close_commits_an_empty_manual_turn() {
         let setup = Setup { stt: true, turn: TurnMode::Manual, ..Setup::default() };
@@ -283,9 +273,8 @@ mod mic_gate_reopens {
     use lk_agents_fuzz::input::{AgentText, Count, Input, Millis, Ref, SayInput};
 
     // Catches: the gate reopening through the owner's queue, behind frames already queued, so frames
-    // pushed as it reopened were silenced (`forwarded_while_enabled`, campaign seed 27243; a45633b37).
-    // The gate's effects settle in their batch, before another frame is forwarded. The race is the
-    // scheduler's, so 32 schedules of each queue policy run.
+    // pushed as it reopened were silenced (`forwarded_while_enabled`, campaign seed 27243). The race
+    // is the scheduler's, so 32 schedules of each queue policy run.
     #[test]
     fn the_microphone_is_heard_once_the_gate_reopens() {
         let mic = |chunks| Input::MicFrames { mic: Ref::new(0), chunks: Count(chunks) };
@@ -388,8 +377,7 @@ mod stt_end_resumes_pause {
 
     // Catches: only a VAD's end of speech armed the false-interruption timer, so with an STT and no
     // VAD an interim that paused the agent left it paused for good (and the session's close waited on
-    // it). The reference's STT `END_OF_SPEECH` is `on_end_of_speech(None)` in "stt" mode, which starts
-    // `_start_false_interruption_timer`; found by `scripts/parity.py false_interruption`.
+    // it).
     #[test]
     fn an_stt_end_of_speech_resumes_the_paused_speech() {
         let setup = Setup {
@@ -450,11 +438,9 @@ mod text_before_attach {
     use lk_agents_fuzz::record::Sink;
 
     // Catches: an authorized synthesised segment forwarding its words straight to the transcription
-    // output it captured, ahead of the activation that attaches it. With the voice down until the
-    // output is replaced, the words written as the synthesis gives up reach an output that was never
-    // attached (`output_replacement_is_clean`, survey seed 1560 and 17 more in the 32768 window). A
-    // retrying voice no longer holds the activation back, so the segment here waits on its
-    // authorization instead: it activates after the replacement, and all its words go to it.
+    // output it captured, ahead of the activation that attaches it, so words reached an output that
+    // was never attached (`output_replacement_is_clean`, survey seed 1560). Here the segment waits
+    // on its authorization, activates after the replacement, and all its words go to it.
     #[test]
     fn a_failed_voice_writes_no_words_to_an_unattached_replaced_output() {
         let text = |t: &str| AgentText(t.into());
@@ -600,8 +586,7 @@ mod unset_detection_stt_only {
     }
 
     // Catches: the unset mode resolved to `stt`, so an STT-only session moved the user state on the
-    // STT's start and end of speech, which the reference's VAD-based path (`_turn_detection_mode =
-    // None`) never reads; found by `scripts/parity.py user_turn_default_detection`.
+    // STT's start and end of speech.
     #[test]
     fn an_stt_only_turn_ends_on_its_final() {
         let setup = Setup { stt: true, ..Setup::default() };
@@ -609,9 +594,7 @@ mod unset_detection_stt_only {
     }
 
     // Catches: a realtime turn pushed the STT's words to the server as an item, beside the audio it
-    // had heard, and kept them as the user item. The reference ignores the STT transcription for a
-    // realtime model and answers from the committed audio; found by
-    // `scripts/parity.py realtime_stt_default_detection`.
+    // had heard, and kept them as the user item; a realtime model answers from the committed audio.
     #[test]
     fn a_realtime_turn_keeps_no_stt_words() {
         let realtime = Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() });

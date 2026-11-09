@@ -1,11 +1,3 @@
-//! Event-loop stalls and job profiles (docs/internals/telemetry.md "Event-loop stalls", "Job
-//! profiles"). Each watched asyncio loop's timer beats its [`LoopWatch`]; one detector thread per
-//! process notices a beat 100 ms old, reads the loop thread's Python stack with py-spy over the
-//! process's own memory (never the GIL) and records the stall once: when the loop beats again,
-//! when its watch closes, or at 5 s while it is still stuck. Every 100 ms the same thread samples
-//! the watched jobs' Python threads into each job's profile. Beats and checks take no lock; a
-//! job's profile is locked once per sample; one process sample per tick serves both.
-
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -16,6 +8,9 @@ use std::time::{Duration, Instant, SystemTime};
 use lk_agents_runtime::telemetry;
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
+
+// Stacks are read with py-spy over the process's own memory, never under the GIL. Beats and
+// checks take no lock; a job's profile is locked once per sample.
 
 /// How often the loop beats, and the detector checks.
 const TICK: Duration = Duration::from_millis(20);
@@ -413,8 +408,7 @@ pub(crate) struct ThreadStack {
 }
 
 /// A thread waiting in Python's own idle calls: the loop's selector, a `threading` wait, a queue
-/// `get`, a thread pool's idle worker. py-spy's own test misses them in-process (the OS reports the thread running, and its
-/// fallback matches bare names where Python 3.11+ gives `KqueueSelector.select`).
+/// `get`, a thread pool's idle worker. py-spy's own idle test misses them in-process.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn idle_frame(frame: &py_spy::Frame) -> bool {
     let function = frame.name.rsplit('.').next().unwrap_or(&frame.name);

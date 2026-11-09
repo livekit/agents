@@ -1,13 +1,3 @@
-//! A provider failure the case injected is accounted for: retried, surfaced, or closed over.
-//!
-//! The fake fails only when the case tells it to, so every accepted failure is a known input. The
-//! driver may answer it in more than one legitimate way -- arm a retry for that leg, fail the
-//! speech and say so on the handle, report it as the session's `error` event naming the speech
-//! (all the reference does when the step's tools still run: `_on_error`), or begin closing once
-//! its error tolerance is spent -- but it may not swallow it. A speech interrupted in the turn
-//! that would read the failure abandons the request, and the failure with it. The host's own close, which ends every run, is not the driver closing over
-//! anything. This is the ownership half of provider failure; whether the retry count
-//! and tolerance are right is a separate contract that needs the configured values.
 use lk_agents_voice::{
     events::{ErrorSource, SessionEvent},
     trace::{GenerationStep, ProviderKind, Step},
@@ -19,6 +9,11 @@ use crate::{
     input::{Input, Ref},
     record::{Handle, Observed, Recording},
 };
+
+// The fake fails only when told, so every failure is a known input. Reporting it as the session's
+// `error` event is all the reference does while the step's tools still run (`_on_error`). A speech
+// interrupted in the turn that would read the failure abandons it. The host's own close does not
+// count as closing over a failure.
 
 pub struct ProviderFailureIsAccounted;
 

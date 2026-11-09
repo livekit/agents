@@ -1,20 +1,5 @@
-//! The shared agent execution core (docs/internals/rust-core.md "Agent execution"): the decisions
-//! direct `Agent.run()`, TextSession and VoiceSession share, as synchronous functions and state
-//! machines over supplied data. No I/O, executor, clock or host object.
-//!
-//! - [`agent`]: the shared agent definition every invocation reads.
-//! - [`assertions`]: the run event assertions `result.expect` walks.
-//! - [`agent_run`]: `AgentRun`, one invocation's model/tool/output machine, and the LLM request
-//!   planning it and VoiceSession share.
-//! - [`request`]: the retry machine: connection limits, retry and cleanup.
-//! - [`tool_outcome`]: the outcome table, what a tool's classified outcome records and asks for.
-//! - [`tool_calls`]: one step's tool calls, from arguments to recorded outcomes.
-//! - [`approval`]: the approval gate's identity, marks and read-back.
-//! - [`text_session`]: request-scoped backend frames and child continuation.
-//! - [`a2a`]: the A2A text door's task decisions, records and delegation client decisions.
-//! - [`metrics`]: the provider metric folds and their log fields.
-//! - [`telemetry`]: telemetry redaction and metric admission.
-//! - [`usage`]: usage accounting and its snapshots.
+//! The agent execution decisions that direct runs, TextSession and VoiceSession share, as
+//! synchronous state machines over supplied data. No I/O, executor, clock or host object.
 
 pub mod a2a;
 pub mod agent;

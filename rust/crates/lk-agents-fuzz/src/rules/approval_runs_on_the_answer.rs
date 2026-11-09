@@ -1,12 +1,3 @@
-//! A tool declared with `needs_approval=True` runs exactly when the model repeats, with the same
-//! arguments, the call whose read-back the person has answered, in the reply to that answer, and
-//! only once per answer. Any other call of it asks its read-back: an answer the person moved on
-//! from (spoke again) grants nothing, and neither does an answer that came after the repeat's step
-//! began calling tools (the step's model request had not read it). The calls carry the marks (`lk.approval`: `asked`,
-//! `granted`) the next call reads.
-//!
-//! Read off what the host was told: each call as announced, each output as last announced before
-//! the next call. The runs' approval tool is `fakes::tools::APPROVAL_TOOL`.
 use std::collections::BTreeMap;
 
 use lk_agents_abi::{
@@ -25,6 +16,11 @@ use crate::{
     fakes::tools::APPROVAL_TOOL,
     record::Recording,
 };
+
+// A `needs_approval` tool runs once per answer, when the model repeats the answered call with the
+// same arguments in the reply to that answer. An answer the person moved on from grants nothing,
+// nor does one that came after the repeat's step began calling tools (its request had not read
+// it). Judged on what the host was told: calls as announced, outputs as last announced.
 
 pub struct ApprovalRunsOnTheAnswer;
 

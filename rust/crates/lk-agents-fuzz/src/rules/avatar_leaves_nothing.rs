@@ -1,14 +1,11 @@
-//! Closing the avatar runner leaves nothing behind: no host frame held, no pull of the generator
-//! after its media closed, the receiver closed, the synchronizer closed once, and nothing of the
-//! runner's still running.
-//!
-//! A frame is the host's (`rtc.VideoFrame`, `rtc.AudioFrame`) and lives while the runner holds its
-//! reference; one kept across an interruption or the close is a frame leaked per call.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
     record::{AvatarStep, Recording},
 };
+
+// A frame is the host's (`rtc.VideoFrame`, `rtc.AudioFrame`) and lives while the runner holds it:
+// one kept across an interruption or the close leaks a frame per call.
 
 pub struct AvatarLeavesNothing;
 

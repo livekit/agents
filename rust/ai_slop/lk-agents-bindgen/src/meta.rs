@@ -1,8 +1,7 @@
-//! The one reader of the attribute language, shared by the expansions and `lk-agents-codegen`.
-//! Nesting is a key prefix (`method.defaults.size`). Rust values are unquoted ([`Metas::expr`],
-//! `ty`, `path`, `ident`); host text is a string literal ([`Metas::text`] refuses anything else).
-
 use proc_macro2::{Span, TokenStream, TokenTree};
+
+// Nesting is a key prefix (`method.defaults.size`). Rust values are unquoted; host text is a
+// string literal.
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {

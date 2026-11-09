@@ -275,4 +275,20 @@ mod tests {
         // available 0.69 / job_load 0.01 = 69 -> capped at 3.
         assert_eq!(i.target_idle_processes(), Some(3));
     }
+
+    // Catches: skipping the 5-sample average, so one CPU spike marks a healthy worker as full.
+    #[test]
+    fn default_load_calc_averages_five_samples() {
+        let mut c = DefaultLoadCalc::new();
+        assert_eq!(c.get(), 0.0, "no CPU intervals have been averaged yet");
+        for s in [1.0, 0.0, 0.0, 0.0, 0.0] {
+            c.add_sample(s, crate::UPDATE_LOAD_INTERVAL);
+        }
+        assert!((c.get() - 0.2).abs() < 1e-6, "{}", c.get());
+        // Window slides: the spike falls out after five more samples.
+        for _ in 0..5 {
+            c.add_sample(0.0, crate::UPDATE_LOAD_INTERVAL);
+        }
+        assert_eq!(c.get(), 0.0);
+    }
 }

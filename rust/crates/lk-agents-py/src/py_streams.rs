@@ -1,5 +1,3 @@
-//! Python async iterators and native sources crossing the binding boundary.
-
 /// Interpreter interface namespaces. Generated inherent methods perform the declared
 /// imports and member access; they accept Python objects without asserting their runtime type.
 pub mod interfaces {
@@ -459,7 +457,3 @@ pub fn close_native<'py, T: Send + 'static>(
         Ok(())
     })
 }
-
-#[cfg(test)]
-#[path = "py_streams_boundary_tests.rs"]
-mod boundary_tests;

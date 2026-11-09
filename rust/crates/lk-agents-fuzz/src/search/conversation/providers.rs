@@ -1,5 +1,3 @@
-//! Model streaming and recorded speech recognition behavior.
-
 use super::*;
 
 use crate::calibration::llm::{LLM_CHARS_PER_CHUNK, LLM_CHUNK_GAP, LLM_FIRST_CHUNK};

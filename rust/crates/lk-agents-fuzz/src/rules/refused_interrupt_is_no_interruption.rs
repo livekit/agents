@@ -1,7 +1,3 @@
-//! A host `interrupt()` the session refused, because the speech disallowed interruptions by the
-//! time it landed, interrupts nothing: the speech is not cut for it, and not reported interrupted
-//! when it ends. The handle kept the request after the refusal and turned it into an interruption
-//! when the speech played out (the reference raises in `interrupt()` and nothing changes).
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_voice::trace::{InterruptCause, InterruptStep, Step};
 
@@ -10,6 +6,9 @@ use crate::{
     check::{Check, Contract, Rule, Subject},
     record::Recording,
 };
+
+// The reference raises in `interrupt()` and nothing changes; a handle that kept the refused
+// request would turn it into an interruption when the speech played out.
 
 pub struct RefusedInterruptIsNoInterruption;
 

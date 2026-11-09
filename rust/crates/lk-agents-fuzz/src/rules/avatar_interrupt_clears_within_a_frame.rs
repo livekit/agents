@@ -1,17 +1,12 @@
-//! An interruption stops the avatar within one frame: once the agent's `lk.clear_buffer` reaches
-//! the runner, no audio received before it, and no video lip-synced to that audio, is pushed out
-//! more than one frame period later.
-//!
-//! One frame is what a generator has in flight when the clear lands: the tick it already took
-//! from its buffer. Everything after it is the generator's to drop, once the runner has cleared
-//! it. What the synchronizer had already queued still plays, as in the reference, which never
-//! clears it (`rtc.AVSynchronizer.clear_queue` is not called).
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
     record::{AvatarFrameLabel, AvatarStep, Observed, Recording},
     rules::avatar_av_in_sync::started,
 };
+
+// One frame is the tick the generator already took when the clear lands. What the synchronizer
+// had queued still plays: the reference never calls `rtc.AVSynchronizer.clear_queue`.
 
 pub struct AvatarInterruptClearsWithinAFrame;
 

@@ -1,5 +1,3 @@
-//! Calls and futures crossing between Rust and the Python interpreter.
-
 /// Interpreter interface namespaces. Generated inherent methods perform the declared
 /// imports and member access; they accept Python objects without asserting their runtime type.
 pub mod interfaces {

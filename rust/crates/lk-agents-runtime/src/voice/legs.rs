@@ -1,6 +1,3 @@
-//! The session's legs: the opening STT and VAD streams, their drains, the turn detector's
-//! predictions and the tasks that forward the room's and the interruption detector's events.
-
 use super::VoiceRuntime;
 use crate::telemetry;
 use crate::voice::VoiceRuntimeEvent;
@@ -340,7 +337,7 @@ impl StreamInput<AudioFrame> for RealtimeAudioSink {
     }
 
     fn end_input(&self) {
-        // Not `aclose`: a handoff replaces the leg, not the socket (the server's mirror survives).
+        // Not `aclose`: a handoff replaces the leg, not the socket.
     }
 }
 

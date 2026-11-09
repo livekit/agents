@@ -1,5 +1,3 @@
-//! Realtime turns regression tests.
-
 mod realtime_generation_without_message {
     //! A realtime generation that ends before any message still ends its speech.
     use lk_agents_fuzz::drive::{NodeSetup, Outcome, RealtimeSetup, Run, Setup, finish, simulate};
@@ -60,11 +58,9 @@ mod realtime_onset_reply_heard {
     use lk_agents_fuzz::drive::{Case, RealtimeSetup, Setup, run};
     use lk_agents_fuzz::input::{Count, Input, Millis, Ref, RtEvent};
 
-    // Catches: c6881abb9's silence, as the person on the call met it (`speech_is_heard`). The
-    // server's onset over a reply still playing (its generation long done) paused the reply instead
-    // of interrupting it; the person's turn then interrupted the paused reply, and that interrupt's
-    // cancel reached the server after it had created its reply to the turn: the new response was
-    // cancelled before a word of it played, and the agent said nothing.
+    // Catches (`speech_is_heard`): the server's onset over a reply still playing paused it instead
+    // of interrupting; the later interrupt's cancel then hit the server's new reply to the turn,
+    // and the agent said nothing.
     #[test]
     fn the_reply_to_a_turn_over_a_playing_reply_is_heard() {
         let setup = Setup {
@@ -103,7 +99,7 @@ mod realtime_outputs_before_next_reply {
     // already let a waiting reply go: a background tool's deferred reply, held while another
     // speech's tools ran, was asked for (`response.create`) before that speech's tool output reached
     // the server, and read the call without its result (`realtime_reply_reads_tool_output`, campaign
-    // seed 1978). The outputs now go with the commit, ahead of everything it releases.
+    // seed 1978).
     #[test]
     fn the_output_goes_with_the_commit() {
         let setup = Setup {
@@ -162,7 +158,7 @@ mod realtime_reply_answered_closing {
     // Catches: a turn committed while the session was closing asked the server for a reply, and the
     // answer was discarded (nothing plays it) without telling the server to stop: still generating,
     // it refused the next reply asked meanwhile (`conversation_already_has_active_response`,
-    // `realtime_server_accepts_requests`, survey seed 8349). The discarded answer is now cancelled.
+    // `realtime_server_accepts_requests`, survey seed 8349).
     #[test]
     fn a_reply_answered_while_closing_frees_the_server() {
         let setup = Setup {
@@ -255,8 +251,7 @@ mod realtime_reply_asked_when_authorized {
 
     // Catches: the request going to the server at once and the speech created only when the server
     // answered, so `speech_created` came after the model call and a reply queued behind a playing one
-    // made the server generate over it. The reference schedules the handle at `generate_reply()` and
-    // its `_realtime_reply_task` calls `rt_session.generate_reply()` once the speech is authorized.
+    // made the server generate over it.
     #[test]
     fn a_queued_realtime_reply_asks_the_server_once_authorized() {
         let setup = Setup {
@@ -313,7 +308,7 @@ mod realtime_reply_ends_after_its_playout {
 
     // Catches: the reply held running until the session closed when the server's `response.done`
     // came after the speaker reported its last message played: a binding that carried no message
-    // never flushed its transcription node, and its drain never ended (5574d1ccc, bc0b5de0c).
+    // never flushed its transcription node, and its drain never ended.
     #[test]
     fn the_reply_is_done_once_the_server_ends_it() {
         let setup = Setup {
@@ -360,7 +355,7 @@ mod realtime_reply_ends_after_its_playout {
     // Catches: after the speaker reported the reply's one message played, the generation bound the
     // output again for a next message before the server said whether one would come. None came, and
     // that binding's transcript chain ended a segment the server never sent: the transcription output
-    // was flushed twice for one message (the reference binds the output once per message).
+    // was flushed twice for one message.
     #[test]
     fn the_transcript_ends_once_per_message() {
         let setup = Setup {
@@ -527,10 +522,8 @@ mod realtime_server_onset_interrupts {
     use lk_agents_voice::trace::{GateOp, InterruptCause, InterruptStep, Step};
 
     // Catches: the server's `input_speech_started` taking the guarded interruption by audio activity,
-    // which pauses a pausable sink instead of interrupting. On a real call the reply then sat paused
-    // after its generation had ended, no false-interruption timer ended the pause, and the next
-    // server turn interrupted it then, so its cancel landed on that new response and the agent went
-    // silent. The reference's `_on_input_speech_started` calls `interrupt(source="audio_activity")`.
+    // which pauses a pausable sink instead of interrupting; the paused reply's later cancel landed
+    // on the next response and the agent went silent.
     #[test]
     fn a_server_speech_onset_interrupts_the_playing_reply() {
         let setup = Setup {
@@ -581,8 +574,7 @@ mod realtime_transcript_forwarded {
 
     // Catches: the realtime step recording the server's text as the transcript but never forwarding
     // it, so a transcription output showed nothing of anything a realtime model said
-    // (`text_conservation`, survey seed 35). `_realtime_generation_task` forwards each message's text
-    // to `text_output` through `forward_generation`.
+    // (`text_conservation`, survey seed 35).
     #[test]
     fn a_realtime_reply_is_shown() {
         let setup = Setup {

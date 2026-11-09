@@ -1,14 +1,12 @@
-//! A streamed say does not complete normally while the case still holds its stream open.
-//!
-//! Nothing records which speech a `say` became, so the link is rebuilt from the two resources the
-//! call opens together: the stream the case feeds, and the call that carries the speech the
-//! driver minted for it. Both take the call's own stamp, so both name the same `Say`.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule},
     input::{AgentText, Input, Ref, SayInput},
     record::{Answer, Detail, Handle, Kind, Observed, Recording},
 };
+
+// Nothing records which speech a `say` became: its fed stream and its call share the call's stamp,
+// which links them.
 
 pub struct NoPrematureCompletion;
 

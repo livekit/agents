@@ -92,11 +92,8 @@ fn retain_format_off_collapses_newlines_through_the_buffer() {
     assert!(!out.iter().any(|t| t.contains('\n')), "newlines survived: {out:?}");
 }
 
-// -------------------------------------------------------------------------------------
 // `tests/test_tokenizer.py`, ported: `blingfire.SentenceTokenizer(min_sentence_len=20)` fed
 // `TEXT` in chunks of 1, 2, 4, ... characters, expected `EXPECTED_MIN_20_BLINGFIRE`.
-// -------------------------------------------------------------------------------------
-
 const TEXT: &str = concat!(
     "Hi! ",
     "LiveKit is a platform for live audio and video applications and services. \n\n",

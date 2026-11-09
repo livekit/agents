@@ -1,10 +1,3 @@
-//! The data plane: what moves frames, stepped beside the decision core by the
-//! runtime queue owner. Sans-IO: no lock, no task, no clock read. Its state
-//! changes only by the decision core's [`AudioInputRouterCommand`]s, and it answers with
-//! [`AudioInputRouterEffect`]s the runtime performs, reports to the decision core among them.
-//!
-//! Today it is the microphone fan-out, [`AudioInputRouter`] (`AgentActivity.push_audio`).
-
 use super::effects::{AudioInputRouterEffect, Delivery};
 use crate::agent_session::{DriverError, VoiceEvent};
 use crate::audio::{AudioChannel, DEFAULT_FRAME_MS, Feed};
@@ -13,6 +6,8 @@ use lk_agents_abi::voice::rtc::silence_frame;
 use lk_agents_abi::{AudioFrame, Ts};
 use lk_agents_media::AudioByteStream;
 use lk_agents_media::{AudioResampler, OnChange, Quality};
+
+// Routing state changes only through the decision core's `AudioInputRouterCommand`s.
 
 /// The length of each silence frame `FlushSttWithSilence` pushes, in seconds.
 const SILENCE_FLUSH_FRAME_SECONDS: f64 = 0.2;

@@ -1,5 +1,3 @@
-//! `perform_tts_inference`: one segment's duplex synthesis, retried, and its buffered playout.
-
 use super::forward::{PlaybackGate, TextLeg, capture, drain_segment_text, take_text};
 use super::llm::{give_up_observer, report_metrics, report_retries};
 use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_forwarding, unheard};
@@ -57,16 +55,11 @@ impl TtsInference<'_, '_, '_> {
     pub(super) async fn run(mut self, first: Visible) -> Result<Heard, Box<Lost>> {
         let (shared, handle, tts) = (self.shared, self.handle, self.tts);
         let mut state = SynthesisAttempt::new(first);
-        // The segment's `tts_request`, one `tts_request_run` per open. A registered `tts_node`
-        // runs under the node span and makes its own request, if any.
         let mut trace = telemetry::TtsTrace::start(self.node.cx(shared), tts.as_ref(), true);
         if let Some(lost) = state.before_open(handle.interrupted(), shared.closing.is_cancelled()) {
             return Err(Box::new(lost));
         }
-        // The driver's TTS always streams (`tts_leg` adapts one that does not). A duplex
-        // open's `Err` is a failed attempt, never a downgrade. What the words leg already
-        // closed is fed at the open, so a preemptive generation's whole segment goes in at
-        // authorization; a live segment streams the rest.
+        // A duplex open's `Err` is a failed attempt, never a downgrade to a non-streaming TTS.
         if !state.input_done {
             let opening = &mut state.opening;
             state.input_done = take_text(self.rx, opening, self.text_out, false).await;
@@ -234,13 +227,12 @@ async fn synthesize(
     done: &mut Synthesized,
 ) -> (Result<Heard, Failed>, bool) {
     let sink = streaming.sink;
-    // Post-transform, like the chunked path: the journal says what the synthesiser was given.
+    // Post-transform: the journal says what the synthesiser was given.
     let text = transformed(shared, &streaming.state.words.raw);
     let segment = streaming.tts_data.segment as u32;
     shared.trace(GenerationStep::TtsRequested { speech: handle.id(), segment, text });
     streaming.transforms =
         (!shared.tts_transforms.is_empty()).then(|| Pipeline::new(&shared.tts_transforms));
-    // The words in hand (first chunk, or a failed attempt's feed) go in first.
     let error = push_text(sink, &mut streaming.transforms, &streaming.state.words.raw).err();
     if streaming.state.opening_pushed(error) {
         end_input(sink, &mut streaming.transforms);
@@ -249,7 +241,6 @@ async fn synthesize(
     take_tts_calls(&mut streaming.tts_data, shared, handle, &mut streaming.source, true);
     let Streaming { state, source, rx, text_out, tts_data, aligned, .. } = streaming;
     let StreamingTts { words, input_done, .. } = state;
-    // Always: `end_input` before teardown (a second call is a no-op).
     sink.end_input();
     let fed = transformed(shared, &words.raw);
     let _ =
@@ -270,8 +261,7 @@ async fn synthesize(
             }
             done.text = fed;
             // Drain the rest so the next segment starts clean; it joins the item only if the audio
-            // played out whole (on the aligned path the item is the stamps). Its words still go
-            // down the transcript leg, which an interruption keeps from the output.
+            // played out whole.
             if !input_done {
                 let rest = drain_segment_text(rx, Visible::default(), text_out).await;
                 if heard.complete && aligned.is_none() {
@@ -573,8 +563,7 @@ impl SynthesisPlayout<'_> {
         let produce = segment.produce_into(&tx, &permits, &stopped, handle);
         let consume = async {
             let played = self.play(shared, handle).await;
-            // A failed output stops synthesis too; the caller still ends input and closes the
-            // source.
+            // A failed output stops synthesis too.
             stopped.cancel();
             played
         };
@@ -613,8 +602,7 @@ impl SynthesisPlayout<'_> {
         let leg = TextLeg::new(self.binding.text(), None, shared, handle.id());
         let mut buffered =
             SynthesizedSegment { rx: &mut self.rx, text: None, leg: &leg, started_at: None };
-        // Activated with no audio output: the words start the turn speaking as they show, and the
-        // synthesised audio is dropped unheard.
+        // With no audio output the synthesised audio is dropped unheard.
         if audio.is_none() {
             shared.report(GenEvent::FirstFrame { speech: handle.id() });
             buffered.started_at = Some(shared.time.wall_secs());

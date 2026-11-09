@@ -1,7 +1,5 @@
-//! Makes `#[host(..)]` legal Rust. `lk-agents-codegen` reads the attributes for every host's view;
-//! this crate strips the per-item markers rustc does not know and writes the Rust a declaration
-//! implies whatever the host (wire strings, declared defaults, `model_dump`, `send` bodies), plus
-//! the `Table` and `Vocabulary` derives.
+//! Makes `#[host(..)]` legal Rust: strips the markers rustc does not know and writes the Rust a
+//! declaration implies, plus the `Table`, `Vocabulary` and telemetry derives.
 
 use proc_macro::TokenStream;
 
@@ -78,26 +76,21 @@ fn telemetry_role(role: &str, attr: TokenStream, item: TokenStream) -> TokenStre
     }
 }
 
-/// `#[derive(Vocabulary)]` -- the search space's completeness check (lk-agents-voice/TEST_STRATEGY.md §5).
+/// `#[derive(Vocabulary)]`: a completeness check over an enum's variants.
 ///
 /// For `enum Foo { A, B(..), C { .. } }` it generates, next to the enum:
 ///
-/// * `pub mod foo_vocabulary { pub struct A; pub struct B; pub struct C; pub const NAMES: &[&str]; }`
-///   -- one zero-sized type per variant, the *key* a generator implements `Covers<K>` for;
-/// * `pub fn assert_foo_is_covered<G>() where G: Covers<A> + Covers<B> + Covers<C> {}` -- referenced
-///   from the harness, so a variant nobody has decided about is a compile error whose message
-///   (`Covers`'s `#[diagnostic::on_unimplemented]`) says which variant and what to do;
-/// * `pub fn foo_coverage<G, S>() -> Vec<(&'static str, Coverage<S>)>` -- every variant, covered or skipped, in declaration
-///   order, which is what the §6.1 coverage test counts and what a sampler reads.
+/// * `pub mod foo_vocabulary { pub struct A; pub struct B; pub struct C; pub const NAMES: &[&str]; }`:
+///   one key type per variant, which a generator implements `Covers<K>` for;
+/// * `pub fn assert_foo_is_covered<G>()` bounded by every `Covers<K>`, so an undecided variant is
+///   a compile error;
+/// * `pub fn foo_coverage<G, S>() -> Vec<(&'static str, Coverage<S>)>`: every variant, covered or
+///   skipped, in declaration order.
 ///
-/// With `#[vocabulary(kind = FooKind)]` it also generates `enum FooKind` (one unit variant per
-/// variant, `Copy + Ord + Hash + Debug`) and `Foo::kind(&self) -> FooKind`. A one-field variant
-/// marked `#[vocabulary(kind = InnerKind)]` nests: its kind is `FooKind::V(InnerKind)`, read off
-/// the field's own `kind()`. `#[vocabulary(kind_is = path::Kind)]` generates only `kind()`, onto
-/// an existing enum whose unit variants have this enum's names.
-///
-/// `Covers` and `Coverage` live in `lk_agents_abi::utils::vocabulary`. Generics on the enum are not supported:
-/// a boundary vocabulary is a plain enum.
+/// `#[vocabulary(kind = FooKind)]` also generates `enum FooKind` and `Foo::kind(&self)`; a
+/// one-field variant marked `#[vocabulary(kind = InnerKind)]` nests as `FooKind::V(InnerKind)`.
+/// `#[vocabulary(kind_is = path::Kind)]` generates only `kind()`, onto an existing enum.
+/// Generics on the enum are not supported.
 #[proc_macro_derive(Vocabulary, attributes(vocabulary))]
 pub fn vocabulary(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
@@ -245,12 +238,9 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
     expanded.into()
 }
 
-/// `#[host(..)]` on an ABI item -- **this item is exposed to every host, and says so where it is
-/// declared.** `lk-agents-codegen` reads the declaration and writes the binding into `lk-agents-py`;
-/// here the item comes back unchanged but for the per-item markers rustc does not know
-/// (`#[host(getter)]` on a method, `#[host(lenient)]` on a parameter, `#[host(kind = "..")]` on a
-/// variant), which are stripped, plus the Rust the declaration implies whatever the host. Reached
-/// as `lk_agents_abi::host`.
+/// `#[host(..)]` on an ABI item: the item is exposed to every host. `lk-agents-codegen` writes the
+/// binding; here the item comes back with its inner markers stripped, plus the Rust the
+/// declaration implies. Reached as `lk_agents_abi::host`.
 ///
 /// | head | item | what it means |
 /// |---|---|---|
@@ -271,8 +261,7 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
 /// | `exceptions` | `const _: () = ();` | ordinary host exception classes, their inheritance and constructors |
 /// | `constant` | a `pub const` | written into its file's Python module |
 ///
-/// One value rule
-/// (`lk_agents_bindgen::meta`): Rust is written unquoted (`defaults(size = -1)`), host text as a
+/// Rust is written unquoted (`defaults(size = -1)`), host text as a
 /// string (`name = "read"`, `err = "RuntimeError"`).
 ///
 /// `wire_enum` and `wire_strs` write the wire strings once, at the variants (`#[host(rename =
@@ -388,8 +377,7 @@ fn expand_host(
     quote::quote!(#parsed #extra)
 }
 
-/// Host operations may cross executor threads. Keep the declaration's async syntax,
-/// but make the returned future's contract explicit in the compiled Rust trait.
+// Host operations may cross executor threads: the returned futures must be `Send`.
 fn send_futures(trait_: &mut syn::ItemTrait) {
     for item in &mut trait_.items {
         let syn::TraitItem::Fn(method) = item else { continue };
@@ -421,9 +409,8 @@ fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
     }
 }
 
-/// `record(.., default)`: the record from its fields' declared `default`s (a `Maybe` field: not
-/// given), so the host's defaults and Rust's are one list. `Default` when every field declares
-/// one; else `new(..)`, taking the fields that declare none, in order.
+/// `record(.., default)`: `Default` when every field declares a default, else `new(..)` taking
+/// the fields that declare none, so the host's defaults and Rust's are one list.
 fn declared_default(st: &syn::ItemStruct) -> syn::Result<proc_macro2::TokenStream> {
     let syn::Fields::Named(named) = &st.fields else { return Ok(proc_macro2::TokenStream::new()) };
     let (mut inits, mut params) = (Vec::new(), Vec::new());
@@ -461,9 +448,8 @@ fn declared_default(st: &syn::ItemStruct) -> syn::Result<proc_macro2::TokenStrea
     })
 }
 
-/// `record(.., model_dump)`: `ModelDump` (`model_dump(mode="json", exclude_none=True)`), the
-/// model's fields in its order: constants first or after `constants_after`, private and skipped
-/// fields left out, a field's `dump_with = path` dumping it as `path(self, cx)`.
+/// `record(.., model_dump)`: `ModelDump`, matching `model_dump(mode="json", exclude_none=True)`
+/// field order: constants first or after `constants_after`, private and skipped fields left out.
 fn declared_model_dump(
     st: &syn::ItemStruct,
     m: &lk_agents_bindgen::Metas,
@@ -528,10 +514,9 @@ fn is_maybe(ty: &syn::Type) -> bool {
     matches!(ty, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "Maybe"))
 }
 
-/// The method keys of a declared proxy (`lk-agents-codegen`'s `decl::vocabulary`).
+// Must match `lk-agents-codegen`'s `decl::vocabulary`.
 const PROXY_CALLS: &[&str] = &["await", "call", "notify", "read_once", "bind"];
 
-/// Some method declares how it is called: the trait is a declaration-model proxy.
 fn declared_proxy(t: &syn::ItemTrait) -> bool {
     t.items.iter().any(|item| {
         let syn::TraitItem::Fn(f) = item else { return false };
@@ -552,10 +537,8 @@ fn declared_proxy(t: &syn::ItemTrait) -> bool {
     })
 }
 
-/// Every marker inside the item that rustc does not know: `#[host(..)]` on a method, parameter,
-/// field, variant or associated const. A proxy trait's Python face (`#[python(..)]` on the trait, its methods and parameters,
-/// read by `lk-agents-codegen`) goes too. The item's other attributes are left alone: a second
-/// `#[host]` is its own call.
+/// Strips the inner `#[host(..)]` and `#[python(..)]` markers rustc does not know. The item's own
+/// attributes stay: a second `#[host]` is its own call.
 fn strip(item: &mut syn::Item) {
     let words: &[&str] = match item {
         syn::Item::Trait(_) => &["host", "python"],
@@ -615,8 +598,7 @@ fn strip(item: &mut syn::Item) {
 
 /// `ALL`, `as_str`, `from_wire`, `FromStr` and `Display` for a unit enum, from its variants' wire
 /// strings. The `FromStr` error is `<prefix>err` (default `String`), built by `<prefix>msg` from the
-/// refused `s: &str` (default `unknown <Enum> "<s>"`). A caller that owns the item strips the
-/// variants' `#[host(rename)]`; a derive cannot, and the markers are its helpers.
+/// refused `s: &str`.
 fn wire_strs<'a>(
     name: &syn::Ident,
     generics: &syn::Generics,
@@ -688,14 +670,13 @@ fn wire_strs<'a>(
 mod tests {
     use quote::quote;
 
-    /// `item`'s outer `host` attributes expanded one at a time, first to last, as rustc does.
+    // Expands the outer `host` attributes one at a time, first to last, as rustc does.
     fn expand_all(item: proc_macro2::TokenStream) -> String {
         let mut item: syn::Item = syn::parse2(item).unwrap();
         let mut impls: Vec<syn::Item> = Vec::new();
         while let Some(i) = super::item_attrs(&item).iter().position(lk_agents_bindgen::is_host) {
             let syn::Item::Enum(e) = &mut item else { unreachable!("an enum") };
             let args = e.attrs.remove(i).meta.require_list().unwrap().tokens.clone();
-            // The expansion is the item followed by its impls; the item expands on.
             let file: syn::File = syn::parse2(super::expand_host(args, quote!(#item))).unwrap();
             let mut items = file.items.into_iter();
             item = items.next().unwrap();
@@ -705,7 +686,7 @@ mod tests {
     }
 
     // Catches: an earlier expansion stripping the variants' `#[host(rename)]` before `wire_strs`
-    // reads them, so the wire string silently falls back to `machine_vm` (AMDCategory, 74b0adf1a).
+    // reads them, so the wire string silently falls back to the snake-cased name.
     #[test]
     fn a_renamed_variant_keeps_its_wire_string_in_either_attribute_order() {
         for item in [

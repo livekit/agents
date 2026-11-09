@@ -1,5 +1,3 @@
-//! Realtime lifecycle regression tests.
-
 mod realtime_close_interrupts {
     //! A close tells the realtime socket to stop even when no generation is open.
     use lk_agents_abi::RealtimeCommandKind;
@@ -8,8 +6,8 @@ mod realtime_close_interrupts {
     use lk_agents_voice::trace::{RealtimeStep, Step};
 
     // Catches: the session-level interrupt (which a close without drain runs) telling the socket only
-    // about generations it had open. The reference calls `rt_session.interrupt()` unconditionally, so
-    // a reply that had ended, or a response the server started and had not announced, is still told.
+    // about generations it had open; a response the server started and had not announced must
+    // still be told.
     #[test]
     fn a_close_interrupts_the_socket_with_no_generation_open() {
         let setup = Setup {
@@ -105,12 +103,9 @@ mod realtime_items_filled {
     use lk_agents_fuzz::input::{Count, Input, Millis, Ref, RtEvent};
     use lk_agents_voice::events::SessionEvent;
 
-    // Catches: `remote_item_added` committed into history as it came, empty, and the transcript and
-    // the reply that fill those items never told to the host: the user's final transcript upserted
-    // the empty record under its id (a replacement, never announced) and the reply was committed
-    // under an id of its own, beside its empty placeholder. On a real call history held an empty
-    // message per turn and no user words. The reference keeps the server's items as placeholders in
-    // the agent's context and commits the transcript and the message under the server's ids.
+    // Catches: `remote_item_added` committed into history empty, and the transcript and reply that
+    // fill those items never told to the host, so history held an empty message per turn and no
+    // user words.
     #[test]
     fn server_items_reach_history_filled() {
         let setup = Setup {
@@ -183,7 +178,7 @@ mod realtime_late_answer_interrupted {
 
     // Catches: the timeout's cancel crossing the server's creation on the wire. The late generation
     // was discarded without an interrupt and held the server, which refused the next
-    // `response.create` (survey seeds 401 and 50; eca089161).
+    // `response.create` (survey seeds 401 and 50).
     #[test]
     fn a_reply_created_as_its_request_timed_out_does_not_hold_the_server() {
         // The server answers exactly at the request's 10 s bound.
@@ -290,10 +285,8 @@ mod realtime_waiter_journalled {
     }
 
     // Catches: a request made after the socket ended answered with an interrupted handle no
-    // interruption journalled. The reference's pending `generate_reply()` fails with a
-    // `RealtimeError` there, which `_realtime_reply_task` logs, as it does a timeout. A real session
-    // reconnects; a server that never takes the connection again ends it with the session's error
-    // close, and the request with it, journalled.
+    // interruption journalled. A server that never takes the connection again ends the session with
+    // its error close, and the request with it, journalled.
     #[test]
     fn a_request_after_the_socket_ended_fails() {
         let r = realtime(&[

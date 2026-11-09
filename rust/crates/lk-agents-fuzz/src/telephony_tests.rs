@@ -1,5 +1,3 @@
-//! Telephony regression tests.
-
 mod amd_awaits_the_callee {
     //! AMD's clock starts when the callee answers in the room: a ringing SIP call is not timed, and a
     //! callee whose audio never comes, or who hangs up first, is `participant_missing`.
@@ -146,10 +144,8 @@ mod amd_consumes_turns {
         (machine, created)
     }
 
-    // Catches: a turn heard after a machine verdict answered by the agent. `AMD._on_end_of_turn`
-    // has the activity skip the reply (`info.skip_reply`) while the detector holds a machine verdict
-    // under `interrupt_on_machine`: the developer is leaving a voicemail, and an auto reply to the
-    // greeting's tail would talk over it.
+    // Catches: a turn heard after a machine verdict (under `interrupt_on_machine`) answered by the
+    // agent: the developer is leaving a voicemail, and an auto reply would talk over it.
     #[test]
     fn a_machine_verdict_skips_the_replies() {
         assert_eq!(after_verdict(true, false), (true, 0));
@@ -172,8 +168,7 @@ mod amd_releasing_turn_no_reply {
 
     // Catches: the session decided the turn before AMD heard its end, so the turn that released a
     // machine verdict under `interrupt_on_machine` still created a reply, which AMD's interrupt then
-    // cut. The reference's `on_end_of_turn` asks `amd._on_end_of_turn(info)` first, which forwards the
-    // end of turn to the classifier and, the verdict now out, skips the reply.
+    // cut.
     #[test]
     fn the_releasing_turn_gets_no_reply() {
         let setup = Setup {
@@ -304,7 +299,7 @@ mod dtmf_close {
 
     // Catches: the collection kept listening until the close's hard edge, so a key pressed while the
     // close drained completed it with a digit pressed after the session began closing (survey seed
-    // 2112). `GetDtmfTask.on_exit`, which the close runs first, stops listening.
+    // 2112).
     #[test]
     fn a_key_pressed_while_closing_is_not_collected() {
         let inputs = vec![
@@ -338,8 +333,7 @@ mod dtmf_read_back_realtime {
 
     // Catches: the confirm arm's read-back built a pipeline reply on a realtime session, which has no
     // LLM, so it failed with "the session has no llm" though nothing failed (`speech_error_is_injected`,
-    // survey seeds 320, 621, 731). `GetDtmfTask` calls `session.generate_reply()`, which a realtime
-    // model answers on its own socket.
+    // survey seeds 320, 621, 731).
     #[test]
     fn a_read_back_on_a_realtime_model_is_spoken() {
         let setup = Setup {

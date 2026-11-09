@@ -1,6 +1,3 @@
-//! Pure copy, truncation and merge plans over a conversation's item facts, and the host's plans
-//! over its own items.
-
 use lk_agents_abi::llm::chat_context::{ChatContextPlans, MergeInsertion};
 use lk_agents_abi::{ChatContext, ChatItem, CopyOptions, ItemKind, MergeOptions, Role};
 use std::collections::BTreeSet;
@@ -94,9 +91,7 @@ fn merge_excludes_facts(f: &ItemFacts<'_>, opts: &MergeOptions) -> bool {
         || (opts.exclude_config_update && f.kind == ItemKind::AgentConfigUpdate)
 }
 
-// The operations as index plans over the facts, applied by whoever owns the items. Positions, not
-// ids, so duplicate ids pick the right object.
-
+// Plans are positions, not ids, so duplicate ids pick the right object.
 pub fn copy_plan(facts: &[ItemFacts<'_>], opts: &CopyOptions) -> Vec<usize> {
     let valid_call_ids: BTreeSet<&str> = match &opts.tools {
         Some(valid) => facts
@@ -113,7 +108,7 @@ pub fn copy_plan(facts: &[ItemFacts<'_>], opts: &CopyOptions) -> Vec<usize> {
 }
 
 /// `None` when under the limit. Leading function calls are dropped; the first instruction message
-/// comes back unless the window holds its id (#4845). Sliced like `self._items[-max_items:]`, but a
+/// comes back unless the window holds its id. Sliced like `self._items[-max_items:]`, but a
 /// zero budget keeps no conversational item (only that instruction); a negative `n` drops the
 /// first `|n|` (the host refuses one).
 pub fn truncate_plan(facts: &[ItemFacts<'_>], max_items: i64) -> Option<Vec<usize>> {

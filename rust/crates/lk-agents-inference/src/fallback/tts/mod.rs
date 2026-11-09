@@ -692,3 +692,7 @@ impl port::FallbackTts for FallbackTts {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "tts_tests.rs"]
+mod tests;

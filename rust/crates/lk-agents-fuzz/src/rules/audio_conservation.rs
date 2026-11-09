@@ -1,10 +1,3 @@
-//! Audio reaching the sink is exactly what was produced for it: every sample carries a known
-//! source, and each source's chunks arrive in order without gaps or repeats.
-//!
-//! The sources are synthesis streams, realtime generations and the audio a case feeds into a
-//! `say`. A truncated
-//! tail is legitimate, because that is what an interruption looks like. A gap, a repeat, a
-//! reorder, or a chunk nobody produced is not.
 use std::collections::BTreeMap;
 
 use crate::{
@@ -12,6 +5,9 @@ use crate::{
     check::{Check, Contract, Rule, Subject},
     record::{Kind, Recording, Sink, Tag},
 };
+
+// Sources are synthesis streams, realtime generations and audio fed into a `say`. A truncated
+// tail is legitimate: that is what an interruption looks like.
 
 pub struct AudioConservation;
 

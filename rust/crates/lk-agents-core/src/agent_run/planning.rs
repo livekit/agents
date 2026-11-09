@@ -1,7 +1,3 @@
-//! LLM request planning (rust-core "Agent execution", request planning): one model request built
-//! from an explicit snapshot of the allowed history, the instructions and the tools. Pure; no
-//! session state is read. AgentRun and VoiceSession both plan through it.
-
 use std::time::SystemTime;
 
 use lk_agents_abi::{ChatContext, ChatItem, ChatMessage, Role, ToolSpec};

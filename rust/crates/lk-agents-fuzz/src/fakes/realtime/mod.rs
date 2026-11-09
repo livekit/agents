@@ -1,26 +1,3 @@
-//! The realtime model at the `Realtime` port the voice session consumes: a provider fake, its
-//! session a thin pass between the driver and [`server::Server`], the realtime server as the
-//! real one was measured doing (`calibration.json`).
-//!
-//! The driver's commands reach the server as it sends them, and what the server does reaches the
-//! driver as the port's `Event`s: the response it was asked for or opened on its own, its message,
-//! words and audio, its end and metrics; the items the server added; the person's speech and
-//! transcript; errors. It carries no session logic: no connection retries, no reconnect restore,
-//! no reply deadlines, no fallback. Inference's own tests hold the native session and the
-//! fallback adapter (decisions 70, 113). What the provider promises at the port it keeps: a reply
-//! cancelled before it was created is failed, never answered; a reply still waiting when the
-//! session ends is failed; a connection slower than the client's bound times out; a connection
-//! drop is a recoverable error, and the reconnect a server holding the conversation as the driver
-//! gave it (as text), asked again for the replies still waiting; a connection that never comes
-//! back within the client's retries ends the session; a fallback setup's fatal error is a swap to
-//! a fresh model.
-//!
-//! The session is a resource (`Kind::Realtime`), one per session the driver opens, and every
-//! response it told the driver of is one too (`Kind::Generation`), until its end. Audio deltas
-//! are tagged with the generation and its chunk. What the server refused, or answered from the
-//! wrong state, is recorded as a `Breach` on the session. What the server does of its own accord
-//! -- hears the person start and stop (its VAD), drops the connection, errs -- is a
-//! `RealtimeEvent` the case sends.
 use std::{
     collections::{BTreeSet, HashMap, VecDeque},
     sync::{
@@ -46,6 +23,13 @@ use crate::{
     record::{Detail, Kind, Tag},
 };
 
+// The session is a thin pass to [`server::Server`], which behaves as the real one was measured
+// (`calibration.json`). It keeps only the provider's port promises: a reply cancelled before
+// creation or still waiting at the end fails; a slow connect times out; a drop is a recoverable
+// error and the reconnect a server holding the conversation as text, asked again for waiting
+// replies; retries exhausted end the session; a fallback setup's fatal error swaps to a fresh
+// model. Retries, restore and fallback logic are tested in inference.
+
 pub mod duplex;
 mod events;
 pub mod server;
@@ -56,23 +40,20 @@ pub use server::{Exo, Server, Vad};
 /// The model a session names in its metrics.
 pub const MODEL: &str = "openai/gpt-realtime";
 
-/// The session's input transcription model.
 const TRANSCRIPTION_MODEL: &str = "gpt-4o-mini-transcribe";
 
 /// `RealtimeModel.label` of a LiveKit Inference model: on every error and metric.
 const LABEL: &str = "lk_agents_realtime.LiveKit Inference Realtime";
 
-/// What the session's errors call the provider.
 const PROVIDER: &str = "LiveKit Inference Realtime";
 
-/// How long before the session the model was built (at the entrypoint, or in a prewarm): its
-/// errors are stamped on the model's own clock (`RealClock` from its construction).
+/// How long before the session the model was built: its errors are stamped on the model's own
+/// clock (`RealClock` from its construction).
 const MODEL_BUILT_BEFORE: Duration = Duration::from_secs(3_600);
 
 /// How long a fallback adapter takes to close the failed model's session and open the next one.
 const SWAP_MS: u64 = 50;
 
-/// The samples an audio delta carries.
 const DELTA_SAMPLES: usize = (server::DELTA_MS * SAMPLE_RATE as u64 / 1000) as usize;
 
 /// Delays a case sets rather than drawing them from the model's seed, in ms.
@@ -87,22 +68,18 @@ pub struct RealtimeDelays {
     pub late_words: Option<u64>,
 }
 
-/// How a realtime setup's server is configured.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ServerSetup {
-    /// Server-side turn detection, and which; `None` is turn detection explicitly off.
+    /// Server-side turn detection; `None` is turn detection explicitly off.
     pub vad: Option<Vad>,
-    /// What the server's delays and choices are drawn from.
     pub seed: u64,
-    /// How long the session takes to connect.
     pub connect: Duration,
     /// How often a response calls a tool, in percent; `None` is the measured rate.
     pub tool_calls: Option<u8>,
-    /// The model answers in text (`modalities=["text"]`).
+    /// `modalities=["text"]`.
     pub text_only: bool,
     /// A fallback adapter's model: a fatal error swaps to a fresh model rather than ending.
     pub fallback: bool,
-    /// What the server's delays are drawn against.
     pub timing: crate::fakes::Timing,
     pub delays: RealtimeDelays,
 }
@@ -127,9 +104,8 @@ impl FakeRealtime {
     }
 }
 
-/// What a LiveKit Inference realtime model reports: server detection left at its default is the
-/// driver's to switch off when it detects turns itself; switched off by the developer, it stays
-/// off. The session transcribes the person and never speaks a `say` itself.
+/// A LiveKit Inference realtime model's capabilities: server detection left at its default is the
+/// driver's to switch off; switched off by the developer, it stays off.
 fn capabilities(vad: Option<Vad>, configured: bool, text_only: bool) -> RealtimeCapabilities {
     RealtimeCapabilities {
         message_truncation: true,
@@ -203,10 +179,8 @@ impl Realtime for FakeRealtime {
     }
 }
 
-/// The session the driver holds.
 struct Session {
     socket: Arc<Socket>,
-    /// Delivers the server's timed happenings; cancelled at the close or with the session.
     pump: OwnedTask,
 }
 
@@ -232,7 +206,6 @@ impl RealtimeSession for Session {
         }))
     }
 
-    /// The conversation the server is being brought to.
     fn chat_ctx(&self) -> BoxFuture<'_, ChatContext> {
         Box::pin(async move { ChatContext::new(self.socket.state.lock().unwrap().desired.clone()) })
     }
@@ -255,8 +228,8 @@ impl RealtimeSession for Session {
     }
 }
 
-/// The response the session told the driver of: its messages, and whether each is still open and
-/// has settled its modalities.
+/// The response the driver was told of, and per message whether it is open and has settled its
+/// modalities.
 struct Generation {
     r: u32,
     id: String,
@@ -275,25 +248,24 @@ struct State {
     swapping: bool,
     /// When the client gives up connecting, or reconnecting, and the error it reports.
     gives_up: Option<(Ts, ApiError)>,
-    /// The session ended: no event comes after the queued ones.
+    /// No event comes after the queued ones.
     over: bool,
-    /// Commands waiting for the connection.
     commands: VecDeque<RealtimeCommand>,
     events: VecDeque<Event>,
     /// The conversation the server is being brought to.
     desired: Vec<ChatItem>,
     instructions: String,
     tools: Vec<String>,
-    /// Replies asked and not yet created; those cancelled before they were.
+    /// Replies asked and not yet created, and those cancelled before creation.
     asked: BTreeSet<String>,
     cancelled: BTreeSet<String>,
     generation: Option<Generation>,
-    /// When the server heard each turn start, as wall seconds, and each turn's transcript so far.
+    /// When the server heard each turn start (wall seconds), and each turn's transcript so far.
     speech_started: HashMap<String, f64>,
     transcripts: HashMap<String, String>,
-    /// Servers connected: the first, then reconnects and a fallback setup's swaps.
+    /// Servers connected, including reconnects and fallback swaps.
     connections: u64,
-    /// Responses the run registered, by index on the current server.
+    /// Registered responses, by index on the current server.
     generations: HashMap<u32, Slot>,
 }
 
@@ -321,7 +293,7 @@ impl State {
         }
     }
 
-    /// The response the driver was told of ends unfinished: its messages close, it is cancelled.
+    /// Ends the told response unfinished: its messages close and it is cancelled.
     fn close_generation(&mut self, audio: bool) {
         let Some(g) = self.generation.take() else { return };
         for (id, open, settled) in &g.messages {
@@ -336,7 +308,6 @@ impl State {
     }
 }
 
-/// One session: its state and the server behind it.
 pub struct Socket {
     setup: ServerSetup,
     caps: RealtimeCapabilities,
@@ -360,8 +331,7 @@ impl Socket {
         wall.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64()
     }
 
-    /// How long the client keeps reconnecting: an attempt per retry, each taking the connection
-    /// time, with the retry intervals between them.
+    /// How long the client keeps reconnecting: each retry's connect time plus the intervals.
     fn retry_budget(&self) -> Duration {
         let opts = ApiConnectOptions::default();
         let intervals: f64 =
@@ -416,7 +386,7 @@ impl Socket {
         }
     }
 
-    /// Everything the session does now; then when it runs next (`None`: it is over).
+    /// Runs everything due now; returns when it runs next (`None`: it is over).
     fn advance(&self, st: &mut State) -> Option<Option<Ts>> {
         loop {
             if st.over {
@@ -471,7 +441,7 @@ impl Socket {
         }
     }
 
-    /// The server is left: what it held is recorded, and its responses end with it.
+    /// Records what the server held; its responses end with it.
     fn hang_up(&self, st: &mut State) {
         if let Some(slot) = self.slot.get() {
             self.registry.record_held(slot.nth, st.server.held());
@@ -481,15 +451,14 @@ impl Socket {
         }
     }
 
-    /// A fatal error: a fallback setup swaps to a fresh model, which the driver gives its frame;
-    /// otherwise the session ends, failing the replies still waiting.
+    /// A fallback setup swaps to a fresh model; otherwise the session ends, failing the replies
+    /// still waiting.
     fn fatal(&self, st: &mut State) {
         let audio = !self.setup.text_only;
         self.hang_up(st);
         st.close_generation(audio);
         if self.setup.fallback {
-            // The error is told first; the healthy model is up once the old session closed and
-            // the new one opened, and what the old one was sent meanwhile is dropped.
+            // What the old model was sent during the swap is dropped.
             let opens_at = server::later(self.now(), SWAP_MS);
             (st.opens_at, st.down, st.gives_up, st.swapping) = (Some(opens_at), false, None, true);
             st.asked.clear();
@@ -502,8 +471,6 @@ impl Socket {
         }
         st.over = true;
     }
-
-    // --- the driver's commands -------------------------------------------------------------
 
     fn command(&self, st: &mut State, now: Ts, cmd: RealtimeCommand) {
         match cmd {
@@ -518,8 +485,7 @@ impl Socket {
             RealtimeCommand::UpdateChatCtx(u) => {
                 let items = u.chat_ctx.items;
                 let server = &mut st.server;
-                // What the conversation loses goes; what it gains is created in its place; a
-                // message the driver records as cut is held as its text.
+                // Removed items are deleted, new ones created in place, cut messages held as text.
                 for id in server.ids() {
                     if !items.iter().any(|i| i.id() == id) {
                         server.delete(&id);
@@ -582,7 +548,7 @@ impl Socket {
                     error,
                 }));
             }
-            // The reply is cancelled by id when it is created.
+            // Cancelled by id once it is created.
             RealtimeCommand::CancelReply(c) => {
                 if st.asked.remove(&c.req_id) {
                     st.cancelled.insert(c.req_id);
@@ -619,8 +585,7 @@ pub(super) fn deliver(socket: &Socket, what: &Input) -> bool {
         let connected = !st.over && st.opens_at.is_none();
         match event {
             RtEvent::Disconnected if connected && !st.down => {
-                // The connection's loss: its server, the response in flight and the person's turn
-                // go with it, and the session says it will reconnect.
+                // The server, the response in flight and the person's turn go with the connection.
                 st.down = true;
                 if st.server.speaking() {
                     st.events.push_back(Event::InputSpeechStopped(InputSpeechStopped {
@@ -638,8 +603,8 @@ pub(super) fn deliver(socket: &Socket, what: &Input) -> bool {
                 true
             }
             RtEvent::Reconnected if st.down => {
-                // A fresh server holding the conversation as the driver last gave it, as text;
-                // the replies still waiting are asked of it again.
+                // A fresh server holds the last given conversation as text; waiting replies are
+                // asked again.
                 (st.down, st.gives_up) = (false, None);
                 st.connections += 1;
                 st.server = socket.new_server(st.connections);

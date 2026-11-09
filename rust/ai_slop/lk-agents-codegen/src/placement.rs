@@ -1,6 +1,3 @@
-//! Export placement is checked on parsed handwritten source, including inactive cfg branches.
-//! Identities use lexical item paths rather than line numbers so unrelated edits need no waiver.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
@@ -9,6 +6,9 @@ use std::{
 
 use quote::ToTokens as _;
 use syn::{parse::Parser as _, punctuated::Punctuated, spanned::Spanned as _};
+
+// Inactive cfg branches are checked too. Identities are lexical item paths, not line numbers,
+// so unrelated edits need no waiver.
 
 const BASELINE: &str = "rust/ai_slop/lk-agents-codegen/export-placement-baseline.json";
 

@@ -23,10 +23,6 @@ use crate::eot::session::{
 use crate::eot::transport::{EotTransport, PredictionListener};
 use crate::eot::{CancelReason, EotRequestId, EotWarning};
 
-// ---------------------------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------------------------
-
 const NOW: f64 = 1_700_000_000.0;
 
 fn map(entries: &[(&str, f64)]) -> BTreeMap<String, f64> {
@@ -65,10 +61,6 @@ fn resolved(actions: &[EotAction]) -> Vec<(String, f64)> {
         })
         .collect()
 }
-
-// ---------------------------------------------------------------------------------------------
-// the pure core: correlation and staleness
-// ---------------------------------------------------------------------------------------------
 
 // Catches: dropping the stale-response guard in `_resolve_prediction`, so a superseded prediction
 // resolves the current turn.
@@ -141,10 +133,6 @@ fn a_timeout_with_nothing_in_flight_still_falls_back() {
     assert_eq!(actions.last(), Some(&EotAction::SwapToLocal(EotSwapToLocal {})));
     assert_eq!(session.model(), TurnDetectorModel::V1Mini);
 }
-
-// ---------------------------------------------------------------------------------------------
-// the pure core: the fallback ladder
-// ---------------------------------------------------------------------------------------------
 
 // Catches: dropping the `timed_out` leg of `cancel_inference` (`base.py:200`): a slow gateway
 // never falls back. Also the session owning a copy of the threshold table instead of sharing it
@@ -271,10 +259,6 @@ fn after_end_input_every_request_is_answered_immediately_and_positively() {
     assert!(session.flush(NOW).is_empty(), "and a flush on a closed stream is a no-op");
 }
 
-// ---------------------------------------------------------------------------------------------
-// request ids
-// ---------------------------------------------------------------------------------------------
-
 // Catches: dropping the session-id prefix, or prefixing when there is no session ("None_eot_").
 #[test]
 fn a_request_id_carries_the_connections_session_id_or_the_fallback_prefix() {
@@ -283,10 +267,6 @@ fn a_request_id_carries_the_connections_session_id_or_the_fallback_prefix() {
     // `if session_id` is truthiness: an empty value is absent, not a prefix.
     assert_eq!(EotRequestId::new(Some(""), 3).as_str(), "turn_request_3");
 }
-
-// ---------------------------------------------------------------------------------------------
-// the local model's buffer
-// ---------------------------------------------------------------------------------------------
 
 // Catches: evicting the newest audio instead of the oldest, or an oversized frame panicking or
 // clearing the buffer.
@@ -302,10 +282,6 @@ fn the_ring_buffer_keeps_the_newest_audio() {
     buf.clear();
     assert!(buf.read().is_empty(), "a flush starts the next turn from silence");
 }
-
-// ---------------------------------------------------------------------------------------------
-// the gateway protocol
-// ---------------------------------------------------------------------------------------------
 
 #[derive(Default)]
 struct RecordingSink {

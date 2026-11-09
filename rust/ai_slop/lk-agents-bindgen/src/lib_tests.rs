@@ -1,7 +1,3 @@
-//! The declaration readers as text. What Python observes of the generated code (names, exceptions)
-//! is pinned end to end by `lk-agents-py`'s export-table test and the `_core` surface diff; these
-//! pin the choices that diff cannot localise.
-
 use quote::quote;
 
 fn exception(attr: proc_macro2::TokenStream, item: &syn::Item) -> syn::Result<String> {
@@ -29,10 +25,10 @@ fn an_error_is_a_host_exception_by_its_kind_table() {
     .unwrap();
     let attr = quote!(error(kind = "RuntimeError"));
     let out = exception(attr.clone(), &e).unwrap();
-    assert!(out.contains("impl crate :: python :: HostException for :: abi :: E"), "{out}");
+    assert!(out.contains("impl crate :: py_errors :: HostException for :: abi :: E"), "{out}");
     assert!(
         out.contains(
-            "Self :: Strict (inner) => crate :: python :: HostException :: to_py_err (inner)"
+            "Self :: Strict (inner) => crate :: py_errors :: HostException :: to_py_err (inner)"
         ),
         "{out}"
     );
@@ -42,7 +38,7 @@ fn an_error_is_a_host_exception_by_its_kind_table() {
         ),
         "{out}"
     );
-    assert!(out.contains("Self :: Cancelled => crate :: python :: host_exception (\"asyncio\" , \"CancelledError\""), "{out}");
+    assert!(out.contains("Self :: Cancelled => crate :: py_errors :: host_exception (\"asyncio\" , \"CancelledError\""), "{out}");
     assert!(out.contains("_ => :: pyo3 :: exceptions :: PyRuntimeError :: new_err"), "{out}");
     // The same table, as the class name a non-Python binding raises.
     let out = kind(attr, &e);
@@ -71,11 +67,13 @@ fn a_struct_error_selects_its_class_by_a_field() {
     let out = exception(attr.clone(), &e).unwrap();
     assert!(out.contains("match self . kind"), "{out}");
     assert!(
-        out.contains("< Kind > :: A => crate :: python :: host_exception_with (\"m\" , \"A\""),
+        out.contains("< Kind > :: A => crate :: py_errors :: host_exception_with (\"m\" , \"A\""),
         "{out}"
     );
     assert!(
-        out.contains("< Kind > :: B => crate :: python :: host_exception_with (\"m.sub\" , \"B\""),
+        out.contains(
+            "< Kind > :: B => crate :: py_errors :: host_exception_with (\"m.sub\" , \"B\""
+        ),
         "{out}"
     );
     assert_eq!(out.matches("\"code\"").count(), 1, "{out}");
@@ -84,7 +82,7 @@ fn a_struct_error_selects_its_class_by_a_field() {
         out.contains("if let :: std :: option :: Option :: Some (cause) = & self . cause"),
         "{out}"
     );
-    assert!(out.contains("err . set_cause (py , :: std :: option :: Option :: Some (crate :: python :: HostException :: to_py_err (& * * cause)))"), "{out}");
+    assert!(out.contains("err . set_cause (py , :: std :: option :: Option :: Some (crate :: py_errors :: HostException :: to_py_err (& * * cause)))"), "{out}");
     assert!(kind(attr, &e).contains("< Kind > :: B => \"m.sub.B\""));
     assert!(exception(quote!(error(by = kind, kinds(A(kwargs(retryable))))), &e).is_err());
     assert!(exception(quote!(error(by = nope, kinds(A(class = "m.A")))), &e).is_err());
@@ -95,7 +93,7 @@ fn a_struct_error_selects_its_class_by_a_field() {
     let out = exception(quote!(error), &e).unwrap();
     assert!(
         out.contains(
-            "Self :: Host { error , .. } => crate :: python :: HostException :: to_py_err (error)"
+            "Self :: Host { error , .. } => crate :: py_errors :: HostException :: to_py_err (error)"
         ),
         "{out}"
     );

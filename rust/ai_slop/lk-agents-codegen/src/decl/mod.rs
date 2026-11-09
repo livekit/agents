@@ -1,14 +1,3 @@
-//! The declaration model: every `#[host(..)]` contract of the ABI crate, read once and resolved
-//! into one IR that every emitter consumes.
-//!
-//! - [`tree`]: the ABI crate's modules, found from `src/lib.rs`, and path resolution over them.
-//! - [`vocabulary`]: the attribute vocabulary, the one reader of `#[host(..)]`.
-//! - [`resolve`]: declarations into the IR below; a type means what its declaration says, never
-//!   what its last path segment spells. An unsupported or ambiguous declaration is an error naming it.
-//! - [`facade`]: the facade classes' part of the IR.
-//!
-//! The IR holds no `syn` types and no maps: generated output must be byte-stable.
-
 mod facade;
 pub mod resolve;
 pub mod tree;
@@ -16,8 +5,10 @@ pub mod vocabulary;
 
 pub use facade::*;
 
+// The IR holds no `syn` types and no maps: generated output must be byte-stable.
+
 #[cfg(test)]
-#[path = "../decl_tests.rs"]
+#[path = "decl_tests.rs"]
 pub(crate) mod tests;
 
 /// Everything the ABI declares, in source order.
@@ -650,9 +641,8 @@ pub struct Refusal {
     pub class: String,
 }
 
-/// `#[host(class(..))] trait X`: a host class implemented natively; or `#[host(functions)] trait
-/// X`: module functions. The runtime or a core
-/// implements the trait; the generated adapter calls it through the selected implementation.
+/// `#[host(class(..))] trait X`: a host class implemented natively, or `#[host(functions)] trait
+/// X`: module functions. The generated adapter calls the selected implementation.
 #[derive(Debug, Clone, Default)]
 pub struct Class {
     pub form: Form,

@@ -1,12 +1,11 @@
-//! The SDK's frame queue (`rtc.AudioStream`/`rtc.VideoStream`'s `RingQueue`): drop-oldest by
-//! count, imitated here rather than borrowed from the runtime, so the fake cannot share a bug with
-//! what it tests.
-
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{Closed, StreamOutput, Ts};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
+
+// The SDK's drop-oldest `RingQueue`, reimplemented rather than borrowed from the runtime so the
+// fake cannot share a bug with what it tests.
 
 struct Ring<T> {
     items: VecDeque<T>,

@@ -1,25 +1,17 @@
-//! The voice scheduler: what is pending, and which enabled event or task turn runs next.
-//!
-//! Two kinds of steps compete. A queued item comes from a source and keeps that source's order:
-//! a reordering no single sender could produce is never delivered. A process (a task pool, a
-//! worker, a client) is enabled when its caller says it is ready, and steps as often as it is
-//! chosen. The scheduler knows the sources and processes and nothing of what a step reads or
-//! writes.
-//!
-//! [`Sampling::Arrival`] is the production order: the oldest queued item, a source the loop polls
-//! first ahead of the rest, then the first ready process. [`Sampling::BasicPos`] is basic
-//! partial-order sampling (Yuan, Yang and Gu, CAV 2018, Algorithm 2), as gosim implements it
-//! (livekit/gosim#28): every queued item and every process draws an independent priority, the
-//! enabled step with the highest runs, and a process that ran draws a new one; no footprints and
-//! no race-based reassignment. Its tests are the small programs at the
-//! bottom.
 use std::collections::BTreeMap;
 
 use fastrand::Rng;
 
+// Queued items keep their source's order: a reordering no single sender could produce is never
+// delivered. BasicPos is basic partial-order sampling (Yuan, Yang and Gu, CAV 2018, Algorithm 2)
+// as gosim implements it: every item and process draws a priority, the highest enabled runs, and
+// a process that ran redraws.
+
 /// How the next step is chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sampling {
+    /// The production order: the oldest queued item (a polled-first source ahead), then the
+    /// first ready process.
     Arrival,
     BasicPos,
 }

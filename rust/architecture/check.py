@@ -199,7 +199,6 @@ HOST_ENTRY_FILES = {
     # The entries' own tests, beside them.
     "rust/crates/lk-agents-py/src/py_calls_tests.rs",
     "rust/crates/lk-agents-py/src/py_streams_tests.rs",
-    "rust/crates/lk-agents-py/src/py_streams_boundary_tests.rs",
 }
 HOST_CALL = re.compile(
     r"\.call(?:0|1|_method|_method0|_method1)?\("

@@ -1,17 +1,8 @@
-//! SDK numbers and SDK events.
-//!
-//! A `wire_enum` an SDK holds as its number crosses as that number wherever it is declared so:
-//! an `sdk` proxy's returns, a `#[host(sdk)]` function parameter and an `sdk` record's fields. An
-//! unknown number reads as the enum's `Default`.
-//!
-//! `proxy(.., events(..))` declares the SDK events the host object's emitter delivers, each into
-//! the native entry of the same name in the declared functions trait. Codegen writes the
-//! subscription (`_generated/<module>.py`): one handler per event, its callback arguments
-//! converted by the entry's parameter types.
-
 use crate::decl::vocabulary::{self as voc, Entry, Value};
 use crate::decl::{Declarations, Field, Form, HostForm, Param, Record, Ty};
 use crate::python::Out;
+
+// An unknown SDK number reads as the enum's `Default`.
 
 /// A `wire_enum` (or an optional one) that can cross as its SDK number.
 pub fn sdk_number(ty: &Ty) -> bool {

@@ -1,11 +1,3 @@
-//! The session's spans form a tree the exporter can ship: every span the voice core records (the
-//! session tracer's records, observed as `SessionEvent::Telemetry`) ends exactly once, under a
-//! parent its declaration allows, within that parent unless declared to outlive it; the session
-//! ends its spans itself, so none reaches the close sweep, and a failed span is never recorded as
-//! cancelled. A span out of this shape is a turn lost, orphaned, misplaced or never ended on the
-//! dashboard. The runtime's own spans (scoped) are held to their declared parents, ends and single
-//! end too; the work a turn records under it (model requests, tool calls) carries the turn's job
-//! and conversation: a span without its job is never exported to Cloud.
 use std::collections::BTreeMap;
 
 use lk_agents_abi::telemetry::decl::{Parent, SpanDecl};
@@ -21,6 +13,10 @@ use crate::{
     input::{AgentText, Input, Millis, SayInput},
     record::Recording,
 };
+
+// A span out of shape is a turn lost, orphaned or never ended on the dashboard. Core spans arrive
+// as `SessionEvent::Telemetry` and must end before the close sweep. A span without its job is
+// never exported to Cloud.
 
 pub struct SpansNestAndEnd;
 

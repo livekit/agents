@@ -1,12 +1,3 @@
-//! Every interruption the driver journals has an input that permits its stated cause.
-//!
-//! The journal says why (`InterruptCause`); this rule checks the why against what the test did:
-//! a host interrupt, a Close, or user speech and turn input. Causes the runtime owns alone
-//! (superseded, watchdog, schedule rejected, handoff, detector) need no input.
-//!
-//! `Host` is the interrupt calls and a DTMF reply interrupting first. Swapping the audio output
-//! while a speech is playing cuts it as `OutputReplaced`: a segment already playing into the old
-//! sink cannot move.
 use lk_agents_voice::trace::{CloseStep, InterruptCause, InterruptStep::Interrupted, Step};
 
 use crate::{
@@ -15,6 +6,9 @@ use crate::{
     input::{DtmfInput, Input, RtEvent},
     record::{InputsView, Interruption, Observed, Recording},
 };
+
+// Causes the runtime owns alone (superseded, watchdog, schedule rejected, handoff, detector) need
+// no input. An output swap cuts as `OutputReplaced`, not `Host`: a playing segment cannot move.
 
 pub struct InterruptionHasCause;
 

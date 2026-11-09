@@ -1,16 +1,3 @@
-//! What a run leaves behind, as plain stamped data, and what it still has open.
-//!
-//! The harness appends; nothing here is reconstructed. Rules never read this file: they read the
-//! four views in [`views`], which are the only account of a run a rule is given.
-//!
-//! The product's own journal is kept verbatim. The rest is the other side of each boundary it
-//! talks across, which the product cannot record: what the case sent and whether it was refused,
-//! what the fakes produced, what left the session, what the host received. A rule comparing the
-//! driver's account against what arrived needs both sides.
-//!
-//! One log holds every resource the run opened, and [`Live`] is the part still open, because
-//! "what can an input point at" and "what is open" are one question asked twice.
-
 use lk_agents_runtime::voice::session::Timebase;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -59,15 +46,12 @@ mod tests {
 pub use resources::{Resource, hook_of, step_name};
 pub use views::*;
 
-// ==============================================================================================
-// When
-// ==============================================================================================
+// The harness only appends; rules never read this module directly, only the views in `views`.
 
 /// When something happened: an occurrence stamp and the session clock in milliseconds.
 ///
-/// Order by `seq`. It comes from one counter taken synchronously at each boundary, so on the
-/// current-thread runtime it is a real happens-before order across host events, fakes, the sink
-/// and the driver's own journal. `at_ms` is for deadlines and for reading.
+/// Order by `seq`: one counter taken synchronously at each boundary, so on the current-thread
+/// runtime it is a real happens-before order. `at_ms` is for deadlines and for reading.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Observed {
     pub seq: u64,
@@ -115,10 +99,6 @@ impl Stamps {
         self.time.now()
     }
 }
-
-// ==============================================================================================
-// What a run opens
-// ==============================================================================================
 
 /// A kind of thing a run can open and point at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -276,13 +256,8 @@ impl Live {
     }
 }
 
-// ==============================================================================================
-// What a run records
-// ==============================================================================================
-
-/// One input the case sent, and whether the thing it was sent to took it. A delivery to a closed
-/// receiver is a recorded, rejected attempt, never a panic and never a reason to reach into the
-/// driver.
+/// One input the case sent, and whether its receiver took it. A delivery to a closed receiver is
+/// a recorded, rejected attempt, never a panic.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Applied {
     pub at: Observed,
@@ -729,10 +704,6 @@ struct Index {
     heard: BTreeMap<(Kind, u32, u32), [Option<Observed>; Tag::MAX_CHUNK as usize + 1]>,
 }
 
-// ==============================================================================================
-// Reading a recording
-// ==============================================================================================
-
 impl Recording {
     /// The last stamp taken, so a rule can measure how long something has been pending.
     pub fn now(&self) -> Observed {
@@ -869,12 +840,7 @@ impl Recording {
     }
 }
 
-// ==============================================================================================
-// Writing a recording
-// ==============================================================================================
-
-/// Only the harness and the authored recordings write here. Each mutator maintains whatever
-/// lookup it feeds, so there is no separate indexing step to forget.
+// Only the harness and the authored recordings write; each mutator maintains the lookup it feeds.
 impl Recording {
     /// Open a resource, returning its index. The live set and the log move together.
     pub fn open(&mut self, at: Observed, kind: Kind, id: Id, detail: Detail) -> u32 {

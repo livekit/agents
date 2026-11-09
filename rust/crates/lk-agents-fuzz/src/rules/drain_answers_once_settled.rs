@@ -1,12 +1,3 @@
-//! A host `drain()` is answered `Ok` only once the frame has exited and nothing it was saying is
-//! left.
-//!
-//! The reference's `AgentActivity.drain()` awaits `on_exit`, then `_pause_scheduling_task()`,
-//! which waits for every speech task to finish, tools included. The driver answers at its
-//! `Drained{refused: None}` step, so at that point of its journal the `on_exit` of the agent it
-//! drains has finished (`HookFinished`, whoever issued it), and every speech the host was told
-//! about (`Emitted(SpeechCreated)`) has been told done (`Emitted(SpeechDone)`). An `Ok` with no
-//! such step behind it is an call the driver never decided.
 use lk_agents_voice::{
     agent_session::machine::activity::scheduling::{SpeechId, SpeechKind},
     agent_session::{HookId, HookKind},
@@ -21,6 +12,10 @@ use crate::{
     input::{AgentText, Input, Millis, SayInput},
     record::{Answer, Kind, Recording},
 };
+
+// The reference's `AgentActivity.drain()` awaits `on_exit`, then `_pause_scheduling_task()`, which
+// waits for every speech task, tools included. So at the driver's `Drained{refused: None}` step
+// the drained agent's `on_exit` has finished and every announced speech has been told done.
 
 pub struct DrainAnswersOnceSettled;
 

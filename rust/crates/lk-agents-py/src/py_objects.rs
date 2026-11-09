@@ -1,5 +1,3 @@
-//! Retained Python objects, reference lifetimes and native capability lookup.
-
 use lk_agents_abi::errors::CapturedError;
 use lk_agents_abi::errors::RefRegistry;
 use lk_agents_abi::utils::host_ref::{ObjectRef, StaleHostRef};

@@ -1,14 +1,3 @@
-//! A synchronised transcript never shows a word before its audio starts playing.
-//!
-//! The synchroniser releases each word against the segment's played position: a paced word at
-//! the middle of its estimated audio, an aligned word at the voice's stamp. Each release is
-//! journalled with where the word's audio starts and how much of the segment had played, so a
-//! word shown with its start still ahead of the playhead is a caption running ahead of the voice.
-//!
-//! A finish is a playhead too: a cut segment shows the words whose audio started before where the
-//! cut says it stopped, with no progress reported in between. And a segment the sink reported
-//! finished whole shows the words still queued at once, their audio being over. Those come in one
-//! go, right before the segment's uninterrupted finish, with nothing played in between.
 use lk_agents_voice::{
     agent_session::machine::activity::scheduling::SpeechId,
     trace::{PlayoutStep, Step},
@@ -22,6 +11,10 @@ use crate::{
 
 /// What two clocks' rounding may leave between a stamp and the playhead, in seconds.
 const EPSILON: f64 = 1e-6;
+
+// A paced word is released at the middle of its estimated audio, an aligned word at its stamp. A
+// finish is a playhead too: a cut shows words started before the cut point, and a whole finish
+// releases the remaining words at once.
 
 pub struct TranscriptFollowsAudio;
 

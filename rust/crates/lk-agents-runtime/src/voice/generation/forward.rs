@@ -1,6 +1,3 @@
-//! `forward_generation`: the voice half of a step, segment by segment, and the transcript leg
-//! (`perform_text_forwarding`).
-
 use super::ReplyExecution;
 use super::llm::extend;
 use super::playout::{
@@ -218,8 +215,7 @@ impl Pump<'_> {
             Voice::Frames(_) => (VoiceKind::CallerFrames, false),
             Voice::Silent => (VoiceKind::Silent, false),
         };
-        // Synthesis may run ahead of authorization; every other route waits for its activation,
-        // which re-targets the binding to the current outputs before the route is planned.
+        // Only synthesis may run ahead of authorization; activation re-targets the binding first.
         if !matches!(SegmentRoute::of(kind, binding.audio().is_some()), SegmentRoute::Synthesis)
             && (!self.gate.wait(shared, self.handle).await || !binding.activate().await?)
         {
@@ -233,23 +229,20 @@ impl Pump<'_> {
         let opened = plan(&binding);
         let synthesis = matches!(opened.route, SegmentRoute::Synthesis);
         let audio_out = binding.audio();
-        // One transcript leg per segment: its flush is once-only and the next segment gets its own.
+        // One transcript leg per segment: its flush is once-only.
         let (tx, rx) = mpsc::unbounded_channel();
         let deferred = opened.transcript.filter(|plan| plan.deferred).map(|_| &tx);
         let leg = opened
             .transcript
             .map(|_| TextLeg::new(binding.text(), deferred, shared, self.handle.id()));
         let text_out = leg.as_ref();
-        // The aligned path: an audio output, the option on, and a TTS that aligns. The leg then
-        // carries the synthesiser's stamped words instead of the deltas.
+        // On the aligned path the leg carries the synthesiser's stamped words, not the deltas.
         let aligned_path = opened.transcript.is_some_and(|plan| plan.aligned);
         let mut aligned =
             aligned_path.then(|| Aligned { leg: text_out, state: Default::default() });
         let deltas = if aligned_path { None } else { text_out };
-        // The segment's first delta; every other one is forwarded where it is consumed.
         capture(deltas, &first.text).await;
-        // With no audio output the first words start the turn speaking, text output or not (the
-        // reference's `first_text_fut`): a session with neither still speaks, then listens.
+        // With no audio output the first words start the turn speaking, text output or not.
         first_text_started_speaking(
             shared,
             self.handle,
@@ -303,8 +296,7 @@ impl Pump<'_> {
             }
             _ => unreachable!("segment plan matches its bound ports"),
         };
-        // Backstop flush for a segment whose loop broke before its `End`, or failed: its words
-        // must not stay open in a synchroniser. Once-only.
+        // Backstop for a segment that broke before its `End`: its words must not stay open.
         if let Some(out) = text_out {
             out.flush();
         }
@@ -317,14 +309,11 @@ impl Pump<'_> {
                 return Err(error);
             }
         };
-        // The queued words reach the output first: a voice lost before activation activates the
-        // binding here, which re-targets it and opens its transcript chain.
+        // A voice lost before activation activates the binding here, opening its transcript chain.
         if synthesis {
             playback.flush_text(shared, self.handle).await?;
         }
-        // Both legs end every segment, one whose words went down the transcript leg with no
-        // audio (none synthesised, a voice lost before its first frame, or its audio switched
-        // off) included. The activated binding decides it.
+        // Both legs end every segment, including one whose words had no audio.
         let leg_state = text_out.map(|leg| *leg.state());
         let ended = plan(playback.binding);
         settle_segment(shared, self.handle, playback.binding, (ended, leg_state), heard).await
@@ -519,8 +508,7 @@ pub(super) async fn take_text(
             }
         };
         let Some(SpeechSegmentEvent::Chunk(more)) = ev else {
-            // Flushed **here**, not after the audio: the synchroniser rotates on
-            // `playback_finished`, and text still open then is lost.
+            // Flushed here, not after the audio: text still open at `playback_finished` is lost.
             if let Some(out) = text_out {
                 out.flush();
             }

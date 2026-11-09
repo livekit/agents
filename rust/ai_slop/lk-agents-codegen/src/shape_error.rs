@@ -1,5 +1,3 @@
-//! Explicit outer-shape diagnostics for declared input containers.
-
 use crate::decl::Ty;
 use crate::decl::vocabulary as voc;
 

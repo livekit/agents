@@ -1,10 +1,3 @@
-//! A background tool's later updates and its final result reach the conversation, whatever the
-//! order in which its step's join hears it detach: `ctx.update()` reaches the driver directly,
-//! while the detach is heard in the model's order, so an update can arrive first and must wait for
-//! it rather than be dropped. Each progress update is told to the host (`ToolCallUpdated` under
-//! `<call_id>_update_<n>`), and the final as `<call_id>_final`.
-//!
-//! The close may cut a tool before its updates land, and a cancelled tool says nothing more.
 use std::collections::{BTreeMap, BTreeSet};
 
 use lk_agents_voice::{
@@ -18,6 +11,10 @@ use crate::{
     input::{AgentText, Input, Ref, ToolAnswer},
     record::{Detail, Kind, Recording},
 };
+
+// `ctx.update()` reaches the driver directly while the detach is heard in the model's order, so an
+// update can arrive first and must wait for it, not be dropped. Updates are told as
+// `<call_id>_update_<n>`, the final as `<call_id>_final`.
 
 pub struct ToolUpdatesAreTold;
 

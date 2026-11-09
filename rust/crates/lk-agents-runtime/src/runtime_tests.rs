@@ -1,7 +1,5 @@
 //! Integration binary for tests that need process isolation or other crates' public APIs.
 
-#[path = "a2a/door_tests.rs"]
-mod a2a_door;
 #[path = "eot_tests.rs"]
 mod eot;
 #[path = "images_tests.rs"]

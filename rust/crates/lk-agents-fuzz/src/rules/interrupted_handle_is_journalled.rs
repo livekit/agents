@@ -1,5 +1,3 @@
-//! A handle that reports itself interrupted has an `Interrupted` step in the journal, and a done
-//! handle reads interrupted exactly when the journal has one: its verdict is the core's.
 use lk_agents_voice::trace::{InterruptStep::Interrupted, Step::Interrupt};
 
 use crate::{

@@ -1,18 +1,8 @@
-//! `#[table("name")]` on a `#[derive(Host)]` record: the record is a row of that table of
-//! livekit/protocol `livekit/agent/thread_schema_v1.sql`, one field per column, named as the column.
-//!
-//! The record implements the calling crate's `sql::Table`: `COLUMNS`, `SELECT` (the column list a
-//! read uses, `json(col)` for a JSONB column) and `from_row`. Each field is checked against the DDL
-//! when the crate compiles: a column of the table, nullable exactly when the field is an `Option`,
-//! JSONB exactly when the field is read as JSON (a `serde_json::Value`, or a typed field marked
-//! `#[table(json)]`).
-//!
-//! `#[table("tasks", remote = path::TaskRow)]` declares the columns of a record defined in another
-//! crate (`#[derive(Table)]` on a column declaration whose fields mirror it): the impl is for
-//! `path::TaskRow`, built field by field, so a field the two disagree on fails to compile.
-
 use proc_macro2::TokenStream;
 use quote::quote;
+
+// Each field is checked against `thread_schema_v1.sql` at compile time: nullable exactly when an
+// `Option`, JSONB exactly when read as JSON.
 
 /// Nothing when the record carries no `#[table]`.
 pub fn table(input: &syn::DeriveInput) -> syn::Result<TokenStream> {

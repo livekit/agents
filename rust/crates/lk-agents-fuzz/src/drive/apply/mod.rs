@@ -1,10 +1,3 @@
-//! One input into what the product sees: a call on the host API, a stream's next piece, a fake's
-//! answer, something in the room, or a wait.
-//!
-//! Every input is recorded, taken or refused. A reference that no longer resolves -- a speech the
-//! driver has forgotten, a hook already finished -- makes the input a refused attempt, and so does
-//! a call the API refuses. Nothing is invented to stand in for it, because a call carrying an id
-//! the driver never issued is a different test from the one the case asked for.
 use lk_agents_abi::OneOrStream;
 use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 use std::task::{Context, Poll, Waker};
@@ -29,11 +22,10 @@ pub use wait::BUDGET_MS;
 impl Run {
     /// Apply one input, then write down everything that became true because of it.
     ///
-    /// Every input is recorded, taken or refused. A delivery to a receiver the product has already
-    /// closed is a fact about the run, not an error, and the case is never steered around one.
+    /// Every input is recorded, taken or refused. A reference that no longer resolves, or a call
+    /// the API refuses, is a refused attempt: nothing is invented to stand in for it.
     pub async fn apply(&mut self, input: &Input) {
-        // `VOICE_TRACE=1` narrates every input as it is applied, whichever phase sends it: the
-        // way to find the one a run stops answering on.
+        // `VOICE_TRACE=1` prints every input, to find the one a run stops answering on.
         static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         if *TRACE.get_or_init(|| std::env::var_os("VOICE_TRACE").is_some()) {
             eprintln!("> {input:?}");
@@ -78,10 +70,6 @@ impl Run {
         true
     }
 }
-
-// ==============================================================================================
-// Calling the host API
-// ==============================================================================================
 
 /// An answer that arrived, plus the live handle it carried, which only this module keeps.
 pub(super) struct Settled {
@@ -400,10 +388,6 @@ fn dtmf_outcome(answer: Result<String, VoiceTaskEnded>) -> DtmfOutcome {
         Err(_) => DtmfOutcome::Stopped,
     }
 }
-
-// ==============================================================================================
-// Feeding a stream, answering a fake
-// ==============================================================================================
 
 /// A stream a `say` opened, until the case ends it with `FeedEnd`: the pusher the host feeds.
 pub(super) enum Feeding {

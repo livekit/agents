@@ -1,6 +1,3 @@
-//! `on_user_turn_completed` is awaited until it returns: the reference never cancels user code
-//! nor moves on without it, so a slow hook, or a second user turn arriving while it runs, never
-//! commits and answers the turn without the hook's edits (or despite its `StopResponse`).
 use lk_agents_voice::agent_session::{HookId, HookKind};
 use lk_agents_voice::trace::{HandoffStep, HookEnd, Step};
 
@@ -9,6 +6,9 @@ use crate::{
     check::{Check, Contract, Rule, Subject},
     record::Recording,
 };
+
+// The reference never cancels user code nor moves on without it: a slow hook or a second turn
+// must not commit the turn without the hook's edits or despite its `StopResponse`.
 
 pub struct TurnHookIsAwaited;
 

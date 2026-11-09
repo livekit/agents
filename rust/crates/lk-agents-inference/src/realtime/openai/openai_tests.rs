@@ -55,10 +55,6 @@ fn types(frames: &[Value]) -> Vec<&str> {
     frames.iter().map(|f| f["type"].as_str().unwrap_or("?")).collect()
 }
 
-// -----------------------------------------------------------------------------------------
-// generate_reply correlation -- the member that needed a design
-// -----------------------------------------------------------------------------------------
-
 // Catches: resolving `generate_reply` off whichever `response.created` arrives first instead
 // of by `metadata.client_event_id` (server VAD creates untagged responses in between).
 #[test]
@@ -206,10 +202,6 @@ fn per_response_instructions_are_concatenated_onto_the_session_prompt() {
     );
 }
 
-// -----------------------------------------------------------------------------------------
-// remote chat context <-> diff ops
-// -----------------------------------------------------------------------------------------
-
 // Catches: wrong anchors, a missing `"root"` literal, or an op order the server cannot apply
 // in `_create_update_chat_ctx_events`.
 #[test]
@@ -309,10 +301,6 @@ fn an_item_anchored_to_a_vanished_one_lands_at_the_tail() {
     recv(&mut m, at(0), item_added(Some("ghost"), "c", "third"));
     assert_eq!(m.chat_ctx().items.iter().map(ChatItem::id).collect::<Vec<_>>(), ["a", "b", "c"]);
 }
-
-// -----------------------------------------------------------------------------------------
-// The xAI dialect's actual deltas
-// -----------------------------------------------------------------------------------------
 
 // Catches: expecting `client_event_id` back from xAI's `force_message`, or consuming the FIFO
 // say tag more than once.
@@ -531,10 +519,6 @@ fn xai_discards_a_response_the_server_left_silent() {
         Event::GenerationDone(GenerationDone { status: GenerationStatus::Cancelled, .. })
     )));
 }
-
-// -----------------------------------------------------------------------------------------
-// Session lifecycle
-// -----------------------------------------------------------------------------------------
 
 // Catches: recycling the socket mid-sentence; xAI must not recycle at all.
 #[test]

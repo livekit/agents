@@ -1,6 +1,3 @@
-//! What the provider tells the driver of the server's happenings: the response it was told of
-//! and only that one's messages, words and audio; its end and metrics; the items the server
-//! added; the person's speech and transcript; and the errors.
 use std::time::Duration;
 
 use lk_agents_abi::{
@@ -25,8 +22,6 @@ use crate::fakes::Control;
 use crate::record::{Detail, Kind, Tag};
 
 impl Socket {
-    // --- what the session is told ----------------------------------------------------------
-
     pub(super) fn told(&self, st: &mut State, now: Ts, happening: Happening) {
         let audio = !self.setup.text_only;
         let active = |st: &State, r: u32| st.generation.as_ref().is_some_and(|g| g.r == r);
@@ -277,8 +272,6 @@ impl Socket {
             }
         }
     }
-
-    // --- what the session reports ----------------------------------------------------------
 
     fn error(&self, message: String, code: Option<&str>, recoverable: bool) -> RealtimeModelError {
         RealtimeModelError {

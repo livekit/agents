@@ -1,5 +1,3 @@
-//! Runtime avatar audio output: byte writers, RPC execution, task ownership and deadlines.
-
 use crate::rtc::events::RpcHandler;
 use crate::telemetry;
 use lk_agents_abi::errors::ProviderError;
@@ -166,7 +164,7 @@ impl Inner {
             *writer = SegmentWriter::Open(opened);
             let continued = self.register_segment(segment, token)?;
             if !self.wait_playback_start && !continued {
-                // approximated: the avatar does not report lk.playback_started
+                // Approximated: the avatar does not report lk.playback_started.
                 self.tracker.playback_started(segment.key, self.clock.now());
             }
         }
@@ -618,8 +616,7 @@ impl AudioOutput for DataStreamAudioOutput {
     fn resume(&self) {}
 }
 
-// Async reader wakeups around voice's synchronous queue and playback state machine.
-
+/// Async reader wakeups around voice's synchronous queue and playback state machine.
 pub struct QueueAudio {
     state: Mutex<Queue>,
     changed: Notify,

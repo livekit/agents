@@ -1,5 +1,3 @@
-//! Host-value emission, shared by record fields, class results and proxy arguments.
-
 use super::conversion;
 use crate::decl::{HostForm, Record, Ty};
 

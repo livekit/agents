@@ -1,5 +1,3 @@
-//! Track publications, local and remote, and the frame conversion a real `rtc.AudioStream` does.
-
 type SpanObserver = dyn Fn(u64, &str) + Send + Sync;
 
 use lk_agents_abi::errors::{ProviderError, RefRegistry};
@@ -44,7 +42,6 @@ struct PublicationState {
     video_streams: Vec<SdkTx<VideoFrameRef>>,
     /// Monotonic stream identity, retained after streams close for processor host references.
     opened_streams: u64,
-    /// The processors every stream opened from now on runs, once they fail.
     failing_processors: Option<FailingProcessors>,
 }
 
@@ -68,14 +65,22 @@ pub struct FailingProcessors {
 /// replayed pre-connect head first).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Faults {
-    /// Never.
     None,
     /// Broken for a while (its model, license or connection): `frames` frames from the `from`-th.
-    Span { from: u32, frames: u32 },
+    Span {
+        from: u32,
+        frames: u32,
+    },
     /// A glitch: one frame in `every`, from the `from`-th.
-    Rare { from: u32, every: u32 },
+    Rare {
+        from: u32,
+        every: u32,
+    },
     /// At the edge of its budget: the first `fails` frames of every `period`.
-    Flapping { period: u32, fails: u32 },
+    Flapping {
+        period: u32,
+        fails: u32,
+    },
 }
 
 impl Faults {
@@ -346,7 +351,6 @@ impl AudioInputStream for FakeAudioInputStream {
 const GAIN_CONTROL: &str = "fake.GainControl";
 const DENOISER: &str = "fake.Denoiser";
 
-/// A stream's processors, and how many frames went through them.
 struct Processing {
     processors: Vec<Processor>,
     frames: u32,
@@ -357,7 +361,7 @@ struct Processor {
     label: &'static str,
     host: HostRef,
     faults: Faults,
-    /// It failed on the last frame.
+    /// Failed on the last frame.
     failing: bool,
 }
 

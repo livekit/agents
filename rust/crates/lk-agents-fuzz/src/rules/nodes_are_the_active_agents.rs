@@ -1,15 +1,3 @@
-//! Every node the session opens is the active agent's.
-//!
-//! An agent's `llm_node`, `tts_node`, `stt_node` and `transcription_node`
-//! are its own: the reference calls each on the agent of the activity
-//! running the step, and a handoff drains the old activity before the new one speaks. So once the
-//! driver installed an agent (`AgentUpdated`, which names it: a handoff's, a `VoiceTask`'s, or a
-//! parent a task gives the floor back to), no node of the agent it replaced opens again past the
-//! instant of that install (several handoffs landing in one cycle each ask for a recognition
-//! stream, opened after the cycle and discarded once superseded). The agent a handoff or a task
-//! asked for may open its nodes from the call on: the journal is read after the fact, so its
-//! stamps can trail what the fakes saw. A parent a task suspends finishes the step whose tool
-//! started the task: its nodes may open until the task ends.
 use lk_agents_voice::trace::{HandoffStep, Step};
 
 use crate::{
@@ -19,6 +7,11 @@ use crate::{
     input::{AgentText, Input, Millis, SayInput},
     record::{NodeUse, Observed, Recording},
 };
+
+// The reference calls each node on the agent of the activity running the step, and a handoff
+// drains the old activity first. The agent asked for may open nodes from the call on, since the
+// journal's stamps can trail what the fakes saw; a suspended parent finishes the step whose tool
+// started the task.
 
 pub struct NodesAreTheActiveAgents;
 

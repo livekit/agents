@@ -1,6 +1,3 @@
-//! Tool bodies: every call the product hands to the runner is an invocation with the actual
-//! `call_id`, name, speech and step; the body waits for whatever the case delivers. The runner is
-//! the host's (`AgentCallbacks`), classifying what the body did, as a Python agent's host does.
 use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -28,21 +25,18 @@ pub const APPROVAL_TOOL: &str = "transfer";
 /// A name-scoped fixture that rejects another call while its earlier body is still running.
 pub const DUPLICATE_REJECT_TOOL: &str = "exclusive_lookup";
 
-/// The tool whose toolset sets `tool_handling` templates: its deferred replies are told
-/// [`TEMPLATED_REPLY`] and the updates' ids.
+/// The tool whose toolset sets `tool_handling` templates: its deferred replies are
+/// [`TEMPLATED_REPLY`] plus the updates' ids.
 pub const TEMPLATED_TOOL: &str = "notify";
 
-/// What [`TEMPLATED_TOOL`]'s deferred reply instructions start with.
 pub const TEMPLATED_REPLY: &str = "Tell the person what changed: ";
 
-/// A fixture tool as the model sees it.
 pub fn tool_spec(name: &str) -> ToolSpec {
     ToolSpec {
         name: name.to_owned(),
         provider_tool: None,
         description: format!("fixture tool {name}"),
-        // The shapes `ToolArgs` draws: a string first, which an `InputRequired(tool=)` hands the
-        // person's answer to.
+        // A string first: an `InputRequired(tool=)` hands it the person's answer.
         json_schema: serde_json::json!({
             "type": "object",
             "properties": {"label": {"type": "string"}, "seconds": {"type": "integer"}},
@@ -53,17 +47,16 @@ pub fn tool_spec(name: &str) -> ToolSpec {
 
 pub struct FakeTools {
     registry: Arc<Registry>,
-    /// Prepared calls' speeches by prepared id, until the body takes them; what a dropped
-    /// preparation releases.
+    /// Prepared calls' speeches until the body takes them or the preparation drops.
     prepared: Arc<Mutex<Preparations>>,
     refs: Arc<dyn lk_agents_abi::RefRegistry>,
-    /// The bodies that answered `Detached` and run on, by call id: what a cancel ends.
+    /// Bodies that answered `Detached` and run on, by call id.
     detached: Mutex<BTreeMap<String, Slot>>,
-    /// The calls the driver cancelled: their task is cancelled, so a body still running cannot
-    /// detach afterwards (seed 5818).
+    /// A cancelled call's task is cancelled, so a body still running cannot detach afterwards
+    /// (seed 5818).
     cancelled: Mutex<std::collections::BTreeSet<String>>,
-    /// The bodies still running, by call id: a cancel ends one at once, as the host cancels the
-    /// callback's task (`AgentCallbacks.cancel`), unless the bodies refuse it.
+    /// A cancel ends a running body at once, as the host cancels the callback's task, unless the
+    /// bodies refuse it.
     running: Mutex<BTreeMap<String, oneshot::Sender<()>>>,
 }
 
@@ -98,12 +91,10 @@ pub fn frame(registry: &Arc<Registry>, agent: &str, tools: &[String]) -> Arc<dyn
     Arc::new(VoiceAgentFrame::new(definition, host, lk_agents_abi::HostRef::new(0, &refs), 0))
 }
 
-/// The fixture tools as the host's setup reports them.
 pub fn tool_infos(tools: &[String]) -> Vec<FunctionToolInfo> {
     tools.iter().map(|name| tool_info(name)).collect()
 }
 
-/// The fixture tool `name`; [`APPROVAL_TOOL`] requires approval with the default read-back.
 fn tool_info(name: &str) -> FunctionToolInfo {
     FunctionToolInfo {
         spec: tool_spec(name),
@@ -120,20 +111,18 @@ fn tool_info(name: &str) -> FunctionToolInfo {
     }
 }
 
-/// The tool call a callback is about.
 fn call_of(invocation: &Invocation) -> &FunctionCall {
     invocation.function_call.as_ref().expect("a tool callback carries its call")
 }
 
-/// The value the runner reports for call `call_id`'s `Completed` in a task: the object `run()` must
-/// return, told apart from every other call's.
+/// The value reported for `call_id`'s `Completed`, distinct per call: what a task's `run()` must
+/// return.
 pub fn completion_value(call_id: &str) -> u64 {
     call_id
         .bytes()
         .fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
 }
 
-/// The side table a completion's value points into; nothing holds the object.
 struct NoRefs;
 
 impl lk_agents_abi::RefRegistry for NoRefs {
@@ -143,8 +132,8 @@ impl lk_agents_abi::RefRegistry for NoRefs {
 /// Prepared arguments no body ran with (a read-back, a refused duplicate) release their speech.
 #[derive(Default)]
 struct Preparations {
-    // A body takes the entry before the corresponding HostRef is dropped. Never reuse its id:
-    // that older reference may still release it after another preparation has been inserted.
+    // Never reuse an id: a body takes its entry before its HostRef drops, and that older ref may
+    // release the id after another preparation was inserted.
     next: u64,
     speeches: BTreeMap<u64, Arc<SpeechHandle>>,
 }
@@ -157,10 +146,10 @@ impl lk_agents_abi::RefRegistry for PreparedRefs {
     }
 }
 
-/// What the case tells a running body to do: answer, or first wait for the agent to go idle --
-/// `ctx.wait_for_idle()` -- and answer once it has.
+/// What the case tells a running body to do.
 pub enum Body {
     Answer(ToolOutcome),
+    /// `ctx.wait_for_idle()` first.
     AfterIdle(ToolOutcome),
     /// `await ctx.speech_handle` first: refused, or the body waits on its own speech forever.
     AwaitOwnSpeech(ToolOutcome),
@@ -175,7 +164,6 @@ impl AgentCallbacks for FakeTools {
         Box::pin(async { Ok(String::new()) })
     }
 
-    /// The called fixture tool; [`APPROVAL_TOOL`] requires approval with the default read-back.
     fn list_tools<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
@@ -185,8 +173,8 @@ impl AgentCallbacks for FakeTools {
         Box::pin(async move { Ok(vec![info]) })
     }
 
-    /// Binds nothing: the parsed arguments are the identity approval binds to, and the prepared
-    /// call keeps its speech for the body.
+    /// The parsed arguments are the approval identity; the preparation keeps its speech for the
+    /// body.
     fn prepare_tool<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
@@ -215,7 +203,7 @@ impl AgentCallbacks for FakeTools {
         Box::pin(async move { Ok(Ok(args)) })
     }
 
-    /// The runs' approval tool reads back with the framework's default: never asked here.
+    /// Never asked: the approval tool uses the framework's default read-back.
     fn read_back<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
@@ -241,15 +229,12 @@ impl AgentCallbacks for FakeTools {
         let call = call_of(invocation).clone();
         Box::pin(async move {
             let mut outcome = self.answer(invocation, &call, &handle).await;
-            // A question asked as written names its own tool to take the answer
-            // (`InputRequired(question, tool=..., verbatim=True)`); one in the agent's words does
-            // not.
+            // A verbatim question names its own tool to take the answer.
             if let ToolOutcome::InputRequired { verbatim: true, tool, .. } = &mut outcome {
                 *tool = Some(call.name.clone());
             }
-            // Every completion is handed over with a value, in a task's speech or not: whether it
-            // ends a task is the core's to decide (a host that validated an ordinary tool's
-            // `Completed` as a task's once silenced the call), so the rules see what it decides.
+            // Every completion carries a value: whether it ends a task is the core's decision,
+            // so the rules see what it decides.
             let transition = matches!(outcome, ToolOutcome::Completed { .. }).then(|| {
                 let refs: Arc<dyn lk_agents_abi::RefRegistry> = Arc::new(NoRefs);
                 lk_agents_abi::HostRef::new(completion_value(&call.call_id), &refs)
@@ -259,8 +244,7 @@ impl AgentCallbacks for FakeTools {
         })
     }
 
-    /// [`TEMPLATED_TOOL`]'s toolset renders its deferred replies; every other template keeps
-    /// the framework's text.
+    /// Only [`TEMPLATED_TOOL`]'s deferred replies are rendered; others keep the framework's text.
     fn render_template<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
@@ -307,8 +291,7 @@ impl AgentCallbacks for FakeTools {
 }
 
 impl FakeTools {
-    /// The body's outcome, or `Cancelled` once the driver cancels it: the callback's task is
-    /// cancelled wherever it waits.
+    /// The body's outcome, or `Cancelled` wherever it waits once the driver cancels it.
     async fn answer(
         &self,
         invocation: &Invocation,
@@ -363,9 +346,8 @@ impl FakeTools {
                 answer
             }
             Ok(Body::AfterIdle(answer)) => {
-                // `async with ctx.foreground():` in the body: idle asked from the tool's own
-                // origin (so the driver can tell it apart from its speech), the floor held, and
-                // released on the way out. Refused by the close, the wait ends all the same.
+                // `async with ctx.foreground():`, asked from the tool's own origin so the driver
+                // can tell it from its speech. A refusal at close ends the wait all the same.
                 let origin = lk_agents_abi::voice::session::VoiceCommandOrigin::Tool {
                     invocation_id: invocation.invocation_id.clone(),
                     operation: invocation.operation,
@@ -414,8 +396,8 @@ pub(super) fn deliver(sender: oneshot::Sender<Body>, what: &Input) -> bool {
     }
 }
 
-/// What the runner reports for a body that answered `answer` with `text`, as a Python tool's
-/// runner classifies the value it returned or raised.
+/// The runner's classification of a body that answered `answer` with `text`, as a Python
+/// runner classifies what a tool returned or raised.
 pub fn outcome_of(answer: Answer, text: &str) -> ToolOutcome {
     let text = text.to_owned();
     let value = |reply_required, verbatim| ToolOutcome::Value {
@@ -495,8 +477,8 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        // A body takes its speech immediately, while its host preparation remains alive until
-        // execution settles. Another call may be prepared during that interval.
+        // A body takes its speech at once but its preparation lives until execution settles,
+        // so another call may be prepared in between.
         drop(tools.run_tool(
             &lk_agents_abi::telemetry::Cx::NONE,
             &first_invocation,
@@ -514,8 +496,7 @@ mod tests {
             .unwrap()
             .unwrap();
         drop(first);
-        // Check before run's assertion acquires the mutex, so the failing regression leaves
-        // preparation cleanup usable rather than causing a second panic during unwinding.
+        // Checked outside run's lock, so a failure does not panic again while unwinding.
         let second_is_prepared =
             tools.prepared.lock().unwrap().speeches.contains_key(&second.prepared.id());
         assert!(second_is_prepared, "the earlier body's cleanup released the later call");

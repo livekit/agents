@@ -1,11 +1,3 @@
-//! A frame's `on_exit` runs once, whichever of a host `drain()`, a handoff or the close asks for
-//! it first.
-//!
-//! The three share one exit: a handoff or a close that follows a drain adopts the drain's hook
-//! while it runs and skips the frame's `on_exit` once it has (C-10). A frame is the stretch of the
-//! journal between two `AgentUpdated` steps -- a swap, a task entered, a parent resumed -- and a
-//! second `HookIssued{OnExit}` for the same agent inside one is user code run twice: a goodbye
-//! said twice, a transfer dialled twice.
 use lk_agents_voice::{
     agent_session::{HookId, HookKind},
     trace::{HandoffStep, Step},
@@ -18,6 +10,9 @@ use crate::{
     input::{AgentText, Input, Millis},
     record::Recording,
 };
+
+// A frame is the journal between two `AgentUpdated` steps. A second `HookIssued{OnExit}` for one
+// agent inside it is user code run twice: a goodbye said twice, a transfer dialled twice.
 
 pub struct OnExitOncePerFrame;
 

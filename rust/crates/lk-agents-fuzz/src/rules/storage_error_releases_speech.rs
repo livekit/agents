@@ -1,4 +1,3 @@
-//! A failed storage receipt still releases the speech's completion barrier.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},

@@ -1,15 +1,11 @@
-//! A cost contract: a call wakes its thread a bounded number of times per second of virtual time.
-//!
-//! Every time the run's one thread goes idle and is woken again (a timer, a task polling) is
-//! counted. A session's own work comes to tens of wake-ups a second (at most 29 over 2,048 survey
-//! seeds); a task that polls instead of waiting, as the idle background audio mixer did every
-//! millisecond before a61e6faa0, is a thousand more for as long as the call lasts. On a real call
-//! that is CPU spent on nothing, multiplied by every call on the worker.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
     record::Recording,
 };
+
+// A session's own work is tens of wake-ups a second (at most 29 over 2,048 survey seeds); a task
+// polling every millisecond adds a thousand, CPU spent on nothing on every call of the worker.
 
 /// Wake-ups per second of virtual time a call may average.
 pub const BOUND_PER_S: u64 = 200;

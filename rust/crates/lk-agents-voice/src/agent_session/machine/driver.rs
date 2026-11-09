@@ -1,6 +1,3 @@
-//! The session decision core and the input vocabulary its runtime queue carries. Initialization
-//! and ordered recognition dispatch are implementations of this same driver, colocated here.
-
 use crate::agent_session::VoiceSessionState;
 use crate::agent_session::commands::{
     Answer, Close, Command, IvrCommand, RecorderHandle, RequestId, Sent, SpeechCall,
@@ -282,8 +279,7 @@ impl VoiceDriver {
         {
             self.publish_event(SessionEvent::Close { reason, error });
         }
-        // The final local accounting boundary (usage.md "Voice sessions"): a recognition stream
-        // still open ends with the session.
+        // A recognition stream still open ends with the session.
         for stream in self.session.stt_requests.keys().copied().collect::<Vec<_>>() {
             self.stt_stream_ended(stream);
         }

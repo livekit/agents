@@ -1,4 +1,3 @@
-//! The realtime server never refuses a request the driver should have known it would refuse.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},

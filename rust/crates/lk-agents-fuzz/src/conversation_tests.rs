@@ -1,5 +1,3 @@
-//! Conversation regression tests.
-
 mod agent_state_written_on_connect {
     //! The agent state reaches the room: written by the session as it changes, and a state taken
     //! before the room connected written once it does.
@@ -125,10 +123,8 @@ mod stored_turn_keeps_the_history {
         ]
     }
 
-    // Catches: the session's history was replaced by the lane storage gave back for a turn's
-    // request, the active agent's own view. Items that view does not hold (a question an earlier
-    // agent left waiting, what `update_chat_ctx` dropped from the view) left the history, so the
-    // person's answer never reached the waiting call and the next commit wrote the lane without them
+    // Catches: the session's history replaced by the active agent's own view of the lane, dropping
+    // items that view does not hold, so a waiting question never got its answer
     // (`tool_output_follows_outcome`, survey seeds 13386, 15374).
     #[test]
     fn what_the_agent_does_not_read_stays_in_the_history() {
@@ -288,8 +284,7 @@ mod turn_hook_sees_agent_context {
     }
 
     // Catches: a second turn decided while the first turn's hook ran ended that wait with no edits
-    // and answered the first turn anyway; the reference awaits the old task ("we never cancel user
-    // code").
+    // and answered the first turn anyway; user code is never cancelled.
     #[test]
     fn a_second_turn_waits_for_the_first_turns_hook() {
         let setup = Setup {

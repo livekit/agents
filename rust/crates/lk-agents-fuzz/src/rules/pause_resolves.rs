@@ -1,11 +1,3 @@
-//! A speech paused for the person's speech does not stay paused once they stopped.
-//!
-//! The pause is the false-interruption machine's: the person's voice over the agent pauses the
-//! speech (`PlayoutGate { Pause }`) until it is clear whether they meant to interrupt. Its cause is
-//! their speech; once that has ended, the speech resumes (a false interruption), is interrupted,
-//! ends, or the session closes, within the false-interruption timeout and as much again. A pause
-//! nothing ends is an agent gone silent mid-sentence: what the realtime server's onset did before
-//! c6881abb9, when no false-interruption timer was armed for its pause.
 use lk_agents_abi::voice::events::UserState;
 use lk_agents_voice::{
     agent_session::machine::activity::scheduling::SpeechId,
@@ -23,6 +15,9 @@ use crate::{
 /// How long a pause may outlast the person's speech, beyond the turn decision it waits on (the
 /// endpointing delay in effect): the default false-interruption timeout (2 s) and as much again.
 pub const BOUND_MS: u64 = 4_000;
+
+// The false-interruption machine pauses a speech (`PlayoutGate { Pause }`) while the person talks
+// over it. A pause nothing ends leaves the agent silent mid-sentence.
 
 pub struct PauseResolves;
 

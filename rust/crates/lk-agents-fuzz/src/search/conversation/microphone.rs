@@ -1,5 +1,3 @@
-//! Microphone segments and the detector verdicts delivered around them.
-
 use super::*;
 use crate::fakes::realtime::server::{
     SPEECH_STARTED_LAG_SEMANTIC, SPEECH_STARTED_LAG_SERVER, SPEECH_STOPPED_LAG_SEMANTIC,
@@ -55,11 +53,7 @@ impl Talk {
             out.push(Verdict { at_ms: slow(rng.u64(VAD_START_MS)), word: Word::VadStart });
         }
         let vad_end_at = dur + slow(rng.u64(VAD_END_MS));
-        // The recogniser behaves as the measured model the setup names does: when its first words
-        // come, how often it restates them, how it cuts a long turn into finals, what it sends
-        // around each final (a usage report before it, the end of speech with it), and its
-        // quirks: Deepgram's empty finals over noise, AssemblyAI's second final for the same
-        // words, Flux's preflights.
+        // The recogniser follows the measured model the setup names, quirks included.
         let model = &STT_MODELS[self.run.setup.stt_model % STT_MODELS.len()];
         let timing = self.run.setup.timing();
         let listening = !live.of(Kind::Stt).is_empty();
@@ -77,9 +71,7 @@ impl Talk {
         } else if vad {
             out.push(Verdict { at_ms: vad_end_at, word: Word::VadEnd });
         }
-        // The realtime server hears the person with its own VAD, when it detects turns: its onset
-        // and its end of speech come as late as measured, its end later still under
-        // semantic detection, which waits for the words to sound finished.
+        // The realtime server's own VAD, with measured lags; semantic detection ends later.
         if let Some(semantic) = self.server_vad() {
             let (started, stopped) = if semantic {
                 (SPEECH_STARTED_LAG_SEMANTIC, SPEECH_STOPPED_LAG_SEMANTIC)
@@ -116,20 +108,13 @@ impl Talk {
         let mut elapsed = 0;
         let mut owed_ms = 0;
         let mut stalled = false;
-        // Where the forwarding log stood when this segment began, and when its `SttStart` was
-        // said. A provider knows only what the driver handed it: a recogniser does not start on,
-        // or transcribe, audio it never received -- and the driver withholds the microphone from
-        // it while an uninterruptible reply plays -- and a detector hears no speech in frames it
-        // was not given. So every verdict waits until microphone audio has reached its stream,
-        // and one still waiting when the speech is over is never said: that provider heard
-        // silence, and silence has nothing to report.
+        // A provider knows only the audio the driver handed it, so every verdict waits until
+        // microphone audio reached its stream; one still waiting when the speech is over is
+        // never said.
         let segment_start = self.run.record.forwarded().len();
         let mut stt_start: Option<usize> = None;
-        // An overlap: this speech starts while the agent's audio is coming out of the speaker.
-        // Audio only handed to the output is not being spoken yet -- the driver marks the agent
-        // speaking on the speaker's own started report -- so a segment merely live is not enough.
-        // The detector is asked for its verdict one beat after `VadStart`, once the driver has
-        // opened the overlap.
+        // An overlap needs the speaker's own started report, not just audio handed to the
+        // output. The detector answers one beat after `VadStart`, once the driver opened it.
         let overlapping = seg.speaking && self.hearing();
         // The recogniser may give out partway through.
         let mut stt_fails_at = (self.rng.u8(0..100) < self.providers.stt_fails)
@@ -200,8 +185,6 @@ impl Talk {
                 })
                 .await?;
             }
-            // Due verdicts whose stream has heard the microphone are said; one still unheard once
-            // the speech is over is dropped, along with everything that would have followed it.
             let over = elapsed >= seg.dur_ms;
             while let Some(verdict) = verdicts.next_if(|v| {
                 v.at_ms <= elapsed && (over || self.sendable(&v.word, segment_start, stt_start))
@@ -220,10 +203,9 @@ impl Talk {
                 }
                 self.say(seg, verdict).await?;
             }
-            // A prediction the driver asked for shows up here too, after the advance.
             self.predict(seg.done).await?;
-            // The detector answers when it has heard enough: a stretch long enough to be a
-            // interruption is judged as soon as it is one, a shorter one once it has ended.
+            // A stretch long enough to be an interruption is judged as soon as it is one, a
+            // shorter one once it has ended.
             let evidence = seg.dur_ms >= BACKCHANNEL_MS || vad_ended;
             if overlapping && !judged && evidence && vad_started_at.is_some_and(|at| elapsed > at) {
                 let barge = seg.dur_ms >= BACKCHANNEL_MS;

@@ -1,6 +1,3 @@
-//! [`StreamAdapter`] (`stt/stream_adapter.py`): a recognize-only STT as a streaming one. The VAD
-//! cuts the audio into utterances, each recognized on its own once it ends.
-
 use crate::telemetry;
 use std::sync::Arc;
 

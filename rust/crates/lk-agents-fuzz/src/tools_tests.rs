@@ -1,5 +1,3 @@
-//! Tools regression tests.
-
 mod input_required_tool_takes_the_answer {
     //! `InputRequired(tool=)`: the person's next turn is a call of that tool, with their words.
     use lk_agents_abi::ChatItem;
@@ -9,9 +7,8 @@ mod input_required_tool_takes_the_answer {
     };
     use lk_agents_voice::events::SessionEvent;
 
-    // Catches: the claim never made on a call (`_claim_next_turn`, `_answer_arguments` absent): the
-    // person's answer went to the model to interpret, and the tool that asked was called with the
-    // model's arguments (finding 7 of the tools review).
+    // Catches: the claim never made on a call: the person's answer went to the model to interpret,
+    // and the tool that asked was called with the model's arguments.
     #[test]
     fn the_claimed_tool_takes_the_persons_words() {
         let setup = Setup {
@@ -93,9 +90,8 @@ mod ordinary_completed_replies {
     use lk_agents_voice::events::SessionEvent;
 
     // Catches: a `Completed` from a tool outside any VoiceTask taken as a task's completion, its
-    // output asking for no reply and the step ending there: the agent went silent (the host's
-    // `task` flag shadowed, finding 1 of the tools review). The fake host hands a value with every
-    // completion, so the core alone decides.
+    // output asking for no reply and the step ending there: the agent went silent. The fake host
+    // hands a value with every completion, so the core alone decides.
     #[test]
     fn an_ordinary_completion_is_replied_to() {
         let setup = Setup { tools: vec!["lookup".into()], ..Setup::default() };
@@ -151,12 +147,9 @@ mod stored_answer_reaches_the_read_back {
     /// The fixture tool the runs declare with `needs_approval=True`.
     const APPROVAL_TOOL: &str = "transfer";
 
-    // Catches: the preemptive reply to the person's answer planned its request with the answer already in the
-    // waiting output, rendered for the model ("not run yet: the person answered ..."). The lane's
-    // store gave that rendering back for the row it had not stored yet, and the session's record took
-    // it as the lane's edit: the output stopped waiting before the answer was recorded, so the stored
-    // output was the model's rendering, never the person's words (`tool_output_follows_outcome`,
-    // survey seed 21687).
+    // Catches: the preemptive reply's rendering of the answer, given back by the lane's store, taken
+    // as the lane's edit, so the stored output was the model's rendering, never the person's words
+    // (`tool_output_follows_outcome`, survey seed 21687).
     #[test]
     fn the_answer_is_the_read_backs_output() {
         // A store that keeps its lease for the whole call.
@@ -227,8 +220,7 @@ mod tool_awaits_own_speech {
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs};
 
     // Catches: `await ctx.speech_handle` inside a blocking tool waited for a speech that waited for
-    // that tool: the call hung silently. The reference raises (`SpeechHandle.wait_for_playout`'s
-    // circular-wait guard); the port's comments claimed the shim had it, and nothing did.
+    // that tool: the call hung silently.
     #[test]
     fn a_tool_awaiting_its_own_speech_is_refused() {
         let setup = Setup { tools: vec!["lookup".into()], ..Setup::default() };
@@ -350,8 +342,7 @@ mod tool_reply_scheduled_at_once {
     // Catches: a detached tool's second update, landing while the reply to its first was playing,
     // delivered by the cycle's waiter pass once that reply ended, after the cycle's scheduling pass
     // had run: the new reply sat queued with the floor free until some unrelated wake scheduled it
-    // (the user-away timer, 15 s later in survey seed 70), the agent silent with the tool's news in
-    // hand (`speech_is_heard`). What the waiters start is now scheduled in the same cycle.
+    // (`speech_is_heard`, survey seed 70).
     #[test]
     fn a_second_tool_update_reply_is_authorized_at_once() {
         let setup = Setup {
@@ -440,8 +431,8 @@ mod tool_started_then_interrupted {
 
     // Catches: the runner task of a scheduled speech's call racing adoption against interruption.
     // The start was already journalled hosted and `ToolExecutionUpdated::Started` emitted, but an
-    // interruption landing before the task's first poll dropped the body unrun (survey seed 170;
-    // 9f070e85f). The race is the scheduler's, so 32 schedules of each queue policy run.
+    // interruption landing before the task's first poll dropped the body unrun (survey seed 170).
+    // The race is the scheduler's, so 32 schedules of each queue policy run.
     #[test]
     fn a_started_call_runs_though_its_speech_is_interrupted() {
         let inputs = [
@@ -488,7 +479,7 @@ mod tool_update_before_detach_heard {
 
     // Catches: `ctx.update()` reaches the driver directly while the detach is heard at the join, in
     // the model's order: with a blocking call ahead of it, the second call's update arrived first and
-    // was refused (`UpdateRefused`), never told nor replied to (finding 3 of the tools review).
+    // was refused (`UpdateRefused`), never told nor replied to.
     #[test]
     fn an_update_ahead_of_the_join_is_told() {
         let setup = Setup { tools: vec!["lookup".into()], ..Setup::default() };
@@ -1131,9 +1122,8 @@ mod host_body_close_ownership {
     use lk_agents_fuzz::drive::{Case, Setup, run};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs};
 
-    // Seed 2 / Arrival / budget 3000 exposed this sequence: a semantic terminal update
-    // releases the core's call while the actual host body remains alive. The body still owns
-    // close cleanup and must settle before the session's cleanup bound.
+    // Seed 2 / Arrival: a terminal update releases the core's call while the host body remains
+    // alive; the body still owns close cleanup and must settle before the cleanup bound.
     fn case(refuses_cancel: bool) -> Case {
         Case {
             setup: Setup {

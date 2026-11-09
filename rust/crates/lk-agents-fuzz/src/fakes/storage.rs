@@ -1,11 +1,3 @@
-//! The voice lane's storage at the port the voice executor consumes: every turn commits and every
-//! abandon gets a seeded delay and outcome, until the setup's `lost_at`-th receipt loses the lease.
-//! It reports the loss with its answer, every speech watching the lease hears it, and every later
-//! acquire is refused, as a real store's lease stays lost. Between voice turns a text turn takes
-//! the lane now and then, at a cadence the seed draws: an acquire after it reloads what that turn
-//! left, the person's text and the agent's answer appended, an earlier answer of the agent's
-//! edited, or the oldest exchange compacted into a summary.
-//! Storage's own lease, renewal and fenced commit are covered by storage and runtime tests.
 use std::sync::{Arc, Mutex};
 
 use super::Registry;
@@ -18,6 +10,10 @@ use lk_agents_abi::{ChatItem, ChatMessage, Role, StreamInput};
 use lk_agents_abi::{Clock, SpawnerExt};
 use std::time::Duration;
 use std::time::UNIX_EPOCH;
+
+// Once the `lost_at`-th receipt loses the lease it stays lost, as a real store's does: watchers
+// hear it and every later acquire is refused. The real lease, renewal and fenced commit are
+// covered by storage and runtime tests.
 
 type Events = Arc<dyn StreamInput<VoiceStorageEvent>>;
 
@@ -52,8 +48,7 @@ impl FakeVoiceStorage {
     }
 
     fn draw(state: &mut State) -> (Result<(), StorageError>, Duration) {
-        // Stress frequencies, not measured provider failure rates: each fault is rare and
-        // independent of the occasional long commit. Both remain functions of the case seed.
+        // Stress frequencies, not measured failure rates.
         let result = match state.rng.u32(0..128) {
             0 => Err(StorageError::Unavailable("seeded storage outage".into())),
             1 => Err(StorageError::VersionConflict {
@@ -185,9 +180,8 @@ impl VoiceStorage for FakeVoiceStorage {
     }
 }
 
-/// What a text turn leaves of the lane: an earlier answer of the agent's edited (`what` 0), the
-/// two oldest plain messages compacted into a summary (1), or an exchange appended (otherwise).
-/// Tool calls and their outputs are never rewritten: a text turn answers in messages.
+/// A text turn between voice turns: edits an agent answer (`what` 0), compacts the two oldest
+/// plain messages into a summary (1), or appends an exchange. Tool items are never rewritten.
 fn text_turn(lane: &mut Vec<ChatItem>, turn: u32, what: u32) {
     let plain = |item: &ChatItem| {
         item.as_message().is_some_and(|m| matches!(m.role, Role::User | Role::Assistant))
@@ -231,7 +225,6 @@ fn text_turn(lane: &mut Vec<ChatItem>, turn: u32, what: u32) {
         }
         _ => {}
     }
-    // Written after everything the call had: the lane's last item's instant.
     let at = lane.iter().map(ChatItem::created_at).max().unwrap_or(UNIX_EPOCH);
     lane.push(said(
         format!("lane_text_{turn}_user"),

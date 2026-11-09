@@ -1,5 +1,3 @@
-//! Loads ordinary Python fixtures for native boundary tests, preserving real traceback paths.
-
 #[cfg(test)]
 pub use support::*;
 

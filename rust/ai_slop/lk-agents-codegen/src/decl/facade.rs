@@ -1,10 +1,7 @@
-//! The facade IR: `#[host(facade(..))]` traits, the public Python classes over native classes
-//! (docs/internals/rust-core.md "Facades").
-
 use super::{Method, Ty};
 
 /// `#[host(facade(..))] trait X`: the public Python class over a native class, one method per
-/// Python method, in order (docs/internals/rust-core.md "Facades").
+/// Python method, in order.
 #[derive(Debug, Clone)]
 pub struct FacadeClass {
     /// The Python class name: the trait's, or `name = ".."`.

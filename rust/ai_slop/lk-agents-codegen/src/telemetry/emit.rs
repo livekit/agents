@@ -1,10 +1,8 @@
-//! The registry's outputs: the Weaver registry (`rust/otel/`), the consumer schema
-//! (`rust/otel/schema.json`) and the Python constants (`_generated/semconv.py`). The Weaver files
-//! are YAML written in its JSON subset, so one JSON printer writes every output.
-
 use super::{Attr, Content, Encoding, Parent, Registry, Shape, ShapeField, Wire};
 use lk_agents_bindgen::telemetry::{InstrumentKind, SpanKind, Unmeasured};
 use serde_json::{Map, Value, json};
+
+// The Weaver files are YAML written in its JSON subset, so one JSON printer writes every output.
 
 /// livekit/protocol's commit whose `otel/model/shared` the shared keys are read from (PR #1866).
 pub const PROTOCOL_REF: &str = "424a912b1db6878a43a9cbea3cd71cb92e4ad712";
@@ -65,8 +63,6 @@ fn encoding(e: &Option<Encoding>) -> Option<&'static str> {
         _ => None,
     }
 }
-
-// --- rust/otel/schema.json -----------------------------------------------------------------------
 
 fn schema_attr(a: &Attr) -> Value {
     let mut f = Map::new();
@@ -214,8 +210,6 @@ fn schema(r: &Registry) -> String {
             .collect::<Vec<_>>(),
     }))
 }
-
-// --- rust/otel/manifest.yaml and rust/otel/registry/ ---------------------------------------------
 
 fn yaml_file(doc: Value) -> String {
     format!(
@@ -433,8 +427,6 @@ pub fn otel(r: &Registry) -> Vec<(String, String)> {
         ("rust/otel/schema.json".into(), schema(r)),
     ]
 }
-
-// --- _generated/semconv.py ----------------------------------------------------------------------
 
 fn constant(name: &str) -> String {
     name.chars()

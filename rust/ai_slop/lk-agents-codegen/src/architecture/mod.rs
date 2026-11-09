@@ -1,4 +1,3 @@
-//! Shared handwritten-source visitor for lint exemptions, compiler locations and export placement.
 use proc_macro2::Span;
 use quote::ToTokens;
 use std::collections::BTreeMap;

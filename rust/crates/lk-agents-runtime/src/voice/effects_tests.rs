@@ -1,5 +1,3 @@
-//! VoiceRuntime host callbacks follow their speech's cancellation lifetime, not the session's.
-
 use super::*;
 use crate::voice::session::{DriverBuilder, Timebase};
 use lk_agents_abi::agent::run::ValidationId;

@@ -1,6 +1,3 @@
-//! Executes decoded A2A RPCs against storage. A response observes one runtime-owned operation;
-//! dropping that observer leaves accepted work owned by the door.
-
 pub mod serve;
 pub(crate) mod stream;
 
@@ -32,6 +29,8 @@ use std::sync::Arc;
 use stream::Sender;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
+
+// Dropping a response's observer leaves accepted work owned by the door.
 
 const RESPONSE_CAPACITY: usize = 64;
 
@@ -417,8 +416,6 @@ impl Inner {
     }
 }
 
-// Admission for decoded A2A operations, independent of worker stream transport.
-
 #[derive(Default)]
 struct Budget {
     handlers: usize,
@@ -465,21 +462,5 @@ impl Drop for Reservation {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn handler_and_payload_capacity_recover_when_operations_finish() {
-        let admission = Admission { max_handlers: 2, max_bytes: 16, ..Admission::default() };
-        let first = admission.try_exchange(9).unwrap();
-        assert!(admission.try_exchange(8).is_none());
-        assert!(admission.try_exchange(usize::MAX).is_none());
-        let second = admission.try_exchange(7).unwrap();
-        assert!(admission.try_exchange(0).is_none());
-        drop(first);
-        assert!(admission.try_exchange(9).is_some());
-        drop(second);
-        assert_eq!(admission.budget.lock().handlers, 0);
-        assert_eq!(admission.budget.lock().bytes, 0);
-    }
-}
+#[path = "door_tests.rs"]
+mod tests;

@@ -1,15 +1,3 @@
-//! A synchronised transcript loses, adds and reorders nothing: what a speech that played out
-//! whole showed is the text forwarded for it.
-//!
-//! The synchroniser re-tokenises what it is given and releases it word by word against the
-//! audio. Pacing changes when a word appears, never which: once the speech completed, the words
-//! it released, joined, are the transcript it was given (the model's text, or the voice's aligned
-//! words). Whitespace is ignored on both sides, as the tokeniser may regroup it.
-//!
-//! Judged where the synchroniser stood between the outputs throughout (not an avatar's, whose late
-//! reports land on the next segment): built with the session,
-//! no output replaced or switched by the speech's end, the voice never failed (a failed segment's
-//! words go out unpaced), some of its audio played and none of its segments was cut.
 use lk_agents_voice::{
     agent_session::machine::activity::scheduling::SpeechId,
     trace::{PlayoutStep, Step},
@@ -20,6 +8,10 @@ use crate::{
     check::{Check, Contract, Rule},
     record::{Handle, Recording, TranscriptSetup},
 };
+
+// Pacing changes when a word appears, never which. Whitespace is ignored, as the tokeniser may
+// regroup it. Avatar outputs are skipped (their late reports land on the next segment), as are
+// failed voices, whose words go out unpaced.
 
 pub struct ShownTranscriptIsConserved;
 

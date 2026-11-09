@@ -1,7 +1,3 @@
-//! `beta/workflows` and `beta/tools`: the checks a capture tool runs on what the model heard
-//! (card numbers and expiries, dates of birth, email addresses, phone numbers), DTMF reception and
-//! sending, the warm transfer, and the call ended after its goodbye.
-
 use lk_agents_abi::utils::dates::Date;
 use lk_agents_abi::voice::workflows::{
     CaptureRefused, DateOfBirthRefused, UnknownDtmfSymbol, WorkflowChecks,

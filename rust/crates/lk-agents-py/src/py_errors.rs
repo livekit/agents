@@ -1,5 +1,3 @@
-//! Python exception capture, classification and restoration.
-
 /// Interpreter interface namespaces. Generated inherent methods perform the declared
 /// imports and member access; they accept Python objects without asserting their runtime type.
 pub mod interfaces {
@@ -68,8 +66,6 @@ use pyo3::types::PyType;
 // A host exception goes into the side table and only its key plus scalar `retryable`/`status_code`/
 // kind cross, so it re-raises with traceback and subclass intact. `raise_original` takes it once.
 
-// --------------------------------------------------------------------- the side table
-
 fn insert(obj: Py<PyAny>) -> CapturedError {
     let t = exception_table();
     CapturedError::new(t.insert(obj), t.registry())
@@ -84,8 +80,6 @@ pub fn resolve_captured(py: Python<'_>, host_ref: CapturedError) -> Option<Py<Py
 pub fn release(host_ref: CapturedError) -> Option<Py<PyAny>> {
     exception_table().take(&host_ref)
 }
-
-// --------------------------------------------------------------------- capture / re-raise
 
 /// Resolved once: captures happen on the retry path.
 struct ErrorTypes {
@@ -112,7 +106,7 @@ fn error_types(py: Python<'_>) -> Option<&'static ErrorTypes> {
         .ok()
 }
 
-/// By class, not name: plugins subclass, and `llm/llm.py:288` tests `isinstance`.
+/// By class, not name: plugins subclass it.
 fn taxonomy_matches(value: &Bound<'_, PyAny>) -> Option<TaxonomyMatches> {
     let types = error_types(value.py())?;
     let is = |t: &Py<PyType>| value.is_instance(t.bind(value.py())).unwrap_or(false);

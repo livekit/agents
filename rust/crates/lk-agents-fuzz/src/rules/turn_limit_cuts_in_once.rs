@@ -1,8 +1,3 @@
-//! A user turn past its limit hands the developer's `on_user_turn_exceeded` over once no reply is
-//! on its way, as the reference's `_user_turn_exceeded_task` does: it waits for the reply the end
-//! of turn may bring and gives up if the agent starts speaking, one callback at a time. Fired at
-//! once, the default callback's reply races the end of turn's (two replies), and an override fires
-//! on an agent that is already answering.
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::events::{AgentState, UserTurnExceededEvent};
 use lk_agents_voice::agent_session::machine::activity::hooks::TurnLimitSkip;
@@ -17,6 +12,9 @@ use crate::{
     input::{Input, Millis, Ref, TurnMode, UserText},
     record::Recording,
 };
+
+// As the reference's `_user_turn_exceeded_task`: fired at once, the default callback's reply
+// would race the end of turn's, and an override would fire on an agent already answering.
 
 pub struct TurnLimitCutsInOnce;
 

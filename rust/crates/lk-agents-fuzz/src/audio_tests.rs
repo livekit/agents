@@ -1,8 +1,6 @@
-//! Audio regression tests.
-
 mod background_audio {
-    //! `BackgroundAudioPlayer` over FakeRoom, in what the DST's player (an ambient stream and the
-    //! thinking sound) does not reach: refused plays and a close cancelled while a stream retires.
+    //! `BackgroundAudioPlayer` paths the DST's player does not reach: refused plays and a close
+    //! cancelled while a stream retires.
     use lk_agents_abi::AudioFrame;
     use lk_agents_abi::errors::ProviderError;
     use lk_agents_abi::voice::background_audio::BackgroundAudioPlayer as _;
@@ -177,10 +175,8 @@ mod failed_synthesis_item {
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
     use lk_agents_voice::{events::SessionEvent, trace::Step};
 
-    // Catches: a TTS failing after its first chunk played committed the reply as complete. The
-    // reference commits the synchroniser's words up to the played position and marks the message
-    // interrupted, so the LLM knows it was cut short (`_pipeline_reply_task_impl`,
-    // `interrupted=speech_handle.interrupted or any(out.tts_failed ...)`, agent_activity.py:4176).
+    // Catches: a TTS failing after its first chunk played committed the reply as complete instead
+    // of the played words marked interrupted.
     #[test]
     fn a_failed_synthesis_commits_what_was_heard_as_interrupted() {
         let text = |t: &str| AgentText(t.into());
@@ -232,7 +228,6 @@ mod failed_synthesis_plays_out {
 
     // Catches: a TTS failing after its first chunk left that chunk playing unwaited, so the speech
     // completed before any of its audio was heard (`synthesized_speech_is_played`, survey seed 122).
-    // The reference's `forward_generation` waits for the playout whether or not the TTS failed.
     #[test]
     fn a_failed_synthesis_waits_for_what_it_made() {
         let text = |t: &str| AgentText(t.into());
@@ -276,9 +271,7 @@ mod filler_refused_on_realtime {
     use lk_agents_voice::trace::{FillerEnd, GenerationStep, Step};
 
     // Catches: the filler's text played as a pipeline speech with no voice on a realtime session
-    // whose model has no `say` (the DST agent's parity finding). The reference's `session.say` raises
-    // there ("without a TTS model or a RealtimeSession that supports say()"), which ends the filler
-    // with nothing spoken.
+    // whose model has no `say`; the say must be refused, ending the filler with nothing spoken.
     #[test]
     fn a_filler_on_a_realtime_model_without_say_is_refused() {
         let setup = Setup {
@@ -333,9 +326,7 @@ mod filler_source {
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs};
 
     // Catches: `end_filler` dropping the pending `FillerSource` hook without journalling
-    // `HookFinished`. The filler fires inside the `function_tools_executed` bound, the speech ends
-    // when that bound passes, and the host's answer then names a hook the driver no longer knows: the
-    // hook stayed open in the journal and the release phase never went quiet (soak seed 2).
+    // `HookFinished`, so the hook stayed open and the release phase never went quiet (soak seed 2).
     #[test]
     fn a_filler_ended_mid_source_finishes_its_hook() {
         let inputs = vec![
@@ -444,8 +435,8 @@ mod filler_source_raises {
             .collect()
     }
 
-    // Catches: a `Failed` answer to `FillerSource` skipping the fire and rescheduling it. In the
-    // reference `src(step)` raising ends `_FillerScheduler._loop`, so no further filler plays.
+    // Catches: a `Failed` answer to `FillerSource` skipping the fire and rescheduling it instead of
+    // ending the filler.
     #[test]
     fn a_raising_filler_callable_ends_the_filler() {
         let opening = [
@@ -537,11 +528,9 @@ mod filler_without_voice_ends {
     use lk_agents_fuzz::drive::{Case, RealtimeSetup, Setup, run};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
 
-    // Catches: `with_filler(delay=0, interval=0)` on a realtime model's tool: the filler's say has no
-    // voice (a realtime session has no TTS), so it finished in the instant it was made, the session
-    // was idle again at once, and the next fire came in the same instant, forever: the session
-    // livelocked (`virtual_time_advances`, campaign seed 1090, once the fake realtime server called
-    // tools). A second fire in the instant of the last now ends the filler.
+    // Catches: `with_filler(delay=0, interval=0)` on a realtime model's tool: the voiceless say
+    // finished at birth and the next fire came in the same instant, forever
+    // (`virtual_time_advances`, campaign seed 1090).
     #[test]
     fn a_voiceless_filler_with_no_interval_ends() {
         let setup = Setup {
@@ -580,10 +569,8 @@ mod silent_audio_say {
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, SayInput};
 
-    // Catches: `no_premature_completion` judging an audio say spoken with the audio output detached.
-    // With no sink the reference's `_tts_task` forwards the text only and never reads `audio`, so the
-    // speech completes with the caller's stream still open (180 of the rule's 222 failures over seeds
-    // 0 to 1023, e.g. seed 2).
+    // Catches: `no_premature_completion` judging an audio say spoken with the audio output detached,
+    // where the speech completes with the caller's stream still open (e.g. seed 2).
     #[test]
     fn an_audio_say_with_no_output_completes_on_its_text() {
         let inputs = [
@@ -621,19 +608,16 @@ mod silent_segment {
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
 
     // Catches: the no-output path of `perform_audio_forwarding` awaiting the next frame without
-    // racing the interruption. Synthesis opened while the output was attached; once the speech is
-    // cut the producer stops without ending the segment, so the reply task never finished, its
-    // synthesis stream was never closed, and the run never went quiet (survey seed 25750 at 6000
-    // seeds from 21000, where joining the task parked the campaign for good).
+    // racing the interruption, so the reply task never finished and the run never went quiet
+    // (survey seed 25750).
     #[test]
     fn a_cut_silent_segment_ends() {
         let outcome = cut_silent_segment(vec![]);
         assert!(outcome.ok(), "{:#?}", outcome.failures);
     }
 
-    // The same cut, with the synthesis failed after the close: the run goes quiet, and the reply
-    // task is left awaiting a frame at the end-of-run join, which parked the run forever before a
-    // task that can never finish was reported as `every_task_finishes`.
+    // The same cut, with the synthesis failed after the close: the end-of-run join must not park
+    // on the reply task awaiting a frame.
     #[test]
     fn a_cut_silent_segment_ends_after_its_synthesis_failed() {
         let outcome = cut_silent_segment(vec![Input::TtsFail { tts: Ref::new(0) }]);
@@ -666,12 +650,9 @@ mod tts_first_byte_anchor {
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
     use lk_agents_voice::events::SessionEvent;
 
-    // Catches: `tts_node_ttfb` measured from the first text the TTS node was given, though the
-    // gateway client stamps when its first sentence went out; with sentence buffering that read
-    // every reply's TTFB a few hundred milliseconds slow. `llm_node_ttfs` was the same stamp, so it
-    // equalled the LLM's time to first token. The reference anchors both on the stream's
-    // `USERDATA_TTS_STARTED_TIME`, and reports no time to first sentence for a TTS without one, as
-    // this fake.
+    // Catches: `tts_node_ttfb` and `llm_node_ttfs` measured from the first text the TTS node was
+    // given instead of the provider's send stamp, reading every TTFB slow under sentence buffering.
+    // A TTS without that stamp, as this fake, reports no time to first sentence.
     #[test]
     fn a_tts_without_a_start_stamp_reports_no_time_to_first_sentence() {
         let setup = Setup::default();

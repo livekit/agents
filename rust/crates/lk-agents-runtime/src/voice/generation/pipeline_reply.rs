@@ -1,5 +1,3 @@
-//! `_pipeline_reply_task`: the one task every speech runs, its steps and their follow-ups.
-
 use super::ReplyExecution;
 use super::forward::{Voice, voice_leg};
 use super::llm::produce_segments;
@@ -43,14 +41,14 @@ pub(crate) async fn pipeline_reply_task(
         Err(DriverError::TextOutput(lk_agents_abi::voice::io::IoError::Host(error))) => {
             error.into()
         }
-        // Reachable from the host (`Agent(llm=None)` then `generate_reply()`).
+        // Reachable from the host: `generate_reply()` on an agent with no LLM.
         Err(DriverError::Missing(what)) => {
             fatal(format!("cannot generate a reply: the session has no {what}"))
         }
         Err(other) => fatal(other.to_string()),
     };
-    // **Moved, never formatted**: only the binding can release a `ProviderError::Host`'s side-table
-    // entry. Not marked here: the loop's `Failed` arm moves the error onto the handle.
+    // Moved, never formatted: only the binding can release a `ProviderError::Host`'s side-table
+    // entry.
     shared.report(GenEvent::Failed { speech, error: Box::new(error) });
 }
 
@@ -99,7 +97,7 @@ async fn run(
     let mut last: Option<Finished> = None;
     loop {
         let outcome = match ctx.plan.source.execution() {
-            // Borrowed: the channel outlives the step, because the follow-up arrives on it.
+            // Borrowed: the follow-up arrives on the same channel.
             Execution::Realtime => {
                 let events =
                     player.as_mut().expect("the runtime gives a realtime speech its player");
@@ -213,23 +211,19 @@ async fn pipeline_reply_task_impl(
         ReplySource::Audio { .. } => handle.take_audio().map_or(Voice::Silent, Voice::Frames),
         _ => ctx.resources.tts.clone().map_or(Voice::Silent, Voice::Tts),
     };
-    // The words start now (preemptive generation). `join!`, not `try_join!`: the voice's host TTS
-    // stream must reach its `close`. Errors are read afterwards, words first.
+    // `join!`, not `try_join!`: the voice's host TTS stream must reach its `close`.
     let (tx, rx) = mpsc::unbounded_channel::<SpeechSegmentEvent>();
     let ((words, tools), spoken) = tokio::join!(
         produce_segments(shared, handle, ctx, tx, speeches),
         voice_leg(shared, handle, ctx, voice, rx)
     );
-    // **Every call the model made is answered**, whatever became of the step, or the next request
+    // Every call the model made is answered, whatever became of the step, or the next request
     // would make it again.
     let llm_gen_data = match words {
         Ok(data) => data,
         Err(e) => {
-            // A step that took the floor gives it back before its tools are waited for, as
-            // `_mark_generation_done` precedes `await exe_task`: a tool waiting for idle would
-            // otherwise wait on its own speech.
-            // Its words played even though the model failed: where the cut stopped them. A voice
-            // that failed too still gives back the floor its step took while its tools run.
+            // Give back the floor before awaiting tools: a tool waiting for idle would otherwise
+            // wait on its own speech.
             let has_tools = !tools.is_empty();
             let played = match &spoken {
                 Ok(Some(spoken)) => Some(spoken.acc.played_at()),
@@ -252,9 +246,8 @@ async fn pipeline_reply_task_impl(
         }
     };
     let Some(spoken) = spoken? else {
-        // Interrupted before its authorization: started tools answered as interrupted. An
-        // authorization granted in that instant marks the step spoken first, so a tool awaiting its
-        // own playout does not deadlock.
+        // Interrupted before authorization. A grant in that instant marks the step spoken first,
+        // so a tool awaiting its own playout does not deadlock.
         if handle.step_authorized(ctx.plan.step) {
             step_spoken(
                 shared,
@@ -270,9 +263,7 @@ async fn pipeline_reply_task_impl(
         let outcome = empty_outcome(shared, ctx, true);
         return Ok(StepOutcome::Done(Finished { outcome, interrupted: true }));
     };
-    // The step's item rides with the step: built from what was heard, committed by the loop. The
-    // speech's interruption decides `tools_running`: a step whose audio was cut still has tools.
-    // A `say` (`_tts_task`) times only its voice: no model, no metadata.
+    // A step whose audio was cut still has tools running.
     let stats = ctx.plan.source.turn_stats(
         llm_gen_data,
         ctx.resources.llm.as_ref().map(|llm| llm.id().metrics_metadata()),

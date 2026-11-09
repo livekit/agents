@@ -1,5 +1,3 @@
-//! Lifecycle regression tests.
-
 mod close_ends_its_tasks {
     //! A closing session's tasks end within its cleanup bound: its close cancels nothing still running.
     use lk_agents_fuzz::drive::{Case, Outcome, Setup, run};
@@ -7,9 +5,8 @@ mod close_ends_its_tasks {
 
     // Catches: an interrupted `say` whose caller's text stream stays open went on reading it, and its
     // voice, its synthesis failed, went on waiting for the words, so the speech's task outlived the
-    // close's release and was cancelled at the cleanup bound (`every_task_finishes`, 82 of the first
-    // 1,024 survey seeds once the DST ran the runtime's real close, e.g. seed 15). `_tts_task`
-    // cancels its forwarding at the interruption.
+    // close's release and was cancelled at the cleanup bound (`every_task_finishes`, e.g. survey
+    // seed 15).
     #[test]
     fn an_interrupted_say_stops_reading_its_stream() {
         let outcome = closed(
@@ -104,7 +101,7 @@ mod cut_unvoiced_segment_stays_closed {
     // Catches: a segment whose voice ended with no audio was cut by its speech's interruption (the
     // cut closed its words), then ended its audio leg as an unvoiced one anyway; the synchroniser
     // opened a segment for that audio end and showed the next speech's words whole before any of
-    // their audio played (`transcript_follows_audio`, campaign seed 19354; 242c57d69).
+    // their audio played (`transcript_follows_audio`, campaign seed 19354).
     #[test]
     fn the_next_speech_words_wait_for_their_audio() {
         let text = |t: &str| AgentText(t.into());
@@ -166,14 +163,9 @@ mod cut_unvoiced_segment_stays_closed {
 }
 
 mod determinism {
-    //! The simulation must be reproducible: the same case twice must leave the same recording.
-    //!
-    //! This is a guard, not a demonstration. Tokio randomises the branch order of an unbiased
-    //! `select!`, so concurrent generations used to race differently on every run and a finding landed
-    //! on a different speech each time. `drive::simulate_with` pins that RNG and gives each case its own
-    //! runtime. Anything that reintroduces real nondeterminism -- a `HashMap` iterated for ordering,
-    //! wall-clock time read as data, a fresh `select!` outside a seeded runtime -- fails here first,
-    //! with a diff, instead of showing up months later as a seed that no longer reproduces its run.
+    //! The same case twice must leave the same recording. Any real nondeterminism (a `HashMap`
+    //! iterated for order, wall-clock time read as data, a `select!` outside the seeded runtime)
+    //! fails here first, with a diff.
     use fastrand::Rng;
     use lk_agents_fuzz::{
         drive::{Run, simulate_with},
@@ -278,8 +270,7 @@ mod failed_step_releases_floor {
 
     // Catches: a step whose model request failed after dispatching a tool kept its speech current
     // while it waited for the tool, so a tool asking `ctx.wait_for_idle()` waited on its own speech
-    // until the close (`speech_settles`, survey seed 4514). The reference marks the generation done
-    // before awaiting the tools (`_pipeline_reply_task_impl`, `_mark_generation_done`).
+    // until the close (`speech_settles`, survey seed 4514).
     #[test]
     fn a_tool_waiting_for_idle_outlives_its_failed_step() {
         let setup = Setup { tools: vec!["lookup".into()], ..Setup::default() };
@@ -342,8 +333,7 @@ mod final_ends_pause {
 
     // Catches: a final transcript paused the speaking agent while a drain held scheduling, so the
     // user turn was dropped without ending the pause and no false-interruption timer resumed it: the
-    // speech stayed paused until the close (`speech_settles`, survey seed 2068). The reference's
-    // `on_final_transcript` always ends the pause with `_cancel_speech_pause`, interrupting it.
+    // speech stayed paused until the close (`speech_settles`, survey seed 2068).
     #[test]
     fn a_final_transcript_interrupts_the_speech_it_paused() {
         let setup = Setup {
@@ -392,9 +382,7 @@ mod final_over_paused_no_preemptive {
 
     // Catches: the final's interruption of the paused speech landed before its preemptive generation
     // was decided, so a preemptive reply was planned (an extra LLM request) for a turn the agent was
-    // still talking over. The reference's `on_final_transcript` cuts the pause in a task, after
-    // `on_preemptive_generation` refused for the live speech; found by
-    // `scripts/parity.py vad_interruption`.
+    // still talking over.
     #[test]
     fn a_final_over_a_paused_speech_plans_no_preemptive_reply() {
         let setup = Setup {
@@ -460,8 +448,7 @@ mod handoff_refused_releases {
 
     // Catches: `update_agent` registering the frame's providers before asking for its answer, so a
     // handoff refused because the session had ended left them in the table for good
-    // (`every_resource_released`, survey seed 66). The host gives every leg on every handoff
-    // (`_frame`), so each late handoff leaked three.
+    // (`every_resource_released`, survey seed 66).
     #[test]
     fn a_handoff_refused_after_the_end_releases_its_providers() {
         let setup = Setup {
@@ -500,8 +487,7 @@ mod held_turn_idle {
 
     // Catches: a user turn decided while a handoff drained was held for the arriving agent and held
     // idle off, while the drain waited on a speech whose tool waited on idle: nothing moved until the
-    // close (`speech_settles`, survey seeds 1923, 3526, 4514). The reference has no held turn
-    // (`on_end_of_turn` skips it while scheduling is paused), so it never blocks `wait_for_idle`.
+    // close (`speech_settles`, survey seeds 1923, 3526, 4514).
     #[test]
     fn a_tool_waiting_for_idle_lets_a_drain_holding_a_turn_finish() {
         let setup = Setup {
@@ -622,8 +608,7 @@ mod idle_after_untranscribed_turn {
     // Catches: the recogniser's `Ended` phase (speech heard, no countdown started) read as a turn
     // being decided. With no transcript coming, idle was never reached, and a tool waiting for idle
     // inside its own speech waited forever while the speech waited on the tool (survey seed 1678,
-    // `session_settles`). The reference's `wait_for_idle` waits only on `_speaking` and a running
-    // `_end_of_turn_task`.
+    // `session_settles`).
     #[test]
     fn idle_is_reached_after_a_turn_with_no_words() {
         let setup = Setup { vad: true, stt: true, turn: TurnMode::Stt, ..Setup::default() };
@@ -661,10 +646,8 @@ mod idle_while_closing {
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
     use lk_agents_voice::trace::{CloseStep, SpeechStep, Step};
 
-    // Catches: `settle_waiters` admitting idle waiters while the session closes. The reference's
-    // `wait_for_idle` raises `ActivityClosedError` once closing; here the drain's last speech ending
-    // granted a `wait_for_idle_and_hold()` its hold, which nothing could release past the edge, so it
-    // outlived the session (soak seed 0).
+    // Catches: `settle_waiters` admitting idle waiters while the session closes, granting a
+    // `wait_for_idle_and_hold()` a hold nothing could release past the edge (soak seed 0).
     #[test]
     fn idle_during_a_close_grants_no_hold() {
         let inputs = [
@@ -712,8 +695,8 @@ mod lane_lost_call_goes_on {
 
     // Catches: a lost lease cancelled the speech under it and every later one at its creation, each
     // announced `Completed` with nothing said, and a speech whose commit was answered after the loss
-    // never finished (`speech_is_heard`, `no_premature_completion`, survey seeds 12, 341, 615;
-    // 62855980b). voice-session.md: storage failures are logged and never end the call.
+    // never finished (`speech_is_heard`, `no_premature_completion`, survey seeds 12, 341, 615).
+    // Storage failures are logged and never end the call.
     #[test]
     fn the_agent_is_heard_after_its_lane_is_lost() {
         // The store loses the lease with its answer to the first turn.
@@ -786,9 +769,7 @@ mod late_verdict_pause_resumes {
     // Catches: the adaptive detector's verdict landing after the person's end of speech paused the
     // playing speech, and nothing ever armed its resume: the end of speech that arms it had already
     // come. With no reply to the turn to interrupt it (scheduling paused by a drain), the agent sat
-    // silent mid-sentence for the rest of the call (`pause_resolves`, survey seed 273). The
-    // reference's transcript paths arm the resume for a pause decided after the end of speech; every
-    // pause decided with the person quiet now does.
+    // silent mid-sentence for the rest of the call (`pause_resolves`, survey seed 273).
     #[test]
     fn a_late_verdicts_pause_resumes() {
         // A realtime model with the session's own detector, recogniser and adaptive interruption.
@@ -864,8 +845,7 @@ mod left_at_close {
     }
 
     // Catches: a blocking tool the close's bound answered with "session closing" left running at the
-    // host. The reference's close cancels its tool tasks (`_ToolExecutor.aclose`); here the body
-    // outlived the session and took a late answer (survey seed 189).
+    // host, so the body outlived the session and took a late answer (survey seed 189).
     #[test]
     fn a_tool_the_close_answered_is_cancelled() {
         let inputs = [
@@ -894,8 +874,7 @@ mod left_at_close {
     }
 
     // Catches: a tool that detached (`ctx.update()`) still running at the host after the session
-    // closed: the reference's close cancels it (`_ToolExecutor.aclose`) and tells its end, cancelled,
-    // before the session's `close`.
+    // closed; the close must cancel it and tell its end before the session's `close`.
     #[test]
     fn a_detached_tool_is_cancelled_before_the_close() {
         let inputs = [

@@ -1,4 +1,3 @@
-//! The storage port's requests and receipts, independent of the runtime's journal.
 use lk_agents_abi::storage::StorageError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

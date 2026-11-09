@@ -1,14 +1,3 @@
-//! The driver's queue, owned by the case: what every source sent, delivered one event at a time in
-//! the order the run's policy chooses.
-//!
-//! In production the queue is a channel and the order is arrival order. Here the case collects
-//! what reached the channel and picks what runs next, so an interleaving the channel would only
-//! produce under load is one a seed can choose. The choice is the shared scheduler's
-//! ([`crate::sched`]): each source keeps its own order, and BasicPOS samples the rest. The loop
-//! takes its own due wakes, before anything handed to it. The microphone's frames are a source of their own: the frames that reached the run since its last
-//! step are one batch, delivered as one step in their order, racing the events under POS and
-//! after queued events in arrival order (the production loop polls its event queue before frames). The
-//! driver's ready tasks are a process of the scheduler, and so is each bridged task.
 use lk_agents_runtime::voice::VoiceRuntimeEvent;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
@@ -26,6 +15,11 @@ use lk_agents_voice::agent_session::VoiceEvent;
 
 use crate::sched::{Sampling, Sched, Step};
 
+// The case owns the driver's queue, so an interleaving production's channel only produces under
+// load is one a seed can choose. The loop takes its own due wakes first. Microphone frames since
+// the last step are one batch: they race events under POS and follow queued events in arrival
+// order, as the production loop polls its event queue before frames.
+
 /// How the next step is chosen, drawn per seed and carried by the case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Policy {
@@ -39,8 +33,7 @@ pub enum Policy {
     /// BasicPOS with the task bridge ([`Gate`]): every task the run's spawner spawns is a process
     /// of its own, with its own priority, rather than one turn the pool shares, so the order of
     /// two tasks is sampled too; after its turn a task draws a new priority. It explores
-    /// production runtime task interleavings, including I/O cancellation and cleanup, and stays
-    /// useful after framework decisions have moved into synchronous components.
+    /// production runtime task interleavings, including I/O cancellation and cleanup.
     TaskBridge,
 }
 
@@ -53,8 +46,7 @@ impl Policy {
     }
 
     /// A seed's own policy: the task bridge for half the seeds, BasicPOS for a quarter and
-    /// arrival order for a quarter, which is still what reaches some bugs first (the paper and
-    /// gosim found the same). `bench/known_bugs.sh` measures each over the known bugs.
+    /// arrival order for a quarter, which still reaches some bugs first.
     pub fn of(schedule: u64) -> Self {
         match Rng::with_seed(schedule ^ POLICY_STREAM).u8(0..4) {
             0 => Policy::Arrival,
@@ -344,9 +336,6 @@ const ORDER_SEED: u64 = 0xcbf2_9ce4_8422_2325;
 /// take its granted turn. The gate is shut only while the run steps the session: when the run
 /// awaits something itself (a host call, the session's start, a player's close) or the session
 /// is gone, what is ready runs as tokio schedules it, as the host's loop outlives the session's.
-///
-/// Transitional: it exists because voice policy tasks still run as tasks; it
-/// is deleted with the last of them.
 pub struct Gate {
     state: Mutex<GateState>,
     woken: tokio::sync::Notify,
@@ -515,9 +504,7 @@ impl Wake for TaskWaker {
     }
 }
 
-/// The scheduler against small programs whose legal orders are known (RC "Partial-order
-/// sampling": scheduler correctness is tested on small programs; benchmarks do not establish it).
-/// Each program is a few sources' events; what is checked is the order the queue delivers them.
+// The scheduler against small programs whose legal orders are known.
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -663,7 +650,7 @@ mod tests {
         assert_eq!(broken.cycle(), None, "one step out of the cycle");
     }
 
-    /// Transitional (retires with the bridge): a granted task takes exactly its turn, and a
+    /// A granted task takes exactly its turn, and a
     /// gated task that is dropped (cancelled) leaves the ready set and any grant it held.
     #[test]
     fn bridge_grants_one_turn_and_forgets_cancelled_tasks() {

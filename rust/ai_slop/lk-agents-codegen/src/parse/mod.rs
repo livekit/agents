@@ -1,4 +1,3 @@
-//! Presentation metadata uses the same attribute reader and resolved module tree as contracts.
 use crate::decl::{ConstValue, Constant, Member, StrClass};
 use crate::decl::{
     tree::{Crate, Module},

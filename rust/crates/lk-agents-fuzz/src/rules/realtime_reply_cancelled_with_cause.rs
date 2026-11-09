@@ -1,4 +1,3 @@
-//! A reply the realtime server started on its own is cancelled by the client only for a reason.
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_voice::trace::{CloseStep, SpeechStep, Step};
 

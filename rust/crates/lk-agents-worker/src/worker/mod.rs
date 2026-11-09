@@ -53,6 +53,9 @@ mod jobs;
 use jobs::{ConnState, Pending, WorkerTimer};
 mod load_driver;
 pub use jobs::{Slot, retry_delay};
+#[cfg(test)]
+#[path = "worker_tests.rs"]
+mod tests;
 
 /// What a client asks of a running worker.
 #[derive(Debug, Clone, PartialEq)]

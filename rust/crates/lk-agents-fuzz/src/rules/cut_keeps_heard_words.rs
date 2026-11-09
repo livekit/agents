@@ -1,18 +1,3 @@
-//! A cut speech is remembered as the words the person heard: those shown whose audio had ended
-//! where the playout stopped, no more and no fewer.
-//!
-//! With a synchroniser, the text an interrupted reply commits is its synchronised transcript (the
-//! reference's `forwarded_text` out of `playback_finished`), not the text the model produced. For
-//! each segment the synchroniser released words into, the heard part is every word of a segment
-//! the sink reported played out whole, and of a cut one the words whose audio ended by the cut's
-//! position (a word's audio ends where the next one's starts, if earlier): a word still playing
-//! was shown, not heard. The text the reply's last step committed
-//! (`ReplyFinished`) must say exactly that of the step's segments (whitespace aside).
-//!
-//! Judged for synthesised replies cut and committed with the synchroniser between the outputs
-//! throughout (not an avatar's, whose late reports land on the next segment), the voice never
-//! failed, every segment's end reported by the sink, and not cut by
-//! the session's close (which closes the synchroniser first).
 use lk_agents_voice::{
     agent_session::machine::activity::scheduling::SpeechId,
     trace::{
@@ -25,6 +10,11 @@ use crate::{
     check::{Check, Contract, Rule},
     record::{Handle, Recording, TranscriptSetup},
 };
+
+// The committed text is the synchronised transcript (the reference's `forwarded_text` from
+// `playback_finished`), not the model's. A word's audio ends where the next starts, if earlier; a
+// word still playing at the cut was shown, not heard. Avatar outputs are skipped: their late
+// reports land on the next segment.
 
 /// What two clocks' rounding may leave between a word's end and the cut, in seconds.
 const EPSILON: f64 = 1e-6;

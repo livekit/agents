@@ -712,43 +712,5 @@ pub(super) fn migrate_jobs(job_ids: Vec<String>) -> WorkerMessage {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::AcceptArguments;
-
-    // Catches: writing lk.agent.name after the user's attributes, overriding a per-job rename.
-    #[test]
-    fn user_attributes_win_over_the_agent_name_default() {
-        let args = AcceptArguments {
-            attributes: BTreeMap::from([(ATTRIBUTE_AGENT_NAME.into(), "override".into())]),
-            ..Default::default()
-        };
-        let args = accept_arguments("configured", args);
-        let want = BTreeMap::from([(ATTRIBUTE_AGENT_NAME.to_string(), "override".to_string())]);
-        assert_eq!(args.attributes, want);
-    }
-
-    // Catches: forgetting `agent: true` on the register permissions.
-    #[test]
-    fn register_marks_the_permission_as_an_agent() {
-        let msg = register("a", "d", "1.2.3", &[], "i1");
-        let Some(pb::worker_message::Message::Register(r)) = msg.message else {
-            panic!("wrong variant")
-        };
-        #[allow(deprecated)]
-        let is_agent = r.allowed_permissions.unwrap().agent;
-        assert!(is_agent);
-    }
-
-    // Catches: the draining status setting `load`, or a status other than WS_FULL.
-    #[test]
-    fn draining_status_carries_no_load() {
-        let msg = update_worker_draining(2);
-        let Some(pb::worker_message::Message::UpdateWorker(u)) = msg.message else {
-            panic!("wrong variant")
-        };
-        assert_eq!(u.status, Some(pb::WorkerStatus::WsFull as i32));
-        assert_eq!(u.load, 0.0);
-        assert_eq!(u.job_count, 2);
-    }
-}
+#[path = "jobs_tests.rs"]
+mod tests;

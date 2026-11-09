@@ -1,8 +1,7 @@
-//! The telemetry registry: the span, event, metric and record declarations of
-//! `lk_agents_abi::telemetry`, read from the ABI source and checked, then written as the Weaver
-//! registry, the consumer schema and the Python constants (`emit`).
-
 mod emit;
+#[cfg(test)]
+#[path = "telemetry_tests.rs"]
+mod tests;
 
 pub use emit::{otel, semconv_py};
 

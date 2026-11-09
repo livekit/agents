@@ -1,6 +1,3 @@
-//! The declared errors' host exceptions and the exported fns and consts: what `_core` raises and
-//! holds beside the declared classes.
-
 use super::super::tree::{Crate, Found};
 use super::super::{DeclaredError, Export};
 use super::voc;
@@ -92,7 +89,6 @@ pub(super) fn declared_error(
     } else {
         String::new()
     };
-    // The generated file is formatted whole.
     Ok(DeclaredError {
         family,
         binding: format!("{}\n{capture}", exception.tokens),

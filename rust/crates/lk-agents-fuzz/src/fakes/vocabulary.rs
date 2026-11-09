@@ -1,16 +1,12 @@
-//! What the fakes can say, against what the core understands.
-//!
-//! Each provider-facing type the core consumes is a `#[derive(Vocabulary)]` enum, and each table
-//! here implements `Covers` for every one of its variants: `Covered` with what produces it, or
-//! `Skipped` with why no fake does. A variant the core gains is a compile error here until
-//! someone decides how the fakes produce it (TEST_STRATEGY.md section 5, for provider events as
-//! for commands).
 use lk_agents_abi::{
     llm::realtime::{assert_event_is_covered, event_coverage, event_vocabulary as event},
     stt::events::{assert_speech_event_type_is_covered, speech_event_type_vocabulary as stt},
     utils::vocabulary::{Coverage, Covers},
     vad::events::{assert_vad_event_type_is_covered, vad_event_type_vocabulary as vad},
 };
+
+// Every variant of a provider vocabulary the core consumes must be `Covered` (by the input that
+// produces it) or `Skipped` (with why), so a new variant fails to compile here.
 
 macro_rules! table {
     ($table:ident: $($vocab:ident :: $leaf:ident => $how:expr;)*) => {$(
@@ -86,8 +82,7 @@ pub fn realtime_event_claims() -> Vec<(&'static str, Coverage<&'static str>)> {
 mod tests {
     use super::*;
 
-    // Catches: a provider event the core consumes that no fake can produce (a new variant fails to
-    // compile before this runs; a skip without a reason is caught here).
+    // Catches a skip without a reason.
     #[test]
     fn every_skip_says_why() {
         every_provider_event_is_producible();

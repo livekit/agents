@@ -1,10 +1,3 @@
-//! The session never works without bound at one virtual instant.
-//!
-//! The clock is paused and moves only when nothing can run, so a session that keeps feeding
-//! itself -- an event that schedules the next, a task that wakes itself, a step that journals
-//! forever -- never lets time move and never hands control back to the case. The run counts
-//! steps at one instant, in the journal and in its own loop, and stops the session past
-//! `NO_PROGRESS_STEPS`: a livelock, reported here rather than as a hang or a stray panic.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
@@ -12,6 +5,10 @@ use crate::{
     input::{AgentText, Input, Millis, Ref},
     record::Recording,
 };
+
+// The clock moves only when nothing can run, so a session that keeps feeding itself never lets
+// time move. The run stops it past `NO_PROGRESS_STEPS` and reports the livelock here rather than
+// as a hang.
 
 pub struct VirtualTimeAdvances;
 

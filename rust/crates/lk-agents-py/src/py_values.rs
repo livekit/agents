@@ -1,5 +1,3 @@
-//! Python values, buffers, union normalization, JSON, metadata codecs and missing values.
-
 /// Interpreter interface namespaces. Generated inherent methods perform the declared
 /// imports and member access; they accept Python objects without asserting their runtime type.
 pub mod interfaces {
@@ -181,7 +179,7 @@ fn type_name(obj: &Bound<'_, PyAny>) -> String {
     obj.get_type().name().map(|n| n.to_string()).unwrap_or_else(|_| "?".to_owned())
 }
 
-/// `pub(crate)` for `to_dict`, which converts media under the same rule.
+/// A host value as JSON; a non-JSON value raises naming `path`.
 pub fn value_from_py(obj: &Bound<'_, PyAny>, path: &str) -> PyResult<Value> {
     if obj.is_none() {
         return Ok(Value::Null);

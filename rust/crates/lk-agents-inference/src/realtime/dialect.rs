@@ -123,11 +123,9 @@ pub struct Dialect {
     pub forced_modalities: Option<&'static [&'static str]>,
     pub caps: CapabilityOverrides,
 
-    // --- payload shape ---
     /// Applied on the socket by [`crate::realtime::openai::wire::WireShape`].
     pub protocol: Protocol,
 
-    // --- behaviour switches, each one an `if` in `machine.rs` ---
     /// `session(turn_detection_disabled=True)` is honoured. xAI ignores the argument.
     pub supports_turn_detection_disabled: bool,
     /// A `function_call` naming no known tool is dropped with a warning (xAI's server-side tools).

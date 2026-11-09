@@ -1,10 +1,3 @@
-//! A `VoiceTask` gives the floor back to the agent it took it from, exactly once.
-//!
-//! The parent's tool awaits the task in memory; the parent itself is only suspended. Each task
-//! that entered ends once, innermost first (an outer task's end ends the ones it started first),
-//! and the agent installed next is the parent it suspended, read off the install itself rather
-//! than the end's own claim. The close ends every task before anything else: none is open once a
-//! close began, and none enters after it.
 use lk_agents_voice::agent_session::machine::activity::voice_task::VoiceTaskId;
 use lk_agents_voice::trace::{HandoffStep, Step};
 
@@ -13,6 +6,9 @@ use crate::{
     check::{Check, Contract, Rule, Subject},
     record::Recording,
 };
+
+// Tasks end innermost first. The restored parent is read off the install, not the end's own
+// claim. The close ends every task first: none is open once it began, and none enters after.
 
 pub struct VoiceTaskRestoresItsParent;
 

@@ -1,6 +1,3 @@
-//! The avatar's two ends over FakeRoom, in what the DST's avatar seeds do not reach: the agent's
-//! `DataStreamAudioOutput` (joins, idle finishes, give-up timer, close and drop) and the worker's
-//! `DataStreamAudioReceiver` (lost trailers, strangers, failing reports, bad streams, the join wait).
 use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputExt, AvatarPlaybackSegment, PlaybackEvent, PlaybackObserver,
     PlaybackSegment,
@@ -29,8 +26,6 @@ async fn settle() {
         tokio::task::yield_now().await;
     }
 }
-
-// ------------------------------------------------------------------------- the agent's side
 
 #[derive(Default)]
 struct Events(Mutex<Vec<String>>);
@@ -179,10 +174,8 @@ async fn the_avatars_playback_finished_rpc_ends_the_segment_and_a_stranger_is_re
 }
 
 // Catches: the avatar's idle timeout (no chunk for 10 s: a paused `say(audio=)` stream, a slow
-// voice) finishing a segment the agent was still feeding. The output retired it, the next capture
-// failed with "the avatar segment retired", and the playout read that as the speech's normal end:
-// the rest of its audio was dropped. The segment continues on a new stream, and its one finish
-// covers both.
+// voice) finishing a segment the agent was still feeding, dropping the rest of its audio. The
+// segment continues on a new stream, and its one finish covers both.
 #[tokio::test]
 async fn an_idle_finish_of_a_segment_still_capturing_continues_it_on_a_new_stream() {
     let f = fixture("idle_finish", None);
@@ -414,8 +407,6 @@ fn drop_cleanup_runs_after_the_callers_async_runtime_has_closed() {
         .unwrap();
     });
 }
-
-// ------------------------------------------------------------------------- the avatar's side
 
 fn receipt_segment(id: &str) -> AvatarPlaybackSegment {
     AvatarPlaybackSegment {

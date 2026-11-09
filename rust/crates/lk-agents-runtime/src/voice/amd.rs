@@ -194,8 +194,7 @@ impl AmdSystem {
         }
         let rx = peer.subscribe();
         let (tx, msg_rx) = tokio::sync::mpsc::unbounded_channel();
-        // "closing it so AMD can manage the IVR lifecycle": the session navigator is closed
-        // before the hold; `execute()` on a machine-ivr verdict starts AMD's own.
+        // AMD manages the IVR lifecycle: a machine-ivr verdict starts its own navigator.
         let _ = peer.send(VoiceCommandOrigin::Amd, IvrCommand::Close);
         let (room, participant) = (setup.room.clone(), setup.participant.clone());
         let system = AmdSystem::new(peer, setup, tx.clone());
@@ -368,7 +367,6 @@ impl AmdSystem {
     fn perform(&mut self, now: Ts, effects: Vec<AmdEffect>) {
         for effect in effects {
             match effect {
-                // Arming replaces, a cancel removes; both journalled.
                 AmdEffect::SetDeadline(timer, at) => {
                     self.timers.set_deadline(timer, at);
                     self.peer.journal(Step::Core(CoreStep::TimerArmed {
@@ -380,8 +378,7 @@ impl AmdSystem {
                     self.timers.clear_deadline(timer);
                     self.peer.journal(Step::Core(CoreStep::TimerCancelled(TimerName::Amd(timer))));
                 }
-                // The waiter is the host's (`execute()` awaits `amd_result`): nothing to wake here.
-                // `AMD.emit("amd_prediction")`; `_on_amd_prediction` then cancels the classification.
+                // The host awaits `amd_result`: nothing to wake here.
                 AmdEffect::Prediction(p) => {
                     let verdict = Command::AmdSpan(AmdSpan::Verdict(p.clone()));
                     let _ = self.peer.send(VoiceCommandOrigin::Amd, verdict);
@@ -390,11 +387,10 @@ impl AmdSystem {
                 }
                 AmdEffect::RequestClassification(req) => self.request_classification(req),
                 AmdEffect::CancelClassification => self.cancel_classification(),
-                // The postpone reply is discarded (`classifier._run`).
+                // The postpone reply is discarded.
                 AmdEffect::Refused(refusal) => {
                     self.peer.journal(Step::Detector(DetectorStep::AmdRefused(refusal)))
                 }
-                // The scheduler's hold, as the system's command.
                 AmdEffect::Authorization(Authorization::Pause) => {
                     let _ =
                         self.peer.send(VoiceCommandOrigin::Amd, SpeechCommand::PauseAuthorization);
@@ -407,7 +403,7 @@ impl AmdSystem {
                     let _ =
                         self.peer.send(VoiceCommandOrigin::Amd, TurnCommand::SkipReplies(skips));
                 }
-                // `interrupt(force=True)`: the greeting is being spoken over.
+                // The greeting is being spoken over.
                 AmdEffect::Interrupt { force } => {
                     let _ = self.peer.send(
                         VoiceCommandOrigin::Amd,
@@ -755,7 +751,7 @@ async fn classify(
             }
         }
     }
-    // Always, on every path: dropping does not cancel a host stream, and `close` consumes it.
+    // Dropping does not cancel a host stream; `close` must run on every path.
     let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
     let closed = stream.close(deadline).await;
     if closed != lk_agents_abi::Closed::Clean {
@@ -809,8 +805,7 @@ mod tests {
         fn end_input(&self) {}
     }
 
-    // Catches: the gate passing pre-connect audio on as live audio (the tap's policy then drops
-    // it), or letting it through while the gate is shut.
+    // Catches: pre-connect audio passed on as live audio, or let through while the gate is shut.
     #[test]
     fn the_gate_forwards_pre_connect_audio_as_head_only_while_listening() {
         let heard = Arc::new(Heard::default());

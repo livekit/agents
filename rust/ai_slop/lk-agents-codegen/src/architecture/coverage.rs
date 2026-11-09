@@ -1,4 +1,3 @@
-//! Effective lint levels for compiler sites, using the shared source visitor.
 use super::Scan;
 use proc_macro2::Span;
 use quote::ToTokens;

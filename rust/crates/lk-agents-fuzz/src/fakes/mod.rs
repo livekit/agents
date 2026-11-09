@@ -1,20 +1,3 @@
-//! Controlled dependencies. Each fake implements a provider trait, mints an identity for every
-//! invocation the product makes, and reads its answers from the control the harness holds.
-//!
-//! **Invocation controls belong to the harness.** A fake writes down what it did by sending a
-//! record, and hands the control side of an invocation over the same channel to the harness, which owns it
-//! alone. So a delivery is the harness calling a fake while holding nothing, and a fake recording
-//! from inside that call is a `send`. No lock on the path means nothing to re-enter, which is what
-//! deadlocked the old registry whenever a fake wrote back mid-delivery.
-//!
-//! A slot is a `(Kind, nth)` pair, not an opaque serial, because that is what a case's `Ref<Chat>`
-//! names: the n-th chat the fakes registered is the n-th a case can point at.
-//!
-//! A delivery to a closed receiver is a recorded, rejected attempt, never a panic.
-//!
-//! See `CONTRIBUTING.md`'s port map for controls, timing, cancellation and unsupported behavior.
-//! Larger room/realtime/avatar models own local shared state; the registry does not hold a
-//! lock across a delivery into one of those models.
 use std::{
     collections::BTreeMap,
     sync::{
@@ -34,6 +17,10 @@ use crate::{
     input::Input,
     record::{Detail, Kind, Observed, Sink, Stamps},
 };
+
+// Invocation controls belong to the harness: a fake sends its records and controls over one
+// channel, so a delivery holds no lock and a fake recording mid-delivery cannot re-enter one.
+// A delivery to a closed receiver is a recorded, rejected attempt, never a panic.
 
 mod avatar;
 mod console;
@@ -72,13 +59,11 @@ pub const SAMPLE_RATE: u32 = 24_000;
 /// One fixture chunk is 10 ms of mono audio.
 pub const SAMPLES_PER_CHUNK: usize = (SAMPLE_RATE / 100) as usize;
 
-/// A provider quantity by its deciles as real providers showed it: the least, p10 to p90, the
-/// most. The crate's `calibration.json` holds what was measured from real providers through
-/// LiveKit Inference; build.rs generates the distributions from it.
+/// A provider quantity by its measured deciles: min, p10 to p90, max (from `calibration.json`).
 pub type Measured = [u64; 11];
 
-/// What a run's provider delays are drawn against: the share of draws that stray from the
-/// measured spread, and the deadlines armed in the run, in ms.
+/// The share of provider delays that stray from the measured spread, and the deadlines armed in
+/// the run, in ms.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Timing {
     pub stray: f64,
@@ -111,10 +96,8 @@ pub fn delay(rng: &mut fastrand::Rng, m: &Measured, timing: &Timing) -> u64 {
     (m[10].max(1) as f64 * 10f64.powf(1.0 + rng.f64())).round() as u64
 }
 
-/// One thing the fakes opened: which boundary it sits at, and which one of its kind it is.
-///
-/// The `nth` is the same number a `Ref` in a case carries, so nothing has to translate between
-/// the fakes' identities and the recording's.
+/// One thing the fakes opened. `nth` is the number a case's `Ref` carries, so the n-th chat
+/// registered is the n-th a case can point at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Slot {
     pub kind: Kind,
@@ -125,37 +108,28 @@ pub struct Slot {
 pub enum Control {
     Chat(mpsc::UnboundedSender<Result<LlmChunk, ProviderError>>),
     Tts(Arc<tts::Synthesis>),
-    /// A recognition stream: its event channel, when it opened, and when the utterance it is in
-    /// began -- the two instants a transcript's `start_time`/`end_time` are measured from.
+    /// A recognition stream, when it opened, and when its utterance began: the instants a
+    /// transcript's `start_time`/`end_time` are measured from.
     Stt(mpsc::UnboundedSender<Result<SpeechEvent, ProviderError>>, Ts, Option<Ts>),
     Vad(mpsc::UnboundedSender<Result<VadEvent, ProviderError>>),
-    /// One pending end-of-turn prediction; answered once, like a tool call.
     Prediction(oneshot::Sender<Result<EotPrediction, ProviderError>>),
-    /// The interruption detector, which stays for the session and keeps its own verdict channel.
     Interruption(Arc<interruption::FakeInterruption>),
     Tool(oneshot::Sender<tools::Body>),
-    /// A tool that answered `Detached`: still running as far as the driver knows, nothing left
-    /// for the case to deliver to it -- its end comes as a `ToolUpdate` command.
+    /// A tool that answered `Detached`; its end comes as a `ToolUpdate` command.
     Running,
-    /// One audio segment, open at its first frame: the playout side of the output it belongs to,
-    /// which takes the case's reports on it -- started, then finished.
+    /// One audio segment, which takes the case's playout reports.
     Segment(Arc<output::Playout>),
-    /// An audio output as a whole: the playout side, for what the case does to the output rather
-    /// than to one segment -- today, a reset.
+    /// An audio output as a whole, for a reset.
     Output(Arc<output::Playout>),
-    /// A camera: the frames the case feeds it, as ordinals it mints frames from.
     Video(mpsc::UnboundedSender<u64>),
-    /// The person's camera track in the room: frames pushed onto it, minted the same way.
     RoomVideo(Arc<crate::fakes::room::FakeTrackPublication>),
-    /// The realtime socket: the server-side events the case injects.
     Realtime(Arc<realtime::Socket>),
-    /// A realtime turn in progress: nothing to deliver to it, its end comes through the socket.
+    /// A realtime turn in progress; its end comes through the socket.
     Generation,
 }
 
 impl Control {
-    /// Whether the case still has something to deliver here. A synthesis stream the product has
-    /// finished reading is spent even though its control object is still in the map.
+    /// A synthesis stream the product finished reading is spent though its control remains.
     pub(crate) fn open(&self) -> bool {
         match self {
             Control::Tts(synthesis) => synthesis.open(),
@@ -164,14 +138,9 @@ impl Control {
     }
 }
 
-/// One thing the fakes did, stamped at the moment it happened and sent to the harness.
-///
-/// **Draining later preserves the true order**, which is the property this whole design rests on:
-/// every record carries the `Observed` stamp taken at the instant of the event, at the same
-/// boundary and from the same counter as everything else the run observes. So the harness is free
-/// to read these whenever it likes -- after each input, never during one -- and the recording it
-/// builds is still the happens-before order. Nothing has to be observed while it happens, and so
-/// nothing has to share a lock with the thing observing it.
+/// One thing the fakes did. Each record carries the `Observed` stamp taken at the event, from the
+/// run's one counter, so the harness may drain them later and still build the happens-before
+/// order.
 pub enum Record {
     Boundary {
         at: Observed,
@@ -181,8 +150,7 @@ pub enum Record {
         at: Observed,
         step: crate::record::StorageStep,
     },
-    /// An invocation a fake opened, with the control side for the harness to keep. Outputs carry
-    /// no control: nothing is ever delivered to one.
+    /// An invocation a fake opened, with its control for the harness. Outputs carry none.
     Opened {
         at: Observed,
         slot: Slot,
@@ -199,8 +167,7 @@ pub enum Record {
         output: u32,
         attached: bool,
     },
-    /// One chunk of audio a synthesis stream produced, with the text that caused it and the
-    /// words it stamped (each with its start, in seconds from the stream's first audio).
+    /// A synthesis chunk, its text, and its word stamps (start seconds from the first audio).
     Produced {
         at: Observed,
         tts: u32,
@@ -208,7 +175,6 @@ pub enum Record {
         text: String,
         stamps: Vec<(String, f64)>,
     },
-    /// One audio delta a realtime generation delivered: the n-th chunk of that generation.
     Generated {
         at: Observed,
         generation: u32,
@@ -225,8 +191,8 @@ pub enum Record {
         socket: u32,
         breach: crate::record::Breach,
     },
-    /// The person heard so much of a realtime generation's audio; `whole`: every frame of it
-    /// captured so far has played or been cut.
+    /// How much of a realtime generation was heard; `whole` when all of it captured so far has
+    /// played or been cut.
     Heard {
         at: Observed,
         generation: u32,
@@ -239,7 +205,6 @@ pub enum Record {
         socket: u32,
         items: Vec<(u32, u64)>,
     },
-    /// Frames the driver pushed into a provider stream, as the tags they carried.
     Forwarded {
         at: Observed,
         slot: Slot,
@@ -278,17 +243,14 @@ pub enum Record {
         agent: String,
         node: crate::record::NodeUse,
     },
-    /// Which output a flushed segment belongs to. Not a stamped event: it is a fact about the
-    /// segment the harness keeps for as long as the run lasts.
+    /// Which output a flushed segment belongs to: a fact kept for the run, not a stamped event.
     Segment {
         segment: u32,
         output: u32,
     },
 }
 
-/// The boundary an input is a delivery to, or `None` when it is not a delivery at all. The one
-/// place the mapping lives, so the harness can refuse a delivery aimed at the wrong kind
-/// without every caller restating it.
+/// The boundary an input is delivered to, or `None` when it is not a delivery.
 pub fn boundary_of(input: &Input) -> Option<Kind> {
     Some(match input {
         Input::LlmText { .. }
@@ -318,8 +280,7 @@ pub fn boundary_of(input: &Input) -> Option<Kind> {
     })
 }
 
-/// The kinds the fakes mint identities for. Speeches, holds and the rest are the driver's, and
-/// the harness opens those from the journal.
+/// The kinds the fakes mint identities for; the rest the harness opens from the journal.
 const MINTED: [Kind; 14] = [
     Kind::Chat,
     Kind::Tts,
@@ -338,27 +299,23 @@ const MINTED: [Kind; 14] = [
 ];
 
 /// What every fake holds: the stamp counter, the identity counters, and the way back to the
-/// harness. Cheap to clone into each fake, and nothing here is ever mutated behind a lock.
+/// harness.
 pub struct Registry {
     stamps: Stamps,
     /// The run's spawner for what the fakes run beside the session (`drive::World`).
     pub world: Arc<dyn lk_agents_abi::Spawner>,
     records: mpsc::UnboundedSender<Record>,
-    /// One counter per kind, because that is what a `Ref` counts. Atomic rather than locked so a
-    /// fake can mint its own identity from inside a product call without blocking anything.
+    /// Atomic so a fake can mint an identity from inside a product call without blocking.
     next: BTreeMap<Kind, AtomicU32>,
-    /// Distinct `call_id`s for generated tool calls.
     tool_serial: AtomicU32,
-    /// The voice provider is down: every synthesis fails at the open until it comes back.
+    /// Every synthesis fails at the open while set.
     voice_down: std::sync::atomic::AtomicBool,
-    /// Tool bodies refuse their cancellation (`Setup::tools_refuse_cancel`).
     refuse_cancel: std::sync::atomic::AtomicBool,
-    /// The session, once it exists: what a tool body calls, as `RunContext` does.
+    /// What a tool body calls, as `RunContext` does.
     session: std::sync::OnceLock<Arc<VoiceSession>>,
-    /// When each synthesis with a voice latency will hand over its first audio, until it has: work
-    /// the fake owes on its own clock, which no answer of the case's releases.
+    /// First audio each synthesis still owes on its own clock, which no case answer releases.
     voice_due: std::sync::Mutex<BTreeMap<u32, tokio::time::Instant>>,
-    /// When the last storage answer the fake owes on its own clock is due: its seeded latency.
+    /// When the last storage answer owed on the fake's own clock is due.
     storage_due: std::sync::Mutex<lk_agents_abi::Ts>,
     chat_responses: std::sync::Mutex<BTreeMap<String, u32>>,
 }
@@ -386,7 +343,6 @@ impl Registry {
         (Arc::new(registry), receiver)
     }
 
-    /// The voice provider's health, as the case sets it.
     pub fn set_voice_down(&self, down: bool) {
         self.voice_down.store(down, Ordering::SeqCst);
     }
@@ -395,7 +351,6 @@ impl Registry {
         self.voice_down.load(Ordering::SeqCst)
     }
 
-    /// Whether tool bodies refuse their cancellation, as the setup says.
     pub fn set_refuse_cancel(&self, refuse: bool) {
         self.refuse_cancel.store(refuse, Ordering::SeqCst);
     }
@@ -424,7 +379,6 @@ impl Registry {
         });
     }
 
-    /// The session was built: what running tool bodies call.
     pub fn attach_session(&self, session: Arc<VoiceSession>) {
         assert!(self.session.set(session).is_ok(), "session attached twice");
     }
@@ -453,27 +407,20 @@ impl Registry {
         self.session.get()
     }
 
-    /// The next slot of a kind.
     fn mint(&self, kind: Kind) -> Slot {
         let counter = self.next.get(&kind).expect("a kind the fakes mint");
         Slot { kind, nth: counter.fetch_add(1, Ordering::SeqCst) }
     }
 
-    /// Write one record down. A run that has ended has dropped the receiver, and a fake still
-    /// running on a detached task may record after that; it is not an error, there is simply no
-    /// one left to tell.
+    /// A fake on a detached task may record after the run dropped the receiver; that is fine.
     fn write(&self, record: Record) {
         let _ = self.records.send(record);
     }
 
-    /// The session opened `agent`'s `node`.
     pub(super) fn node_used(&self, agent: &str, node: crate::record::NodeUse) {
         self.write(Record::Node { at: self.stamps.next(), agent: agent.to_owned(), node });
     }
 
-    /// A new output instance the case is attaching. Recorded like an invocation so the harness has
-    /// one place to read everything the fakes opened.
-    /// An audio output, with its playout side as the control the case reaches the output by.
     pub(super) fn new_audio_output(&self, playout: Arc<output::Playout>) -> u32 {
         self.register(Kind::Output, Detail::Output { audio: true }, Control::Output(playout)).nth
     }
@@ -485,8 +432,7 @@ impl Registry {
         slot.nth
     }
 
-    /// The case attached a microphone. Not a fake's invocation, but minted here so its `nth` is
-    /// what a `Ref<Mic>` names, like every other resource.
+    /// Minted here so its `nth` is what a `Ref<Mic>` names.
     pub fn new_mic(&self) -> u32 {
         let at = self.stamps.next();
         let slot = self.mint(Kind::Mic);
@@ -494,8 +440,7 @@ impl Registry {
         slot.nth
     }
 
-    /// The end-of-turn predictor leg, one per session, minted so the frames the driver pushes into
-    /// it can be recorded against something a rule can name.
+    /// Minted so the frames pushed into the end-of-turn leg are recorded against a nameable slot.
     pub fn new_eot(&self) -> u32 {
         let at = self.stamps.next();
         let slot = self.mint(Kind::Eot);
@@ -510,8 +455,6 @@ impl Registry {
         slot
     }
 
-    /// Remember which output a flushed segment belongs to. Separate from `register` because only
-    /// the audio output knows the pairing, and it learns the segment's identity from the call.
     pub(super) fn attach_segment(&self, segment: u32, output: u32) {
         self.write(Record::Segment { segment, output });
     }
@@ -609,18 +552,10 @@ impl Registry {
         self.write(Record::Produced { at, tts, chunk, text, stamps });
     }
 
-    /// Run one delivery through the real channel, against a control the harness took out of its
-    /// own table and hands in here.
-    ///
-    /// Nothing is locked on this path, so nothing can be re-entered: the control belongs to the
-    /// caller alone, and a fake that records from inside this call -- the synthesis logging the
-    /// audio a release produced, a tracker notifying an attached recorder -- only sends. The
-    /// answer is whether the receiver took it; `End`, `Fail`, tool answers and playout reports
-    /// spend the control either way. Each fake owns the conversion from an `Input` to its wire
-    /// type.
+    /// One delivery against a control the harness took out of its table. Returns whether the
+    /// receiver took it, and the control back unless the delivery spent it.
     pub fn deliver(&self, slot: Slot, control: Control, input: &Input) -> (bool, Option<Control>) {
-        // Taken for every delivery, not only the ones that mint a call id, so a generated
-        // `call_id` stays a function of how many deliveries preceded it.
+        // Taken for every delivery, so a generated `call_id` depends only on how many preceded it.
         let serial = self.tool_serial.fetch_add(1, Ordering::SeqCst);
         match control {
             Control::Chat(sender) => {
@@ -695,17 +630,15 @@ impl Registry {
                 }
                 let accepted = playout.report(slot.nth);
                 self.record_sink(Sink::Played { segment: slot.nth, accepted });
-                // A finish the output refused -- the segment is still taking frames -- leaves it
-                // outstanding; the case can report it once the flush has come.
+                // A refused finish (still taking frames) stays reportable after the flush.
                 (accepted, (!accepted).then_some(Control::Segment(playout)))
             }
         }
     }
 }
 
-/// The audio half of a provider stream: the driver pushes frames here, and each one is written
-/// down as the tags it carried. The fake never derives events from these -- that link is the
-/// case's to make or break -- but recording them is what lets a rule check whether it did.
+/// The audio half of a provider stream: frames are recorded as their tags, never turned into
+/// events, so the audio-to-event link stays the case's to make or break.
 pub(super) struct Forward {
     pub(super) slot: Slot,
     pub(super) registry: Arc<Registry>,
@@ -713,7 +646,6 @@ pub(super) struct Forward {
     pub(super) ended: Option<Arc<tokio::sync::Notify>>,
 }
 
-/// The origin tags a frame carries, one per sample.
 pub(super) fn tags_of(frame: &AudioFrame) -> Vec<crate::record::Tag> {
     let (pairs, _) = frame.data.as_chunks::<2>();
     pairs.iter().map(|b| crate::record::Tag::decode(i16::from_le_bytes(*b))).collect()

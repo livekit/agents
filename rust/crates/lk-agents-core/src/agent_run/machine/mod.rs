@@ -1,19 +1,3 @@
-//! `AgentRun`: one agent invocation as a synchronous machine (rust-core "Agent execution"). It
-//! composes a model-step child ([`model_step`]), the tool/approval child ([`crate::tool_calls`]) and the
-//! output acceptance kept here, and decides when to request another step, ask the person, or
-//! settle. Direct runs, TextSession and VoiceSession drive it with `handle(event, now)` and
-//! `wake_at()`; the runtime executes its effects and returns their outcomes as events.
-//!
-//! - `mod.rs`: the invocation's events, state and step decisions.
-//! - [`super::effects`]: the scoped runtime-work declarations.
-//! - [`crate::agent_run`]: correlation IDs; result and stream records live in `lk_agents_abi`.
-//! - [`model_step`]: one model request.
-//! - `step_outcome`: what a settled step leads to.
-//! - `cancellation`: cancelled work still owed, and when the invocation settles anyway.
-//! - `coordinated`: an invocation whose coordinator plans its requests and decides its steps.
-//!
-//! One step's calls are [`crate::tool_calls`]'s, the machine VoiceSession composes too.
-
 use super::effects::AgentRunEffect;
 use super::execution;
 use super::planning::{self, RequestSnapshot, plan_request};
@@ -53,7 +37,7 @@ pub use coordinated::{AgentRunContinuation, Opening};
 pub use text_session::DelegationCheckpoint;
 
 #[cfg(test)]
-#[path = "../../agent_run_tests.rs"]
+#[path = "machine_tests.rs"]
 mod tests;
 
 pub use super::{CallId, CheckpointId, RenderId, RequestId, StepId};
@@ -232,7 +216,7 @@ pub struct AgentRun {
     /// Index of the incoming message in `history`: `new_messages` start there.
     first_new: usize,
     next_id: u64,
-    /// This invocation's requests and tool bodies (usage.md).
+    /// This invocation's requests and tool bodies.
     ledger: Ledger,
     /// What reached the person as written, in order: it leads the answer.
     verbatim: Vec<String>,
@@ -921,7 +905,7 @@ impl AgentRun {
         self.finish(Ok(self.result(RunOutcome::Completed { output }, verbatim)), fx)
     }
 
-    /// The turn ended producing no output (agents.md "Running a turn"). A `str` agent whose text
+    /// The turn ended producing no output. A `str` agent whose text
     /// reached the person as written completes with it; anything else has no output.
     fn end_without_output(&mut self, fx: &mut Vec<AgentRunEffect>) {
         if matches!(self.agent.output, OutputSpec::Text { .. }) && !self.verbatim.is_empty() {

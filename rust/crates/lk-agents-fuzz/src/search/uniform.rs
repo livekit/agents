@@ -1,10 +1,3 @@
-//! A uniform move: any legal row of the table, no actor behind it.
-//!
-//! Every legal row is as likely as every other, with two judgements only: reach for a kind the
-//! run is not holding, and let time pass between steps -- aimed, half the time, at a deadline the
-//! driver has armed, because boundary races are where a driver breaks and uniform delays never
-//! land on one. The conversation sends these at a per-run rate; at the bottom of the dial a run
-//! is nothing else, which is what the search's uniform sampler used to be on its own.
 use std::collections::BTreeMap;
 
 use fastrand::Rng;
@@ -16,26 +9,18 @@ use crate::{
     record::Recording,
 };
 
-/// How often to prefer an input that starts a kind the run is not holding.
-///
-/// Uniform choice keeps hitting the second half of chains it never started, so a long run comes
-/// out wide and shallow. The only judgement the search currently makes.
+// A uniform move: any legal row of the table, no actor behind it.
+
+/// How often to prefer an input that starts a kind the run is not holding, since uniform choice
+/// keeps hitting the second half of chains it never started.
 const REACH_FOR_NEW: u8 = 55;
 
-/// How often an `Advance` is aimed at a deadline the driver has armed, rather than a stock delay.
-///
-/// The driver's own timers are a map of where its behaviour changes. Landing an action one
-/// millisecond before, exactly on, and one after each armed deadline is how a search finds the
-/// conflicts that only exist at a boundary, and uniform delays almost never land there.
+/// How often an `Advance` is aimed just before, on or after an armed deadline: boundary races
+/// are where a driver breaks, and uniform delays almost never land there.
 const AIM_AT_TIMER: u8 = 50;
 
-/// How often a step is followed by time passing, independently of which input was chosen.
-///
-/// `Advance` is one row in a table of sixty four, so left to the table time passes about twice per
-/// run, and otherwise only when an await gives up after its whole budget. Every deadline the driver
-/// arms is then crossed by a single thirty-second leap and never approached. Time is a dimension of
-/// the space, not one input among many, so it is sampled between steps rather than competing with
-/// them.
+/// How often a step is followed by time passing. Time is sampled between steps rather than as
+/// one table row, or deadlines are only ever crossed by one long leap.
 pub const TICK: u8 = 50;
 
 /// Time passing between two steps: aimed at an armed deadline when there is one, a stock delay
@@ -48,9 +33,6 @@ pub fn tick(record: &Recording, rng: &mut Rng) -> Input {
 }
 
 /// Sample the next input to send, or `None` when the run can send nothing at all.
-///
-/// [`Input::available`] has already asked every row whether its references resolve, so the legal
-/// moves arrive ready-made and no availability rule is written twice.
 pub fn sample_next(record: &Recording, rng: &mut Rng) -> Option<Input> {
     let live = record.live();
     let mut sampler = Sampler::new(live, rng);

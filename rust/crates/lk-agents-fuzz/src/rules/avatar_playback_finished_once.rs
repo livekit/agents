@@ -1,16 +1,13 @@
-//! The avatar reports each segment's playback finished once: when the generator yields its end,
-//! or when a clear cuts it. Never a report for a segment that did not end, and never one missing
-//! for a segment that did, unless the close came too soon after for the report to go out.
-//!
-//! A segment is a run of audio the runner received, closed by the receiver's segment end or by a
-//! clear. The agent's speech waits on this report (`DataStreamAudioOutput`): one missing holds it
-//! until the clear timeout, or for ever without one; one too many ends the next segment early.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
     record::{AvatarStep, Observed, Recording},
     rules::avatar_av_in_sync::started,
 };
+
+// The agent's speech waits on this report (`DataStreamAudioOutput`): one missing holds it until
+// the clear timeout, or forever; one too many ends the next segment early. A report may be missing
+// only when the close came too soon after the segment ended.
 
 pub struct AvatarPlaybackFinishedOnce;
 

@@ -1,9 +1,3 @@
-//! A prediction is judged against the detector's own threshold.
-//!
-//! The reference asks the detector stream for `unlikely_threshold(language)` once a prediction
-//! lands: the user's overrides, the gateway's defaults and a fallback's rescale all live there.
-//! The fake detector's table puts every language at [`EOT_THRESHOLD`], so each announced
-//! prediction must carry it.
 use lk_agents_voice::events::{EotPredictionEvent, SessionEvent};
 use lk_agents_voice::trace::Step;
 
@@ -13,6 +7,9 @@ use crate::{
     fakes::EOT_THRESHOLD,
     record::{Kind, Recording},
 };
+
+// The detector stream's `unlikely_threshold(language)` holds the user's overrides, the gateway's
+// defaults and a fallback's rescale. The fake puts every language at `EOT_THRESHOLD`.
 
 pub struct EotJudgedByTheDetector;
 

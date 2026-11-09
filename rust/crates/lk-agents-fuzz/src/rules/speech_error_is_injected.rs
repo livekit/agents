@@ -1,9 +1,3 @@
-//! A speech fails only from a failure the case injected into one of its own requests, or from
-//! closing before it was scheduled, from a synthesis the case failed while it was live, from the
-//! realtime socket the case dropped while it was live, from an error the realtime server sent
-//! while it was live (a refusal, a timeout, a failed connection: the server's, reported by the
-//! session), from a server that created no reply within the client's bound, or from a refusal
-//! the driver journals itself.
 use lk_agents_voice::{
     events::{ErrorSource, SessionEvent},
     trace::{PlayoutStep, SpeechStep, Step},

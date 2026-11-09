@@ -1,5 +1,3 @@
-//! Rust log records forwarded to Python without waiting for the GIL.
-
 /// Interpreter interface namespaces. Generated inherent methods perform the declared
 /// imports and member access; they accept Python objects without asserting their runtime type.
 pub mod interfaces {
@@ -432,8 +430,8 @@ mod logging_tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    // Catches: a log line waiting for the GIL. The thread logging holds what a GIL holder waits
-    // for (a lock, here a reply), as review14's storage_lost warn under the Requests lock did.
+    // Catches: a log line waiting for the GIL while the logging thread holds what a GIL holder
+    // waits for (a lock, here a reply).
     #[test]
     fn a_line_logged_while_a_gil_holder_waits_on_the_logger_completes_and_arrives() {
         Python::initialize();

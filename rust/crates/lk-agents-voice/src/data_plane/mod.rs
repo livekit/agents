@@ -1,8 +1,3 @@
-//! Microphone input routing: pure fan-out, resampling, and gates beside voice coordination.
-//!
-//! `machine::AudioInputRouter` produces `effects::AudioInputRouterEffect`; runtime performs I/O.
-//! AudioInput remains the source interface, not this routing state machine.
-
 pub mod effects;
 pub mod machine;
 

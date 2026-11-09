@@ -1,7 +1,7 @@
-//! Speaking starts with delivered audio, or the first words when no audio output exists.
-
 use super::TurnAccumulator;
 use crate::generation::effects::TurnAccumulatorEffect;
+
+// Speaking starts with delivered audio, or the first words when no audio output exists.
 
 pub enum TurnAccumulatorOutputEvent<'a> {
     SegmentOpened { has_audio_output: bool, interrupted: bool },

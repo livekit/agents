@@ -1,8 +1,4 @@
-//! Participant transcription stalls, backlog, replacement and close contracts.
-
 use super::*;
-
-// --------------------------------------------------------------------- the agent's transcript
 
 /// A text writer that waits until the test lets it write.
 struct StalledWriter {

@@ -1,11 +1,4 @@
-//! What the DST simulates and what it leaves outside, stated once and printed by every campaign
-//! (K-1, K-9).
-//!
-//! Each campaign states which production decisions and executors it actually exercises. Voice
-//! includes the real runtime loop and its injected tasks; provider/SDK network implementations
-//! remain outside its fake ports. Backend A2A and TextSession execution is outside the DST.
-
-/// One campaign's boundary.
+/// What one campaign simulates and what it leaves outside, printed by every campaign.
 pub struct Boundary {
     /// The cores the run steps itself, one event at a time.
     pub cores: &'static [&'static str],

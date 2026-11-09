@@ -1,7 +1,3 @@
-//! Recognition: every `stream()` the product opens is its own invocation with its own event
-//! channel. A reopen is a new `RequestId`; the old one stays addressable so a late delivery to
-//! it is a recorded, rejected attempt rather than a silent channel swap. Microphone audio the
-//! driver forwards is recorded, never interpreted; recognition events come only from the case.
 use std::sync::Arc;
 
 use lk_agents_abi::{
@@ -17,15 +13,16 @@ use crate::{
     record::{Detail, Kind},
 };
 
+// A reopened stream stays addressable, so a late delivery to it is a recorded, rejected attempt
+// rather than a silent channel swap. Audio is recorded, never interpreted.
+
 pub struct FakeStt {
     registry: Arc<Registry>,
-    /// How long opening a stream takes, on the session's clock: a real recogniser connects
-    /// before it listens, and a driver that reopens or closes during that window has an open
-    /// in flight to deal with.
+    /// Connect delay, so a reopen or close can land while an open is in flight.
     connect: std::time::Duration,
-    /// What its streams are recorded as: the session's, or AMD's own.
+    /// The session's streams, or AMD's own.
     detail: Detail,
-    /// `STTCapabilities.keyterms`: whether keyterm detection runs over it.
+    /// `STTCapabilities.keyterms`.
     keyterms: bool,
 }
 
@@ -112,8 +109,7 @@ impl Stt for FakeStt {
 impl StreamOutput<SpeechEvent> for Recognition {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
         Box::pin(async move {
-            // A real stream ends once its input has: what was already produced first, then the end.
-            // Without it a stream the driver replaced stays open, and a case keeps speaking into it.
+            // A real stream ends once its input has; otherwise a replaced stream stays open.
             tokio::select! {
                 biased;
                 event = self.events.recv() => event.transpose(),
@@ -136,8 +132,7 @@ impl StreamOutput<SpeechEvent> for Recognition {
 
 impl lk_agents_abi::utils::stream::ProviderStream<SpeechEvent> for Recognition {}
 
-/// Where a transcript sits in the stream's audio: a real recogniser stamps its words with the
-/// seconds of stream it had heard when they began and ended.
+/// A real recogniser stamps words with the seconds of stream heard when they began and ended.
 pub(super) struct Clock {
     pub opened: Ts,
     pub started: Option<Ts>,

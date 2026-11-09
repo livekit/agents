@@ -1,12 +1,10 @@
-//! Public re-export modules: every generated name whose declaration places it in a public module
-//! (`path = "livekit.agents.<module>"`) is re-exported by `_generated/public_<module>.py`,
-//! which that public module star-imports and lists in its literal `__all__`. The public modules
-//! hold no hand-written import list of generated names.
-
 use std::collections::BTreeMap;
 
 use crate::decl::{Declarations, Form, RecordBody};
 use crate::python::Out;
+
+// Each public module star-imports its `_generated/public_<module>.py` and lists the names in a
+// literal `__all__`; it holds no hand-written import list of generated names.
 
 const PACKAGE: &str = "livekit.agents";
 /// The native module, and its import from `_generated`.

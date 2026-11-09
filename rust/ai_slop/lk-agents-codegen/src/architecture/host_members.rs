@@ -1,8 +1,9 @@
-//! Fixed Python member names belong to generated accessors, including calls through the generic
-//! extraction helpers. Dynamic application keys and reflected Python field objects remain legal.
 use std::collections::BTreeSet;
 use std::path::Path;
 use syn::{spanned::Spanned, visit::Visit};
+
+// Fixed Python member names belong to generated accessors; dynamic application keys and reflected
+// field objects remain legal.
 
 pub fn check(root: &Path) -> Result<(), String> {
     let mut errors = Vec::new();

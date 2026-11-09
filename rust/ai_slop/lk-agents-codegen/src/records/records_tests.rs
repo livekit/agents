@@ -1,6 +1,4 @@
-//! Declared records' Python models: legacy modules, unions, constants and nested classes.
-
-use super::*;
+use crate::decl::tests::read;
 
 #[test]
 fn transparent_provider_members_distinguish_native_capabilities_from_host_classes() {
@@ -37,8 +35,7 @@ fn transparent_provider_members_distinguish_native_capabilities_from_host_classe
     assert!(model.contains("Member: TypeAlias = NativeModel | Model"), "{model}");
 }
 
-// Catches: declared records overwriting the legacy models of the module they share (a family
-// migrated record by record), or a declared record redefining a legacy model's name.
+// Catches: declared records overwriting the authored models of their module, or redefining one.
 #[test]
 fn declared_records_join_a_legacy_module_without_replacing_it() {
     let legacy = "# GENERATED FILE -- DO NOT EDIT.\n\nfrom __future__ import annotations\n\nfrom pydantic import BaseModel\n\n\nclass Legacy(BaseModel):\n    x: int\n";
@@ -156,9 +153,8 @@ fn a_defaulted_typed_dict_key_is_not_required_whatever_its_annotation() {
     );
 }
 
-// Catches: a scalar-or-map option (`Policy | dict[str, Policy] | None`) needing wrapper classes,
-// `None` not crossing as the unit variant, a policy string read as a model instance, a duration
-// not told apart as a `timedelta`, or `int` and `float` variants left ambiguous.
+// Catches: a scalar-or-map option needing wrapper classes, `None` not crossing as the unit
+// variant, or `int` and `float` variants left ambiguous.
 #[test]
 fn a_transparent_record_crosses_scalars_maps_and_none() {
     let decls = read(
@@ -281,9 +277,7 @@ fn a_model_takes_one_item_for_its_list_and_an_enum_class_has_hook_methods() {
     assert!(dataclass.err().is_some_and(|e| e.contains("pydantic model's list field")));
 }
 
-// Catches: a nested model (`RealtimeModelMetrics.InputTokenDetails`) emitted at module level,
-// named without its owner where it is used, read off the module rather than its owner, or nested
-// in what is no record struct.
+// Catches: a nested model emitted at module level or named without its owner.
 #[test]
 fn a_nested_record_is_a_class_of_its_owners_model() {
     let decls = read(
@@ -321,9 +315,8 @@ fn a_nested_record_is_a_class_of_its_owners_model() {
     );
 }
 
-// Catches: a computed default (`STTMetrics.total_tokens`, input plus output when left out) lost,
-// overriding an explicit value (even 0), computed in Python rather than by the Rust function, or
-// accepted where the host never reads it.
+// Catches: a computed default lost, overriding an explicit value (even 0), or computed in Python
+// rather than by the Rust function.
 #[test]
 fn an_omitted_field_is_computed_from_the_record_read() {
     let decls = read(
@@ -363,9 +356,8 @@ fn an_omitted_field_is_computed_from_the_record_read() {
     assert!(emitted_only.err().is_some_and(|e| e.contains("`omitted`")));
 }
 
-// Catches: a dispatched member routed by anything but its model class, an event emitted under a
-// name its model does not carry, an ignored member lost, an event the host's behaviour emits
-// missing from `EventTypes` and `AgentEvent`, or a route outside a dispatched record accepted.
+// Catches: a dispatched member routed by anything but its model class, an ignored member lost,
+// or an emitted event missing from `EventTypes` and `AgentEvent`.
 #[test]
 fn a_dispatched_record_routes_its_members_by_model_class() {
     let source = r#"
@@ -450,10 +442,8 @@ fn transparent_records_extract_and_emit_existing_host_classes() {
     assert!(crate::records::conversions(&invalid).err().unwrap().contains("names one host class"));
 }
 
-// Catches: a plugin-facing dataclass emitted frozen or keyword-only (breaking positional
-// construction and mutation), its `__post_init__` hook dropped or calling `_core`, a renamed field
-// crossing under its Rust name, a host-stamped `Option` overwritten with `None` on emit, or a
-// required field accepted after a defaulted one (a `TypeError` at import).
+// Catches: a plugin-facing dataclass emitted frozen or keyword-only, its `__post_init__` hook
+// dropped, a renamed field crossing under its Rust name, or a required field after a defaulted one.
 #[test]
 fn a_dataclass_record_is_mutable_positional_and_calls_its_post_init_hook() {
     let decls = read(
@@ -524,7 +514,7 @@ fn an_extract_only_string_enum_needs_no_python_type_cache() {
 
 #[test]
 fn external_records_generate_structural_conversions_and_reuse_the_host_class() {
-    let declarations = super::read(r#"
+    let declarations = read(r#"
         #[crate::host(record(module = "options", name = "Options", host_type = "package.Options", extract, emit))]
         pub struct Options { pub retry: u32, pub timeout: Option<f64> }
     "#).unwrap();
@@ -541,7 +531,7 @@ fn external_records_generate_structural_conversions_and_reuse_the_host_class() {
 
 #[test]
 fn a_read_only_external_record_imports_its_class_for_typing_only() {
-    let declarations = super::read(r#"
+    let declarations = read(r#"
         #[crate::host(record(module = "spans", name = "Span", host_type = "optional.sdk.Span", extract))]
         pub struct Span { pub name: String }
     "#).unwrap();
@@ -785,9 +775,8 @@ fn only_a_record_whose_rust_type_derives_hash_is_frozen() {
     );
 }
 
-// Catches: a generic result union losing its type parameter (`RunResult[str]` unsubscriptable at
-// run time), a branch not inheriting its base's fields and methods, an assertion cursor rebuilt on
-// every read, or a cached view on a slotted model (no `__dict__` to keep it in).
+// Catches: a generic union losing its type parameter, a branch not inheriting its base, or a
+// cached view on a slotted model.
 #[test]
 fn a_generic_union_of_dataclass_subclasses_shares_its_base_and_caches_a_view() {
     let source = |base: &str| {

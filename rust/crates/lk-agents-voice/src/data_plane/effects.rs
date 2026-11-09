@@ -1,6 +1,3 @@
-//! Microphone-routing work produced by `machine::AudioInputRouter`.
-//! Runtime's voice executor delivers frames, closes inputs, and reports facts to VoiceDriver.
-
 use crate::agent_session::VoiceEvent;
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::resources::ResourceId;

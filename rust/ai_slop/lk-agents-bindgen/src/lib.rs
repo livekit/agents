@@ -1,12 +1,11 @@
-//! `lk-agents-bindgen`: the `#[host(..)]` attribute language, read once for every reader. The proc
-//! macros (`lk-agents-host-derive`) and the generator (`lk-agents-codegen`) both read it through
+//! The `#[host(..)]` attribute language. The proc macros and the generator both read it through
 //! [`meta`], so the two cannot read one attribute two ways.
 
 mod error;
 pub mod meta;
 pub mod telemetry;
 #[cfg(test)]
-#[path = "bindgen_tests.rs"]
+#[path = "lib_tests.rs"]
 mod tests;
 
 pub use error::{HostException, ToHost, host_exception, host_kind, raised};
@@ -41,12 +40,10 @@ fn unlink(line: &str) -> String {
     out
 }
 
-/// `#[host(method(send = <expr>))]` on a body-less method (`pub fn f(&self, ..) -> R;`): the body
-/// is `self.send(<expr>)` written for it, the expression built from the parameters. Returning
-/// `Result<_, E>` the refusal is returned (`?`, converted by `From`); returning nothing it is
-/// dropped. Run on every `#[host(object)]` impl before anything else reads it -- the expansion,
-/// the strip and the codegen -- so each sees an ordinary method. A body-less fn without `send`, and
-/// `send` beside a written body, are refused.
+/// Writes `self.send(<expr>)` as the body of each body-less `#[host(method(send = <expr>))]`
+/// method. A `Result` return propagates the refusal; a unit return drops it. Run on every
+/// `#[host(object)]` impl before anything else reads it. A body-less fn without `send`, and `send`
+/// beside a written body, are refused.
 pub fn fill_sends(imp: &mut syn::ItemImpl) -> syn::Result<()> {
     struct Bodiless {
         attrs: Vec<syn::Attribute>,

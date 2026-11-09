@@ -1,5 +1,3 @@
-//! Streaming synthesis decisions: feed ordering, completion and aligned captions.
-
 use crate::generation::effects::{
     AlignedTranscriptEffect, DrainedText, StreamingTtsEffect, SynthesisLossEffect,
 };

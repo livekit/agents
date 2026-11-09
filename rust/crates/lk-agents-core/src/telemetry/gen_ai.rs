@@ -1,7 +1,3 @@
-//! OpenTelemetry GenAI semantic conventions the framework's spans follow: provider names, and the
-//! message capture shapes (`gen_ai.system_instructions`, `gen_ai.input.messages`,
-//! `gen_ai.output.messages`, `gen_ai.tool.definitions`).
-
 use lk_agents_abi::llm::chat_context::{ChatContent, ImageSource, Role};
 use lk_agents_abi::telemetry::spans::agent_turn::{ChatContextDict, ResponseFunctionCall};
 use lk_agents_abi::telemetry::spans::inference::{
@@ -13,7 +9,7 @@ use serde_json::Value;
 
 use crate::agent_run::planning::INSTRUCTIONS_MESSAGE_ID;
 
-/// `gen_ai_provider_name` (`trace_types.py`): a plugin's `provider` in the GenAI registry's
+/// A plugin's `provider` in the GenAI registry's
 /// spelling; one outside the registry keeps its own.
 pub fn provider_name(provider: &str) -> Option<String> {
     let value = provider.trim();

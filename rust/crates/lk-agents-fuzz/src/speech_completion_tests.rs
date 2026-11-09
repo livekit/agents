@@ -1,5 +1,3 @@
-//! Speech regression tests.
-
 mod speech_announced_before_user_item {
     //! `generate_reply(user_input=)` announces its speech, user-initiated, before the user item.
     use lk_agents_abi::{ChatItem, Role};
@@ -8,9 +6,7 @@ mod speech_announced_before_user_item {
     use lk_agents_voice::{events::SessionEvent, trace::Step};
 
     // Catches: the user item committed before `speech_created`, which a listener pairing the two saw
-    // in the wrong order. The reference emits `speech_created(user_initiated=True)` in
-    // `_generate_reply` and adds the user message once the reply task sees its speech scheduled
-    // (`_pipeline_reply_task_impl`); found by `scripts/parity.py generate_reply`.
+    // in the wrong order.
     #[test]
     fn the_speech_is_announced_before_the_user_item() {
         let setup = Setup::default();
@@ -55,9 +51,7 @@ mod step_cut_text_conserved {
 
     // Catches: `text_conservation` holding a speech that completed to every word its steps were
     // given, though the host's unforced `interrupt()` stops only the playing step (its words are
-    // never forwarded) and the tool's follow-up then completes the speech (survey seed 2750). The
-    // completion clause now skips a speech the driver journalled interrupting. The step-scoped cut is
-    // gone since: as `_interrupt_fut` is one-shot, the speech ends interrupted and nothing follows.
+    // never forwarded) and the tool's follow-up then completes the speech (survey seed 2750).
     #[test]
     fn a_cut_step_does_not_owe_its_words() {
         let setup = Setup { tools: vec!["lookup".into()], ..Setup::default() };
@@ -118,9 +112,7 @@ mod unheard_reply_not_committed {
 
     // Catches: a segment whose synthesis ended interrupted (never opened, or cut while its open was
     // being retried) taking the lost-voice fallback, which forwards the segment's words as text and
-    // counts them heard. The reply was committed whole, `interrupted` set, though not a word of it
-    // played: on a real call the model then read its own unheard question as asked and answered past
-    // the caller. The reference commits only the synchronised transcript of what played: nothing.
+    // counts them heard, so the reply was committed whole though not a word of it played.
     #[test]
     fn an_unheard_reply_is_not_committed() {
         let said = assistant_words(&[
@@ -171,9 +163,7 @@ mod uninterruptible_drops_turn {
     use lk_agents_voice::{events::SessionEvent, trace::Step};
 
     // Catches: the turn queued a reply behind the speech, which then answered words the agent had
-    // talked over. The reference's `_user_turn_completed_impl` returns with "skipping reply to user
-    // input, current speech generation cannot be interrupted" and keeps no user item; found by
-    // `scripts/parity.py say_uninterruptible`.
+    // talked over.
     #[test]
     fn a_turn_over_an_uninterruptible_speech_is_dropped() {
         let setup = Setup { stt: true, ..Setup::default() };
@@ -229,9 +219,7 @@ mod unvoiced_synthesis_no_item {
     use lk_agents_voice::{events::SessionEvent, trace::Step};
 
     // Catches: the failed synthesis's words committed as an interrupted assistant message the caller
-    // never heard. The reference's `forward_generation` leaves a segment whose TTS failed with none of
-    // its audio captured "skipped", so `forwarded_text` is empty and no message is added; found by
-    // `scripts/parity.py tts_failure`.
+    // never heard.
     #[test]
     fn an_unvoiced_speech_commits_nothing() {
         let setup = Setup { sync_transcription: true, ..Setup::default() };
@@ -360,7 +348,7 @@ mod voice_task {
     }
 
     // Catches: a drain refused because a task holds the floor answered as if the session were
-    // closing (the harness read the refusal's string and took anything but one as `Closing`).
+    // closing.
     #[test]
     fn a_drain_under_a_running_task_is_refused_as_task_running() {
         use lk_agents_voice::agent_session::DrainRefused;

@@ -1,6 +1,3 @@
-//! `AgentSession.agent_state` and `user_state`: who is speaking, the user's turn claims, and the
-//! away timer that runs while both listen.
-
 use std::time::Duration;
 
 use lk_agents_abi::Ts;

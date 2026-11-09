@@ -1,10 +1,3 @@
-//! Every speech is done once the test has answered everything the driver was waiting on.
-//!
-//! While the test is still talking, a speech may legitimately wait on it. The test then answers
-//! every request, synthesis, playout, hook and hold, lets the driver's timers fire, and keeps
-//! going until nothing new appears. At that instant the driver waits on nobody but itself, so a
-//! speech created before it and not yet done was waiting on nothing: it was stuck, and only the
-//! close will end it.
 use lk_agents_voice::agent_session::effects::{GateCause, GateOp};
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::trace::{InterruptStep, SpeechStep, Step, ToolStep, TurnStep};
@@ -15,6 +8,9 @@ use crate::{
     input::Input,
     record::{Handle, Observed, Recording, SpeechView},
 };
+
+// Once the test answered everything and timers fired until nothing new appears, the driver waits
+// on nobody but itself: a speech not yet done is stuck.
 
 pub struct SpeechSettles;
 

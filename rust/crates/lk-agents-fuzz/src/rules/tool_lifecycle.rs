@@ -1,12 +1,3 @@
-//! A tool body the runner executed is announced to the host once as started and, once its speech
-//! has finished, once as ended, in that order.
-//!
-//! The end is owed at the join, not when the body answers. The driver awaits a step's tool calls
-//! in the model's order *after* the step is spoken, so a call that has answered is still legally
-//! silent while an earlier sibling is outstanding or the step is still playing. What the product
-//! does guarantee is that no started call outlives its speech: `tool_executor::end_live_tools`
-//! settles whatever is still live when the speech is cut or the session closes. So the trigger
-//! here is the speech's own completion.
 use lk_agents_voice::events::ToolEndStatus;
 
 use crate::{
@@ -15,6 +6,10 @@ use crate::{
     input::{AgentText, Input, Ref, ToolAnswer},
     record::Recording,
 };
+
+// The end is owed at the speech's completion, not when the body answers: calls are joined in the
+// model's order after the step is spoken, and `tool_executor::end_live_tools` settles what is
+// still live when the speech is cut or the session closes.
 
 pub struct ToolLifecycle;
 

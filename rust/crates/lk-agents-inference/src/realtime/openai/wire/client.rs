@@ -1,5 +1,3 @@
-//! Client frames and the GA, beta and xAI session layouts.
-
 use super::*;
 use crate::realtime::dialect::TurnDetection;
 use serde::Serialize;

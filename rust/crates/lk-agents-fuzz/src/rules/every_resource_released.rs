@@ -1,11 +1,3 @@
-//! Once the session has ended, its resource table is empty.
-//!
-//! The host registers every provider, output and microphone it hands over, and the data plane
-//! registers every stream sink it feeds; the table keeps each alive until released. Whatever owns
-//! an id releases it: the decision core what it held or was handed in a command it never took, the
-//! runtime the microphone and the sinks. An id still in the table once the driver has exited and
-//! the session's tasks are joined has nobody left to release it: the provider behind it is kept
-//! alive for as long as the host keeps the session object.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
@@ -13,6 +5,10 @@ use crate::{
     input::{Input, Millis, Models},
     record::{Phase, Recording},
 };
+
+// The core releases what it held or was handed in a command it never took; the runtime releases
+// the microphone and the sinks. An id left after the exit keeps its provider alive for as long as
+// the host keeps the session object.
 
 pub struct EveryResourceReleased;
 

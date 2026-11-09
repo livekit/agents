@@ -1,10 +1,3 @@
-//! A provider the core released is never named again.
-//!
-//! The core holds providers by id and releases one at the end of the step in which nothing holds
-//! it any more: not the session, not a switch, not an inline task's parent. The table then lets it
-//! go. An effect naming a released id afterwards (a stream opened on it, a prewarm, a second
-//! release) is the core deciding with a provider it gave up: a use after free, which the table
-//! answers with nothing.
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_voice::{
     agent_session::effects::{ProviderCall, StreamKind},
@@ -18,6 +11,8 @@ use crate::{
     input::{Input, Millis, Models},
     record::Recording,
 };
+
+// An effect naming a released id is a use after free: the table answers it with nothing.
 
 pub struct ReleasedProviderUnused;
 

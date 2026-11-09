@@ -1,6 +1,3 @@
-//! A recognition stream's audio input: a `CatchUp` media queue its pump drains at the pace of
-//! the provider, so a slow provider never fails the stream; ending the input drops the sender.
-
 use lk_agents_abi::{AudioFrame, Clock};
 use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Policy, Stuck};
 use lk_agents_telemetry as telemetry;

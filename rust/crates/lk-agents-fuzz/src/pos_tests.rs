@@ -1,17 +1,6 @@
-//! Partial-order sampling, measured. Ignored by default: this is a measurement, not a check (the
-//! scheduler's own tests are the small programs in `src/drive/queue.rs`).
-//!
+//! Partial-order sampling benchmark comparing queue policies; ignored, a measurement not a check.
 //! `cargo test --release -p lk-agents-fuzz --test pos -- --ignored --nocapture bench`
-//!
-//! `bench`: every queue policy on the same seeds, the way Yuan, Yang and Gu (CAV 2018) compare
-//! samplers. Over `VOICE_SEEDS` (4096) campaign seeds per policy: what each reached, its distinct
-//! findings (contract and subject kind), its cost, and per contract the seeds that failed it and
-//! the seeds to its first failure in each of `VOICE_WINDOWS` (8) windows. Then the paper's method
-//! proper, per contract that failed: its first failing case is the program, run under
-//! `VOICE_SCHEDULES` (512) schedules per policy, the hit ratio and the schedules to the first hit
-//! in each window; and between the two, that case's setup under `VOICE_SETUPS` (1024) fresh
-//! conversations. `rust/crates/lk-agents-fuzz/bench/known_bugs.sh` runs it over the known bugs,
-//! each reintroduced from its fix commit, and tabulates it.
+//! (tuned by `VOICE_SEEDS`, `VOICE_WINDOWS`, `VOICE_SCHEDULES`, `VOICE_SETUPS`).
 use std::collections::BTreeSet;
 
 use fastrand::Rng;

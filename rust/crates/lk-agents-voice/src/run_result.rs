@@ -1,7 +1,3 @@
-//! Voice-run identity, result selection and recording. A run settles into the `RunResult` a text
-//! run settles into: its items, usage and outcome are the core's. Work membership and liveness
-//! stay in lifecycle owners.
-
 use crate::agent::Source;
 use crate::agent_session::VoiceDriver;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
@@ -35,7 +31,7 @@ struct OpenRun {
     last: Option<(SpeechId, Option<ProviderError>)>,
     /// What the run recorded, each item once by identity, in time order.
     items: Vec<ChatItem>,
-    /// The requests and tool bodies of the speeches the run owns (usage.md).
+    /// The requests and tool bodies of the speeches the run owns.
     usage: Ledger,
 }
 

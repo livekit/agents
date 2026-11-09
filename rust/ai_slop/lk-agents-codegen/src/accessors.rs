@@ -1,5 +1,3 @@
-//! Interpreter-local interface readers and the Python emitter. The emitter consumes the same
-//! resolved declarations as classes, proxies and values; it never scans source or infers keys.
 use crate::decl::tree::Crate;
 use crate::decl::vocabulary::{self as voc, Entry};
 use crate::decl::{

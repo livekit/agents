@@ -1,6 +1,3 @@
-//! A settled step's outcome: its calls and outputs recorded in model order, and whether the
-//! invocation continues, asks, stops or fails.
-
 use lk_agents_abi::agent::OutputSpec;
 use lk_agents_abi::agent::run::{Output, RunError};
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
@@ -108,10 +105,8 @@ impl AgentRun {
             outputs.push(ChatItem::FunctionCallOutput(output));
         }
         self.input_requirements.extend(input_requirements.iter().cloned());
-        // Calls retain their dispatch stamps; outputs are stamped when the step settles, never
-        // before their call: a host that stamps its calls finer than the run's clock reads them.
-        // One canonical order agrees with chronological voice/storage projections without
-        // rewriting those stamps: all calls, then all outputs, each in model order.
+        // Outputs are never stamped before their call (hosts may stamp calls finer than our
+        // clock); all calls, then all outputs, each in model order, stays chronological.
         let items: Vec<ChatItem> = calls.into_iter().chain(outputs).collect();
         let editable_continuation = exceeded.is_none() && terminal.is_none();
         let next = match (exceeded, terminal) {
@@ -192,3 +187,7 @@ enum Terminal {
     Ask(RunQuestion),
     Stop,
 }
+
+#[cfg(test)]
+#[path = "step_outcome_tests.rs"]
+mod tests;

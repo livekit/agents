@@ -1,14 +1,3 @@
-//! Every API call gets its result.
-//!
-//! A call that returns a value -- `say`, `generate_reply`, `interrupt`, `commit_user_turn`,
-//! `wait_for_idle`, `wait_for_idle_and_hold`, `handoff`, `drain`, a DTMF start -- is a future the developer
-//! awaits, and the driver owes it a result even while closing: a pending drain joins the close's
-//! own, a handoff is refused as closing, a DTMF collection is answered stopped. The one future the
-//! driver drops on purpose is a `say` or `generate_reply` that reached the session after the host
-//! asked it to drain or close, or after the driver began closing on its own: it never spoke, and
-//! the dropped future says so. A `commit_user_turn` answered superseded must have been superseded
-//! by a newer commit. Any other dropped future, and any call with no result once the driver has
-//! exited, is a call the driver forgot.
 use lk_agents_voice::trace::{Step, TurnStep};
 
 use crate::{
@@ -17,6 +6,10 @@ use crate::{
     input::{AgentText, Input, Millis, SayInput},
     record::{Answer, Recording},
 };
+
+// The driver owes every call a result even while closing: a pending drain joins the close's, a
+// handoff is refused as closing, a DTMF collection is answered stopped. A `commit_user_turn`
+// answered superseded must have a newer commit behind it.
 
 pub struct ApiCallsReturn;
 

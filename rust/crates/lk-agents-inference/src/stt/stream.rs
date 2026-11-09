@@ -1,6 +1,3 @@
-//! A live stream's two halves: the sink the caller pushes audio into, with the control its
-//! client's `update_options` reaches, and the source it drains speech events from.
-
 use super::*;
 
 /// A keyterm change that arrived mid-utterance, deferred to `END_OF_SPEECH`: "the gateway may

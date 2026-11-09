@@ -1,7 +1,3 @@
-//! The whole `livekit.agents._core` surface: `_core.pyi`, which re-exports every name from the
-//! generated stub that declares it, and `core_names.json`, the names `dir(_core)` returns, which
-//! `lk-agents-py` compares with its registration table.
-
 use crate::python::Out;
 
 /// One generated `_core` stub module and the `_core` names it declares.

@@ -1,8 +1,3 @@
-//! Everything that became true since the last input, written down.
-//!
-//! Answers, host events, what the fakes did, what the driver journalled, and the public state of
-//! every speech handle. Nothing here awaits: what it finds is what was ready without giving the
-//! driver another turn.
 use super::apply::Settled;
 use super::*;
 use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
@@ -60,9 +55,8 @@ impl Run {
         self.absorb_journal();
         self.attribute_chats(from_journal, from_host);
 
-        // A snapshot takes a stamp of its own: what it observed came after everything stamped
-        // before it and before everything stamped after, so a speech seen done here and a stream
-        // closed by the next input never share an instant a timeline rule cannot order.
+        // The snapshot takes a stamp of its own, so what it saw never shares an instant with what
+        // the next input does.
         let now = self.stamps.next();
         for (id, handle) in &self.handles {
             let done = handle.done();

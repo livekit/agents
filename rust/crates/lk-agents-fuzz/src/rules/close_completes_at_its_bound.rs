@@ -1,9 +1,3 @@
-//! A session closes within its cleanup bound even when a host callback refuses its cancellation.
-//!
-//! A tool body that catches its cancellation (`except CancelledError:`) runs on after the close
-//! cancelled it. The session must not wait for it: its loop exits, and its close cancels what is
-//! still running at `HOST_TEARDOWN_TIMEOUT` past the stop (`Runtime::close`), so a refusal costs
-//! the close at most that bound.
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::trace::Step;
 
@@ -14,6 +8,9 @@ use crate::{
     input::{Input, Millis, Ref, ToolArgs},
     record::Recording,
 };
+
+// A tool body that catches `CancelledError` runs on after the close. `Runtime::close` cancels
+// what still runs at `HOST_TEARDOWN_TIMEOUT` past the stop, so a refusal costs at most that bound.
 
 pub struct CloseCompletesAtItsBound;
 

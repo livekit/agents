@@ -1,12 +1,5 @@
-//! `resolved_declaration_ir`: declarations in, IR or a refusal naming the declaration out.
-
 use super::tree::Crate;
 use super::*;
-
-#[path = "decl_callables_tests.rs"]
-mod callables;
-#[path = "decl_models_tests.rs"]
-mod models;
 
 const LIB: &str = "pub mod invoke; pub mod errors; pub mod llm; pub mod utils; pub use llm::chat::Item; pub use utils::host_ref::HostRef;";
 
@@ -91,18 +84,15 @@ fn class(body: &str) -> String {
     )
 }
 
-fn refuse(body: &str) -> String {
+pub(crate) fn refuse(body: &str) -> String {
     match read(&class(body)) {
         Ok(d) => panic!("expected a refusal of `{body}`, got {:?}", d.classes[0].methods),
         Err(e) => e,
     }
 }
 
-// Catches: an alias read by its name instead of what it stands for (`Extra` as a record, `Res<T>`
-// without its bound argument), a re-exported record not found through `pub use`, a source taken
-// from the signature instead of its declaration, the error's conversion not resolved in the
-// error's own module, or a path through a private module (`errors::api`) that another crate
-// cannot name: each item is written by its shortest public path.
+// Catches: an alias read by its name, a re-export not followed, a source taken from the
+// signature, or an item written through a private module instead of its shortest public path.
 #[test]
 fn aliases_generics_reexports_and_declared_kinds_resolve() {
     let decls = read(&class(
@@ -146,10 +136,8 @@ fn aliases_generics_reexports_and_declared_kinds_resolve() {
     assert_eq!(c.methods[3].kind, MethodKind::Await);
 }
 
-// Catches: an awaited method declared `-> BoxFuture<'static, T>` started only when the host
-// awaits it (a command it sends would then be ordered after later calls), its future's output
-// read as the declared result instead of the future itself, or a call refused in a `Result`
-// raising only once awaited.
+// Catches: a `-> BoxFuture<'static, T>` method started only when awaited (reordering its
+// command), or a refusal in a `Result` raising only once awaited.
 #[test]
 fn an_eager_await_runs_at_the_call_and_awaits_its_future() {
     let decls = read(&class(
@@ -328,10 +316,8 @@ fn a_sink_and_its_source_are_one_duplex_stream_class() {
     }
 }
 
-// Catches: the adapter choosing a conversion by anything but the declared kind (a JSON object
-// extracted by pyo3, a proxy taken as a value), a default dropped from the host signature, the
-// error raised through anything but its declared conversion, a source handed out without the
-// runtime's single-consumer adapter, or a class the shell need not select an implementation for.
+// Catches: the adapter choosing a conversion, error or source adapter by anything but the
+// declared kind, or a default dropped from the host signature.
 #[test]
 fn adapters_and_stubs_follow_the_declared_kinds() {
     let decls = read(&class(
@@ -444,10 +430,9 @@ fn refuse_proxy(body: &str) -> String {
     }
 }
 
-// Catches: a proxy call made outside the context its invocation captured, a host refusal read as
-// a failure (or the reverse), a notification awaited, reordered (a task per call) or its failure dropped silently, an argument
-// converted by anything but its declared kind, or a class parameter of a declared proxy taken
-// through the in-place `HostProxy`.
+// Catches: a proxy call outside its captured context, a refusal read as a failure (or the
+// reverse), a notification awaited, reordered or silently failing, or an argument converted by
+// anything but its declared kind.
 #[test]
 fn declared_proxies_call_the_host_in_their_context() {
     let decls = read(&format!(
@@ -506,10 +491,8 @@ fn declared_proxies_call_the_host_in_their_context() {
     }
 }
 
-// Catches: a provider's identity read per call instead of once, a call without its own context
-// left with none (rather than the one captured when the proxy was taken), a bound value not
-// reaching the awaited calls, or a returned host stream read as a value instead of pulled in the
-// call's context.
+// Catches: a provider identity read per call, a call without its own context left with none, a
+// bound value not reaching awaited calls, or a returned host stream read as a value.
 #[test]
 fn provider_proxies_read_once_bind_and_pull_host_streams() {
     let decls = read(&proxy(
@@ -551,9 +534,6 @@ fn provider_proxies_read_once_bind_and_pull_host_streams() {
     }
 }
 
-// Catches: a proxy call with no context to enter (or two), a failure swallowed into a default, an
-// error or refusal with no declared conversion, a call kind guessed from the signature, or a
-// value handed to the host that it cannot receive.
 // Catches: a core stream handed to a host call converted as anything but its generated stream
 // class, or that class missing from the proxy's family and registration.
 #[test]
@@ -897,10 +877,8 @@ fn proxy_tuple_returns_convert_each_element_by_its_declared_kind() {
     assert!(llm.contains("Value::Object(map) => Ok(map)"), "{llm}");
 }
 
-// Catches: an awaited call of a trait without async-trait (`-> BoxFuture<'_, T>`) refused or
-// implemented as an `async fn` (which would not match the trait), a consuming one losing its
-// `'static` future, a method's named future lifetime dropped, a missing context returned as a bare
-// `Err` where the future is due, or the two forms mixed in one trait.
+// Catches: a `-> BoxFuture<'_, T>` call refused or implemented as an `async fn`, its lifetime
+// dropped, or a missing context returned as a bare `Err` where the future is due.
 #[test]
 fn a_proxy_without_async_trait_returns_boxed_futures() {
     let decls = read(
@@ -969,12 +947,9 @@ fn an_optional_proxy_is_absence_or_the_host_object_behind_its_proxy() {
     );
 }
 
-// Catches: a live room read answered from a stale snapshot (or awaited off its caller), a host
-// failure of a synchronous call turned into a default, a writer close that cannot consume its
-// proxy, a host object the core must own (`Box<dyn ..>`) refused or taken off the host loop
-// ("no running event loop": a real room's byte stream writer), a failed close that returns
-// nothing dropped silently, or a borrowed participant read
-// on every call instead of once when the room is taken.
+// Catches: a live read answered from a stale snapshot, a sync host failure turned into a default,
+// an owned host object taken off the host loop, a failed close dropped silently, or a borrowed
+// participant read on every call instead of once.
 #[test]
 fn proxy_calls_consumes_and_lends_by_declaration() {
     let decls = read(&proxy(
@@ -1008,8 +983,7 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
             && llm.contains("log::warn!(\"Callbacks.release failed: {e}\");"),
         "{llm}"
     );
-    // A host object handed over to be owned (a writer the core later closes by value), taken in
-    // the context its call ran in: the reply is read off the host loop, where none is running.
+    // An owned host object is taken in its call's context: the reply is read off the host loop.
     assert!(
         llm.contains("-> ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::llm::class::Callbacks>")
             && llm.contains("let context = ::lk_agents_abi::agent::HostContext::host_context(&crate::py_calls::calling_context(&self.context)).cloned();")
@@ -1046,9 +1020,8 @@ fn a_value_implementing_a_declared_class_crosses_as_a_handle_over_a_clone() {
     assert!(llm.contains(want), "{want}\n{llm}");
 }
 
-// Catches: a host class without the `_core_*` surface (an io leg) called directly instead of
-// through its declared view, or a shared `_core` object read back as a copy rather than the very
-// object the host holds.
+// Catches: a host class called directly instead of through its declared view, or a shared
+// `_core` object read back as a copy.
 #[test]
 fn a_viewed_proxy_calls_its_view_and_shares_core_objects() {
     let decls = read(
@@ -1158,10 +1131,8 @@ fn declared_classes_consume_string_enums_with_native_error_expressions() {
     assert!(read(&source).unwrap_err().contains("is not a value of"));
 }
 
-// Catches: a declared proxy refused as a host call's argument (a typed noise-cancellation choice
-// passed back to the SDK), handed back as the view over it rather than the object the host
-// passed, a trait no proxy can be found behind accepted, or a host stream a synchronous call
-// returns pulled without a context.
+// Catches: a declared proxy refused as an argument or handed back as its view instead of the
+// host's object, or a host stream from a synchronous call pulled without a context.
 #[test]
 fn a_declared_proxy_is_handed_back_as_its_host_object() {
     let decls = read(

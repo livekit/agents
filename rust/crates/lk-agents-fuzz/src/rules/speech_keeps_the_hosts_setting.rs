@@ -1,10 +1,3 @@
-//! `handle.allow_interruptions = v` sticks: once the loop has had a turn, the handle reads `v`.
-//!
-//! The setter on a running speech asks the loop, which publishes the value back; on an ended
-//! speech the value is the handle's own, as in 1.x. Either way the host reads what it set. A
-//! request the loop never applied (asked for a speech it had already let go) leaves the old value
-//! (ef4a20f5c). An interrupted speech refuses `False`, and a tool's interruption hold restores its
-//! own value when released, so those speeches are not judged.
 use lk_agents_voice::trace::{CoreStep, Step};
 use lk_agents_voice::agent_session::commands::{CommandKind, SpeechCommandKind};
 
@@ -14,6 +7,10 @@ use crate::{
     input::{Input, Ref},
     record::{Handle, Id, Kind, Recording},
 };
+
+// A request the loop never applied (for a speech it already let go) leaves the old value. An
+// interrupted speech refuses `False` and a tool's hold restores its own value, so those are not
+// judged.
 
 pub struct SpeechKeepsTheHostsSetting;
 

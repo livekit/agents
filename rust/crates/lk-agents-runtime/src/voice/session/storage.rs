@@ -1,5 +1,3 @@
-//! Storage startup: the call's lane, on the supplied thread or, without one, a new local one.
-
 use crate::voice::VoiceRuntime;
 use crate::voice::session::Tx;
 use lk_agents_abi::StreamInput;
@@ -16,6 +14,7 @@ use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 
+/// The call's lane, on the supplied thread or, without one, a new local one.
 pub struct SessionStorage {
     env: ProcessEnv,
     namespace: Option<Arc<Namespace>>,
@@ -165,8 +164,7 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
     }
 }
 
-// Typed storage commands and receipts, over the session's existing event queue.
-
+/// Typed storage receipts, over the session's existing event queue.
 pub(in crate::voice) struct StorageReporter(pub Tx);
 
 impl StreamInput<VoiceStorageEvent> for StorageReporter {

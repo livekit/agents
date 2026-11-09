@@ -1,5 +1,3 @@
-//! The speaker: it plays the segments the agent flushed one at a time, reports their start, its
-//! progress and their finish, and now and then loses a finish on the way to the tracker.
 use super::*;
 
 /// In a hundred finishes, how many the speaker's transport loses on the way to the tracker; of

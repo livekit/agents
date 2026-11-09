@@ -1,10 +1,3 @@
-//! A `VoiceTask` suspends its parent and restores it without the parent's hooks.
-//!
-//! The parent's activation is the same one before and after the task: its `on_exit` is not run
-//! when the task takes the floor, nor its `on_enter` when it comes back. From the task's entry
-//! to its end the parent's `on_exit` is never issued (nothing may replace an agent a task holds);
-//! its `on_enter` neither, through the restore up to the next command the driver takes. A close
-//! after the restore may still exit the parent: that is the close's exit, not the task's.
 use lk_agents_voice::agent_session::machine::activity::voice_task::VoiceTaskId;
 use lk_agents_voice::agent_session::{HookId, HookKind};
 use lk_agents_voice::trace::{CoreStep, HandoffStep, Step};
@@ -14,6 +7,9 @@ use crate::{
     check::{Check, Contract, Rule, Subject},
     record::Recording,
 };
+
+// The parent's activation is the same before and after the task. A close after the restore may
+// still exit the parent: that is the close's exit, not the task's.
 
 pub struct VoiceTaskSkipsParentHooks;
 

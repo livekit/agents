@@ -1,16 +1,3 @@
-//! A tool call is recorded with the output its outcome means, as the reference's executor and
-//! `_apply_transition` record it: a value's text (also when it asks for no reply), a transition's
-//! text (`Completed`'s value, `Failed`'s error, an `InputRequired`'s question), an error flagged
-//! as one, and a reply asked for exactly when the outcome asks for one. An `InputRequired` left
-//! open is answered by the person's next message only when selected: that call's output becomes
-//! what they said, while sibling questions remain pending.
-//!
-//! A step cut short records its outputs asking for no reply, and the close settles calls still
-//! running as an error, so neither is held to the reply flag; a body cancelled has no outcome. A
-//! step whose speech ended before its outputs were recorded asks for no reply to them. A
-//! `VoiceTask`'s speech runs its tools on the task's runner, whose `Completed` ends the task: its
-//! agent asks for no reply to it. A body its first `ctx.update()` detached answers with its final,
-//! recorded under `<call_id>_final`; a host update ending a body first answers its call.
 use lk_agents_abi::{ChatItem, FunctionCall, Role, llm::tool_executor::WAITING_PREFIX};
 use lk_agents_core::tts::markup::ChatMessageExt;
 use lk_agents_voice::{
@@ -25,6 +12,10 @@ use crate::{
     input::{AgentText, Input, Ref, ToolAnswer},
     record::{Detail, Kind, Recording},
 };
+
+// Mirrors the reference's executor and `_apply_transition`. A cut step's outputs and calls the
+// close settles as errors are not held to the reply flag. A `VoiceTask`'s `Completed` ends the
+// task, so its agent asks for no reply. A detached body's final is recorded as `<call_id>_final`.
 
 pub struct ToolOutputFollowsOutcome;
 

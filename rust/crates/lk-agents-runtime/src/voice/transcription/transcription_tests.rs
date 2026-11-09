@@ -4,8 +4,6 @@ use lk_agents_voice::transcription::machine::synchronizer::Liang;
 use std::time::Duration;
 use tokio::sync::watch;
 
-// ----------------------------------------------------------------------------- the chain
-
 /// A physical output that latches each frame's segment key; the test reports its playback.
 struct KeyedPlayback(Arc<dyn PlaybackTracker>, parking_lot::Mutex<Option<PlaybackSegment>>);
 
@@ -140,8 +138,7 @@ impl Chain {
 
 // Catches: switching synchronisation off and on while a segment played out closed that segment's
 // pacer and opened a fresh one that the old segment's playback then moved; the next segment's
-// words joined it and were all shown at its first frame, seconds before their audio (survey
-// seed 2815).
+// words joined it and were all shown at its first frame, seconds before their audio.
 #[tokio::test]
 async fn a_segment_closed_while_playing_paces_nothing_after_it() {
     let c = Chain::new();
@@ -164,8 +161,8 @@ async fn a_segment_closed_while_playing_paces_nothing_after_it() {
 }
 
 // Catches: a segment whose text ended with no audio left open (the next speech's audio paired
-// with it) or cut with nothing shown, though its text is the speech's history (survey seed
-// 21650): it is shown whole at once, and the next segment paces on its own.
+// with it) or cut with nothing shown, though its text is the speech's history: it is shown whole
+// at once, and the next segment paces on its own.
 #[tokio::test]
 async fn a_segment_with_no_audio_shows_its_text_and_pairs_with_nothing() {
     let c = Chain::new();
@@ -192,7 +189,7 @@ async fn a_segment_with_no_audio_shows_its_text_and_pairs_with_nothing() {
     assert_eq!(shown.split_whitespace().collect::<Vec<_>>(), ["after", "words"]);
 }
 
-// Catches (review of 242c57d69): a speech cut before any audio leaves its segment cleared with no
+// Catches: a speech cut before any audio leaves its segment cleared with no
 // audio end owed in practice; the next unvoiced speech's audio end was absorbed by it, so that
 // speech's words stayed open and paired with the following speech's audio.
 #[tokio::test]
@@ -209,8 +206,7 @@ async fn a_cut_wordy_segment_does_not_take_the_next_ones_audio_end() {
 
 // Catches: the synchroniser still capturing after the output below reported its open segment cut
 // and reset. The speech's later frames opened no segment of their own, so its wait returned at
-// once with the cut and its words were shown under the next speech (survey seeds 29564, 24667,
-// 6113).
+// once with the cut and its words were shown under the next speech.
 #[tokio::test]
 async fn frames_after_a_sink_reset_open_their_own_segment() {
     let c = Chain::new();
@@ -233,8 +229,7 @@ async fn frames_after_a_sink_reset_open_their_own_segment() {
 
 // Catches: a sink that cut and reset its playout while the segment's audio was still coming threw
 // the segment's words away. The audio after the reset paced no text, so the speech's transcript
-// fell back to every word forwarded, and aligned words after it were shown off their stamps
-// (campaign seeds 25043, 1906, 22545).
+// fell back to every word forwarded, and aligned words after it were shown off their stamps.
 #[tokio::test]
 async fn a_playout_reset_mid_segment_plays_on_with_its_words() {
     let c = Chain::new();
@@ -325,8 +320,7 @@ impl PlaybackObserver for Attributed {
 
 // Catches: a pause released the playing segment's started word with no playback named, so the
 // speech playing next took it for its own: after a speech whose finish was lost, the next one's
-// launch pause showed the old speech's " refund" as the new speech's, ahead of its audio (survey
-// seed 24922).
+// launch pause showed the old speech's " refund" as the new speech's, ahead of its audio.
 #[tokio::test]
 async fn a_pause_names_the_playback_whose_word_it_shows() {
     let c = Chain::new();

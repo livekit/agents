@@ -1,5 +1,3 @@
-//! Exception constructors and presentation resolve alongside the native error declarations.
-//! Emission consumes typed metadata; no emitter discovers or interprets source declarations.
 use crate::decl::{
     Declarations, Literal,
     vocabulary::{self as voc, Entry, Value},

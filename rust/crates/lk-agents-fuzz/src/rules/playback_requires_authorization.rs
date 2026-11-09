@@ -1,11 +1,3 @@
-//! A speculative reply's audio does not reach the sink before that reply is authorized.
-//!
-//! This is the playback-enforcement half only. A sink push is attributed to a speech by the
-//! journal's `SinkCalled { speech }`, stamped by the same counter as `Authorized`, so the order
-//! is a real one. Whether the authorization itself was permitted is a separate contract that
-//! needs the turn-policy predicate the strategy still leaves open. Restricted to speculative
-//! speeches (the driver's `Preemptive` kind, started from a preflight transcript before the turn
-//! ended); every other kind is authorized at creation and would pass trivially.
 use lk_agents_voice::{
     agent_session::machine::activity::scheduling::{SpeechId, SpeechKind},
     trace::{
@@ -23,6 +15,9 @@ use crate::{
     input::{AgentText, Count, Input, Millis, Ref, TurnMode, UserText},
     record::{Recording, SpeechView},
 };
+
+// `SinkCalled { speech }` and `Authorized` share one counter, so their order is real. Only
+// `Preemptive` speeches are judged: every other kind is authorized at creation.
 
 pub struct PlaybackRequiresAuthorization;
 

@@ -1,6 +1,3 @@
-//! `#[host(error ..)]`: the host exception a declared error raises, which `lk-agents-codegen` writes
-//! into the binding, and its `host_kind`, which `lk-agents-host-derive` writes beside the error.
-
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 

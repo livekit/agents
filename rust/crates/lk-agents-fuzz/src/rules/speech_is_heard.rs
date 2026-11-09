@@ -1,12 +1,3 @@
-//! No dead air: a speech the agent was given plays within a bound, or the run says why it has not.
-//!
-//! From its creation, a speech's audio reaches the speaker (`SinkCalled { Push }`) within
-//! [`BOUND_MS`] of virtual time, or by then it has ended (how is other rules' to judge), or
-//! something it rightly waits on still holds at the bound: a model, voice, tool, hook or server
-//! response the case has yet to answer; the floor held by another speech that is playing, or by
-//! the developer (`wait_for_idle_and_hold`); authorization held (AMD); the person speaking; the
-//! session closing. What is left is an agent with something to say, nothing to wait for, saying
-//! nothing: a reply queued behind a speech paused for good, as c6881abb9's realtime onset left one.
 use std::collections::BTreeMap;
 
 use lk_agents_abi::{RealtimeCommandKind, voice::events::UserState};
@@ -36,6 +27,10 @@ pub const BOUND_MS: u64 = 15_000;
 /// it has not ended.
 const OWED: [Kind; 6] =
     [Kind::Chat, Kind::Tts, Kind::Tool, Kind::Hook, Kind::Generation, Kind::Stream];
+
+// A speech may rightly wait past the bound on an unanswered model, voice, tool, hook or server
+// response, the floor (another speech or `wait_for_idle_and_hold`), AMD's authorization hold, the
+// person speaking, or the close. Anything else is dead air.
 
 pub struct SpeechIsHeard;
 

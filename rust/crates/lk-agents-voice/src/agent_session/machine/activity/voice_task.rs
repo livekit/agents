@@ -1,7 +1,3 @@
-//! `VoiceTask.run()`: from inside a tool of the agent holding the floor, a task's agent takes it.
-//! The parent waits in memory, its tool still running, and is put back without its `on_exit` or
-//! `on_enter` once the task completes, fails, is cancelled, or the session closes.
-
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{
     AgentUpdate, Answer, GenerateReplyRequest, RequestId, SpeechCommand, VoiceDriver,
@@ -9,6 +5,9 @@ use crate::agent_session::{
 use crate::trace::{HandoffStep, InterruptCause};
 use lk_agents_abi::voice::session::VoiceTaskValue;
 use lk_agents_abi::{HostRef, Maybe, Ts};
+
+// The parent's tool keeps running while the task holds the floor; the parent is restored
+// without its `on_exit` or `on_enter` however the task ends.
 
 /// Minted per session, in entry order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

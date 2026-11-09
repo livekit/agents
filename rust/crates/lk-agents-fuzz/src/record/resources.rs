@@ -1,12 +1,11 @@
-//! What the harness asks of a recording while a run is going: which resource a case's `Ref`
-//! names, and what the driver has reached. Rules read none of this; they read the views.
-
 use std::collections::BTreeSet;
 
 use lk_agents_voice::{agent_session::HookCall, trace::Step};
 
 use super::{Applied, Detail, Host, Id, Kind, Observed, Opened, Recording};
 use crate::input::Input;
+
+// Harness-only queries over a running recording; rules read the views instead.
 
 /// One resource the run opened, with the input behind it.
 #[derive(Clone, Copy)]
@@ -87,22 +86,17 @@ impl Recording {
 
     /// Journal step variants this run produced, as `Family::Variant`.
     pub fn journal_names(&self) -> BTreeSet<String> {
-        // The folded view is part of the vocabulary: `ByAudioActivityRepeated` is only ever produced by
-        // folding a run of identical barge steps, so a journal that folds to it reached it. The
-        // rules keep reading the raw steps; only the reach count reads the fold.
+        // `ByAudioActivityRepeated` exists only in the folded journal, so reach counts the fold.
         let steps: Vec<Step> = self.journal.iter().map(|(_, step)| step.clone()).collect();
         lk_agents_voice::trace::folded(&steps).iter().map(step_name).collect()
     }
 }
 
-/// A journal step's variant path, spelled `Family::Variant`.
-///
-/// Read off `Debug`, because a `Step` is thirteen nested enums with no other way to ask which
-/// variant it is.
+/// A journal step's variant path, spelled `Family::Variant`, read off `Debug` since a `Step` is
+/// nested enums with no other way to name the variant.
 pub fn step_name(step: &Step) -> String {
     let cut = |s: &str| s.find(['(', '{', ' ', ')']).unwrap_or(s.len());
-    // The two names lead the text: formatting stops once both are written, not at the payload's
-    // end.
+    // Formatting stops once both names are written, not at the payload's end.
     struct Head<F>(String, F);
     impl<F: Fn(&str) -> usize> std::fmt::Write for Head<F> {
         fn write_str(&mut self, s: &str) -> std::fmt::Result {

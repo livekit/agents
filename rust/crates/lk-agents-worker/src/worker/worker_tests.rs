@@ -1,26 +1,480 @@
-//! Connection lifecycle and scheduling tests using scripted peers and gated host operations.
-
-#[path = "worker_test_fixtures.rs"]
-mod fixtures;
-use fixtures::*;
-
-use crate::transport::TransportError;
+use crate::transport::{
+    Connected, TransportError, TransportEvent, WorkerSink, WorkerStream, WorkerTransport,
+};
 use crate::*;
-use livekit_protocol::{self as protocol, ServerMessage, server_message};
+use async_trait::async_trait;
+use livekit_protocol::{self as protocol, RegisterWorkerResponse, ServerMessage, server_message};
+use lk_agents_abi::{Clock, Ts};
 use parking_lot::Mutex;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-// The two pure decisions
-
-// Catches: an exponential backoff replacing `min(n * 2, 10)`, losing the immediate first retry.
-#[test]
-fn the_first_reconnect_is_immediate_and_the_ladder_caps_at_ten() {
-    let ladder: Vec<u64> = (0..8).map(|n| retry_delay(n).as_secs()).collect();
-    assert_eq!(ladder, vec![0, 2, 4, 6, 8, 10, 10, 10]);
+pub(super) enum Step {
+    /// The connect attempt fails.
+    ConnectFails,
+    /// The connect attempt succeeds and the socket yields these messages, then blocks forever.
+    Serves(Vec<Result<ServerMessage, TransportError>>),
 }
 
-// The connection itself
+#[derive(Default)]
+pub(super) struct Wire {
+    pub(super) sent: Vec<protocol::WorkerMessage>,
+    pub(super) attempts: u32,
+}
+
+pub(super) struct ScriptedTransport {
+    pub(super) script: Mutex<std::collections::VecDeque<Step>>,
+    pub(super) wire: Arc<Mutex<Wire>>,
+}
+
+pub(super) struct Sink(pub(super) Arc<Mutex<Wire>>);
+
+#[async_trait]
+impl WorkerSink for Sink {
+    async fn send(&self, message: protocol::WorkerMessage) -> Result<(), TransportError> {
+        self.0.lock().sent.push(message);
+        Ok(())
+    }
+    async fn close(&self) {}
+}
+
+pub(super) struct Stream(
+    pub(super) std::collections::VecDeque<Result<ServerMessage, TransportError>>,
+);
+
+#[async_trait]
+impl WorkerStream for Stream {
+    async fn recv(&mut self) -> Result<TransportEvent, TransportError> {
+        match self.0.pop_front() {
+            Some(message) => message.map(Box::new).map(TransportEvent::ServerMessage),
+            // An exhausted script means the peer went quiet, like a real idle socket; `Closed`
+            // would make every test look like a drop.
+            None => std::future::pending().await,
+        }
+    }
+}
+
+#[async_trait]
+impl WorkerTransport for ScriptedTransport {
+    async fn connect(
+        &self,
+        _url: &str,
+        _token: Option<&str>,
+        _headers: Vec<(String, String)>,
+    ) -> Result<Connected, TransportError> {
+        self.wire.lock().attempts += 1;
+        match self.script.lock().pop_front() {
+            Some(Step::ConnectFails) | None => Err(TransportError::Failed("refused".into())),
+            Some(Step::Serves(frames)) => Ok(Connected {
+                sink: Arc::new(Sink(self.wire.clone())),
+                stream: Box::new(Stream(frames.into())),
+            }),
+        }
+    }
+}
+
+/// Rejects every job, fails every launch, and answers `load_fnc` with `user` (`None`: none given).
+#[derive(Default)]
+pub(super) struct LoadHost {
+    pub(super) user: Option<f32>,
+
+    /// How many times `load_fnc` was asked.
+    pub(super) user_calls: Arc<Mutex<u32>>,
+}
+
+#[async_trait]
+impl WorkerHost for LoadHost {
+    async fn on_job_request(&self, _r: crate::JobRequest) -> JobDecision {
+        JobDecision::Reject
+    }
+    async fn launch_job(&self, _i: crate::RunningJobInfo) -> Result<JobId, HostError> {
+        Err(HostError::new("no pool"))
+    }
+    async fn terminate_job(&self, _id: JobId) -> Result<(), HostError> {
+        Ok(())
+    }
+    async fn user_load(&self) -> Option<f32> {
+        *self.user_calls.lock() += 1;
+        self.user
+    }
+}
+
+pub(super) fn runtime_cfg(max_retry: u32) -> RuntimeConfig {
+    RuntimeConfig {
+        server_url: "wss://gw".into(),
+        worker_token: None,
+        headers: vec![],
+        api_key: String::new(),
+        api_secret: String::new(),
+        max_retry,
+        connection_timeout: Duration::from_secs(10),
+    }
+}
+
+pub(super) struct FrozenClock;
+impl Clock for FrozenClock {
+    fn now(&self) -> Ts {
+        Ts::ZERO
+    }
+    fn wall(&self) -> SystemTime {
+        SystemTime::UNIX_EPOCH
+    }
+    /// Frozen: a wait on it never ends. No test here arms one.
+    fn wait_until(&self, _at: Ts) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move { std::future::pending::<()>().await })
+    }
+}
+
+pub(super) fn register_message(worker_id: &str) -> Result<ServerMessage, TransportError> {
+    let msg = ServerMessage {
+        message: Some(server_message::Message::Register(RegisterWorkerResponse {
+            worker_id: worker_id.to_owned(),
+            ..Default::default()
+        })),
+    };
+    Ok(msg)
+}
+
+pub(super) fn conn(steps: Vec<Step>, max_retry: u32) -> (Worker, Arc<Mutex<Wire>>, WorkerClient) {
+    conn_with(
+        steps,
+        max_retry,
+        WorkerConfig { ws_url: "wss://gw".into(), ..Default::default() },
+        LoadHost::default(),
+    )
+}
+
+pub(super) fn conn_with(
+    steps: Vec<Step>,
+    max_retry: u32,
+    cfg_worker: WorkerConfig,
+    host: LoadHost,
+) -> (Worker, Arc<Mutex<Wire>>, WorkerClient) {
+    let wire = Arc::new(Mutex::new(Wire::default()));
+    let t = ScriptedTransport { script: Mutex::new(steps.into()), wire: wire.clone() };
+    let (c, h) = Worker::with_components(
+        Arc::new(t),
+        runtime_cfg(max_retry),
+        cfg_worker,
+        Arc::new(host),
+        Arc::new(FrozenClock),
+        blocking_io(),
+    );
+    (c, wire, h)
+}
+
+pub(super) fn load_conn(host: LoadHost) -> (Worker, WorkerClient) {
+    // Finite, so `worker_load` is actually compared against something (devmode's is `inf`).
+    let cfg = WorkerConfig {
+        ws_url: "wss://gw".into(),
+        load_threshold: EnvOption::Fixed(0.7),
+        ..Default::default()
+    };
+    let (c, _wire, h) = conn_with(vec![], 0, cfg, host);
+    (c, h)
+}
+
+pub(super) struct TestClock(pub(super) tokio::time::Instant);
+impl Clock for TestClock {
+    fn now(&self) -> Ts {
+        Ts::from_nanos(self.0.elapsed().as_nanos() as u64)
+    }
+    fn wall(&self) -> SystemTime {
+        SystemTime::UNIX_EPOCH
+    }
+
+    fn wait_until(&self, at: Ts) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            tokio::time::sleep(at.saturating_duration_since(self.now())).await;
+        })
+    }
+}
+
+pub(super) struct ChannelTransport {
+    pub(super) stall_writes: Arc<std::sync::atomic::AtomicBool>,
+
+    /// One peer per connection, in dial order.
+    pub(super) incoming: Connections,
+
+    pub(super) sent: tokio::sync::mpsc::UnboundedSender<protocol::WorkerMessage>,
+    pub(super) closed: Arc<std::sync::atomic::AtomicUsize>,
+}
+pub(super) struct ChannelSink {
+    pub(super) stall_writes: Arc<std::sync::atomic::AtomicBool>,
+    pub(super) sent: tokio::sync::mpsc::UnboundedSender<protocol::WorkerMessage>,
+    pub(super) closed: Arc<std::sync::atomic::AtomicUsize>,
+}
+#[async_trait]
+impl WorkerSink for ChannelSink {
+    async fn send(&self, message: protocol::WorkerMessage) -> Result<(), TransportError> {
+        if self.stall_writes.load(std::sync::atomic::Ordering::SeqCst) {
+            return std::future::pending().await;
+        }
+        self.sent.send(message).map_err(|e| TransportError::Failed(e.to_string()))
+    }
+    async fn close(&self) {
+        self.closed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+pub(super) struct ChannelStream(
+    pub(super) tokio::sync::mpsc::UnboundedReceiver<Result<ServerMessage, TransportError>>,
+);
+#[async_trait]
+impl WorkerStream for ChannelStream {
+    async fn recv(&mut self) -> Result<TransportEvent, TransportError> {
+        self.0
+            .recv()
+            .await
+            .unwrap_or_else(|| Err(TransportError::Failed("peer ended".into())))
+            .map(Box::new)
+            .map(TransportEvent::ServerMessage)
+    }
+}
+#[async_trait]
+impl WorkerTransport for ChannelTransport {
+    async fn connect(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: Vec<(String, String)>,
+    ) -> Result<Connected, TransportError> {
+        let incoming = self
+            .incoming
+            .lock()
+            .pop_front()
+            .ok_or_else(|| TransportError::Failed("no more connections".into()))?;
+        Ok(Connected {
+            sink: Arc::new(ChannelSink {
+                sent: self.sent.clone(),
+                closed: self.closed.clone(),
+                stall_writes: self.stall_writes.clone(),
+            }),
+            stream: Box::new(ChannelStream(incoming)),
+        })
+    }
+}
+
+pub(super) type Peer = tokio::sync::mpsc::UnboundedSender<Result<ServerMessage, TransportError>>;
+pub(super) type Connections = Arc<
+    Mutex<
+        std::collections::VecDeque<
+            tokio::sync::mpsc::UnboundedReceiver<Result<ServerMessage, TransportError>>,
+        >,
+    >,
+>;
+
+/// The load the host reports, its sample count, and a gate it waits on when closed.
+pub(super) struct HostLoad {
+    pub(super) value: Mutex<f32>,
+    pub(super) samples: std::sync::atomic::AtomicUsize,
+    pub(super) gated: std::sync::atomic::AtomicBool,
+    pub(super) gate: tokio::sync::Semaphore,
+}
+
+impl Default for HostLoad {
+    fn default() -> Self {
+        Self {
+            value: Mutex::new(0.0),
+            samples: Default::default(),
+            gated: Default::default(),
+            gate: tokio::sync::Semaphore::new(0),
+        }
+    }
+}
+
+/// Holds decisions and launches at explicit gates so tests control completion order.
+pub(super) struct GatedHost {
+    pub(super) load: Arc<HostLoad>,
+    pub(super) launched: Arc<Mutex<Vec<crate::RunningJobInfo>>>,
+    pub(super) started: tokio::sync::mpsc::UnboundedSender<&'static str>,
+    pub(super) decisions: Arc<tokio::sync::Semaphore>,
+    pub(super) launches: Arc<tokio::sync::Semaphore>,
+    pub(super) dropped: Arc<std::sync::atomic::AtomicUsize>,
+    /// Launches fail with a host error.
+    pub(super) failing_launches: Arc<std::sync::atomic::AtomicBool>,
+}
+
+pub(super) struct OperationGuard(pub(super) Arc<std::sync::atomic::AtomicUsize>);
+impl Drop for OperationGuard {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+#[async_trait]
+impl WorkerHost for GatedHost {
+    async fn on_job_request(&self, _: crate::JobRequest) -> JobDecision {
+        let _guard = OperationGuard(self.dropped.clone());
+        self.started.send("decision").unwrap();
+        self.decisions.acquire().await.unwrap().forget();
+        JobDecision::Accept(crate::AcceptArguments {
+            identity: "agent-identity".into(),
+            name: "Agent Name".into(),
+            metadata: "participant-metadata".into(),
+            attributes: [(lk_agents_abi::ATTRIBUTE_AGENT_NAME.into(), "per-job-agent".into())]
+                .into(),
+        })
+    }
+    async fn launch_job(&self, info: crate::RunningJobInfo) -> Result<JobId, HostError> {
+        let _guard = OperationGuard(self.dropped.clone());
+        self.launched.lock().push(info.clone());
+        self.started.send("launch").unwrap();
+        self.launches.acquire().await.unwrap().forget();
+        if self.failing_launches.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(HostError::new("launch failed"));
+        }
+        Ok(info.job.id)
+    }
+    async fn terminate_job(&self, _: JobId) -> HostResult {
+        Ok(())
+    }
+    async fn user_load(&self) -> Option<f32> {
+        if self.load.gated.load(std::sync::atomic::Ordering::SeqCst) {
+            self.load.gate.acquire().await.unwrap().forget();
+        }
+        self.load.samples.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Some(*self.load.value.lock())
+    }
+}
+
+pub(super) struct RuntimeRig {
+    pub(super) connections: Connections,
+    pub(super) load: Arc<HostLoad>,
+    pub(super) launched: Arc<Mutex<Vec<crate::RunningJobInfo>>>,
+    pub(super) stall_writes: Arc<std::sync::atomic::AtomicBool>,
+    pub(super) runtime: Worker,
+    pub(super) handle: WorkerClient,
+    pub(super) peer: tokio::sync::mpsc::UnboundedSender<Result<ServerMessage, TransportError>>,
+    pub(super) sent: tokio::sync::mpsc::UnboundedReceiver<protocol::WorkerMessage>,
+    pub(super) started: tokio::sync::mpsc::UnboundedReceiver<&'static str>,
+    pub(super) decisions: Arc<tokio::sync::Semaphore>,
+    pub(super) launches: Arc<tokio::sync::Semaphore>,
+    pub(super) dropped: Arc<std::sync::atomic::AtomicUsize>,
+    pub(super) closed: Arc<std::sync::atomic::AtomicUsize>,
+    pub(super) failing_launches: Arc<std::sync::atomic::AtomicBool>,
+}
+pub(super) fn runtime_rig() -> RuntimeRig {
+    runtime_rig_with_retry(0)
+}
+
+pub(super) fn runtime_rig_with_retry(max_retry: u32) -> RuntimeRig {
+    let cfg = WorkerConfig { load_threshold: EnvOption::Fixed(0.7), ..Default::default() };
+    runtime_rig_with(max_retry, cfg)
+}
+
+pub(super) fn runtime_rig_with(max_retry: u32, cfg: WorkerConfig) -> RuntimeRig {
+    let stall_writes = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (peer, incoming) = tokio::sync::mpsc::unbounded_channel();
+    let (send, sent) = tokio::sync::mpsc::unbounded_channel();
+    let (start, started) = tokio::sync::mpsc::unbounded_channel();
+    let decisions = Arc::new(tokio::sync::Semaphore::new(0));
+    let launches = Arc::new(tokio::sync::Semaphore::new(0));
+    let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let failing_launches = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let connections: Connections = Arc::new(Mutex::new([incoming].into()));
+    let load = Arc::new(HostLoad::default());
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let (runtime, handle) = Worker::with_components(
+        Arc::new(ChannelTransport {
+            stall_writes: stall_writes.clone(),
+            incoming: connections.clone(),
+            sent: send,
+            closed: closed.clone(),
+        }),
+        runtime_cfg(max_retry),
+        cfg,
+        Arc::new(GatedHost {
+            load: load.clone(),
+            launched: launched.clone(),
+            started: start,
+            decisions: decisions.clone(),
+            launches: launches.clone(),
+            dropped: dropped.clone(),
+            failing_launches: failing_launches.clone(),
+        }),
+        Arc::new(TestClock(tokio::time::Instant::now())),
+        blocking_io(),
+    );
+    RuntimeRig {
+        connections,
+        load,
+        launched,
+        runtime,
+        handle,
+        peer,
+        sent,
+        started,
+        decisions,
+        launches,
+        dropped,
+        closed,
+        stall_writes,
+        failing_launches,
+    }
+}
+pub(super) fn offer(id: &str) -> ServerMessage {
+    ServerMessage {
+        message: Some(server_message::Message::Availability(protocol::AvailabilityRequest {
+            job: Some(protocol::Job { id: id.into(), ..Default::default() }),
+            ..Default::default()
+        })),
+    }
+}
+pub(super) fn assignment_message(id: &str) -> ServerMessage {
+    ServerMessage {
+        message: Some(server_message::Message::Assignment(protocol::JobAssignment {
+            job: Some(protocol::Job { id: id.into(), ..Default::default() }),
+            token: "token".into(),
+            url: Some("wss://assigned-sfu".into()),
+        })),
+    }
+}
+
+pub(super) async fn until_sent(
+    sent: &mut tokio::sync::mpsc::UnboundedReceiver<protocol::WorkerMessage>,
+    predicate: impl Fn(&protocol::WorkerMessage) -> bool,
+) -> protocol::WorkerMessage {
+    tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            let message = sent.recv().await.expect("runtime stopped");
+            if predicate(&message) {
+                break message;
+            }
+        }
+    })
+    .await
+    .expect("expected worker message")
+}
+
+/// A server that never answers the dial.
+pub(super) struct HangingTransport(tokio::sync::Notify, crate::transport::TransportKind);
+impl HangingTransport {
+    pub(super) fn new(kind: crate::transport::TransportKind) -> Self {
+        Self(tokio::sync::Notify::new(), kind)
+    }
+}
+#[async_trait]
+impl WorkerTransport for HangingTransport {
+    async fn connect(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: Vec<(String, String)>,
+    ) -> Result<Connected, TransportError> {
+        self.0.notify_one();
+        std::future::pending().await
+    }
+
+    fn kind(&self) -> crate::transport::TransportKind {
+        self.1
+    }
+}
+
+// Each test owns its blocking service so saturation cannot affect other tests.
+pub(super) fn blocking_io() -> lk_agents_net::blocking_io::BlockingIo {
+    lk_agents_net::blocking_io::BlockingIo::with_limits("lk-test-io", 4, &[4]).unwrap()
+}
 
 // Catches: the register message not being the first thing written to the socket.
 
@@ -124,8 +578,6 @@ async fn close_during_the_reconnect_backoff_stops_the_ladder() {
     assert_eq!(h.snapshot().finished.as_deref(), Some("closed"));
 }
 
-// The idle-process target
-
 // Catches: the idle-process target being computed and then dropped before it reaches the handle,
 // a snapshot read stealing it from the next reader, or devmode's infinite threshold ("leave the
 // pool alone") turned into a target of zero.
@@ -147,15 +599,12 @@ async fn registering_leaves_the_idle_process_target_on_the_handle() {
     }
 }
 
-// The default load function: which side samples, and what "no answer" means
-
 // Catches: the host inventing a load when there is no `load_fnc`; `None` must make the core sample.
 #[tokio::test(start_paused = true)]
 async fn no_user_load_function_means_the_core_samples_for_itself() {
     let (mut c, _h) = load_conn(LoadHost::default());
     c.sample_load_now().await.expect("sampled");
     c.sample_load_now().await.expect("sampled");
-    // With no user override, use the core CPU monitor.
     let load = c.snapshot_now().worker_load;
     assert!(load.is_finite() && (0.0..=1.0).contains(&load), "load out of range: {load}");
 }
@@ -172,7 +621,6 @@ async fn a_user_load_function_wins_and_is_asked_exactly_once() {
     assert_eq!(h.snapshot().worker_load, c.snapshot_now().worker_load);
 }
 
-// Runtime scheduling tests use channels for the peer and gates for slow host operations.
 #[tokio::test]
 async fn acceptance_delivers_the_job_and_participant_fields_to_the_peer() {
     let RuntimeRig { mut runtime, handle, peer, mut sent, decisions, started: _started, .. } =
@@ -482,218 +930,4 @@ async fn accepting_tcp_without_registering_does_not_restore_the_retry_budget() {
     assert!(matches!(&error, RuntimeError::RetriesExhausted { retries: 1, .. }));
     assert_eq!(wire.lock().attempts, 2, "only registration restores the retry budget");
     assert!(error.to_string().contains("registration timed out"));
-}
-
-// Catches: skipping the 5-sample average, so one CPU spike marks a healthy worker as full.
-#[test]
-fn default_load_calc_averages_five_samples() {
-    let mut c = crate::DefaultLoadCalc::new();
-    assert_eq!(c.get(), 0.0, "no CPU intervals have been averaged yet");
-    for s in [1.0, 0.0, 0.0, 0.0, 0.0] {
-        c.add_sample(s, UPDATE_LOAD_INTERVAL);
-    }
-    assert!((c.get() - 0.2).abs() < 1e-6, "{}", c.get());
-    // Window slides: the spike falls out after five more samples.
-    for _ in 0..5 {
-        c.add_sample(0.0, UPDATE_LOAD_INTERVAL);
-    }
-    assert_eq!(c.get(), 0.0);
-}
-
-#[path = "job_dispatch_tests.rs"]
-mod job_dispatch;
-
-mod generated_sequences {
-    use super::*;
-
-    // These sequences drive the async worker through its real command and transport queues.
-    // Reusing the gated host keeps the same boundary behavior as the individual race regressions.
-
-    async fn wait_for_snapshot(handle: &WorkerClient, predicate: impl Fn(&Snapshot) -> bool) {
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while !predicate(&handle.snapshot()) {
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            }
-        })
-        .await
-        .expect("worker did not settle the generated operation");
-    }
-
-    async fn next_host_operation(
-        started: &mut tokio::sync::mpsc::UnboundedReceiver<&'static str>,
-    ) -> &'static str {
-        tokio::time::timeout(Duration::from_secs(1), started.recv())
-            .await
-            .expect("host operation was not started")
-            .expect("worker dropped the host")
-    }
-
-    fn record_reply(
-        message: protocol::WorkerMessage,
-        replies: &mut std::collections::BTreeMap<String, Vec<bool>>,
-    ) {
-        if let Some(livekit_protocol::worker_message::Message::Availability(reply)) =
-            message.message
-        {
-            replies.entry(reply.job_id).or_default().push(reply.available);
-        }
-    }
-
-    async fn receive_reply(
-        sent: &mut tokio::sync::mpsc::UnboundedReceiver<protocol::WorkerMessage>,
-        replies: &mut std::collections::BTreeMap<String, Vec<bool>>,
-        job_id: &str,
-    ) {
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while !replies.contains_key(job_id) {
-                record_reply(sent.recv().await.expect("worker stopped"), replies);
-            }
-        })
-        .await
-        .expect("offered job was not answered");
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn generated_offer_assignment_and_drain_sequences_settle_once() {
-        // Base-three digits choose immediate completion, completion before launch returns, or an
-        // expired assignment. Each sequence also varies duplicate offers and assignment messages.
-        for seed in 0..81_u64 {
-            let RuntimeRig {
-                mut runtime,
-                handle,
-                peer,
-                mut sent,
-                mut started,
-                decisions,
-                launches,
-                ..
-            } = runtime_rig();
-            let mut notifications = handle.subscribe();
-            let task = tokio::spawn(async move { runtime.run().await });
-            let first = sent.recv().await.expect("register was not sent");
-            assert!(matches!(
-                first.message,
-                Some(livekit_protocol::worker_message::Message::Register(_))
-            ));
-            peer.send(register_message("sequence-worker")).unwrap();
-            assert!(matches!(
-                notifications.recv().await.unwrap(),
-                WorkerNotification::Registered(_)
-            ));
-            let mut replies = std::collections::BTreeMap::new();
-            let mut choices = seed;
-            for index in 0..4 {
-                let mode = choices % 3;
-                choices /= 3;
-                let job_id = format!("seed-{seed}-job-{index}");
-                decisions.add_permits(1);
-                for _ in 0..=seed % 3 {
-                    peer.send(Ok(offer(&job_id))).unwrap();
-                }
-                assert_eq!(next_host_operation(&mut started).await, "decision", "seed {seed}");
-                receive_reply(&mut sent, &mut replies, &job_id).await;
-                assert_eq!(replies[&job_id], [true], "seed {seed}");
-                // Let the writer's completion reach the worker before advancing its assignment clock.
-                tokio::time::sleep(Duration::from_millis(1)).await;
-                if mode == 2 {
-                    tokio::time::advance(crate::ASSIGNMENT_TIMEOUT).await;
-                    wait_for_snapshot(&handle, |snapshot| snapshot.reserved_slots == 0).await;
-                    for _ in 0..=seed % 2 {
-                        peer.send(Ok(assignment_message(&job_id))).unwrap();
-                    }
-                    // A failed disposition establishes that the late assignment was consumed.
-                    tokio::time::timeout(Duration::from_secs(1), async {
-                        loop {
-                            let message = sent.recv().await.expect("worker stopped");
-                            let failed = matches!(&message.message,
-                                Some(livekit_protocol::worker_message::Message::UpdateJob(update))
-                                    if update.job_id == job_id
-                                        && update.status == protocol::JobStatus::JsFailed as i32);
-                            record_reply(message, &mut replies);
-                            if failed {
-                                break;
-                            }
-                        }
-                    })
-                    .await
-                    .expect("late assignment was not refused");
-                    assert!(
-                        started.try_recv().is_err(),
-                        "expired assignment launched: seed {seed}"
-                    );
-                    continue;
-                }
-                for _ in 0..=seed % 3 {
-                    peer.send(Ok(assignment_message(&job_id))).unwrap();
-                }
-                assert_eq!(next_host_operation(&mut started).await, "launch", "seed {seed}");
-                if mode == 1 {
-                    handle
-                        .send(WorkerCommand::JobStatus {
-                            job_id: job_id.clone(),
-                            status: protocol::JobStatus::JsSuccess,
-                        })
-                        .unwrap();
-                    tokio::time::sleep(Duration::from_millis(1)).await;
-                }
-                launches.add_permits(1);
-                wait_for_snapshot(&handle, |snapshot| snapshot.reserved_slots == 0).await;
-                if mode == 0 {
-                    assert_eq!(handle.snapshot().active_jobs, 1, "seed {seed}");
-                    handle
-                        .send(WorkerCommand::JobStatus {
-                            job_id,
-                            status: protocol::JobStatus::JsSuccess,
-                        })
-                        .unwrap();
-                }
-                wait_for_snapshot(&handle, |snapshot| snapshot.active_jobs == 0).await;
-                assert!(started.try_recv().is_err(), "duplicate assignment launched: seed {seed}");
-            }
-
-            // Keep one accepted request pending when draining; its assignment timeout must release
-            // the drain, and offers received during drain must never invoke the host or be accepted.
-            let pending_id = format!("seed-{seed}-pending");
-            decisions.add_permits(1);
-            peer.send(Ok(offer(&pending_id))).unwrap();
-            assert_eq!(next_host_operation(&mut started).await, "decision");
-            receive_reply(&mut sent, &mut replies, &pending_id).await;
-            tokio::time::sleep(Duration::from_millis(1)).await;
-            handle.send(WorkerCommand::Drain { timeout: Some(Duration::from_secs(20)) }).unwrap();
-            wait_for_snapshot(&handle, |snapshot| snapshot.draining).await;
-            assert!(
-                handle.snapshot().drain_outcome.is_none(),
-                "drained with a pending job: seed {seed}"
-            );
-            let refused_id = format!("seed-{seed}-during-drain");
-            peer.send(Ok(offer(&refused_id))).unwrap();
-            receive_reply(&mut sent, &mut replies, &refused_id).await;
-            assert_eq!(replies[&refused_id], [false], "seed {seed}");
-            tokio::time::advance(crate::ASSIGNMENT_TIMEOUT).await;
-            handle.drain(Some(Duration::from_secs(20))).await.unwrap();
-            assert_eq!(handle.snapshot().reserved_slots, 0, "seed {seed}");
-            assert_eq!(handle.snapshot().active_jobs, 0, "seed {seed}");
-            handle.send(WorkerCommand::Close).unwrap();
-            task.await.unwrap().unwrap();
-            while let Ok(message) = sent.try_recv() {
-                record_reply(message, &mut replies);
-            }
-            assert!(
-                replies.values().all(|answers| answers.len() == 1),
-                "duplicate reply: seed {seed}"
-            );
-            assert!(started.try_recv().is_err(), "draining worker invoked host: seed {seed}");
-            let mut drain_finished = 0;
-            while let Ok(event) = notifications.try_recv() {
-                match event {
-                    WorkerNotification::Drained(DrainOutcome::Finished) => drain_finished += 1,
-                    WorkerNotification::Drained(DrainOutcome::TimedOut) => {
-                        panic!("drain timed out: seed {seed}")
-                    }
-                    _ => {}
-                }
-            }
-            assert_eq!(drain_finished, 1, "seed {seed}");
-        }
-    }
 }

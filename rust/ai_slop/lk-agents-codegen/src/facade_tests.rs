@@ -1,6 +1,3 @@
-//! The facade forms over a native object handed in: bound arguments, wrapped results, per-call
-//! delegates, context managers through a delegate, setters and chained calls, foreign bases.
-
 fn emit(source: &str) -> Result<String, String> {
     let declarations = crate::decl::tests::read(source)?;
     Ok(super::emit(&declarations, &[])?.remove(0).text)

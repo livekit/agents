@@ -1,5 +1,3 @@
-//! Realtime tools regression tests.
-
 mod realtime_cut_reply_tool_runs {
     //! A realtime reply whose audio the output cut still has its tools running.
     use lk_agents_fuzz::drive::{RealtimeSetup, Run, Setup, simulate};
@@ -8,11 +6,8 @@ mod realtime_cut_reply_tool_runs {
 
     // Catches: the realtime step deciding `tools_running` from its playout (`!heard.complete`), so a
     // reply whose audio the speaker cut (a republished track, a sink reset) reported its tools as
-    // not running while they ran. `wait_for_idle` then counted the working speech as busy, a tool
-    // inside `ctx.foreground()` waited on its own speech forever, and the reply never ended: the
-    // agent idled silent for the rest of the call (survey seed 4224, once the fake realtime server
-    // called tools). The pipeline step decides it from the speech's interruption, as the reference
-    // does; the realtime one now does too.
+    // not running while they ran, so a tool inside `ctx.foreground()` waited on its own speech
+    // forever (survey seed 4224). It must follow the speech's interruption instead.
     #[test]
     fn a_cut_realtime_reply_still_runs_its_tools() {
         // A model whose replies speak and call `lookup`.
@@ -99,11 +94,8 @@ mod realtime_tool_steps_bounded {
     use lk_agents_voice::trace::{Step, ToolStep};
 
     // Catches: the realtime follow-up to a tool step sent with no `tool_choice`, so neither a spent
-    // step budget nor a draining agent stopped the model calling tools again: a model whose prompt
-    // has it call a tool every response looped, tool after tool, and the reply never ended (found
-    // once the fake realtime server called tools). The reference's `_realtime_generation_task` asks
-    // for the follow-up with `tool_choice="none"` when `max_tool_steps` is reached or the activity
-    // drains; the pipeline step already did.
+    // step budget nor a draining agent stopped the model calling tools again, and the reply never
+    // ended. The follow-up must carry `tool_choice="none"` in both cases.
     #[test]
     fn a_realtime_reply_stops_calling_tools_at_its_budget() {
         let setup = Setup {
@@ -157,11 +149,8 @@ mod realtime_tool_update_replies {
     use lk_agents_voice::trace::{RealtimeStep, Step, ToolStep};
 
     // Catches: the deferred reply to a detached tool's update (`ctx.update()`, then its final
-    // result) built as a pipeline reply on a realtime session, which has no LLM: it failed at once
-    // with "cannot generate a reply: the session has no llm", the update was reported skipped, and
-    // the person never heard the tool's result (survey seed 769, once the fake realtime server called
-    // tools). The reference's deferred reply is `session.generate_reply()`, which a realtime model
-    // answers on its own socket.
+    // result) built as a pipeline reply on a realtime session, which has no LLM, so the person never
+    // heard the tool's result (survey seed 769).
     #[test]
     fn a_detached_realtime_tool_is_answered_on_the_socket() {
         let setup = Setup {

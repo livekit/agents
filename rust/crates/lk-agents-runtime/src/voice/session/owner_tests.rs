@@ -1,5 +1,3 @@
-//! Lifetime regressions use resource ports with independently controlled completion.
-
 use super::*;
 use lk_agents_abi::AudioFrame;
 use std::sync::atomic::{AtomicUsize, Ordering};

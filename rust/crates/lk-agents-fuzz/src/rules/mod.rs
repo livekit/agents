@@ -1,12 +1,7 @@
-//! The contract registry: one guarantee per file, each with its rule and the recordings it must
-//! reject. Files are discovered by `build.rs`, so there is nothing to register: a new
-//! `src/rules/<id>.rs` holding a unit struct named `<Id>` that implements [`Rule`] is in the table
-//! on the next build. `check_all` walks the table once over each finished run; the registry tests
-//! walk it so a rule cannot exist without a counterexample it rejects and a probe that reaches it.
 use crate::check::{Registered, Rule};
 
-// `build.rs` lists `src/rules/*.rs` and generates the `mod` declarations and `RULES`;
-// adding a rule is adding a file. See the registry test for what each file must hold.
+// `build.rs` generates the `mod` declarations and `RULES` from `src/rules/*.rs`: a file holding a
+// unit struct `<Id>` that implements `Rule` is registered by existing.
 include!(concat!(env!("OUT_DIR"), "/rules.rs"));
 
 #[cfg(test)]

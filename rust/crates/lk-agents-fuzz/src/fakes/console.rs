@@ -1,5 +1,3 @@
-//! The CLI peer's bytes and paced speaker, driving the real console transport and audio legs.
-
 use super::Registry;
 use crate::record::Sink;
 use lk_agents_abi::SpawnerExt as _;
@@ -30,9 +28,8 @@ impl Connector for Socket {
     }
 }
 
-/// The CLI's microphone, requests and playout acknowledgements, in socket order. As the Go CLI's
-/// speaker, it acknowledges a flush once everything queued has played, and only the last flush:
-/// a newer flush or a clear drops the acknowledgement still owed.
+/// The CLI peer. As the Go CLI's speaker, it acknowledges only the last flush, once everything
+/// queued has played: a newer flush or a clear drops the acknowledgement still owed.
 #[derive(Clone)]
 pub struct FakeCli {
     to_agent: tokio::sync::mpsc::UnboundedSender<proto::AgentSessionMessage>,
@@ -136,9 +133,8 @@ impl FakeCli {
     }
 }
 
-/// What the CLI asks of the session (`ConsoleCall`'s `_core_*` port), answered as the host would
-/// from its own state. Toggling the legs stays with the case's own inputs, so `update_io` is
-/// acknowledged and changes nothing.
+/// The session port the CLI queries. Leg toggles come from the case's own inputs, so `update_io`
+/// changes nothing.
 pub struct FakeConsolePort;
 
 impl remote_session::SessionPort for FakeConsolePort {

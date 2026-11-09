@@ -444,7 +444,7 @@ async def test_generated_connect_options_total_deadline_keeps_timeout_classifica
     with pytest.raises(APITimeoutError) as failure:
         async with APIConnectOptions(total_timeout=0).total_deadline():
             await asyncio.Future()
-    assert failure.value.phase == "total"
+    assert failure.value.timeout == "total"
     with pytest.raises(TimeoutError, match="provider timeout"):
         async with APIConnectOptions(total_timeout=None).total_deadline():
             raise TimeoutError("provider timeout")

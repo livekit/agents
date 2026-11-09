@@ -10,8 +10,6 @@ pub mod ipc;
 pub mod server;
 pub mod transport;
 mod worker;
-#[cfg(test)]
-mod worker_tests;
 
 pub use config::{
     ASSIGNMENT_TIMEOUT, DRAIN_TIMEOUT, EnvOption, UPDATE_LOAD_INTERVAL, UPDATE_STATUS_INTERVAL,

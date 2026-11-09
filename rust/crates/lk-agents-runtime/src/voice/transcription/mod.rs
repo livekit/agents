@@ -1,6 +1,3 @@
-//! `TranscriptSynchronizer`'s live chain: the audio and text nodes it installs and the task that
-//! forwards released words. Its decisions are voice's `TranscriptSync`.
-
 use crate::monotone::Monotone;
 use crate::telemetry;
 use lk_agents_abi::voice::io::{
@@ -404,7 +401,7 @@ impl TranscriptSynchronizer {
         let TranscriptSyncConfig { audio_next, text_next, speed, hyphenator, clock, spawner } =
             config;
 
-        // `io.AudioOutput.__init__`'s auto-wrap, so an avatar hand-off can replace the leaf later.
+        // Wrapped so an avatar hand-off can replace the leaf later.
         let audio_next = if audio_next.next_in_chain().is_none() {
             AudioSinkProxy::new(audio_next) as Arc<dyn AudioOutput>
         } else {
@@ -523,5 +520,5 @@ impl AudioOutput for AudioSinkProxy {
 }
 
 #[cfg(test)]
-#[path = "synchronizer_tests.rs"]
+#[path = "transcription_tests.rs"]
 mod tests;

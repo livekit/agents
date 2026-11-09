@@ -1,8 +1,3 @@
-//! ABI declarations into the IR. Every type a declaration names is found through the crate's
-//! modules and `use`s ([`Crate::resolve`]), aliases are expanded with their generic arguments,
-//! and the result is classified by what its declaration says. Anything else fails, naming the
-//! declaration.
-
 use super::tree::{Crate, Found};
 use super::vocabulary::{self as voc, Entry, Value};
 use super::*;
@@ -18,8 +13,11 @@ use exposed::{declared_error, error_entry, export_decl, export_entry};
 use proxy::eager_future;
 use record::{check_default, record_entry, record_target, unit_enum};
 
-/// The declarations that still cross as a tuple ("Boundary values"), by their diagnostic
-/// location. It only shrinks: a row no declaration meets is stale.
+// A named type is found through the crate's modules and `use`s, aliases expanded with their
+// generic arguments, and classified by its declaration; anything else fails naming it.
+
+/// The declarations that still cross as a tuple, by diagnostic location. It only shrinks: a row
+/// no declaration meets is stale.
 const TUPLE_BASELINE: &str = include_str!("../../../tuple-baseline.json");
 
 /// The baselined tuple declarations met by this run.

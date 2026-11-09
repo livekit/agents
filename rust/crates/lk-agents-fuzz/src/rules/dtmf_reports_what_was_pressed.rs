@@ -1,15 +1,3 @@
-//! A DTMF collection the driver runs answers with exactly the keys the caller pressed.
-//!
-//! The session journals each key the person it listens to presses. That journal is first held to
-//! the case's own presses: the person's keys, in order, every one pressed before the session
-//! began closing, and never a guest's. Evidence for a collection is then the journaled keys
-//! after its `Start` (and before its call, the next `Start` or a `Stop`), up to the stop key
-//! `#`, dropping what is no DTMF key. A collection without a read-back (`confirm: false`) holds
-//! no guard across a reply, so
-//! each of those keys is buffered. The call is then decided by count alone: `Complete` carries
-//! them, space-separated, when there are `num_digits` of them; `Incomplete` when there are not;
-//! `Stopped` only once the collection was ended -- a `Stop`, a newer `Start`, or a close (the
-//! host's, or the session's own).
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::trace::{CloseStep, RoomLinkStep, RoomStep, Step};
 use lk_agents_voice::workflows::machine::dtmf::{DtmfEvent, DtmfOutcome, GetDtmfResult};
@@ -21,6 +9,11 @@ use crate::{
     input::{Count, DtmfInput, DtmfKey, Input, Millis, RoomIn},
     record::{Answer, Detail, Kind, Observed, Recording},
 };
+
+// The journalled keys must first be the person's own presses, in order, before the close, never a
+// guest's. A collection's evidence is the keys after its `Start`, up to the stop key `#`. Without a
+// read-back (`confirm: false`) no guard spans a reply, so every key is buffered and the answer is
+// decided by count alone.
 
 pub struct DtmfReportsWhatWasPressed;
 

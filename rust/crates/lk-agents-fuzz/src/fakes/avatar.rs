@@ -1,20 +1,3 @@
-//! The avatar worker the agent's voice streams to, in its own room, on the production wiring: the
-//! agent's `DataStreamAudioReceiver`, the runner (`lk_agents_runtime::avatar::runner`, its ready
-//! events taken in the run's seeded order), and in place of the user's model and the SDK's
-//! `rtc.AVSynchronizer` a generator and a synchronizer that keep real time:
-//!
-//! - the generator ticks at its frame rate whether or not it has audio, each tick a video frame
-//!   and the audio it lip-syncs (up to one frame period), ready after its generation latency;
-//!   what a tick took from the buffer is in flight, and a clear drops only what was not taken;
-//! - the synchronizer plays audio back to back and blocks a push past its queue, and shows video
-//!   on the frame clock from a queue of `fps * queue` frames, as `rtc.AVSynchronizer` does.
-//!
-//! Each frame carries its entry in this worker's frame table as its bytes, and the table watches
-//! the buffer, so a frame the runner keeps is an entry left at the close.
-//!
-//! The two rooms are relayed in the order the agent sent things over its data channel: a segment's
-//! chunks as they are written, a `lk.clear_buffer` between them, as a real room delivers them.
-
 type CachedEntries = (u64, HashMap<u64, (Entry, Weak<[u8]>)>);
 
 use std::{
@@ -63,25 +46,29 @@ async fn until_ms(clock: &dyn Clock, ms: u64) {
     clock.wait_until(Ts::ZERO.saturating_add(Duration::from_millis(ms))).await;
 }
 
-// ----------------------------------------------------------------------------- the frame table
-
 #[derive(Clone, Copy, Debug)]
 enum Entry {
-    /// Audio the receiver handed over: its segment, when, and how many samples at what rate.
-    Received { segment: u32, from: Observed, samples: u32, rate: u32 },
-    /// A frame the generator made, and how long it plays if audio.
-    Generated { label: AvatarFrameLabel, ms: u64 },
+    Received {
+        segment: u32,
+        from: Observed,
+        samples: u32,
+        rate: u32,
+    },
+    /// A generated frame, and how long it plays if audio.
+    Generated {
+        label: AvatarFrameLabel,
+        ms: u64,
+    },
 }
 
-/// This worker's frames: each frame's bytes are its id, and an entry lives while a frame still
-/// holds those bytes.
+/// Each frame's bytes are its id, and an entry lives while a frame holds those bytes, so a frame
+/// the runner keeps is an entry left at the close.
 #[derive(Default)]
 struct Frames {
     entries: Mutex<CachedEntries>,
 }
 
 impl Frames {
-    /// The bytes of a new frame that stands for `entry`.
     fn tag(&self, entry: Entry) -> Arc<[u8]> {
         let mut entries = self.entries.lock().unwrap();
         entries.0 += 1;
@@ -91,7 +78,6 @@ impl Frames {
         data
     }
 
-    /// Audio standing for `entry`: `samples` at `rate` (what it plays for), its bytes the tag.
     fn audio(&self, entry: Entry, samples: u32, rate: u32) -> AudioFrame {
         AudioFrame::new(bytes::Bytes::from_owner(self.tag(entry)), rate, 1, samples)
     }
@@ -125,17 +111,13 @@ fn record(log: &Log, stamps: &Stamps, step: AvatarStep) -> Observed {
     at
 }
 
-// ----------------------------------------------------------------------------- the receiver
-
-/// `DataStreamAudioReceiver` as a host `AudioReceiver` hands it to the runner (`voice/avatar.py`):
-/// a frame becomes a host frame, a segment end `AudioSegmentEnd`, the end of the stream the end
-/// of iteration.
+/// `DataStreamAudioReceiver` as a host `AudioReceiver` hands it to the runner (`voice/avatar.py`).
 struct Receiver {
     rx: Arc<DataStreamAudioReceiver>,
     frames: Arc<Frames>,
     log: Log,
     stamps: Stamps,
-    /// The segment being received, and whether any of its audio was.
+    /// The segment being received, whether any of its audio was, and the clear epoch.
     segment: Mutex<(u32, bool, u64)>,
     closed: Mutex<bool>,
 }
@@ -241,8 +223,6 @@ impl AvatarAudioReceiver for Receiver {
     }
 }
 
-// ----------------------------------------------------------------------------- the generator
-
 #[derive(Clone, Copy, Debug)]
 enum Buffered {
     Audio {
@@ -251,27 +231,27 @@ enum Buffered {
         samples: u32,
         rate: u32,
     },
-    /// The end of the segment whose audio was pushed last when it came: a segment's end can come
-    /// out after the next segment's audio went in.
+    /// Names the segment last pushed when it came: an end can come out after the next segment's
+    /// audio went in.
     End(Option<u32>),
 }
 
 #[derive(Default)]
 struct GenState {
     buffer: VecDeque<Buffered>,
-    /// What the last tick generated and the runner has not taken yet.
     ready: VecDeque<(Option<AvatarFrame>, Option<AvatarFrameLabel>, Option<u32>)>,
-    /// Clears so far: a tick in flight across one generated for audio the clear dropped.
+    /// A tick in flight across a clear generated for audio the clear dropped.
     clears: u64,
     next_tick_ms: Option<u64>,
     tick: u64,
-    /// The segment of the last audio pushed: what a segment end ends.
     last_segment: Option<u32>,
     closed: bool,
     pulls_after_close: u32,
 }
 
-/// A video model at a real frame rate with a real generation latency.
+/// A video model in real time: it ticks at its frame rate with or without audio, each tick a video
+/// frame plus up to one period of lip-synced audio, ready after its latency. A clear drops only
+/// what a tick had not yet taken from the buffer.
 struct Generator {
     period_ms: u64,
     latency_ms: u64,
@@ -283,8 +263,6 @@ struct Generator {
 }
 
 impl Generator {
-    /// One tick's frames, from what is buffered: a video frame, the audio it lip-syncs, and the
-    /// segment's end when its last audio has gone.
     fn tick(
         &self,
         state: &mut GenState,
@@ -320,7 +298,7 @@ impl Generator {
         if taken > 0 {
             let audio = AvatarFrameLabel { video: false, ..video };
             let ms = u64::from(taken) * 1000 / u64::from(rate.max(1));
-            // at 1 kHz, a sample per millisecond: the frame plays `ms`
+            // At 1 kHz, so the frame plays `ms`.
             let frame = self.frames.audio(Entry::Generated { label: audio, ms }, ms as u32, 1000);
             out.push((Some(AvatarFrame::Audio(frame)), Some(audio), None));
         }
@@ -333,7 +311,6 @@ impl Generator {
         out
     }
 
-    /// How long until what is buffered has been generated.
     fn due_in(&self) -> Option<Duration> {
         let state = self.state.lock().unwrap();
         let ms: u64 = state
@@ -383,8 +360,8 @@ impl AvatarVideoGenerator for Generator {
         _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move {
-            // Nothing generated before the clear is yielded after it, as the reference's generators
-            // make each frame from their audio queue as it is pulled.
+            // Nothing generated before the clear is yielded after it, as the reference's
+            // generators make each frame from their queue as it is pulled.
             let mut state = self.state.lock().unwrap();
             state.buffer.clear();
             state.ready.clear();
@@ -430,7 +407,6 @@ impl AvatarVideoGenerator for Generator {
                     at
                 };
                 until_ms(&*self.clock, at).await;
-                // taken from the buffer now: in flight for the generation's latency
                 let (made, clears) = {
                     let mut state = self.state.lock().unwrap();
                     (self.tick(&mut state), state.clears)
@@ -445,8 +421,6 @@ impl AvatarVideoGenerator for Generator {
     }
 }
 
-// ----------------------------------------------------------------------------- the synchronizer
-
 #[derive(Default)]
 struct AvState {
     audio_end_ms: u64,
@@ -456,7 +430,8 @@ struct AvState {
     closes: u32,
 }
 
-/// `rtc.AVSynchronizer` and the avatar's two tracks.
+/// `rtc.AVSynchronizer` and the avatar's two tracks: audio back to back with a push blocked past
+/// its queue, video on the frame clock from a queue of `fps * queue` frames.
 struct Synchronizer {
     period_ms: u64,
     clock: Arc<dyn Clock>,
@@ -482,8 +457,7 @@ impl AvatarMedia for Synchronizer {
             let Some(Entry::Generated { label, ms }) = self.frames.of(&frame) else {
                 return Ok(());
             };
-            // When the push returns (a full queue holds it) and when the frame plays, decided now:
-            // pushes come one at a time, so nothing else moves the queues meanwhile.
+            // Decided now: pushes come one at a time, so nothing else moves the queues meanwhile.
             let (returns_ms, plays_ms) = {
                 let now = now_ms(&*self.clock);
                 let mut state = self.state.lock().unwrap();
@@ -529,9 +503,6 @@ impl AvatarMedia for Synchronizer {
     }
 }
 
-// ----------------------------------------------------------------------------- the worker
-
-/// Where the relay has got to on each side.
 #[derive(Default)]
 struct Relay {
     sent: usize,
@@ -549,7 +520,6 @@ pub struct FakeAvatarWorker {
     log: Log,
     stamps: Stamps,
     relay: Mutex<Relay>,
-    /// The agent's room, and the avatar's identity in it.
     agent: Arc<FakeRoom>,
     avatar: String,
     relaying: Mutex<Option<lk_agents_abi::OwnedTask>>,
@@ -558,8 +528,8 @@ pub struct FakeAvatarWorker {
 impl FakeAvatarWorker {
     pub const AGENT: &'static str = "agent";
 
-    /// The worker in its room `name`, joined to the agent's room as `avatar`, generating at `fps`
-    /// with `latency_ms` per frame; the runner takes its ready events in the order `schedule`
+    /// The avatar worker in its room `name`, joined to the agent's room as `avatar`, on the
+    /// production receiver and runner; the runner takes ready events in the order `schedule`
     /// seeds.
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
@@ -583,7 +553,6 @@ impl FakeAvatarWorker {
         let period_ms = 1000 / fps;
         record(&log, &stamps, AvatarStep::Started { period_ms, latency_ms, queue_ms: QUEUE_MS });
 
-        // the receiver's `clear_buffer` event; the runner reads the clear from the receiver
         let worker: Arc<OnceLock<Weak<FakeAvatarWorker>>> = Arc::default();
         let on_clear: Arc<dyn Fn() + Send + Sync> = {
             let worker = worker.clone();
@@ -662,7 +631,6 @@ impl FakeAvatarWorker {
             relaying: Mutex::default(),
         });
         assert!(worker.set(Arc::downgrade(&me)).is_ok(), "avatar worker set twice");
-        // what either side sends crosses as it is sent
         let relaying = {
             let weak = Arc::downgrade(&me);
             let mut agent_sent = me.agent.local_participant().sent_count();
@@ -682,7 +650,7 @@ impl FakeAvatarWorker {
             })
         };
         *me.relaying.lock().unwrap() = Some(relaying);
-        // `AvatarRunner.start()`: the receiver's own start, then the runner's
+        // `AvatarRunner.start()`: the receiver's start, then the runner's.
         let error = rx.start().await.err().map(|e| e.to_string());
         record(
             &me.log,
@@ -704,8 +672,8 @@ impl FakeAvatarWorker {
         me
     }
 
-    /// Carry what each side sent since the last relay to the other, in the order it was sent: the
-    /// agent's segment streams and its clears to the worker, the worker's reports to the agent.
+    /// Carries what each side sent since the last relay to the other, in send order, as a real
+    /// room delivers it.
     pub async fn relay(&self) {
         let avatar = self.avatar.as_str();
         let local = self.agent.local_participant();
@@ -767,7 +735,7 @@ impl FakeAvatarWorker {
         }
     }
 
-    /// How much has been relayed, which only grows.
+    /// How much has been relayed; only grows.
     pub fn progress(&self) -> (usize, usize) {
         let relay = self.relay.lock().unwrap();
         (relay.sent, relay.reports)
@@ -803,7 +771,7 @@ impl FakeAvatarWorker {
         self.relay.lock().unwrap().streams.clear();
         let pulls_after_close = self.generator.state.lock().unwrap().pulls_after_close;
         let media_closes = self.media.state.lock().unwrap().closes;
-        // what the generator itself still holds is the user's model's, not the runner's
+        // What the generator still holds is the user model's, not leaked by the runner.
         let held =
             self.generator.state.lock().unwrap().ready.iter().filter(|r| r.0.is_some()).count();
         let step = AvatarStep::Closed {

@@ -1,14 +1,3 @@
-//! A close, once begun, finishes: the session exits.
-//!
-//! Every phase of a close is bounded by design, so the run waits for the exit however long it
-//! takes in virtual time. A session that has not exited a virtual day later is not slow: it sits
-//! mid-close with nothing armed, runnable or pending that could ever wake it, or it keeps working
-//! without ever getting there. Either way the close never finishes, and every rule that judges a
-//! closed session would otherwise skip the run in silence.
-//!
-//! Not `driver_exits_only_on_close`, which is the converse (no exit without a close), and not
-//! `every_task_finishes`, which joins tasks once the session is gone: this is the session itself
-//! never going.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
@@ -16,6 +5,9 @@ use crate::{
     input::Input,
     record::Recording,
 };
+
+// Every close phase is bounded, so a session not exited a virtual day later is stuck, not slow.
+// Without this rule every rule judging a closed session would skip such a run in silence.
 
 pub struct CloseFinishes;
 

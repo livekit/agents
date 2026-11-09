@@ -1,28 +1,3 @@
-//! A real session with controlled dependencies, and one function that applies an [`Input`] to it.
-//!
-//! The only place that touches the product, and only as a host does: the session is assembled
-//! with `VoiceSession(...)` (`VoiceSession::new`) over the fake room and the fakes, started,
-//! and every call is the host method a Python `AgentSession` makes, with its argument shapes;
-//! people join and leave through the fake room, which the real room io watches. What the host
-//! cannot do it does not do: the test-only probe (the runtime's `dst` feature) only watches the journal and
-//! the host events, and hands the session's runtime to the run, which runs its real loop and chooses
-//! what reaches the loop's queue ([`executor`]).
-//! It decides nothing: rules read [`Recording`] and nothing else.
-//!
-//! **Each resource is opened by whoever mints it.** Speeches, holds, fillers and hook calls come
-//! from the driver's own journal, the one account of them that cannot drift from what it did. The
-//! rest have no journal to read -- a chat exists because a fake was called, an answer because a
-//! call returned a future -- and are opened here, from the side that knows.
-//!
-//! **Applying an input does not yield.** Only [`Input::Advance`] and the awaits reach the
-//! executor, so a case can build a burst the driver must untangle in one cycle.
-//! [`Recording::driver_ran_since`] is written against that, and breaking it would quietly weaken
-//! every rule that allows the driver one input of grace.
-//!
-//! The module is split by what a run does, in order: [`start`] builds the session, [`apply`]
-//! turns one input into what the product sees, [`collect`] writes down what became true, and
-//! [`finish`] releases what a run owes and reports what it found. This file holds what they
-//! share: the setup, the simulation, and the run itself.
 use lk_agents_voice::audio_recognition::observation::RecognitionObservation;
 
 type HostJournal = Arc<Mutex<Vec<(Observed, Host, Option<Arc<SpeechHandle>>)>>>;
@@ -114,13 +89,15 @@ pub use queue::Policy;
 
 use self::apply::{Feeding, Pending};
 use self::queue::Next;
-// ==============================================================================================
-// What a session is built with
-// ==============================================================================================
+
+// The session is driven only as a host drives it, through the host API and the fake room.
+// Speeches, holds, fillers and hook calls are opened from the driver's journal; everything else
+// is opened here by the side that mints it. Applying an input never yields: only
+// `Input::Advance` and the awaits reach the executor, which `Recording::driver_ran_since` and
+// every rule granting one input of grace rely on.
 
 /// What the session is built with: everything fixed for the life of a run. Everything a case can
-/// change afterwards is an [`Input`] instead, so a case says what it did rather than how the
-/// session was configured to let it.
+/// change afterwards is an [`Input`] instead.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Setup {
     /// A recognition leg listening to the microphone, so recognition events can be delivered. The
@@ -442,12 +419,8 @@ pub struct RoomSetup {
     pub delete_room_on_close: bool,
 }
 
-/// One run, whole: how the session is built and what is sent to it.
-///
-/// The setup is not optional detail. Some of what a rule needs cannot be reached by any input,
-/// because it is fixed when the session is constructed -- speculative generation, the turn mode,
-/// whether host hooks are bound. A probe that carried only inputs could never reach those rules,
-/// so a case carries both halves.
+/// One run, whole: how the session is built and what is sent to it. Some prerequisites are fixed
+/// at construction, so a case carries both halves.
 #[derive(Clone, Debug, Default)]
 pub struct Case {
     pub setup: Setup,
@@ -522,28 +495,18 @@ impl Default for Setup {
     }
 }
 
-// ==============================================================================================
-// The simulation
-// ==============================================================================================
-
-/// The scheduler seed a run uses when its case names none. The bytes are the crate's former name;
-/// changing them would change every interleaving the hand-written regression tests run under.
+/// The scheduler seed a run uses when its case names none. Changing the bytes would change every
+/// interleaving the hand-written regression tests run under.
 const SCHEDULER_SEED: &[u8] = b"lk-agents-voice-tests";
 
-/// Run one simulation under the schedule every case ran with before schedules were a dimension.
-/// Tests with no case go through here.
+/// Run one simulation under schedule zero, the schedule of a hand-written case.
 pub fn simulate<T>(body: impl std::future::Future<Output = T>) -> T {
     simulate_with(0, body)
 }
 
 /// Run one simulation: paused time, a single thread, and a scheduler whose choices are fixed by
-/// `schedule`.
-///
-/// Tokio randomises unbiased `select!` branch order and task polling order per call, which is the
-/// interleaving of the driver's concurrent work: two events in one instant, a verdict against an
-/// overlap's close, a timer against a command. Pinning the seed is what makes a seed reproduce
-/// its run; varying it across cases is what makes the campaign explore interleavings rather than
-/// walk one of them a thousand times. Zero is the schedule of a hand-written case.
+/// `schedule`. Tokio's unbiased `select!` and task polling order follow the seed, so pinning it
+/// reproduces a run and varying it explores interleavings.
 pub fn simulate_with<T>(schedule: u64, body: impl std::future::Future<Output = T>) -> T {
     let mut seed = SCHEDULER_SEED.to_vec();
     if schedule != 0 {
@@ -569,11 +532,9 @@ pub fn simulate_with<T>(schedule: u64, body: impl std::future::Future<Output = T
 /// that unoptimised: this must never fire on a run that is merely slow.
 const HANG_S: u64 = 600;
 
-/// What no step count can see: a product task that never yields, or a lock that never comes back,
-/// blocks the run's only thread, so nothing on it can notice. A thread beside it can, and the only
-/// thing it can do about it is end the process loudly, naming the schedule, rather than leave a
-/// campaign parked forever. Disarmed when the returned sender is dropped, with the simulation.
-/// It dumps the run's trail: the last steps dispatched and what is still pending.
+/// A task that never yields blocks the run's only thread, so only a thread beside it can notice:
+/// it aborts the process naming the schedule and dumping the run's trail. Disarmed when the
+/// returned sender is dropped.
 fn watchdog(schedule: u64, trail: Arc<Mutex<queue::Trail>>) -> std::sync::mpsc::Sender<()> {
     use std::io::Write;
     let caller = std::thread::current().name().unwrap_or("campaign worker").to_owned();
@@ -601,17 +562,13 @@ fn watchdog(schedule: u64, trail: Arc<Mutex<queue::Trail>>) -> std::sync::mpsc::
 }
 
 /// Steps one virtual instant may hold, in the journal or in the run's own loop, before the run
-/// counts as a livelock. Derived from the busiest instant measured with the microphone's frames
-/// scheduled as steps (2026-10-28, `Outcome::busiest_instant`): 3,330 loop steps on the 1,024-seed
-/// survey, 6,262 on the next 32,768 seeds (seed 30341). Twenty times the busiest is a session
-/// feeding itself, and waiting longer only spends real time before the same verdict.
+/// counts as a livelock: twenty times the busiest instant measured (`Outcome::busiest_instant`,
+/// 6,262 steps at seed 30341).
 const NO_PROGRESS_STEPS: u32 = 20 * 6_262;
 
-/// The run's spawner: every task of the run goes through it, so nothing bypasses the harness.
-/// The product's tasks are retained as real Tokio joins, so a task the driver detached cannot
-/// disappear from the test, each with when and from which line it was spawned, so a task that
-/// never finishes can be placed in the run and in the source (`every_task_finishes`). What the
-/// fakes run beside the session ([`World`]) is scheduled the same way and aborted with the run.
+/// The run's spawner. Product tasks are retained with their spawn instant and site, so a detached
+/// task that never finishes can be placed (`every_task_finishes`); the fakes' tasks ([`World`])
+/// are scheduled the same way and aborted with the run.
 struct Tasks {
     /// Teardown can drop a returned run outside `simulate_with`'s entered runtime. Keep
     /// launches tied to the original scheduler rather than consulting ambient context.
@@ -701,10 +658,6 @@ impl RefRegistry for NoopRefs {
     fn release(&self, _id: u64) {}
 }
 
-// ==============================================================================================
-// The run
-// ==============================================================================================
-
 /// A real session, the fakes behind it, and everything the run has learned.
 pub struct Run {
     /// The session, as a host holds it.
@@ -734,7 +687,6 @@ pub struct Run {
     /// Journal steps the probe stamped, waiting to be absorbed. The probe runs under the
     /// driver's own lock and cannot touch the recording, so it parks them here.
     steps: Arc<Mutex<Vec<(Observed, Step)>>>,
-    /// Host events the probe stamped as the session's drain handed them over.
     /// What the host received, with the live handle of a speech it was told of, taken as the
     /// event was delivered (the session lets it go once nothing names it).
     host: HostJournal,

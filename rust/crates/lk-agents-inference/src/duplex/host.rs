@@ -16,8 +16,6 @@ use super::session::DuplexAdapterModel;
 use super::{AdaptiveNoiseGate, AudioGate, DuplexCommand, DuplexEvent, FixedGate, Fragment};
 use lk_agents_net::env::ProcessEnv;
 
-// ------------------------------------------------------------------------------------ gates
-
 /// A gate the host holds and the session drives: one state, whoever calls.
 pub struct GateClass<G>(Arc<Mutex<G>>);
 
@@ -110,8 +108,6 @@ impl SessionGate {
 fn describe(e: &HostError) -> String {
     format!("{}: {}", e.class, e.message)
 }
-
-// ------------------------------------------------------------------------------------ the host
 
 /// A plugin's session.
 pub(super) struct HostSession {
@@ -325,8 +321,6 @@ impl HostSession {
 fn micros(frame: &AudioFrame) -> u64 {
     (frame.duration() * 1e6) as u64
 }
-
-// ------------------------------------------------------------------------------------ the model
 
 impl abi::DuplexRealtimeModel for DuplexAdapterModel {
     type Env = ProcessEnv;

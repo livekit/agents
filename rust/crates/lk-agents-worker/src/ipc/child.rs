@@ -270,3 +270,7 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
             .await;
     }
 }
+
+#[cfg(test)]
+#[path = "child_tests.rs"]
+mod tests;

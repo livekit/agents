@@ -1,15 +1,7 @@
-//! Releasing what a run owes, then reporting what it found.
-//!
-//! Beside the session it drives and not in `search`: a probe or a regression test needs exactly
-//! this and nothing of the campaign, so changing how the search picks inputs cannot change how a
-//! case ends. The rules run once, over the finished recording; the only check between inputs is
-//! that the run is still moving.
 use super::*;
 use lk_agents_voice::agent_session::commands::{CommandKind, TurnCommandKind};
 
-// ==============================================================================================
-// The release phase
-// ==============================================================================================
+// Kept out of `search` so changing how the search picks inputs cannot change how a case ends.
 
 /// How far one release round may move the clock. Bounded, so one timer that re-arms itself cannot
 /// run the phase away.
@@ -67,10 +59,8 @@ impl Run {
                 });
             }
         }
-        // A person the case left mid-sentence keeps the driver waiting for the end of their turn,
-        // and a reply behind that turn never starts. End the speech on every detector that heard
-        // a start without an end. The detector is speaking or not, so its last word stands: an
-        // end with no start before it does not cancel the next start.
+        // A person left mid-sentence keeps the driver waiting for their turn's end: end the speech
+        // on every detector whose last word was a start.
         for nth in self.record.live().of(Kind::Vad) {
             let still_speaking = self
                 .record
@@ -150,16 +140,13 @@ impl Run {
             (0..self.outstanding(Input::PauseAuthorization {}, Input::ResumeAuthorization {}))
                 .map(|_| Input::ResumeAuthorization {}),
         );
-        // A turn left mid-decision keeps the session from being idle too, and no timer will move
-        // it: a transcript that never reached a final leaves the turn parked, waiting for words
-        // that are not coming. `ClearTurn` is the product's own neutral release, whereas a
+        // A turn left mid-decision parks forever. `ClearTurn` is the product's neutral release; a
         // synthetic final would invent caller words and a commit would ask for a reply.
         if self.turn_undecided() {
             out.push(Input::ClearTurn {});
         }
-        // A navigator the case started is the case's to close. Left running it does what a
-        // navigator does -- prompts the line again at every silence, forever -- and a release
-        // phase that only answers what is owed never gets to quiet.
+        // A navigator the case started is the case's to close: left running, it prompts again at
+        // every silence and the release never gets quiet.
         if self.ivr_navigating() {
             out.push(Input::Ivr {
                 input: IvrInput::Close,
@@ -361,8 +348,6 @@ impl Run {
         declared
     }
 
-    /// How many `open` inputs the case applied without a matching `close`, in order. A close with
-    /// nothing to close is a no-op in the product, so the count never goes below zero.
     /// The case's last hold or release of this synthesis was a hold.
     fn tts_held(&self, nth: u32) -> bool {
         self.record
@@ -378,6 +363,8 @@ impl Run {
             .unwrap_or(false)
     }
 
+    /// How many `open` inputs the case applied without a matching `close`; a close with nothing
+    /// to close is a no-op in the product, so the count never goes below zero.
     fn outstanding(&self, open: Input, close: Input) -> u32 {
         let mut count: u32 = 0;
         for applied in self.record.applied() {
@@ -391,10 +378,6 @@ impl Run {
     }
 }
 
-// ==============================================================================================
-// Running a case to the end
-// ==============================================================================================
-
 /// How many quiet release rounds end a run. Two, because one can just be a gap between timers.
 const QUIET_ROUNDS: u32 = 2;
 
@@ -404,10 +387,6 @@ const QUIET_ROUNDS: u32 = 2;
 /// Reaching this is a finding, not a limit to raise.
 const MAX_RELEASE_ROUNDS: u32 = 100;
 
-/// What one run found.
-///
-/// `expectations` separates a contract that passed from one that never applied. A report that
-/// cannot tell those apart shows a rule as green long after its state stopped being reachable.
 /// How a run ended, with its evidence. A run stopped at a finite bound is `Budget` unless the
 /// trail shows the cycle it was spinning in: a step limit alone proves no livelock, and a wait
 /// that ran out proves no deadlock unless nothing could have moved it.
@@ -426,6 +405,8 @@ pub enum Ending {
     Budget { bound: String, trail: String },
 }
 
+/// What one run found. `expectations` separates a contract that passed from one that never
+/// applied.
 #[derive(Debug, Default)]
 pub struct Outcome {
     pub ending: Ending,
@@ -446,7 +427,7 @@ pub struct Outcome {
     /// run never reached cannot be judged, so a reader of what is left live must not read it.
     pub stopped_early: bool,
     /// `(input, phase)`: which inputs landed in which phase of the conversation, read off the
-    /// journal as it stood when each input was applied. COVERAGE.md's operation x phase table.
+    /// journal as it stood when each input was applied.
     pub cells: BTreeSet<(&'static str, &'static str)>,
     /// The most steps of the run's loop at one virtual instant.
     pub busiest_instant: u32,
@@ -460,11 +441,8 @@ impl Outcome {
     }
 }
 
-/// Run one case to completion in its own simulation.
-///
-/// One case, one runtime: the seeded scheduler is only reproducible from its start, so two cases
-/// sharing a runtime would each begin at a different point in the stream and neither would
-/// reproduce on its own.
+/// Run one case to completion in its own simulation: the seeded scheduler only reproduces from
+/// its start, so cases never share a runtime.
 pub fn run(case: Case) -> Outcome {
     simulate_with(case.schedule, run_in(case))
 }
@@ -566,15 +544,9 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
     outcome
 }
 
-/// The one check that runs after every input: that the run is still moving. The rules run once,
-/// at the end, over the whole recording -- they read the whole recording anyway, and run after
-/// every input they were most of a survey's wall time and a case stopped at its first finding,
-/// which cost the rest of what that run would have reached.
-///
-/// Moving is counted in steps at one virtual instant, never in real seconds, so a slow machine
-/// cannot change a verdict. A livelocked session was stopped, and nothing applied after it would
-/// reach it: the run ends there. What can block without stepping at all -- a task that never
-/// yields -- is the watchdog's (`simulate_with`), which aborts rather than judges.
+/// The one check that runs after every input: that the run is still moving (the rules run once,
+/// at the end). Moving is counted in steps at one virtual instant, never in real seconds, so a
+/// slow machine cannot change a verdict; a task that never yields is the watchdog's.
 pub fn guard(run: &Run, outcome: &mut Outcome) -> Option<Outcome> {
     run.record.livelock()?;
     record_outcome(run, outcome);
@@ -619,7 +591,7 @@ fn ending(run: &Run, failures: &[Failure]) -> Ending {
     if failures.is_empty() { Ending::Completed } else { Ending::ContractViolated }
 }
 
-/// The phases of a conversation, in COVERAGE.md's column order.
+/// The phases of a conversation.
 pub const PHASES: [&str; 14] = [
     "starting",
     "idle",
@@ -697,11 +669,9 @@ fn cells_by_input(record: &Recording) -> BTreeSet<(&'static str, &'static str)> 
     out
 }
 
-/// For each input the case sent, the kinds it opened *directly*, by exact stamp.
-///
-/// A `say` does not open its speech here: that arrives from the driver's journal at the next
-/// input which yields, and no timing rule can say which earlier input caused it. So this answers
-/// one direction only, whether a row opens something it never named, which the survey audits.
+/// For each input the case sent, the kinds it opened directly, by exact stamp. Journal-minted
+/// resources (a `say`'s speech) arrive later, so this only audits whether a row opens something
+/// it never named.
 fn opened_by_input(record: &Recording) -> BTreeMap<&'static str, BTreeSet<Kind>> {
     let mut out: BTreeMap<&'static str, BTreeSet<Kind>> = BTreeMap::new();
     for applied in record.applied() {
@@ -826,8 +796,7 @@ mod tests {
     }
 
     /// Every contract's probe reaches its prerequisite: the run passes, and the contract made at
-    /// least one expectation on it. Without this a probe can rot into a case that runs fine and
-    /// never touches the rule it was written for.
+    /// least one expectation on it.
     #[test]
     fn every_probe_reaches_its_contract() {
         {

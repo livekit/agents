@@ -1,8 +1,3 @@
-//! Voice activity: a second observer of the microphone, alongside recognition. Every `stream()`
-//! the product opens is its own invocation; the audio the driver forwards is recorded, and the
-//! detections come only from the case, so the relation between the two is the case's to choose.
-//! A plugin's detector takes its audio as the core hands it to a plugin: through the `Now` queue
-//! and pump of `PluginInput`.
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,12 +16,12 @@ use crate::{
     record::{Detail, Kind},
 };
 
-/// How often a real detector reports, in seconds; what one `VadInference` stands for.
+/// How often a real detector reports, in seconds.
 const UPDATE_INTERVAL: f64 = 0.032;
 
 pub struct FakeVad {
     registry: Arc<Registry>,
-    /// A plugin's detector, and how long each of its streams takes no audio after it opens.
+    /// Set for a plugin detector: how long each stream takes no audio after it opens.
     stall: Option<Duration>,
 }
 
@@ -112,8 +107,7 @@ impl Vad for FakeVad {
 impl StreamOutput<VadEvent> for Detection {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<VadEvent>, ProviderError>> {
         Box::pin(async move {
-            // A real stream ends once its input has: what was already produced first, then the end.
-            // Without it a stream the driver replaced stays open, and a case keeps speaking into it.
+            // A real stream ends once its input has; otherwise a replaced stream stays open.
             tokio::select! {
                 biased;
                 event = self.events.recv() => event.transpose(),
@@ -154,9 +148,7 @@ pub(super) fn deliver(
             ev.raw_accumulated_speech = secs(*speech_ms);
             ev
         }
-        // A real detector reports every interval with a confidence, and the driver places the
-        // start of speech retroactively from what it accumulated. Noisy confidence is the input
-        // that logic exists for, so the case chooses it.
+        // The case chooses the confidence: the driver places speech start retroactively from it.
         Input::VadInference { probability: Confidence(percent), speaking, duration, .. } => {
             let (speech, silence) =
                 if *speaking { (secs(*duration), 0.0) } else { (0.0, secs(*duration)) };

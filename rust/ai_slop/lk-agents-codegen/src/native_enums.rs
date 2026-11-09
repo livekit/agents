@@ -1,5 +1,3 @@
-//! Native Python enum classes declared once by ABI unit enums.
-
 use crate::decl::{Declarations, HostForm, NativeEnum, Record, Ty, vocabulary as voc};
 use crate::python::Out;
 use crate::surface::Stub;

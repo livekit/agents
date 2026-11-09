@@ -1,5 +1,3 @@
-//! `rtc.AudioSource` with playout modelled on the injected clock, and a synthesiser of speech frames.
-
 use lk_agents_abi::voice::rtc::RtcError;
 use lk_agents_abi::voice::rtc::capabilities::AudioSource;
 use lk_agents_abi::voice::rtc::{PlaybackInfo, TrackPublishOptions, frame_duration};
@@ -34,8 +32,7 @@ struct SourceState {
     captured: Vec<AudioFrame>,
     played: Vec<AudioFrame>,
     discarded: Vec<AudioFrame>,
-    /// The same [`PlayoutLedger`] the host shim keeps. `played` is derived (`captured - discarded`),
-    /// so a frame cut mid-play counts only its unplayed part.
+    /// The host shim's ledger: a frame cut mid-play counts only its unplayed part.
     ledger: PlayoutLedger,
 }
 

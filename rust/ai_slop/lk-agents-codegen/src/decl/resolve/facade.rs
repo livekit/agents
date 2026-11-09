@@ -1,5 +1,3 @@
-//! `#[host(facade(..))]` traits: the public Python class over a native class.
-
 use super::*;
 
 /// The keys a facade method reads itself; the rest are the class-method keys.

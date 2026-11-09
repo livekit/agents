@@ -1,5 +1,3 @@
-//! Proxy declarations: a `#[host(proxy)]` trait whose methods declare how the core calls the host.
-
 use super::*;
 
 /// The scopes `requires(..)` names, as `lk_agents_abi::invoke::Scope` variants.

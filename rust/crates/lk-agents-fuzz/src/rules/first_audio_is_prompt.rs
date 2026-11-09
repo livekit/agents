@@ -1,14 +1,3 @@
-//! A latency contract: once a speech may play, its first audio reaches the speaker within a budget
-//! of the product having it.
-//!
-//! The product has a speech's first audio when its source hands over that source's first chunk:
-//! the voice (`tts`, after the voice's calibrated time to first audio) or the realtime server (its
-//! first audio delta, after the server's calibrated delays). The speech may play once the
-//! scheduler authorized it. From the later of the two, the first audio is on the speaker within
-//! [`BUDGET_MS`] of virtual time, unless the speech was paused, cut or the session closing, or the
-//! output replaced, in between. What is left is audio the product holds for no reason: a reply's
-//! voice buffered until the server finished generating it (what c8a832860 fixed in the Python
-//! glue), or until the synthesis ended.
 use std::collections::BTreeMap;
 
 use lk_agents_voice::{
@@ -22,6 +11,10 @@ use crate::{
     check::{Check, Contract, Rule, Subject},
     record::{Kind, Observed, Recording, Sink, Tag},
 };
+
+// The clock starts at the later of the source's first chunk and the speech's authorization. A
+// miss is audio held for no reason, such as a reply's voice buffered until the server finished
+// generating it or until the synthesis ended.
 
 /// What the product may add between having a speech's first audio and the speaker playing it.
 pub const BUDGET_MS: u64 = 100;

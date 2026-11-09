@@ -1,6 +1,3 @@
-//! A requested reply makes its model request, or settles, within a bound of its creation: it does
-//! not wait for the speech playing before it (the reference starts a reply's inference at once and
-//! waits for the floor only to play).
 use std::collections::BTreeMap;
 
 use lk_agents_voice::agent_session::machine::activity::scheduling::{SpeechId, SpeechKind};
@@ -19,6 +16,8 @@ pub const BOUND_MS: u64 = 15_000;
 /// What the case owes the driver before a reply can be planned: an answer to the turn hook, or
 /// to a tool whose output the reply reads.
 const OWED: [Kind; 2] = [Kind::Hook, Kind::Tool];
+
+// The reference starts a reply's inference at once and waits for the floor only to play.
 
 pub struct ReplyReachesItsModel;
 

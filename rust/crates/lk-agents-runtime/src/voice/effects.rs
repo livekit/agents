@@ -1,5 +1,3 @@
-//! Executes the decision core's effects after synchronous settlement.
-
 use super::legs::PendingLeg;
 use super::{HostCallbackId, VoiceRuntime};
 use crate::telemetry;
@@ -132,7 +130,7 @@ impl VoiceRuntime {
         use lk_agents_abi::storage::voice::VoiceStorageCommand;
         use lk_agents_voice::agent_session::effects::AudioOp;
         use lk_agents_voice::agent_session::effects::VoiceEffect as E;
-        // Journalled already: VoiceDriver recorded each effect when the domain produced it.
+        // VoiceDriver journalled each effect when it was produced.
         match effect {
             E::RealtimePlayer { speech, event } => self.forward_to_realtime_player(speech, *event),
             E::CloseRealtimePlayer(speech) => {
@@ -223,23 +221,19 @@ impl VoiceRuntime {
                     let _ = sink.flush();
                 }
             }
-            // A session without a turn detector asks for no flush.
             E::EotFlush(reason) => {
                 if let Some(d) = self.eot.as_ref() {
                     d.flush(Some(reason));
                 }
             }
             E::EotPredict { req, timeout } => self.predict_end_of_turn(req, timeout),
-            // `_generate_reply` is the one `timed_out=True` site. A session without a detector
-            // asks for none.
             E::EotCancel { req: _, timed_out } => {
                 if let Some(d) = self.eot.as_ref() {
                     d.cancel_inference(timed_out);
                 }
             }
             E::InterruptionSignal { overlap, signal } => self.signal_interruption(overlap, signal),
-            // The open runs off the loop (the provider awaits a connection); the stream comes back
-            // as `VoiceEvent::StreamOpened`.
+            // Opens off the loop; the stream comes back as `VoiceEvent::StreamOpened`.
             E::OpenSttStream { open, stt, span } => {
                 let stt = self.shared.resources.stt(stt);
                 let cx = self.shared.trace.clone().continuing(span);
@@ -499,9 +493,8 @@ impl VoiceRuntime {
         match op {
             GateOp::Pause => sink.pause(),
             GateOp::Resume => sink.resume(),
-            // A bare clear: the speech's own playout, cut by the same interruption, closes the
-            // segment it pushed (`clear_sink`). A flush here would end a synchronised segment none
-            // of whose audio reached the sink as if it had been said.
+            // A bare clear: the cut speech's playout closes its own segment. A flush would end a
+            // synchronised segment whose audio never reached the sink as if it had been said.
             GateOp::ClearBuffer => sink.clear_buffer(),
         }
     }

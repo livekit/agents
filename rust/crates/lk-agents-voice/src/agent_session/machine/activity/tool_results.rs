@@ -1,6 +1,3 @@
-//! Apply AgentRun's canonical tool results to voice history and host callbacks.
-//! Voice supplies floor/interruption constraints; it does not select the tool outcome again.
-
 use crate::agent::{Source, Visibility};
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{HookCall, HookId, RequestId, VoiceDriver};
@@ -10,6 +7,8 @@ use crate::trace::{CoreStep, ToolStep};
 use lk_agents_abi::{ChatItem, Ts};
 use lk_agents_core::agent_run::AgentRunContinuation;
 use std::collections::BTreeMap;
+
+// AgentRun selects the tool outcome; voice only adds floor and interruption constraints.
 
 impl VoiceDriver {
     /// The executor reports completion and voice facts, not a competing step decision.

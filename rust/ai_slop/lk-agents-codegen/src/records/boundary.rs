@@ -1,4 +1,3 @@
-//! Whole boundary records: field access, omission and codecs are generated as one conversion.
 use super::{emit, read};
 use crate::decl::{Field, RecordBody, RecordDecl, Ty};
 

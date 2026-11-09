@@ -1,7 +1,3 @@
-//! Shared invocation domain: [`machine::AgentRun`] owns transitions; [`effects`] declares
-//! runtime work. Correlation IDs live at this domain entry; execution identity stays in
-//! [`execution`]. Host result records come from `lk_agents_abi::agent::run`.
-
 pub mod effects;
 pub mod execution;
 pub mod machine;

@@ -1,7 +1,3 @@
-//! Generation planning, reply snapshots and media coordination.
-//! [`machine`] contains playback, preparation and stream owners; [`effects`] maps their work
-//! to runtime consumers. Domain-level reply records and accumulators remain here.
-
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::tool_executor::Toolset;
 use lk_agents_abi::errors::ProviderError;

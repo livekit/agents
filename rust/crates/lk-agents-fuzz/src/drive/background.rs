@@ -1,4 +1,3 @@
-//! Named host arguments for the production background player's binding API.
 use super::*;
 use lk_agents_abi::voice::background_audio::Sounds;
 

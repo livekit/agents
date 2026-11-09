@@ -437,3 +437,7 @@ pub(crate) fn record_usage(cx: &Cx, metrics: &AgentMetrics) {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "telemetry_tests.rs"]
+pub(crate) mod tests;

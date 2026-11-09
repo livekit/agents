@@ -1,5 +1,3 @@
-//! The model: every `chat()` registers an invocation with the actual request's item ids and
-//! tool names; the response stream reads whatever the test delivers to that request.
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -89,12 +87,9 @@ impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for Response {}
 /// The completion tokens every reply reports.
 pub const COMPLETION_TOKENS: u64 = 10;
 
-/// One model delivery onto a registered chat request's stream, in the chunk shapes the inference
-/// gateway sends: each `LlmText` is one wire chunk naming the assistant role
-/// (the case cuts a reply into the token-sized pieces the model streams, at the model's pace), a
-/// tool call comes whole in one chunk, and the end is an empty chunk (the finish) followed by one
-/// carrying only the usage. True when the stream still had a reader. `End` and `Fail` close the
-/// stream; the registry drops the control afterwards.
+/// One model delivery onto a chat stream, in the gateway's chunk shapes: one chunk per `LlmText`,
+/// a tool call whole, and the end as an empty finish chunk then a usage-only chunk. True when the
+/// stream still had a reader.
 pub(super) fn deliver(
     sender: &mpsc::UnboundedSender<Result<LlmChunk, ProviderError>>,
     nth: u32,

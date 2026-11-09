@@ -1,7 +1,3 @@
-//! Voice session records, configuration snapshots and lifecycle facts.
-//! [`machine::VoiceDriver`] owns ordered transitions; [`effects`] declares runtime work.
-//! Shared session data lives here, with command, host-event and step-clock contracts beside it.
-
 use crate::agent_session::effects::VoiceEffect;
 use crate::agent_session::machine::activity::DriverConfig;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
@@ -39,8 +35,8 @@ pub use time::*;
 /// State retained across agent changes. The `VoiceDriver` orchestrates it together with the
 /// [`AgentActivity`](crate::agent_session::machine::activity::AgentActivity).
 pub(crate) struct VoiceSessionState {
-    /// `session.usage`: provider metrics records and tool bodies started (usage.md "Voice
-    /// sessions"), published with the view.
+    /// `session.usage`: provider metrics records and tool bodies started, published with the
+    /// view.
     pub(crate) usage: lk_agents_core::usage::Ledger,
     /// The model and synthesis requests each speech started and the ledger still holds
     /// unmeasured, oldest first: a metrics record of the speech measures the oldest of its kind;
@@ -199,9 +195,7 @@ impl VoiceSessionState {
         }
     }
 
-    /// This turn's markup guide over the session's TTS. A reply that runs with it off scrubs the
-    /// markup from the agent's history (`_pipeline_reply_task`).
-    /// A provider request started (usage.md "Counting"); returns its ledger id.
+    /// A provider request started; returns its ledger id.
     pub(crate) fn start_request(
         &mut self,
         kind: lk_agents_core::usage::ModelKind,
@@ -723,7 +717,7 @@ mod label_tests {
 }
 
 #[cfg(test)]
-#[path = "../agent_session_tests.rs"]
+#[path = "agent_session_tests.rs"]
 pub(crate) mod tests;
 
 /// The nodes an agent overrides on the way out, opened at each use from the agent a reply was

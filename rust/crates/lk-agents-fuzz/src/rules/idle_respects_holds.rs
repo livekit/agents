@@ -1,8 +1,3 @@
-//! `wait_for_idle` is not answered while another caller's floor hold is outstanding.
-//!
-//! A hold is live from the moment the driver answered the `WaitForIdleAndHold` that took it until it
-//! releases it; the run opens and closes a `Hold` resource on exactly those two journal steps. A
-//! waiter that names the hold passes through; every other waiter must wait.
 use lk_agents_voice::trace::{SpeechStep, Step};
 
 use crate::{
@@ -11,6 +6,9 @@ use crate::{
     input::{Input, Ref},
     record::{Answer, ApiCallView, Detail, Kind, Observed, Recording},
 };
+
+// A hold is live from the answer to its `WaitForIdleAndHold` until its release: the `Hold`
+// resource's open and close. A waiter that names the hold passes through.
 
 pub struct IdleRespectsHolds;
 

@@ -1,5 +1,3 @@
-//! Class declarations and their native registration, over the shared type/method resolver.
-
 use super::*;
 
 impl Resolver<'_> {

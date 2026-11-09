@@ -1,5 +1,3 @@
-//! Select exported classes from their actual Rust trait implementations. No second class list:
-//! each ABI class must have exactly one concrete implementation reachable by the backend.
 use crate::decl::Declarations;
 use crate::decl::tree::{Crate, Found};
 use crate::python::Out;
@@ -7,6 +5,8 @@ use quote::ToTokens;
 use std::collections::BTreeMap;
 use std::path::Path;
 use syn::visit_mut::VisitMut;
+
+// Each ABI class must have exactly one concrete implementation reachable by the backend.
 
 struct Sources {
     crates: BTreeMap<String, Crate>,

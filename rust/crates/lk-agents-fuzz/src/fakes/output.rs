@@ -1,8 +1,3 @@
-//! What leaves the session, and the inputs that stay silent. Every output instance the case
-//! attaches carries its own index, so sink calls on a replaced instance are distinguishable from
-//! the new one's. Audio segments are invocations the case reports on the way a speaker does:
-//! started, and -- once flushed -- finished. Also the microphone, the always-pending video input,
-//! and the recorder tap.
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
@@ -25,12 +20,11 @@ use crate::{
     record::{Detail, Kind, RecorderCall, Sink, Tag},
 };
 
-/// Keeps the microphone leg open without supplying frames.
-/// The microphone: whatever frames the case pushes, in order.
-///
-/// Every frame is tagged so it can be traced to the provider streams it reaches. Whether it was
-/// speech is not the frame's to say -- the case injects VAD and STT's verdicts separately, which
-/// is what lets a rule test how the driver reconciles them.
+// Each attached output carries its own index, so sink calls on a replaced instance are
+// distinguishable from the new one's.
+
+/// The microphone: the case's frames, in order. Frames are tagged, never judged as speech: the
+/// case injects VAD and STT verdicts separately, so a rule can test how the driver reconciles them.
 pub struct FakeAudioInput {
     frames: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<AudioFrame>>,
 }
@@ -54,8 +48,7 @@ impl AudioInput for FakeAudioInput {
     }
 }
 
-/// The camera: whatever frames the case pushes, in order. Each attached camera is a resource the
-/// case feeds by `VideoFrames`; a camera nobody feeds keeps the leg open and yields nothing.
+/// A camera the case feeds by `VideoFrames`; unfed, it keeps the leg open and yields nothing.
 pub struct FakeVideoInput {
     frames: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<u64>>,
 }
@@ -96,8 +89,7 @@ pub fn room_camera(registry: &Registry, camera: Arc<crate::fakes::room::FakeTrac
     registry.register(Kind::Video, Detail::RoomCamera, Control::RoomVideo(camera));
 }
 
-/// So many frames onto the person's camera track, minted as the host camera's are. Accepted
-/// when a reader took them.
+/// Frames onto the person's camera track. True when a reader took them.
 pub(super) fn feed_room_video(
     camera: &crate::fakes::room::FakeTrackPublication,
     video: u32,
@@ -121,7 +113,7 @@ pub(super) fn feed_room_video(
     read
 }
 
-/// So many frames into a camera, each named by the camera's index and its ordinal.
+/// Frames into a camera, each named by the camera's index and its ordinal.
 pub(super) fn feed_video(
     sender: &tokio::sync::mpsc::UnboundedSender<u64>,
     video: u32,
@@ -138,28 +130,20 @@ pub(super) fn feed_video(
     true
 }
 
-/// The playout side of one audio output: the segment taking frames, the flushed segments still
-/// owing a report, and the tracker every report goes through.
+/// The playout side of one audio output. A segment opens at its first frame, as the driver's
+/// tracker counts them, and a flush closes it. The case reports `started` when its first audio
+/// leaves (the edge the driver marks speaking on, so the only one that makes an overlap possible)
+/// and `finished` once it all played.
 ///
-/// A segment opens at its first frame, exactly as the driver's own tracker counts them, and a
-/// flush closes it to new frames. The case then reports on it the way a speaker does: `started`
-/// when the first of its audio actually leaves for the listener -- the edge the driver marks the
-/// agent as speaking on, and so the only thing that makes an overlap possible -- and `finished`
-/// once it has all played, which is only meaningful after the flush.
-///
-/// **One owner for both ways a segment ends.** A playout report the case delivers and a clear the
-/// product performs are the same question asked from two sides -- which segments are still
-/// outstanding -- and an answer kept in two places drifts: the output would re-report a segment
-/// the case had already released. So the set lives here, with the output that flushed them, and
-/// the harness keeps only the routing table. The lock holds plain numbers and is always released
-/// before the tracker is called, so a tracker that notifies a recorder cannot re-enter it.
+/// The outstanding set has one owner for both ways a segment ends, a case report and a product
+/// clear, or the output would re-report a segment the case already released. The lock is
+/// released before the tracker is called, so a tracker that notifies a recorder cannot re-enter.
 pub struct Playout {
     tracker: Arc<dyn PlaybackTracker>,
     state: Mutex<PlayoutState>,
-    /// A host source: a cut is reported a few scheduler hops after the clear, as the report of
-    /// one crosses back from the host's own loop, on the run's spawner.
+    /// A host source: a cut is reported a few scheduler hops after the clear, as the report
+    /// crosses back from the host's own loop.
     lagging: Option<Arc<dyn lk_agents_abi::Spawner>>,
-    /// Where what the person heard of a realtime generation is written down.
     registry: Option<Arc<Registry>>,
 }
 
@@ -168,20 +152,16 @@ const LAGGING_REPORT_HOPS: usize = 64;
 
 #[derive(Default)]
 struct PlayoutState {
-    /// Audio captured since the last flush, as the position the open segment will report.
+    /// Audio captured since the last flush.
     duration: Duration,
-    /// The segment taking frames, once its first frame gave it an identity.
     open: Option<u32>,
     keys: BTreeMap<u32, lk_agents_abi::voice::io::PlaybackSegment>,
-    /// Segments closed to frames and not yet reported or cleared, with the position each reports.
+    /// Segments flushed and not yet reported or cleared, with the position each reports.
     flushed: BTreeMap<u32, Duration>,
-    /// Segments whose start the speaker has reported.
     started: BTreeSet<u32>,
-    /// How much of each started segment the speaker has reported played so far.
     played: BTreeMap<u32, Duration>,
-    /// The frames the open segment took, by realtime generation (none for other audio).
+    /// The open segment's frames, by realtime generation (none for other audio).
     frames: Vec<(Option<u32>, Duration)>,
-    /// The frames each flushed segment holds.
     flushed_frames: BTreeMap<u32, Vec<(Option<u32>, Duration)>>,
     /// Per realtime generation: the audio captured, and how much of it a segment's end settled.
     captured_by: BTreeMap<u32, Duration>,
@@ -189,7 +169,7 @@ struct PlayoutState {
 }
 
 impl Playout {
-    /// One more frame. True when it is the first of a new segment, which then needs an identity.
+    /// True when the frame is the first of a new segment, which then needs an identity.
     fn captured(&self, duration: Duration, generation: Option<u32>) -> bool {
         let mut state = self.state.lock().unwrap();
         state.duration += duration;
@@ -200,8 +180,8 @@ impl Playout {
         state.open.is_none()
     }
 
-    /// What the person heard of each realtime generation in `frames`: the first `played` of it;
-    /// and whether every frame of it captured so far has now played or been cut.
+    /// Records what was heard of each realtime generation in `frames` (the first `played`), and
+    /// whether all of it captured so far has now played or been cut.
     fn heard(&self, frames: Vec<(Option<u32>, Duration)>, mut played: Duration) {
         let mut by: BTreeMap<u32, Duration> = BTreeMap::new();
         let mut settled: BTreeMap<u32, Duration> = BTreeMap::new();
@@ -232,7 +212,6 @@ impl Playout {
         }
     }
 
-    /// The segment the frames since the last flush belong to.
     fn opened(&self, segment: u32) {
         let key = self.tracker.current_segment().expect("a captured frame has a segment key");
         let mut state = self.state.lock().unwrap();
@@ -240,9 +219,8 @@ impl Playout {
         state.keys.insert(segment, key);
     }
 
-    /// The open segment is closed to new frames and carries what was captured for it. `None`
-    /// when nothing was captured since the last flush: the tracker opened no segment for that
-    /// flush either, so there is nothing to report on.
+    /// Closes the open segment. `None` when nothing was captured since the last flush: the
+    /// tracker opened no segment either.
     fn flushed(&self) -> Option<(u32, Duration)> {
         let mut state = self.state.lock().unwrap();
         let segment = state.open.take()?;
@@ -253,9 +231,8 @@ impl Playout {
         Some((segment, position))
     }
 
-    /// The speaker began emitting this segment. True when the segment is the oldest outstanding
-    /// one and nothing else is playing: a real sink plays its queue in order, one segment at a
-    /// time. A second start, a start out of order, or one for a segment gone is refused.
+    /// The speaker began emitting this segment. Refused unless it is the oldest outstanding one
+    /// and nothing else is playing: a real sink plays its queue in order, one at a time.
     pub(super) fn started(&self, segment: u32, at: Ts) -> bool {
         let key = {
             let mut state = self.state.lock().unwrap();
@@ -270,8 +247,7 @@ impl Playout {
         true
     }
 
-    /// A stretch of this segment played. True when the segment is outstanding and had started;
-    /// the stretch begins where the last one ended, as a real output's runs do.
+    /// A stretch of a started segment played, beginning where the last one ended.
     pub(super) fn progressed(&self, segment: u32, played: Duration, at: Ts) -> bool {
         let offset = {
             let mut state = self.state.lock().unwrap();
@@ -297,21 +273,18 @@ impl Playout {
         true
     }
 
-    /// The output threw its playback count away: every segment still outstanding is reported
-    /// interrupted, then the tracker is reset. Finished first, as the reference's only resetting
-    /// sink does (`DataStreamAudioOutput._clear_buffer_task._on_timeout`): a reset alone moves no
-    /// count above this output, and a wrapper waiting on the segment would wait forever.
-    /// Returns the segments that were cut.
+    /// Reports every outstanding segment interrupted, then resets the tracker, as the reference's
+    /// only resetting sink does (`DataStreamAudioOutput._clear_buffer_task._on_timeout`): a reset
+    /// alone leaves a wrapper waiting on the segment forever. Returns the segments cut.
     pub(super) fn reset(&self) -> Vec<u32> {
         let cut = self.cleared();
         self.tracker.reset();
         cut
     }
 
-    /// This segment finished playing. True when it was flushed and still owed; a segment still
-    /// taking frames cannot have finished, and one already reported is not reported twice. A
-    /// finish the product already settled for the sink (its lost-finish bound) is still the
-    /// speaker's report: the tracker drops it, the segment is done (seed 11256).
+    /// This segment finished playing. True when it was flushed and still owed. A finish the
+    /// product already settled (its lost-finish bound) is still reported; the tracker drops it
+    /// (seed 11256).
     pub(super) fn report(&self, segment: u32) -> bool {
         let Some(key) = self.state.lock().unwrap().keys.get(&segment).copied() else {
             return false;
@@ -324,9 +297,8 @@ impl Playout {
         true
     }
 
-    /// This segment finished playing and the report of it was lost: the speaker's progress
-    /// reports came through to the end, its finish never does. True when it was flushed and
-    /// still owed.
+    /// This segment played to the end but its finish report was lost. True when it was flushed
+    /// and still owed.
     pub(super) fn lose(&self, segment: u32, at: Ts) -> bool {
         let (start, rest) = {
             let state = self.state.lock().unwrap();
@@ -343,8 +315,7 @@ impl Playout {
         self.finished(segment).is_some()
     }
 
-    /// The segment leaves the outstanding ones, heard whole; its length, or `None` when it was
-    /// not flushed and owed.
+    /// Retires a flushed segment, heard whole; its length, or `None` when it was not owed.
     fn finished(&self, segment: u32) -> Option<Duration> {
         let (position, frames) = {
             let mut state = self.state.lock().unwrap();
@@ -359,9 +330,8 @@ impl Playout {
         Some(position)
     }
 
-    /// The product threw away the buffer: every segment still outstanding, open or flushed, is
-    /// reported interrupted where the speaker had played it to (nothing of one not started), the
-    /// way a real output does.
+    /// Reports every outstanding segment, open or flushed, interrupted where the speaker had
+    /// played it to, as a real output does on a clear.
     fn cleared(&self) -> Vec<u32> {
         let cut: Vec<(u32, lk_agents_abi::voice::io::PlaybackSegment, Duration)> = {
             let mut state = self.state.lock().unwrap();
@@ -424,8 +394,7 @@ pub struct FakeAudioOutput {
     id: u32,
     registry: Arc<Registry>,
     playout: Arc<Playout>,
-    /// Whether this output says it can pause. A pause is recorded, nothing more: the playout is
-    /// the case's to report on either way, which is what a paused speaker looks like from here.
+    /// A pause is only recorded: playout stays the case's to report, as a paused speaker looks.
     pausable: bool,
 }
 
@@ -483,8 +452,7 @@ impl AudioOutput for FakeAudioOutput {
         frame: &'a AudioFrame,
     ) -> lk_agents_abi::BoxFuture<'a, io::Result<()>> {
         Box::pin(async move {
-            // The first frame after a flush opens a segment, as the driver's tracker counts them;
-            // the case reports on it from here on, so it needs its identity now, not at the flush.
+            // The case reports on a segment from its first frame, so it gets its identity now.
             let generation = frame.data.as_chunks::<2>().0.iter().find_map(|s| {
                 match Tag::decode(i16::from_le_bytes(*s)) {
                     Tag::Generated { generation, .. } => Some(generation),
@@ -510,7 +478,6 @@ impl AudioOutput for FakeAudioOutput {
     }
 
     fn flush_segment(&self) {
-        // A flush with nothing captured owes nothing: the tracker opened no segment for it.
         if let Some((segment, captured)) = self.playout.flushed() {
             let ms = captured.as_millis() as u64;
             self.registry.record_sink(Sink::Flush { output: self.id, segment, ms });
@@ -574,7 +541,6 @@ impl TextOutput for FakeTextOutput {
     }
 }
 
-/// The recorder tap: records that it was called, nothing else.
 pub struct FakeRecorder {
     registry: Arc<Registry>,
 }
@@ -607,7 +573,7 @@ impl AudioRecorder for FakeRecorder {
     }
 }
 
-/// A background sound from a host stream (`AudioConfig(source=async_iterator)`): so many 20 ms
+/// A background sound from a host stream (`AudioConfig(source=async_iterator)`): `frames` 20 ms
 /// frames of tone, then its end.
 pub struct FakeSoundStream {
     left: Mutex<u32>,
