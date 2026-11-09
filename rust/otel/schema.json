@@ -1450,34 +1450,88 @@
                     "required": true
                   },
                   {
-                    "key": "input_tokens",
-                    "type": "int",
-                    "required": true
-                  },
-                  {
-                    "key": "output_tokens",
-                    "type": "int",
-                    "required": true
-                  },
-                  {
-                    "key": "cache_read_tokens",
-                    "type": "int",
-                    "required": false
-                  },
-                  {
-                    "key": "cache_write_tokens",
-                    "type": "int",
-                    "required": false
-                  },
-                  {
-                    "key": "output_reasoning_tokens",
-                    "type": "int",
-                    "required": false
-                  },
-                  {
-                    "key": "total_tokens",
-                    "type": "int",
-                    "required": true
+                    "key": "tokens",
+                    "type": "kvlist",
+                    "required": true,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "input_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "output_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "total_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "cache_read_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_write_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_reasoning_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_image_tokens",
+                          "type": "int",
+                          "required": false
+                        }
+                      ]
+                    }
                   },
                   {
                     "key": "tokens_per_second",
@@ -1946,14 +2000,14 @@
                     "required": true
                   },
                   {
-                    "key": "session_duration",
+                    "key": "connection_duration",
                     "type": "double",
-                    "required": true
+                    "required": false
                   },
                   {
                     "key": "ttft",
                     "type": "double",
-                    "required": true
+                    "required": false
                   },
                   {
                     "key": "cancelled",
@@ -1961,19 +2015,88 @@
                     "required": true
                   },
                   {
-                    "key": "input_tokens",
-                    "type": "int",
-                    "required": true
-                  },
-                  {
-                    "key": "output_tokens",
-                    "type": "int",
-                    "required": true
-                  },
-                  {
-                    "key": "total_tokens",
-                    "type": "int",
-                    "required": true
+                    "key": "tokens",
+                    "type": "kvlist",
+                    "required": true,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "input_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "output_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "total_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "cache_read_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_write_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_reasoning_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_image_tokens",
+                          "type": "int",
+                          "required": false
+                        }
+                      ]
+                    }
                   },
                   {
                     "key": "tokens_per_second",
@@ -1981,86 +2104,9 @@
                     "required": true
                   },
                   {
-                    "key": "input_token_details",
-                    "type": "kvlist",
-                    "required": true,
-                    "shape": {
-                      "fields": [
-                        {
-                          "key": "audio_tokens",
-                          "type": "int",
-                          "required": true
-                        },
-                        {
-                          "key": "text_tokens",
-                          "type": "int",
-                          "required": true
-                        },
-                        {
-                          "key": "image_tokens",
-                          "type": "int",
-                          "required": true
-                        },
-                        {
-                          "key": "cached_tokens",
-                          "type": "int",
-                          "required": true
-                        },
-                        {
-                          "key": "cached_tokens_details",
-                          "type": "kvlist",
-                          "required": false,
-                          "shape": {
-                            "fields": [
-                              {
-                                "key": "audio_tokens",
-                                "type": "int",
-                                "required": true
-                              },
-                              {
-                                "key": "text_tokens",
-                                "type": "int",
-                                "required": true
-                              },
-                              {
-                                "key": "image_tokens",
-                                "type": "int",
-                                "required": true
-                              }
-                            ]
-                          }
-                        }
-                      ]
-                    }
-                  },
-                  {
-                    "key": "output_token_details",
-                    "type": "kvlist",
-                    "required": true,
-                    "shape": {
-                      "fields": [
-                        {
-                          "key": "text_tokens",
-                          "type": "int",
-                          "required": true
-                        },
-                        {
-                          "key": "audio_tokens",
-                          "type": "int",
-                          "required": true
-                        },
-                        {
-                          "key": "image_tokens",
-                          "type": "int",
-                          "required": true
-                        }
-                      ]
-                    }
-                  },
-                  {
                     "key": "acquire_time",
                     "type": "double",
-                    "required": true
+                    "required": false
                   },
                   {
                     "key": "connection_reused",
@@ -2267,14 +2313,14 @@
                     "required": true
                   },
                   {
-                    "key": "session_duration",
+                    "key": "connection_duration",
                     "type": "double",
-                    "required": true
+                    "required": false
                   },
                   {
                     "key": "ttft",
                     "type": "double",
-                    "required": true
+                    "required": false
                   },
                   {
                     "key": "cancelled",
@@ -2282,19 +2328,88 @@
                     "required": true
                   },
                   {
-                    "key": "input_tokens",
-                    "type": "int",
-                    "required": true
-                  },
-                  {
-                    "key": "output_tokens",
-                    "type": "int",
-                    "required": true
-                  },
-                  {
-                    "key": "total_tokens",
-                    "type": "int",
-                    "required": true
+                    "key": "tokens",
+                    "type": "kvlist",
+                    "required": true,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "input_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "output_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "total_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "cache_read_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_write_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_reasoning_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_image_tokens",
+                          "type": "int",
+                          "required": false
+                        }
+                      ]
+                    }
                   },
                   {
                     "key": "tokens_per_second",
@@ -2302,86 +2417,9 @@
                     "required": true
                   },
                   {
-                    "key": "input_token_details",
-                    "type": "kvlist",
-                    "required": true,
-                    "shape": {
-                      "fields": [
-                        {
-                          "key": "audio_tokens",
-                          "type": "int",
-                          "required": true
-                        },
-                        {
-                          "key": "text_tokens",
-                          "type": "int",
-                          "required": true
-                        },
-                        {
-                          "key": "image_tokens",
-                          "type": "int",
-                          "required": true
-                        },
-                        {
-                          "key": "cached_tokens",
-                          "type": "int",
-                          "required": true
-                        },
-                        {
-                          "key": "cached_tokens_details",
-                          "type": "kvlist",
-                          "required": false,
-                          "shape": {
-                            "fields": [
-                              {
-                                "key": "audio_tokens",
-                                "type": "int",
-                                "required": true
-                              },
-                              {
-                                "key": "text_tokens",
-                                "type": "int",
-                                "required": true
-                              },
-                              {
-                                "key": "image_tokens",
-                                "type": "int",
-                                "required": true
-                              }
-                            ]
-                          }
-                        }
-                      ]
-                    }
-                  },
-                  {
-                    "key": "output_token_details",
-                    "type": "kvlist",
-                    "required": true,
-                    "shape": {
-                      "fields": [
-                        {
-                          "key": "text_tokens",
-                          "type": "int",
-                          "required": true
-                        },
-                        {
-                          "key": "audio_tokens",
-                          "type": "int",
-                          "required": true
-                        },
-                        {
-                          "key": "image_tokens",
-                          "type": "int",
-                          "required": true
-                        }
-                      ]
-                    }
-                  },
-                  {
                     "key": "acquire_time",
                     "type": "double",
-                    "required": true
+                    "required": false
                   },
                   {
                     "key": "connection_reused",
@@ -2939,7 +2977,7 @@
                   {
                     "key": "ttfb",
                     "type": "double",
-                    "required": true
+                    "required": false
                   },
                   {
                     "key": "duration",
@@ -2962,14 +3000,88 @@
                     "required": true
                   },
                   {
-                    "key": "input_tokens",
-                    "type": "int",
-                    "required": true
-                  },
-                  {
-                    "key": "output_tokens",
-                    "type": "int",
-                    "required": true
+                    "key": "tokens",
+                    "type": "kvlist",
+                    "required": true,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "input_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "output_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "total_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "cache_read_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_write_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_reasoning_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_image_tokens",
+                          "type": "int",
+                          "required": false
+                        }
+                      ]
+                    }
                   },
                   {
                     "key": "streamed",
@@ -2979,7 +3091,7 @@
                   {
                     "key": "acquire_time",
                     "type": "double",
-                    "required": true
+                    "required": false
                   },
                   {
                     "key": "connection_reused",
@@ -3116,7 +3228,7 @@
                   {
                     "key": "ttfb",
                     "type": "double",
-                    "required": true
+                    "required": false
                   },
                   {
                     "key": "duration",
@@ -3139,14 +3251,88 @@
                     "required": true
                   },
                   {
-                    "key": "input_tokens",
-                    "type": "int",
-                    "required": true
-                  },
-                  {
-                    "key": "output_tokens",
-                    "type": "int",
-                    "required": true
+                    "key": "tokens",
+                    "type": "kvlist",
+                    "required": true,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "input_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "output_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "total_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "cache_read_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_write_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_reasoning_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_image_tokens",
+                          "type": "int",
+                          "required": false
+                        }
+                      ]
+                    }
                   },
                   {
                     "key": "streamed",
@@ -3156,7 +3342,7 @@
                   {
                     "key": "acquire_time",
                     "type": "double",
-                    "required": true
+                    "required": false
                   },
                   {
                     "key": "connection_reused",
@@ -3306,7 +3492,7 @@
                   {
                     "key": "ttfb",
                     "type": "double",
-                    "required": true
+                    "required": false
                   },
                   {
                     "key": "duration",
@@ -3329,14 +3515,88 @@
                     "required": true
                   },
                   {
-                    "key": "input_tokens",
-                    "type": "int",
-                    "required": true
-                  },
-                  {
-                    "key": "output_tokens",
-                    "type": "int",
-                    "required": true
+                    "key": "tokens",
+                    "type": "kvlist",
+                    "required": true,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "input_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "output_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "total_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "cache_read_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_write_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_reasoning_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_image_tokens",
+                          "type": "int",
+                          "required": false
+                        }
+                      ]
+                    }
                   },
                   {
                     "key": "streamed",
@@ -3346,7 +3606,7 @@
                   {
                     "key": "acquire_time",
                     "type": "double",
-                    "required": true
+                    "required": false
                   },
                   {
                     "key": "connection_reused",
