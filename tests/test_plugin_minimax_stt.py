@@ -132,12 +132,13 @@ async def _recognize_with(
     *,
     seconds: float = 1.0,
     buffer: AudioBuffer | None = None,
+    conn_options: APIConnectOptions | None = None,
 ) -> tuple[Any, _FakeSession]:
     session = _FakeSession(response)
     stt._session = session  # type: ignore[assignment]
     event = await stt.recognize(
         buffer if buffer is not None else _make_audio(seconds),
-        conn_options=APIConnectOptions(),
+        conn_options=conn_options if conn_options is not None else APIConnectOptions(),
     )
     return event, session
 
@@ -450,6 +451,20 @@ async def test_request_timeout_scales_with_segment_length() -> None:
     _, long = await _recognize_with(stt, _FakeResponse(payload={"text": "ok"}), seconds=30.0)
 
     assert long.timeout.total > short.timeout.total
+
+
+async def test_zero_timeout_stays_disabled() -> None:
+    """aiohttp reads `total=0` as no deadline, so the audio budget must not re-enable it."""
+    stt = minimax.STT(api_key=FAKE_KEY)
+    _, session = await _recognize_with(
+        stt,
+        _FakeResponse(payload={"text": "ok"}),
+        seconds=30.0,
+        conn_options=APIConnectOptions(timeout=0),
+    )
+
+    assert session.timeout.total == 0
+    assert session.timeout.sock_connect == 0
 
 
 # --- truncated streams ---------------------------------------------------------------

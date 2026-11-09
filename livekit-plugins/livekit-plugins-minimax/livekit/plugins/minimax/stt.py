@@ -329,7 +329,13 @@ class STT(stt.STT):
         # connect timeout alone is far too short (a long utterance would time out every
         # attempt and the base retry loop would re-upload it max_retry more times). Budget the
         # connect timeout, one second per second of audio, and one second per MB uploaded.
-        total_timeout = conn_options.timeout + duration + len(wav_bytes) / (1024 * 1024)
+        # aiohttp treats `total=0` as no deadline, so a caller that disabled the timeout must
+        # not get the positive budget below instead.
+        total_timeout = (
+            conn_options.timeout + duration + len(wav_bytes) / (1024 * 1024)
+            if conn_options.timeout > 0
+            else 0.0
+        )
 
         async with session.post(
             url,
