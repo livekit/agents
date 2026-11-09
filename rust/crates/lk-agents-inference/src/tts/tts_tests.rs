@@ -905,3 +905,30 @@ async fn a_tts_synthesis_round_trips_over_the_websocket() {
     assert!(bytes > 4_000, "expected roughly a second of 24 kHz PCM, got {bytes} bytes");
     assert_eq!(segments.len(), 1, "one synthesis is one segment: {segments:?}");
 }
+
+// Catches: a pooled connection taken for a synthesis that stops before it starts (or whose pump is
+// cancelled) dropped without leaving the pool or closing: its pool id stayed checked out forever.
+#[tokio::test]
+async fn a_synthesis_stopped_while_opening_closes_its_pooled_connection() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let tts = tts(ws.clone());
+    ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
+    ws.feed(text(json!({"type": "done"})));
+    let mut source =
+        tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Hello there.").await.unwrap();
+    while source.next().await.unwrap().is_some() {}
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(tts.connections.lock().idle.len(), 1, "the first synthesis gave it back");
+    let pooled = tts.connections.lock().idle.values().next().unwrap().sender.clone();
+    let stream = tts.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap();
+    // Stopped before its pump first runs: the stop wins over the reused connection.
+    drop(stream);
+    for _ in 0..64 {
+        tokio::task::yield_now().await;
+    }
+    assert!(tts.connections.lock().idle.is_empty());
+    assert!(pooled.is_closed(), "the checked-out connection was closed");
+    assert_eq!(ws.connect_count(), 1);
+}

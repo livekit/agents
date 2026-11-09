@@ -37,7 +37,6 @@ use wire::FallbackModel;
 // gateway said `done`.
 
 pub mod emitter;
-pub mod machine;
 pub mod pacing;
 mod provider_options;
 mod pump;
@@ -343,6 +342,11 @@ impl GatewayTts {
             .finish();
         let pump = Pump {
             connections: self.connections.clone(),
+            background: lk_agents_net::owned::Background::new(
+                self.tasks.clone(),
+                self.spawner.clone(),
+                clock.clone(),
+            ),
             session_id,
             ws: self.ws.clone(),
             url: format!("{}?{query}", join_url(&to_ws_url(&opts.base_url), "tts")),
@@ -651,6 +655,8 @@ const MAX_PENDING_TEXT_BYTES: usize = 64 * 1024;
 
 struct Pump {
     connections: Arc<Mutex<Connections>>,
+    /// Where a checked-out connection dropped unreleased is closed.
+    background: lk_agents_net::owned::Background,
     session_id: Option<String>,
     ws: Arc<dyn WsTransport>,
     url: String,

@@ -1,20 +1,8 @@
 use crate::interruption::{OverlappingSpeechEvent, RequestIdentity};
+use lk_agents_abi::Ts;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::ReqId;
-use lk_agents_abi::{SynthesizedAudio, TranscriptChunk, Ts};
-
-/// Synthesis stream work from [`TtsSynthesis`](crate::tts::machine::TtsSynthesis), performed
-/// by the private TTS executor (`tts/pump.rs`).
-pub enum TtsSynthesisEffect {
-    TtsSynthesisStart,
-    TtsTextSend(String),
-    TtsFinalFlush,
-    TtsAlignment { segment_id: String, tokens: Vec<TranscriptChunk> },
-    TtsAudio(SynthesizedAudio),
-    Finished(Result<(), ApiError>),
-    TtsCancel,
-}
 
 /// Fallback request work from [`ChainRequest`](crate::fallback::machine::ChainRequest),
 /// performed by the fallback chain and realtime-session adapters.
