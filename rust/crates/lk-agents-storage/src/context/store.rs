@@ -13,7 +13,7 @@ use super::transaction::Transaction;
 use crate::backends::with_thread;
 use crate::sql::{Row, Statement};
 use crate::thread::run::RunOutcome;
-use crate::{CommitOptions, RunOptions, Storage, StorageError, Thread, shortuuid};
+use crate::{CommitOptions, Holder, RunOptions, Storage, StorageError, Thread, shortuuid};
 use lk_agents_abi::storage::thread::AbandonReason;
 
 #[derive(Clone)]
@@ -35,9 +35,15 @@ pub(crate) struct Database {
     storage: Arc<dyn Storage>,
     thread_id: String,
     lane: String,
+    /// The store's direct saves, one owner of the lane.
+    holder: Holder,
 }
 
 impl Database {
+    fn new(storage: Arc<dyn Storage>, thread_id: String, lane: String) -> Self {
+        Self { storage, thread_id, lane, holder: Holder::new("context") }
+    }
+
     /// `f` over the thread opened for it, its schema applied, then closed.
     async fn with_thread<T>(
         &self,
@@ -73,7 +79,7 @@ impl Database {
         with_thread(&*self.storage, &self.thread_id, "context", async |thread| {
             let mut options = RunOptions::new(shortuuid("context_"), "");
             options.channel = Some("context".into());
-            let mut run = thread.lane(&self.lane).open(options).await?;
+            let mut run = thread.lane(&self.lane).open(options, &self.holder).await?;
             // The lease serializes direct and conversational saves for this scope's lane.
             // Check before any writes so a stale direct save has a typed refusal.
             for write in &writes {
@@ -122,7 +128,7 @@ impl ContextStore {
         read_only: bool,
     ) -> Result<Self, StorageError> {
         let activation = Activation::new(scopes, routing, read_only)?;
-        Ok(Self::with(activation, Some(Database { storage, thread_id, lane }), true))
+        Ok(Self::with(activation, Some(Database::new(storage, thread_id, lane)), true))
     }
 
     /// Stages a joining transaction's writes, unless its managed turn has ended.
@@ -143,6 +149,14 @@ impl ContextStore {
 
     fn clear_statements(&self) {
         self.statements.lock().clear();
+    }
+
+    /// Waits, bounded, for the releases its direct saves' dropped leases left.
+    pub(crate) async fn released(&self) -> bool {
+        match &self.database {
+            Some(database) => database.holder.released().await,
+            None => true,
+        }
     }
 
     pub(crate) async fn lock_managed(&self) -> tokio::sync::OwnedMutexGuard<()> {
@@ -183,7 +197,7 @@ impl ContextStore {
         thread_id: String,
         lane: String,
     ) -> Result<Self, StorageError> {
-        let database = Database { storage, thread_id, lane };
+        let database = Database::new(storage, thread_id, lane);
         let (scopes, routing) = database.snapshot().await?;
         Ok(Self::with(Activation::new(scopes, routing, false)?, Some(database), false))
     }

@@ -227,6 +227,9 @@ pub enum AbandonReason {
     /// The context save lost to a concurrent writer.
     #[host(rename = "context-version-conflict")]
     ContextVersionConflict,
+    /// The acquire was dropped after its request may have taken the lane.
+    #[host(rename = "acquire-canceled")]
+    AcquireCanceled,
 }
 
 /// How a task listing is ordered (docs/internals/storage.md#reading-thread-items-and-tasks).

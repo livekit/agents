@@ -83,6 +83,36 @@ async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() 
     fixture.cleanup(&[&thread]).await;
 }
 
+/// A lease the store's own canceled turn left behind (its cleanup lost) is re-entered by the
+/// store's next turn at once, not after the lease TTL.
+#[tokio::test]
+async fn a_turn_reenters_the_lease_a_canceled_turn_left_behind() {
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let store = std::sync::Arc::new(
+        VoiceStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into(), None)
+            .await
+            .unwrap(),
+    );
+    store.acquire(1, Vec::new()).await.unwrap();
+    let (sink, mut events) = Events::new();
+    std::sync::Arc::clone(&store).dispatch(VoiceStorageCommand::Abort { speech: 1 }, sink).unwrap();
+    assert!(matches!(events.recv().await, Some(VoiceStorageEvent::Abandoned { .. })));
+    let file =
+        fixture.dir.as_ref().unwrap().join("threads").join(format!("{}.sqlite", fixture.thread_id));
+    let intruder = FileConnection::open(file, false).await.unwrap();
+    let orphan = format!(
+        "UPDATE lanes SET lease_holder='{}', lease_token='orphan', lease_until=unixepoch()+60 \
+         WHERE lane='desk'",
+        store.holder.as_str()
+    );
+    intruder.batch(vec![Statement::raw(orphan)]).await.unwrap();
+    let next = tokio::time::timeout(Duration::from_secs(2), store.acquire(2, Vec::new())).await;
+    assert!(matches!(next, Ok(Ok(_))), "the next turn waited for its own orphaned lease");
+    store.aclose().await.unwrap();
+    intruder.close().await;
+    fixture.cleanup(&[]).await;
+}
+
 /// The voice store's events, as the voice executor receives them.
 struct Events(tokio::sync::mpsc::UnboundedSender<VoiceStorageEvent>);
 

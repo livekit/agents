@@ -367,6 +367,9 @@ const ENDPOINT_MS: Range<u64> = 300..1500;
 /// A model's time to its first token.
 const THINK_MS: Range<u64> = 100..600;
 
+/// How often, in a hundred chances, an acquire of the voice lane in flight is cut.
+const CUT_IN_FLIGHT: u8 = 50;
+
 /// Rounds of answering what the agent's reply owes: the model, then synthesis, then playout.
 const REPLY_ROUNDS: usize = 3;
 
@@ -525,7 +528,36 @@ impl Talk {
         while self.rng.f64() < self.randomness / (1.0 + self.randomness) {
             self.uniform().await?;
         }
-        self.apply(input).await
+        self.apply(input).await?;
+        self.cut_in_flight().await
+    }
+
+    /// An acquire of the voice lane in flight is where a dropped caller can leave the database
+    /// ahead of it: step through it a millisecond at a time and cut it at a random point, as the
+    /// developer or a barge-in interrupting, or the call ending.
+    async fn cut_in_flight(&mut self) -> Result<(), Halt> {
+        let in_flight = |talk: &Self| talk.run.registry.storage_in_flight();
+        if self.ending || !in_flight(self) || self.rng.u8(0..100) >= CUT_IN_FLIGHT {
+            return Ok(());
+        }
+        for _ in 0..self.rng.u8(0..8) {
+            if !in_flight(self) {
+                return Ok(());
+            }
+            self.apply(Input::Advance { ms: Millis(1) }).await?;
+        }
+        if !in_flight(self) {
+            return Ok(());
+        }
+        match self.rng.u8(0..4) {
+            0 | 1 => self.apply_now(Input::Interrupt { force: true, wait: false }).await,
+            2 => self.apply_now(Input::Interrupt { force: false, wait: false }).await,
+            _ => {
+                self.ending = true;
+                self.apply_now(Input::Close { drain: false }).await?;
+                Err(Halt::Ended)
+            }
+        }
     }
 
     /// One uniform move, then time passing half the time; labelled in the case. A uniform move

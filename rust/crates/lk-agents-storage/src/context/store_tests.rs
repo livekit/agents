@@ -118,7 +118,11 @@ async fn application_transactions_commit_on_exit_or_with_the_turn(backend: Backe
     staged.commit().await.unwrap();
     assert_eq!(notes(&direct).await.len(), 1, "staged until the turn commits");
     let thread = fixture.thread("w1").await;
-    let mut run = thread.lane("desk").open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    let mut run = thread
+        .lane("desk")
+        .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
+        .await
+        .unwrap();
     run.stage_statements(turn.statements());
     run.commit(CommitOptions::default()).await.unwrap();
     assert_eq!(notes(&direct).await, [[json!("first")], [json!("turn")]]);
@@ -138,9 +142,17 @@ async fn a_turns_application_writes_never_apply_after_a_takeover(backend: Backen
         .unwrap();
     tx.commit().await.unwrap();
     let (s1, s2) = (fixture.thread("w1").await, fixture.thread("w2").await);
-    let mut stale = s1.lane("desk").open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    let mut stale = s1
+        .lane("desk")
+        .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
+        .await
+        .unwrap();
     stale.lease().unwrap().release(None).await.unwrap();
-    let mut fresh = s2.lane("desk").open(RunOptions::new("r2", "AST_2")).await.unwrap();
+    let mut fresh = s2
+        .lane("desk")
+        .open(RunOptions::new("r2", "AST_2"), &crate::Holder::new("test"))
+        .await
+        .unwrap();
     fresh.commit(CommitOptions::default()).await.unwrap();
 
     stale.stage_statements(vec![lk_agents_abi::storage::context::AppStatement {

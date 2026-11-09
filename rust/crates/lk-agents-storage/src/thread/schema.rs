@@ -280,7 +280,7 @@ SELECT :task_id, :lane, COALESCE((SELECT MAX(seq) FROM tasks WHERE lane = :lane)
 
 statement! {
     /// A turn's `submitted` row in the inbox receive, only when this request inserted the
-    /// inbox row.
+    /// inbox row; a retry after a lost acknowledgment inserts nothing.
     InsertSubmittedTaskForMessage<'a> {
         internal: SqlValue,
         lane: &'a str,
@@ -294,6 +294,7 @@ SELECT :task_id, :lane, COALESCE((SELECT MAX(seq) FROM tasks WHERE lane = :lane)
   NULL, :message_id, 'submitted', jsonb(:data), jsonb(:internal), CAST(unixepoch('subsec') * 1000 AS INTEGER)
 FROM inbox
 WHERE lane = :lane AND message_id = :message_id AND task_id = :task_id
+  AND NOT EXISTS (SELECT 1 FROM tasks WHERE lane = :lane AND message_id = :message_id)
 "#
 }
 

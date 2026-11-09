@@ -23,13 +23,15 @@ generator must not change how the same case is judged.
 
 | Tests | Real code exercised | Controlled boundary |
 | --- | --- | --- |
-| Voice | `VoiceSession`, its runtime loop, room/avatar executors, and composed decision cores | Provider, host, room, and media ports |
+| Voice | `VoiceSession`, its runtime loop, room/avatar executors, composed decision cores, and the voice lane's storage (`VoiceStore`, leases, renewal, fenced commit) | Provider, host, room, and media ports; the thread database connection |
 | Room | Room I/O, participant streams, output, readiness, and lifecycle | The same fake RTC ports, including failures and stalls |
 
 Standalone A2A and TextSession execution is outside this crate. Their component tests remain
-in the core, runtime and storage crates. The voice campaign does not exercise real provider
-sockets or Python callbacks. [boundary.rs](src/boundary.rs) describes the simulation boundary
-and the separate conformance suites. Shared AgentRun behavior remains covered when used by voice.
+in the core, runtime and storage crates. Storage is faked at the database connection only: the
+voice lane runs storage's own code over its in-memory SQLite on the run's clock. The voice
+campaign does not exercise real provider sockets or Python callbacks.
+[boundary.rs](src/boundary.rs) describes the simulation boundary and the separate conformance
+suites. Shared AgentRun behavior remains covered when used by voice.
 
 ## Where to start
 

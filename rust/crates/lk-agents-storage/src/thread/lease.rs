@@ -1,24 +1,81 @@
 use std::ops::ControlFlow;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use lk_agents_abi::storage::journal::{JournalEvent, RunEnded};
+use lk_agents_abi::storage::thread::AbandonReason;
+use lk_agents_abi::{Clock as _, HOST_TEARDOWN_TIMEOUT};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
-use lk_agents_net::task::TokioSpawner;
+use lk_agents_net::clock::RealClock;
+use lk_agents_net::clock::unix_now_ms;
+use lk_agents_net::task::{TaskSet, TokioSpawner};
 use parking_lot::Mutex;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use crate::sql::{Bind, SqlValue};
+use crate::sql::{Bind, SqlValue, Statement};
 use crate::thread::db::EventWrite;
 use crate::thread::schema::{
     ExtendLease, InsertRunEnded, ReleaseLease, ReleaseLeaseIfDrained, WithdrawWaiter,
 };
 use crate::thread::{LeaseTiming, Thread};
-use crate::{Fence, StorageError};
+use crate::{Fence, RunOutcome, StorageError, shortuuid};
 
 pub use lk_agents_abi::storage::thread::LanePoll;
 
 // The renewal task holds only the database and the fence, never the lease, so dropping the last
 // `Lease` handle stops it.
+
+/// An owner's lease identity, `<label>/<id>`. Every acquire of one owner carries it, so the
+/// owner's next acquire re-enters a lease a canceled acquire or a lost cleanup left behind.
+/// Minted once per owner, which acquires one lane at a time: two owners never share one. The
+/// releases its dropped leases leave run on its set, which the owner's close awaits.
+#[derive(Clone)]
+pub struct Holder {
+    id: Arc<str>,
+    releases: Arc<TaskSet>,
+}
+
+impl Holder {
+    pub fn new(label: &str) -> Self {
+        let id = format!("{label}/{}", shortuuid("own_")).into();
+        Self { id, releases: Arc::default() }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.id
+    }
+
+    /// Waits, at most [`HOST_TEARDOWN_TIMEOUT`], for the releases dropped leases left; `false`
+    /// when one is still in flight.
+    pub async fn released(&self) -> bool {
+        let clock = RealClock::new();
+        let deadline = clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+        self.releases.wait_empty(&clock, Some(deadline)).await
+    }
+}
+
+/// The release by token, after the `run_ended` of `run_id` when given; both are fenced on the
+/// token, so a lease since taken again is left alone.
+fn release(lane: &str, token: &str, ended: Option<(&str, &EventWrite)>) -> Vec<Statement> {
+    let mut batch = Vec::new();
+    if let Some((run_id, e)) = ended {
+        let payload = SqlValue::json(&e.payload);
+        batch.push(InsertRunEnded { lane, token, ts_ms: e.ts_ms, run_id, payload }.bind());
+    }
+    batch.push(ReleaseLease { lane, token }.bind());
+    batch
+}
+
+/// [`release`] from a drop, on the spawner captured while the lease was taken (the caller may
+/// already be gone, or off the runtime), counted by its owner.
+fn release_detached(spawner: &TokioSpawner, owner: &Holder, db: Thread, batch: Vec<Statement>) {
+    owner.releases.spawn(spawner, "lease release", async move {
+        if let Err(error) = db.conn().batch(batch).await {
+            log::debug!(target: lk_agents_abi::LOG_TARGET, "lease cleanup failed: {error}");
+        }
+    });
+}
 
 /// A canceled acquire must withdraw its mark even when its future is dropped.
 pub(crate) struct Waiter {
@@ -52,6 +109,63 @@ impl Drop for Waiter {
     }
 }
 
+/// A lease take in flight, under the token it mints: the only way to a [`Lease`]. Dropped
+/// before [`PendingLease::into_lease`] while a request may have taken the lane (an abandoned
+/// future, an error, a lost acknowledgment), it releases by token and ends the run `canceled`.
+pub(crate) struct PendingLease {
+    db: Thread,
+    lane: String,
+    token: String,
+    holder: Holder,
+    run_id: Option<String>,
+    armed: bool,
+    spawner: TokioSpawner,
+}
+
+impl PendingLease {
+    pub(crate) fn new(db: Thread, lane: &str, holder: &Holder, run_id: Option<&str>) -> Self {
+        let (lane, token, holder) = (lane.to_owned(), shortuuid("lease_"), holder.clone());
+        let run_id = run_id.map(str::to_owned);
+        Self { db, lane, token, holder, run_id, armed: false, spawner: TokioSpawner::current() }
+    }
+
+    pub(crate) fn token(&self) -> &str {
+        &self.token
+    }
+
+    /// Before each request that may take the lane.
+    pub(crate) fn arm(&mut self) {
+        self.armed = true;
+    }
+
+    /// The database answered that the lane is not held under this token.
+    pub(crate) fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    /// The lane taken at `version` under this token.
+    pub(crate) fn into_lease(mut self, version: i64, at: Instant) -> Lease {
+        self.armed = false;
+        let (lane, token, holder) = (self.lane.clone(), self.token.clone(), self.holder.clone());
+        let fence = Fence { lane, holder: holder.as_str().into(), token, version };
+        Lease::new(self.db.clone(), fence, holder, at)
+    }
+}
+
+impl Drop for PendingLease {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let reason = Some(AbandonReason::AcquireCanceled.as_str().to_owned());
+        let event = JournalEvent::RunEnded(RunEnded { outcome: RunOutcome::Canceled, reason });
+        let ended = EventWrite::new(unix_now_ms(), event);
+        let ended = self.run_id.as_deref().map(|run_id| (run_id, &ended));
+        let batch = release(&self.lane, &self.token, ended);
+        release_detached(&self.spawner, &self.holder, self.db.clone(), batch);
+    }
+}
+
 /// A lease an acquire or a receive took: the lane at `version` under `token`. Cloned by the run
 /// and its checkpoint; [`Lease::keep_alive`] extends it while the run works.
 #[derive(Clone)]
@@ -65,6 +179,19 @@ struct Held {
     ownership: Arc<Ownership>,
     /// Owned here: dropping the last handle cancels it.
     renewal: Mutex<Option<OwnedTask>>,
+    /// Released, or handed back by a commit: dropping the last handle writes nothing.
+    released: AtomicBool,
+    owner: Holder,
+    spawner: TokioSpawner,
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        if !self.released.load(Ordering::Acquire) {
+            let batch = release(&self.fence.lane, &self.fence.token, None);
+            release_detached(&self.spawner, &self.owner, self.db.clone(), batch);
+        }
+    }
 }
 
 /// Shared with renewal without keeping the lease (and its owned task) alive.
@@ -112,14 +239,17 @@ impl Ownership {
 }
 
 impl Lease {
-    pub(crate) fn new(db: Thread, fence: Fence, acquired_at: Instant) -> Self {
+    fn new(db: Thread, fence: Fence, owner: Holder, acquired_at: Instant) -> Self {
         let (lost, _) = watch::channel(None);
         let ownership = Arc::new(Ownership {
             lane: fence.lane.clone(),
             deadline: Mutex::new(acquired_at + db.timing.ttl),
             lost,
         });
-        Self { inner: Arc::new(Held { db, fence, ownership, renewal: Mutex::new(None) }) }
+        let (renewal, released) = (Mutex::new(None), AtomicBool::new(false));
+        let spawner = TokioSpawner::current();
+        let held = Held { db, fence, ownership, renewal, released, owner, spawner };
+        Self { inner: Arc::new(held) }
     }
 
     pub fn fence(&self) -> &Fence {
@@ -128,6 +258,10 @@ impl Lease {
 
     pub fn holder(&self) -> &str {
         &self.inner.fence.holder
+    }
+
+    pub fn owner(&self) -> &Holder {
+        &self.inner.owner
     }
 
     /// Renews on start-to-start deadlines. Each request is bounded by the interval and the
@@ -149,6 +283,11 @@ impl Lease {
     /// Ends the renewal; the lease itself is released by the commit or a release.
     pub fn stop(&self) {
         self.inner.renewal.lock().take();
+    }
+
+    /// A write already released the lease (a commit that did not keep it).
+    pub(crate) fn released(&self) {
+        self.inner.released.store(true, Ordering::Release);
     }
 
     pub fn is_lost(&self) -> bool {
@@ -183,13 +322,8 @@ impl Lease {
     /// Releases without writing anything else but, when given, the `run_ended` event of `run_id`.
     pub async fn release(&self, ended: Option<(&str, &EventWrite)>) -> Result<(), StorageError> {
         let Fence { lane, token, .. } = &self.inner.fence;
-        let mut batch = Vec::new();
-        if let Some((run_id, e)) = ended {
-            let payload = SqlValue::json(&e.payload);
-            batch.push(InsertRunEnded { lane, token, ts_ms: e.ts_ms, run_id, payload }.bind());
-        }
-        batch.push(ReleaseLease { lane, token }.bind());
-        self.inner.db.conn().batch(batch).await?;
+        self.inner.db.conn().batch(release(lane, token, ended)).await?;
+        self.released();
         Ok(())
     }
 
@@ -198,6 +332,7 @@ impl Lease {
     pub async fn release_if_drained(&self) -> Result<bool, StorageError> {
         let (db, fence) = (&self.inner.db, &self.inner.fence);
         if db.exec(ReleaseLeaseIfDrained { lane: &fence.lane, token: &fence.token }).await? > 0 {
+            self.released();
             return Ok(true);
         }
         if db.exec(extend(fence, db.timing.secs())).await? == 0 {

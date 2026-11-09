@@ -159,7 +159,7 @@ mod stored_answer_reaches_the_read_back {
             vad: true,
             preemptive: true,
             turn: TurnMode::Stt,
-            storage_lost_at: Some(1_000),
+            storage: Some(lk_agents_fuzz::drive::StorageSetup::default()),
             ..Setup::default()
         };
         let answer = || UserText("yes please".into());

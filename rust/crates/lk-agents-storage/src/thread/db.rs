@@ -263,6 +263,7 @@ pub enum Receive {
 }
 
 /// The message a receive inserts, with its `submitted` task row.
+#[derive(Clone, Copy)]
 pub struct ReceiveInput<'a> {
     pub task_id: &'a str,
     pub message: &'a a2a::Message,

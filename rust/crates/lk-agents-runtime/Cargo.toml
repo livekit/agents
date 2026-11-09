@@ -66,8 +66,9 @@ media-ffmpeg = ["lk-agents-media/ffmpeg", "lk-agents-inference/ffmpeg"]
 media-images = ["lk-agents-media/images", "lk-agents-inference/images"]
 media-blingfire = ["lk-agents-media/blingfire"]
 # Test-only: what a deterministic simulation installs on a session (`VoiceSession::probe`) and
-# reads back from it. Enabled by the fuzzer.
-dst = []
+# reads back from it, and storage's in-memory backend it runs the voice lane over. Enabled by the
+# fuzzer.
+dst = ["lk-agents-storage/testing"]
 
 [lints]
 workspace = true

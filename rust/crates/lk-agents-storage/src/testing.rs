@@ -130,12 +130,14 @@ macro_rules! contract {
     };
 }
 
-/// How the next commit batch fails: its acknowledgment lost before or after it applied, or
-/// refused outright, by a disk I/O error or as too large for the database.
+/// How the next commit or lease take fails: its acknowledgment lost before or after it applied,
+/// applied with no answer ever, or refused outright, by a disk I/O error or as too large.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommitFault {
     LoseAckBefore,
     LoseAckAfter,
+    /// Applied, then pending forever: the request outlives whoever awaits it.
+    StallAfter,
     Refuse,
     RefuseTooLarge,
 }
@@ -146,6 +148,8 @@ pub enum CommitFault {
 pub struct Faulty {
     inner: Box<dyn ThreadDbConnection>,
     commit: parking_lot::Mutex<Option<CommitFault>>,
+    take: parking_lot::Mutex<Option<CommitFault>>,
+    probes_until: parking_lot::Mutex<Option<tokio::time::Instant>>,
     unreachable_for: parking_lot::Mutex<Option<Duration>>,
     unreachable_until: parking_lot::Mutex<Option<tokio::time::Instant>>,
 }
@@ -155,6 +159,8 @@ impl Faulty {
         Self {
             inner,
             commit: parking_lot::Mutex::new(None),
+            take: parking_lot::Mutex::new(None),
+            probes_until: parking_lot::Mutex::new(None),
             unreachable_for: parking_lot::Mutex::new(None),
             unreachable_until: parking_lot::Mutex::new(None),
         }
@@ -169,7 +175,18 @@ impl Faulty {
         *self.commit.lock() = Some(fault);
     }
 
-    /// Every request after the next faulted commit fails `Unavailable` for `d`.
+    /// A lost commit's resolution probes fail `Unavailable` for `d` from now; other requests
+    /// still reach the database.
+    pub fn probes_unavailable_for(&self, d: Duration) {
+        *self.probes_until.lock() = Some(tokio::time::Instant::now() + d);
+    }
+
+    /// The next batch that takes a lease (an acquire or an inbox receive).
+    pub fn fail_next_lease_take(&self, fault: CommitFault) {
+        *self.take.lock() = Some(fault);
+    }
+
+    /// Every request after the next faulted batch fails `Unavailable` for `d`.
     pub fn unreachable_after_commit_for(&self, d: Duration) {
         *self.unreachable_for.lock() = Some(d);
     }
@@ -200,11 +217,20 @@ impl ThreadDbConnection for Faulty {
                 .iter()
                 .any(|w| s.sql().contains(w))
         });
+        let probe = statements.iter().any(|s| s.sql().contains("SELECT version, lease_token"));
+        if probe
+            && self.probes_until.lock().is_some_and(|until| tokio::time::Instant::now() < until)
+        {
+            return Err(StorageError::Unavailable("probe unreachable".into()));
+        }
+        let takes =
+            statements.iter().any(|s| s.sql().contains("SET waiter = CASE WHEN lease_holder"));
         let fault = match *self.commit.lock() {
             Some(CommitFault::RefuseTooLarge) if !staged => None,
             ref mut armed if is_commit => armed.take(),
             _ => None,
         };
+        let fault = fault.or_else(|| takes.then(|| self.take.lock().take()).flatten());
         if fault.is_some()
             && let Some(d) = self.unreachable_for.lock().take()
         {
@@ -216,6 +242,10 @@ impl ThreadDbConnection for Faulty {
             Some(CommitFault::LoseAckAfter) => {
                 self.inner.batch(statements).await?;
                 Err(StorageError::Uncertain("lost after".into()))
+            }
+            Some(CommitFault::StallAfter) => {
+                self.inner.batch(statements).await?;
+                std::future::pending().await
             }
             Some(CommitFault::Refuse) => {
                 let io = rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_IOERR);
@@ -281,6 +311,56 @@ impl ThreadDbConnection for MemoryConnection {
 
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         crate::backends::sqlite::batch(&mut self.0.lock(), &statements)
+    }
+
+    async fn close(&self) {}
+}
+
+/// A backend whose every thread is the one database behind `connection`: what a deterministic
+/// simulation hands `VoiceStore::bound`, so the production lane, lease and commit run over it.
+/// Only `open` is modeled; thread lifecycle belongs to the backends' own contracts.
+pub struct MemoryStorage {
+    pub connection: Arc<dyn ThreadDbConnection>,
+    pub lease: LeaseTiming,
+}
+
+#[async_trait::async_trait]
+impl Storage for MemoryStorage {
+    async fn create_thread(
+        &self,
+        _: CreateRequest,
+    ) -> Result<livekit_protocol::agent::agent_thread::Thread, StorageError> {
+        Err(StorageError::Invalid("a memory backend creates no threads".into()))
+    }
+
+    async fn get_thread(
+        &self,
+        _: &str,
+    ) -> Result<livekit_protocol::agent::agent_thread::Thread, StorageError> {
+        Err(StorageError::Invalid("a memory backend keeps no registry".into()))
+    }
+
+    async fn list_threads(
+        &self,
+        _: livekit_protocol::agent::agent_thread::ListRequest,
+    ) -> Result<livekit_protocol::agent::agent_thread::ListResponse, StorageError> {
+        Err(StorageError::Invalid("a memory backend keeps no registry".into()))
+    }
+
+    async fn update_thread(
+        &self,
+        _: livekit_protocol::agent::agent_thread::UpdateRequest,
+    ) -> Result<livekit_protocol::agent::agent_thread::Thread, StorageError> {
+        Err(StorageError::Invalid("a memory backend keeps no registry".into()))
+    }
+
+    async fn delete_thread(&self, _: &str) -> Result<(), StorageError> {
+        Ok(())
+    }
+
+    async fn open(&self, thread_id: &str, holder: &str) -> Result<Thread, StorageError> {
+        Thread::new(self.connection.clone(), thread_id, self.lease, SchemaCell::default(), holder)
+            .await
     }
 
     async fn close(&self) {}

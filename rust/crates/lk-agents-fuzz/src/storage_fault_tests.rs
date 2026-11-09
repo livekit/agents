@@ -1,6 +1,6 @@
 use lk_agents_abi::storage::StorageError;
 use lk_agents_fuzz::{
-    drive::{ConnSetup, Run, Setup, simulate},
+    drive::{ConnSetup, Outcome, Run, Setup, StorageSetup, finish, simulate},
     input::{AgentText, Input, Millis, Ref},
     record::{Recording, StorageOperation, StorageStep},
 };
@@ -15,7 +15,7 @@ fn reply(seed: u64, end: Reply) -> Recording {
     simulate(async {
         let setup = Setup {
             tts: false,
-            storage_lost_at: Some(u32::MAX),
+            storage: Some(StorageSetup { faults: true, ..StorageSetup::default() }),
             conn: Some(ConnSetup { llm: 0, ..ConnSetup::DEFAULT }),
             ..Setup::default()
         };
@@ -39,8 +39,8 @@ fn reply(seed: u64, end: Reply) -> Recording {
 
 #[test]
 fn storage_faults_and_slow_commits_finish_the_speech() {
-    let mut unavailable = [false; 3];
-    let mut conflict = [false; 3];
+    // Storage's own abandon logs its failures and answers Ok: only acquires and commits fail.
+    let mut unavailable = [false; 2];
     let mut slow = false;
     for seed in 0..1024 {
         for end in [Reply::Complete, Reply::Fail] {
@@ -57,10 +57,8 @@ fn storage_faults_and_slow_commits_finish_the_speech() {
                     StorageOperation::Abandon => 2,
                     StorageOperation::ObserveLoss => continue,
                 };
-                match result {
-                    Err(StorageError::Unavailable(_)) => unavailable[index] = true,
-                    Err(StorageError::VersionConflict { .. }) => conflict[index] = true,
-                    _ => {}
+                if matches!(result, Err(StorageError::Unavailable(_))) && index < 2 {
+                    unavailable[index] = true;
                 }
                 if *operation == StorageOperation::Acquire {
                     assert!(
@@ -84,13 +82,46 @@ fn storage_faults_and_slow_commits_finish_the_speech() {
                 "seed {seed}: {failures:?}"
             );
         }
-        if unavailable.iter().all(|seen| *seen) && conflict.iter().all(|seen| *seen) && slow {
+        if unavailable.iter().all(|seen| *seen) && slow {
             return;
         }
     }
-    panic!(
-        "seed window missed storage outcomes: unavailable={unavailable:?}, conflict={conflict:?}, slow={slow}"
-    );
+    panic!("seed window missed storage outcomes: unavailable={unavailable:?}, slow={slow}");
+}
+
+// Catches: a barge-in while the turn's lease take had applied but was unanswered: the
+// interruption's watchdog dropped the speech with the acquire in flight, leaving the lane taken
+// with no `Lease` to renew or release it, so the next turn waited out the lease's TTL and the
+// agent was silent after the interruption.
+#[test]
+fn a_barge_in_during_the_lease_take_leaves_the_lane_free() {
+    let outcome = simulate(async {
+        let storage = StorageSetup { take_answer_ms: Some(6_000), ..StorageSetup::default() };
+        let setup = Setup { tts: false, storage: Some(storage), ..Setup::default() };
+        let mut run = Run::start(&setup, 0, Default::default()).await;
+        let reply = Input::GenerateReply { user_input: None, instructions: None, allow: None };
+        run.apply(&reply).await;
+        for _ in 0..100 {
+            if run.lease_take_unanswered() {
+                break;
+            }
+            run.apply(&Input::Advance { ms: Millis(1) }).await;
+        }
+        assert!(run.lease_take_unanswered(), "the turn never took the lane");
+        // The watchdog gives up on the interrupted speech five seconds on, its acquire unanswered.
+        run.apply(&Input::Interrupt { force: true, wait: false }).await;
+        run.apply(&Input::Advance { ms: Millis(5_500) }).await;
+        let answered = run.record.host_view().storage().iter().any(|(_, step)| {
+            matches!(step, StorageStep::Answered { operation: StorageOperation::Acquire, .. })
+        });
+        assert!(!answered && !run.lease_take_unanswered(), "the acquire was not dropped");
+        run.apply(&reply).await;
+        run.apply(&Input::Advance { ms: Millis(12_000) }).await;
+        finish(run, Outcome::default()).await
+    });
+    let lane: Vec<_> =
+        outcome.failures.iter().filter(|f| f.contract.starts_with("storage_lane")).collect();
+    assert!(lane.is_empty(), "{lane:#?}");
 }
 
 // Catches: the interruption watchdog ending a speech whose tools ended just before it fired, while
@@ -105,7 +136,7 @@ fn a_turn_reported_before_the_watchdog_fires_waits_for_its_receipt() {
             let setup = Setup {
                 tts: false,
                 tools: vec!["lookup".into()],
-                storage_lost_at: Some(u32::MAX),
+                storage: Some(StorageSetup::default()),
                 ..Setup::default()
             };
             let mut run = Run::start(&setup, seed, Default::default()).await;

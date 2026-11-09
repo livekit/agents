@@ -689,8 +689,8 @@ mod idle_while_closing {
 
 mod lane_lost_call_goes_on {
     //! A lost voice-lane lease never ends the call: what the agent says after it is heard.
-    use lk_agents_fuzz::drive::{Outcome, Run, Setup, finish, simulate};
-    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, UserText};
+    use lk_agents_fuzz::drive::{Outcome, Run, Setup, StorageSetup, finish, simulate};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs, UserText};
     use lk_agents_voice::trace::{SpeechStep, Step};
 
     // Catches: a lost lease cancelled the speech under it and every later one at its creation, each
@@ -699,29 +699,53 @@ mod lane_lost_call_goes_on {
     // Storage failures are logged and never end the call.
     #[test]
     fn the_agent_is_heard_after_its_lane_is_lost() {
-        // The store loses the lease with its answer to the first turn.
-        let setup = Setup { storage_lost_at: Some(1), ..Setup::default() };
-        let reply = |chat: u32, said: &str| {
+        // The database goes down just after the first turn took the lane, for longer than the
+        // lease, while the turn's tool runs: its renewals fail until the lease is lost.
+        let storage = StorageSetup { outage: Some((30, 12_000)), ..StorageSetup::default() };
+        let setup = Setup { storage: Some(storage), ..Setup::default() };
+        let say = |chat: u32, segment: u32, said: &str| {
             [
-                Input::GenerateReply {
-                    user_input: Some(UserText("hello?".into())),
-                    instructions: None,
-                    allow: None,
-                },
-                Input::Advance { ms: Millis(20) },
                 Input::LlmText { chat: Ref::new(chat), text: AgentText(said.into()) },
                 Input::LlmEnd { chat: Ref::new(chat) },
                 Input::Advance { ms: Millis(20) },
-                Input::PlayoutStarted { segment: Ref::new(chat) },
-                Input::PlayoutProgressed { segment: Ref::new(chat), ms: Millis(5_000) },
-                Input::PlayoutFinished { segment: Ref::new(chat) },
+                Input::PlayoutStarted { segment: Ref::new(segment) },
+                Input::PlayoutProgressed { segment: Ref::new(segment), ms: Millis(5_000) },
+                Input::PlayoutFinished { segment: Ref::new(segment) },
                 Input::Advance { ms: Millis(1_000) },
             ]
         };
+        let ask = || Input::GenerateReply {
+            user_input: Some(UserText("hello?".into())),
+            instructions: None,
+            allow: None,
+        };
+        let first = [
+            ask(),
+            Input::Advance { ms: Millis(20) },
+            Input::LlmToolCall {
+                chat: Ref::new(0),
+                name: "lookup".into(),
+                args: ToolArgs("{}".into()),
+            },
+            Input::LlmEnd { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(12_000) },
+            Input::ToolAnswered {
+                tool: Ref::new(0),
+                answer: ToolAnswer::Value,
+                text: AgentText("Found it.".into()),
+            },
+            Input::Advance { ms: Millis(20) },
+        ];
+        let inputs: Vec<Input> = first
+            .into_iter()
+            .chain(say(1, 0, "Hi, how can I help?"))
+            .chain([ask(), Input::Advance { ms: Millis(20) }])
+            .chain(say(2, 1, "Sure."))
+            .collect();
         simulate(async {
             let mut run = Run::start(&setup, 0, Default::default()).await;
-            for input in reply(0, "Hi, how can I help?").into_iter().chain(reply(1, "Sure.")) {
-                run.apply(&input).await;
+            for input in &inputs {
+                run.apply(input).await;
             }
             let journal: Vec<&Step> = run.record.journal().iter().map(|(_, s)| s).collect();
             let lost = journal

@@ -110,8 +110,11 @@ async fn items_and_tasks_page_through_the_existing_client() {
         .unwrap();
     let thread = store.storage.open(&record.thread_id, "writer").await.unwrap();
     for index in 0..3 {
-        let mut run =
-            thread.lane("desk").open(RunOptions::new(format!("run-{index}"), "")).await.unwrap();
+        let mut run = thread
+            .lane("desk")
+            .open(RunOptions::new(format!("run-{index}"), ""), &crate::Holder::new("test"))
+            .await
+            .unwrap();
         run.history_mut().push(ItemRow::new(chat_item::Item::Message(ChatMessage {
             id: format!("item-{index}"),
             role: ChatRole::User as i32,
@@ -307,7 +310,11 @@ async fn task_filters_preserve_every_state_and_optional_name() {
         .await
         .unwrap();
     let thread = store.storage.open(&record.thread_id, "writer").await.unwrap();
-    let mut run = thread.lane("desk").open(RunOptions::new("states", "")).await.unwrap();
+    let mut run = thread
+        .lane("desk")
+        .open(RunOptions::new("states", ""), &crate::Holder::new("test"))
+        .await
+        .unwrap();
     let states = [
         (TaskState::Submitted, "SUBMITTED"),
         (TaskState::Working, "WORKING"),

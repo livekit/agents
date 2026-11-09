@@ -36,6 +36,9 @@ pub const VOICE: Boundary = Boundary {
          session or fallback logic); fakes::realtime::duplex (a duplex model's events at \
          the Realtime boundary, as its adapter's segmenter makes them)",
         "fakes::room (the LiveKit SDK room in memory, on the run's clock)",
+        "fakes::storage (the voice lane's thread database connection: storage's in-memory \
+         SQLite behind seeded latency, lost answers and outages; VoiceStore, Lane, Lease, \
+         renewal and fenced commit are production)",
     ],
     scheduled: &[
         "production runtime tasks (generation, playout, tools, hooks, room and avatar I/O) \
@@ -49,7 +52,8 @@ pub const VOICE: Boundary = Boundary {
         "real LiveKit rooms through the rtc SDK (H-13, K-18)",
         "Python host bindings, lk-agents-py (B-19 conformance)",
         "worker, IPC and job processes (lk-agents-worker's own tests; the DST fakes the worker)",
-        "backend A2A/TextSession execution and storage (core, runtime and backend contracts)",
+        "backend A2A/TextSession execution, and storage's SQLite file and AgentDB backends \
+         (core, runtime and backend contracts)",
     ],
 };
 

@@ -382,9 +382,6 @@ impl Run {
             return Err(StorageError::Invalid(format!("run {} already ended", self.run_id)));
         }
         self.finished = true;
-        if let Some(lease) = &self.lease {
-            lease.stop();
-        }
         Ok(())
     }
 
@@ -396,20 +393,46 @@ impl Run {
         if let Some(lease) = &self.lease
             && self.closed
         {
-            lease.release(None).await?;
-            return Ok(Committed { version, task: None });
+            let released = lease.release(None).await;
+            lease.stop();
+            return released.map(|()| Committed { version, task: None });
         }
         if self.lease.is_none() {
             self.lane.thread.ensure_schema().await?;
         }
         let lease = opts.lease;
-        let commit = self.writes(opts)?;
+        let out = match self.writes(opts) {
+            Ok(commit) => self.send_resolving(commit, lease).await,
+            Err(error) => Err(error),
+        };
+        self.settle(&out, lease);
+        out
+    }
+
+    async fn send_resolving(
+        &mut self,
+        commit: Commit,
+        lease: LeaseAfterCommit,
+    ) -> Result<Committed, StorageError> {
         match self.send(&commit, lease).await {
             Err(StorageError::Uncertain(why)) => self.resolve_lost_ack(commit, lease, why).await,
             Err(StorageError::Invalid(why)) if !commit.app_writes.is_empty() => {
                 Err(self.refused_commit(&commit, why).await)
             }
             out => out,
+        }
+    }
+
+    /// The lease renews until the commit's outcome is known; one left unresolved keeps it for
+    /// [`Run::resolve_later`]. A commit that released it leaves its handle nothing to release.
+    fn settle(&self, out: &Result<Committed, StorageError>, after: LeaseAfterCommit) {
+        let Some(lease) = &self.lease else { return };
+        if matches!(out, Err(StorageError::Uncertain(_))) {
+            return;
+        }
+        lease.stop();
+        if out.is_ok() && after == LeaseAfterCommit::Release {
+            lease.released();
         }
     }
 
@@ -503,7 +526,9 @@ impl Run {
     /// authoritative outcome, never a guess. `None` when nothing was left unresolved.
     pub async fn resolve_later(mut self) -> Option<Result<Committed, StorageError>> {
         let (commit, lease) = self.unresolved.take()?;
-        Some(self.resolve(&commit, lease, RESOLVE_LATER).await)
+        let out = self.resolve(&commit, lease, RESOLVE_LATER).await;
+        self.settle(&out, lease);
+        Some(out)
     }
 
     /// Leaving by error: `run_ended` with the outcome and the reason, and the release; nothing
@@ -522,7 +547,9 @@ impl Run {
             unix_now_ms(),
             JournalEvent::RunEnded(RunEnded { outcome, reason: Some(reason.into()) }),
         );
-        if let Err(e) = lease.release(Some((&self.run_id, &ended))).await {
+        let released = lease.release(Some((&self.run_id, &ended))).await;
+        lease.stop();
+        if let Err(e) = released {
             log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.name(), runId = self.run_id.as_str(); "run_ended could not be written after a failed run: {e}");
         }
         Ok(())

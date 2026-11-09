@@ -776,8 +776,9 @@ Measured nowhere here, and each a separate source of production risk:
 - The Python voice host adapters (`livekit-agents-next/livekit/agents/voice/`), including the
   `livekit.rtc` room adapter.
 - The binding from Python to the driver (`lk-agents-py`), plugins reached through host proxies.
-- Threads, lanes and leases in agent-db, the A2A text door, and a text turn landing on a lane
-  while a call is live (`storage/live.py`).
+- Threads, lanes and leases in agent-db and the SQLite file backend, and the A2A text door.
+  The voice lane itself runs storage's own lease, renewal and commit code over its in-memory
+  database (2026-11-08); a text turn lands on it only between voice turns.
 - Real provider behaviour beyond what was recorded: section 13 lists what each fake is
   calibrated from and what it still cannot do.
 - `lk-agents-inference` (native gateway clients, fallback adapters), `lk-agents-media`,

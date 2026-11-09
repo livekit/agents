@@ -96,7 +96,7 @@ do not duplicate those rules in a generator or fake.
 | [Room](src/fakes/room/mod.rs) | In-memory RTC capabilities, participants, publications, streams and faults; records where each SDK object binds to the host loop | Injected clock paces audio; production room executors own lifecycle. No SDK network behavior |
 | [Avatar](src/fakes/avatar.rs) | Tagged frames/audio, buffer clear and room relay over real avatar runner wiring | Injected frame clock, generation latency and queue pressure; no model or SDK AVSynchronizer |
 | [Console](src/fakes/console.rs) | Fake CLI protocol peer over in-memory bytes, paced speaker receipts | Real console transport/parser, injected timing; no OS socket or speaker |
-| [Voice storage](src/fakes/storage.rs) | Voice lane acquire/commit/abandon/loss and seeded concurrent history edits | Immediate port responses unless configured lease loss; no database/fencing/renewal implementation |
+| [Voice storage](src/fakes/storage.rs) | The thread database connection under production `VoiceStore`; records each acquire/commit/abandon at the port, which lease refused a take and what the closed store left; another worker's text turns edit the lane | Seeded latency on both sides of the apply, lease takes answered after the interruption watchdog, lost answers, lost writes and outages (some outlast the lease); no file or AgentDB backend |
 
 For larger models, follow room capability implementations from `fakes/room/mod.rs`, realtime
 session wiring into `realtime/server.rs`, and avatar generator/synchronizer from `avatar.rs`.

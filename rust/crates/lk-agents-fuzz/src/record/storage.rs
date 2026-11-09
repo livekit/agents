@@ -20,6 +20,19 @@ pub enum StorageStep {
         result: Result<(), StorageError>,
         delivered: bool,
     },
+    /// A lease take found the lane held by a lease whose owner last sent a request (a renewal,
+    /// commit or release) or took it this long ago.
+    LaneHeld {
+        idle_ms: u64,
+    },
+    /// What the lane held once the store closed: runs started and never ended, whether a lease
+    /// is still held, and whether a fault that can cost ownership (an outage, a write never
+    /// applied) was injected.
+    LaneSettled {
+        unended: u32,
+        held: bool,
+        faulted: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

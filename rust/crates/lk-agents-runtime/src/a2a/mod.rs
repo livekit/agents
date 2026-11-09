@@ -16,13 +16,13 @@ use lk_agents_core::a2a::{
 };
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
-use lk_agents_storage::StorageError;
 use lk_agents_storage::thread::db::{Receive, ReceiveInput};
 use lk_agents_storage::thread::run::ItemRow;
 use lk_agents_storage::{
     CommitOptions, Lane, LaneAccess, Lease, LeaseAfterCommit, Run, RunOptions, Thread, WhenHeld,
     shortuuid,
 };
+use lk_agents_storage::{Holder, StorageError};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -30,6 +30,8 @@ use std::sync::Arc;
 /// the open handler.
 struct Call {
     lane: Lane,
+    /// The request's lease owner: its receive, runs and drain carry it.
+    holder: Holder,
     run: Option<Run>,
     lease: Option<Lease>,
     handler: Option<Handler>,
@@ -56,7 +58,7 @@ impl Call {
         let options = RunOptions { access: lane_access, ..options };
         let run = match (access, self.lease.take()) {
             (Access::Kept, Some(lease)) => self.lane.resume(options, lease).await?,
-            _ => self.lane.open(options).await?,
+            _ => self.lane.open(options, &self.holder).await?,
         };
         let history_end = run.history().iter().map(ItemRow::created_at).fold(0.0, f64::max);
         let opened =
@@ -211,7 +213,8 @@ impl Turn {
         let task_id = task_id.unwrap_or_else(|| shortuuid("AST_"));
         let mut machine = TaskMachine::new(self.lane.clone(), msg, task_id, &self.opts, wall);
         let lane = self.thread.lane(&self.lane);
-        let mut call = Call { lane, run: None, lease: None, handler: None, caller_history };
+        let holder = Holder::new(self.thread.holder());
+        let mut call = Call { lane, holder, run: None, lease: None, handler: None, caller_history };
         let mut effects = machine.handle(A2aTaskEvent::Start, elapsed());
         loop {
             match effects.pop() {
@@ -227,6 +230,11 @@ impl Turn {
                 }
                 Some(A2aTaskEffect::Finished(answer)) => {
                     let now = elapsed();
+                    let Call { holder, run, lease, .. } = call;
+                    drop((run, lease));
+                    if !holder.released().await {
+                        log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(); "an A2A turn ended with its lease release in flight");
+                    }
                     return answer.map(|answer| machine.result(answer, self.thread.id(), now));
                 }
                 None => {
@@ -333,7 +341,7 @@ impl Turn {
             data: &task.data,
             internal: task.internal.as_ref(),
         };
-        let (received, lease) = call.lane.receive(self.thread.holder(), input).await?;
+        let (received, lease) = call.lane.receive(&call.holder, input).await?;
         call.lease = lease;
         Ok(match received {
             Receive::Duplicate(existing) => Completion::Received {
@@ -615,7 +623,8 @@ mod lease_tests {
                 .await
                 .unwrap();
         let lane = thread.lane("desk");
-        let run = lane.open(RunOptions::new("run", "task")).await.unwrap();
+        let holder = Holder::new("worker");
+        let run = lane.open(RunOptions::new("run", "task"), &holder).await.unwrap();
         run.lease().unwrap().stop();
         tokio::time::advance(Duration::from_secs(10)).await;
         let probe = Probe(Arc::default());
@@ -624,6 +633,7 @@ mod lease_tests {
         let handler = Handler::open(host, telemetry::Cx::NONE, context());
         let mut call = Call {
             lane,
+            holder,
             run: Some(run),
             lease: None,
             handler: Some(handler),

@@ -1621,6 +1621,7 @@ dependencies = [
 name = "lk-agents-fuzz"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "fastrand",
  "lk-agents-abi",

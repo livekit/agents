@@ -5,13 +5,12 @@ use crate::thread::run::{
     LEASE_WAIT_TIMEOUT, LOOKUP_LIMIT, RunOutcome, RunSummary, SUBMIT_CHANNEL, TaskState,
 };
 use crate::thread::schema::*;
-use crate::{Fence, LaneAccess, StorageError, TaskPickup, TaskWrite, WhenHeld};
+use crate::{LaneAccess, StorageError, TaskPickup, TaskWrite, WhenHeld};
 use lk_agents_abi::storage::journal::{JournalEvent, RunStarted};
 use lk_agents_abi::usage::Usage;
 use serde_json::{Map, Value};
 
-use crate::shortuuid;
-use crate::thread::lease::Lease;
+use crate::thread::lease::{Holder, Lease, PendingLease};
 use lk_agents_net::clock::unix_now_ms;
 
 use super::{EventLog, Run, RunOptions, Tasks, Thread, db};
@@ -29,26 +28,48 @@ impl Lane {
     }
 
     /// The inbox receive, one atomic batch: the inbox row, the `submitted` task row and the
-    /// lease attempt.
+    /// lease attempt under `holder`. A lost acknowledgment is retried with the same token.
     pub async fn receive(
         &self,
-        holder: &str,
+        holder: &Holder,
         input: db::ReceiveInput<'_>,
     ) -> Result<(Receive, Option<Lease>), StorageError> {
         self.thread.ensure_schema().await?;
-        let token = shortuuid("lease_");
-        let holder = format!("{holder}/{token}");
         let lease_secs = self.thread.timing.secs();
         let conn = &*self.thread.conn;
-        let acquired_at = tokio::time::Instant::now();
-        let received = db::receive(conn, &self.name, &holder, &token, lease_secs, input).await?;
+        let mut pending = PendingLease::new(self.thread.clone(), self.name(), holder, None);
+        let epoch = tokio::time::Instant::now();
+        let mut poll = LanePoll::new(epoch.elapsed(), LEASE_WAIT_TIMEOUT);
+        let mut uncertain = false;
+        let (received, acquired_at) = loop {
+            let acquired_at = tokio::time::Instant::now();
+            pending.arm();
+            let token = pending.token();
+            match db::receive(conn, &self.name, holder.as_str(), token, lease_secs, input).await {
+                // a duplicate of this very task after a lost acknowledgment is its own insert
+                Ok(Receive::Duplicate(Some(task))) if uncertain && task == input.task_id => {
+                    let fence = self.thread.read(SelectFence { lane: &self.name }, |row| {
+                        Ok((row[0].as_i64(), row[1].as_str().map(str::to_owned)))
+                    });
+                    let held = fence.await?.into_iter().next().and_then(|(version, held)| {
+                        version.filter(|_| held.as_deref() == Some(token))
+                    });
+                    break (Receive::Received(held), acquired_at);
+                }
+                Ok(received) => break (received, acquired_at),
+                Err(StorageError::Uncertain(why)) => {
+                    uncertain = true;
+                    retry_uncertain(&mut poll, epoch, why).await?;
+                }
+                Err(error) => return Err(error),
+            }
+        };
         let lease = match received {
-            Receive::Received(Some(version)) => Some(Lease::new(
-                self.thread.clone(),
-                Fence { lane: self.name.clone(), holder, token, version },
-                acquired_at,
-            )),
-            _ => None,
+            Receive::Received(Some(version)) => Some(pending.into_lease(version, acquired_at)),
+            _ => {
+                pending.disarm();
+                None
+            }
         };
         if let Some(lease) = &lease {
             lease.check()?;
@@ -176,27 +197,30 @@ impl Lane {
         db::cancel(&*self.thread.conn, self.name(), task_id, &metadata).await
     }
 
-    /// Takes the lane and loads it. The run commits with [`Run::commit`] and ends by error with
-    /// [`Run::abandon`]; a run dropped without either stops renewing and lets its lease lapse,
-    /// which the next acquire sees as a `run_started` without a `run_ended`.
-    pub async fn open(&self, opts: RunOptions) -> Result<Run, StorageError> {
-        let holder = format!("{}/{}", self.thread.holder, shortuuid("run_"));
-        self.open_with_holder(opts, &holder).await
+    /// Takes the lane for `holder` and loads it. The run commits with [`Run::commit`] and ends
+    /// by error with [`Run::abandon`]; a run dropped without either releases its lease, leaving
+    /// a `run_started` without a `run_ended`.
+    pub async fn open(&self, opts: RunOptions, holder: &Holder) -> Result<Run, StorageError> {
+        self.open_with_holder(opts, holder).await
     }
 
     /// Transfer a batch drain's existing lease into its next run deliberately.
     pub async fn resume(&self, opts: RunOptions, lease: Lease) -> Result<Run, StorageError> {
         lease.check()?;
-        let result = self.open_with_holder(opts, lease.holder()).await;
+        let result = self.open_with_holder(opts, lease.owner()).await;
         lease.stop();
         result
     }
 
-    async fn open_with_holder(&self, opts: RunOptions, holder: &str) -> Result<Run, StorageError> {
+    async fn open_with_holder(
+        &self,
+        opts: RunOptions,
+        owner: &Holder,
+    ) -> Result<Run, StorageError> {
+        let holder = owner.as_str();
         let (lease, closed, state, items, tasks, picked_up, context_scopes) = match opts.access {
             LaneAccess::Exclusive(when_held) => {
-                let (a, acquired_at) = self.acquire(&opts, when_held, holder).await?;
-                let lease = Lease::new(self.thread.clone(), a.fence.clone(), acquired_at);
+                let (a, lease) = self.acquire(&opts, when_held, owner).await?;
                 if !a.already_committed {
                     lease.check()?;
                     lease.keep_alive();
@@ -251,17 +275,23 @@ impl Lane {
     }
 
     /// The acquire, polled with backoff while another holder has the lane, as `when_held` says.
+    /// One token for every attempt: a lost acknowledgment is retried as the holder re-entering
+    /// what it may have taken.
     async fn acquire(
         &self,
         opts: &RunOptions,
         when_held: WhenHeld,
-        holder: &str,
-    ) -> Result<(Acquired, tokio::time::Instant), StorageError> {
+        owner: &Holder,
+    ) -> Result<(Acquired, Lease), StorageError> {
+        let holder = owner.as_str();
         let epoch = tokio::time::Instant::now();
         let mut poll = LanePoll::new(epoch.elapsed(), opts.wait_timeout);
         let mut waiter = None;
+        let mut pending =
+            PendingLease::new(self.thread.clone(), self.name(), owner, Some(&opts.run_id));
+        let token = pending.token().to_owned();
+        let mut lost_ack = false;
         loop {
-            let token = shortuuid("lease_");
             let req = Acquire {
                 lane: self.name(),
                 holder,
@@ -288,6 +318,7 @@ impl Lane {
             let initializing = !bootstrap.is_empty();
             let conn = &*self.thread.conn;
             let mut acquired_at = tokio::time::Instant::now();
+            pending.arm();
             let acquired = match db::acquire(conn, &req, bootstrap).await {
                 Err(error) if initializing => {
                     self.thread.reconcile_schema(error).await?;
@@ -296,10 +327,23 @@ impl Lane {
                     db::acquire(conn, &req, Vec::new()).await
                 }
                 out => out,
-            }?;
+            };
+            let acquired = match acquired {
+                Err(StorageError::Uncertain(why)) => {
+                    lost_ack = true;
+                    retry_uncertain(&mut poll, epoch, why).await?;
+                    continue;
+                }
+                out => out?,
+            };
             self.thread.schema_applied();
             if let Some(acquired) = acquired {
-                return Ok((acquired, acquired_at));
+                let lease = pending.into_lease(acquired.fence.version, acquired_at);
+                return Ok((acquired, lease));
+            }
+            // after a lost acknowledgment the lane may still be ours under a waiter's fence
+            if !lost_ack {
+                pending.disarm();
             }
             if when_held == WhenHeld::Reject {
                 return Err(StorageError::Rejected { running_task_id: None });
@@ -324,3 +368,21 @@ impl Lane {
         }
     }
 }
+
+/// Waits out the next poll step after a lost acknowledgment; `Uncertain` once the deadline passed.
+async fn retry_uncertain(
+    poll: &mut LanePoll,
+    epoch: tokio::time::Instant,
+    why: String,
+) -> Result<(), StorageError> {
+    log::debug!(target: lk_agents_abi::LOG_TARGET, "lease take acknowledgment lost, retrying: {why}");
+    let Some(at) = poll.next(epoch.elapsed()) else {
+        return Err(StorageError::Uncertain(why));
+    };
+    tokio::time::sleep_until(epoch + at).await;
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "lane_tests.rs"]
+mod tests;

@@ -49,7 +49,7 @@ pub use output::{
     HALF, room_camera,
 };
 pub use realtime::{FakeDuplex, FakeRealtime, RealtimeDelays, ServerSetup, Vad as RealtimeVad};
-pub use storage::FakeVoiceStorage;
+pub use storage::FakeStore;
 pub use stt::FakeStt;
 pub use tools::{FakeTools, TEMPLATED_REPLY, TEMPLATED_TOOL, completion_value, frame};
 pub use tts::{FakeTts, MS_PER_WORD, TtsOptions};
@@ -298,6 +298,14 @@ const MINTED: [Kind; 14] = [
     Kind::Generation,
 ];
 
+struct StoragePending(Arc<Registry>);
+
+impl Drop for StoragePending {
+    fn drop(&mut self) {
+        self.0.storage_pending.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// What every fake holds: the stamp counter, the identity counters, and the way back to the
 /// harness.
 pub struct Registry {
@@ -317,6 +325,8 @@ pub struct Registry {
     voice_due: std::sync::Mutex<BTreeMap<u32, tokio::time::Instant>>,
     /// When the last storage answer owed on the fake's own clock is due.
     storage_due: std::sync::Mutex<lk_agents_abi::Ts>,
+    /// Acquires of the voice lane still awaited.
+    storage_pending: AtomicU32,
     chat_responses: std::sync::Mutex<BTreeMap<String, u32>>,
 }
 
@@ -338,6 +348,7 @@ impl Registry {
             session: std::sync::OnceLock::new(),
             voice_due: std::sync::Mutex::default(),
             storage_due: std::sync::Mutex::new(lk_agents_abi::Ts::ZERO),
+            storage_pending: AtomicU32::new(0),
             chat_responses: std::sync::Mutex::default(),
         };
         (Arc::new(registry), receiver)
@@ -495,6 +506,18 @@ impl Registry {
     pub(super) fn storage_due(&self, at: lk_agents_abi::Ts) {
         let mut due = self.storage_due.lock().unwrap();
         *due = (*due).max(at);
+    }
+
+    /// Counts an acquire of the voice lane until the guard drops: answered or cancelled.
+    fn storage_pending(self: &Arc<Self>) -> StoragePending {
+        self.storage_pending.fetch_add(1, Ordering::SeqCst);
+        StoragePending(self.clone())
+    }
+
+    /// Whether an acquire of the voice lane is in flight: where a cancelled caller can leave the
+    /// database ahead of it.
+    pub fn storage_in_flight(&self) -> bool {
+        self.storage_pending.load(Ordering::SeqCst) > 0
     }
 
     /// When the last storage answer still owed is due, if it is after `now`.

@@ -607,7 +607,8 @@ impl host::handles::Thread for Thread {
         if let Some(timeout) = wait_timeout {
             options.wait_timeout = timeout;
         }
-        Ok(RunHandle::new(self.lane(&lane).open(options).await?))
+        let holder = crate::Holder::new(self.holder());
+        Ok(RunHandle::new(self.lane(&lane).open(options, &holder).await?))
     }
     fn close(&self, env: &ProcessEnv) {
         let thread = self.clone();

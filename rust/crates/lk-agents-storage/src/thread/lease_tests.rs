@@ -29,15 +29,22 @@ async fn a_dropped_run_stops_renewing_and_its_lease_lapses(backend: Backend) {
     let fx = backend.fixture(Some((Duration::from_secs(1), Duration::from_millis(300)))).await;
     let s1 = fx.thread("w1").await;
     let s2 = fx.thread("w2").await;
-    let run = s1.lane(LANE).open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    let run = s1
+        .lane(LANE)
+        .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
+        .await
+        .unwrap();
     drop(run);
     tokio::time::sleep(Duration::from_millis(2600)).await;
     let lane2 = s2.lane(LANE);
     let next = lane2
-        .open(RunOptions {
-            access: LaneAccess::Exclusive(WhenHeld::Reject),
-            ..RunOptions::new("r2", "AST_2")
-        })
+        .open(
+            RunOptions {
+                access: LaneAccess::Exclusive(WhenHeld::Reject),
+                ..RunOptions::new("r2", "AST_2")
+            },
+            &crate::Holder::new("test"),
+        )
         .await;
     let next = next.expect("the dropped run's lease lapsed");
     drop(next);
@@ -50,7 +57,7 @@ async fn waiters_take_the_lane_in_the_order_their_rows_were_submitted(backend: B
     let fx = backend.fixture(None).await;
     let s = fx.thread("w1").await;
     let lane = s.lane(LANE);
-    lane.open(RunOptions::new("r0", ""))
+    lane.open(RunOptions::new("r0", ""), &crate::Holder::new("test"))
         .await
         .unwrap()
         .commit(CommitOptions::default())
@@ -64,18 +71,27 @@ async fn waiters_take_the_lane_in_the_order_their_rows_were_submitted(backend: B
         pickup: TaskPickup::Claim,
         ..RunOptions::new("r2", "AST_second")
     };
-    let refused = lane.open(second()).await.err().expect("the older waiter goes first");
+    let refused = lane
+        .open(second(), &crate::Holder::new("test"))
+        .await
+        .err()
+        .expect("the older waiter goes first");
     assert!(matches!(refused, StorageError::Rejected { .. }), "{refused}");
     let first = RunOptions {
         access: LaneAccess::Exclusive(WhenHeld::Reject),
         pickup: TaskPickup::Claim,
         ..RunOptions::new("r1", "AST_first")
     };
-    let mut run = lane.open(first).await.unwrap();
+    let mut run = lane.open(first, &crate::Holder::new("test")).await.unwrap();
     assert!(run.picked_up());
     run.commit(CommitOptions::default()).await.unwrap();
     // the first row is working now: the second is the oldest waiter and takes the lane
-    lane.open(second()).await.unwrap().commit(CommitOptions::default()).await.unwrap();
+    lane.open(second(), &crate::Holder::new("test"))
+        .await
+        .unwrap()
+        .commit(CommitOptions::default())
+        .await
+        .unwrap();
     fx.cleanup(&[&s]).await;
 }
 
@@ -85,7 +101,11 @@ async fn an_expired_owner_cannot_restart_or_commit_after_takeover(backend: Backe
     let fx = backend.fixture(Some((Duration::from_secs(1), Duration::from_millis(200)))).await;
     let first = fx.thread("w1").await;
     let second = fx.thread("w2").await;
-    let mut stale = first.lane(LANE).open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    let mut stale = first
+        .lane(LANE)
+        .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
+        .await
+        .unwrap();
     let old_lease = stale.lease().unwrap().clone();
     old_lease.stop();
     tokio::time::sleep(Duration::from_millis(2100)).await;
@@ -93,7 +113,11 @@ async fn an_expired_owner_cannot_restart_or_commit_after_takeover(backend: Backe
     old_lease.keep_alive();
     assert!(old_lease.is_lost(), "restarting renewal cannot revive an expired handle");
 
-    let owner = second.lane(LANE).open(RunOptions::new("r2", "AST_2")).await.unwrap();
+    let owner = second
+        .lane(LANE)
+        .open(RunOptions::new("r2", "AST_2"), &crate::Holder::new("test"))
+        .await
+        .unwrap();
     assert_eq!(stale.version(), owner.version(), "takeover alone does not change the version");
     assert_ne!(old_lease.fence().token, owner.lease().unwrap().fence().token);
     stale.set_state(json!({"stale": true}));
@@ -118,13 +142,19 @@ async fn cloned_handles_do_not_replace_an_active_runs_lease(backend: Backend) {
     let thread = fixture.thread("worker-a").await;
     let cloned = thread.clone();
     let lane = thread.lane("front-desk");
-    let mut first = lane.open(RunOptions::new("first", "AST_first")).await.unwrap();
+    let mut first = lane
+        .open(RunOptions::new("first", "AST_first"), &crate::Holder::new("test"))
+        .await
+        .unwrap();
     let result = cloned
         .lane("front-desk")
-        .open(RunOptions {
-            access: LaneAccess::Exclusive(WhenHeld::Reject),
-            ..RunOptions::new("second", "AST_second")
-        })
+        .open(
+            RunOptions {
+                access: LaneAccess::Exclusive(WhenHeld::Reject),
+                ..RunOptions::new("second", "AST_second")
+            },
+            &crate::Holder::new("test"),
+        )
         .await;
     let refused = match result {
         Err(StorageError::Rejected { .. }) => true,
@@ -144,10 +174,12 @@ async fn a_dead_waiter_does_not_interrupt_a_new_owner(backend: Backend) {
     let fixture = backend.fixture(None).await;
     let thread = fixture.thread("worker").await;
     let lane = thread.lane("desk");
-    let mut owner = lane.open(RunOptions::new("first", "task1")).await.unwrap();
+    let mut owner =
+        lane.open(RunOptions::new("first", "task1"), &crate::Holder::new("test")).await.unwrap();
     assert!(lane.set_waiter("dead-worker").await.unwrap());
     owner.commit(CommitOptions::default()).await.unwrap();
-    let mut next = lane.open(RunOptions::new("second", "task2")).await.unwrap();
+    let mut next =
+        lane.open(RunOptions::new("second", "task2"), &crate::Holder::new("test")).await.unwrap();
     assert_eq!(lane.checkpoint("task2").await.unwrap().0, None);
     next.commit(CommitOptions::default()).await.unwrap();
     fixture.cleanup(&[&thread]).await;
@@ -158,13 +190,17 @@ async fn canceled_and_timed_out_acquires_withdraw_their_marks(backend: Backend) 
     let fixture = backend.fixture(None).await;
     let thread = fixture.thread("worker").await;
     let lane = thread.lane("desk");
-    let mut owner = lane.open(RunOptions::new("owner", "task")).await.unwrap();
+    let mut owner =
+        lane.open(RunOptions::new("owner", "task"), &crate::Holder::new("test")).await.unwrap();
     let result = lane
-        .open(RunOptions {
-            access: LaneAccess::Exclusive(WhenHeld::Interrupt),
-            wait_timeout: Duration::ZERO,
-            ..RunOptions::new("timeout", "timeout-task")
-        })
+        .open(
+            RunOptions {
+                access: LaneAccess::Exclusive(WhenHeld::Interrupt),
+                wait_timeout: Duration::ZERO,
+                ..RunOptions::new("timeout", "timeout-task")
+            },
+            &crate::Holder::new("test"),
+        )
         .await;
     assert!(matches!(result, Err(StorageError::Rejected { .. })));
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -178,10 +214,13 @@ async fn canceled_and_timed_out_acquires_withdraw_their_marks(backend: Backend) 
     let waiting_lane = lane.clone();
     let waiting = tokio::spawn(async move {
         waiting_lane
-            .open(RunOptions {
-                access: LaneAccess::Exclusive(WhenHeld::Interrupt),
-                ..RunOptions::new("canceled", "canceled-task")
-            })
+            .open(
+                RunOptions {
+                    access: LaneAccess::Exclusive(WhenHeld::Interrupt),
+                    ..RunOptions::new("canceled", "canceled-task")
+                },
+                &crate::Holder::new("test"),
+            )
             .await
     });
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -208,7 +247,8 @@ async fn a_resumed_drain_keeps_another_waiters_mark(backend: Backend) {
     let fixture = backend.fixture(None).await;
     let thread = fixture.thread("worker").await;
     let lane = thread.lane("desk");
-    let mut owner = lane.open(RunOptions::new("first", "task1")).await.unwrap();
+    let mut owner =
+        lane.open(RunOptions::new("first", "task1"), &crate::Holder::new("test")).await.unwrap();
     let lease = owner.lease().unwrap().clone();
     assert!(lane.set_waiter("other-worker").await.unwrap());
     owner
@@ -325,7 +365,11 @@ async fn slow_acknowledgments_do_not_shift_the_renewal_cadence() {
     let connection = slow_replies(0, 2, false);
     let thread = slow_thread(connection.clone()).await;
     let started = tokio::time::Instant::now();
-    let run = thread.lane("desk").open(RunOptions::new("run", "task")).await.unwrap();
+    let run = thread
+        .lane("desk")
+        .open(RunOptions::new("run", "task"), &crate::Holder::new("test"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(9500)).await;
     let attempts: Vec<_> =
         connection.attempts.lock().iter().map(|at| (*at - started).as_secs()).collect();
@@ -339,7 +383,11 @@ async fn acknowledgment_latency_and_stalled_renewals_cannot_extend_the_ownership
     let connection = slow_replies(0, 2, true);
     let thread = slow_thread(connection.clone()).await;
     let started = tokio::time::Instant::now();
-    let run = thread.lane("desk").open(RunOptions::new("run", "task")).await.unwrap();
+    let run = thread
+        .lane("desk")
+        .open(RunOptions::new("run", "task"), &crate::Holder::new("test"))
+        .await
+        .unwrap();
     let lease = run.lease().unwrap();
     let error = lease.lost().await;
     assert!(matches!(error, StorageError::LeaseLost(_)));
@@ -356,7 +404,7 @@ async fn a_slow_acquisition_cannot_start_work_with_an_expired_ownership_budget()
     let thread = slow_thread(slow_replies(11, 0, false)).await;
     let error = thread
         .lane("desk")
-        .open(RunOptions::new("run", "task"))
+        .open(RunOptions::new("run", "task"), &crate::Holder::new("test"))
         .await
         .err()
         .expect("expired claim");
@@ -377,7 +425,7 @@ async fn an_inbox_claim_keeps_renewing_while_acceptance_or_debounce_waits() {
     let (_, lease) = thread
         .lane("desk")
         .receive(
-            "worker",
+            &crate::Holder::new("worker"),
             crate::thread::db::ReceiveInput {
                 task_id: "task",
                 message: &message,
@@ -406,7 +454,11 @@ async fn a_failing_renewal_retries_within_the_lease_and_is_lost_after_it() {
     let thread = Thread::new(faulty.clone(), "AT_renewal", timing, SchemaCell::default(), "w1")
         .await
         .unwrap();
-    let run = thread.lane(LANE).open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    let run = thread
+        .lane(LANE)
+        .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
+        .await
+        .unwrap();
     let lease = run.lease().unwrap().clone();
     let start = tokio::time::Instant::now();
 

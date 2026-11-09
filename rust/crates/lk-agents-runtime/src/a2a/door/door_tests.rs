@@ -199,7 +199,10 @@ async fn streaming_acceptance_precedes_the_lane_wait(backend: Backend) {
     let thread = store.storage.open(&created.thread_id, "holding-worker").await.unwrap();
     let mut held = thread
         .lane("desk")
-        .open(lk_agents_storage::RunOptions::new("hold", "held-task"))
+        .open(
+            lk_agents_storage::RunOptions::new("hold", "held-task"),
+            &lk_agents_storage::Holder::new("test"),
+        )
         .await
         .unwrap();
     let door = door(&store, Arc::new(Host));
@@ -271,7 +274,10 @@ async fn a_continuation_keeps_one_wire_identity(backend: Backend) {
     assert!(saved.internal.is_none());
     let mut questions = thread
         .lane("desk")
-        .open(lk_agents_storage::RunOptions::new("questions", "question-batch"))
+        .open(
+            lk_agents_storage::RunOptions::new("questions", "question-batch"),
+            &lk_agents_storage::Holder::new("test"),
+        )
         .await
         .unwrap();
     for id in ["AST_older", "AST_newer"] {

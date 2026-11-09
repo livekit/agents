@@ -94,6 +94,14 @@ impl Run {
                     () = self.time.wait_until(until) => {}
                 }
             }
+            // Then the host closes the call's store (`SessionStorage.aclose`).
+            if let Some(store) = self.store.take() {
+                let until = self.time.now().saturating_add(Duration::from_millis(NEVER_MS));
+                tokio::select! {
+                    () = store.close() => {}
+                    () = self.time.wait_until(until) => {}
+                }
+            }
             self.record.enter_phase(Phase::Closed);
         }
         exited

@@ -132,6 +132,12 @@ impl Run {
             ))
         });
         let host: super::HostJournal = Arc::default();
+        let store = match setup.storage {
+            Some(storage) => Some(
+                fakes::FakeStore::open(storage, schedule, registry.clone(), time.clock()).await,
+            ),
+            None => None,
+        };
         let args = VoiceSessionArgs {
             instructions: Some(setup.instructions.clone()),
             agent: OPENING_AGENT.into(),
@@ -221,9 +227,7 @@ impl Run {
             }),
             hook_bound: setup.hook_bound_ms.map(|ms| ms as f64 / 1000.0),
             max_unrecoverable_errors: setup.max_unrecoverable_errors,
-            storage: setup.storage_lost_at.map(|n| {
-                fakes::FakeVoiceStorage::new(n, schedule, registry.clone(), time.clock()) as _
-            }),
+            storage: store.as_ref().map(|store| store.port.clone()),
             stt_context: (!setup.keyterms.is_empty() || setup.keyterm_detection.is_some()).then(
                 || SttContextConfig {
                     keyterms: Some(setup.keyterms.clone()),
@@ -356,6 +360,7 @@ impl Run {
             tasks,
             stamps,
             registry,
+            store,
             records,
             controls: BTreeMap::new(),
             overrides: Vec::new(),

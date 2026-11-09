@@ -4,7 +4,7 @@ use lk_agents_abi::voice::session_options::TextTransformSet;
 use crate::{
     drive::{
         AmdAnswer, AmdSetup, ConnSetup, Faults, KeytermDetectionSetup, NodeSetup, PreConnect,
-        ProcessorFaults, RealtimeSetup, RoomLegs, RoomSetup, Setup, TtsAlignment,
+        ProcessorFaults, RealtimeSetup, RoomLegs, RoomSetup, Setup, StorageSetup, TtsAlignment,
     },
     input::{AGENT_TURNS, DELAYS_MS, NAMES, TurnMode},
 };
@@ -103,7 +103,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         agent_aligned_transcript: None,
         tools_refuse_cancel: false,
         stray: 0.0,
-        storage_lost_at: None,
+        storage: None,
         vad_stall_ms: None,
     };
     // `lk agent console` runs on the host's legs only.
@@ -185,8 +185,9 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     setup.aligned_transcript = said(rng);
     setup.agent_aligned_transcript = said(rng);
     setup.tools_refuse_cancel = rng.u8(0..100) < 10;
-    // The lane's lease is lost at one of the first answers.
-    setup.storage_lost_at = (rng.u8(0..100) < 10).then(|| rng.u32(1..6));
+    // Most calls store their lane; half of those over a faulty database.
+    setup.storage = (rng.u8(0..100) < 80)
+        .then(|| StorageSetup { faults: rng.bool(), ..StorageSetup::default() });
     // A broken model, license or connection fails a span; a glitch fails a rare frame; a
     // processor flapping at the edge of its budget is the rarest.
     let faults = |rng: &mut Rng| match rng.u8(0..100) {

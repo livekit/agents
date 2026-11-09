@@ -18,12 +18,15 @@ use lk_agents_abi::{ChatContent, ChatItem, Role};
 
 use crate::backends::with_thread;
 use crate::context::store::ContextStore;
-use crate::{CommitOptions, Lease, Run, RunOptions, Storage, Thread, shortuuid};
+use crate::{CommitOptions, Holder, Lease, Run, RunOptions, Storage, Thread, shortuuid};
 
 pub struct VoiceStore {
     backend: Arc<dyn Storage>,
     thread_id: String,
     lane: String,
+    /// Every turn's lease owner, so a turn whose acquire was canceled leaves the next one
+    /// nothing to wait for.
+    holder: Holder,
     activation: ContextStore,
     initial: Option<Vec<ChatItem>>,
     state: tokio::sync::Mutex<State>,
@@ -83,6 +86,7 @@ impl VoiceStore {
             backend,
             thread_id,
             lane,
+            holder: Holder::new("voice"),
             activation,
             initial: explicit_history.is_none().then_some(items),
             state: tokio::sync::Mutex::new(State {
@@ -125,7 +129,7 @@ impl VoiceStore {
         let thread = self.backend.open(&self.thread_id, "voice").await?;
         let mut options = RunOptions::new(shortuuid("voice_"), "");
         options.channel = Some("voice".into());
-        let mut run = match thread.lane(&self.lane).open(options).await {
+        let mut run = match thread.lane(&self.lane).open(options, &self.holder).await {
             Ok(run) => run,
             Err(error) => {
                 thread.close().await;
@@ -392,6 +396,10 @@ impl HostVoiceStore for VoiceStore {
         self.activation.close();
         drop(state);
         self.tasks.wait_empty(&RealClock::new(), None).await;
+        let (voice, context) = tokio::join!(self.holder.released(), self.activation.released());
+        if !(voice && context) {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(); "the voice store closed with a lease release in flight");
+        }
         result
     }
 }

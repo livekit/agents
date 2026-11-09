@@ -115,10 +115,14 @@ async fn initialize(reword_initial: bool, install_race: bool, version: Option<i6
         .await?;
         diagnostics.reword.store(true, Ordering::Relaxed);
         let lane = thread.lane("desk");
-        let mut run = lane.open(RunOptions::new("schema-run", "AST_schema")).await?;
+        let mut run = lane
+            .open(RunOptions::new("schema-run", "AST_schema"), &crate::Holder::new("test"))
+            .await?;
         run.set_state(json!({"saved": true}));
         run.commit(CommitOptions::default()).await?;
-        let mut restored = lane.open(RunOptions::new("schema-read", "AST_read")).await?;
+        let mut restored = lane
+            .open(RunOptions::new("schema-read", "AST_read"), &crate::Holder::new("test"))
+            .await?;
         if restored.state() != Some(&json!({"saved": true})) {
             return Err(StorageError::Unavailable(
                 "the initialized schema lost the committed state".into(),
@@ -175,7 +179,10 @@ async fn a_lost_install_race_reports_why_the_schema_could_not_be_checked() {
     )
     .await
     .unwrap();
-    let opened = thread.lane("desk").open(RunOptions::new("schema-run", "AST_schema")).await;
+    let opened = thread
+        .lane("desk")
+        .open(RunOptions::new("schema-run", "AST_schema"), &crate::Holder::new("test"))
+        .await;
     assert!(matches!(opened, Err(StorageError::Unavailable(_))), "{:?}", opened.err());
     diagnostics.close().await;
     store.close().await;
@@ -187,7 +194,11 @@ async fn items_page_by_position_with_a_filter_bound_cursor(backend: Backend) {
     let fx = backend.fixture(None).await;
     let s = fx.thread("w1").await;
     for (lane, n) in [("lane-a", 0), ("lane-b", 1), ("lane-a", 2)] {
-        let mut run = s.lane(lane).open(RunOptions::new(format!("r{n}"), "")).await.unwrap();
+        let mut run = s
+            .lane(lane)
+            .open(RunOptions::new(format!("r{n}"), ""), &crate::Holder::new("test"))
+            .await
+            .unwrap();
         run.history_mut().push(message(&format!("i{n}"), ChatRole::User, "hi"));
         run.commit(CommitOptions::default()).await.unwrap();
     }

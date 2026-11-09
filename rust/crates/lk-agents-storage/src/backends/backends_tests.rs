@@ -102,7 +102,11 @@ async fn a_commit_does_not_extend_expiry(backend: Backend) {
     let t = t.unwrap();
     tokio::time::sleep(Duration::from_millis(1100)).await;
     let thread = s.open(&t.thread_id, "w1").await.unwrap();
-    let mut run = thread.lane("front-desk").open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    let mut run = thread
+        .lane("front-desk")
+        .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
+        .await
+        .unwrap();
     run.set_state(serde_json::json!({"n": 1}));
     run.commit(CommitOptions::default()).await.unwrap();
     thread.close().await;
@@ -190,7 +194,8 @@ async fn sqlite_delete_and_expiry_invalidate_open_handles() {
             .unwrap();
         let thread = storage.open(&record.thread_id, "reader").await.unwrap();
         let lane = thread.lane("desk");
-        let mut run = lane.open(RunOptions::new("held", "task")).await.unwrap();
+        let mut run =
+            lane.open(RunOptions::new("held", "task"), &crate::Holder::new("test")).await.unwrap();
         if expired {
             tokio::time::sleep(Duration::from_millis(2100)).await;
         } else {
@@ -270,10 +275,13 @@ mod process {
         let thread = storage.open(&input("THREAD"), &role).await?;
         let mut run = thread
             .lane("desk")
-            .open(RunOptions {
-                wait_timeout: Duration::from_secs(8),
-                ..RunOptions::new(format!("run-{role}"), format!("AST_{role}"))
-            })
+            .open(
+                RunOptions {
+                    wait_timeout: Duration::from_secs(8),
+                    ..RunOptions::new(format!("run-{role}"), format!("AST_{role}"))
+                },
+                &crate::Holder::new("test"),
+            )
             .await?;
         let outcome = match role.as_str() {
             "deleted" => {

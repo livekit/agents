@@ -101,7 +101,7 @@ mod stored_turn_keeps_the_history {
     //! A turn that takes the voice lane keeps the session's history whole, whatever its agent reads.
     use lk_agents_abi::ChatItem;
     use lk_agents_core::tts::markup::ChatMessageExt;
-    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::drive::{Run, Setup, StorageSetup, simulate};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, Role, UserText};
     use lk_agents_voice::events::SessionEvent;
 
@@ -129,7 +129,7 @@ mod stored_turn_keeps_the_history {
     #[test]
     fn what_the_agent_does_not_read_stays_in_the_history() {
         // A store that keeps its lease for the whole call.
-        let setup = Setup { storage_lost_at: Some(1_000), ..Setup::default() };
+        let setup = Setup { storage: Some(StorageSetup::default()), ..Setup::default() };
         // The agent's view becomes one note of the developer's; its first exchange stays in history.
         let dropped = Input::UpdateChatCtx {
             items: vec![Role::Assistant],

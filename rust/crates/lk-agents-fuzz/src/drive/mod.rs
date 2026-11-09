@@ -229,9 +229,22 @@ pub struct Setup {
     /// The share of provider delays that stray from the measured ones to a deadline or a stall
     /// (`fakes::delay`): the search's randomness, so a pure conversation keeps real timings.
     pub stray: f64,
-    /// The voice lane is stored, its lease lost at this storage answer (the n-th turn committed or
-    /// abandoned); `None` runs the session without storage, as most do.
-    pub storage_lost_at: Option<u32>,
+    /// The voice lane is stored, by storage's own code over its in-memory database; `None` runs
+    /// the session without storage.
+    pub storage: Option<StorageSetup>,
+}
+
+/// The thread database behind the voice lane. Every answer takes a seeded latency.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StorageSetup {
+    /// Seeded faults on top: answers lost after the write applied, writes lost before it, lease
+    /// takes answered after the interruption watchdog, and outages, a quarter of which outlast
+    /// the lease.
+    pub faults: bool,
+    /// The database unreachable over `[from, from + len)` ms of the call, as `(from, len)`.
+    pub outage: Option<(u64, u64)>,
+    /// Every lease take answers this long after it applied: a slow acknowledgment.
+    pub take_answer_ms: Option<u64>,
 }
 
 /// The pre-connect buffer wait the room's legs run with: shorter than the half second of frames
@@ -490,7 +503,7 @@ impl Default for Setup {
             chunked_tts: false,
             tools_refuse_cancel: false,
             stray: 0.0,
-            storage_lost_at: None,
+            storage: None,
         }
     }
 }
@@ -674,6 +687,8 @@ pub struct Run {
     tasks: Arc<Tasks>,
     stamps: Stamps,
     pub registry: Arc<Registry>,
+    /// The voice lane's store and database, closed as the host closes it after the session.
+    store: Option<fakes::FakeStore>,
     /// What the fakes have done and not yet been read. Drained after every input; see [`Record`]
     /// for why reading it later still yields the order things happened in.
     records: mpsc::UnboundedReceiver<Record>,
@@ -743,6 +758,11 @@ impl Run {
     /// The order of every step dispatched so far, folded: a seed replays it exactly.
     pub fn dispatch_order(&self) -> u64 {
         self.queue.order()
+    }
+
+    /// An acquire's lease take applied with its answer still owed (`FakeStore::take_unanswered`).
+    pub fn lease_take_unanswered(&self) -> bool {
+        self.store.as_ref().is_some_and(fakes::FakeStore::take_unanswered)
     }
 }
 
