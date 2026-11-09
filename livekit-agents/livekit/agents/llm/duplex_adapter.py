@@ -344,6 +344,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         duplex.on("input_speech_started", lambda ev: self.emit("input_speech_started", ev))
         duplex.on("input_speech_stopped", lambda ev: self.emit("input_speech_stopped", ev))
         duplex.on("metrics_collected", lambda ev: self.emit("metrics_collected", ev))
+        duplex.on("background_work_changed", lambda ev: self.emit("background_work_changed", ev))
         duplex.on("error", lambda ev: self.emit("error", ev))
 
         self._segment_atask = asyncio.create_task(

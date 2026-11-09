@@ -47,6 +47,16 @@ class GenerationCreatedEvent:
     """The response ID associated with this generation, used for metrics attribution"""
 
 
+@dataclass
+class BackgroundWorkChangedEvent:
+    """The model started or finished work it will speak about when done, without new input.
+
+    Speech the user can already hear is not background work. A reconnect drops it.
+    """
+
+    running: bool
+
+
 class RealtimeModelError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["realtime_model_error"] = "realtime_model_error"
@@ -165,6 +175,7 @@ EventTypes = Literal[
     "session_reconnected",
     "metrics_collected",
     "remote_item_added",
+    "background_work_changed",  # a BackgroundWorkChangedEvent, for a model that reports it
     "error",
 ]
 

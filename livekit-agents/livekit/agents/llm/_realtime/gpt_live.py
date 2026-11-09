@@ -471,6 +471,11 @@ class GPTLiveSession(
         self._backend_open_calls: set[str] = set()
         self._backend_response_pending = False
 
+        # a response.create was sent and its response.created has not arrived yet
+        self._backend_response_requested = False
+        # the backend state last reported as background_work_changed
+        self._backend_busy_reported = False
+
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
 
@@ -663,6 +668,8 @@ class GPTLiveSession(
         self._backend_running_responses.clear()
         self._backend_open_calls.clear()
         self._backend_response_pending = False
+        self._backend_response_requested = False
+        self._update_backend_state()
         self._usage_total = types.Usage()
         self._session_id = None
 
@@ -835,6 +842,7 @@ class GPTLiveSession(
             self.emit("decision_event", types.DecisionEventEnvelope.construct(**event))
         elif etype == "response.event":
             self._handle_response_event(types.ResponseEventEnvelope.construct(**event))
+            self._update_backend_state()
         elif etype == "session.usage.updated":
             self._handle_session_usage_updated(types.SessionUsageUpdatedEvent.construct(**event))
         elif etype == "session.closed":
@@ -970,6 +978,7 @@ class GPTLiveSession(
 
         if event.type == "response.created":
             self._backend_running_responses[d_id] = set()
+            self._backend_response_requested = False
 
         elif event.type == "response.output_item.done":
             # only the completed item carries the name, call id and arguments together
@@ -1063,7 +1072,23 @@ class GPTLiveSession(
         ):
             return
         self._backend_response_pending = False
+        self._backend_response_requested = True
         self.send_event(types.ResponseCreateEvent(event_id=utils.shortuuid("response_create_")))
+
+    @property
+    def _backend_busy(self) -> bool:
+        # client work is the application's, so nothing here knows whether it still runs
+        return bool(
+            self._backend_running_responses
+            or self._backend_open_calls
+            or self._backend_response_pending
+            or self._backend_response_requested
+        )
+
+    def _update_backend_state(self) -> None:
+        if (busy := self._backend_busy) != self._backend_busy_reported:
+            self._backend_busy_reported = busy
+            self.emit("background_work_changed", llm.BackgroundWorkChangedEvent(running=busy))
 
     # metrics and errors
 

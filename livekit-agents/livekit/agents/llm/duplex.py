@@ -61,6 +61,7 @@ DuplexEventTypes = Literal[
     "input_speech_started",  # the user's turns, as the plugin detects them
     "input_speech_stopped",
     "input_audio_transcription_completed",
+    "background_work_changed",  # a BackgroundWorkChangedEvent, as on RealtimeSession
     "session_reconnected",
     "metrics_collected",
     "error",
