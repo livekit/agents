@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterable, AsyncIterator, Sequence
 
     from livekit.agents._generated.expressive import ExpressiveOptions
-    from livekit.agents.inference import TurnDetector
     from livekit.agents.llm.tool_context import ToolChoice
 
     from ..llm import ChatContext
@@ -29,8 +28,8 @@ if TYPE_CHECKING:
     from .chat_items import ChatItem
     from .expressive import ExpressiveOptions as HostExpressiveOptions
     from .rtc_frames import AudioFrame
-    from .session_options import ResolvedSessionOptions, TextTransforms, TurnDetectionMode
-    from .turn import EndpointingOptions, InterruptionOptions
+    from .session_options import ResolvedSessionOptions, TextTransforms
+    from .turn import TurnHandlingOptions
     from .usage import Usage
     from .vad import VAD
 
@@ -112,9 +111,7 @@ class VoiceSession:
         stt: NotGivenOr[STT | str | None] = NOT_GIVEN,
         tts: NotGivenOr[TTS | str | None] = NOT_GIVEN,
         vad: NotGivenOr[VAD | None] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetectionMode | TurnDetector | None] = NOT_GIVEN,
-        endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
-        interruption: NotGivenOr[InterruptionOptions] = NOT_GIVEN,
+        turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         expressive: NotGivenOr[bool | HostExpressiveOptions] = NOT_GIVEN,
@@ -123,16 +120,14 @@ class VoiceSession:
         """`update_options(..)`: change only the supplied settings. A replaced `stt`, `tts` or `vad`
         is installed in place on a running session, without restarting the call or interrupting
         speech; a setting an `override_options` layer holds takes the new value once the layer is
-        released. `interruption` merges over the session's and takes no `mode`, which is set with
-        `VoiceSession(turn_handling=)`.
+        released. `turn_handling` merges by key over the session's, nested groups included; its
+        `interruption` takes no `mode`, which is set with `VoiceSession(turn_handling=)`.
         """
         self._native.update_options(
             stt=_stt_model(stt) if is_given(stt) else stt,
             tts=_tts_model(tts) if is_given(tts) else tts,
             vad=vad,
-            turn_detection=turn_detection,
-            endpointing_opts=endpointing_opts,
-            interruption=interruption,
+            turn_handling=turn_handling,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=tts_text_transforms,
             expressive=expressive,

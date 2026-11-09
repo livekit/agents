@@ -394,7 +394,10 @@ plain_enum! {
 }
 plain_enum! {
     /// One field of the live session configuration, changed alone so a finding names it.
-    Knob { Detection, MinEndpointing, MaxEndpointing, Interruptions, MinInterruptionWords, UserAway, MaxToolSteps }
+    Knob {
+        Detection, MinEndpointing, MaxEndpointing, Interruptions, MinInterruptionWords, UserAway,
+        MaxToolSteps, UserTurnMaxWords,
+    }
 }
 plain_enum! {
     /// Which turn-taking mode the session runs in.

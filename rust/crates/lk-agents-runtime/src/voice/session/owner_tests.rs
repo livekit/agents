@@ -128,8 +128,8 @@ async fn option_updates_while_the_session_opens_stay_on_the_options() {
         owner.start(storage, host.clone(), None, lk_agents_abi::telemetry::Cx::NONE).unwrap();
     host.preparing.notified().await;
     use Maybe::NotGiven as N;
-    owner.update_options(Maybe::Given(None), N, N, N, N, N, N, N, N, N).unwrap();
-    let layer = owner.override_options(N, Maybe::Given(None), N, N, N, N, N, N).unwrap();
+    owner.update_options(Maybe::Given(None), N, N, N, N, N, N, N).unwrap();
+    let layer = owner.override_options(N, Maybe::Given(None), N, N, N, N).unwrap();
     owner.release_override(layer).unwrap();
     host.release.notify_one();
     assert!(opening.await.is_err());

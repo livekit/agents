@@ -2,7 +2,7 @@ mod live_options {
     //! A live option change reaches the next reply.
     use lk_agents_fuzz::drive::{Case, Setup, run};
     use lk_agents_fuzz::input::{
-        AgentText, Count, Input, Knob, Millis, Ref, ToolAnswer, ToolArgs, TurnMode,
+        AgentText, Count, Input, Knob, Millis, Ref, ToolAnswer, ToolArgs, TurnMode, UserText,
     };
 
     /// One tool step under `max_tool_steps = 0`, with the limit raised to `raise` first when given.
@@ -54,6 +54,39 @@ mod live_options {
             "the step limit of 0 was never hit: the probe is blind"
         );
         assert!(!limit_reached(tool_step(Some(3))), "the raised limit did not reach the reply");
+    }
+
+    // Catches: a live `user_turn_limit` kept by the turn machine from construction, never firing.
+    #[test]
+    fn a_turn_limit_set_live_cuts_in() {
+        let case = Case {
+            setup: Setup { stt: true, turn: TurnMode::Manual, ..Setup::default() },
+            inputs: vec![
+                Input::Configure {
+                    knob: Knob::UserTurnMaxWords,
+                    mode: TurnMode::Default,
+                    ms: Millis(0),
+                    on: false,
+                    words: Count(4),
+                },
+                Input::SttStart { stt: Ref::new(0) },
+                Input::SttFinal {
+                    utterance: Ref::new(0),
+                    text: UserText("my name is Theo and I live in Paris".into()),
+                    speaker: None,
+                },
+                Input::Advance { ms: Millis(100) },
+                Input::Close { drain: false },
+            ],
+            ..Case::default()
+        };
+        let outcome = run(case);
+        assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
+        assert!(
+            outcome.reached.iter().any(|v| v.ends_with("::UserTurnExceeded")),
+            "{:#?}",
+            outcome.reached
+        );
     }
 }
 

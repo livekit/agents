@@ -17,15 +17,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from livekit.agents._generated.expressive import ExpressiveOptions
-    from livekit.agents.inference import TurnDetector
 
-    from .turn import (
-        EndpointingMode,
-        EndpointingOptions,
-        InterruptionMode,
-        InterruptionOptions,
-        TurnHandlingOptions,
-    )
+    from .turn import EndpointingMode, InterruptionMode, TurnHandlingOptions
 
 TurnDetectionMode: TypeAlias = Literal["stt", "vad", "manual", "realtime_llm"]
 """The turn detection mode a session or agent asks for; unsaid or `None` decides from the legs."""
@@ -65,14 +58,13 @@ class SessionKwargs(TypedDict, total=False):
 class UpdateKwargs(TypedDict, total=False):
     """`AgentSession.update_options(..)`'s option surface."""
 
-    endpointing_opts: EndpointingOptions
-    turn_detection: TurnDetectionMode | TurnDetector | None
-    """`None` reverts to automatic selection."""
+    turn_handling: TurnHandlingOptions
+    """Merged by key over the session's, nested groups included. `turn_detection=None` reverts
+    to automatic selection; `interruption.mode` is set at construction.
+    """
     expressive: bool | ExpressiveOptions | None
     keyterms: list[str]
     """The user-defined keyterms, replaced; the detected ones stay."""
-    interruption: InterruptionOptions
-    """Merged over the session's interruption handling; its `mode` is set at construction."""
     min_consecutive_speech_delay: float
     tts_text_transforms: Sequence[TextTransforms] | None
 

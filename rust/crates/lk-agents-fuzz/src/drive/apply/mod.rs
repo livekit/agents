@@ -126,31 +126,37 @@ pub(super) fn ready_now<F: std::future::Future>(future: F) -> Option<F::Output> 
     }
 }
 
-/// What `update_options` / `override_options` say for `knob`; `None` for the options they do not
-/// take (endpointing and detection only).
-fn turn_update(knob: Knob, mode: TurnMode, ms: Millis) -> Option<UpdateKwargs> {
+/// The `turn_handling` that `update_options` / `override_options` say for `knob`; `None` for the
+/// options the fuzz drives through a patch instead (endpointing and detection go through here).
+fn turn_update(knob: Knob, mode: TurnMode, ms: Millis) -> Option<TurnHandlingKwargs> {
     let endpointing = |patch: fn(&mut EndpointingKwargs, f64)| {
         let mut kwargs = EndpointingKwargs::default();
         patch(&mut kwargs, secs(ms));
         Some(kwargs)
     };
-    match knob {
-        Knob::Detection => Some(UpdateKwargs {
+    let turn = match knob {
+        Knob::Detection => TurnHandlingKwargs {
             turn_detection: Maybe::Given(
                 turn_detection(mode).map_or(TurnDetectionKwarg::Null, TurnDetectionKwarg::Mode),
             ),
-            ..UpdateKwargs::default()
-        }),
-        Knob::MinEndpointing => Some(UpdateKwargs {
-            endpointing_opts: endpointing(|k, s| k.min_delay = Some(s)),
-            ..UpdateKwargs::default()
-        }),
-        Knob::MaxEndpointing => Some(UpdateKwargs {
-            endpointing_opts: endpointing(|k, s| k.max_delay = Some(s)),
-            ..UpdateKwargs::default()
-        }),
-        _ => None,
-    }
+            ..TurnHandlingKwargs::default()
+        },
+        Knob::MinEndpointing => TurnHandlingKwargs {
+            endpointing: endpointing(|k, s| k.min_delay = Some(s)),
+            ..TurnHandlingKwargs::default()
+        },
+        Knob::MaxEndpointing => TurnHandlingKwargs {
+            endpointing: endpointing(|k, s| k.max_delay = Some(s)),
+            ..TurnHandlingKwargs::default()
+        },
+        _ => return None,
+    };
+    Some(turn)
+}
+
+/// `update_options(turn_handling=)` / `override_options(turn_handling=)` with only `turn`.
+fn turn_kwargs(turn: TurnHandlingKwargs) -> UpdateKwargs {
+    UpdateKwargs { turn_handling: Some(turn), ..UpdateKwargs::default() }
 }
 
 fn secs(ms: Millis) -> f64 {

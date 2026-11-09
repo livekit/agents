@@ -36,8 +36,8 @@ const CLOSED_REMEMBERED: usize = 32;
 /// How long any request may wait for its `GenerationCreated` before it fails.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Warned when a live `update_options(turn_detection=..)` would flip a realtime model's
-/// server-side turn detection, which is fixed at the open.
+/// Warned when a live `update_options(turn_handling={"turn_detection": ..})` would flip a
+/// realtime model's server-side turn detection, which is fixed at the open.
 pub const REALTIME_TURN_DETECTION_STAYS_ENABLED: &str = "changing turn_detection at runtime does not update a realtime model's server-side turn detection (resolved at session start); it stays enabled for this session.";
 
 pub const REALTIME_TURN_DETECTION_STAYS_DISABLED: &str = "changing turn_detection at runtime does not update a realtime model's server-side turn detection (resolved at session start); it stays disabled for this session.";

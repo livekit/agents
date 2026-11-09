@@ -48,7 +48,7 @@ again when left empty.
 `inference.TurnDetector`, which predicts the end of the person's turn on their audio; any other
 object is refused (`TypeError`). Left out, a session without a realtime model runs
 `inference.TurnDetector()`. A detector object is set at construction;
-`update_options(turn_detection=)` on a running session takes a mode.
+`update_options(turn_handling={"turn_detection": ...})` on a running session takes a mode.
 
 `session.start(agent, chat_ctx=)` and `session.update_agent(agent, chat_ctx=)`
 are the two places to supply a different history. An explicit agent switch
@@ -158,8 +158,10 @@ await session.start(agent=front_desk, room=ctx.room)
 # Change presentation and listening policy when the application needs it.
 session.update_options(
     tts=specialist_voice,
-    turn_detection="stt",
-    endpointing_opts={"min_delay": 0.3, "max_delay": 2.0},
+    turn_handling={
+        "turn_detection": "stt",
+        "endpointing": {"min_delay": 0.3, "max_delay": 2.0},
+    },
 )
 session.update_agent(specialist)
 ```
@@ -181,10 +183,13 @@ not promise zero-latency model replacement.
 
 A replaced provider is installed in place under the current agent's nodes; only
 the providers whose effective value changed are rebound. Before `start()` the
-session opens on the updated settings and providers. `interruption` merges over
-the session's settings and takes no `mode`, not even `None`: the interruption
-mode is set with `VoiceSession(turn_handling=)` and refused with a `ValueError`
-anywhere else. An update refused for its arguments changes nothing.
+session opens on the updated settings and providers. `turn_handling` takes the
+same keys as the constructor's and merges by key, nested groups included:
+`{"endpointing": {"max_delay": 4.0}}` changes that one setting and keeps the
+others. `turn_detection: None` returns to automatic selection. Its `interruption`
+takes no `mode`, not even `None`: the interruption mode is set with
+`VoiceSession(turn_handling=)` and refused with a `ValueError` anywhere else. An
+update refused for its arguments changes nothing.
 
 `update_agent` changes the agent's instructions, tools, and reasoning behavior.
 It preserves the session's audio settings. VoiceTask activation and restoration also
@@ -203,8 +208,7 @@ async with session.override_options(tts=specialist_voice):
 ```
 
 Each setting takes its value from the topmost override that sets it, else from
-the base; each key of `endpointing_opts` and `interruption` is a setting on its
-own. Overrides sit above the active agent's settings, including an agent or
+the base; each key inside a `turn_handling` group is a setting on its own. Overrides sit above the active agent's settings, including an agent or
 `VoiceTask` that takes over inside the block. Base changes made during an
 override persist: they show through at once on the settings no override sets,
 and on the others once the override is removed. The layer belongs to the block that opened it and is

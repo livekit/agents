@@ -98,10 +98,7 @@ impl AudioRecognition {
             // Without an adaptive detector, transcripts over agent speech reach the turn at once.
             interruption_enabled: i.detection_enabled(),
             transcription_timeout: cfg.timers.transcription_timeout(),
-            user_turn_limit: UserTurnLimit {
-                max_words: cfg.turn.user_turn_limit.max_words().map(|w| w as usize),
-                max_duration: cfg.turn.user_turn_limit.max_duration(),
-            },
+            user_turn_limit: user_turn_limit(cfg),
             backchannel_boundary: i.backchannel_boundary(),
             detector: match legs.detector {
                 None => Detector::None,
@@ -268,6 +265,13 @@ impl AudioRecognition {
         self.endpointing = Endpointing::new(cfg);
     }
 
+    /// The option leaves the turn reads at each use, refreshed after a live configuration change.
+    pub fn set_options(&mut self, cfg: &AgentSessionOptions) {
+        self.cfg.transcription_timeout = cfg.timers.transcription_timeout();
+        self.cfg.user_turn_limit = user_turn_limit(cfg);
+        self.cfg.backchannel_boundary = cfg.turn.interruption.backchannel_boundary();
+    }
+
     /// Only crossing the manual boundary retires the running evaluation: under manual only
     /// `commit_user_turn()` may end a turn.
     #[must_use = "recognition effects must be applied before the next transition"]
@@ -344,5 +348,12 @@ impl AudioRecognition {
             }
             (None, _) => false,
         }
+    }
+}
+
+fn user_turn_limit(cfg: &AgentSessionOptions) -> UserTurnLimit {
+    UserTurnLimit {
+        max_words: cfg.turn.user_turn_limit.max_words().map(|w| w as usize),
+        max_duration: cfg.turn.user_turn_limit.max_duration(),
     }
 }

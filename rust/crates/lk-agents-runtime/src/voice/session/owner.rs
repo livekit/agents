@@ -11,8 +11,8 @@ use lk_agents_abi::voice::session::{
 };
 use lk_agents_abi::voice::session_effects::{DeliveredState, SessionEvents};
 use lk_agents_abi::voice::session_options::{
-    EndpointingKwargs, Expressive, InterruptionKwargs, RecordingOptions, ResolvedSessionOptions,
-    SessionLegs, TextTransformSet, TurnDetectionKwarg, UpdateKwargs,
+    Expressive, RecordingOptions, ResolvedSessionOptions, SessionLegs, TextTransformSet,
+    TurnHandlingKwargs, UpdateKwargs,
 };
 use lk_agents_abi::voice::session_owner::SessionOwner as _;
 use lk_agents_abi::voice::session_owner::{
@@ -647,20 +647,16 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         stt: Maybe<Option<HostRef>>,
         tts: Maybe<Option<HostRef>>,
         vad: Maybe<Option<HostRef>>,
-        turn_detection: Maybe<TurnDetectionKwarg>,
-        endpointing_opts: Maybe<EndpointingKwargs>,
-        interruption: Maybe<InterruptionKwargs>,
+        turn_handling: Maybe<TurnHandlingKwargs>,
         min_consecutive_speech_delay: Maybe<f64>,
         tts_text_transforms: Maybe<Option<TextTransformSet>>,
         expressive: Maybe<Expressive>,
         keyterms: Maybe<Vec<String>>,
     ) -> Result<(), OptionsRefused> {
         let update = UpdateKwargs {
-            endpointing_opts: endpointing_opts.given(),
-            turn_detection,
+            turn_handling: turn_handling.given(),
             expressive,
             keyterms: keyterms.given(),
-            interruption: interruption.given(),
             min_consecutive_speech_delay: min_consecutive_speech_delay.given(),
             tts_text_transforms,
         };
@@ -678,16 +674,12 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         stt: Maybe<Option<HostRef>>,
         tts: Maybe<Option<HostRef>>,
         vad: Maybe<Option<HostRef>>,
-        turn_detection: Maybe<TurnDetectionKwarg>,
-        endpointing_opts: Maybe<EndpointingKwargs>,
-        interruption: Maybe<InterruptionKwargs>,
+        turn_handling: Maybe<TurnHandlingKwargs>,
         min_consecutive_speech_delay: Maybe<f64>,
         tts_text_transforms: Maybe<Option<TextTransformSet>>,
     ) -> Result<u64, OptionsRefused> {
         let update = UpdateKwargs {
-            endpointing_opts: endpointing_opts.given(),
-            turn_detection,
-            interruption: interruption.given(),
+            turn_handling: turn_handling.given(),
             min_consecutive_speech_delay: min_consecutive_speech_delay.given(),
             tts_text_transforms,
             ..UpdateKwargs::default()

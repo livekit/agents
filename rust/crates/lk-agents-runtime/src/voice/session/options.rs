@@ -202,7 +202,7 @@ impl ProviderRegistry {
 mod tests {
     use super::*;
     use lk_agents_abi::voice::session::SessionOptions as _;
-    use lk_agents_abi::voice::session_options::TurnDetectionKwarg;
+    use lk_agents_abi::voice::session_options::{TurnDetectionKwarg, TurnHandlingKwargs};
 
     #[test]
     fn replaced_provider_references_are_released_outside_the_options_lock() {
@@ -255,18 +255,27 @@ mod tests {
             SessionOptions::new(crate::voice::session::tests::option_kwargs(), Default::default());
         let mode = |options: &SessionOptions| options.resolved(legs()).turn_detection_mode;
         options.update(UpdateKwargs {
-            turn_detection: Maybe::Given(TurnDetectionKwarg::Mode(TurnDetection::Manual)),
+            turn_handling: Some(TurnHandlingKwargs {
+                turn_detection: Maybe::Given(TurnDetectionKwarg::Mode(TurnDetection::Manual)),
+                ..Default::default()
+            }),
             expressive: Maybe::Given(Expressive::default()),
             ..Default::default()
         });
         assert_eq!(mode(&options), Some(TurnDetection::Manual));
         options.update(UpdateKwargs {
-            turn_detection: Maybe::Given(TurnDetectionKwarg::Detector),
+            turn_handling: Some(TurnHandlingKwargs {
+                turn_detection: Maybe::Given(TurnDetectionKwarg::Detector),
+                ..Default::default()
+            }),
             ..Default::default()
         });
         assert_eq!(mode(&options), Some(TurnDetection::Manual));
         options.update(UpdateKwargs {
-            turn_detection: Maybe::Given(TurnDetectionKwarg::Null),
+            turn_handling: Some(TurnHandlingKwargs {
+                turn_detection: Maybe::Given(TurnDetectionKwarg::Null),
+                ..Default::default()
+            }),
             ..Default::default()
         });
         assert_ne!(mode(&options), Some(TurnDetection::Manual));

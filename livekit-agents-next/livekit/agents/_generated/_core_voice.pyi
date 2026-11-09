@@ -12,7 +12,6 @@ from typing import Any, Literal, Self
 from livekit.agents import VAD
 from livekit.agents._generated.expressive import ExpressiveOptions
 from livekit.agents.beta.workflows import _TransferHost
-from livekit.agents.inference import TurnDetector
 from livekit.agents.job import JobContext
 from livekit.agents.llm import LLM
 from livekit.agents.llm.tool_context import ToolChoice
@@ -68,7 +67,7 @@ from .telemetry import RecordingOptions, ReportJob, SessionReport, SpanContext
 from .tool_options import ToolSpec
 from .tool_report import ToolReport
 from .transcript import TranscriptChunk
-from .turn import EndpointingOptions, InterruptionMode, InterruptionOptions
+from .turn import InterruptionMode, TurnHandlingOptions
 from .usage import Usage
 from .voice_session import (
     DtmfTaskOptions,
@@ -926,9 +925,7 @@ class _core_SessionOwner:
         stt: NotGivenOr[object | None] = ...,
         tts: NotGivenOr[object | None] = ...,
         vad: NotGivenOr[object | None] = ...,
-        turn_detection: NotGivenOr[TurnDetectionMode | TurnDetector | None] = ...,
-        endpointing_opts: NotGivenOr[EndpointingOptions] = ...,
-        interruption: NotGivenOr[InterruptionOptions] = ...,
+        turn_handling: NotGivenOr[TurnHandlingOptions] = ...,
         min_consecutive_speech_delay: NotGivenOr[float] = ...,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = ...,
         expressive: NotGivenOr[bool | ExpressiveOptions | None] = ...,
@@ -937,8 +934,8 @@ class _core_SessionOwner:
         """`update_options(..)`: change only the supplied settings. A replaced `stt`, `tts` or `vad`
         is installed in place on a running session, without restarting the call or interrupting
         speech; a setting an `override_options` layer holds takes the new value once the layer is
-        released. `interruption` merges over the session's and takes no `mode`, which is set with
-        `VoiceSession(turn_handling=)`.
+        released. `turn_handling` merges by key over the session's, nested groups included; its
+        `interruption` takes no `mode`, which is set with `VoiceSession(turn_handling=)`.
         """
     def override_options(
         self,
@@ -946,9 +943,7 @@ class _core_SessionOwner:
         stt: NotGivenOr[object | None] = ...,
         tts: NotGivenOr[object | None] = ...,
         vad: NotGivenOr[object | None] = ...,
-        turn_detection: NotGivenOr[TurnDetectionMode | TurnDetector | None] = ...,
-        endpointing_opts: NotGivenOr[EndpointingOptions] = ...,
-        interruption: NotGivenOr[InterruptionOptions] = ...,
+        turn_handling: NotGivenOr[TurnHandlingOptions] = ...,
         min_consecutive_speech_delay: NotGivenOr[float] = ...,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = ...,
     ) -> int:

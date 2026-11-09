@@ -2,8 +2,7 @@ use crate::audio_recognition::TurnDetectionMode;
 use crate::events::DiagnosticEvent;
 use crate::turn::{
     EndpointingOptions, InterruptionOptions, PreemptiveGenerationOptions, TurnHandlingOptions,
-    UserTurnLimitOptions, count, endpointing_options, interruption_options, nullable,
-    turn_handling_layer,
+    UserTurnLimitOptions, count, nullable, turn_handling_layer,
 };
 pub use lk_agents_abi::voice::session_options::{
     DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides, Expressive,
@@ -19,7 +18,8 @@ use std::time::Duration;
 pub fn validate_session_update(
     update: &UpdateKwargs,
 ) -> Result<(), lk_agents_abi::voice::session::CommandRefused> {
-    if update.interruption.as_ref().is_some_and(|settings| settings.mode.is_given()) {
+    let turn = update.turn_handling.as_ref();
+    if turn.and_then(|t| t.interruption).is_some_and(|settings| settings.mode.is_given()) {
         return Err(lk_agents_abi::voice::session::CommandRefused::Invalid(
             "interruption takes no mode here: the interruption mode is set with VoiceSession(turn_handling=)".to_owned(),
         ));
@@ -32,9 +32,12 @@ pub fn running_layer(
     update: &UpdateKwargs,
 ) -> Result<AgentSessionOptions, lk_agents_abi::voice::session::CommandRefused> {
     validate_session_update(update)?;
-    if let Maybe::Given(TurnDetectionKwarg::Detector) = update.turn_detection {
+    if update
+        .turn_handling
+        .is_some_and(|t| t.turn_detection == Maybe::Given(TurnDetectionKwarg::Detector))
+    {
         return Err(lk_agents_abi::voice::session::CommandRefused::Invalid(
-            "update_options(turn_detection=) takes a mode on a running session; a turn detector object is set with VoiceSession(turn_handling=)".to_owned(),
+            "update_options(turn_handling={\"turn_detection\": ...}) takes a mode on a running session; a turn detector object is set with VoiceSession(turn_handling=)".to_owned(),
         ));
     }
     Ok(update_layer(update))
@@ -336,30 +339,20 @@ pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
 /// What `update_options(..)` or `override_options(..)` says.
 pub fn update_layer(kw: &UpdateKwargs) -> AgentSessionOptions {
     let UpdateKwargs {
-        endpointing_opts,
-        turn_detection,
+        turn_handling,
         expressive: _,
         keyterms: _,
-        interruption,
         min_consecutive_speech_delay,
         tts_text_transforms,
     } = kw.clone();
-    let mut o = AgentSessionOptions::default();
-    if let Some(e) = endpointing_opts {
-        o.turn.endpointing = endpointing_options(&e);
-    }
-    if let Some(i) = interruption {
-        o.turn.interruption = interruption_options(&i);
+    let mut o = turn_handling.as_ref().map(turn_handling_layer).unwrap_or_default();
+    // Unlike at construction, a given `None` reverts to automatic selection. A detector object
+    // is refused by `running_layer` before a running session reads this.
+    if turn_handling.is_some_and(|t| t.turn_detection == Maybe::Given(TurnDetectionKwarg::Null)) {
+        o.turn.detection = Maybe::Given(None);
     }
     o.speech.min_consecutive_speech_delay = min_consecutive_speech_delay.map(secs);
     o.speech.tts_text_transforms = tts_text_transforms;
-    o.turn.detection = match turn_detection {
-        Maybe::NotGiven => Maybe::NotGiven,
-        Maybe::Given(TurnDetectionKwarg::Null) => Maybe::Given(None),
-        Maybe::Given(TurnDetectionKwarg::Mode(m)) => Maybe::Given(Some(m)),
-        // A detector object: refused by `update_turn_options` before this.
-        Maybe::Given(TurnDetectionKwarg::Detector) => Maybe::NotGiven,
-    };
     o
 }
 

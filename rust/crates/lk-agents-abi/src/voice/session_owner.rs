@@ -161,8 +161,8 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     /// `update_options(..)`: change only the supplied settings. A replaced `stt`, `tts` or `vad`
     /// is installed in place on a running session, without restarting the call or interrupting
     /// speech; a setting an `override_options` layer holds takes the new value once the layer is
-    /// released. `interruption` merges over the session's and takes no `mode`, which is set with
-    /// `VoiceSession(turn_handling=)`.
+    /// released. `turn_handling` merges by key over the session's, nested groups included; its
+    /// `interruption` takes no `mode`, which is set with `VoiceSession(turn_handling=)`.
     #[host(call)]
     #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
     fn update_options(
@@ -170,9 +170,7 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
         #[host(kw)] stt: crate::Maybe<Option<crate::HostRef>>,
         tts: crate::Maybe<Option<crate::HostRef>>,
         vad: crate::Maybe<Option<crate::HostRef>>,
-        turn_detection: crate::Maybe<super::session_options::TurnDetectionKwarg>,
-        endpointing_opts: crate::Maybe<super::session_options::EndpointingKwargs>,
-        interruption: crate::Maybe<super::session_options::InterruptionKwargs>,
+        turn_handling: crate::Maybe<super::session_options::TurnHandlingKwargs>,
         min_consecutive_speech_delay: crate::Maybe<f64>,
         tts_text_transforms: crate::Maybe<Option<super::session_options::TextTransformSet>>,
         expressive: crate::Maybe<super::session_options::Expressive>,
@@ -188,9 +186,7 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
         #[host(kw)] stt: crate::Maybe<Option<crate::HostRef>>,
         tts: crate::Maybe<Option<crate::HostRef>>,
         vad: crate::Maybe<Option<crate::HostRef>>,
-        turn_detection: crate::Maybe<super::session_options::TurnDetectionKwarg>,
-        endpointing_opts: crate::Maybe<super::session_options::EndpointingKwargs>,
-        interruption: crate::Maybe<super::session_options::InterruptionKwargs>,
+        turn_handling: crate::Maybe<super::session_options::TurnHandlingKwargs>,
         min_consecutive_speech_delay: crate::Maybe<f64>,
         tts_text_transforms: crate::Maybe<Option<super::session_options::TextTransformSet>>,
     ) -> Result<u64, OptionsRefused>;
@@ -324,8 +320,8 @@ pub trait VoiceSessionFacade {
     /// `update_options(..)`: change only the supplied settings. A replaced `stt`, `tts` or `vad`
     /// is installed in place on a running session, without restarting the call or interrupting
     /// speech; a setting an `override_options` layer holds takes the new value once the layer is
-    /// released. `interruption` merges over the session's and takes no `mode`, which is set with
-    /// `VoiceSession(turn_handling=)`.
+    /// released. `turn_handling` merges by key over the session's, nested groups included; its
+    /// `interruption` takes no `mode`, which is set with `VoiceSession(turn_handling=)`.
     #[host(
         annotation(
             stt = "..stt.STT | str | None",
@@ -345,9 +341,7 @@ pub trait VoiceSessionFacade {
         #[host(kw)] stt: crate::Maybe<Option<crate::HostRef>>,
         tts: crate::Maybe<Option<crate::HostRef>>,
         vad: crate::Maybe<Option<crate::HostRef>>,
-        turn_detection: crate::Maybe<super::session_options::TurnDetectionKwarg>,
-        endpointing_opts: crate::Maybe<super::session_options::EndpointingKwargs>,
-        interruption: crate::Maybe<super::session_options::InterruptionKwargs>,
+        turn_handling: crate::Maybe<super::session_options::TurnHandlingKwargs>,
         min_consecutive_speech_delay: crate::Maybe<f64>,
         tts_text_transforms: crate::Maybe<Option<super::session_options::TextTransformSet>>,
         expressive: crate::Maybe<super::session_options::Expressive>,

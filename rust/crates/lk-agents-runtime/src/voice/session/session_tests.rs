@@ -767,10 +767,15 @@ async fn a_finished_speech_leaves_the_sessions_registry() {
 #[tokio::test(start_paused = true)]
 async fn a_failed_build_leaves_the_held_override_for_the_retried_start() {
     use lk_agents_abi::voice::session::SessionOptions as _;
-    use lk_agents_abi::voice::session_options::{EndpointingKwargs, SessionLegs, UpdateKwargs};
+    use lk_agents_abi::voice::session_options::{
+        EndpointingKwargs, SessionLegs, TurnHandlingKwargs, UpdateKwargs,
+    };
     let options = SessionOptions::new(option_kwargs(), Default::default());
     options.override_options(UpdateKwargs {
-        endpointing_opts: Some(EndpointingKwargs { min_delay: Some(0.9), ..Default::default() }),
+        turn_handling: Some(TurnHandlingKwargs {
+            endpointing: Some(EndpointingKwargs { min_delay: Some(0.9), ..Default::default() }),
+            ..Default::default()
+        }),
         ..Default::default()
     });
     // A remote session needs a room or a console: this build fails.

@@ -152,7 +152,10 @@ fn an_agents_turn_detection_none_is_automatic_selection() {
 fn updates_cannot_reselect_interruption_mode_even_before_start() {
     use lk_agents_abi::voice::session_options::InterruptionKwargs;
     let with_mode = |mode| UpdateKwargs {
-        interruption: Some(InterruptionKwargs { mode, ..Default::default() }),
+        turn_handling: Some(TurnHandlingKwargs {
+            interruption: Some(InterruptionKwargs { mode, ..Default::default() }),
+            ..Default::default()
+        }),
         ..Default::default()
     };
     assert!(validate_session_update(&UpdateKwargs::default()).is_ok());

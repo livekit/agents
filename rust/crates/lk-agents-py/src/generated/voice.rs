@@ -4212,18 +4212,16 @@ impl CoreSessionOwner {
     /// `update_options(..)`: change only the supplied settings. A replaced `stt`, `tts` or `vad`
     /// is installed in place on a running session, without restarting the call or interrupting
     /// speech; a setting an `override_options` layer holds takes the new value once the layer is
-    /// released. `interruption` merges over the session's and takes no `mode`, which is set with
-    /// `VoiceSession(turn_handling=)`.
-    #[pyo3(signature = (*, stt = crate::py_values::Omittable::NOT_GIVEN, tts = crate::py_values::Omittable::NOT_GIVEN, vad = crate::py_values::Omittable::NOT_GIVEN, turn_detection = crate::py_values::Omittable::NOT_GIVEN, endpointing_opts = crate::py_values::Omittable::NOT_GIVEN, interruption = crate::py_values::Omittable::NOT_GIVEN, min_consecutive_speech_delay = crate::py_values::Omittable::NOT_GIVEN, tts_text_transforms = crate::py_values::Omittable::NOT_GIVEN, expressive = crate::py_values::Omittable::NOT_GIVEN, keyterms = crate::py_values::Omittable::NOT_GIVEN))]
+    /// released. `turn_handling` merges by key over the session's, nested groups included; its
+    /// `interruption` takes no `mode`, which is set with `VoiceSession(turn_handling=)`.
+    #[pyo3(signature = (*, stt = crate::py_values::Omittable::NOT_GIVEN, tts = crate::py_values::Omittable::NOT_GIVEN, vad = crate::py_values::Omittable::NOT_GIVEN, turn_handling = crate::py_values::Omittable::NOT_GIVEN, min_consecutive_speech_delay = crate::py_values::Omittable::NOT_GIVEN, tts_text_transforms = crate::py_values::Omittable::NOT_GIVEN, expressive = crate::py_values::Omittable::NOT_GIVEN, keyterms = crate::py_values::Omittable::NOT_GIVEN))]
     fn update_options(
         &self,
         py: Python<'_>,
         stt: crate::py_values::Omittable<'_>,
         tts: crate::py_values::Omittable<'_>,
         vad: crate::py_values::Omittable<'_>,
-        turn_detection: crate::py_values::Omittable<'_>,
-        endpointing_opts: crate::py_values::Omittable<'_>,
-        interruption: crate::py_values::Omittable<'_>,
+        turn_handling: crate::py_values::Omittable<'_>,
         min_consecutive_speech_delay: crate::py_values::Omittable<'_>,
         tts_text_transforms: crate::py_values::Omittable<'_>,
         expressive: crate::py_values::Omittable<'_>,
@@ -4251,13 +4249,8 @@ impl CoreSessionOwner {
                 (crate::py_objects::object_ref_from_py(value.as_any())).map(Some)
             }
         })?;
-        let turn_detection = turn_detection
-            .map(|value| crate::py_values::turn_detection_kwarg_from_py(value.as_any()))?;
-        let endpointing_opts = endpointing_opts.map(|value| {
-            crate::generated::records::turn::endpointing_options_from_py(value.as_any())
-        })?;
-        let interruption = interruption.map(|value| {
-            crate::generated::records::turn::interruption_options_from_py(value.as_any())
+        let turn_handling = turn_handling.map(|value| {
+            crate::generated::records::turn::turn_handling_options_from_py(value.as_any())
         })?;
         let min_consecutive_speech_delay = min_consecutive_speech_delay.map(|value| {
             crate::py_values::number_from_py::<f64>(value.as_any(), "min_consecutive_speech_delay")
@@ -4300,23 +4293,21 @@ impl CoreSessionOwner {
                     .collect::<PyResult<Vec<_>>>()
             })
         })?;
-        py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::update_options(&self.0, stt, tts, vad, turn_detection, endpointing_opts, interruption, min_consecutive_speech_delay, tts_text_transforms, expressive, keyterms)).map_err(|e: ::lk_agents_abi::voice::session_owner::OptionsRefused| <::lk_agents_abi::voice::session_owner::OptionsRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::update_options(&self.0, stt, tts, vad, turn_handling, min_consecutive_speech_delay, tts_text_transforms, expressive, keyterms)).map_err(|e: ::lk_agents_abi::voice::session_owner::OptionsRefused| <::lk_agents_abi::voice::session_owner::OptionsRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
     /// `override_options(..)` entered: a layer over the session's settings and providers, each
     /// taking its value from the topmost layer that sets it, named by the id returned, refused as
     /// `update_options` refuses.
-    #[pyo3(signature = (*, stt = crate::py_values::Omittable::NOT_GIVEN, tts = crate::py_values::Omittable::NOT_GIVEN, vad = crate::py_values::Omittable::NOT_GIVEN, turn_detection = crate::py_values::Omittable::NOT_GIVEN, endpointing_opts = crate::py_values::Omittable::NOT_GIVEN, interruption = crate::py_values::Omittable::NOT_GIVEN, min_consecutive_speech_delay = crate::py_values::Omittable::NOT_GIVEN, tts_text_transforms = crate::py_values::Omittable::NOT_GIVEN))]
+    #[pyo3(signature = (*, stt = crate::py_values::Omittable::NOT_GIVEN, tts = crate::py_values::Omittable::NOT_GIVEN, vad = crate::py_values::Omittable::NOT_GIVEN, turn_handling = crate::py_values::Omittable::NOT_GIVEN, min_consecutive_speech_delay = crate::py_values::Omittable::NOT_GIVEN, tts_text_transforms = crate::py_values::Omittable::NOT_GIVEN))]
     fn override_options(
         &self,
         py: Python<'_>,
         stt: crate::py_values::Omittable<'_>,
         tts: crate::py_values::Omittable<'_>,
         vad: crate::py_values::Omittable<'_>,
-        turn_detection: crate::py_values::Omittable<'_>,
-        endpointing_opts: crate::py_values::Omittable<'_>,
-        interruption: crate::py_values::Omittable<'_>,
+        turn_handling: crate::py_values::Omittable<'_>,
         min_consecutive_speech_delay: crate::py_values::Omittable<'_>,
         tts_text_transforms: crate::py_values::Omittable<'_>,
     ) -> PyResult<u64> {
@@ -4342,13 +4333,8 @@ impl CoreSessionOwner {
                 (crate::py_objects::object_ref_from_py(value.as_any())).map(Some)
             }
         })?;
-        let turn_detection = turn_detection
-            .map(|value| crate::py_values::turn_detection_kwarg_from_py(value.as_any()))?;
-        let endpointing_opts = endpointing_opts.map(|value| {
-            crate::generated::records::turn::endpointing_options_from_py(value.as_any())
-        })?;
-        let interruption = interruption.map(|value| {
-            crate::generated::records::turn::interruption_options_from_py(value.as_any())
+        let turn_handling = turn_handling.map(|value| {
+            crate::generated::records::turn::turn_handling_options_from_py(value.as_any())
         })?;
         let min_consecutive_speech_delay = min_consecutive_speech_delay.map(|value| {
             crate::py_values::number_from_py::<f64>(value.as_any(), "min_consecutive_speech_delay")
@@ -4379,7 +4365,7 @@ impl CoreSessionOwner {
                 .map(Some)
             }
         })?;
-        let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::override_options(&self.0, stt, tts, vad, turn_detection, endpointing_opts, interruption, min_consecutive_speech_delay, tts_text_transforms)).map_err(|e: ::lk_agents_abi::voice::session_owner::OptionsRefused| <::lk_agents_abi::voice::session_owner::OptionsRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::override_options(&self.0, stt, tts, vad, turn_handling, min_consecutive_speech_delay, tts_text_transforms)).map_err(|e: ::lk_agents_abi::voice::session_owner::OptionsRefused| <::lk_agents_abi::voice::session_owner::OptionsRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(out)
     }
 

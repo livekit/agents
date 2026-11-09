@@ -364,6 +364,7 @@ impl VoiceDriver {
         if let Some(e) = endpointing {
             self.activity.audio_recognition.set_endpointing(&e);
         }
+        self.activity.audio_recognition.set_options(&self.session.config.effective);
         if let Some(mode) = mode {
             let eff = self.activity.audio_recognition.set_turn_detection_mode(now, mode);
             self.apply_recognition_effects(eff);

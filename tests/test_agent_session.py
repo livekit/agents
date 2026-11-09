@@ -28,7 +28,7 @@ pytestmark = pytest.mark.unit
 def test_pre_start_provider_updates_and_views_need_no_event_loop() -> None:
     first, replacement = FakeTTS(), FakeTTS()
     session = VoiceSession(vad=None, tts=first, turn_handling={"turn_detection": "manual"})
-    session.update_options(tts=replacement, endpointing_opts={"min_delay": 0.4})
+    session.update_options(tts=replacement, turn_handling={"endpointing": {"min_delay": 0.4}})
     assert session.tts is replacement
     assert session.options["endpointing"]["min_delay"] == 0.4
     assert session.keyterms == []
@@ -52,7 +52,7 @@ async def test_a_provider_update_binds_only_on_a_running_session() -> None:
         assert early.bound == 0, "before start() the session opens on the options' providers"
         await session.start(Agent(instructions="Welcome the caller.", name="reception"))
         bound = early.bound
-        session.update_options(endpointing_opts={"min_delay": 0.4})
+        session.update_options(turn_handling={"endpointing": {"min_delay": 0.4}})
         assert early.bound == bound, "a settings-only update rebinds no provider"
         session.update_options(tts=late)
         assert late.bound == 1
@@ -66,10 +66,12 @@ async def test_the_interruption_mode_is_set_only_at_construction(
 ) -> None:
     async with VoiceSession(vad=None, turn_handling={"turn_detection": "manual"}) as session:
         with pytest.raises(ValueError, match="takes no mode"):
-            session.update_options(interruption={"mode": mode, "min_duration": 1.5})
+            session.update_options(
+                turn_handling={"interruption": {"mode": mode, "min_duration": 1.5}}
+            )
         assert session.options["interruption"]["min_duration"] != 1.5, "nothing applies"
         with pytest.raises(ValueError, match="takes no mode"):
-            async with session.override_options(interruption={"mode": mode}):
+            async with session.override_options(turn_handling={"interruption": {"mode": mode}}):
                 pass
 
 
@@ -82,7 +84,7 @@ def test_the_detector_gate_reads_the_session_modes_from_the_native_options() -> 
     )
     assert chosen._options.turn_detection == "manual"
     assert chosen._options.interruption_mode == "vad"
-    chosen.update_options(turn_detection=None)
+    chosen.update_options(turn_handling={"turn_detection": None})
     assert chosen._options.turn_detection is None
 
 
@@ -134,8 +136,8 @@ async def test_temporary_options_restore_the_base_after_an_exception() -> None:
     session = VoiceSession(vad=None, turn_handling={"turn_detection": None})
     try:
         with pytest.raises(RuntimeError, match="interaction failed"):
-            async with session.override_options(turn_detection="manual"):
-                session.update_options(turn_detection="vad")
+            async with session.override_options(turn_handling={"turn_detection": "manual"}):
+                session.update_options(turn_handling={"turn_detection": "vad"})
                 raise RuntimeError("interaction failed")
         assert session.options["turn_detection_mode"] == "vad"
     finally:
@@ -163,12 +165,12 @@ async def test_live_session_changes_interruption_and_delivery_settings() -> None
     async with VoiceSession(vad=None, turn_handling={"turn_detection": "manual"}) as session:
         await session.start(Agent(instructions="Welcome the caller.", name="reception"))
         session.update_options(
-            interruption={"min_duration": 1.5},
+            turn_handling={"interruption": {"min_duration": 1.5}},
             min_consecutive_speech_delay=0.4,
             tts_text_transforms=None,
         )
-        async with session.override_options(interruption={"enabled": False}):
-            async with session.override_options(interruption={"min_words": 2}):
+        async with session.override_options(turn_handling={"interruption": {"enabled": False}}):
+            async with session.override_options(turn_handling={"interruption": {"min_words": 2}}):
                 await interruption(enabled=False, min_words=2, min_duration=1.5)
             await interruption(enabled=False, min_words=0)
         await interruption(enabled=True, min_words=0, min_duration=1.5)
@@ -190,6 +192,30 @@ def _endpointing(session: VoiceSession) -> tuple[float, float]:
     return endpointing["min_delay"], endpointing["max_delay"]
 
 
+async def test_a_turn_handling_update_merges_by_key() -> None:
+    async with VoiceSession(
+        vad=None,
+        turn_handling={
+            "turn_detection": "manual",
+            "endpointing": {"min_delay": 0.3, "max_delay": 2.0},
+            "interruption": {"min_duration": 0.8},
+        },
+    ) as session:
+        await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+        session.update_options(
+            turn_handling={
+                "endpointing": {"max_delay": 4.0},
+                "user_turn_limit": {"max_words": 40},
+                "preemptive_generation": {"enabled": False},
+            }
+        )
+        await _eventually(lambda: _endpointing(session) == (0.3, 4.0))
+        assert session.options["interruption"]["min_duration"] == 0.8
+        assert session.options["turn_detection_mode"] == "manual"
+        assert session.options["user_turn_limit"]["max_words"] == 40
+        assert session.options["preemptive_generation"]["enabled"] is False
+
+
 async def test_an_override_opened_before_start_is_released_after_it() -> None:
     async with VoiceSession(
         vad=None,
@@ -198,7 +224,7 @@ async def test_an_override_opened_before_start_is_released_after_it() -> None:
             "endpointing": {"min_delay": 0.3, "max_delay": 2.0},
         },
     ) as session:
-        async with session.override_options(endpointing_opts={"min_delay": 1.2}):
+        async with session.override_options(turn_handling={"endpointing": {"min_delay": 1.2}}):
             await session.start(Agent(instructions="Welcome the caller.", name="reception"))
             await _eventually(lambda: _endpointing(session) == (1.2, 2.0))
         await _eventually(lambda: _endpointing(session) == (0.3, 2.0))
@@ -213,8 +239,8 @@ async def test_a_base_change_shows_through_the_settings_an_override_leaves_unset
         },
     ) as session:
         await session.start(Agent(instructions="Welcome the caller.", name="reception"))
-        async with session.override_options(endpointing_opts={"min_delay": 1.2}):
-            session.update_options(endpointing_opts={"max_delay": 4.0})
+        async with session.override_options(turn_handling={"endpointing": {"min_delay": 1.2}}):
+            session.update_options(turn_handling={"endpointing": {"max_delay": 4.0}})
             await _eventually(lambda: _endpointing(session) == (1.2, 4.0))
         await _eventually(lambda: _endpointing(session) == (0.3, 4.0))
 
@@ -228,8 +254,8 @@ async def test_overrides_released_out_of_order_leave_the_one_still_held() -> Non
         },
     ) as session:
         await session.start(Agent(instructions="Welcome the caller.", name="reception"))
-        outer = session.override_options(endpointing_opts={"min_delay": 0.9})
-        inner = session.override_options(endpointing_opts={"max_delay": 3.0})
+        outer = session.override_options(turn_handling={"endpointing": {"min_delay": 0.9}})
+        inner = session.override_options(turn_handling={"endpointing": {"max_delay": 3.0}})
         await outer.__aenter__()
         await inner.__aenter__()
         await outer.__aexit__(None, None, None)
@@ -243,7 +269,9 @@ async def test_an_override_on_a_session_closed_inside_it_raises_the_block_error(
     async with _voiced_session(base) as session:
         await session.start(Agent(instructions="Welcome the caller.", name="reception"))
         with pytest.raises(RuntimeError, match="interaction failed") as raised:
-            async with session.override_options(tts=specialist, turn_detection="vad"):
+            async with session.override_options(
+                tts=specialist, turn_handling={"turn_detection": "vad"}
+            ):
                 await session.aclose()
                 raise RuntimeError("interaction failed")
         assert any("restoring the overridden providers" in n for n in raised.value.__notes__)
@@ -261,7 +289,9 @@ async def test_an_override_ending_on_a_session_closed_inside_it_ends_quietly() -
 async def test_provider_overrides_keep_base_updates_across_start_and_release_out_of_order() -> None:
     base, outer_tts, inner_tts, replacement = [FakeTTS(fake_audio_duration=0.1) for _ in range(4)]
     async with _voiced_session(base) as session:
-        outer = session.override_options(tts=outer_tts, endpointing_opts={"min_delay": 0.9})
+        outer = session.override_options(
+            tts=outer_tts, turn_handling={"endpointing": {"min_delay": 0.9}}
+        )
         await outer.__aenter__()
         try:
             await session.start(Agent(instructions="Welcome the caller.", name="reception"))

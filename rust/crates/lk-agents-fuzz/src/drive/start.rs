@@ -848,6 +848,9 @@ pub(super) fn patch(
         Knob::MinInterruptionWords => patch.turn.interruption.min_words = Some(words.0),
         Knob::UserAway => patch.timers.user_away = lk_agents_abi::Maybe::Given(delay),
         Knob::MaxToolSteps => patch.speech.max_tool_steps = Some(words.0),
+        Knob::UserTurnMaxWords => {
+            patch.turn.user_turn_limit.max_words = lk_agents_abi::Maybe::Given(Some(words.0));
+        }
     }
     patch
 }

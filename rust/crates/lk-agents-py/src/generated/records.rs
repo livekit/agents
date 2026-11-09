@@ -14613,22 +14613,11 @@ pub mod session_options {
     ) -> PyResult<::lk_agents_abi::voice::session_options::UpdateKwargs> {
         let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
         Ok(::lk_agents_abi::voice::session_options::UpdateKwargs {
-            endpointing_opts: match obj.get_item("endpointing_opts")? {
+            turn_handling: match obj.get_item("turn_handling")? {
                 Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
-                    (crate::generated::records::turn::endpointing_options_from_py(v.as_any()))?,
+                    (crate::generated::records::turn::turn_handling_options_from_py(v.as_any()))?,
                 ),
                 _ => None,
-            },
-            turn_detection: match obj.get_item("turn_detection")? {
-                Some(v) => {
-                    (if crate::py_values::is_not_given(v.as_any())? {
-                        Ok(::lk_agents_abi::Maybe::NotGiven)
-                    } else {
-                        (crate::py_values::turn_detection_kwarg_from_py(v.as_any()))
-                            .map(::lk_agents_abi::Maybe::Given)
-                    })?
-                }
-                None => ::lk_agents_abi::Maybe::NotGiven,
             },
             expressive: match obj.get_item("expressive")? {
                 Some(v) => {
@@ -14658,12 +14647,6 @@ pub mod session_options {
                             "UpdateKwargs.keyterms: expected a list or tuple",
                         ))
                     })?,
-                ),
-                _ => None,
-            },
-            interruption: match obj.get_item("interruption")? {
-                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
-                    (crate::generated::records::turn::interruption_options_from_py(v.as_any()))?,
                 ),
                 _ => None,
             },

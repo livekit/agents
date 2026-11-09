@@ -302,7 +302,7 @@ impl Run {
         match input {
             Input::Configure { knob, mode, ms, on, words } => {
                 match turn_update(*knob, *mode, *ms) {
-                    Some(update) => api.update_turn_options(update).ok()?,
+                    Some(turn) => api.update_turn_options(turn_kwargs(turn)).ok()?,
                     None => api
                         .send(TurnCommand::Configure(Box::new(patch(
                             *knob, *mode, *ms, *on, *words,
@@ -311,7 +311,8 @@ impl Run {
                 }
             }
             Input::Override { knob, mode, ms } => {
-                self.overrides.push(api.override_options(turn_update(*knob, *mode, *ms)?).ok()?);
+                let update = turn_kwargs(turn_update(*knob, *mode, *ms)?);
+                self.overrides.push(api.override_options(update).ok()?);
             }
             Input::ReleaseOverride { nth } => {
                 if self.overrides.is_empty() {
@@ -323,14 +324,7 @@ impl Run {
             Input::Handoff { agent, instructions, tools, turn } => {
                 let mut args =
                     frame(&self.setup, &self.legs, &self.registry, agent, &instructions.0, tools);
-                args.turn_handling =
-                    turn.and_then(|t| turn_update(t.knob, t.mode, t.ms)).map(|update| {
-                        TurnHandlingKwargs {
-                            turn_detection: update.turn_detection,
-                            endpointing: update.endpointing_opts,
-                            ..TurnHandlingKwargs::default()
-                        }
-                    });
+                args.turn_handling = turn.and_then(|t| turn_update(t.knob, t.mode, t.ms));
                 return Some(Pending::answer(AnswerWait::reply(
                     api.update_agent(args).ok()?,
                     |ok| Answer::Handoff(ok.then_some(()).ok_or(())),

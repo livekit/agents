@@ -425,17 +425,14 @@ pub struct SessionKwargs {
 #[crate::host(record(module = "session_options", typed_dict, extract))]
 #[derive(Clone, Default, PartialEq)]
 pub struct UpdateKwargs {
+    /// Merged by key over the session's, nested groups included. `turn_detection=None` reverts
+    /// to automatic selection; `interruption.mode` is set at construction.
     #[host(default = None)]
-    pub endpointing_opts: Option<EndpointingKwargs>,
-    /// `None` reverts to automatic selection.
-    pub turn_detection: Maybe<TurnDetectionKwarg>,
+    pub turn_handling: Option<TurnHandlingKwargs>,
     pub expressive: Maybe<Expressive>,
     /// The user-defined keyterms, replaced; the detected ones stay.
     #[host(default = None)]
     pub keyterms: Option<Vec<String>>,
-    /// Merged over the session's interruption handling; its `mode` is set at construction.
-    #[host(default = None)]
-    pub interruption: Option<InterruptionKwargs>,
     #[host(default = None)]
     pub min_consecutive_speech_delay: Option<f64>,
     pub tts_text_transforms: Maybe<Option<TextTransformSet>>,
@@ -481,8 +478,7 @@ debug_record!(SessionKwargs {
 });
 
 debug_record!(UpdateKwargs {
-    endpointing_opts, keyterms, interruption, min_consecutive_speech_delay;
-    turn_detection, expressive, tts_text_transforms
+    turn_handling, keyterms, min_consecutive_speech_delay; expressive, tts_text_transforms
 });
 
 /// `SessionLegs` as the host states it before `start()`, so `session.options` can resolve early.

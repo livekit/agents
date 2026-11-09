@@ -85,7 +85,7 @@ if TYPE_CHECKING:
     from ..storage import Thread
     from ..storage.context import ContextStore
     from .amd import AMD
-    from .io import EndpointingOptions, InterruptionOptions, TurnDetectionMode
+    from .io import TurnHandlingOptions
 
 # The session and the state of the event its callbacks are handling.
 _delivered: contextvars.ContextVar[tuple[VoiceSession[Any], _SessionState]] = (
@@ -383,9 +383,7 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         stt: NotGivenOr[STT | str | None] = NOT_GIVEN,
         tts: NotGivenOr[TTS | str | None] = NOT_GIVEN,
         vad: NotGivenOr[VAD | None] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
-        interruption: NotGivenOr[InterruptionOptions] = NOT_GIVEN,
+        turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
     ) -> AsyncIterator[None]:
@@ -396,9 +394,7 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
             stt=_stt_model(stt),
             tts=_tts_model(tts),
             vad=vad,
-            turn_detection=turn_detection,
-            endpointing_opts=endpointing_opts,
-            interruption=interruption,
+            turn_handling=turn_handling,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=tts_text_transforms,
         )
