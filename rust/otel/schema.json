@@ -1442,7 +1442,7 @@
                   {
                     "key": "ttft",
                     "type": "double",
-                    "required": true
+                    "required": false
                   },
                   {
                     "key": "cancelled",
@@ -1450,29 +1450,29 @@
                     "required": true
                   },
                   {
-                    "key": "completion_tokens",
+                    "key": "input_tokens",
                     "type": "int",
                     "required": true
                   },
                   {
-                    "key": "prompt_tokens",
+                    "key": "output_tokens",
                     "type": "int",
                     "required": true
                   },
                   {
-                    "key": "prompt_cached_tokens",
+                    "key": "cache_read_tokens",
                     "type": "int",
-                    "required": true
+                    "required": false
                   },
                   {
-                    "key": "cache_creation_tokens",
+                    "key": "cache_write_tokens",
                     "type": "int",
-                    "required": true
+                    "required": false
                   },
                   {
-                    "key": "reasoning_tokens",
+                    "key": "output_reasoning_tokens",
                     "type": "int",
-                    "required": true
+                    "required": false
                   },
                   {
                     "key": "total_tokens",

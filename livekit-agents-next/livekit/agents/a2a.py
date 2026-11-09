@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import weakref
 from collections.abc import Callable, Sequence
-from typing import cast
+from typing import Self, cast
 
 from pydantic import JsonValue
 from typing_extensions import Unpack
 
 from . import _core
-from ._core import ServerConfig, _core_a2a_agent_card
+from ._core import AgentClient, ServerConfig, _core_a2a_agent_card
 from ._generated import public_a2a as _public
 from ._generated.a2a_card import EndpointDescriptor
+from ._generated.a2a_client import AgentCard
 from ._generated.a2a_door import DoorConfig
 from ._generated.a2a_metadata import RPC_PATH
 from ._generated.a2a_remote import RemoteEventInputRequired, RemoteEventOutcome
@@ -28,8 +30,11 @@ from .voice.events import RunContext
 
 
 class RemoteAgent:
-    """An A2A endpoint as a delegation tool: an endpoint in this codebase, or a URL with the
-    tool's name and description."""
+    """An A2A endpoint as a delegation tool: an endpoint in this codebase, or a URL.
+
+    ``name`` and ``description`` override the endpoint's own. A URL given without both reads
+    them, and the tool's input schema, from the remote card when a run first sets the tool up.
+    """
 
     def __init__(
         self,
@@ -40,17 +45,37 @@ class RemoteAgent:
         token: str | None = None,
         conn_options: APIConnectOptions | None = None,
     ) -> None:
+        self._token = token
+        self._conn_options = conn_options
+        self._name = name
+        self._description = description
+        self._card: AgentCard | None = None
         if isinstance(target, str):
             url = target
             self._url: Callable[[], str] = lambda: url
+            if name is not None and description is not None:
+                self._card = _core._core_delegation_tool(name, description)
         else:
-            name = name or target.name
-            description = description or target.description
             self._url = target.delegation_url
+            self._card = _core._core_delegation_tool(
+                name or target.name, description or target.description
+            )
             _referenced.add(target)
-        self._card = _core._core_delegation_tool(name or "", description or "")
-        self._token = token
-        self._conn_options = conn_options
+
+    async def _resolved_card(self) -> AgentCard:
+        """The tool's card: declared in code, else the remote card's, read once."""
+        if self._card is None:
+            client = AgentClient(self._url(), token=self._token, conn_options=self._conn_options)
+            try:
+                card = await client.connect()
+            finally:
+                await client.aclose()
+            self._card = dataclasses.replace(
+                card,
+                name=self._name or card.name,
+                description=self._description or card.description,
+            )
+        return self._card
 
     def as_tool(self) -> Toolset:
         return _RemoteTool(self)
@@ -73,7 +98,12 @@ class _ExpertTool(RawFunctionTool):
 class _RemoteTool(Toolset):
     def __init__(self, agent: RemoteAgent) -> None:
         self._agent = agent
-        card = agent._card
+        self._tool: _ExpertTool | None = None
+        if agent._card is not None:
+            self._define(agent._card)
+        super().__init__(id=agent._card.name if agent._card is not None else agent._url())
+
+    def _define(self, card: AgentCard) -> None:
         tool = function_tool(
             self._invoke,
             raw_schema={
@@ -82,15 +112,21 @@ class _RemoteTool(Toolset):
                 "parameters": card.input_schema,
             },
         )
-        self._tool = _ExpertTool(tool, agent._url)
-        super().__init__(id=card.name)
+        self._tool = _ExpertTool(tool, self._agent._url)
+
+    async def setup(self) -> Self:
+        if self._tool is None:
+            self._define(await self._agent._resolved_card())
+        return await super().setup()
 
     @property
     def tools(self) -> Sequence[Tool | Toolset]:
-        return [self._tool]
+        # a URL's card is read when a run first sets the tool up
+        return [self._tool] if self._tool is not None else []
 
     async def _invoke(self, ctx: RunContext, raw_arguments: dict[str, object]) -> ToolReport:
         agent = self._agent
+        assert agent._card is not None and self._tool is not None
         url = agent._url()
         if ctx._session is not None:
             history = ctx._session.history

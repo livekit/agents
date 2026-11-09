@@ -151,10 +151,25 @@ async def test_remote_tool_is_defined_in_code_and_fetches_nothing_at_setup(peer:
     assert tool.info.raw_schema["description"] == "Checks account coverage."
     assert tool.info.raw_schema["parameters"]["required"] == ["request"]
     assert peer.requests == []
-    with pytest.raises(ValueError):
-        RemoteAgent(peer.url)
     with pytest.raises(TypeError):
         _remote(peer).as_tool(needs_approval=True)
+
+
+@pytest.mark.asyncio
+async def test_a_url_without_a_name_reads_the_remote_card_once_at_first_setup(peer: Peer) -> None:
+    peer.structured = True
+    agent = RemoteAgent(peer.url, description="Coverage, as described here.", conn_options=OPTIONS)
+    toolset = agent.as_tool()
+    assert toolset.tools == [] and peer.requests == []
+    await toolset.setup()
+    tool = toolset.tools[0]
+    assert tool.info.name == "check_coverage"
+    assert tool.info.raw_schema["description"] == "Coverage, as described here."
+    assert tool.info.raw_schema["parameters"]["required"] == ["account"]
+    again = agent.as_tool()
+    await again.setup()
+    assert again.tools[0].info.name == "check_coverage"
+    assert [method for method, _, _ in peer.requests] == ["GET"]
 
 
 @pytest.mark.asyncio
