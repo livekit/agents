@@ -149,8 +149,8 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
             options: The session options the core resolves: ``turn_handling``,
                 ``max_tool_steps``, ``use_tts_aligned_transcript``,
                 ``tts_text_transforms``, ``min_consecutive_speech_delay``, ``expressive``,
-                ``aec_warmup_duration``, ``ivr_detection``, ``user_away_timeout``,
-                ``transcription_timeout``, ``session_close_transcript_timeout``.
+                ``aec_warmup_duration``, ``user_away_timeout``, ``transcription_timeout``,
+                ``session_close_transcript_timeout``.
         """
         super().__init__()
         self._adapter = SessionAdapter(self)

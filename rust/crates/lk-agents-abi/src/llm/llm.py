@@ -19,7 +19,7 @@ from .. import _bindings, _core
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
 from .chat_items import MetricsMetadata
-from .llm import ChatChunk, CollectedResponse, FunctionToolCall, LLMError
+from .llm import ChatChunk, FunctionToolCall, LLMError, _CollectedResponse
 from .types import ProviderId
 from .usage import TokenUsage
 
@@ -338,7 +338,7 @@ class LLMStream(ABC):
 
         return _iterable()
 
-    async def collect(self) -> CollectedResponse:
+    async def collect(self) -> _CollectedResponse:
         """Collect the entire stream into a single response.
 
         Example:
@@ -367,7 +367,7 @@ class LLMStream(ABC):
                 if chunk.usage is not None:
                     usage = chunk.usage
 
-        return CollectedResponse(
+        return _CollectedResponse(
             text="".join(text_parts).strip(),
             tool_calls=tool_calls,
             usage=usage,

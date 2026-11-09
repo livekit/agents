@@ -194,7 +194,7 @@ class VoiceSession:
         """
         await self._running.set_participant(identity)
 
-    def clear_user_turn(self) -> None:
+    def _clear_user_turn(self) -> None:
         """`AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it."""
         self._running.clear_user_turn()
 
@@ -214,7 +214,7 @@ class VoiceSession:
         """`AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`)."""
         await self._running.wait_for_idle()
 
-    def commit_user_turn(
+    def _commit_user_turn(
         self,
         *,
         transcript_timeout: float = 2.0,

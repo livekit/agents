@@ -261,12 +261,12 @@ def _retain_cleanup(future: _CancellableFuture) -> None:
         future.add_done_callback(_cleanup_done)
 
 
-def pending_cleanup_count() -> int:
+def _pending_cleanup_count() -> int:
     """The number of cleanups still running in this process, across job loops."""
     return len(_pending_cleanup)
 
 
-async def await_cleanup(cleanup: Awaitable[_T]) -> _T:
+async def _await_cleanup(cleanup: Awaitable[_T]) -> _T:
     """Start ``cleanup`` once and keep it running to completion if this wait is cancelled.
 
     ``cleanup`` owns its deadline; cancelling the wait never cancels it.
@@ -474,7 +474,5 @@ __all__ = [
     "Interval",
     "interval",
     "cancel_and_wait",
-    "await_cleanup",
-    "pending_cleanup_count",
     "ChanEmpty",
 ]

@@ -408,7 +408,8 @@ pub struct SessionKwargs {
     pub expressive: Maybe<Expressive>,
     /// Unsaid is the default warmup, `None` none at all (outbound SIP).
     pub aec_warmup_duration: Maybe<Option<f64>>,
-    #[host(default = false)]
+    /// IVR navigation from the session's start; private, `AMD(ivr_detection=)` is the public one.
+    #[host(rename = "_ivr_detection", default = false)]
     pub ivr_detection: bool,
     /// `None` disables the away timer.
     #[host(default = 15.0)]

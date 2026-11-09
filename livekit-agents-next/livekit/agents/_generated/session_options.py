@@ -53,7 +53,8 @@ class SessionKwargs(TypedDict, total=False):
     expressive: bool | ExpressiveOptions | None
     aec_warmup_duration: float | None
     """Unsaid is the default warmup, `None` none at all (outbound SIP)."""
-    ivr_detection: bool
+    _ivr_detection: bool
+    """IVR navigation from the session's start; private, `AMD(ivr_detection=)` is the public one."""
     user_away_timeout: float | None
     """`None` disables the away timer."""
     transcription_timeout: float

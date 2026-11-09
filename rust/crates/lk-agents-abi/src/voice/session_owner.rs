@@ -399,8 +399,8 @@ pub trait VoiceSessionFacade {
     async fn set_participant(&self, identity: Option<String>) -> crate::voice::io::Result<()>;
 
     /// `AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it.
-    #[host(via = Running)]
-    fn clear_user_turn(&self) -> Result<(), super::session::SessionRefused>;
+    #[host(via = Running, native = clear_user_turn)]
+    fn _clear_user_turn(&self) -> Result<(), super::session::SessionRefused>;
 
     /// `AgentSession.interrupt(force=)`: the current and queued speeches up to the first
     /// uninterruptible; answers when they are done, or with the refusal.
@@ -421,8 +421,8 @@ pub trait VoiceSessionFacade {
 
     /// `AgentSession.commit_user_turn(..)`: flush, wait for the final, commit, answer with the
     /// transcript. Runs whether or not awaited; a newer commit supersedes it.
-    #[host(via = Running, future)]
-    async fn commit_user_turn(
+    #[host(via = Running, native = commit_user_turn, future)]
+    async fn _commit_user_turn(
         &self,
         #[host(kw, default = 2.0)] transcript_timeout: f64,
         #[host(default = 2.0)] stt_flush_duration: f64,

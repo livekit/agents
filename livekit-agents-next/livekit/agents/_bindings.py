@@ -35,9 +35,9 @@ if TYPE_CHECKING:
         FunctionCall,
         FunctionCallOutput,
     )
+    from ._generated.events import OverlappingSpeechEvent
     from ._generated.llm import ChatChunk
     from ._generated.llm_fallback import AvailabilityChanged
-    from ._generated.events import OverlappingSpeechEvent
     from ._generated.run_result import _Settled
     from ._generated.session_events import ErrorEvent, FunctionToolsExecutedEvent
     from ._generated.stt import STT, SpeechData, SpeechEvent
@@ -152,7 +152,7 @@ async def pump(
         await draining
     finally:
         # native close must start even if an authored input's finally block stalls
-        await aio.await_cleanup(asyncio.gather(aio.cancel_and_wait(feeding, draining), _close()))
+        await aio._await_cleanup(asyncio.gather(aio.cancel_and_wait(feeding, draining), _close()))
 
 
 async def drain(native: _Source[_OutputT], out: Callable[[_OutputT], None]) -> None:

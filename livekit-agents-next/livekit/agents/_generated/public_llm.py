@@ -7,7 +7,6 @@ from .facades_llm import FallbackLLMStream as FallbackLLMStream
 from .llm import (
     ChatChunk as ChatChunk,
     ChoiceDelta as ChoiceDelta,
-    CollectedResponse as CollectedResponse,
     FunctionToolCall as FunctionToolCall,
     LLM as LLM,
     LLMError as LLMError,
@@ -19,7 +18,6 @@ from .realtime import RealtimeModelError as RealtimeModelError
 __all__: list[str] = [
     "FunctionToolCall",
     "ChoiceDelta",
-    "CollectedResponse",
     "ChatChunk",
     "LLMError",
     "AvailabilityChangedEvent",

@@ -37,7 +37,7 @@ pub struct ChoiceDelta {
 
 // What `LLMStream.collect()` gathers: built by the host, the generated stream's `collect()`.
 // The reference has no class docstring.
-#[crate::host(record(module = "llm", pydantic))]
+#[crate::host(record(module = "llm", name = "_CollectedResponse", pydantic))]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CollectedResponse {
     #[host(default = "")]

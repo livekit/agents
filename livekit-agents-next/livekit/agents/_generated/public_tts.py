@@ -7,7 +7,6 @@ from .._core import (
     AudioEmitter as AudioEmitter,
     split_all_markup as split_all_markup,
     split_expr_markup as split_expr_markup,
-    strip_all_markup as strip_all_markup,
 )
 from .facades_tts import (
     FallbackChunkedStream as FallbackChunkedStream,
@@ -17,7 +16,6 @@ from .facades_tts import (
 )
 from .tts import (
     ChunkedStream as ChunkedStream,
-    ExpressiveTag as ExpressiveTag,
     MarkupInfo as MarkupInfo,
     MarkupSplit as MarkupSplit,
     SynthesizeStream as SynthesizeStream,
@@ -29,7 +27,6 @@ from .tts import (
 from .tts_availability import AvailabilityChangedEvent as AvailabilityChangedEvent
 
 __all__: list[str] = [
-    "ExpressiveTag",
     "MarkupSplit",
     "TTSCapabilities",
     "MarkupInfo",
@@ -45,6 +42,5 @@ __all__: list[str] = [
     "StreamPacerWrapper",
     "AudioEmitter",
     "split_all_markup",
-    "strip_all_markup",
     "split_expr_markup",
 ]

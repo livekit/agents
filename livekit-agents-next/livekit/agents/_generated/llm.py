@@ -52,7 +52,7 @@ class ChoiceDelta(BaseModel):
     """Provider-specific extra data (e.g., Google thought signatures)."""
 
 
-class CollectedResponse(BaseModel):
+class _CollectedResponse(BaseModel):
     text: str = ""
     tool_calls: list[FunctionToolCall] = Field(default_factory=list)
     usage: TokenUsage | None = None
@@ -99,7 +99,7 @@ class SerializedImage:
 
 FunctionToolCall.__module__ = "livekit.agents.llm"
 ChoiceDelta.__module__ = "livekit.agents.llm"
-CollectedResponse.__module__ = "livekit.agents.llm"
+_CollectedResponse.__module__ = "livekit.agents.llm"
 ChatChunk.__module__ = "livekit.agents.llm"
 LLMError.__module__ = "livekit.agents.llm"
 SerializedImage.__module__ = "livekit.agents.llm.utils"
@@ -415,7 +415,7 @@ class LLMStream(ABC):
 
         return _iterable()
 
-    async def collect(self) -> CollectedResponse:
+    async def collect(self) -> _CollectedResponse:
         """Collect the entire stream into a single response.
 
         Example:
@@ -444,7 +444,7 @@ class LLMStream(ABC):
                 if chunk.usage is not None:
                     usage = chunk.usage
 
-        return CollectedResponse(
+        return _CollectedResponse(
             text="".join(text_parts).strip(),
             tool_calls=tool_calls,
             usage=usage,

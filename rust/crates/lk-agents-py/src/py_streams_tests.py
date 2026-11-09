@@ -132,7 +132,7 @@ async def test_cancelled_input_is_terminal_even_when_native_output_is_waiting() 
 
 
 async def test_rejoining_bounded_cleanup_does_not_cancel_an_authored_finally_again() -> None:
-    baseline = aio.pending_cleanup_count()
+    baseline = aio._pending_cleanup_count()
     entered, cleaning, release, settled = (asyncio.Event() for _ in range(4))
 
     async def run() -> None:
@@ -150,21 +150,21 @@ async def test_rejoining_bounded_cleanup_does_not_cancel_an_authored_finally_aga
             await entered.wait()
             assert not await aio.cancel_and_wait(task, timeout=0)
             await cleaning.wait()
-            assert aio.pending_cleanup_count() == baseline + 1
+            assert aio._pending_cleanup_count() == baseline + 1
             assert not await aio.cancel_and_wait(task, timeout=0)
             assert not settled.is_set()
         finally:
             release.set()
             await asyncio.gather(task, return_exceptions=True)
         assert settled.is_set()
-        while aio.pending_cleanup_count() != baseline:
+        while aio._pending_cleanup_count() != baseline:
             await asyncio.sleep(0)
 
 
 async def test_cancelled_pump_waiter_retains_and_settles_both_cleanup_branches() -> None:
     native = _Native()
     native.allow_close.clear()
-    baseline = aio.pending_cleanup_count()
+    baseline = aio._pending_cleanup_count()
     entered, cleaning, release, settled = (asyncio.Event() for _ in range(4))
 
     async def items() -> AsyncIterator[int]:
@@ -190,14 +190,14 @@ async def test_cancelled_pump_waiter_retains_and_settles_both_cleanup_branches()
             with pytest.raises(asyncio.CancelledError):
                 await pump
             assert not settled.is_set() and not native.closed.is_set()
-            assert aio.pending_cleanup_count() > baseline
+            assert aio._pending_cleanup_count() > baseline
         finally:
             release.set()
             native.allow_close.set()
             await asyncio.gather(pump, return_exceptions=True)
         await settled.wait()
         await native.closed.wait()
-        while aio.pending_cleanup_count() != baseline:
+        while aio._pending_cleanup_count() != baseline:
             await asyncio.sleep(0)
     assert native.close_count == 1
 

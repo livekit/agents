@@ -114,7 +114,6 @@ class TTSError(BaseModel):
     recoverable: bool
 
 
-ExpressiveTag.__module__ = "livekit.agents.tts"
 MarkupSplit.__annotations__ = get_annotations(MarkupSplit, eval_str=True)
 MarkupSplit.__module__ = "livekit.agents.tts"
 TTSCapabilities.__annotations__ = get_annotations(TTSCapabilities, eval_str=True)

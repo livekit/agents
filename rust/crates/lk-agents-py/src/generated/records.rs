@@ -14581,7 +14581,7 @@ pub mod session_options {
                 }
                 None => ::lk_agents_abi::Maybe::NotGiven,
             },
-            ivr_detection: match obj.get_item("ivr_detection")? {
+            ivr_detection: match obj.get_item("_ivr_detection")? {
                 Some(v) if !crate::py_values::is_not_given(&v)? => (v.as_any().extract::<bool>())?,
                 _ => false,
             },
