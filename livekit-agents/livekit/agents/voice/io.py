@@ -348,6 +348,20 @@ class AudioOutput(
         if self.next_in_chain:
             self.next_in_chain.resume()
 
+    def set_volume(self, volume: float, *, ramp_duration: float = 0.02) -> None:
+        """Set the playback volume, e.g. to duck the agent while the user talks over it.
+
+        Forwarded down the chain to the sink; a sink that cannot change its volume ignores it.
+        The volume stays in effect for later speech until it is changed again.
+
+        Args:
+            volume: Linear gain applied to the audio: 1.0 plays it unchanged, 0.0 mutes it.
+            ramp_duration: Seconds to move from the current volume to ``volume``, so the
+                change does not click. 0 applies it at once.
+        """
+        if self.next_in_chain:
+            self.next_in_chain.set_volume(volume, ramp_duration=ramp_duration)
+
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(label={self.label!r}, next={self.next_in_chain!r})"
 
