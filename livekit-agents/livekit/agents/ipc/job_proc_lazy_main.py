@@ -21,16 +21,18 @@ import socket
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
+from livekit.protocol import agent
 
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
 from ..log import _add_global_log_fields, logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
 from ..telemetry.traces import _resource
+from ..types import ATTRIBUTE_SIMULATOR
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
 from .inference_executor import InferenceExecutor
@@ -41,11 +43,15 @@ from .proto import (
     InferenceRequest,
     InferenceResponse,
     InitializeRequest,
+    JoinTiming,
     ShutdownRequest,
     ShutdownRequestAck,
     ShuttingDown,
     StartJobRequest,
 )
+
+if TYPE_CHECKING:
+    from ..voice.remote_session import SessionHost
 
 # Defensive timeout for AgentSession.aclose() during job shutdown. Hardcoded for now
 # as a guardrail against close paths that hang indefinitely. If aclose() does not
@@ -138,6 +144,8 @@ def proc_main(args: ProcStartArgs) -> None:
             logger.warning("stack for `%s`:\n%s", t.name, "".join(traceback.format_stack(frame)))
 
     log_handler.close()
+    if job_proc.failed:
+        raise SystemExit(1)
 
 
 class _InfClient(InferenceExecutor):
@@ -208,10 +216,13 @@ class _JobProc:
         self._simulation_end_fnc = simulation_end_fnc
         self._session_end_timeout = session_end_timeout
         self._job_task: asyncio.Task[None] | None = None
+        self._join_timing_task: asyncio.Task[None] | None = None
+        self._entrypoint_started_mono = 0.0
 
         # used to warn users if both connect and shutdown are not called inside the job_entry
         self._ctx_connect_called = False
         self._ctx_shutdown_called = False
+        self.failed = False
 
     @property
     def has_running_job(self) -> bool:
@@ -299,6 +310,16 @@ class _JobProc:
 
         def _on_ctx_connect() -> None:
             self._ctx_connect_called = True
+            timing = _join_timing(
+                self._job_ctx._info,
+                self._entrypoint_started_mono,
+                self._job_ctx._connect_called_mono,
+                self._job_ctx._connected_mono,
+            )
+            if timing is not None:
+                self._join_timing_task = asyncio.create_task(
+                    self._client.send(JoinTiming(timing=timing))
+                )
 
         def _on_ctx_shutdown(reason: str) -> None:
             self._ctx_shutdown_called = True
@@ -337,6 +358,7 @@ class _JobProc:
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         http_context._new_session_ctx()
 
+        self._entrypoint_started_mono = time.monotonic()
         # the job's root span, from the availability request to the end of shutdown; the
         # entrypoint returning is an event on it
         job_span = _start_job_span(self._job_ctx)
@@ -383,6 +405,10 @@ class _JobProc:
                     "unhandled exception while running the job task",
                     exc_info=t.exception(),
                 )
+                # Errors while unwinding an already requested shutdown do not
+                # turn that shutdown into a failed job.
+                if not self._shutdown_fut.done():
+                    self.failed = True
                 # if the process crashes before ctx.connect(), shutdown_fut will never resolve
                 # we'll force it to trigger shutdown so _on_cleanup can flush crash logs
                 with contextlib.suppress(asyncio.InvalidStateError):
@@ -472,6 +498,16 @@ class _JobProc:
                 trace_utils.record_exception(span, e)
                 logger.exception("error in job_ctx._on_session_end")
 
+        # the worker reports the join timing once per job, so it must go out before the job exits
+        if self._join_timing_task is not None:
+            with contextlib.suppress(Exception):
+                await self._join_timing_task
+
+        if (session_host := self._job_ctx._session_host) is not None:
+            if self._job_ctx.simulation_context() is not None:
+                await self._wait_for_simulation_finalize(session_host)
+            await session_host.aclose()
+
         await self._client.send(ShuttingDown())
 
         logger.debug(
@@ -480,7 +516,13 @@ class _JobProc:
         )
         await self._client.send(Exiting(reason=shutdown_info.reason))
         with tracer.start_as_current_span("room_disconnect"):
-            await self._room.disconnect()
+            await self._room.disconnect(
+                reason=(
+                    rtc.DisconnectReason.AGENT_ERROR
+                    if self.failed
+                    else rtc.DisconnectReason.CLIENT_INITIATED
+                )
+            )
 
         async def _traced_shutdown_callback(
             callback: Callable[[str], Awaitable[None]],
@@ -508,6 +550,38 @@ class _JobProc:
             await asyncio.gather(*shutdown_tasks)
         except Exception:
             logger.exception("error while shutting down the job")
+
+    async def _wait_for_simulation_finalize(self, session_host: SessionHost) -> None:
+        # the simulator asks for the on_simulation_end verdict only once it has judged
+        # the run, which can be well after the agent ended the call; it can no longer
+        # ask once it has left the room
+        room = self._room
+        simulator_left = asyncio.Event()
+
+        def _check_simulator_left(*_: Any) -> None:
+            if not room.isconnected() or not any(
+                ATTRIBUTE_SIMULATOR in p.attributes for p in room.remote_participants.values()
+            ):
+                simulator_left.set()
+
+        room.on("participant_disconnected", _check_simulator_left)
+        room.on("disconnected", _check_simulator_left)
+        _check_simulator_left()
+
+        finalized = asyncio.create_task(session_host.wait_for_simulation_finalized())
+        left = asyncio.create_task(simulator_left.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {finalized, left},
+                timeout=self._session_end_timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                logger.warning("simulator did not finalize within %.1fs", self._session_end_timeout)
+        finally:
+            room.off("participant_disconnected", _check_simulator_left)
+            room.off("disconnected", _check_simulator_left)
+            await aio.cancel_and_wait(finalized, left)
 
 
 def _is_framework_callback(fnc: Any) -> bool:
@@ -588,13 +662,45 @@ def _record_dispatch_timeline(
         span.add_event("job_started_on_server", timestamp=int(started * 1e9))
 
 
+def _join_timing(
+    info: RunningJobInfo,
+    entrypoint_started_mono: float,
+    connect_called_mono: float,
+    connected_mono: float,
+) -> agent.JobJoinTiming | None:
+    """The worker-side instants of the join, in microseconds of the host's monotonic clock.
+    None when one is unknown (simulation, console, resumed job)."""
+    stamps = [
+        info.received_mono,
+        info.accepted_mono,
+        info.assigned_mono,
+        info.launched_mono,
+        entrypoint_started_mono,
+        connect_called_mono,
+        connected_mono,
+    ]
+    if not all(stamps):
+        return None
+    us = [round(s * 1e6) for s in stamps]
+    return agent.JobJoinTiming(
+        offer_received_us=us[0],
+        accepted_us=us[1],
+        assignment_received_us=us[2],
+        launched_us=us[3],
+        launch_warm=info.launched_warm,
+        entrypoint_started_us=us[4],
+        connect_called_us=us[5],
+        connected_us=us[6],
+    )
+
+
 @dataclass
 class ThreadStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
     session_end_timeout: float
-    join_fnc: Callable[[], None]
+    join_fnc: Callable[[int], None]
     mp_cch: socket.socket
     user_arguments: Any | None
     simulation_end_fnc: Callable[[Any], Any] | None = None
@@ -604,6 +710,7 @@ def thread_main(
     args: ThreadStartArgs,
 ) -> None:
     """main function for the job process when using the ThreadedJobRunner"""
+    exitcode = 1
     try:
         from .proc_client import _ProcClient
 
@@ -620,5 +727,6 @@ def thread_main(
         client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc.entrypoint)
         client.initialize()
         client.run()
+        exitcode = int(job_proc.failed)
     finally:
-        args.join_fnc()
+        args.join_fnc(exitcode)
