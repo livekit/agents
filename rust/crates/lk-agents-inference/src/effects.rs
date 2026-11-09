@@ -1,4 +1,3 @@
-use crate::avatar::machine::{AvatarRequestId, CreateFailure, ProviderSession, Retirement};
 use crate::interruption::{OverlappingSpeechEvent, RequestIdentity};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::resources::ResourceId;
@@ -55,62 +54,6 @@ pub enum RealtimeConnectionEffect {
     Retry { error: ApiError },
     Failed { error: ApiError },
     CleanupIncomplete { generation: u64 },
-}
-
-/// Provider-session acquisition/retirement work from
-/// [`AvatarSessionLifecycle`](crate::avatar::machine::AvatarSessionLifecycle), performed by
-/// [`GatewayAvatar`](crate::avatar::gateway::GatewayAvatar).
-#[derive(Debug, Clone, PartialEq)]
-pub enum AvatarSessionEffect {
-    /// The caller is refused: a creation is in flight, a session was adopted or the instance
-    /// is closed.
-    CreateRefused,
-    AvatarSessionCreate {
-        request: AvatarRequestId,
-        attempt: u32,
-        avatar: ResourceId,
-    },
-    AvatarSessionTerminate {
-        request: AvatarRequestId,
-        attempt: u32,
-        avatar: ResourceId,
-        session: ProviderSession,
-    },
-    AvatarRequestCancel {
-        request: AvatarRequestId,
-        attempt: u32,
-    },
-    /// A failed attempt that will be retried.
-    AttemptFailed {
-        request: AvatarRequestId,
-        attempt: u32,
-        error: ApiError,
-    },
-    /// The create caller's single outcome. A caller that stopped waiting has none.
-    CreateFinished(Result<ProviderSession, CreateFailure>),
-    Retiring {
-        session: ProviderSession,
-        reason: Retirement,
-    },
-    /// A session that cannot be terminated (no provider id or token) is released to its idle
-    /// timeout.
-    Unterminable(ProviderSession),
-    SessionTerminated(ProviderSession),
-    /// The instance still holds `session`; the next close retries.
-    TerminateFailed {
-        session: ProviderSession,
-        error: ApiError,
-    },
-    /// An attempt missed its cleanup deadline; the runtime still owns it.
-    CleanupIncomplete {
-        request: AvatarRequestId,
-        attempt: u32,
-    },
-    /// A retiring create was still unanswered at its deadline: a session it may have made bills
-    /// until the provider's idle timeout; a later answer is still terminated.
-    RetirementIncomplete {
-        request: AvatarRequestId,
-    },
 }
 
 /// Adaptive-interruption work from

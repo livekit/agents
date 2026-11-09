@@ -1,5 +1,4 @@
 pub mod gateway;
-pub mod machine;
 
 use lk_agents_abi::inference::avatar_session::AvatarError;
 use serde::Deserialize;
@@ -8,7 +7,42 @@ use serde_json::{Map, Value};
 use crate::headers::{Headers, gateway_headers};
 use lk_agents_core::request::AttemptFailure;
 use lk_agents_net::transport::HttpRequest;
-pub use machine::ProviderSession;
+
+/// A provider session the gateway created.
+#[derive(Clone, PartialEq)]
+pub struct ProviderSession {
+    /// The gateway's id.
+    pub session_id: Option<String>,
+    /// The provider's own id; terminate names it.
+    pub provider_session_id: Option<String>,
+    /// The HMAC issued with `provider_session_id`: terminate proves this project owns it.
+    pub terminate_token: Option<String>,
+    /// The audio rate the avatar takes.
+    pub sample_rate: u32,
+}
+
+impl ProviderSession {
+    /// Without both ids it bills until the provider's idle timeout.
+    pub fn terminable(&self) -> bool {
+        self.provider_session_id.is_some() && self.terminate_token.is_some()
+    }
+
+    /// The gateway replays one operation's answer under its idempotency key.
+    fn same_as(&self, other: &ProviderSession) -> bool {
+        self.session_id == other.session_id && self.provider_session_id == other.provider_session_id
+    }
+}
+
+impl std::fmt::Debug for ProviderSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderSession")
+            .field("session_id", &self.session_id)
+            .field("provider_session_id", &self.provider_session_id)
+            .field("terminate_token", &self.terminate_token.as_ref().map(|_| "<redacted>"))
+            .field("sample_rate", &self.sample_rate)
+            .finish()
+    }
+}
 
 /// The rate when the gateway's answer names none (older gateways); the gateway is authoritative.
 pub const DEFAULT_SAMPLE_RATE: u32 = 16_000;
