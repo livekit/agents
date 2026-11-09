@@ -1,13 +1,13 @@
 mod executor;
 pub(crate) mod gaps;
 pub(crate) mod input;
-pub mod machine;
 pub mod options;
 mod provider_options;
 pub mod retrying;
 pub use retrying::{recognize, stream};
 mod stream;
 pub mod stream_adapter;
+mod transcript;
 pub mod wire;
 
 use crate::abi::{AudioFrame, StreamInput, StreamOutput, Stt, SttCapabilities};
@@ -33,7 +33,6 @@ use lk_agents_abi::vad::inference::VadModels;
 use lk_agents_abi::{ApiConnectOptions, Clock, SpeechEvent};
 use lk_agents_media::AudioByteStream;
 use lk_agents_media::{AudioResampler, OnChange, Quality};
-use machine::{SttStream, SttStreamEvent};
 use options::{FallbackModel, VadResolution};
 use std::sync::{Arc, Weak};
 use std::time::Duration;

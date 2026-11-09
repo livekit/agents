@@ -483,7 +483,7 @@ async fn the_stream_ends_once_the_transcripts_stop_after_the_input_ended() {
     let events = drain_until(source.as_mut(), SpeechEventType::EndOfSpeech).await;
     assert!(events.iter().any(|e| e.kind == SpeechEventType::FinalTranscript));
 
-    crate::testkit::arm_then_advance(&clock, machine::FINAL_TRANSCRIPT_QUIET / 2).await;
+    crate::testkit::arm_then_advance(&clock, executor::FINAL_TRANSCRIPT_QUIET / 2).await;
     let early = lk_agents_abi::timeout(
         &lk_agents_net::clock::RealClock::new(),
         Duration::from_millis(50),
@@ -491,7 +491,7 @@ async fn the_stream_ends_once_the_transcripts_stop_after_the_input_ended() {
     )
     .await;
     assert!(early.is_err(), "ended before the quiet period: {early:?}");
-    crate::testkit::arm_then_advance(&clock, machine::FINAL_TRANSCRIPT_QUIET).await;
+    crate::testkit::arm_then_advance(&clock, executor::FINAL_TRANSCRIPT_QUIET).await;
     let end = lk_agents_abi::timeout(
         &lk_agents_net::clock::RealClock::new(),
         Duration::from_secs(1),
@@ -1075,7 +1075,7 @@ mod live_gateway {
         }
 
         // Silence produces an *empty* final transcript, which is the exact case
-        // `stt::machine`'s `an_empty_final_transcript_still_ends_the_turn` pins: the gateway really
+        // `stt::transcript`'s `an_empty_final_transcript_still_ends_the_turn` pins: the gateway really
         // does send one, and the whole turn has to close out on it.
         assert_eq!(
             events,

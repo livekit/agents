@@ -1,11 +1,21 @@
 use super::*;
-use crate::effects::SttStreamEffect;
 use crate::telemetry;
 use gaps::Gaps;
+use lk_agents_abi::Ts;
+use lk_agents_abi::errors::Timeout;
 use lk_agents_abi::metrics::base::ConnectionAcquired;
 use lk_agents_media::Frame;
 use lk_agents_media::media_queue::{self, Item};
 use std::ops::ControlFlow;
+use transcript::TranscriptMachine;
+use wire::Incoming;
+
+// Some providers acknowledge finalization with `session.finalized`; others (Deepgram, AssemblyAI)
+// answer with at most a final transcript and keep the socket open, so a quiet period after the
+// input ended completes the stream.
+
+/// Quiet period after a post-EOF final transcript that completes a stream with no acknowledgment.
+pub(super) const FINAL_TRANSCRIPT_QUIET: Duration = Duration::from_secs(3);
 
 pub(super) struct SttStreamExecutor {
     pub(super) ws: Arc<dyn WsTransport>,
@@ -117,20 +127,18 @@ impl SttStreamExecutor {
             .finish();
         let url = format!("{}?{query}", join_url(&to_ws_url(&self.opts.base_url), "stt"));
         // `_speech_duration`: written by send, read by recv.
-        let machine = Arc::new(Mutex::new(SttStream::new(
-            0,
-            lk_agents_abi::resources::ResourceId(0),
+        let total_deadline = self
+            .opts
+            .conn_options
+            .total_timeout
+            .map(|seconds| self.accepted.saturating_add(Duration::from_secs_f64(seconds)));
+        let progress = Arc::new(Mutex::new(Progress::new(
             request_id,
             opts.language.as_deref(),
-            FINALIZATION_TIMEOUT,
-            self.opts
-                .conn_options
-                .total_timeout
-                .map(|seconds| self.accepted.saturating_add(Duration::from_secs_f64(seconds))),
+            total_deadline,
         )));
-        let opening = machine.lock().handle(SttStreamEvent::Start, self.clock.now());
-        if !opening.iter().any(|effect| matches!(effect, SttStreamEffect::OpenSttStream { .. })) {
-            return finished(opening).unwrap_or(Ok(()));
+        if let Some(ended) = progress.lock().settle(self.clock.now()) {
+            return ended.unwrap_or(Ok(()));
         }
         let acquiring = self.clock.now();
         let (sender, mut receiver) = open_ws(
@@ -159,7 +167,7 @@ impl SttStreamExecutor {
             vad_sink,
             vad_push_warned: false,
             sample_rate,
-            machine: machine.clone(),
+            progress: progress.clone(),
             clock: self.clock.clone(),
             rearm: rearm.clone(),
             bstream: AudioByteStream::new(
@@ -185,12 +193,12 @@ impl SttStreamExecutor {
             connection: Some(connection),
             awaiting_ack: true,
         }
-        .run(receiver.as_mut(), machine.clone());
+        .run(receiver.as_mut(), progress.clone());
         let finalize = Self::vad_finalize_loop(sender.clone(), &mut vad_source);
 
         let settle = async {
             loop {
-                let deadline = machine.lock().wake_at();
+                let deadline = progress.lock().wake_at();
                 let wait = async {
                     match deadline {
                         Some(deadline) => self.clock.wait_until(deadline).await,
@@ -202,8 +210,7 @@ impl SttStreamExecutor {
                     _ = rearm.notified() => continue,
                     _ = wait => {}
                 }
-                let effects = machine.lock().handle(SttStreamEvent::Wake, self.clock.now());
-                if let Some(result) = finished(effects) {
+                if let Some(Some(result)) = progress.lock().settle(self.clock.now()) {
                     return result;
                 }
             }
@@ -216,7 +223,7 @@ impl SttStreamExecutor {
             r = recv => r,
             r = finalize => r,
         };
-        if !machine.lock().server_closed() && !sender.is_closed() {
+        if !progress.lock().server_closed && !sender.is_closed() {
             let close = sender.send_text(wire::session_close().to_string());
             if let Err(error) =
                 within(&*self.clock, self.opts.conn_options.write_deadline(self.clock.now()), close)
@@ -235,7 +242,9 @@ impl SttStreamExecutor {
             }
         }
         outcome.map_err(|error| {
-            if machine.lock().replay_safe() { error } else { error.with_retryable(false) }
+            // A reconnect sends only new audio, so it repeats no delivered transcript; once the
+            // input ended there is nothing left to send and the pending transcript would be lost.
+            if progress.lock().input_ended { error.with_retryable(false) } else { error }
         })
     }
 
@@ -309,12 +318,126 @@ const GATEWAY_CHANNELS: u16 = 1;
 /// The bytes of one 16-bit PCM sample.
 const PCM_SAMPLE_BYTES: usize = std::mem::size_of::<i16>();
 
-/// The machine's verdict, when `effects` end the stream.
-fn finished(effects: impl IntoIterator<Item = SttStreamEffect>) -> Option<Result<(), ApiError>> {
-    effects.into_iter().find_map(|effect| match effect {
-        SttStreamEffect::Finished(result) => Some(result),
-        _ => None,
-    })
+/// One connection's progress, shared by its send, receive and settlement halves: the transcript
+/// assembly and the deadlines that end the stream.
+#[derive(Debug)]
+struct Progress {
+    transcript: TranscriptMachine,
+    total_deadline: Option<Ts>,
+    finalization_deadline: Option<Ts>,
+    input_ended: bool,
+    finished: bool,
+    server_closed: bool,
+}
+
+/// What one gateway message produced: transcripts to deliver, the end-of-speech edge that releases
+/// a deferred update, and the stream's outcome when the message ended it.
+#[derive(Debug, Default)]
+struct Received {
+    events: Vec<SpeechEvent>,
+    end_of_speech: bool,
+    outcome: Option<Result<(), ApiError>>,
+}
+
+impl Progress {
+    fn new(request_id: String, language: Option<&str>, total_deadline: Option<Ts>) -> Self {
+        Progress {
+            transcript: TranscriptMachine::new(request_id, language),
+            total_deadline,
+            finalization_deadline: None,
+            input_ended: false,
+            finished: false,
+            server_closed: false,
+        }
+    }
+
+    fn wake_at(&self) -> Option<Ts> {
+        self.total_deadline.into_iter().chain(self.finalization_deadline).min()
+    }
+
+    /// `None` while the stream runs at `now`. Once it ended, `Some` with the outcome when this
+    /// call's deadline ended it, `Some(None)` when it had already ended.
+    fn settle(&mut self, now: Ts) -> Option<Option<Result<(), ApiError>>> {
+        if self.finished {
+            return Some(None);
+        }
+        let outcome = if self.total_deadline.is_some_and(|deadline| now >= deadline) {
+            Err(ApiError::timed_out(Timeout::Total).with_retryable(false))
+        } else if self.finalization_deadline.is_some_and(|deadline| now >= deadline) {
+            Ok(())
+        } else {
+            return None;
+        };
+        self.finished = true;
+        Some(Some(outcome))
+    }
+
+    fn audio_written(&mut self, duration: f64, now: Ts) {
+        if self.settle(now).is_none() {
+            self.transcript.record_audio(duration);
+        }
+    }
+
+    /// The input ended: whether the gateway is asked to finalize. The quiet period starts.
+    fn input_ended(&mut self, now: Ts) -> bool {
+        if self.settle(now).is_some() || self.input_ended {
+            return false;
+        }
+        self.input_ended = true;
+        self.finalization_deadline = Some(now.saturating_add(FINALIZATION_TIMEOUT));
+        true
+    }
+
+    fn server_eof(&mut self, now: Ts) -> Option<Result<(), ApiError>> {
+        match self.settle(now) {
+            Some(ended) => ended,
+            None => Some(self.fail("STT server EOF before transcript completion")),
+        }
+    }
+
+    fn message(&mut self, message: Incoming, now: Ts) -> Received {
+        if let Some(outcome) = self.settle(now) {
+            return Received { outcome, ..Received::default() };
+        }
+        let quiet = match &message {
+            Incoming::SessionClosed { truncated } => {
+                self.server_closed = true;
+                if *truncated {
+                    Duration::ZERO
+                } else if self.input_ended {
+                    self.finished = true;
+                    return Received { outcome: Some(Ok(())), ..Received::default() };
+                } else {
+                    let error = self.fail("STT session closed before transcript completion");
+                    return Received { outcome: Some(error), ..Received::default() };
+                }
+            }
+            Incoming::FinalTranscript(_) => FINAL_TRANSCRIPT_QUIET,
+            Incoming::InterimTranscript(_) | Incoming::PreflightTranscript(_) => {
+                FINALIZATION_TIMEOUT
+            }
+            _ => Duration::ZERO,
+        };
+        if self.input_ended && !quiet.is_zero() {
+            self.finalization_deadline = Some(now.saturating_add(quiet));
+        }
+        let acknowledged = self.input_ended && matches!(message, Incoming::SessionFinalized { .. });
+        let processed = self.transcript.process(message);
+        let outcome = if let Some(error) = processed.error {
+            Some(Err(error))
+        } else if acknowledged {
+            Some(Ok(()))
+        } else {
+            None
+        };
+        self.finished |= outcome.is_some();
+        Received { events: processed.events, end_of_speech: processed.end_of_speech, outcome }
+    }
+
+    fn fail(&mut self, message: &str) -> Result<(), ApiError> {
+        self.finished = true;
+        Err(ApiError::connection(Some(message.into())))
+    }
 }
 
 /// The send half of one connection: the input re-framed, resampled and written to the gateway,
@@ -326,7 +449,7 @@ struct AudioUplink {
     vad_sink: Option<crate::abi::VadSink>,
     vad_push_warned: bool,
     sample_rate: u32,
-    machine: Arc<Mutex<SttStream>>,
+    progress: Arc<Mutex<Progress>>,
     clock: Arc<dyn Clock>,
     rearm: Arc<tokio::sync::Notify>,
     bstream: AudioByteStream,
@@ -427,7 +550,7 @@ impl AudioUplink {
     async fn send_frames(&mut self, frames: Vec<Frame>) -> Result<(), ApiError> {
         for frame in frames {
             let duration = f64::from(frame.samples_per_channel) / f64::from(self.sample_rate);
-            self.machine.lock().handle(SttStreamEvent::AudioWritten(duration), self.clock.now());
+            self.progress.lock().audio_written(duration, self.clock.now());
             self.audio.clear();
             base64::engine::general_purpose::STANDARD.encode_string(&frame.data, &mut self.audio);
             let sent = self.sender.send_text(wire::input_audio(&self.audio).to_string()).await;
@@ -443,15 +566,15 @@ impl AudioUplink {
         Ok(())
     }
 
-    /// The input ended: the VAD hears it, the machine may ask the gateway to finalize, and the
+    /// The input ended: the VAD hears it, the gateway may be asked the gateway to finalize, and the
     /// settlement timer re-arms. Completion is an acknowledgment or a quiet period: the receive
     /// half and the settlement timer observe it.
     async fn finish_input(mut self) -> Result<(), ApiError> {
         if let Some(sink) = self.vad_sink.as_mut() {
             sink.end_input();
         }
-        let effects = self.machine.lock().handle(SttStreamEvent::InputEnded, self.clock.now());
-        if effects.iter().any(|effect| matches!(effect, SttStreamEffect::SttFinalize { .. })) {
+        let finalize = self.progress.lock().input_ended(self.clock.now());
+        if finalize {
             self.sender
                 .send_text(wire::session_finalize().to_string())
                 .await
@@ -462,7 +585,7 @@ impl AudioUplink {
     }
 }
 
-/// The receive half of one connection: gateway messages through the machine, transcripts out.
+/// The receive half of one connection: gateway messages assembled into transcripts.
 struct RecvCtx {
     event_tx: mpsc::Sender<Result<SpeechEvent, ApiError>>,
     deferred: Arc<DeferredExtra>,
@@ -485,20 +608,19 @@ impl RecvCtx {
     async fn run(
         mut self,
         receiver: &mut dyn lk_agents_net::transport::WsReceiver,
-        machine: Arc<Mutex<SttStream>>,
+        progress: Arc<Mutex<Progress>>,
     ) -> Result<(), ApiError> {
         loop {
-            let effects = match self.read(receiver).await? {
+            let received = match self.read(receiver).await? {
                 WsMessage::Closed => {
-                    let effects =
-                        machine.lock().handle(SttStreamEvent::ServerEof, self.clock.now());
-                    return finished(effects).unwrap_or(Ok(()));
+                    let ended = progress.lock().server_eof(self.clock.now());
+                    return ended.unwrap_or(Ok(()));
                 }
                 // "unexpected LiveKit Inference STT message type" -- logged and skipped.
                 WsMessage::Binary(_) | WsMessage::Other => continue,
-                WsMessage::Text(text) => self.handle_text(&machine, &text)?,
+                WsMessage::Text(text) => self.handle_text(&progress, &text)?,
             };
-            if let Some(result) = self.apply(effects).await {
+            if let Some(result) = self.apply(received).await {
                 return result;
             }
         }
@@ -524,49 +646,42 @@ impl RecvCtx {
         }
     }
 
-    /// A gateway message through the machine; the settlement timer re-arms after the lock.
+    /// A gateway message assembled; the settlement timer re-arms after the lock.
     fn handle_text(
         &mut self,
-        machine: &Mutex<SttStream>,
+        progress: &Mutex<Progress>,
         text: &str,
-    ) -> Result<Vec<SttStreamEffect>, ApiError> {
+    ) -> Result<Received, ApiError> {
         let incoming = wire::decode(text)
             .ok_or_else(|| ApiError::new("Malformed STT gateway message").with_retryable(false))?;
         if matches!(incoming, wire::Incoming::SessionCreated) {
             self.awaiting_ack = false;
         }
-        let effects = {
-            let mut machine = machine.lock();
-            let effects =
-                machine.handle(SttStreamEvent::Message(Box::new(incoming)), self.clock.now());
+        let received = {
+            let mut progress = progress.lock();
+            let received = progress.message(incoming, self.clock.now());
             self.deferred
                 .speaking
-                .store(machine.is_speaking(), std::sync::atomic::Ordering::SeqCst);
-            effects
+                .store(progress.transcript.is_speaking(), std::sync::atomic::Ordering::SeqCst);
+            received
         };
         self.rearm.notify_one();
-        Ok(effects)
+        Ok(received)
     }
 
-    /// Carries out the machine's effects; `Some` ends the stream.
-    async fn apply(&mut self, effects: Vec<SttStreamEffect>) -> Option<Result<(), ApiError>> {
-        for effect in effects {
-            match effect {
-                SttStreamEffect::Deliver(event) => {
-                    if self.deliver(event).await.is_break() {
-                        return Some(Ok(()));
-                    }
-                }
-                SttStreamEffect::EndOfSpeech => {
-                    if let Err(error) = self.send_deferred_update() {
-                        return Some(Err(error));
-                    }
-                }
-                SttStreamEffect::Finished(result) => return Some(result),
-                _ => {}
+    /// Delivers what a message produced; `Some` ends the stream.
+    async fn apply(&mut self, received: Received) -> Option<Result<(), ApiError>> {
+        for event in received.events {
+            if self.deliver(event).await.is_break() {
+                return Some(Ok(()));
             }
         }
-        None
+        if received.end_of_speech
+            && let Err(error) = self.send_deferred_update()
+        {
+            return Some(Err(error));
+        }
+        received.outcome
     }
 
     /// Sends a transcript on the caller's timeline; the first usage report carries the
@@ -614,4 +729,46 @@ pub(super) fn shifted(mut event: SpeechEvent, offset: f64) -> SpeechEvent {
         }
     }
     event
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Catches: a stream whose input ended waiting for an acknowledgment the gateway never sends
+    // (Deepgram and AssemblyAI keep the socket open with no `session.finalized` after
+    // `session.finalize`), failing every `stt.stream()` read to its end with a read timeout.
+    #[test]
+    fn input_eof_completes_on_acknowledgment_or_quiet_period() {
+        let now = Ts::ZERO;
+        let at = |secs| now.saturating_add(Duration::from_secs(secs));
+        let make = || Progress::new("r".into(), None, None);
+        let final_transcript =
+            || wire::decode(r#"{"type":"final_transcript","transcript":"hello"}"#).unwrap();
+
+        let mut progress = make();
+        assert!(progress.settle(now).is_none(), "the stream opens");
+        progress.audio_written(0.1, now);
+        assert!(progress.input_ended(now), "the gateway is asked to finalize");
+        assert!(!progress.input_ended(now), "once");
+        assert!(progress.message(final_transcript(), at(1)).outcome.is_none());
+        assert!(progress.settle(at(3)).is_none());
+        assert!(matches!(progress.settle(at(4)), Some(Some(Ok(())))));
+        assert!(matches!(progress.settle(at(5)), Some(None)), "ended once");
+
+        let mut progress = make();
+        progress.input_ended(now);
+        let quiet = FINALIZATION_TIMEOUT.as_secs();
+        assert!(progress.settle(at(quiet - 1)).is_none());
+        assert!(matches!(progress.settle(at(quiet)), Some(Some(Ok(())))));
+
+        let mut progress = make();
+        progress.input_ended(now);
+        let acknowledged = progress.message(Incoming::SessionFinalized { truncated: false }, now);
+        assert!(matches!(acknowledged.outcome, Some(Ok(()))));
+
+        let mut progress = make();
+        progress.input_ended(now);
+        assert!(matches!(progress.server_eof(now), Some(Err(_))));
+    }
 }

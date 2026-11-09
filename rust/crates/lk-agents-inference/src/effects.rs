@@ -2,18 +2,7 @@ use crate::interruption::{OverlappingSpeechEvent, RequestIdentity};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::ReqId;
-use lk_agents_abi::{SpeechEvent, SynthesizedAudio, TranscriptChunk, Ts};
-
-/// Recognition stream work from [`SttStream`](crate::stt::machine::SttStream), performed by
-/// the private STT executor (`stt/executor.rs`).
-#[derive(Debug, Clone, PartialEq)]
-pub enum SttStreamEffect {
-    OpenSttStream { stream_id: u64, stt: ResourceId },
-    SttFinalize { stream_id: u64 },
-    Deliver(SpeechEvent),
-    EndOfSpeech,
-    Finished(Result<(), ApiError>),
-}
+use lk_agents_abi::{SynthesizedAudio, TranscriptChunk, Ts};
 
 /// Synthesis stream work from [`TtsSynthesis`](crate::tts::machine::TtsSynthesis), performed
 /// by the private TTS executor (`tts/pump.rs`).

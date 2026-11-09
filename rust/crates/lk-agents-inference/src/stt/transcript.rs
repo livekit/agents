@@ -1,7 +1,7 @@
 use crate::stt::wire::{Incoming, Transcript};
 use lk_agents_abi::{RecognitionUsage, SpeechData, SpeechEvent, SpeechEventType, TranscriptChunk};
 
-// `speaking` is written from three places, and its end-of-speech edge releases a deferred keyterm
+// One connection's transcript assembly. `speaking` is written from three places, and its end-of-speech edge releases a deferred keyterm
 // update.
 
 #[derive(Debug, Clone, Default, PartialEq)]
