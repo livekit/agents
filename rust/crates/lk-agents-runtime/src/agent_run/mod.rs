@@ -1,5 +1,5 @@
 use lk_agents_net::signal;
-use lk_agents_net::task::{TaskSet, TokioSpawner};
+use lk_agents_net::task::TaskSet;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,7 +13,7 @@ use lk_agents_abi::llm::tool_executor::Approval;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::usage::Usage;
 use lk_agents_abi::utils::host_ref::HostRef;
-use lk_agents_abi::{ApiConnectOptions, ChatRequest, Clock, FunctionCall, Llm, Ts};
+use lk_agents_abi::{ApiConnectOptions, ChatRequest, Clock, FunctionCall, Llm, Spawner, Ts};
 use lk_agents_core::agent_run::{
     AgentRunEffect, AgentRunEvent, CallId, CheckpointId, OutputVerdict, RenderId, RequestId,
 };
@@ -110,9 +110,9 @@ impl Drop for ActiveRun {
 
 type Accepted = Arc<parking_lot::Mutex<BTreeMap<ValidationId, serde_json::Value>>>;
 
-/// Starts one invocation on `runtime`; its updates arrive on the receiver.
+/// Starts one invocation on `spawner`; its updates arrive on the receiver.
 pub fn start(
-    runtime: &tokio::runtime::Handle,
+    spawner: &Arc<dyn Spawner>,
     agent: AgentDefinition,
     input: RunInput,
     setup: RunSetup,
@@ -133,7 +133,7 @@ pub fn start(
         run,
         work: Execution::new(
             setup,
-            runtime.clone(),
+            spawner.clone(),
             Reporter { id: input_id, tx: events_tx },
             span,
         ),
@@ -142,8 +142,7 @@ pub fn start(
         finished: false,
     };
     let driving = Arc::new(TaskSet::default());
-    let spawner = TokioSpawner::new(runtime.clone());
-    driving.spawn(&spawner, "agent run", driver.drive(events, progress, cancel.clone()));
+    driving.spawn(&**spawner, "agent run", driver.drive(events, progress, cancel.clone()));
     let handle =
         ActiveRun { cancel, progress: Progress(progress_tx), usage, accepted, _driver: driving };
     Ok((handle, update_rx))

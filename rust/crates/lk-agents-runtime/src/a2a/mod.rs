@@ -6,7 +6,7 @@ use handler::{Handler, Read};
 use lk_agents_abi::a2a::metadata::REASON_KEY;
 use lk_agents_abi::a2a::turn::Turn as TurnContract;
 use lk_agents_abi::storage::thread::{Backoff, TaskReason, TaskWrite};
-use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
+use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT, Spawner};
 use lk_agents_core::a2a::task::{
     A2aTaskEffect, A2aTaskEvent, Access, Completion, Handle, HandlerEvent, LaneRun, Operation,
     RunEnd, Stage, TaskMachine, rejected_commit,
@@ -15,8 +15,8 @@ use lk_agents_core::a2a::{
     HandlerOutput, Message, Policy, TurnContext, TurnHost, TurnOptions, TurnResult,
     caller_history_of, host_error, resolve_policy,
 };
-use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::task::{Leave, TaskSet, TokioSpawner};
+use lk_agents_net::env::{ProcessEnv, ProcessError};
+use lk_agents_net::task::{Leave, TaskSet};
 use lk_agents_storage::thread::RESOLVE_LATER;
 use lk_agents_storage::thread::db::{Receive, ReceiveInput};
 use lk_agents_storage::thread::run::ItemRow;
@@ -41,6 +41,8 @@ struct Call {
     /// A delegating caller's conversation, when the message carried one.
     caller_history: Option<Value>,
     submitted: Option<Submitted>,
+    /// Where the turn's background work (a cancel, a commit resolver) runs.
+    spawner: Arc<dyn Spawner>,
 }
 
 /// The `submitted` row a turn writes, owned from before its insert until the turn answers it.
@@ -53,7 +55,7 @@ struct Submitted {
     open: Option<Leave>,
     clock: Arc<dyn Clock>,
     resolvers: Arc<TaskSet>,
-    spawner: TokioSpawner,
+    spawner: Arc<dyn Spawner>,
     answered: bool,
 }
 
@@ -64,7 +66,7 @@ impl Drop for Submitted {
         }
         let (lane, task_id, clock) = (self.lane.clone(), self.task_id.clone(), self.clock.clone());
         let open = self.open.take();
-        self.resolvers.spawn(&self.spawner, "a2a task cancel", async move {
+        self.resolvers.spawn(&*self.spawner, "a2a task cancel", async move {
             let _open = open;
             cancel_unanswered(lane, task_id, clock).await;
         });
@@ -203,6 +205,8 @@ pub struct Turn {
     span: Option<telemetry::SpanContext>,
     /// The resolvers of commits left uncertain, owned by the door.
     resolvers: Arc<TaskSet>,
+    /// The executor each run's background work spawns on, read when the run starts.
+    spawner: fn() -> Result<Arc<dyn Spawner>, ProcessError>,
 }
 
 impl Turn {
@@ -212,6 +216,7 @@ impl Turn {
         lane: &str,
         host: Arc<dyn TurnHost>,
         clock: Arc<dyn Clock>,
+        spawner: fn() -> Result<Arc<dyn Spawner>, ProcessError>,
         options: TurnOptions,
     ) -> Self {
         Self {
@@ -225,6 +230,7 @@ impl Turn {
             host_context: None,
             span: None,
             resolvers: Arc::default(),
+            spawner,
         }
     }
 
@@ -272,6 +278,8 @@ impl Turn {
         let mut machine = TaskMachine::new(self.lane.clone(), msg, task_id, &self.opts, wall);
         let lane = self.thread.lane(&self.lane);
         let holder = Holder::new(&self.holder);
+        let spawner = (self.spawner)()
+            .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
         let mut call = Call {
             lane,
             holder,
@@ -280,6 +288,7 @@ impl Turn {
             handler: None,
             caller_history,
             submitted: None,
+            spawner,
         };
         let mut effects = machine.handle(A2aTaskEvent::Start, elapsed());
         loop {
@@ -336,7 +345,7 @@ impl Turn {
                     open: Some(self.thread.keep_open("a2a task cancel")),
                     clock: self.clock.clone(),
                     resolvers: self.resolvers.clone(),
-                    spawner: TokioSpawner::current(),
+                    spawner: call.spawner.clone(),
                     answered: false,
                 });
                 let inserted = call.lane.submit(&task).await?;
@@ -391,7 +400,7 @@ impl Turn {
                     .run
                     .take()
                     .ok_or_else(|| StorageError::Invalid("no A2A run is open".into()))?;
-                self.resolve_later(call.lane.clone(), run, task_id, failed);
+                self.resolve_later(call, run, task_id, failed);
                 Completion::Done
             }
             Operation::CloseRun => {
@@ -504,9 +513,10 @@ impl Turn {
 
     /// Hands a run whose commit stayed uncertain to a background resolver, which fails its task
     /// with `failed` when the commit was rejected.
-    fn resolve_later(&self, lane: Lane, run: Run, answer: String, failed: a2a::Message) {
+    fn resolve_later(&self, call: &Call, run: Run, answer: String, failed: a2a::Message) {
         let open = self.thread.keep_open("a2a commit resolver");
-        self.resolvers.spawn(&TokioSpawner::current(), "a2a commit resolver", async move {
+        let lane = call.lane.clone();
+        self.resolvers.spawn(&*call.spawner, "a2a commit resolver", async move {
             let _open = open;
             match run.resolve_later().await {
                 Some(Err(e)) if rejected_commit(&e) => {
@@ -621,6 +631,7 @@ impl TurnContract for Turn {
             &lane,
             host,
             env.clock.clone(),
+            env.spawner,
             options.unwrap_or_default(),
         )
     }
@@ -717,7 +728,9 @@ mod lease_tests {
         tokio::time::advance(Duration::from_secs(10)).await;
         let probe = Probe(Arc::default());
         let host: Arc<dyn TurnHost> = Arc::new(probe.clone());
-        let turn = Turn::new(thread, "worker", "desk", host.clone(), clock, Default::default());
+        let spawner = ProcessEnv::current_runtime().spawner;
+        let turn =
+            Turn::new(thread, "worker", "desk", host.clone(), clock, spawner, Default::default());
         let handler = Handler::open(host, telemetry::Cx::NONE, context());
         let mut call = Call {
             lane,
@@ -727,6 +740,7 @@ mod lease_tests {
             handler: Some(handler),
             caller_history: None,
             submitted: None,
+            spawner: spawner().unwrap(),
         };
         let result = turn.next_event(&mut call, Some(false)).await;
         assert!(matches!(result, Err(StorageError::LeaseLost(_))));

@@ -19,6 +19,7 @@ use lk_agents_abi::{ChatContent, ChatItem, Role};
 
 use crate::backends::with_thread;
 use crate::context::store::ContextStore;
+use crate::telemetry::Cx;
 use crate::{CommitOptions, Holder, Lease, Run, RunOptions, Storage, Thread, shortuuid};
 
 pub struct VoiceStore {
@@ -38,6 +39,8 @@ pub struct VoiceStore {
     /// Settles, aborts and loss observations, which `aclose` waits out.
     tasks: Arc<TaskSet>,
     closing: Mutex<bool>,
+    /// The session the store serves: its turns' health metrics record under it.
+    cx: Cx,
 }
 
 struct State {
@@ -64,6 +67,7 @@ impl VoiceStore {
         thread_id: String,
         lane: String,
         explicit_history: Option<Vec<ChatItem>>,
+        cx: Cx,
     ) -> Result<Self, StorageError> {
         let (history, version) = with_thread(&*backend, &thread_id, async |thread| {
             let lane = thread.lane(&lane);
@@ -84,7 +88,8 @@ impl VoiceStore {
             .map(|item| item.id().to_owned())
             .collect();
         let activation =
-            ContextStore::bound(backend.clone(), thread_id.clone(), lane.clone()).await?;
+            ContextStore::bound(backend.clone(), thread_id.clone(), lane.clone(), cx.clone())
+                .await?;
         Ok(Self {
             backend,
             thread_id,
@@ -103,6 +108,7 @@ impl VoiceStore {
             lost: Arc::new(AtomicBool::new(false)),
             tasks: Arc::default(),
             closing: Mutex::new(false),
+            cx,
         })
     }
 
@@ -129,7 +135,7 @@ impl VoiceStore {
         }
         // Exclude direct saves before taking the lane, avoiding the inverse lock/lease order.
         let fields = self.activation.lock_managed().await;
-        let thread = self.backend.open(&self.thread_id).await?;
+        let thread = self.backend.open(&self.thread_id).await?.with_telemetry(self.cx.clone());
         let mut options = RunOptions::new(shortuuid("voice_"), "");
         options.channel = Some("voice".into());
         options.kind = crate::thread::run::LaneKind::Voice;

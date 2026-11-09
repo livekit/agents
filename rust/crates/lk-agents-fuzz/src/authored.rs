@@ -98,6 +98,14 @@ impl Authored {
         self
     }
 
+    /// As [`Self::journal`], in the same instant as the fact before it.
+    pub fn journal_at_once(mut self, step: Step) -> Self {
+        self.seq += 1;
+        let at = Observed::at(self.seq, self.seq - 1 + self.later_ms);
+        self.recording.record_journal(at, step);
+        self
+    }
+
     /// A speech handle as the public API would report it. A handle that is already done is
     /// stamped `done_since` here, because a rule that measures how long it has been done needs
     /// one.

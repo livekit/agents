@@ -10,15 +10,16 @@ use crate::a2a::Turn;
 use livekit_protocol::agent::chat_context::{ChatItem, chat_item};
 use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
 use livekit_protocol::agent::{ChatMessage, ChatRole, FunctionCall, FunctionCallOutput};
-use lk_agents_abi::Clock;
 use lk_agents_abi::a2a::turn::HandlerPort;
 use lk_agents_abi::a2a::turn::TurnContext;
 use lk_agents_abi::errors::{HostError, HostErrorKind, ProviderError};
 use lk_agents_abi::llm::chat_context::protocol::{decode_chat_item, encode_chat_item};
+use lk_agents_abi::{Clock, Spawner};
 use lk_agents_core::a2a::{
     DebounceSpec, HandlerOutput, PendingCall, Policy, PolicySpec, TurnHost, TurnOptions, TurnResult,
 };
 use lk_agents_net::clock::RealClock;
+use lk_agents_net::env::{ProcessEnv, ProcessError};
 use lk_agents_storage::TaskWrite;
 use lk_agents_storage::testing::Backend;
 use lk_agents_storage::thread::db::Receive;
@@ -386,6 +387,10 @@ fn clock() -> Arc<dyn Clock> {
     Arc::new(RealClock::new())
 }
 
+fn spawner() -> fn() -> Result<Arc<dyn Spawner>, ProcessError> {
+    ProcessEnv::current_runtime().spawner
+}
+
 fn options(policy: Option<Policy>) -> TurnOptions {
     TurnOptions {
         policy: policy.map_or(PolicySpec::Default, PolicySpec::All),
@@ -395,7 +400,7 @@ fn options(policy: Option<Policy>) -> TurnOptions {
 }
 
 fn turn(s: &Thread, host: Arc<Fake>, policy: Option<Policy>) -> Turn {
-    Turn::new(s.clone(), "worker", LANE, host, clock(), options(policy))
+    Turn::new(s.clone(), "worker", LANE, host, clock(), spawner(), options(policy))
 }
 
 /// `run_turn(storage, thread, LANE, message, policy, handler)` of the Python tests.
@@ -423,12 +428,13 @@ async fn two_workers_share_one_session(backend: Backend) {
     let a = fx.thread().await;
     let opts = TurnOptions { policy: PolicySpec::All(Policy::Queue), ..TurnOptions::default() };
     let host = Fake::new(Behavior::Counter);
-    let first = Turn::new(a.clone(), "worker", LANE, host.clone(), clock(), opts.clone())
-        .run(a2a("hello", "m1", None, None), None)
-        .await
-        .unwrap();
+    let first =
+        Turn::new(a.clone(), "worker", LANE, host.clone(), clock(), spawner(), opts.clone())
+            .run(a2a("hello", "m1", None, None), None)
+            .await
+            .unwrap();
     let b = fx.thread().await;
-    let second = Turn::new(b.clone(), "worker", LANE, host.clone(), clock(), opts)
+    let second = Turn::new(b.clone(), "worker", LANE, host.clone(), clock(), spawner(), opts)
         .run(a2a("again", "m2", None, None), None)
         .await
         .unwrap();
@@ -591,7 +597,7 @@ async fn the_inbox_batches_a_burst_into_one_reply(backend: Backend) {
     let first = {
         let (a, host, opts) = (a.clone(), host.clone(), opts.clone());
         tokio::spawn(async move {
-            Turn::new(a, "worker", LANE, host, clock(), opts)
+            Turn::new(a, "worker", LANE, host, clock(), spawner(), opts)
                 .run(a2a("where", "m1", Some("sms"), None), None)
                 .await
         })
@@ -600,7 +606,7 @@ async fn the_inbox_batches_a_burst_into_one_reply(backend: Backend) {
     let second = {
         let (b, host, opts) = (b.clone(), host.clone(), opts);
         tokio::spawn(async move {
-            Turn::new(b, "worker", LANE, host, clock(), opts)
+            Turn::new(b, "worker", LANE, host, clock(), spawner(), opts)
                 .run(a2a("are you", "m2", Some("sms"), None), None)
                 .await
         })
@@ -930,6 +936,7 @@ async fn a_lease_timeout_fails_the_early_row(backend: Backend) {
         LANE,
         Fake::new(Behavior::Echo),
         clock(),
+        spawner(),
         TurnOptions {
             policy: PolicySpec::All(Policy::Queue),
             wait_timeout: Some(Duration::from_millis(50)),
@@ -1068,7 +1075,8 @@ async fn the_submitted_row_is_durable_before_the_debounce() {
         debounce: DebounceSpec::All(Duration::from_secs(1)),
         ..TurnOptions::default()
     };
-    let turn = Turn::new(s.clone(), "worker", LANE, Fake::new(Behavior::Echo), clock(), opts);
+    let turn =
+        Turn::new(s.clone(), "worker", LANE, Fake::new(Behavior::Echo), clock(), spawner(), opts);
     let running = tokio::spawn(async move {
         turn.run(a2a("hello", "m1", Some("sms"), None), Some("AST_1".into())).await
     });
@@ -1140,6 +1148,7 @@ mod attachments {
             "desk",
             Arc::new(Host),
             Arc::new(RealClock::new()),
+            lk_agents_net::env::ProcessEnv::current_runtime().spawner,
             TurnOptions { policy: PolicySpec::All(Policy::Queue), ..Default::default() },
         );
         for mime in ["image/png", "audio/wav", "application/pdf"] {

@@ -77,7 +77,8 @@ impl TtsInference<'_, '_, '_> {
                 trace.end(done.text, done.metrics.as_ref());
                 return Ok(heard);
             }
-            Err(failed) => failed,
+            Err(Some(failed)) => failed,
+            Err(None) => return Err(Box::new(state.stopped())),
         };
         let lost = state.failed(error, produced);
         fail(&mut trace, &lost);
@@ -85,30 +86,35 @@ impl TtsInference<'_, '_, '_> {
     }
 
     /// One open and its synthesis, its `tts_request_run` ended either way. On success, what it
-    /// fed and measured; on failure, the error and whether audio came first.
+    /// fed and measured; on failure, the error and whether audio came first; `None` when an
+    /// interrupt stopped the open.
     async fn attempt(
         &mut self,
         state: &mut SynthesisAttempt,
         trace: &mut telemetry::TtsTrace,
         attempt: Option<telemetry::ScopedSpan<telemetry::TtsRequestRun>>,
-    ) -> Result<(Heard, Synthesized), (DriverError, bool)> {
+    ) -> Result<(Heard, Synthesized), Option<(DriverError, bool)>> {
         let (shared, handle) = (self.shared, self.handle);
         // An adapter's own requests open under this attempt.
         let context = attempt.as_ref().map_or(trace.cx(), |a| a.cx()).clone();
-        let stream = match lk_agents_inference::tts::stream(
+        // An open is still owned by nobody, so an interrupt drops it.
+        let open = lk_agents_inference::tts::stream(
             self.tts.clone(),
             &context,
             self.expressive,
             shared.conn.tts.unwrap_or_default(),
             shared.time.clock(),
             Some(give_up_observer(shared, handle, ProviderKind::Tts)),
-        )
-        .await
-        {
-            Ok(stream) => stream,
-            Err(error) => {
+        );
+        let stream = match super::llm::until_interrupted(handle, open).await {
+            Some(Ok(stream)) => stream,
+            Some(Err(error)) => {
                 trace.end_attempt(attempt, Some(&error));
-                return Err((DriverError::Provider(error), false));
+                return Err(Some((DriverError::Provider(error), false)));
+            }
+            None => {
+                trace.end_attempt(attempt, None);
+                return Err(None);
             }
         };
         let (sink, source) = stream.split();
@@ -155,7 +161,7 @@ impl TtsInference<'_, '_, '_> {
         };
         trace.end_attempt(attempt, provider.as_ref());
         state.stream_failed(failed.words, text_ended, failed.synchronized, failed.heard);
-        Err((failed.error, failed.produced))
+        Err(Some((failed.error, failed.produced)))
     }
 }
 
@@ -245,7 +251,8 @@ async fn synthesize(
     let StreamingTts { words, input_done, .. } = state;
     sink.end_input();
     let fed = transformed(shared, &words.raw);
-    let _ = source.close().await;
+    // An interrupted reply leaves the close to finish as the session's cleanup.
+    let _ = super::llm::until_interrupted(handle, source.close()).await;
     let produced = tts_data.produced();
     match heard {
         Ok(mut heard) => {

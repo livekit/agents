@@ -14,6 +14,7 @@ use lk_agents_abi::storage::voice::{
     StorageWork, VoiceStorage, VoiceStorageCommand, VoiceStorageEvent, VoiceStore as _,
 };
 use lk_agents_abi::storage::{StorageError, Unacknowledged};
+use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::{ChatItem, ChatMessage, Clock, Role, StreamInput, Ts};
 use lk_agents_runtime::storage::backends::sqlite::{FileConnection, SqliteStorage, Workers};
 use lk_agents_runtime::storage::sql::{BatchResult, Row, SqlValue, Statement, StatementKind};
@@ -65,7 +66,7 @@ pub struct FakeStore {
 }
 
 impl FakeStore {
-    /// `VoiceStore::bound` over a fresh lane, as `Storage._core_voice_store` builds it.
+    /// `VoiceStore::bound` over a fresh lane, as `Namespace::voice_store` builds it.
     pub async fn open(
         setup: StorageSetup,
         seed: u64,
@@ -94,7 +95,7 @@ impl FakeStore {
             Arc::new(FakeConnection { inner, db: calls.clone() }) as Arc<dyn ThreadDbConnection>
         };
         let backend = Arc::new(Wrapped { storage, wrap });
-        let voice = VoiceStore::bound(backend, thread.thread_id, LANE.into(), None)
+        let voice = VoiceStore::bound(backend, thread.thread_id, LANE.into(), None, Cx::NONE)
             .await
             .expect("a fresh lane loads");
         let voice = Arc::new(voice);

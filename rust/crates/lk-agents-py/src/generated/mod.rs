@@ -113,7 +113,6 @@ pub trait Implementations: 'static {
     type Storage: ::lk_agents_abi::storage::Storage<
             Thread = Self::Thread,
             ContextActivation = Self::ContextActivation,
-            VoiceStore = Self::VoiceStore,
             ThreadServer = Self::ThreadServer,
         >;
     type ContextActivation: ::lk_agents_abi::storage::context::ContextActivation<Transaction = Self::AppTransaction>;

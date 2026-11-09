@@ -250,7 +250,7 @@ impl Inner {
 
     async fn open(self: &Arc<Self>, startup: Startup) -> Result<(), StartFailed> {
         let Startup { storage, host, trace, job_ids, mut opening } = startup;
-        let ready = storage.open_ready().await?;
+        let ready = storage.open_ready(&trace).await?;
         // `gen_ai.conversation.id` is the call's thread.
         let trace = trace.with_conversation(ready.thread());
         // Startup work runs under `session_start`, reserved before the driver opens it.

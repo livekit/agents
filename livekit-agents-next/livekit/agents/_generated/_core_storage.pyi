@@ -46,13 +46,6 @@ class Storage:
         api_secret: str,
         port: int = 0,
     ) -> _core_ThreadServer: ...
-    async def _core_voice_store(
-        self,
-        thread_id: str,
-        lane: str,
-        *,
-        initial_history: Sequence[ChatItem] | None = None,
-    ) -> _core_VoiceStore: ...
     def __new__(
         cls,
         *,

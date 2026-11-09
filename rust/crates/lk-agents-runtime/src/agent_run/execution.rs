@@ -85,7 +85,7 @@ pub(crate) struct Execution {
     /// The span's context, kept past its end for work still settling.
     cx: telemetry::Cx,
     pub(super) setup: RunSetup,
-    runtime: tokio::runtime::Handle,
+    spawner: Arc<dyn Spawner>,
     events_tx: Reporter,
     /// Each model request in flight; a request dropped from here stops too.
     pub requests: BTreeMap<RequestId, Request>,
@@ -103,7 +103,7 @@ pub(crate) struct Execution {
 impl Execution {
     pub fn new(
         setup: RunSetup,
-        runtime: tokio::runtime::Handle,
+        spawner: Arc<dyn Spawner>,
         events_tx: Reporter,
         span: telemetry::ScopedSpan<telemetry::AgentRun>,
     ) -> Self {
@@ -112,7 +112,7 @@ impl Execution {
             cx: span.cx().clone(),
             span: Some(span),
             setup,
-            runtime,
+            spawner,
             events_tx,
             requests: BTreeMap::new(),
             operations: BTreeMap::new(),
@@ -243,15 +243,12 @@ impl Execution {
         let lost = events.clone();
         let stream = stream_request(request, req, llm, clock, events, cancelled.clone(), trace);
         // A stream whose task ended without its end or failure (it panicked) reports it failed.
-        let task = TokioSpawner::new(self.runtime.clone()).spawn_settled(
-            stream,
-            move |outcome| async move {
-                if !matches!(outcome, lk_agents_abi::TaskOutcome::Completed) {
-                    let error = ApiError::new("the model request ended without reporting").into();
-                    let _ = lost.send(Report::LlmFailed { request, error }).await;
-                }
-            },
-        );
+        let task = self.spawner.spawn_settled(stream, move |outcome| async move {
+            if !matches!(outcome, lk_agents_abi::TaskOutcome::Completed) {
+                let error = ApiError::new("the model request ended without reporting").into();
+                let _ = lost.send(Report::LlmFailed { request, error }).await;
+            }
+        });
         self.requests.insert(request, Request { stop: cancelled.drop_guard(), _task: task });
     }
 
@@ -447,7 +444,7 @@ impl Execution {
         let operation = self.invoker.invoke(
             function_call,
             approval,
-            &self.runtime,
+            &*self.spawner,
             move |inv| call(inv, events),
             lost,
         );

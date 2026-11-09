@@ -2,6 +2,7 @@ use crate::context::store::ContextStore;
 use crate::testing::Backend;
 use crate::{CommitOptions, RunOptions, StorageError};
 use lk_agents_abi::storage::context::{AppTransaction as _, ContextActivation as _, ContextField};
+use lk_agents_abi::telemetry::Cx;
 use serde_json::{Value, json};
 
 fn field(name: &str, value: Value) -> ContextField {
@@ -10,14 +11,22 @@ fn field(name: &str, value: Value) -> ContextField {
 
 async fn direct_context_saves_survive_reload_and_refuse_stale_activations(backend: Backend) {
     let fixture = backend.fixture(None).await;
-    let first =
-        ContextStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
-            .await
-            .unwrap();
-    let stale =
-        ContextStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
-            .await
-            .unwrap();
+    let first = ContextStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
+    let stale = ContextStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
     let fields = vec![field("draft", json!("first"))];
     let a = first.load("root:desk".into(), "Booking".into(), fields.clone()).await.unwrap();
     let b = stale.load("root:desk".into(), "Booking".into(), fields.clone()).await.unwrap();
@@ -27,10 +36,14 @@ async fn direct_context_saves_survive_reload_and_refuse_stale_activations(backen
     assert!(first.writes().is_empty(), "returning success means the direct save committed");
     first.close();
 
-    let restored =
-        ContextStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
-            .await
-            .unwrap();
+    let restored = ContextStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
     let loaded = restored
         .load("root:desk".into(), "Booking".into(), vec![field("draft", json!("default"))])
         .await
@@ -62,10 +75,14 @@ async fn direct_context_saves_survive_reload_and_refuse_stale_activations(backen
 
 async fn several_context_declarations_share_one_direct_scope(backend: Backend) {
     let fixture = backend.fixture(None).await;
-    let store =
-        ContextStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
-            .await
-            .unwrap();
+    let store = ContextStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
     let draft = vec![field("draft", json!("booking"))];
     let preferences = vec![field("language", json!("fr"))];
     let a = store.load("root:desk".into(), "Booking".into(), draft.clone()).await.unwrap();
@@ -88,8 +105,9 @@ async fn notes(store: &ContextStore) -> Vec<Vec<Value>> {
 async fn application_transactions_commit_on_exit_or_with_the_turn(backend: Backend) {
     let fixture = backend.fixture(None).await;
     let (storage, thread_id) = (fixture.storage.clone(), fixture.thread_id.clone());
-    let direct =
-        ContextStore::bound(storage.clone(), thread_id.clone(), "desk".into()).await.unwrap();
+    let direct = ContextStore::bound(storage.clone(), thread_id.clone(), "desk".into(), Cx::NONE)
+        .await
+        .unwrap();
     let tx = direct.transaction(false).await.unwrap();
     tx.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)".into(), None)
         .await
@@ -107,9 +125,10 @@ async fn application_transactions_commit_on_exit_or_with_the_turn(backend: Backe
     discarded.rollback();
     assert_eq!(notes(&direct).await.len(), 1);
 
-    let turn = ContextStore::turn(storage, thread_id, "desk".into(), Vec::new(), None, false)
-        .await
-        .unwrap();
+    let turn =
+        ContextStore::turn(storage, thread_id, "desk".into(), Vec::new(), None, false, Cx::NONE)
+            .await
+            .unwrap();
     let staged = turn.transaction(false).await.unwrap();
     staged
         .execute("INSERT INTO notes (body) VALUES (?)".into(), Some(vec![json!("turn")]))
@@ -132,10 +151,14 @@ async fn application_transactions_commit_on_exit_or_with_the_turn(backend: Backe
 /// A turn's application writes are fenced with it: after a takeover they never apply.
 async fn a_turns_application_writes_never_apply_after_a_takeover(backend: Backend) {
     let fixture = backend.fixture(None).await;
-    let direct =
-        ContextStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
-            .await
-            .unwrap();
+    let direct = ContextStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
     let tx = direct.transaction(true).await.unwrap();
     tx.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)".into(), None)
         .await
@@ -195,7 +218,7 @@ async fn faulty_store() -> (
 async fn a_lost_direct_save_resolves_before_the_next_save() {
     use crate::testing::WriteFault;
     let (storage, faulty, thread, _dir) = faulty_store().await;
-    let store = ContextStore::bound(storage, thread, "desk".into()).await.unwrap();
+    let store = ContextStore::bound(storage, thread, "desk".into(), Cx::NONE).await.unwrap();
     let first = vec![field("draft", json!("first"))];
     let loaded = store.load("root:desk".into(), "Booking".into(), first.clone()).await.unwrap();
     faulty.fail_next_commit(WriteFault::LoseAckAfter);
@@ -216,7 +239,7 @@ async fn a_lost_direct_save_resolves_before_the_next_save() {
 async fn a_lost_application_transaction_applies_once() {
     use crate::testing::WriteFault;
     let (storage, faulty, thread, _dir) = faulty_store().await;
-    let store = ContextStore::bound(storage, thread, "desk".into()).await.unwrap();
+    let store = ContextStore::bound(storage, thread, "desk".into(), Cx::NONE).await.unwrap();
     let tx = store.transaction(true).await.unwrap();
     tx.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)".into(), None)
         .await

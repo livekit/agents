@@ -60,5 +60,10 @@ httparse = "1"
 # The fake AgentDB server's side of the data plane.
 tokio-tungstenite = { version = "0.30", default-features = false }
 
+# A worker killed with SIGKILL mid-run, recovered by the next one: the binary re-executes itself.
+[[test]]
+name = "crash"
+path = "src/thread/crash_tests.rs"
+
 [lints]
 workspace = true

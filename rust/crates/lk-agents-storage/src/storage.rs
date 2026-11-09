@@ -140,6 +140,17 @@ pub struct Namespace {
 const LOCAL_PAGE: i64 = 100;
 
 impl Namespace {
+    /// A call's lane, its turns' health metrics recorded under the call's span `cx`.
+    pub async fn voice_store(
+        &self,
+        thread_id: String,
+        lane: String,
+        initial_history: Option<Vec<lk_agents_abi::ChatItem>>,
+        cx: lk_agents_abi::telemetry::Cx,
+    ) -> Result<VoiceStore, StorageError> {
+        VoiceStore::bound(self.storage().await?, thread_id, lane, initial_history, cx).await
+    }
+
     async fn backend(&self) -> Result<&Backend, StorageError> {
         self.backend
             .get_or_try_init(|| async {
@@ -291,7 +302,6 @@ pub(crate) async fn thread_tasks(
 impl HostStorageClass for Namespace {
     type Thread = Thread;
     type ContextActivation = ContextStore;
-    type VoiceStore = VoiceStore;
     type ThreadServer = crate::http::ThreadServer;
     type Env = ProcessEnv;
 
@@ -314,15 +324,6 @@ impl HostStorageClass for Namespace {
             port,
         )
         .await
-    }
-
-    async fn _core_voice_store(
-        &self,
-        thread_id: String,
-        lane: String,
-        initial_history: Option<Vec<lk_agents_abi::ChatItem>>,
-    ) -> Result<Self::VoiceStore, StorageError> {
-        VoiceStore::bound(self.storage().await?, thread_id, lane, initial_history).await
     }
 
     fn new(
@@ -490,7 +491,7 @@ impl HostStorageClass for Namespace {
         thread_id: String,
         lane: String,
     ) -> Result<Self::ContextActivation, StorageError> {
-        ContextStore::bound(self.storage().await?, thread_id, lane).await
+        ContextStore::bound(self.storage().await?, thread_id, lane, self.cx.clone()).await
     }
 
     async fn _core_turn_store(
@@ -502,7 +503,8 @@ impl HostStorageClass for Namespace {
         read_only: bool,
     ) -> Result<Self::ContextActivation, StorageError> {
         let storage = self.storage().await?;
-        ContextStore::turn(storage, thread_id, lane, scopes, routing_state, read_only).await
+        let cx = self.cx.clone();
+        ContextStore::turn(storage, thread_id, lane, scopes, routing_state, read_only, cx).await
     }
 
     async fn aclose(&self) {

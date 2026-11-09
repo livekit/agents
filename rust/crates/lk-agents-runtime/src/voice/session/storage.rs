@@ -1,8 +1,8 @@
+use crate::telemetry;
 use crate::voice::VoiceRuntime;
 use crate::voice::session::Tx;
 use lk_agents_abi::StreamInput;
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::storage::Storage as _;
 use lk_agents_abi::storage::context::ContextActivation as _;
 use lk_agents_abi::storage::voice::VoiceStore as _;
 use lk_agents_abi::storage::voice::{VoiceStorageCommand, VoiceStorageEvent};
@@ -21,6 +21,8 @@ pub struct SessionStorage {
     lane: String,
     agent: String,
     initial_history: Option<Vec<ChatItem>>,
+    /// Where the lane's health metrics go before a session names its own span.
+    process: telemetry::Cx,
     opened: OnceCell<Opened>,
 }
 
@@ -56,13 +58,14 @@ impl SessionStorage {
     }
 
     /// Native startup receives the initialized payload, so it cannot read a pre-open handle.
-    pub(super) async fn open_ready(&self) -> Result<&Opened, StorageError> {
-        self.opened.get_or_try_init(|| self.load()).await
+    /// The lane's health metrics record under `cx`, the session's span.
+    pub(super) async fn open_ready(&self, cx: &telemetry::Cx) -> Result<&Opened, StorageError> {
+        self.opened.get_or_try_init(|| self.load(cx)).await
     }
 
     /// The supplied thread's lane, whose failure is the call's; without one, the call runs in
     /// memory on the history it was given.
-    async fn load(&self) -> Result<Opened, StorageError> {
+    async fn load(&self, cx: &telemetry::Cx) -> Result<Opened, StorageError> {
         let scope_id = format!("root:{}", self.lane);
         let (Some(namespace), Some(thread_id)) = (&self.namespace, &self.thread_id) else {
             return Ok(Opened {
@@ -72,8 +75,9 @@ impl SessionStorage {
                 history: self.initial_history.clone(),
             });
         };
+        let history = self.initial_history.clone();
         let store = namespace
-            ._core_voice_store(thread_id.clone(), self.lane.clone(), self.initial_history.clone())
+            .voice_store(thread_id.clone(), self.lane.clone(), history, cx.clone())
             .await?;
         Ok(Opened {
             scope_id,
@@ -110,17 +114,26 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
     type VoiceStore = VoiceStore;
 
     fn new(
-        _env: &ProcessEnv,
+        env: &ProcessEnv,
         namespace: Option<Arc<Namespace>>,
         thread_id: Option<String>,
         lane: String,
         agent: String,
         initial_history: Option<Vec<ChatItem>>,
     ) -> Self {
-        Self { namespace, thread_id, lane, agent, initial_history, opened: OnceCell::new() }
+        let process = env.tracer.root();
+        Self {
+            namespace,
+            thread_id,
+            lane,
+            agent,
+            initial_history,
+            process,
+            opened: OnceCell::new(),
+        }
     }
     async fn open(&self) -> Result<(), StorageError> {
-        self.open_ready().await.map(|_| ())
+        self.open_ready(&self.process).await.map(|_| ())
     }
     fn namespace(&self) -> Option<Arc<Namespace>> {
         self.opened().lane.as_ref().map(|lane| Arc::clone(&lane.namespace))

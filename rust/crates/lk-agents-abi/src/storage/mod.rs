@@ -153,9 +153,6 @@ pub trait Storage: Send + Sync + Sized + 'static {
     #[host(class(name = "_core_ContextActivation"))]
     type ContextActivation: Send + Sync + 'static;
 
-    #[host(class(name = "_core_VoiceStore"))]
-    type VoiceStore: Send + Sync + 'static;
-
     #[host(class(name = "_core_ThreadServer"))]
     type ThreadServer: Send + Sync + 'static;
 
@@ -170,14 +167,6 @@ pub trait Storage: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]
     type Env;
-
-    #[host(await)]
-    async fn _core_voice_store(
-        &self,
-        thread_id: String,
-        lane: String,
-        #[host(kw, default = None)] initial_history: Option<Vec<crate::ChatItem>>,
-    ) -> Result<Self::VoiceStore, StorageError>;
 
     /// `local`: threads in that project's directory, resolved to an absolute path once.
     /// Otherwise agentstore through the public API derived from `url`, with tokens minted from

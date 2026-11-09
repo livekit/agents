@@ -7,7 +7,7 @@ use lk_agents_abi::text_session::{TextSessionDelivery, TextSessionRunner};
 use lk_agents_abi::{ChatItem, Closed, StreamOutput, Ts};
 use lk_agents_core::text_session::SessionAgent;
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::task::{TaskSet, TokioSpawner};
+use lk_agents_net::task::TaskSet;
 use parking_lot::Mutex;
 
 #[derive(Clone)]
@@ -21,7 +21,7 @@ pub struct Runner {
     config: TextSessionConfig,
     agents: BTreeMap<String, TextSessionAgent>,
     control: Mutex<Option<Control>>,
-    runtime: fn() -> Result<tokio::runtime::Handle, lk_agents_net::env::ProcessError>,
+    spawner: fn() -> Result<Arc<dyn Spawner>, lk_agents_net::env::ProcessError>,
     clock: Arc<dyn Clock>,
     tracer: telemetry::Tracer,
 }
@@ -51,18 +51,18 @@ impl TextSessionRunner for Runner {
         .map_err(|e| Invalid(e.to_string()))?;
         let resources =
             agents.into_iter().map(|agent| (agent.definition.name.clone(), agent)).collect();
-        let (control, runtime, clock) = (Mutex::new(None), env.runtime, env.clock.clone());
-        Ok(Self { config, agents: resources, control, runtime, clock, tracer: env.tracer.clone() })
+        let (control, spawner, clock) = (Mutex::new(None), env.spawner, env.clock.clone());
+        Ok(Self { config, agents: resources, control, spawner, clock, tracer: env.tracer.clone() })
     }
 
     fn run(&self, request: TextSessionRequest) -> Result<Updates, Invalid> {
-        let runtime = (self.runtime)().map_err(|error| Invalid(error.to_string()))?;
+        let spawner = (self.spawner)().map_err(|error| Invalid(error.to_string()))?;
         let mut current = self.control.lock();
         if current.as_ref().is_some_and(|c| !c.release.is_closed()) {
             return Err(Invalid("this runner already has an active request".into()));
         }
         let (updates, control) = start(
-            &runtime,
+            spawner,
             self.config.clone(),
             self.agents.clone(),
             request,
@@ -134,7 +134,7 @@ impl TextSessionRunner for Runner {
 }
 
 fn start(
-    runtime: &tokio::runtime::Handle,
+    spawner: Arc<dyn Spawner>,
     config: TextSessionConfig,
     agents: BTreeMap<String, TextSessionAgent>,
     request: TextSessionRequest,
@@ -172,7 +172,7 @@ fn start(
         request,
         clock: clock.clone(),
         cx,
-        runtime: runtime.clone(),
+        spawner: spawner.clone(),
         events_tx,
         updates,
         work: BTreeMap::new(),
@@ -182,9 +182,8 @@ fn start(
         finished: false,
     };
     let driving = Arc::new(TaskSet::default());
-    let spawner = TokioSpawner::new(runtime.clone());
     driving.spawn(
-        &spawner,
+        &*spawner,
         "text session",
         driver.drive(message, events, progress, releases, cancel.clone()),
     );

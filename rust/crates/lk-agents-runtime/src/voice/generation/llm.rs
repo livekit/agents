@@ -135,20 +135,25 @@ impl LlmInference<'_> {
         let attempt = trace.attempt();
         let mut data = self.announce_request(&req, llm.as_ref());
         let observer = give_up_observer(shared, handle, ProviderKind::Llm);
-        let opened = lk_agents_inference::llm::chat(
+        // An open is still owned by nobody, so an interrupt drops it: the step has no words.
+        let open = lk_agents_inference::llm::chat(
             llm.clone(),
             trace.cx(),
             &req,
             shared.time.clock(),
             Some(observer),
-        )
-        .await;
-        let ended = match opened {
-            Err(error) => {
+        );
+        let ended = match until_interrupted(handle, open).await {
+            None => {
+                self.request_finished(None);
+                report_llm_metrics(&data, false, shared, handle);
+                Ok(())
+            }
+            Some(Err(error)) => {
                 self.request_finished(Some(&error));
                 Err(error)
             }
-            Ok(stream) => {
+            Some(Ok(stream)) => {
                 // Owned before the first read: a cancelled reply still closes it.
                 let mut stream = lk_agents_net::owned::Owned::stream(&shared.background(), stream);
                 report_retries(shared, handle, ProviderKind::Llm, &mut stream);
@@ -221,7 +226,8 @@ impl LlmInference<'_> {
     ) -> Result<(), ProviderError> {
         self.request_finished(ended.as_ref().err());
         report_llm_metrics(data, ended.is_err(), self.shared, self.handle);
-        let _ = stream.close().await;
+        // An interrupted reply leaves the close to finish as the session's cleanup.
+        let _ = until_interrupted(self.handle, stream.close()).await;
         ended
     }
 

@@ -250,7 +250,8 @@ impl SynthesisAttempt {
         }
     }
 
-    fn stopped(&self) -> Lost {
+    /// Stopped by an interrupt or the close: nothing failed and nothing was lost.
+    pub fn stopped(&self) -> Lost {
         Lost {
             failure: None,
             lost: false,

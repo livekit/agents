@@ -19,7 +19,7 @@ use lk_agents_abi::text_session::{LocalAgentTool, LocalInteraction as Port, Text
 use lk_agents_abi::usage::Usage;
 use lk_agents_abi::{
     ApiConnectOptions, ChatItem, ChatMessage, Clock, FunctionCall, HOST_TEARDOWN_TIMEOUT, Role,
-    WallAnchor,
+    Spawner, WallAnchor,
 };
 use lk_agents_core::agent_tool::{self, Step};
 use lk_agents_core::tool_outcome::Mode;
@@ -42,7 +42,7 @@ pub struct LocalInteraction {
     clock: Arc<dyn Clock>,
     shared: Arc<Mutex<Shared>>,
     /// The running delegation's stop and settlement.
-    running: Mutex<Option<(CancellationToken, signal::Cell<Option<()>>)>>,
+    running: Mutex<Option<(CancellationToken, signal::Cell<Option<ToolOutcome>>)>>,
 }
 
 #[derive(Default)]
@@ -93,31 +93,30 @@ impl Port for LocalInteraction {
         if let Err(refused) = agent_tool::admit(self.depth) {
             return Ok(refused);
         }
-        let runtime = (env.runtime)().map_err(|e| Invalid(e.to_string()))?;
+        let spawner = (env.spawner)().map_err(|e| Invalid(e.to_string()))?;
         let stop = CancellationToken::new();
         let (done, settled) = signal::once();
-        *self.running.lock() = Some((stop.clone(), settled));
+        *self.running.lock() = Some((stop.clone(), settled.clone()));
         let delegate = Delegate {
             child: self.child.clone(),
             tool: self.tool.clone(),
             call: self.call.clone(),
             clock: self.clock.clone(),
             shared: self.shared.clone(),
-            runtime: runtime.clone(),
+            spawner: spawner.clone(),
             host,
             context,
             cx,
             conn_options,
             stop,
         };
-        // Its own task: a dropped `run` leaves it to the host, which stops it in the same turn
+        // A process task: a dropped `run` leaves it to the host, which stops it in the same turn
         // (`cancelled()`), and `settled()` waits for the child's settlement: the task's end, however
-        // it ends, drops `done`.
-        let task = runtime.spawn(async move {
-            let _done: signal::Producer<Option<()>> = done;
+        // it ends, resolves or drops `done`.
+        env.tasks.spawn_settling(&*spawner, "agent tool", done, async move {
             delegate.drive(arguments, history, live).await
         });
-        task.await.map_err(|e| Invalid(e.to_string()))
+        settled.wait().await.map_err(|_| Invalid("the agent tool's child ended unsettled".into()))
     }
 
     fn cancelled(&self) {
@@ -173,7 +172,7 @@ struct Delegate {
     call: FunctionCall,
     clock: Arc<dyn Clock>,
     shared: Arc<Mutex<Shared>>,
-    runtime: tokio::runtime::Handle,
+    spawner: Arc<dyn Spawner>,
     host: Arc<dyn DelegationHost>,
     context: CallContext,
     cx: telemetry::Cx,
@@ -274,7 +273,7 @@ impl Delegate {
         let span = telemetry::start(&self.cx, telemetry::AgentRun { operation, agent_name });
         let definition = self.child.definition.clone();
         let (active, mut updates) =
-            crate::agent_run::start(&self.runtime, definition, input, setup, span, UPDATE_QUEUE)
+            crate::agent_run::start(&self.spawner, definition, input, setup, span, UPDATE_QUEUE)
                 .map_err(|e| e.to_string())?;
         self.shared.lock().live = Some((invocation_id, active.progress(), active.usage()));
         let mut cancelling = false;

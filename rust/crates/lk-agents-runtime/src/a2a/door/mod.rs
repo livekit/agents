@@ -4,6 +4,7 @@ pub(crate) mod stream;
 use crate::a2a::Turn;
 use crate::telemetry;
 use a2a::JsonRpcId;
+use lk_agents_abi::Spawner;
 use lk_agents_abi::a2a::auth::{AuthOperation, AuthPrincipal};
 use lk_agents_abi::a2a::card::EndpointDescriptor;
 use lk_agents_abi::a2a::door::{
@@ -17,8 +18,8 @@ use lk_agents_core::a2a::auth::{authorize, first_message_scope};
 use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_core::a2a::wire;
 use lk_agents_net::clock::unix_now_ms;
-use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::task::{TaskSet, TokioSpawner};
+use lk_agents_net::env::{ProcessEnv, ProcessError};
+use lk_agents_net::task::TaskSet;
 use lk_agents_storage::storage::Namespace;
 use lk_agents_storage::thread::db::TaskQuery;
 use lk_agents_storage::thread::schema::TaskRow;
@@ -48,7 +49,7 @@ pub struct Door {
     endpoint: EndpointDescriptor,
     /// Accepted operations, which `aclose` waits out.
     tasks: Arc<TaskSet>,
-    runtime: tokio::runtime::Handle,
+    spawner: Arc<dyn Spawner>,
     admission: Admission,
 }
 
@@ -62,6 +63,7 @@ struct Inner {
     /// The namespace's A2A work, which counts this door's operations too.
     owner: Arc<TaskSet>,
     clock: Arc<dyn lk_agents_abi::Clock>,
+    spawner: fn() -> Result<Arc<dyn Spawner>, ProcessError>,
     tracer: telemetry::Tracer,
 }
 
@@ -78,8 +80,7 @@ impl A2ADoor for Door {
         let namespace = storage.downcast::<Namespace>().map_err(|_| {
             StorageError::Invalid("an A2A door needs this process's Storage".into())
         })?;
-        let runtime = env
-            .caller_runtime()
+        let spawner = (env.spawner)()
             .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
         lk_agents_core::a2a::card::agent_card(config.endpoint.clone())
             .map_err(|e| StorageError::Invalid(e.to_string()))?;
@@ -95,11 +96,12 @@ impl A2ADoor for Door {
                 host,
                 options: config.options,
                 clock: env.clock.clone(),
+                spawner: env.spawner,
                 tracer: env.tracer.clone(),
             }),
             endpoint: config.endpoint,
             tasks: Arc::default(),
-            runtime,
+            spawner,
             admission: Admission::default(),
         })
     }
@@ -176,8 +178,7 @@ impl Door {
         };
         let inner = self.inner.clone();
         let ownership = self.inner.owner.track("a2a operation");
-        let spawner = TokioSpawner::new(self.runtime.clone());
-        self.tasks.spawn(&spawner, "a2a operation", async move {
+        self.tasks.spawn(&*self.spawner, "a2a operation", async move {
             let _ownership = ownership;
             let _admission = admission;
             let id = request.id.clone();
@@ -401,6 +402,7 @@ impl Inner {
                 &self.lane,
                 self.host.clone(),
                 self.clock.clone(),
+                self.spawner,
                 self.options.clone(),
             )
         };

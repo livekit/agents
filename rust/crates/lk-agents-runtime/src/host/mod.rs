@@ -6,8 +6,7 @@ use lk_agents_abi::invoke::{HostEntry, HostNotices, Refusal, Scope};
 use lk_agents_abi::llm::tool_executor::Approval;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{BoxFuture, FunctionCall};
-use lk_agents_abi::{SpawnerExt, TaskOutcome};
-use lk_agents_net::task::TokioSpawner;
+use lk_agents_abi::{Spawner, SpawnerExt, TaskOutcome};
 use std::collections::BTreeMap;
 
 // Never call the host while holding a lock: an entry may wait for the GIL.
@@ -113,7 +112,7 @@ impl HostInvoker {
         &mut self,
         function_call: Option<FunctionCall>,
         approval: Option<Approval>,
-        runtime: &tokio::runtime::Handle,
+        spawner: &dyn Spawner,
         call: F,
         lost: L,
     ) -> u64
@@ -127,7 +126,7 @@ impl HostInvoker {
         let invocation = Invocation { operation, function_call, approval, ..self.entry.clone() };
         self.live.insert(operation, invocation.clone());
         let work = call(invocation);
-        let task = TokioSpawner::new(runtime.clone()).spawn_settled(work, |outcome| async move {
+        let task = spawner.spawn_settled(work, |outcome| async move {
             if !matches!(outcome, TaskOutcome::Completed) {
                 lost.await;
             }

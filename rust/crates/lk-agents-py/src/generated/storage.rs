@@ -89,40 +89,6 @@ impl Storage {
         })
     }
 
-    #[pyo3(signature = (thread_id, lane, *, initial_history = None))]
-    fn _core_voice_store<'py>(
-        &self,
-        py: Python<'py>,
-        thread_id: ::std::string::String,
-        lane: ::std::string::String,
-        initial_history: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let initial_history = initial_history
-            .map(|v| {
-                v.try_iter().and_then(|items| {
-                    items
-                        .map(|item| {
-                            let item = item?;
-                            crate::generated::records::chat_items::chat_item_from_py(item.as_any())
-                        })
-                        .collect::<PyResult<Vec<_>>>()
-                })
-            })
-            .transpose()?;
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::py_calls::future_into_py(py, async move {
-            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_voice_store(&this, thread_id, lane, initial_history)
-                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
-            Python::attach(|py| {
-                ::pyo3::IntoPyObjectExt::into_py_any(
-                    super::storage::CoreVoiceStore(::std::sync::Arc::new(out)),
-                    py,
-                )
-            })
-        })
-    }
-
     /// `local`: threads in that project's directory, resolved to an absolute path once.
     /// Otherwise agentstore through the public API derived from `url`, with tokens minted from
     /// the key pair; each omitted one is `LIVEKIT_URL`, `LIVEKIT_API_KEY` or

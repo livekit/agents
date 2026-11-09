@@ -13,7 +13,7 @@ use lk_agents_abi::text_session::{
     TextSessionTurn, TextSessionUpdate,
 };
 use lk_agents_abi::usage::Usage;
-use lk_agents_abi::{Clock, HostRef, WallAnchor};
+use lk_agents_abi::{Clock, HostRef, Spawner, WallAnchor};
 use lk_agents_core::agent_run;
 use lk_agents_core::text_session::{
     TextSession, TextSessionConfig, TextSessionEffect, TextSessionEvent, TextSessionInput,
@@ -52,7 +52,7 @@ pub(super) struct Driver {
     clock: Arc<dyn Clock>,
     /// Where the invocations' `agent_run` spans open.
     cx: telemetry::Cx,
-    runtime: tokio::runtime::Handle,
+    spawner: Arc<dyn Spawner>,
     events_tx: mpsc::Sender<(String, Report)>,
     updates: mpsc::Sender<TextSessionUpdate>,
     work: BTreeMap<String, Execution>,
@@ -243,7 +243,7 @@ impl Driver {
             entry,
         };
         let reporter = Reporter { id: invocation_id.clone(), tx: self.events_tx.clone() };
-        let execution = Execution::new(setup, self.runtime.clone(), reporter, span);
+        let execution = Execution::new(setup, self.spawner.clone(), reporter, span);
         self.work.insert(invocation_id, execution);
     }
 

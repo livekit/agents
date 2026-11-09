@@ -2200,6 +2200,55 @@ effects. Escalation that terminates a process is a process-supervision decision,
 not a hidden behavior of a stream or tool wrapper. Conformance tests exercise
 cancellation races and cleanup outcomes in both bindings.
 
+### Lifecycle and ownership
+
+Each rule below removes a class of bug: a hang, a leak, or work that was abandoned silently.
+It does this by making the bad state impossible to build, not by relying on a convention.
+
+- **Waits.** A wait is on an `lk_agents_net::signal` cell. Its `Producer` is the only writer,
+  and it lives where the progress happens:
+  - moved into the task that makes the progress (`TaskSet::spawn_settling`), or
+  - held in the table of the loop that owns the state.
+
+  When the producer drops (by a return, a cancel, a panic or a runtime drop), every waiter
+  resolves. It gets `Err(Ended)` when the state can no longer come. So a waiter that is never
+  woken cannot be written.
+- **Shared state.** When several parties change one piece of state, it is a `signal::Shared`
+  with a terminal value, such as closed, that every wait accepts. `Notify` and raw `watch`
+  appear only inside `signal.rs`; Clippy rejects them anywhere else.
+- **Closeable resources.** A resource that must be closed (a stream, a track, a provider
+  socket) is held in `owned::Owned` from the moment it exists, before the next await. Dropping
+  it runs its bounded close as a cleanup task, which the owner's `TaskSet` joins. A close that
+  must outlive its caller goes through `owned::Background`, never `spawn_detached`.
+- **Lane leases.** The only way to get a `Lease` is a `PendingLease`, which is minted per take
+  under a fresh token. If the take is dropped while the request may already hold the lane (an
+  abandoned future, an error, a lost acknowledgment), the `PendingLease` releases by token and
+  ends the run `canceled`. A `Lease` renews until its commit resolves, and releases when it
+  drops. Each owner has one `Holder`, and the owner's close awaits those releases.
+- **Task deaths.** A task that feeds a machine reports its own death as an input
+  (`TaskSet::scoped_feeding`), so a lost task cannot leave the machine waiting.
+- **Session end.** Every wait a host can await (a speech handle, a reply, a run result)
+  resolves when its session ends, whether it was drained or dropped. The voice runtime owns
+  each speech's lifecycle producers, so closing the session finishes them.
+- **Uncertain writes.** A storage write whose acknowledgment was lost is `Unacknowledged`. It is
+  re-sent through `Resend` with a key that makes resending safe, until its outcome is known or
+  the retries run out.
+
+The DST checks these rules on every run:
+- `every_wait_resolves`: each wait the driver started resolved.
+- `no_waiter_at_quiescence`: nothing is still parked once the system goes idle.
+- The lease, stream and transcript rules from AGENTS.md.
+
+Health metrics (`telemetry/health.rs`) report what still slips through in production:
+- `lk.agents.lane.acquire_wait`: how long a lane acquire waited;
+- `lk.agents.lane.ownerless_wait`: time spent waiting behind a holder that stopped renewing;
+- `lk.agents.lane.lease_lapsed`: leases taken over after they lapsed instead of being released;
+- `lk.agents.teardown.overrun`: teardowns that ran past their bound;
+- `lk.agents.storage.write_uncertain`: writes still unresolved when their retries ran out.
+
+A call's storage records these metrics under the call's job, so they reach LiveKit Cloud with
+the job's other metrics.
+
 ## Runtime limits and backpressure
 
 Each runtime queue declares its capacity, accounting unit and full behavior.

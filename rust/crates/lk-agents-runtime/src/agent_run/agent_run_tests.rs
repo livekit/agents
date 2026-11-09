@@ -421,9 +421,8 @@ fn setup(
         conn_options: Default::default(),
         entry,
     };
-    let (handle, updates) =
-        start(&tokio::runtime::Handle::current(), agent, input, setup, run_span(&spans), 4)
-            .unwrap();
+    let spawner: Arc<dyn Spawner> = Arc::new(lk_agents_net::task::TokioSpawner::current());
+    let (handle, updates) = start(&spawner, agent, input, setup, run_span(&spans), 4).unwrap();
     *host.progress.lock() = Some(handle.progress());
     Setup { handle, updates, host, closed, spans }
 }

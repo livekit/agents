@@ -261,7 +261,7 @@ struct Generation<'a> {
 /// A text message spoken by the TTS: its text goes in as it streams, its audio is the message's.
 struct Voiced {
     sink: lk_agents_abi::TtsSink,
-    source: lk_agents_abi::TtsSource,
+    source: lk_agents_net::owned::Owned<lk_agents_abi::TtsSource>,
     transforms: Option<lk_agents_voice::transcription::Pipeline>,
     /// The message's text is all in.
     input_done: bool,
@@ -298,7 +298,7 @@ impl Generation<'_> {
         let text = super::tts::transformed(self.shared, &words);
         let segment = idx as u32;
         self.shared.trace(GenerationStep::TtsRequested { speech: self.handle.id(), segment, text });
-        let (sink, mut source) = {
+        let (sink, source) = {
             let id = tts.id();
             self.shared.report(GenEvent::RequestStarted {
                 speech: self.handle.id(),
@@ -324,6 +324,8 @@ impl Generation<'_> {
             .map_err(DriverError::from)?
             .split()
         };
+        // Owned before the first read: a cut reply still closes it.
+        let mut source = lk_agents_net::owned::Owned::stream(&self.shared.background(), source);
         super::llm::report_retries(
             self.shared,
             self.handle,
@@ -408,14 +410,12 @@ impl Generation<'_> {
         }
     }
 
-    /// The voiced message's synthesis is over: its input ended and its stream closed.
+    /// The voiced message's synthesis is over: its input ended and its stream closed. An
+    /// interrupted reply leaves the close to finish as the session's cleanup.
     async fn unvoice(&mut self) {
         let Some(v) = self.voiced.take() else { return };
         v.sink.end_input();
-        let _ = v
-            .source
-            .close(self.shared.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT))
-            .await;
+        let _ = super::llm::until_interrupted(self.handle, v.source.close()).await;
     }
 }
 

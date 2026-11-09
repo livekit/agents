@@ -6,6 +6,7 @@ use lk_agents_abi::storage::context::{ContextActivation as _, ContextField};
 use lk_agents_abi::storage::voice::{
     VoiceStorage as _, VoiceStorageCommand, VoiceStorageEvent, VoiceStore as _,
 };
+use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::{ChatItem, ChatMessage, Role};
 use serde_json::json;
 use std::time::Duration;
@@ -15,9 +16,15 @@ async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() 
     let fixture =
         Backend::Sqlite.fixture(Some((Duration::from_secs(5), Duration::from_millis(10)))).await;
     let store = std::sync::Arc::new(
-        VoiceStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into(), None)
-            .await
-            .unwrap(),
+        VoiceStore::bound(
+            fixture.storage.clone(),
+            fixture.thread_id.clone(),
+            "desk".into(),
+            None,
+            Cx::NONE,
+        )
+        .await
+        .unwrap(),
     );
     store
         .acquire(
@@ -55,10 +62,14 @@ async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() 
     assert!(matches!(abandoned, Some(VoiceStorageEvent::Abandoned { speech: 1, result: Ok(()) })));
     let thread = fixture.thread().await;
     assert!(thread.lane("desk").history().await.unwrap().is_empty());
-    let restored =
-        ContextStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
-            .await
-            .unwrap();
+    let restored = ContextStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
     assert!(
         restored
             .load("root:desk".into(), "Draft".into(), field(0))
@@ -78,9 +89,15 @@ async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() 
 async fn a_turn_reenters_the_lease_a_canceled_turn_left_behind() {
     let fixture = Backend::Sqlite.fixture(None).await;
     let store = std::sync::Arc::new(
-        VoiceStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into(), None)
-            .await
-            .unwrap(),
+        VoiceStore::bound(
+            fixture.storage.clone(),
+            fixture.thread_id.clone(),
+            "desk".into(),
+            None,
+            Cx::NONE,
+        )
+        .await
+        .unwrap(),
     );
     store.acquire(1, Vec::new()).await.unwrap();
     let (sink, mut events) = Events::new();
@@ -112,4 +129,37 @@ impl lk_agents_abi::StreamInput<VoiceStorageEvent> for Events {
         Ok(())
     }
     fn end_input(&self) {}
+}
+
+/// A call's lane metrics are the job's: Cloud receives only measurements keyed to a job.
+#[tokio::test]
+async fn a_turns_lane_metrics_record_under_the_calls_job() {
+    use lk_agents_abi::telemetry::record::{JobKey, Record, RecordSink};
+    #[derive(Default)]
+    struct Jobs(parking_lot::Mutex<Vec<(&'static str, Option<JobKey>)>>);
+    impl RecordSink for Jobs {
+        fn record(&self, record: Record) {
+            if let Record::Measurement(m) = record {
+                self.0.lock().push((m.instrument, m.job));
+            }
+        }
+    }
+    let sink = std::sync::Arc::new(Jobs::default());
+    let clock = std::sync::Arc::new(lk_agents_abi::VirtualClock::new());
+    let tracer = lk_agents_telemetry::Tracer::new(sink.clone(), clock, 7);
+    let job = JobKey("AJ_call".into());
+    let cx = tracer.root().with_job(Some(job.clone()));
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let store = VoiceStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        None,
+        cx,
+    )
+    .await
+    .unwrap();
+    store.acquire(1, Vec::new()).await.unwrap();
+    let measured = sink.0.lock().clone();
+    assert!(measured.contains(&("lk.agents.lane.acquire_wait", Some(job))), "{measured:?}");
 }

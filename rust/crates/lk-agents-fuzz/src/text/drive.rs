@@ -221,9 +221,9 @@ impl Env {
         };
         let decl = AgentRun { operation: GenAiOperation::InvokeAgent, agent_name: "desk".into() };
         let span = lk_agents_telemetry::start(&self.tracer.root(), decl);
-        let runtime = tokio::runtime::Handle::current();
+        let spawner = (self.process.spawner)().expect("the DST's runtime");
         let (active, updates) =
-            agent_run::start(&runtime, Self::agent(), input, setup, span, 16).expect("a valid run");
+            agent_run::start(&spawner, Self::agent(), input, setup, span, 16).expect("a valid run");
         let (done, finished) = oneshot::channel();
         let stop = CancellationToken::new();
         let watch = self.clone().watch_run(id, active, updates, cancel_after, stop.clone(), done);
@@ -380,7 +380,8 @@ impl Env {
             Err(error) => return record(Some(Err(error.to_string()))),
         };
         let holder = format!("worker-{}", plan.worker);
-        let turn = Turn::new(thread.clone(), &holder, LANE, host, clock.clone(), options);
+        let spawner = self.process.spawner;
+        let turn = Turn::new(thread.clone(), &holder, LANE, host, clock.clone(), spawner, options);
         let after = clock.now().saturating_add(Duration::from_millis(plan.after_ms));
         let answered = match plan.client {
             Client::Waits | Client::Disconnects => {

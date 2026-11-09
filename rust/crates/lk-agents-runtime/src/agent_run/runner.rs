@@ -8,7 +8,7 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::resources::{LlmRef, ResourceId};
 use lk_agents_abi::usage::Usage;
 use lk_agents_abi::utils::stream::StreamOutput;
-use lk_agents_abi::{ChatItem, Clock, Closed, Llm, Ts, WallAnchor};
+use lk_agents_abi::{ChatItem, Clock, Closed, Llm, Spawner, Ts, WallAnchor};
 use lk_agents_core::tool_outcome::Mode;
 use lk_agents_core::{Opening, RunInput};
 use lk_agents_net::signal;
@@ -30,7 +30,7 @@ pub struct Runner {
     /// Each running invocation's progress port and usage, by invocation id; ended ones are pruned
     /// when the next one starts.
     running: Mutex<Vec<(String, Progress, signal::Cell<Usage>)>>,
-    runtime: fn() -> Result<tokio::runtime::Handle, lk_agents_net::env::ProcessError>,
+    spawner: fn() -> Result<Arc<dyn Spawner>, lk_agents_net::env::ProcessError>,
     tracer: telemetry::Tracer,
 }
 
@@ -53,7 +53,7 @@ impl AgentRunner for Runner {
             host,
             clock: env.clock.clone(),
             running: Mutex::new(Vec::new()),
-            runtime: env.runtime,
+            spawner: env.spawner,
             tracer: env.tracer.clone(),
         })
     }
@@ -62,7 +62,7 @@ impl AgentRunner for Runner {
         let ChatItem::Message(mut message) = request.message else {
             return Err(Invalid("a run's message is a chat message".into()));
         };
-        let runtime = (self.runtime)().map_err(|error| Invalid(error.to_string()))?;
+        let spawner = (self.spawner)().map_err(|error| Invalid(error.to_string()))?;
         let execution_id = lk_agents_core::agent_run::execution::bind(
             &mut message,
             &request.history,
@@ -114,7 +114,7 @@ impl AgentRunner for Runner {
         };
         let invocation_id = input.invocation_id.clone();
         let (handle, updates) =
-            start(&runtime, self.definition.clone(), input, setup, span, UPDATE_QUEUE)
+            start(&spawner, self.definition.clone(), input, setup, span, UPDATE_QUEUE)
                 .map_err(|e| Invalid(e.to_string()))?;
         let mut running = self.running.lock();
         running.retain(|(_, progress, _)| !progress.ended());
