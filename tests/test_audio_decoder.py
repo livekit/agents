@@ -544,3 +544,33 @@ async def test_aborted_read_does_not_signal_end_of_input(monkeypatch: pytest.Mon
 
     assert pushes, "the reader never ran, so the abort was never exercised"
     assert ends == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("container, codec, mime", [("flac", "flac", "audio/flac")])
+async def test_decoder_keeps_the_start_of_the_stream(container: str, codec: str, mime: str):
+    """The packets PyAV reads while probing the container must still be decoded."""
+    import av
+    import numpy as np
+
+    sample_rate = 16000
+    samples = (np.arange(sample_rate) % 2000 - 1000).astype(np.int16)  # 1s of lossless audio
+
+    encoded = io.BytesIO()
+    with av.open(encoded, "w", format=container) as out:
+        stream = out.add_stream(codec, rate=sample_rate, layout="mono")
+        frame = av.AudioFrame.from_ndarray(samples[None, :], format="s16", layout="mono")
+        frame.sample_rate = sample_rate
+        for packet in [*stream.encode(frame), *stream.encode(None)]:
+            out.mux(packet)
+
+    decoder = AudioStreamDecoder(sample_rate=sample_rate, num_channels=1, format=mime)
+    data = encoded.getvalue()
+    for i in range(0, len(data), 1024):
+        decoder.push(data[i : i + 1024])
+    decoder.end_input()
+
+    decoded = b"".join([bytes(frame.data) async for frame in decoder])
+    await decoder.aclose()
+
+    assert np.array_equal(np.frombuffer(decoded, dtype=np.int16), samples)
