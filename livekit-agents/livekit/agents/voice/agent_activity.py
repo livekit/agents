@@ -185,8 +185,6 @@ _OnEnterContextVar = contextvars.ContextVar["_OnEnterData | None"]("agents_activ
 class _ReusableResources:
     stt_pipeline: _STTPipeline | None = None
     rt_session: llm.RealtimeSession | None = None
-    # the reused session reports background work only when it changes, so its state carries over
-    rt_background_work: bool = False
     turn_detector_stream: _StreamingTurnDetectorStream | None = None
 
     async def cleanup(self) -> None:
@@ -1169,7 +1167,6 @@ class AgentActivity(RecognitionHooks):
                         "background_work_changed", self._on_background_work_changed
                     )
                     self._rt_session.off("session_reconnected", self._on_rt_session_reconnected)
-                    resources.rt_background_work = self._background_work_held
                     self._hold_for_background_work(False)
                     self._rt_session.off("input_speech_started", self._on_input_speech_started)
                     self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
@@ -1277,7 +1274,6 @@ class AgentActivity(RecognitionHooks):
                 logger.debug("reusing realtime session from previous activity")
                 self._rt_session = reuse_resources.rt_session
                 reuse_resources.rt_session = None  # ownership transferred
-                self._hold_for_background_work(reuse_resources.rt_background_work)
 
                 # clear any stale audio/generation state
                 self._rt_session.interrupt()
