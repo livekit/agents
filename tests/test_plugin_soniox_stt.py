@@ -1642,6 +1642,18 @@ async def test_assistant_reply_is_not_sent_twice_with_echo_cancellation() -> Non
     assert _sent(stream) == []
 
 
+def test_agent_text_over_the_byte_limit_is_split_and_ends_the_segment_once() -> None:
+    stream = _make_stream()
+    text = "é" * 600 + "ok"  # 1202 bytes, 602 characters
+
+    stream._push_agent_text(text, end_of_segment=True)
+
+    sent = _sent(stream)
+    assert "".join(m["text"] for m in sent) == text
+    assert all(len(m["text"].encode()) <= 1000 for m in sent)
+    assert [m["end_of_segment"] for m in sent] == [False, True]
+
+
 async def test_agent_text_queued_before_connecting_survives_the_connection() -> None:
     stream = _make_stream()
     ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)

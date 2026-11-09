@@ -65,6 +65,9 @@ KEEPALIVE_MESSAGE = '{"type": "keepalive"}'
 END_TOKEN = "<end>"
 FINALIZED_TOKEN = "<fin>"
 
+# Soniox closes the stream on an agent_text message longer than this.
+AGENT_TEXT_MAX_BYTES = 1000
+
 
 def is_end_token(token: dict) -> bool:
     """Return True if the given token marks an end or finalized event."""
@@ -430,7 +433,16 @@ class SpeechStream(stt.SpeechStream):
 
     def _push_agent_text(self, text: str, *, end_of_segment: bool) -> None:
         # rides the audio queue: Soniox places agent text by its position among the audio
-        self.audio_queue.put_nowait(_AgentText(text, end_of_segment))
+        pieces = _split_utf8(text, AGENT_TEXT_MAX_BYTES)
+        if len(pieces) > 1:
+            logger.warning(
+                "Soniox agent text is over %d bytes; sending it as %d messages",
+                AGENT_TEXT_MAX_BYTES,
+                len(pieces),
+            )
+        for piece in pieces[:-1]:
+            self.audio_queue.put_nowait(_AgentText(piece, False))
+        self.audio_queue.put_nowait(_AgentText(pieces[-1], end_of_segment))
 
     def _report_processed_audio_duration(self, total_audio_proc_ms: float) -> None:
         """Report the audio duration and output tokens processed by the STT engine."""
@@ -841,6 +853,20 @@ def _lang_segments_to_fields(
         [LanguageCode(lang) for lang, _ in segments],
         [t for _, t in segments],
     )
+
+
+def _split_utf8(text: str, limit: int) -> list[str]:
+    """Split text into pieces of at most `limit` UTF-8 bytes, never inside a character."""
+    pieces: list[str] = []
+    start = size = 0
+    for i, ch in enumerate(text):
+        n = len(ch.encode())
+        if size + n > limit:
+            pieces.append(text[start:i])
+            start, size = i, 0
+        size += n
+    pieces.append(text[start:])
+    return pieces
 
 
 class _AgentText(NamedTuple):
