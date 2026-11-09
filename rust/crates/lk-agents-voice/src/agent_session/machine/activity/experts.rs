@@ -9,9 +9,9 @@ use crate::audio_recognition::EndOfTurnInfo;
 use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle};
 use crate::experts::{ExpertTool, Floor, Presentation};
 use crate::generation::ReplySource;
-use crate::tool_executor::{Delivery, ToolOutcome, answer};
+use crate::tool_executor::{Delivery, HostedTool, ToolOutcome, answer};
 use lk_agents_abi::llm::tool_executor::ASK_IN_OWN_WORDS;
-use lk_agents_abi::{ChatItem, Ts};
+use lk_agents_abi::{ChatItem, ChatMessage, Role, Ts};
 use lk_agents_core::tts::markup::ChatMessageExt;
 
 // A detached call of a configured remote tool is a delegation: its updates are the expert's
@@ -172,25 +172,43 @@ impl VoiceDriver {
         info: &EndOfTurnInfo,
         user_text: Option<&str>,
     ) -> bool {
+        let Some(hosted) = self.claim_expert_reply(now) else { return false };
+        let user = self.user_turn_item(info, user_text);
+        self.answer_expert(hosted, user, Source::UserTurn { turn: info.turn_id });
+        true
+    }
+
+    /// Typed input (`session._run(user_input=)`, console text) answering a pending expert
+    /// question, as a spoken turn does: committed, forwarded, no model reply.
+    pub(crate) fn forward_typed_expert_reply(&mut self, now: Ts, text: &str) -> bool {
+        let Some(hosted) = self.claim_expert_reply(now) else { return false };
+        let user =
+            ChatMessage::text(self.session.ids.mint("item"), Role::User, text, self.step.wall());
+        self.session.runs.record(&ChatItem::Message(user.clone()));
+        self.answer_expert(hosted, user, Source::UserTyped);
+        true
+    }
+
+    /// The pending question a reply answers now, claimed for it: its body's host handle.
+    fn claim_expert_reply(&mut self, now: Ts) -> Option<HostedTool> {
         let tools = self.activity.expert_tools();
         let floor = Floor { tools: &tools, free: true, task: self.activity.voice_tasks.running() };
-        let Some(request) = self.session.experts.collect(floor) else { return false };
+        let request = self.session.experts.collect(floor)?;
         let running =
             self.activity.tools.running.iter().find(|r| r.call.call_id == request.call_id);
-        // The body no longer runs: the turn is an ordinary one.
-        let Some(hosted) = running.map(|r| r.hosted.clone()) else { return false };
-        if self.session.experts.answer(&request).is_err() {
-            return false;
-        }
+        // The body no longer runs: the reply is an ordinary one.
+        let hosted = running.map(|r| r.hosted.clone())?;
+        self.session.experts.answer(&request).ok()?;
         if self.activity.speech_scheduler.preemptive_generation().is_some() {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
         }
-        let user = self.user_turn_item(info, user_text);
+        Some(hosted)
+    }
+
+    fn answer_expert(&mut self, hosted: HostedTool, user: ChatMessage, source: Source) {
         let answer = user.text_content().unwrap_or_default();
-        let source = Source::UserTurn { turn: info.turn_id };
         self.commit_item(ChatItem::Message(user), source, Visibility::Both);
         self.record_effect(VoiceEffect::AnswerExpert { hosted, answer });
-        true
     }
 }
 

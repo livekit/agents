@@ -244,7 +244,12 @@ impl VoiceDriver {
         // Before the reply, so the run's start precedes its items on the host stream.
         self.publish_event(SessionEvent::RunStarted { run });
         if let Some(text) = spec.user_input {
-            self.run_reply(now, Some(text));
+            // An answer to a waiting expert is forwarded; the run settles with no reply of its own.
+            if self.forward_typed_expert_reply(now, &text) {
+                self.session.runs.participated();
+            } else {
+                self.run_reply(now, Some(text));
+            }
         }
     }
 

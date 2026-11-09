@@ -290,3 +290,51 @@ async def test_on_a_call_the_childs_usage_counts_once_in_the_sessions() -> None:
         assert await asyncio.wait_for(child_requests(), 5) == 1
         await asyncio.sleep(0.2)
         assert [m.requests for m in session.usage.models if m.model == "child-model"] == [1]
+
+
+async def test_typed_input_answers_a_waiting_child_on_a_call() -> None:
+    from livekit.agents.llm import FunctionToolCall
+
+    from .fake_llm import FakeLLM, FakeLLMResponse
+
+    child_model = Script(
+        call("ask_date", {}, "ask"), call("final_result", {"reference": "B-6"}, "f")
+    )
+    child = _booking(child_model)
+
+    @child.tool
+    async def ask_date(ctx: RunContext[Case]) -> InputRequired:
+        """Ask for the date."""
+        return InputRequired("For which date?", verbatim=True)
+
+    delegate = FunctionToolCall(name="booking", arguments='{"nights": 1}', call_id="c1")
+    response = FakeLLMResponse(input="One night", content="", ttft=0, duration=0)
+    model = FakeLLM(fake_responses=[response.model_copy(update={"tool_calls": [delegate]})])
+    desk = Agent(instructions="Delegate.", name="desk", tools=[child.as_tool(parameters=Request)])
+    async with VoiceSession(
+        llm=model, vad=None, context=Case(), turn_handling={"turn_detection": "manual"}
+    ) as session:
+        await session.start(desk)
+        await session._run(user_input="One night")
+
+        def said(text: str) -> bool:
+            return any(
+                i.type == "message" and i.role == "assistant" and i.text_content == text
+                for i in session.history.items
+            )
+
+        while not said("For which date?"):
+            await asyncio.sleep(0.01)
+        answered = await asyncio.wait_for(session._run(user_input="Friday"), 5)
+        assert answered.status == "no_output", "a forwarded answer asks no reply of its own"
+
+        async def result() -> str:
+            while True:
+                for item in session.history.items:
+                    if item.type == "function_call_output" and "B-6" in item.output:
+                        return item.output
+                await asyncio.sleep(0.01)
+
+        assert "B-6" in await asyncio.wait_for(result(), 5)
+    answer = child_model.requests[1].items[-1]
+    assert answer.type == "message" and answer.text_content == "Friday"
