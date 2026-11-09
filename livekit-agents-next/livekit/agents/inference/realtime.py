@@ -59,6 +59,7 @@ class RealtimeModel(_RealtimeModel):
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         truncation: NotGivenOr[Truncation | None] = NOT_GIVEN,
         reasoning: NotGivenOr[Reasoning | None] = NOT_GIVEN,
+        max_response_output_tokens: NotGivenOr[int | None] = NOT_GIVEN,
         max_session_duration: NotGivenOr[timedelta | None] = NOT_GIVEN,
         conn_options: APIConnectOptions | None = None,
     ) -> None:
@@ -82,6 +83,7 @@ class RealtimeModel(_RealtimeModel):
             tracing=tracing,
             truncation=truncation,
             reasoning=reasoning,
+            max_response_output_tokens=max_response_output_tokens,
             api_key=api_key,
             max_session_duration=max_session_duration,
             conn_options=conn_options,

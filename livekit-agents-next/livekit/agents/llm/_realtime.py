@@ -11,6 +11,7 @@ from . import realtime as llm_realtime
 
 if TYPE_CHECKING:
     from .._generated.realtime_wire import Modalities
+    from .tool_context import ToolChoice
 
 # kept for plugins that subclass it
 RealtimeSession = llm_realtime.RealtimeSession
@@ -33,9 +34,12 @@ class RealtimeModel(_facades.RealtimeModel):
         input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[NoiseReduction | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
+        truncation: NotGivenOr[Truncation | None] = NOT_GIVEN,
         reasoning: NotGivenOr[Reasoning | None] = NOT_GIVEN,
+        max_response_output_tokens: NotGivenOr[int | None] = NOT_GIVEN,
         max_session_duration: NotGivenOr[timedelta | None] = NOT_GIVEN,
     ) -> RealtimeModel:
         """Create a RealtimeModel configured for Azure OpenAI.
@@ -51,9 +55,13 @@ class RealtimeModel(_facades.RealtimeModel):
             input_audio_transcription: Transcription options; ``whisper-1`` when not given.
             input_audio_noise_reduction: Input noise reduction settings.
             turn_detection: Server-side turn detection; server VAD when not given.
+            tool_choice: Tool selection policy.
             speed: Audio playback speed multiplier.
             tracing: Tracing configuration for OpenAI Realtime.
+            truncation: How the conversation is truncated when it exceeds the context.
             reasoning: Reasoning config for reasoning-capable models.
+            max_response_output_tokens: Maximum output tokens per response; ``None`` is
+                unlimited.
             max_session_duration: How long one connection serves before it is recycled.
 
         Raises:
@@ -71,9 +79,12 @@ class RealtimeModel(_facades.RealtimeModel):
             input_audio_transcription=input_audio_transcription,
             input_audio_noise_reduction=input_audio_noise_reduction,
             turn_detection=turn_detection,
+            tool_choice=tool_choice,
             speed=speed,
             tracing=tracing,
+            truncation=truncation,
             reasoning=reasoning,
+            max_response_output_tokens=max_response_output_tokens,
             max_session_duration=max_session_duration,
         )
 
