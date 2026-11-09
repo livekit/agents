@@ -317,8 +317,8 @@ class JobContext:
     def thread(self) -> Thread | None:
         """The call's durable thread, resolved before the entrypoint runs.
 
-        The dispatch's ``thread_id``, else a new thread; ``None`` on a server without storage.
-        Pass it to ``VoiceSession(thread=)``.
+        The thread the job's ``thread_id`` names; ``None`` when it names none, names one that
+        does not resolve, or the server has no storage. Pass it to ``VoiceSession(thread=)``.
         """
         return self._thread
 

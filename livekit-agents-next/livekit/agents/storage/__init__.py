@@ -166,19 +166,20 @@ class Thread(_facades.Thread):
 
 @dataclass(frozen=True)
 class _CallThreadEntrypoint:
-    """Resolves the call's thread (dispatch ``thread_id``, else a new one) as ``ctx.thread``; on
-    a storage failure the call runs with no thread."""
+    """Opens the thread the job's ``thread_id`` names as ``ctx.thread``; none named, or one that
+    does not resolve, leaves it ``None``."""
 
     entrypoint: Callable[[JobContext], Awaitable[None]]
     storage: Storage
 
     async def __call__(self, ctx: JobContext) -> None:
         try:
-            thread = await self.storage.threads._core_call_thread(ctx.job.metadata)
-            ctx._thread = Thread(self.storage, thread.thread_id, agent_name=ctx.job.agent_name)
+            thread = await self.storage.threads._core_call_thread(ctx.job)
+            if thread is not None:
+                ctx._thread = Thread(self.storage, thread.thread_id, agent_name=ctx.job.agent_name)
         except StorageError as e:
             logger.warning(
-                "the call's thread could not be resolved; the call is kept in memory",
+                "the call's thread could not be resolved; the call runs without it",
                 extra={"error": str(e)},
             )
         await self.entrypoint(ctx)

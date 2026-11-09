@@ -357,22 +357,26 @@ impl Storage {
         })
     }
 
-    /// A call's thread: the one the `thread_id` of the dispatch's JSON `metadata` names, else a
-    /// new one. Metadata that is not a JSON object, or names no nonempty string id, names none.
-    #[pyo3(signature = (metadata))]
+    /// A call's thread: the one the job's `thread_id` names, `None` when it names none. Never
+    /// creates a thread.
+    #[pyo3(signature = (job))]
     fn _core_call_thread<'py>(
         &self,
         py: Python<'py>,
-        metadata: ::std::string::String,
+        job: Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
+        let job = crate::py_values::proto_job_from_py(job.as_any())?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_call_thread(&this, metadata)
+            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_call_thread(&this, job)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
-                    crate::generated::records::storage_class::thread_info_to_py(py, out)?,
+                    out.map(|value| {
+                        crate::generated::records::storage_class::thread_info_to_py(py, value)
+                    })
+                    .transpose()?,
                     py,
                 )
             })

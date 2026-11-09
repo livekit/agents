@@ -237,7 +237,8 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 
 ### Request Flow
 1. A text message reaches `/agents/<agent>/<deployment>/<endpoint>` as A2A; a call is a job dispatch.
-2. The platform resolves the thread (the `contextId`, or `thread_id` in the dispatch metadata) or creates one.
+2. The platform resolves the thread: a text's `contextId` (none creates one), or a call's job
+   `thread_id`, set by its dispatch (none runs the call without a shared thread).
 3. The worker takes the agent's lane lease and loads the lane from the thread's database.
 4. The handler runs `agent.run(...)` (text) or the `VoiceSession` runs the agent (call).
 5. The framework commits history, explicitly saved context fields and task rows in one fenced

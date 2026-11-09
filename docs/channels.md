@@ -9,7 +9,7 @@ WhatsApp, and email into endpoint requests and delivers their replies.
 | ---------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------- |
 | web chat, API, partner agent | an A2A client calls the endpoint directly                           | `contextId` on every message after the first                       | the task's answer, streamed or returned |
 | another agent, delegating    | the same, with `livekit/kind: delegation`                           | the caller's thread under [explicit authority](protocol/a2a.md#delegation-and-conversation-data), else its own | the task's answer                       |
-| phone call                   | a SIP rule dispatches a job; the call runs on a `VoiceSession`       | the thread the dispatch names, else a new one                      | speech                                  |
+| phone call                   | a SIP rule dispatches a job; the call runs on a `VoiceSession`       | the job's `thread_id`: the caller's `phone:+E164` thread           | speech                                  |
 
 Every A2A message may carry `livekit/channel` with the channel's name, and
 the handler reads the resolved value as `ctx.messages[i].channel`.

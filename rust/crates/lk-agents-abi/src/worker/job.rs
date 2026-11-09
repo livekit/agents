@@ -123,6 +123,11 @@ pub fn decode_job(bytes: &[u8]) -> Result<Job, prost::DecodeError> {
     <Job as prost::Message>::decode(bytes)
 }
 
+/// The thread a call's dispatch names: the job's `thread_id`; empty names none.
+pub fn job_thread(job: &Job) -> Option<&str> {
+    Some(job.thread_id.as_str()).filter(|id| !id.is_empty())
+}
+
 /// The job as its protobuf bytes on the job process channel.
 #[cfg(feature = "serde")]
 mod proto_bytes {

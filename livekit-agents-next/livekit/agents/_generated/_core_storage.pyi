@@ -9,6 +9,8 @@ from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from typing import Self
 
+from livekit.protocol.agent import Job
+
 from .chat_items import ChatItem
 from .storage_class import (
     EventRow,
@@ -123,9 +125,9 @@ class Storage:
         status: TaskState | None = None,
     ) -> list[ThreadTask]:
         """The thread's A2A tasks, of one `status` when given."""
-    async def _core_call_thread(self, metadata: str) -> ThreadInfo:
-        """A call's thread: the one the `thread_id` of the dispatch's JSON `metadata` names, else a
-        new one. Metadata that is not a JSON object, or names no nonempty string id, names none.
+    async def _core_call_thread(self, job: Job) -> ThreadInfo | None:
+        """A call's thread: the one the job's `thread_id` names, `None` when it names none. Never
+        creates a thread.
         """
     async def open(self, thread_id: str, holder: str) -> Thread:
         """The existing thread's handle, its writes under `holder`. Takes no lease."""

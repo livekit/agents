@@ -49,7 +49,7 @@ export async function POST(request: Request) {
         {
           agentName,
           deployment: process.env.LIVEKIT_AGENT_DEPLOYMENT ?? "",
-          metadata: JSON.stringify({ thread_id: sessionId }),
+          threadId: sessionId,
         },
       ],
     },

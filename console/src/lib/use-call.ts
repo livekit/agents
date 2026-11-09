@@ -7,7 +7,7 @@ import { useAgent, usePersistentUserChoices, useSession, useSessionMessages, typ
 
 /**
  * The room token for a call, from the console's own `/api/token`: the
- * current session id rides in the dispatch metadata, so the voice door
+ * current session id is the dispatch's thread, so the voice door
  * joins the conversation on screen. A new call is a new room, and a
  * conversation that has no session yet gets one from the route, which the
  * page adopts. One click mints one token: the answer is kept for a few

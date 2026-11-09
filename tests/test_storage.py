@@ -767,23 +767,19 @@ async def test_a_rejected_message_leaves_no_submitted_row(thread_storages: Worke
 # -- session resolution and the Session handle --
 
 
-async def test_session_resolution_follows_the_threads_service(
-    thread_storage: Storage,
-) -> None:
-    threads = thread_storage.threads
-    fresh = await threads._core_call_thread("")
-    assert fresh.thread_id.startswith("AT_")
-    named = json.dumps({"thread_id": fresh.thread_id})
-    assert (await threads._core_call_thread(named)).thread_id == fresh.thread_id
-    other = await threads._core_call_thread('{"thread_id": ""}')
-    assert other.thread_id not in ("", fresh.thread_id)
-
-
 # -- a text during a call (plan 3.3.7) --
 
 
-async def test_the_rtc_door_resolves_the_call_thread(thread_storage: Storage) -> None:
-    import json
+def dispatched_job(thread_id: str = "") -> Any:
+    from livekit.protocol import agent
+
+    job = agent.Job(id="AJ_1", agent_name="desk").SerializeToString()
+    # `thread_id` (field 15) as wire bytes until the Python protocol package declares it.
+    raw = thread_id.encode()
+    return agent.Job.FromString(job + bytes([15 << 3 | 2, len(raw)]) + raw if raw else job)
+
+
+async def test_the_rtc_door_opens_only_the_jobs_thread(thread_storage: Storage) -> None:
     import pickle
     from types import SimpleNamespace
 
@@ -796,17 +792,16 @@ async def test_the_rtc_door_resolves_the_call_thread(thread_storage: Storage) ->
 
     door = _CallThreadEntrypoint(entrypoint, thread_storage)
     sid = await new_session(thread_storage, "desk")
-    unknown = json.dumps({"thread_id": "AT_unknown"})
-    for metadata in (json.dumps({"thread_id": sid}), "", unknown):
-        job = SimpleNamespace(metadata=metadata, agent_name="desk")
-        await door(SimpleNamespace(worker_id="w", job=job, _thread=None))  # type: ignore[arg-type]
+    before = (await thread_storage.threads.list_threads("")).threads
+    for thread_id in (sid, "", "AT_unknown"):
+        ctx = SimpleNamespace(job=dispatched_job(thread_id), _thread=None)
+        await door(ctx)  # type: ignore[arg-type]
 
-    named, fresh, refused = seen
-    # an unknown id is refused: the call runs on a new local thread, not on a handle to no thread
-    assert refused is None
+    named, unnamed, refused = seen
     assert named is not None and named.id == sid and named._agent_name == "desk"
-    assert fresh is not None and fresh.id != sid
-    assert (await fresh.info()).thread_id == fresh.id
+    # no thread_id runs the call without one, and an unknown id is refused: nothing is created
+    assert unnamed is None and refused is None
+    assert (await thread_storage.threads.list_threads("")).threads == before
     # a job process rebuilds the storage from its configuration
     assert pickle.loads(pickle.dumps(thread_storage))._args == thread_storage._args
 
