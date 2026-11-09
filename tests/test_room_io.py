@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import array
 import asyncio
 from collections import defaultdict
 from collections.abc import Callable
@@ -1025,6 +1026,100 @@ async def test_audio_input_trailing_silence_includes_all_channels() -> None:
     assert frame.num_channels == 2
     assert frame.samples_per_channel == expected_samples
     assert len(frame.data) == expected_samples * frame.num_channels  # int16 samples
+
+
+def _stereo_frame(*, sample_rate: int, samples_per_channel: int) -> rtc.AudioFrame:
+    """Use opposite channels so downmixing has an observable result."""
+    pcm = array.array("h")
+    for _ in range(samples_per_channel):
+        pcm.append(1000)
+        pcm.append(-1000)
+    return rtc.AudioFrame(
+        data=pcm.tobytes(),
+        sample_rate=sample_rate,
+        num_channels=2,
+        samples_per_channel=samples_per_channel,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pre_connect_resample_keeps_stereo_duration() -> None:
+    """A stereo clip must not be resampled as mono (#channels on the resampler).
+
+    ``AudioResampler`` defaults to one channel. Feeding it interleaved stereo
+    reads the right channel as the next moment in time, so 100 ms becomes 200 ms.
+    """
+    room = _FakeRoom()
+    audio_input = _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=2,
+        noise_cancellation=None,
+        auto_gain_control=False,
+        pre_connect_audio_handler=None,
+    )
+    frame = _stereo_frame(sample_rate=48000, samples_per_channel=4800)  # 100 ms
+    try:
+        out = list(audio_input._resample_frames([frame]))
+    finally:
+        await audio_input.aclose()
+
+    assert out
+    assert {f.sample_rate for f in out} == {24000}
+    assert {f.num_channels for f in out} == {2}
+    assert sum(f.duration for f in out) == pytest.approx(0.1, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_pre_connect_resample_downmixes_stereo_into_a_mono_stream() -> None:
+    """The live track is forced to the stream's channel count; pre-connect audio is too."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    frame = _stereo_frame(sample_rate=48000, samples_per_channel=4800)
+    try:
+        out = list(audio_input._resample_frames([frame]))
+    finally:
+        await audio_input.aclose()
+
+    assert {f.sample_rate for f in out} == {24000}
+    assert {f.num_channels for f in out} == {1}
+    assert sum(f.duration for f in out) == pytest.approx(0.1, abs=0.01)
+    samples = array.array("h")
+    for output_frame in out:
+        samples.frombytes(output_frame.data.tobytes())
+    assert max(map(abs, samples)) <= 1  # Sox may dither silence by one int16 step.
+
+
+@pytest.mark.asyncio
+async def test_pre_connect_upmixes_mono_into_a_stereo_stream() -> None:
+    """Pre-connect audio uses the same mono-to-stereo mapping as the live track."""
+    room = _FakeRoom()
+    audio_input = _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=2,
+        noise_cancellation=None,
+        auto_gain_control=False,
+        pre_connect_audio_handler=None,
+    )
+    samples_per_channel = 2400
+    mono = array.array("h", [1000]) * samples_per_channel
+    frame = rtc.AudioFrame(
+        data=mono.tobytes(),
+        sample_rate=24000,
+        num_channels=1,
+        samples_per_channel=samples_per_channel,
+    )
+    try:
+        out = list(audio_input._resample_frames([frame]))
+    finally:
+        await audio_input.aclose()
+
+    assert len(out) == 1
+    assert out[0].num_channels == 2
+    samples = array.array("h")
+    samples.frombytes(out[0].data.tobytes())
+    assert samples[:8] == array.array("h", [1000, 1000] * 4)
 
 
 @pytest.mark.asyncio

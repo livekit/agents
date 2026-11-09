@@ -20,6 +20,37 @@ from ..io import AudioInput, VideoInput
 from ._pre_connect_audio import PreConnectAudioHandler
 from .types import NoiseCancellationParams, NoiseCancellationSelector
 
+
+def _with_channel_count(frame: rtc.AudioFrame, num_channels: int) -> rtc.AudioFrame:
+    """Return ``frame`` with exactly ``num_channels`` interleaved samples.
+
+    Live tracks are mixed to the configured channel count by ``rtc.AudioStream``.
+    Pre-connect frames keep the channel count recorded by the client, so they
+    need the same conversion before entering the resampler.
+    """
+    if frame.num_channels == num_channels:
+        return frame
+
+    import numpy as np
+
+    samples = np.frombuffer(frame.data, dtype=np.int16).reshape(-1, frame.num_channels)
+    if num_channels == 1:
+        mixed = samples.mean(axis=1).astype(np.int16)
+    elif frame.num_channels == 1:
+        mixed = np.repeat(samples, num_channels, axis=1).reshape(-1)
+    elif frame.num_channels > num_channels:
+        mixed = samples[:, :num_channels].reshape(-1)
+    else:
+        pad = np.zeros((samples.shape[0], num_channels - frame.num_channels), dtype=np.int16)
+        mixed = np.concatenate((samples, pad), axis=1).reshape(-1)
+    return rtc.AudioFrame(
+        data=mixed.tobytes(),
+        sample_rate=frame.sample_rate,
+        num_channels=num_channels,
+        samples_per_channel=frame.samples_per_channel,
+    )
+
+
 T = TypeVar("T", bound=rtc.AudioFrame | rtc.VideoFrame)
 
 
@@ -491,13 +522,16 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
     def _resample_frames(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
         resampler: rtc.AudioResampler | None = None
         for frame in frames:
+            frame = _with_channel_count(frame, self._num_channels)
             if (
                 not resampler
                 and self._sample_rate is not None
                 and frame.sample_rate != self._sample_rate
             ):
                 resampler = rtc.AudioResampler(
-                    input_rate=frame.sample_rate, output_rate=self._sample_rate
+                    input_rate=frame.sample_rate,
+                    output_rate=self._sample_rate,
+                    num_channels=self._num_channels,
                 )
 
             if resampler:
