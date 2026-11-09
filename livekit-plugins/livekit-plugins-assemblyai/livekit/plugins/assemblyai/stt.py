@@ -425,6 +425,13 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = dataclasses.replace(self._opts)
+        if language and config.speech_model in _U3_PRO_MODELS:
+            config.language_codes = _normalize_language_codes(language, config.speech_model)
+        elif language:
+            logger.warning(
+                "language is ignored: language steering is only supported with the "
+                f"{', '.join(_U3_PRO_MODELS)} models"
+            )
         stream = SpeechStream(
             stt=self,
             conn_options=conn_options,

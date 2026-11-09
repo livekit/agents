@@ -1012,6 +1012,36 @@ async def test_language_codes_set():
     assert stt._opts.language_codes == ["en", "es"]
 
 
+def _stream_with_language(stt, language=None):
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        return stt.stream(language=language) if language is not None else stt.stream()
+
+
+async def test_stream_language_steers_that_stream_only():
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(
+        api_key="test-key", model="u3-rt-pro", language_codes=["en"], http_session=MagicMock()
+    )
+
+    assert _stream_with_language(stt, "es-ES")._opts.language_codes == ["es"]
+    assert _stream_with_language(stt)._opts.language_codes == ["en"]
+    assert _stream_with_language(stt, "")._opts.language_codes == ["en"]
+    assert stt._opts.language_codes == ["en"]
+
+
+async def test_stream_language_ignored_without_language_steering_support():
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="universal-streaming-english", http_session=MagicMock())
+
+    assert _stream_with_language(stt, "es")._opts.language_codes is NOT_GIVEN
+
+
 async def test_language_code_normalized_to_iso_639_1():
     """language_code is normalized to a bare ISO 639-1 code regardless of input format."""
     from livekit.plugins.assemblyai import STT
