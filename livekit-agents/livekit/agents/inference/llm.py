@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -34,7 +35,7 @@ from ..types import (
     NotGiven,
     NotGivenOr,
 )
-from ..utils import is_given, resolve_env_int
+from ..utils import aio, is_given, resolve_env_int
 from ._realtime_models import is_duplex_model, is_realtime_model
 from ._utils import (
     HEADER_INFERENCE_PROVIDER,
@@ -47,6 +48,10 @@ from ._utils import (
 )
 
 lk_oai_debug = resolve_env_int("LK_OPENAI_DEBUG")
+
+# How long the replacement for a cancelled request's connection waits before it opens:
+# long enough for the request that supersedes the cancelled one to take the idle spare.
+_SPARE_CONNECTION_DELAY = 0.1
 
 # Reasoning models don't support sampling parameters.
 # See: https://platform.openai.com/docs/guides/reasoning
@@ -463,12 +468,37 @@ class LLM(llm.LLM):
                 ),
             ),
         )
+        self._spare_task: asyncio.Task[None] | None = None
 
     async def _prewarm_impl(self) -> None:
-        await self._client.models.list()
+        # Leaves two idle connections, so one is a spare. The client speaks HTTP/1.1,
+        # where a cancelled request closes its connection, and preemptive generation
+        # sends the request that replaces it at once. The second request cannot ride
+        # the connection that the first still holds, whatever the timing.
+        async with self._client.models.with_streaming_response.list() as held:
+            await self._client.models.list()
+            await held.read()
+
+    def _replace_spare_connection(self) -> None:
+        """Re-open, in the background, the connection that a cancelled request closed."""
+        if self._spare_task is not None and not self._spare_task.done():
+            return
+
+        async def _reopen() -> None:
+            await asyncio.sleep(_SPARE_CONNECTION_DELAY)
+            try:
+                # a request rides an idle connection before it opens one, so this opens
+                # connections only while fewer than two are idle
+                await self._prewarm_impl()
+            except Exception:
+                pass
+
+        self._spare_task = asyncio.create_task(_reopen())
 
     async def aclose(self) -> None:
         await super().aclose()
+        if self._spare_task is not None:
+            await aio.cancel_and_wait(self._spare_task)
         await self._client.close()
 
     @classmethod
@@ -731,6 +761,11 @@ class LLMStream(llm.LLMStream):
                         )
                         self._event_ch.send_nowait(usage_chunk)
 
+        except asyncio.CancelledError:
+            # the cancelled request took its connection to the gateway with it
+            if isinstance(self._llm, LLM):
+                self._llm._replace_spare_connection()
+            raise
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
         except httpx.TimeoutException as e:
