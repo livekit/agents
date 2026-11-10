@@ -144,6 +144,7 @@ class StreamAdapterWrapper(RecognizeStream):
                         language=self._language,
                         conn_options=self._wrapped_stt_conn_options,
                     )
+                    self._mark_provider_progress()
 
                     if len(t_event.alternatives) == 0:
                         continue

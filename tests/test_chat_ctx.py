@@ -141,6 +141,132 @@ def _ctx_with_per_turn_instructions() -> tuple[ChatContext, str]:
     return chat_ctx, instructions
 
 
+_AWS_CACHE_POINT = {"cachePoint": {"type": "default"}}
+
+
+def _aws_cache_points(messages: list[dict]) -> list[tuple[int, int]]:
+    return [
+        (mi, bi)
+        for mi, m in enumerate(messages)
+        for bi, block in enumerate(m["content"])
+        if block == _AWS_CACHE_POINT
+    ]
+
+
+def test_aws_cache_messages_is_off_by_default():
+    chat_ctx, _ = _ctx_with_per_turn_instructions()
+
+    default, _ = chat_ctx.to_provider_format(format="aws")
+    disabled, _ = chat_ctx.to_provider_format(format="aws", cache_messages=False)
+
+    assert default == disabled
+    assert _aws_cache_points(default) == []
+
+
+def test_aws_cache_messages_ends_before_per_turn_instructions():
+    chat_ctx, instructions = _ctx_with_per_turn_instructions()
+
+    messages, extra = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert extra.system_messages == ["You are a helpful assistant."]
+    # messages[0] is the "(empty)" user turn Bedrock needs before the greeting
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+    assert _aws_cache_points(messages) == [(2, 1)]
+    user_turn = messages[2]["content"]
+    assert user_turn[0] == {"text": "I'd like to refill my prescription."}
+    assert instructions in user_turn[2]["text"]
+
+
+def test_aws_cache_messages_ends_after_the_tool_result():
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["What's the weather in Paris?"])
+    chat_ctx.insert(FunctionCall(call_id="c1", name="get_weather", arguments='{"city": "Paris"}'))
+    chat_ctx.insert(
+        FunctionCallOutput(call_id="c1", name="get_weather", output="sunny", is_error=False)
+    )
+
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+    assert messages[-1]["content"][0]["toolResult"]["toolUseId"] == "c1"
+    assert _aws_cache_points(messages) == [(2, 1)]
+
+
+def test_aws_cache_messages_next_turn_starts_with_the_cached_prefix():
+    chat_ctx, _ = _ctx_with_per_turn_instructions()
+    first, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+    [(mi, bi)] = _aws_cache_points(first)
+    cached = [*first[:mi], {**first[mi], "content": first[mi]["content"][:bi]}]
+
+    # next turn: the per-turn instructions are gone, the reply and a new message follow
+    chat_ctx.items.pop()
+    chat_ctx.add_message(role="assistant", content=["Sure, which pharmacy?"])
+    chat_ctx.add_message(role="user", content=["The one on Main Street."])
+    second, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert second[:mi] == cached[:mi]
+    assert second[mi]["content"][:bi] == cached[mi]["content"]
+    assert _aws_cache_points(second) == [(len(second) - 1, 1)]
+
+
+def test_aws_cache_messages_after_an_assistant_turn_ends_that_turn():
+    # a reply generated right after the agent spoke: the instructions open a new user turn
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["Hi"])
+    chat_ctx.add_message(role="assistant", content=["Hello! How can I help you?"])
+    chat_ctx.add_message(role="system", content=["Ask if they are still there."])
+
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+    assert _aws_cache_points(messages) == [(1, 1)]
+
+
+def test_aws_cache_messages_needs_conversation_content():
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="system", content=["You are a helpful assistant."])
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+    assert _aws_cache_points(messages) == []
+
+    # an item with no Bedrock content isn't conversation content either
+    chat_ctx.add_message(role="user", content=[""])
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+    assert _aws_cache_points(messages) == []
+
+
+def test_aws_cache_messages_follows_serialized_order_for_late_tool_results():
+    # the older call's result arrives last, but it's serialized next to its call
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["Look up both."])
+    chat_ctx.insert(FunctionCall(id="item_a", call_id="slow", name="slow_lookup", arguments="{}"))
+    chat_ctx.insert(FunctionCall(id="item_b", call_id="fast", name="fast_lookup", arguments="{}"))
+    for call_id, name in (("fast", "fast_lookup"), ("slow", "slow_lookup")):
+        chat_ctx.insert(
+            FunctionCallOutput(call_id=call_id, name=name, output="done", is_error=False)
+        )
+
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert messages[-1]["content"][0]["toolResult"]["toolUseId"] == "fast"
+    assert _aws_cache_points(messages) == [(len(messages) - 1, 1)]
+
+
+def test_aws_cache_messages_empty_item_keeps_the_last_conversation_block():
+    # the empty item adds nothing, so the boundary stays after the last real block, and
+    # the rewritten instructions in between never become the boundary
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["Hello"])
+    chat_ctx.add_message(role="system", content=["Ask for the year they were born."])
+    chat_ctx.add_message(role="user", content=[""])
+
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert len(messages) == 1
+    assert messages[0]["content"][:2] == [{"text": "Hello"}, _AWS_CACHE_POINT]
+    assert "Ask for the year" in messages[0]["content"][2]["text"]
+    assert _aws_cache_points(messages) == [(0, 1)]
+
+
 def test_openai_format_preserves_mid_conversation_system_messages():
     # intentional pass-through: the openai serializer keeps system messages where they are;
     # providers that need repositioning handle it in their own serializer
@@ -888,6 +1014,22 @@ def test_resolve_template_identical_variants_collapse():
     assert instr.text is None
     assert instr.render() == "You are a helpful assistant.\n\nshared note"
     assert instr.render(modality="audio") == "You are a helpful assistant.\n\nshared note"
+
+
+@pytest.mark.parametrize(
+    "template, expected",
+    [
+        ("Hello {name}, total {}", "Hello Alex, total "),
+        ("Hello {name}, item {0}", "Hello Alex, item "),
+        ("Hello {name}, price {price:.2f}", "Hello Alex, price "),
+        ("Hello {name}, caller {caller!s}", "Hello Alex, caller "),
+    ],
+)
+def test_render_missing_placeholders_become_empty(template: str, expected: str):
+    """Placeholders with no value render empty, whatever their field or format spec."""
+    from livekit.agents.llm.chat_context import Instructions
+
+    assert Instructions(template).render(data={"name": "Alex"}) == expected
 
 
 def test_upsert_places_a_backdated_item_where_it_happened():

@@ -82,6 +82,8 @@ class LemonSliceAPI:
         agent_prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_idle_prompt: NotGivenOr[str] = NOT_GIVEN,
         idle_timeout: NotGivenOr[int] = NOT_GIVEN,
+        audio_sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        model: NotGivenOr[str] = NOT_GIVEN,
         extra_payload: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> str:
         """
@@ -98,6 +100,8 @@ class LemonSliceAPI:
             agent_prompt: A prompt that subtly influences the avatar's movements and expressions while responding.
             agent_idle_prompt: A prompt that subtly influences the avatar's movements and expressions while idle.
             idle_timeout: The idle timeout, in seconds.
+            audio_sample_rate: Sample rate of the audio sent to the avatar. One of 16000, 22050, 24000, 44100 or 48000.
+            model: The LemonSlice model to run the avatar on. Uses the default model when not given.
             extra_payload: Additional payload to include in the request.
 
         Returns:
@@ -134,6 +138,10 @@ class LemonSliceAPI:
             payload["agent_idle_prompt"] = agent_idle_prompt
         if utils.is_given(idle_timeout):
             payload["idle_timeout"] = idle_timeout
+        if utils.is_given(audio_sample_rate):
+            payload["audio_sample_rate"] = audio_sample_rate
+        if utils.is_given(model):
+            payload["model"] = model
         if utils.is_given(extra_payload):
             payload.update(extra_payload)
         if utils.is_given(agent_image):

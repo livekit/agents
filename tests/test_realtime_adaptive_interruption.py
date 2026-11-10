@@ -677,3 +677,31 @@ async def test_real_end_of_agent_speech_still_tears_down() -> None:
         "_AgentSpeechEndedSentinel",
     ]
     assert ch.sent[0]._agent_ended is True  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("realtime", [False, True])
+async def test_text_simulation_disables_audio_turn_handling_without_warnings(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, realtime: bool
+) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+    monkeypatch.setattr(AgentSession, "_text_only", property(lambda self: True))
+
+    session = AgentSession(
+        llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=False))
+        if realtime
+        else FakeLLM(fake_responses=[]),
+        stt=FakeSTT(),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            interruption={"mode": "adaptive"},
+        ),
+    )
+
+    with caplog.at_level("WARNING", logger="livekit.agents"):
+        activity = _make_activity(session)
+
+    assert activity._turn_detection is None
+    assert activity._interruption_detector is None
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]

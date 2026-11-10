@@ -6,7 +6,7 @@ import pytest
 
 from livekit.agents import llm
 from livekit.agents.llm import remote_chat_context
-from livekit.plugins.openai.realtime import realtime_model
+from livekit.agents.log import logger
 from livekit.plugins.openai.realtime.realtime_model import RealtimeSession
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
@@ -107,7 +107,7 @@ def test_response_done_handles_string_status_details(monkeypatch) -> None:
         )
     )
     debug = Mock()
-    monkeypatch.setattr(realtime_model.logger, "debug", debug)
+    monkeypatch.setattr(logger, "debug", debug)
 
     session._handle_response_done_but_not_complete(event)
 

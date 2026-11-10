@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import TYPE_CHECKING, Any, Literal
 
 from opentelemetry import context as otel_context, trace
@@ -15,7 +14,7 @@ from ..llm.utils import parse_function_arguments
 from ..log import logger
 from ..stt.stt import STT
 from ..telemetry import trace_types, tracer
-from ..utils import aio
+from ..utils import aio, resolve_env_int
 
 if TYPE_CHECKING:
     from ..metrics import LLMMetrics
@@ -104,7 +103,7 @@ _MAX_TRANSCRIPT_MESSAGES = 12
 _DEFAULT_DETECTION_MODEL = "google/gemma-4-31b-it"
 
 # set LK_KEYTERMS_DEBUG=1 to log the input/output of every detection pass
-lk_keyterms_debug = int(os.getenv("LK_KEYTERMS_DEBUG", 0))
+lk_keyterms_debug = resolve_env_int("LK_KEYTERMS_DEBUG")
 
 
 def _resolve_detection(config: KeytermDetectionOptions | None) -> KeytermDetectionOptions:

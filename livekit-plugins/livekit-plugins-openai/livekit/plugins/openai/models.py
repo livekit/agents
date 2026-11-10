@@ -68,6 +68,7 @@ EmbeddingModels = Literal[
 ]
 
 AssistantTools = Literal["code_interpreter", "file_search", "function"]
+DecisionModels = Literal["gpt-6-luna-decisions"]
 
 # adapters for OpenAI-compatible LLMs
 

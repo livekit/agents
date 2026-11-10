@@ -11,7 +11,7 @@ from opentelemetry import trace
 
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
-from ..telemetry import trace_types
+from ..telemetry import gen_ai as gen_ai_telemetry, trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .chat_context import ChatContext, MetricsMetadata
 from .llm import LLM, ChatChunk, LLMStream
@@ -302,6 +302,9 @@ class FallbackLLMStream(LLMStream):
         if llm_status.recovering_task is None or llm_status.recovering_task.done():
 
             async def _recover_llm_task(llm: LLM) -> None:
+                # the probe is never served, so it must not carry the turn's llm_node
+                # attributes; this task runs in its own context copy, so the turn keeps them
+                gen_ai_telemetry._llm_request_attributes.set(None)
                 try:
                     async for _ in self._try_generate(llm=llm, check_recovery=True):
                         pass

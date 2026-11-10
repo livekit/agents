@@ -214,6 +214,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
             RealtimeModelMetrics(
                 request_id="",
                 timestamp=time.time(),
+                label=self._realtime_model.label,
                 acquire_time=acquire_time,
                 connection_reused=False,
                 input_token_details=RealtimeModelMetrics.InputTokenDetails(),
@@ -245,6 +246,15 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     @property
     @abstractmethod
     def tools(self) -> ToolContext: ...
+
+    @property
+    def background_work_running(self) -> bool:
+        """Whether the model works on something it will speak about when done, without new input.
+
+        Speech the user can already hear is not background work. The user is not marked away
+        while it runs.
+        """
+        return False
 
     @abstractmethod
     async def update_instructions(self, instructions: str) -> None: ...

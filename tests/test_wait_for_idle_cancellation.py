@@ -97,3 +97,30 @@ async def test_cancelling_latest_user_turn_does_not_cancel_predecessor() -> None
 
     predecessor.cancel()
     await asyncio.gather(predecessor, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_idle_does_not_spin_through_speech_delay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_sleep = asyncio.sleep
+    yields = 0
+
+    async def _counting_sleep(delay: float, *args: Any, **kwargs: Any) -> Any:
+        nonlocal yields
+        if delay == 0 and asyncio.current_task() is idle_task:
+            yields += 1
+        return await real_sleep(delay, *args, **kwargs)
+
+    async with AgentSession(min_consecutive_speech_delay=0.3) as session:
+        await session.start(Agent(instructions="test"))
+        session.say("first")
+        session.say("second")
+        await real_sleep(0.02)
+
+        monkeypatch.setattr(asyncio, "sleep", _counting_sleep)
+        idle_task = asyncio.create_task(session.wait_for_idle())
+        await asyncio.wait_for(idle_task, timeout=5.0)
+
+    # a few passes per speech; a spinning loop yields thousands of times through the delay
+    assert yields < 20, f"wait_for_idle yielded {yields} times through the speech delay"
