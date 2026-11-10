@@ -146,3 +146,18 @@ async def test_update_agent_long_on_enter_no_deadlock():
         # the next turn completes the task
         second_result = await asyncio.wait_for(sess.run(user_input="Bob"), timeout=5.0)
         second_result.expect.contains_function_call(name="record_name")
+
+
+@pytest.mark.asyncio
+async def test_update_agent_rejects_agent_running_elsewhere():
+    """A handoff to an agent another session runs raises and leaves the session usable."""
+    current, occupied = Agent(instructions="current"), Agent(instructions="occupied")
+    async with AgentSession() as sess, AgentSession() as other:
+        await sess.start(current)
+        await other.start(occupied)
+
+        with pytest.raises(RuntimeError):
+            sess.update_agent(occupied)
+
+        assert sess.current_agent is current
+        assert not sess._activity._new_turns_blocked

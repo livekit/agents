@@ -124,14 +124,6 @@ logging. Precedence is constructor argument, then process environment, then the
 selected file. An empty required value fails instead of falling back silently.
 Use owner-only file permissions and never copy this file into commits.
 
-The smoke script additionally accepts `--env-file`. It preflights all selected
-service configurations before making any request, so an empty/partial template
-cannot accidentally start a selected live test. On POSIX it requires the selected
-file to have mode `0600`. Never commit endpoints,
-credentials, recordings, transcripts or request/response captures. Provider
-errors deliberately omit response bodies and transport exception details that
-could echo this information.
-
 ## STT contract and lifecycle
 
 See [Service availability](#service-availability) first: there is no publicly
@@ -209,10 +201,10 @@ transport completion, not that the backend decoded an incomplete model chunk.
 There is no invented padding rule. The acknowledged completion is authoritative,
 even when it removes an interim hypothesis. Comparing final and revisable text
 cannot distinguish legitimate revision from recognition or audio-tail loss;
-discarded hypotheses are never appended to the final. The opt-in fixture smoke
-must verify the full expected transcript, particularly the last
-word, for both a short clip and a non-chunk-aligned tail. Obtain a documented
-backend drain/flush mechanism if commit does not decode the tail.
+discarded hypotheses are never appended to the final. Verify the full expected
+transcript, particularly the last word, for both a short clip and a
+non-chunk-aligned tail. Obtain a documented backend drain/flush mechanism if
+commit does not decode the tail.
 
 After VAD detects speech, `flush()` drains its real audio tail and commits,
 waiting internally before processing subsequent input; it leaves the socket

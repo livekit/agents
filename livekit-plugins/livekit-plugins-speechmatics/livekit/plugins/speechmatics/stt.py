@@ -32,6 +32,7 @@ from livekit.agents import (
     utils,
     vad,
 )
+from livekit.agents.stt import SpeechData
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -40,6 +41,7 @@ from livekit.agents.utils import AudioBuffer, is_given
 from speechmatics.agent_stt import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_MODEL,
+    SUPPORTED_SAMPLE_RATES,
     AdditionalVocabEntry,
     AgentSttAsyncClient,
     AudioEncoding,
@@ -71,10 +73,10 @@ DEFAULT_BASE_URL = "wss://eu2.rt.speechmatics.com/v2/agent"
 BASE_URL_ENV_VAR = "SPEECHMATICS_RT_URL"
 AGENT_URL_PATH = "/v2/agent"
 
-# Audio format we can actually send. The service fixes the sample rate at 16 kHz, and
-# LiveKit frames are 16-bit PCM which we forward unconverted, so declaring any other
-# encoding would describe the bytes wrongly rather than change them.
-SUPPORTED_SAMPLE_RATE = 16000
+# Audio format we can actually send. The sample rates the service accepts come from the
+# SDK's `SUPPORTED_SAMPLE_RATES` (8 kHz and 16 kHz). LiveKit frames are 16-bit PCM which
+# we forward unconverted, so declaring any other encoding would describe the bytes wrongly
+# rather than change them.
 SUPPORTED_AUDIO_ENCODINGS = (AudioEncoding.PCM_S16LE,)
 
 # Why each part of the pre-Agent-STT surface is inert, reported wherever a caller still
@@ -152,6 +154,7 @@ class STTOptions:
     # The resolved model name (operating point). See `_resolve_model`.
     model: str = DEFAULT_MODEL.value
     include_partials: bool | None = None
+    emit_sentences: bool | None = None
 
     # Diarization
     enable_diarization: bool | None = None
@@ -173,6 +176,7 @@ class STT(stt.STT):
         language: str = "en",
         output_locale: NotGivenOr[str] = NOT_GIVEN,
         include_partials: NotGivenOr[bool] = NOT_GIVEN,
+        emit_sentences: NotGivenOr[bool] = NOT_GIVEN,
         enable_diarization: NotGivenOr[bool] = NOT_GIVEN,
         additional_vocab: NotGivenOr[list[AdditionalVocabEntry]] = NOT_GIVEN,
         speaker_sensitivity: NotGivenOr[float] = NOT_GIVEN,
@@ -226,6 +230,10 @@ class STT(stt.STT):
             include_partials: Whether the service sends partial segments, emitted as
                 interim transcripts. Defaults to True.
 
+            emit_sentences: Whether the service closes a segment at every end of sentence
+                rather than only at the end of the turn, so each sentence is emitted as its
+                own final transcript. Defaults to False.
+
             enable_diarization: Attribute words to distinct speakers. Defaults to True.
 
             additional_vocab: Vocabulary entries that bias the model toward specific
@@ -247,8 +255,8 @@ class STT(stt.STT):
             known_speakers: Known speaker identifiers, used to attribute words to the
                 same speakers across sessions. Defaults to [].
 
-            sample_rate: Audio sample rate in Hz. The service accepts 16000 only, so any
-                other value raises a `ValueError`. Defaults to 16000.
+            sample_rate: Audio sample rate in Hz. The service accepts 8000 and 16000, so
+                any other value raises a `ValueError`. Defaults to 16000.
 
             audio_encoding: Audio encoding format. LiveKit frames are 16-bit PCM and are
                 forwarded unconverted, so `AudioEncoding.PCM_S16LE` is the only value that
@@ -305,6 +313,7 @@ class STT(stt.STT):
             additional_vocab=_normalize_additional_vocab(_set(additional_vocab) or []),
             model=_resolve_model(model, operating_point),
             include_partials=_set(include_partials),
+            emit_sentences=_set(emit_sentences),
             enable_diarization=enable_diarization if is_given(enable_diarization) else True,
             speaker_sensitivity=_set(speaker_sensitivity),
             max_speakers=_set(max_speakers),
@@ -348,8 +357,9 @@ class STT(stt.STT):
 
         # Set audio parameters. Neither is a free choice: an unsupported rate is rejected
         # by the service, and an encoding we do not actually send would mislabel the audio.
-        if sample_rate != SUPPORTED_SAMPLE_RATE:
-            raise ValueError(f"sample_rate must be {SUPPORTED_SAMPLE_RATE}")
+        if sample_rate not in SUPPORTED_SAMPLE_RATES:
+            supported = ", ".join(str(rate) for rate in SUPPORTED_SAMPLE_RATES)
+            raise ValueError(f"sample_rate must be one of: {supported}")
         if audio_encoding not in SUPPORTED_AUDIO_ENCODINGS:
             supported = ", ".join(e.value for e in SUPPORTED_AUDIO_ENCODINGS)
             raise ValueError(f"audio_encoding must be one of: {supported}")
@@ -446,6 +456,7 @@ class STT(stt.STT):
             output_locale=opts.output_locale,
             domain=opts.domain,
             enable_partials=opts.include_partials,
+            emit_sentences=opts.emit_sentences,
         )
 
     def finalize(self) -> None:
@@ -557,6 +568,7 @@ class SpeechStream(stt.RecognizeStream):
         self._client: AgentSttAsyncClient | None = None
         self._msg_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._speech_duration: float = 0
+        self._final_alternatives: list[SpeechData] = []
 
         self._vad: vad.VAD | None = vad_instance
         self._vad_stream: vad.VADStream | None = None
@@ -581,6 +593,7 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _run(self) -> None:
         """Run the STT stream."""
+        self._final_alternatives = []
         logger.debug("Connecting to Speechmatics STT service")
 
         # Config is required
@@ -848,17 +861,25 @@ class SpeechStream(stt.RecognizeStream):
         )
 
         # Send the event
+        if is_final:
+            self._final_alternatives = [speech_data] if seg.end_time > 0 else []
         self._event_ch.send_nowait(stt.SpeechEvent(type=event_type, alternatives=[speech_data]))
 
     def _handle_start_of_turn(self, message: dict[str, Any]) -> None:
         """Handle StartOfTurn events."""
         logger.debug("StartOfTurn received")
+        self._final_alternatives = []
         self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
     def _handle_end_of_turn(self, message: dict[str, Any]) -> None:
         """Handle EndOfTurn events."""
         logger.debug("EndOfTurn received")
-        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.END_OF_SPEECH, alternatives=self._final_alternatives
+            )
+        )
+        self._final_alternatives = []
 
         if self._speech_duration > 0.0:
             usage_event = stt.SpeechEvent(

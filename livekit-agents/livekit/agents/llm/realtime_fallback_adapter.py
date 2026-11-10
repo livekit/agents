@@ -408,6 +408,10 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
     def tools(self) -> ToolContext:
         return self._active.tools
 
+    @property
+    def background_work_running(self) -> bool:
+        return self._active.background_work_running
+
     async def update_instructions(self, instructions: str) -> None:
         self._instructions = instructions
         await self._active.update_instructions(instructions)
