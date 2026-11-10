@@ -348,7 +348,7 @@ class STT(stt.STT):
 
         Args:
             mode: ``"live"`` (streaming, default) or ``"fast"`` (one request per utterance).
-            api_key: Zoom AI Services API key (Platform Studio → Credentials). Defaults to
+            api_key: Zoom AI Services API key (from https://www.zoom.ai/). Defaults to
                 ``$ZOOM_AI_API_KEY``. It is sent on every request and reconnect, so it
                 must stay valid for as long as the agent runs.
             language: A Scribe locale, e.g. ``"en-US"``; base codes such as ``"en"`` map to
