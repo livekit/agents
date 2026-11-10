@@ -322,3 +322,89 @@ async def test_a_cancelled_call_propagates() -> None:
         await call
 
     assert sent == []
+
+
+def test_http_server_label_drops_credentials() -> None:
+    from livekit.agents.llm.mcp import MCPServerHTTP
+
+    server = MCPServerHTTP(url="https://user:secret@mcp.example.com:8443/s/token123/mcp?key=abc")
+    assert server._server_label() == "https://mcp.example.com:8443"
+
+
+def test_stdio_server_label_is_the_command_name() -> None:
+    from livekit.agents.llm.mcp import MCPServerStdio
+
+    server = MCPServerStdio(command="/usr/local/bin/npx", args=["--token", "secret"])
+    assert server._server_label() == "npx"
+
+
+class _ConnectingMCPServer(_FakeMCPServer):
+    """Starts disconnected; initialize() attaches the fake client or raises."""
+
+    def __init__(self, tool_names: list[str], error: Exception | None = None) -> None:
+        super().__init__(tool_names)
+        self._fake_client = self._client
+        self._client = None
+        self._error = error
+
+    async def initialize(self) -> None:
+        if self._error is not None:
+            raise self._error
+        self._client = self._fake_client
+
+
+@pytest.mark.asyncio
+async def test_setup_logs_connected_with_tool_names(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    ts = MCPToolset(id="m", mcp_server=_ConnectingMCPServer(["get_weather", "book_flight"]))
+    with caplog.at_level(logging.INFO, logger="livekit.agents"):
+        await ts.setup()
+        await ts.setup(reload=True)  # already connected: no second line
+
+    records = [r for r in caplog.records if r.getMessage() == "MCP server connected"]
+    assert len(records) == 1
+    assert records[0].__dict__["server"] == "_ConnectingMCPServer"
+    assert records[0].__dict__["toolset_id"] == "m"
+    assert records[0].__dict__["tool_count"] == 2
+    assert records[0].__dict__["tools"] == ["get_weather", "book_flight"]
+
+
+@pytest.mark.asyncio
+async def test_setup_failure_logs_and_reraises(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    server = _ConnectingMCPServer(["echo"], error=ConnectionError("refused"))
+    ts = MCPToolset(id="m", mcp_server=server)
+    with caplog.at_level(logging.ERROR), pytest.raises(ConnectionError):
+        await ts.setup()
+
+    (record,) = caplog.records
+    assert record.getMessage() == "failed to connect to MCP server; its tools are unavailable"
+    assert record.__dict__["server"] == "_ConnectingMCPServer"
+    assert record.__dict__["toolset_id"] == "m"
+    assert record.exc_info is not None
+
+
+@pytest.mark.asyncio
+async def test_tool_call_timeout_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    import mcp
+
+    class _TimingOutClient(_FakeClient):
+        async def call_tool(self, name: str, arguments: Any, **kwargs: Any) -> Any:
+            raise mcp.MCPError(code=mcp.types.REQUEST_TIMEOUT, message="timed out")
+
+    server = _FakeMCPServer()
+    server._client = _TimingOutClient(["echo"])  # type: ignore[assignment]
+    tool = _build_mcp_tool(server, MCPToolOptions())
+
+    with caplog.at_level(logging.WARNING), pytest.raises(mcp.MCPError):
+        await tool({})
+
+    (record,) = caplog.records
+    assert record.getMessage() == "MCP tool call timed out"
+    assert record.__dict__["tool"] == "echo"
+    assert record.__dict__["server"] == "_FakeMCPServer"
+    assert record.__dict__["timeout_s"] == 5
