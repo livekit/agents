@@ -80,6 +80,8 @@ _GATEWAY_ERROR_STATUS: dict[str, tuple[int, bool | None]] = {
     "engine_unsupported": (400, False),
     "moderation_blocked": (400, False),
     "in_flight_response": (400, False),
+    # a prompt-cache ttl other than "30m" or "12h" (agent-gateway#1794)
+    "invalid_prompt_cache_ttl": (400, False),
 }
 
 

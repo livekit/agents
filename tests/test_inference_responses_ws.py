@@ -391,6 +391,24 @@ async def test_gateway_tool_not_allowed_is_400() -> None:
     await llm_model.aclose()
 
 
+async def test_gateway_invalid_prompt_cache_ttl_is_400() -> None:
+    llm_model = _make_llm()
+    refused = {
+        "type": "gateway.error",
+        "code": "invalid_prompt_cache_ttl",
+        "message": 'prompt_cache_options.ttl: only "30m" or "12h" is supported, got "24h"',
+    }
+    _use_connection(llm_model, _ScriptedWs([_CONNECTED, refused]))
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await _drain(llm_model)
+
+    assert 'only "30m" or "12h" is supported' in exc_info.value.message
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.retryable is False
+    await llm_model.aclose()
+
+
 async def test_gateway_upstream_connect_failed_is_retryable_502() -> None:
     llm_model = _make_llm()
     upstream_failed = {
