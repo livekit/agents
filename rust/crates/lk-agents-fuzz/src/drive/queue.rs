@@ -381,6 +381,9 @@ impl Gate {
             state.slots.insert(id, Slot { ready: true, outer: None });
             id
         };
+        // Born ready: a task spawned off the bridge (a storage lease's renewal respawning its
+        // database worker) would otherwise wait for virtual time to move before its first turn.
+        self.woken.notify_one();
         Box::pin(Gated { id, gate: Arc::clone(self), inner })
     }
 
@@ -685,6 +688,26 @@ mod tests {
             assert!(!gate.granting(), "a cancelled task kept its grant");
             assert_eq!(gate.ready(), [2]);
             drop(two);
+        });
+    }
+
+    /// A task spawned while the run waits (by a task off the bridge, as a lease's renewal
+    /// respawns its database worker) wakes it: it does not wait for virtual time to move.
+    #[test]
+    fn a_task_spawned_behind_a_shut_gate_wakes_the_run() {
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        runtime.block_on(async {
+            let gate = Arc::new(Gate::new());
+            let _shut = gate.shut();
+            let task = tokio::spawn(gate.wrap(Box::pin(async {})));
+            tokio::task::yield_now().await;
+            let woken = tokio::select! {
+                biased;
+                () = gate.woken() => true,
+                () = std::future::ready(()) => false,
+            };
+            assert!(woken, "the run never learned of the new task");
+            task.abort();
         });
     }
 }

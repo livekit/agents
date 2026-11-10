@@ -149,23 +149,32 @@ impl FakeDatabase {
             "UPDATE lanes SET lease_holder = 'intruder', lease_token = ?1, \
              lease_until = unixepoch() + {ttl} WHERE lane = ?2{free}"
         );
-        let before = self.lessee().await;
-        let took = self.observer.batch(vec![Statement::raw(take).with(params())]).await;
-        if !took.is_ok_and(|r| r.at(0).is_ok_and(|s| s.rows_affected() > 0)) {
+        // The lease it replaces, read in the take's own transaction: the call's take may apply
+        // between a separate read and the steal. It speaks as it sends the take, as `plan` notes
+        // an owner's request: the call's take may observe its lease before this task resumes.
+        let lessee = Statement::raw("SELECT lease_token, lease_until FROM lanes WHERE lane = ?1")
+            .with(vec![SqlValue::Text(LANE.into())]);
+        self.state.lock().touched.insert(token.clone(), self.clock.now());
+        let took = self.observer.batch(vec![lessee, Statement::raw(take).with(params())]).await;
+        let Ok(took) = took else {
+            self.state.lock().intruding = false;
+            return;
+        };
+        if !took.at(1).is_ok_and(|s| s.rows_affected() > 0) {
             self.state.lock().intruding = false;
             return;
         }
-        let now = self.clock.now();
+        let before = took.at(0).ok().and_then(|s| match s.rows().first()?.as_slice() {
+            [SqlValue::Text(token), SqlValue::Int(until)] => Some((token.clone(), *until)),
+            _ => None,
+        });
+        if steal
+            && let Some((stolen, until)) = before
+            && until >= self.unix_secs()
         {
             let mut state = self.state.lock();
-            state.touched.insert(token.clone(), now);
-            if steal
-                && let Some((stolen, until)) = before
-                && until >= self.unix_secs()
-            {
-                state.stolen.push(stolen);
-                state.faulted = true;
-            }
+            state.stolen.push(stolen);
+            state.faulted = true;
         }
         self.record_fault(if steal { StorageFault::Stolen } else { StorageFault::Held });
         let renew = format!(
@@ -177,8 +186,8 @@ impl FakeDatabase {
             let step = left.min(renewal);
             self.wait(Duration::from_millis(step)).await;
             left -= step;
-            let _ = self.observer.batch(vec![Statement::raw(renew.clone()).with(params())]).await;
             self.state.lock().touched.insert(token.clone(), self.clock.now());
+            let _ = self.observer.batch(vec![Statement::raw(renew.clone()).with(params())]).await;
         }
         let release = "UPDATE lanes SET lease_until = 0, lease_token = NULL WHERE lane = ?2 AND lease_token = ?1";
         let _ = self.observer.batch(vec![Statement::raw(release).with(params())]).await;

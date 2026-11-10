@@ -326,6 +326,13 @@ impl Socket {
         self.clock.now()
     }
 
+    /// When the server next does something on its own clock (a cancelled response's end, the
+    /// rest of a reply), if it is still serving.
+    pub(crate) fn next_due(&self) -> Option<Ts> {
+        let st = self.state.lock().unwrap();
+        if st.over || st.down { None } else { st.server.next_due() }
+    }
+
     fn wall_secs(&self) -> f64 {
         let wall = self.clock.wall();
         wall.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64()

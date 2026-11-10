@@ -225,6 +225,17 @@ impl Run {
         let avatar = now + self.avatar_due_in().map_or(0, |d| d.as_millis() as u64);
         // The store answers a commit or an acquire after its own latency.
         let storage = self.storage_due().map_or(now, |at| at.as_nanos() / 1_000_000);
+        // A realtime server ends a response it was told to cancel on its own clock (seed 3649).
+        let realtime = self
+            .controls
+            .values()
+            .filter_map(|control| match control {
+                Control::Realtime(socket) => socket.next_due(),
+                _ => None,
+            })
+            .map(|at| at.as_nanos() / 1_000_000)
+            .max()
+            .unwrap_or(now);
         let furthest = self
             .deadlines()
             .map(|(_, at)| at)
@@ -233,7 +244,8 @@ impl Run {
             .max(playing)
             .max(voice)
             .max(avatar)
-            .max(storage);
+            .max(storage)
+            .max(realtime);
         Input::Advance { ms: Millis((furthest.saturating_sub(now) + 1).min(RELEASE_CAP_MS)) }
     }
 

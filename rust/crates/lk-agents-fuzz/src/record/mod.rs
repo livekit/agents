@@ -696,6 +696,8 @@ pub struct Recording {
     /// The legs' retry budgets the session was built with.
     conn: Option<(crate::drive::ConnSetup, bool)>,
     faults: Vec<(Observed, Site, Fault)>,
+    /// Each provider stream whose read an injected hang never answered, by kind and nth.
+    hung_reads: Vec<(Observed, Kind, u32)>,
     probes: Vec<Probe>,
     /// Waiters still parked once the driver finished and the run went quiet, by site.
     parked: Vec<String>,
@@ -1123,6 +1125,16 @@ impl Recording {
 
     pub fn record_fault(&mut self, at: Observed, site: Site, fault: Fault) {
         self.faults.push((at, site, fault));
+    }
+
+    /// When a read of stream `nth` of `kind` hung, never answered: what that stream's reader then
+    /// waits on.
+    pub fn read_hung(&self, kind: Kind, nth: u32) -> Option<Observed> {
+        self.hung_reads.iter().find(|(_, k, n)| *k == kind && *n == nth).map(|(at, ..)| *at)
+    }
+
+    pub fn record_read_hung(&mut self, at: Observed, kind: Kind, nth: u32) {
+        self.hung_reads.push((at, kind, nth));
     }
 
     /// Whether a fake never answered somewhere: what the case could not release.

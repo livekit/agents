@@ -46,6 +46,7 @@ impl Rule for SpeechIsHeard {
             waited_on_a_voice_fed_after_its_open,
             waited_on_its_storage_receipt,
             waited_on_a_voice_open_never_answered,
+            waited_on_its_voices_read_never_answered,
         ],
         counterexamples: &[
             silent_behind_a_paused_speech,
@@ -53,6 +54,7 @@ impl Rule for SpeechIsHeard {
             silent_with_the_voice_due,
             silent_beside_anothers_stalled_voice,
             silent_beside_a_recogniser_open_never_answered,
+            silent_beside_an_earlier_voices_hung_read,
         ],
         probe: None,
     };
@@ -307,6 +309,19 @@ fn waits_on(r: &Recording, speech: u64, made: u64, deadline: u64) -> Option<&'st
     });
     if hung_open {
         return Some("a provider open never answered");
+    }
+    // A model or voice stream opened for it whose read never answered (stress seed 29's voice, hung
+    // after its first chunk): a read is unbounded at the port, its provider's transport bounds it
+    // below, so the speech waits on that provider as on an open never answered.
+    let hung_read = r
+        .opened()
+        .iter()
+        .filter(|o| {
+            matches!(o.kind, Kind::Chat | Kind::Tts) && (made..=deadline).contains(&o.at.at_ms)
+        })
+        .any(|o| r.read_hung(o.kind, o.nth).is_some_and(|hung| hung.at_ms <= deadline));
+    if hung_read {
+        return Some("a provider read never answered");
     }
     let open = |kind: Kind| {
         r.opened()
@@ -644,6 +659,35 @@ fn waited_on_a_voice_open_never_answered() -> Recording {
 /// The same, the hang on the recogniser's open: nothing this speech waits on.
 fn silent_beside_a_recogniser_open_never_answered() -> Recording {
     silent_say_with_a_hang(Site::SttOpen)
+}
+
+/// A `say` whose voice's first read never answered (an injected hang): it waits on that voice.
+fn waited_on_its_voices_read_never_answered() -> Recording {
+    silent_say_with_a_hung_voice(false)
+}
+
+/// The hung read is on a voice opened before the say was made: not the say's to wait on.
+fn silent_beside_an_earlier_voices_hung_read() -> Recording {
+    silent_say_with_a_hung_voice(true)
+}
+
+/// Speech 4, silent, and the first read of a voice opened after it (or `earlier`, before it)
+/// never answered.
+fn silent_say_with_a_hung_voice(earlier: bool) -> Recording {
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
+    let mut built = Authored::new().output(true);
+    if earlier {
+        built = built.tts().later(10);
+    }
+    built = built.speech_created(4, SpeechKind::Say).speech(4, Handle::live());
+    if !earlier {
+        built = built.tts();
+    }
+    // Its input all sent, the record holds the voice closed though its reader never got there.
+    let mut r = built.closed(Kind::Tts, 0).later(BOUND_MS * 2).done();
+    let made = r.host_view().speeches()[0].created_at().expect("the say was made");
+    r.record_read_hung(Observed::at(made.seq + 1, made.at_ms), Kind::Tts, 0);
+    r
 }
 
 /// Speech 4, silent, and a hang struck at `site` a moment after it was made.

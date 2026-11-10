@@ -7,13 +7,15 @@ use crate::{
     authored::Authored,
     check::{Check, Contract, Rule},
     input::{Input, Ref},
-    record::{Handle, Observed, Recording},
+    record::{Handle, Kind, Observed, Recording},
 };
 
 // The fake fails only when told, so every failure is a known input. Reporting it as the session's
 // `error` event is all the reference does while the step's tools still run (`_on_error`). A speech
 // interrupted in the turn that would read the failure abandons it. The host's own close does not
-// count as closing over a failure.
+// count as closing over a failure. A failure queued behind a read of its stream that never
+// answered (an injected hang) is never read: the request waits on its provider, as a read
+// unbounded at the port does.
 
 pub struct ProviderFailureIsAccounted;
 
@@ -21,8 +23,8 @@ impl Rule for ProviderFailureIsAccounted {
     const CONTRACT: Contract = Contract {
         id: "provider_failure_is_accounted",
         guarantee: "Every injected model failure is retried, surfaced on its speech or as an error event naming it, or followed by the session closing.",
-        examples: &[failure_then_retry, failure_then_failed_speech],
-        counterexamples: &[failure_swallowed],
+        examples: &[failure_then_retry, failure_then_failed_speech, failure_behind_a_hung_read],
+        counterexamples: &[failure_swallowed, failure_beside_another_streams_hung_read],
         probe: None,
     };
 
@@ -66,10 +68,12 @@ impl Rule for ProviderFailureIsAccounted {
             // Only the driver's own error close counts as closing over the failure: the host closing
             // the session at the end of every run says nothing about what the driver did with it.
             let closing = internal.error_close_requested_after(sent.at);
+            // Its stream's read hung before the failure came: nothing reads it (seed 5055).
+            let unread = r.read_hung(Kind::Chat, chat.nth).is_some_and(|hung| hung <= sent.at);
 
             check.expect(
                 speech,
-                retried || surfaced || abandoned || closing,
+                retried || surfaced || abandoned || closing || unread,
                 format!(
                     "a model failure on {chat:?} for speech {id} was neither retried, surfaced nor \
                      closed over"
@@ -105,4 +109,20 @@ fn failure_then_failed_speech() -> Recording {
 /// The failure was delivered, the driver ran, and nothing came of it anywhere.
 fn failure_swallowed() -> Recording {
     failed_request(4).speech(4, Handle::finished()).done()
+}
+
+/// The failure came behind a read of its stream that never answered.
+fn failure_behind_a_hung_read() -> Recording {
+    failure_after_a_hung_read(0)
+}
+
+/// Another stream's read hung; this one's failure was read and swallowed.
+fn failure_beside_another_streams_hung_read() -> Recording {
+    failure_after_a_hung_read(1)
+}
+
+fn failure_after_a_hung_read(hung: u32) -> Recording {
+    let mut r = failed_request(4).speech(4, Handle::finished()).done();
+    r.record_read_hung(Observed::at(0, 0), Kind::Chat, hung);
+    r
 }

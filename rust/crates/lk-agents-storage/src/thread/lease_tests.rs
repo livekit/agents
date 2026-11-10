@@ -262,6 +262,41 @@ async fn a_resumed_drain_keeps_another_waiters_mark(backend: Backend) {
     fixture.cleanup(&[&thread]).await;
 }
 
+/// A run's cleanup still ends it after its own holder re-entered the lane under a new token (a
+/// canceled acquire's release applied after the holder's next turn took the lane): the newer
+/// lease stays held, and resending the cleanup writes nothing more.
+async fn a_runs_cleanup_ends_it_after_its_holder_re_entered(backend: Backend) {
+    let fixture = backend.fixture(None).await;
+    let thread = fixture.thread().await;
+    let lane = thread.lane(LANE);
+    let holder = crate::Holder::new("test");
+    let mut first = lane.open(RunOptions::new("first", "AST_first"), &holder).await.unwrap();
+    let mut next = lane.open(RunOptions::new("next", "AST_next"), &holder).await.unwrap();
+    assert_ne!(first.lease().unwrap().fence().token, next.lease().unwrap().fence().token);
+    first.abandon(RunOutcome::Canceled, "acquire-canceled").await.unwrap();
+    let ended = |runs: &[crate::thread::run::RunSummary], id: &str| {
+        runs.iter().filter(|r| r.run_id == id && !r.interrupted()).count()
+    };
+    let runs = lane.runs(usize::MAX).await.unwrap();
+    assert_eq!(ended(&runs, "first"), 1, "the re-entered holder's run never ended: {runs:?}");
+    let conn = thread.conn().clone();
+    let ended_events = || async {
+        let count = "SELECT COUNT(*) FROM events WHERE run_id = 'first' AND type = 'run_ended'";
+        conn.query(crate::sql::Statement::raw(count)).await.unwrap()[0][0].as_i64()
+    };
+    assert_eq!(ended_events().await, Some(1));
+    // A resend of the applied cleanup writes no second `run_ended`, and leaves the newer lease.
+    let lease = next.lease().unwrap().clone();
+    let ended = RunEnded { outcome: RunOutcome::Canceled, reason: None };
+    let event = EventWrite::new(0, JournalEvent::RunEnded(ended));
+    let token = first.lease().unwrap().fence().token.clone();
+    conn.batch(release(LANE, &token, holder.as_str(), Some(("first", &event)))).await.unwrap();
+    assert_eq!(ended_events().await, Some(1));
+    assert!(!lease.is_lost());
+    next.commit(CommitOptions::default()).await.unwrap();
+    fixture.cleanup(&[&thread]).await;
+}
+
 crate::contract!(
     waiters_take_the_lane_in_the_order_their_rows_were_submitted,
     an_expired_owner_cannot_restart_or_commit_after_takeover,
@@ -270,6 +305,7 @@ crate::contract!(
     a_dead_waiter_does_not_interrupt_a_new_owner,
     canceled_and_timed_out_acquires_withdraw_their_marks,
     a_resumed_drain_keeps_another_waiters_mark,
+    a_runs_cleanup_ends_it_after_its_holder_re_entered,
 );
 
 #[test]

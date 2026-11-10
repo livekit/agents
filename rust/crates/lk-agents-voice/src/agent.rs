@@ -259,7 +259,8 @@ impl SessionChatCtx {
             .into_iter()
             .filter(|item| item.id() != INSTRUCTIONS_MESSAGE_ID)
             .filter_map(|item| match held.remove(item.id()) {
-                Some(entry) if read.get(item.id()) == Some(&&item) => Some(entry),
+                // An unread row is not the lane's to change: the record's entry stays.
+                Some(entry) if read.get(item.id()).is_none_or(|read| *read == &item) => Some(entry),
                 Some(entry) => Some(Committed { item, ..entry }),
                 None if read.contains_key(item.id()) => None,
                 None => Some(Committed {
@@ -412,5 +413,28 @@ mod tests {
         assert_eq!(carried, ["u"]);
         let ids: Vec<_> = ctx.agent_chat_ctx().items.iter().map(|i| i.id().to_owned()).collect();
         assert_eq!(ids, ["u"]);
+    }
+
+    /// Seed 1227: a question another agent asked was answered after the last commit; a reload
+    /// for a turn that did not read it gives back the committed, waiting row, and the answer
+    /// stays. A row the turn read and the lane changed is replaced.
+    #[test]
+    fn a_reload_changes_only_the_rows_the_turn_read() {
+        let at = SystemTime::UNIX_EPOCH;
+        let output = |text: &str| {
+            ChatItem::FunctionCallOutput(FunctionCallOutput::new("fo", "call_1", text, false, at))
+        };
+        let said = |text: &str| ChatItem::Message(ChatMessage::text("u", Role::User, text, at));
+        let mut ctx = SessionChatCtx::new("caller");
+        let _ = ctx.commit(output("Monday"), Source::HostCtx, Visibility::History, "agent");
+        let _ = ctx.commit(said("hello"), Source::HostCtx, Visibility::Both, "caller");
+        let read = [said("hello")];
+        assert!(ctx.reload_transport(
+            &read,
+            vec![output("waiting"), said("hello, edited")],
+            "caller"
+        ));
+        let items: Vec<_> = ctx.items().cloned().collect();
+        assert_eq!(items, [output("Monday"), said("hello, edited")]);
     }
 }

@@ -163,3 +163,73 @@ async fn a_turns_lane_metrics_record_under_the_calls_job() {
     let measured = sink.0.lock().clone();
     assert!(measured.contains(&("lk.agents.lane.acquire_wait", Some(job))), "{measured:?}");
 }
+
+/// A turn's own edit to a committed row (a question answered since the last commit) survives
+/// another writer's commit in between that left the row alone; the other writer's own rows and
+/// edits are kept.
+#[tokio::test]
+async fn a_turns_edit_survives_another_writers_commit() {
+    use crate::thread::run::ItemRow;
+    use crate::{CommitOptions, Holder, RunOptions};
+    use lk_agents_abi::llm::chat_context::protocol::encode_chat_item;
+    let said = |id: &str, role, text: &str| {
+        ChatItem::Message(ChatMessage::text(id, role, text, std::time::UNIX_EPOCH))
+    };
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let store = std::sync::Arc::new(
+        VoiceStore::bound(
+            fixture.storage.clone(),
+            fixture.thread_id.clone(),
+            "desk".into(),
+            None,
+            Cx::NONE,
+        )
+        .await
+        .unwrap(),
+    );
+    let asked = vec![said("q", Role::Assistant, "which day?"), said("a", Role::User, "hello")];
+    store.acquire(1, asked.clone()).await.unwrap();
+    let (sink, mut events) = Events::new();
+    std::sync::Arc::clone(&store)
+        .dispatch(VoiceStorageCommand::Settle { speech: 1, history: asked }, sink)
+        .unwrap();
+    assert!(matches!(
+        events.recv().await,
+        Some(VoiceStorageEvent::Settled { speech: 1, result: Ok(()), .. })
+    ));
+    // A text turn appends an exchange and rewrites `a`.
+    let thread = fixture.thread().await;
+    let mut run = thread
+        .lane("desk")
+        .open(RunOptions::new("text_1", ""), &Holder::new("text"))
+        .await
+        .unwrap();
+    let rows = [
+        said("q", Role::Assistant, "which day?"),
+        said("a", Role::User, "hello, edited"),
+        said("t", Role::User, "text me"),
+    ];
+    *run.history_mut() = rows
+        .iter()
+        .map(|item| ItemRow {
+            id: item.id().into(),
+            message_id: None,
+            payload: encode_chat_item(item),
+        })
+        .collect();
+    run.commit(CommitOptions::default()).await.unwrap();
+    let local = vec![said("q", Role::Assistant, "Monday"), said("a", Role::User, "hello")];
+    let merged = store.acquire(2, local).await.unwrap();
+    let text = |id: &str| {
+        merged
+            .iter()
+            .find(|item| item.id() == id)
+            .and_then(|item| item.as_message())
+            .map(|m| m.content.iter().map(|c| format!("{c:?}")).collect::<String>())
+    };
+    assert!(text("q").is_some_and(|t| t.contains("Monday")), "{merged:?}");
+    assert!(text("a").is_some_and(|t| t.contains("edited")), "{merged:?}");
+    assert!(text("t").is_some(), "{merged:?}");
+    store.aclose().await.unwrap();
+    fixture.cleanup(&[&thread]).await;
+}

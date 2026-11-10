@@ -14,9 +14,19 @@ pub struct StorageReceiptPrecedesSpeechDone;
 impl Rule for StorageReceiptPrecedesSpeechDone {
     const CONTRACT: Contract = Contract {
         id: "storage_receipt_precedes_speech_done",
-        guarantee: "A speech is announced done only after its settle or abandon receipt, including slow and failed commits. A speech the interruption watchdog ended never reports its turn: its lane is released afterwards. Nor does one the close released at its bound with its commit still pending (a lane another live worker holds).",
-        examples: &[waited, released_after_watchdog, released_by_the_close],
-        counterexamples: &[done_before_receipt, done_without_receipt, watchdog_cut_a_pending_commit],
+        guarantee: "A speech is announced done only after its settle or abandon receipt, including slow and failed commits. A speech the interruption watchdog ended never reports its turn: its lane is released afterwards. Nor does one the close released at its bound, its commit still pending (a lane another live worker holds) or reported afterwards, within the lane's release bound.",
+        examples: &[
+            waited,
+            released_after_watchdog,
+            released_by_the_close,
+            reported_after_the_close,
+        ],
+        counterexamples: &[
+            done_before_receipt,
+            done_without_receipt,
+            watchdog_cut_a_pending_commit,
+            released_after_done,
+        ],
         probe: None,
     };
 
@@ -31,14 +41,16 @@ impl Rule for StorageReceiptPrecedesSpeechDone {
             if timed_out.is_some_and(|ended| ended < *requested) {
                 continue;
             }
-            let released = r.journal().iter().any(|(at, step)| {
+            // The close's release announces the speech done itself, whenever its turn reports.
+            let released = r.journal().iter().find_map(|(at, step)| {
                 matches!(step, Step::Close(CloseStep::Performed(CloseAct::Released { speech: s }))
-                    if s.0 == *speech && at > requested)
+                    if s.0 == *speech)
+                .then_some(*at)
             });
-            if released {
-                continue;
-            }
             for (done, _) in host.speech(*speech).done_announcements() {
+                if released.is_some_and(|released| released < done) {
+                    continue;
+                }
                 let received = host.storage().iter().any(|(at, step)| {
                     *requested < *at
                         && *at < done
@@ -88,6 +100,35 @@ fn released_by_the_close() -> Recording {
         .storage(StorageStep::Requested { speech: 2, operation: settle })
         .journal(Step::Close(CloseStep::Performed(CloseAct::Released { speech: SpeechId(2) })))
         .speech_done(2, SpeechOutcome::Interrupted)
+        .done()
+}
+
+/// Speech 1 waited; the close released speech 2 at its bound, its cut turn reported afterwards.
+fn reported_after_the_close() -> Recording {
+    let settle = StorageOperation::Settle;
+    Authored::new()
+        .storage(request())
+        .storage(receipt())
+        .speech_done(1, SpeechOutcome::Completed)
+        .journal(Step::Close(CloseStep::Performed(CloseAct::Released { speech: SpeechId(2) })))
+        .speech_done(2, SpeechOutcome::Interrupted)
+        .storage(StorageStep::Requested { speech: 2, operation: settle })
+        .storage(StorageStep::Answered {
+            speech: 2,
+            operation: settle,
+            delivered: true,
+            result: Ok(()),
+        })
+        .done()
+}
+
+/// Announced done before its receipt, then released by the close: the release did not announce it.
+fn released_after_done() -> Recording {
+    Authored::new()
+        .storage(request())
+        .speech_done(1, SpeechOutcome::Interrupted)
+        .journal(Step::Close(CloseStep::Performed(CloseAct::Released { speech: SpeechId(1) })))
+        .storage(receipt())
         .done()
 }
 

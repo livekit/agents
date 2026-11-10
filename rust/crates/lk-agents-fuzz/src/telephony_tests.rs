@@ -364,3 +364,74 @@ mod dtmf_read_back_realtime {
         assert!(spoke, "no realtime generation answered the read-back");
     }
 }
+
+mod amd_hung_provider_ends_with_the_detector {
+    //! A provider that never answers AMD's opens is abandoned when the detector stops reading.
+    use lk_agents_fuzz::drive::{
+        AmdAnswer, AmdSetup, Ending, Outcome, Run, Setup, finish, simulate,
+    };
+    use lk_agents_fuzz::input::{AmdInput, Input, Millis, Ref, TurnMode, UserText};
+    use lk_agents_fuzz::record::{Fault, Site};
+
+    /// Arms the one hazard each case draws: AMD's own STT, or its classifier, never opens.
+    const OPEN_HANGS: u64 = 37;
+
+    fn closed_detector(own_stt: bool, heard: &[Input]) -> (Vec<(Site, Fault)>, Outcome) {
+        let setup = Setup {
+            vad: !own_stt,
+            stt: !own_stt,
+            turn: if own_stt { TurnMode::Default } else { TurnMode::Stt },
+            tools: Vec::new(),
+            amd: Some(AmdSetup { own_stt, answer: AmdAnswer::Track, ..AmdSetup::default() }),
+            stress: Some(OPEN_HANGS),
+            ..Setup::default()
+        };
+        simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            let close = [
+                Input::Advance { ms: Millis(100) },
+                Input::Amd { input: AmdInput::Close },
+                Input::Advance { ms: Millis(100) },
+            ];
+            for input in heard.iter().chain(&close) {
+                run.apply(input).await;
+            }
+            let faults = run.record.faults().iter().map(|(_, s, f)| (*s, *f)).collect();
+            (faults, finish(run, Outcome::default()).await)
+        })
+    }
+
+    // Catches: the tap's `stt.stream()` awaited unraced, so an open that never answered kept the
+    // "amd tap open" task alive after the detector closed (`every_task_finishes`, a Deadlock,
+    // survey seeds 1424, 3221, 3963, 4485, 4797).
+    #[test]
+    fn a_hung_tap_open_ends_with_the_detector() {
+        let (faults, outcome) = closed_detector(true, &[]);
+        assert_eq!(faults, [(Site::SttOpen, Fault::Hang)], "the seed arms only the tap's open");
+        assert_eq!(outcome.ending, Ending::Completed, "{:#?}", outcome.failures);
+        assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
+    }
+
+    // Catches: the classification's `llm.chat()` awaited before its cancellation was raced, so a
+    // model that never answered kept the "amd classification" task alive after the detector
+    // closed (`every_task_finishes`, a Deadlock, survey seeds 1301, 3748).
+    #[test]
+    fn a_hung_classification_open_ends_with_the_detector() {
+        let heard = [
+            Input::VadStart { vad: Ref::new(0), speech_ms: Millis(300) },
+            Input::SttStart { stt: Ref::new(0) },
+            Input::Advance { ms: Millis(300) },
+            Input::SttFinal {
+                utterance: Ref::new(0),
+                text: UserText("hi you have reached the voicemail of theo".into()),
+                speaker: None,
+            },
+            Input::SttEnd { utterance: Ref::new(0) },
+            Input::VadEnd { vad: Ref::new(0), silence_ms: Millis(500) },
+        ];
+        let (faults, outcome) = closed_detector(false, &heard);
+        assert_eq!(faults, [(Site::ChatOpen, Fault::Hang)], "the seed arms only the classifier");
+        assert_eq!(outcome.ending, Ending::Completed, "{:#?}", outcome.failures);
+        assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
+    }
+}

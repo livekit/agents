@@ -422,8 +422,9 @@ impl VoiceRuntime {
         {
             let local = context.plan.request.chat_ctx.items.clone();
             let queue = queue.clone();
+            let speech = Arc::clone(&handle);
             let reload = async move {
-                reload_history(storage, speech, local, &queue).await;
+                reload_history(&speech, storage, local, &queue).await;
             };
             self.speeches.spawn(handle.id(), "speech lane reload", reload);
         }
@@ -437,7 +438,7 @@ impl VoiceRuntime {
         self.speeches.spawn_feeding(handle.id(), "speech", lost, async move {
             if let Some(storage) = storage {
                 let local = context.plan.request.chat_ctx.items.clone();
-                if let Some(history) = reload_history(storage, task.id(), local, &queue).await {
+                if let Some(history) = reload_history(&task, storage, local, &queue).await {
                     context.plan.request.chat_ctx.items = history;
                 }
             }
@@ -681,14 +682,21 @@ impl VoiceRuntime {
 }
 
 /// The speech takes the voice lane: the lane's history, which replaces the speech's `local` one,
-/// is reported and returned, and the lane's loss is watched.
+/// is reported and returned, and the lane's loss is watched. An interrupted speech stops waiting
+/// for a lane another holder has: an abandoned acquire releases whatever it may have taken.
 async fn reload_history(
+    handle: &super::SpeechHandle,
     storage: Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>,
-    speech: SpeechId,
     local: Vec<lk_agents_abi::ChatItem>,
     queue: &crate::voice::session::Tx,
 ) -> Option<Vec<lk_agents_abi::ChatItem>> {
-    match storage.acquire(speech.0, local.clone()).await {
+    let speech = handle.id();
+    let acquired = tokio::select! {
+        biased;
+        acquired = storage.acquire(speech.0, local.clone()) => acquired,
+        () = handle.wait_for_interrupted() => return None,
+    };
+    match acquired {
         Ok(history) => {
             let _ =
                 queue.send(VoiceEvent::StorageReloaded { read: local, history: history.clone() });

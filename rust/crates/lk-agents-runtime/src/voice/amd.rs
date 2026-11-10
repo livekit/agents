@@ -474,14 +474,16 @@ impl AmdSystem {
         let tasks = self.tasks.clone();
         let cx = self.cx.clone();
         self.tasks.spawn(self.peer.spawner.as_ref(), "amd tap open", async move {
-            if peer.closing.is_cancelled() || tx.is_closed() {
-                return;
-            }
-            // Let an admitted host open settle so its successful result can acquire ownership.
             let options = stt.conn_options().unwrap_or_default();
-            let result =
-                lk_agents_inference::stt::stream(stt, options, peer.time.clock(), &cx, None, None)
-                    .await;
+            let open =
+                lk_agents_inference::stt::stream(stt, options, peer.time.clock(), &cx, None, None);
+            // The detector stopped reading: abandoning an open is safe, as a host open dropped
+            // unsettled is cancelled and a stream it returned unread is closed.
+            let result = tokio::select! {
+                biased;
+                () = tx.closed() => return,
+                result = open => result,
+            };
             let outcome = match result {
                 Ok(Some(pair)) => {
                     let (sink, source) = pair.split();
@@ -696,38 +698,37 @@ async fn classify(
 ) {
     let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &request);
     let mut attempt = Some(trace.attempt());
-    let mut stream =
-        match lk_agents_inference::llm::chat(llm.clone(), trace.cx(), &request, time.clock(), None)
-            .await
-        {
-            Ok(s) => s,
-            Err(error) => {
-                trace.end_attempt(attempt.take().flatten(), Some(&error));
-                trace.fail(&error);
-                let (calls, metrics) = (Vec::new(), None);
-                let _ = tx.send(Msg::Answer { req, transcript, calls, failed: true, metrics });
-                return;
-            }
-        };
+    // Abandoning an open is safe: a host open dropped unsettled is cancelled, and a stream it
+    // returned unread is closed (`py_streams::StreamCall`). A cancelled request reports nothing.
+    let open =
+        lk_agents_inference::llm::chat(llm.clone(), trace.cx(), &request, time.clock(), None);
+    let opened = tokio::select! {
+        biased;
+        () = cancelled.cancelled() => return,
+        opened = open => opened,
+    };
+    let mut stream = match opened {
+        Ok(s) => s,
+        Err(error) => {
+            trace.end_attempt(attempt.take().flatten(), Some(&error));
+            trace.fail(&error);
+            let (calls, metrics) = (Vec::new(), None);
+            let _ = tx.send(Msg::Answer { req, transcript, calls, failed: true, metrics });
+            return;
+        }
+    };
     let mut calls: Vec<FunctionToolCall> = Vec::new();
     let mut failed = false;
     let mut aborted = false;
     loop {
-        if cancelled.is_cancelled() {
-            aborted = true;
-            break;
-        }
-        let next = if stream.cancel_safe() {
-            tokio::select! {
-                biased;
-                () = cancelled.cancelled() => {
-                    aborted = true;
-                    break;
-                }
-                item = stream.next() => item,
+        // Cancelling the whole request may drop any pull: the stream is closed below.
+        let next = tokio::select! {
+            biased;
+            () = cancelled.cancelled() => {
+                aborted = true;
+                break;
             }
-        } else {
-            stream.next().await
+            item = stream.next() => item,
         };
         match next {
             Ok(Some(chunk)) => {

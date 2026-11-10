@@ -234,6 +234,50 @@ mod realtime_late_answer_interrupted {
     }
 }
 
+mod realtime_cancel_ends_on_the_servers_clock {
+    //! A response the server was told to cancel ends after the server's own wind-down, which the
+    //! release phase waits out.
+    use lk_agents_fuzz::drive::{Outcome, RealtimeSetup, Run, Setup, finish, simulate};
+    use lk_agents_fuzz::fakes::RealtimeDelays;
+    use lk_agents_fuzz::input::{Input, Millis};
+
+    // Catches: the release phase moving the clock a millisecond a round while the late reply's
+    // `response.done` was due a measured lag after its cancel, so the reply stayed live and the
+    // run never went quiet (`session_settles`, campaign seed 3649).
+    #[test]
+    fn the_release_waits_out_a_cancelled_reply() {
+        // The server answers exactly at the request's 10 s bound: the driver cancels, then
+        // interrupts the reply it is told of.
+        let delays = RealtimeDelays { created: Some(10_000), ..RealtimeDelays::default() };
+        let setup = Setup {
+            realtime: Some(RealtimeSetup {
+                turn_detection: false,
+                delays,
+                ..RealtimeSetup::default()
+            }),
+            ..Setup::default()
+        };
+        let inputs = [
+            // Past the away timer, so no deadline of the driver's moves the release's clock.
+            Input::Advance { ms: Millis(15_001) },
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(10_000) },
+        ];
+        let outcome = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in &inputs {
+                run.apply(input).await;
+            }
+            finish(run, Outcome::default()).await
+        });
+        assert!(
+            !outcome.failures.iter().any(|f| f.contract == "session_settles"),
+            "{:#?}",
+            outcome.failures
+        );
+    }
+}
+
 mod realtime_waiter_journalled {
     //! A realtime request settled before the server answered ends its handle through the journal.
     use lk_agents_fuzz::drive::{RealtimeSetup, Run, Setup, simulate};

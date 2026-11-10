@@ -44,7 +44,8 @@ pub struct VoiceStore {
 }
 
 struct State {
-    known: BTreeSet<String>,
+    /// Each conversational item as this store last read it from the lane or committed it.
+    known: BTreeMap<String, ChatItem>,
     version: i64,
     active: Option<Active>,
     /// The frozen staged fields of a commit left unresolved, and why its outcome is unknown.
@@ -85,7 +86,7 @@ impl VoiceStore {
             .as_ref()
             .unwrap_or(&items)
             .iter()
-            .map(|item| item.id().to_owned())
+            .map(|item| (item.id().to_owned(), item.clone()))
             .collect();
         let activation =
             ContextStore::bound(backend.clone(), thread_id.clone(), lane.clone(), cx.clone())
@@ -150,9 +151,14 @@ impl VoiceStore {
             // The lane as this store last saw it: the turn's own reading, edits included, is
             // the newest.
             let merged = if run.version() == state.version {
+                // The turn's new items are known from now on: if it is abandoned, a later reload
+                // drops them rather than committing them as another turn's.
+                for item in local.iter().filter(|item| conversational(item)) {
+                    state.known.entry(item.id().to_owned()).or_insert_with(|| item.clone());
+                }
                 local
             } else {
-                let mut stored = run
+                let stored = run
                     .history()
                     .iter()
                     .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
@@ -160,12 +166,28 @@ impl VoiceStore {
                 let ids: BTreeSet<_> = stored.iter().map(|item| item.id().to_owned()).collect();
                 let (mut instructions, pending): (Vec<_>, Vec<_>) =
                     local.into_iter().partition(|item| !conversational(item));
-                stored.extend(
-                    pending.into_iter().filter(|item| {
-                        !state.known.contains(item.id()) && !ids.contains(item.id())
-                    }),
-                );
-                instructions.extend(stored);
+                let mut edited: BTreeMap<String, ChatItem> = BTreeMap::new();
+                let mut added = Vec::new();
+                for item in pending {
+                    if ids.contains(item.id()) {
+                        edited.insert(item.id().to_owned(), item);
+                    } else if !state.known.contains_key(item.id()) {
+                        added.push(item);
+                    }
+                }
+                // A row the other writer left as this store last saw it keeps the turn's own
+                // edit (a question answered since the last commit); one it changed is its own.
+                let mut merged: Vec<ChatItem> = stored
+                    .iter()
+                    .map(|row| match edited.remove(row.id()) {
+                        Some(mine) if state.known.get(row.id()) == Some(row) => mine,
+                        _ => row.clone(),
+                    })
+                    .collect();
+                state.known = stored.into_iter().map(|item| (item.id().to_owned(), item)).collect();
+                state.known.extend(added.iter().map(|item| (item.id().to_owned(), item.clone())));
+                merged.extend(added);
+                instructions.extend(merged);
                 instructions
             };
             self.activation.begin_managed(
@@ -183,11 +205,6 @@ impl VoiceStore {
                 return Err(error);
             }
         };
-        state.known = merged
-            .iter()
-            .filter(|item| conversational(item))
-            .map(|item| item.id().to_owned())
-            .collect();
         *self.lease.lock() = run.lease().cloned();
         state.active = Some(Active { thread, run, speeches: BTreeSet::from([speech]) });
         Ok(merged)
@@ -208,9 +225,11 @@ impl VoiceStore {
             .iter()
             .map(|row| (row.id.clone(), row.message_id.clone()))
             .collect();
+        let history: Vec<ChatItem> = history.into_iter().filter(conversational).collect();
+        let committed: BTreeMap<String, ChatItem> =
+            history.iter().map(|item| (item.id().to_owned(), item.clone())).collect();
         let history = history
             .into_iter()
-            .filter(conversational)
             .map(|item| {
                 if item.as_message().is_some_and(|message| {
                     message.content.iter().any(|content| !matches!(content, ChatContent::Text(_)))
@@ -262,7 +281,7 @@ impl VoiceStore {
         self.activation.end_managed(result.is_ok(), fields);
         if let Ok(version) = result {
             state.version = version;
-            state.known = active.run.history().iter().map(|row| row.id.clone()).collect();
+            state.known = committed;
             Ok(())
         } else {
             result.map(|_| ())

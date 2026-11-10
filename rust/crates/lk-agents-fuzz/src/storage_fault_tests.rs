@@ -195,3 +195,19 @@ fn a_realtime_reply_plays_while_its_lane_reloads() {
         assert!(!late, "seed {seed}: the reply's first audio waited on the lane");
     }
 }
+
+// Catches the harness judging the lane by itself, not by the real backend (launch-gate seeds
+// 1239, 4416, 2692, 2634, 2990, 3368): a database worker a lease's renewal respawned off the task
+// bridge waited for virtual time to move until the lease lapsed; another worker's steal read the
+// lease it replaced before the call's take applied, and its take was observed before it was noted
+// speaking; a turn the close released at its bound reported afterwards, as designed.
+#[test]
+fn the_lane_is_judged_by_the_real_backend() {
+    for seed in [1239, 4416, 2692, 2634, 2990, 3368] {
+        let setup = lk_agents_fuzz::search::sample_setup(&mut fastrand::Rng::with_seed(seed));
+        let outcome = lk_agents_fuzz::search::explore(setup, seed, 3000);
+        let storage: Vec<_> =
+            outcome.failures.iter().filter(|f| f.contract.starts_with("storage_")).collect();
+        assert!(storage.is_empty(), "seed {seed}: {storage:#?}");
+    }
+}

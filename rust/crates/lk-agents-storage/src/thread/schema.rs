@@ -245,11 +245,14 @@ WHERE lane = :lane AND lease_token = :token
 }
 
 statement! {
-    /// A run's last event when it ends without a commit (failed, or already committed), only
-    /// under this lease.
+    /// A run's last event when it ends without a commit (failed, canceled, or already
+    /// committed), once: under this lease, or while its holder still has the lane under another
+    /// token (its next turn re-entered before this cleanup applied). Another holder's lane is
+    /// left alone: the run is then found interrupted.
     InsertRunEnded<'a> {
         lane: &'a str,
         token: &'a str,
+        holder: &'a str,
         ts_ms: i64,
         run_id: &'a str,
         payload: SqlValue,
@@ -257,7 +260,8 @@ statement! {
 INSERT INTO events (ts_ms, lane, run_id, type, payload)
 SELECT :ts_ms, :lane, :run_id, 'run_ended', jsonb(:payload)
 FROM lanes
-WHERE lane = :lane AND lease_token = :token
+WHERE lane = :lane AND (lease_token = :token OR lease_holder = :holder)
+  AND NOT EXISTS (SELECT 1 FROM events WHERE lane = :lane AND run_id = :run_id AND type = 'run_ended')
 "#
 }
 

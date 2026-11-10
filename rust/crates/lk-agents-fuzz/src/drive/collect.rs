@@ -190,6 +190,11 @@ impl Run {
                 }
                 Record::Fault { at, site, fault, on } => {
                     self.record.record_fault(at, site, fault);
+                    if let Some(slot) = on.filter(|_| fault == crate::record::Fault::Hang)
+                        && !site.is_close()
+                    {
+                        self.record.record_read_hung(at, slot.kind, slot.nth);
+                    }
                     // A stream that panicked unwound away, and one whose close hangs was let go:
                     // either is gone, and nothing more reaches it.
                     let spent = fault == crate::record::Fault::Panic || site.is_close();

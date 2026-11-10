@@ -79,13 +79,20 @@ impl PartialEq for Holder {
 
 impl Eq for Holder {}
 
-/// The release by token, after the `run_ended` of `run_id` when given; both are fenced on the
-/// token, so a lease since taken again is left alone.
-fn release(lane: &str, token: &str, ended: Option<(&str, &EventWrite)>) -> Vec<Statement> {
+/// The release by token, after the `run_ended` of `run_id` when given. The release is fenced on
+/// the token, so a lease since taken again is left alone; the `run_ended` also lands while
+/// `holder` re-entered the lane under another token, once.
+fn release(
+    lane: &str,
+    token: &str,
+    holder: &str,
+    ended: Option<(&str, &EventWrite)>,
+) -> Vec<Statement> {
     let mut batch = Vec::new();
     if let Some((run_id, e)) = ended {
         let payload = SqlValue::json(&e.payload);
-        batch.push(InsertRunEnded { lane, token, ts_ms: e.ts_ms, run_id, payload }.bind());
+        let ts_ms = e.ts_ms;
+        batch.push(InsertRunEnded { lane, token, holder, ts_ms, run_id, payload }.bind());
     }
     batch.push(ReleaseLease { lane, token }.bind());
     batch
@@ -236,7 +243,7 @@ impl Drop for PendingLease {
         let event = JournalEvent::RunEnded(RunEnded { outcome: RunOutcome::Canceled, reason });
         let ended = EventWrite::new(unix_now_ms(), event);
         let ended = self.run_id.as_deref().map(|run_id| (run_id, &ended));
-        let batch = release(&self.lane, &self.token, ended);
+        let batch = release(&self.lane, &self.token, self.holder.as_str(), ended);
         release_detached(&self.spawner, &self.holder, self.db.clone(), &self.lane, batch);
     }
 }
@@ -263,7 +270,7 @@ impl Drop for Held {
     fn drop(&mut self) {
         if !self.released.load(Ordering::Acquire) {
             let (fence, db) = (&self.fence, self.db.clone());
-            let batch = release(&fence.lane, &fence.token, None);
+            let batch = release(&fence.lane, &fence.token, fence.holder.as_str(), None);
             release_detached(&self.spawner, &fence.holder, db, &fence.lane, batch);
         }
     }
@@ -394,9 +401,10 @@ impl Lease {
     /// Releases without writing anything else but, when given, the `run_ended` event of `run_id`.
     /// Both are keyed by the token, so a lost acknowledgment is sent again.
     pub async fn release(&self, ended: Option<(&str, &EventWrite)>) -> Result<(), StorageError> {
-        let Fence { lane, token, .. } = &self.inner.fence;
+        let Fence { lane, token, holder, .. } = &self.inner.fence;
         let (db, conn) = (&self.inner.db, self.inner.db.conn());
-        db.resend(StorageWrite::Release).send(|| conn.batch(release(lane, token, ended))).await?;
+        let batch = || conn.batch(release(lane, token, holder.as_str(), ended));
+        db.resend(StorageWrite::Release).send(batch).await?;
         self.mark_released();
         Ok(())
     }
@@ -408,7 +416,7 @@ impl Lease {
         let event = JournalEvent::RunEnded(RunEnded { outcome: RunOutcome::Canceled, reason });
         let ended = EventWrite::new(unix_now_ms(), event);
         let Fence { lane, token, holder, .. } = &self.inner.fence;
-        let batch = release(lane, token, Some((run_id, &ended)));
+        let batch = release(lane, token, holder.as_str(), Some((run_id, &ended)));
         release_detached(&self.inner.spawner, holder, self.inner.db.clone(), lane, batch);
         self.stop();
         self.mark_released();

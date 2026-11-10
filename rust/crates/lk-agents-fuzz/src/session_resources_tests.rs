@@ -958,3 +958,69 @@ mod hung_voice_held_to_the_close {
         });
     }
 }
+
+mod lane_wait_ends_with_the_speech {
+    //! A speech waiting on the voice lane stops waiting once interrupted: the session's close is
+    //! not held to its cleanup bound by a lease take that has not answered.
+    use lk_agents_fuzz::drive::{Ending, Outcome, Run, Setup, StorageSetup, finish, simulate};
+    use lk_agents_fuzz::input::{Input, Millis};
+
+    // Catches: the speech's `acquire` awaited unraced, so a lane another holder kept (or a take
+    // answered late) kept the interrupted speech's task waiting past the close's cleanup bound
+    // (`every_task_finishes`, survey seeds 1605, 1995, 4927).
+    #[test]
+    fn an_interrupted_speech_stops_waiting_for_the_lane() {
+        let storage = StorageSetup { take_answer_ms: Some(30_000), ..StorageSetup::default() };
+        let setup = Setup { tts: false, storage: Some(storage), ..Setup::default() };
+        let outcome = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            run.apply(&Input::GenerateReply { user_input: None, instructions: None, allow: None })
+                .await;
+            for _ in 0..100 {
+                if run.lease_take_unanswered() {
+                    break;
+                }
+                run.apply(&Input::Advance { ms: Millis(1) }).await;
+            }
+            assert!(run.lease_take_unanswered(), "the turn never took the lane");
+            run.apply(&Input::Close { drain: false }).await;
+            run.apply(&Input::Advance { ms: Millis(40_000) }).await;
+            finish(run, Outcome::default()).await
+        });
+        assert_eq!(outcome.ending, Ending::Completed, "{:#?}", outcome.failures);
+        assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
+    }
+}
+
+mod hung_voice_read_is_waited_on {
+    //! A `say` whose voice's read never answers waits on that voice until the close.
+    use lk_agents_fuzz::drive::{Ending, Outcome, Run, Setup, finish, simulate};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, SayInput};
+    use lk_agents_fuzz::record::{Fault, Site};
+
+    /// Arms the one hazard this case draws: the say's voice hangs at its second read.
+    const VOICE_HANGS: u64 = 29;
+
+    // Catches: `speech_is_heard` excusing only an open that never answered, so a say whose voice
+    // hung after its first chunk was reported silent with nothing to wait on.
+    #[test]
+    fn a_say_on_a_hung_voice_waits_on_it() {
+        let setup = Setup { stress: Some(VOICE_HANGS), ..Setup::default() };
+        let outcome = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            let say = Input::Say {
+                text: AgentText("Your options are many.".into()),
+                input: SayInput::Words,
+                allow: None,
+                to_ctx: false,
+            };
+            for input in [say, Input::Advance { ms: Millis(20) }] {
+                run.apply(&input).await;
+            }
+            let faults: Vec<_> = run.record.faults().iter().map(|(_, s, f)| (*s, *f)).collect();
+            assert_eq!(faults, [(Site::TtsNext, Fault::Hang)], "the seed arms only the voice");
+            finish(run, Outcome::default()).await
+        });
+        assert_eq!(outcome.ending, Ending::Completed, "{:#?}", outcome.failures);
+    }
+}
