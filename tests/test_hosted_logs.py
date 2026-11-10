@@ -245,16 +245,18 @@ def test_init_recording_decides_only_once() -> None:
     ctx._hosted_output.decide.assert_not_called()
 
 
-async def test_cleanup_decides_export_when_no_session_decided() -> None:
+@pytest.mark.parametrize("recording", [True, False])
+async def test_cleanup_follows_the_job_when_no_session_decided(recording: bool) -> None:
     ctx = MagicMock()
     ctx._recording_initialized = False
     ctx._rejected_recording = None
     ctx._early_log_handler = None
     ctx._telemetry_state = None
     ctx._handlers_with_filter = []
+    ctx.job.enable_recording = recording
     ctx.job.enable_redaction = True
     await JobContext._on_cleanup(ctx)
-    ctx._hosted_output.decide.assert_called_once_with(logs=True, redaction=True)
+    ctx._hosted_output.decide.assert_called_once_with(logs=recording, redaction=True)
 
 
 async def test_cleanup_keeps_the_session_decision() -> None:
@@ -339,7 +341,8 @@ def test_thread_job_files_redact_pii_when_redaction_is_on(
     out.close()
 
     line = json.loads((hosted_env / "jobs" / "job-AJ_1.export.done.log").read_text())
-    assert "lk.pii.transcript" not in line and "room" not in line
+    assert "lk.pii.transcript" not in line
+    assert line["room"] == "alice-room"
     assert line["exc_info"] == "ValueError: exception details redacted"
     assert "secret user text" not in json.dumps(line)
     assert line["lk.redaction.enabled"] is True
@@ -391,7 +394,8 @@ def test_job_process_redacts_every_thread(hosted_env: Path, project: bool, sessi
     lines = (hosted_env / "jobs" / "job-AJ_1.export.log").read_text().splitlines()
     assert len(lines) == 2
     for line in map(json.loads, lines):
-        assert "lk.pii.event" not in line and "room" not in line
+        assert "lk.pii.event" not in line
+        assert line["room"] == "alice-room"
         assert line["lk.redaction.enabled"] is True
         assert line["job_id"] == "AJ_1"
 
@@ -540,7 +544,10 @@ async def _hosted_entrypoint(job_ctx: JobContext) -> None:
 def _hosted_job(*, redaction: bool) -> job.RunningJobInfo:
     return job.RunningJobInfo(
         job=agent.Job(
-            id=f"AJ_{uuid.uuid4().hex[:12]}", type=agent.JobType.JT_ROOM, enable_redaction=redaction
+            id=f"AJ_{uuid.uuid4().hex[:12]}",
+            type=agent.JobType.JT_ROOM,
+            enable_recording=True,
+            enable_redaction=redaction,
         ),
         url="fake_url",
         token="fake_token",

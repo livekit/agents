@@ -22,8 +22,6 @@ HOSTED_LOGS_HANDOFF_FILE_ENV = "LIVEKIT_HOSTED_LOGS_HANDOFF_FILE"
 HOSTED_LOGS_JOBS_DIR_ENV = "LIVEKIT_HOSTED_LOGS_JOBS_DIR"
 _HANDED_OFF_ENV = "LIVEKIT_HOSTED_LOGS_HANDED_OFF"
 
-_REDACTED_JOB_FIELDS = frozenset({"room"})
-
 _handed_off = False
 
 current_job_output: contextvars.ContextVar[JobOutput | None] = contextvars.ContextVar(
@@ -127,14 +125,10 @@ def _telemetry() -> tuple[Callable[[str], bool], str, str]:
 
 
 def _redact(record: logging.LogRecord) -> logging.LogRecord:
-    """A copy without PII fields, the room name or exception details, marked as redacted."""
+    """A copy without PII fields or exception details, marked as redacted."""
     is_pii_attribute, redacted_message, redaction_attribute = _telemetry()
     copy = logging.makeLogRecord(
-        {
-            k: v
-            for k, v in record.__dict__.items()
-            if not is_pii_attribute(k) and k not in _REDACTED_JOB_FIELDS
-        }
+        {k: v for k, v in record.__dict__.items() if not is_pii_attribute(k)}
     )
     if record.exc_info and record.exc_info[0] is not None:
         copy.exc_info = None

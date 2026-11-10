@@ -408,7 +408,10 @@ class JobContext:
 
     async def _on_cleanup(self) -> None:
         if self._hosted_output is not None and not self._recording_initialized:
-            logs, redaction = self._rejected_recording or (True, self.job.enable_redaction)
+            logs, redaction = self._rejected_recording or (
+                self.job.enable_recording,
+                self.job.enable_redaction,
+            )
             self._hosted_output.decide(logs=logs, redaction=redaction)
 
         # if session.start() was never reached and server wanted recording,
