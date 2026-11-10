@@ -1,0 +1,4 @@
+google-adk[a2a,openai]>=2.14
+aiohttp
+uvicorn
+python-dotenv

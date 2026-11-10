@@ -64,6 +64,9 @@ MERGED_INTO = "livekit/mergedInto"
 REASON = "livekit/reason"
 QUEUED = "livekit/queued"
 """On a ``working`` task whose question waits, unshown, behind the one in front of the person."""
+PROGRESS = "livekit/progress"
+"""``true`` on a ``working`` message that is progress, from any server, extension or not: plain
+A2A gives a ``working`` message no meaning, so a caller tells the person only these."""
 VERBATIM = "livekit/verbatim"
 """``true`` on a text part that reaches the person exactly as written; the agent facing them
 words every other part."""

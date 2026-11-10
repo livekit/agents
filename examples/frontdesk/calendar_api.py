@@ -12,8 +12,6 @@ from zoneinfo import ZoneInfo
 
 import aiohttp
 
-from livekit.agents.utils import http_context
-
 TIMEZONE = ZoneInfo("UTC")
 SLOT_MINUTES = 30
 # FRONTDESK_NOW pins the clock, so the scenarios' absolute dates stay where they are
@@ -100,10 +98,13 @@ class CalComCalendar:
         self._api_key = api_key
         self._event_id: int | None = None
         self.appointments: list[Appointment] = []
-        try:
-            self._http = http_context.http_session()
-        except RuntimeError:
-            self._http = aiohttp.ClientSession()
+        self._session: aiohttp.ClientSession | None = None
+
+    @property
+    def _http(self) -> aiohttp.ClientSession:
+        if self._session is None:
+            self._session = aiohttp.ClientSession()
+        return self._session
 
     def now(self) -> datetime.datetime:
         return datetime.datetime.now(TIMEZONE)

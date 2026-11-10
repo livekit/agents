@@ -124,8 +124,9 @@ explicitly. Any other A2A server gets the request as text and nothing else,
 and keeps a context of its own, which the delegate reads back from the
 call that recorded it in the history, since one delegate serves every
 conversation. The caller depends on nothing coming back
-but core A2A: the working statuses are the progress, the artifact is the
-answer. See [a2a.md](a2a.md), "Writing an expert in another framework".
+but core A2A: the artifact is the answer, and a working status is progress
+only when flagged `livekit/progress`. See [a2a.md](a2a.md), "Writing an
+expert in another framework".
 
 `A2ADelegate(url, token=None, httpx_client=None, name=None, announce=True, answer_detector=False, conn_options=DEFAULT_API_CONNECT_OPTIONS)`.
 A dropped answer stream is read again up to `conn_options.max_retry` times. With no `token`, an

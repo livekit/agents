@@ -8,6 +8,7 @@ email, by text and on the phone.
 | ------------------- | ------------------ | ----------------------------------------------------------------------------------------------------- |
 | `frontend_agent.py` | `dentist`         | Talks to the patient, on the phone and by text (the `frontend` endpoint). Its one tool is the back office. |
 | `backend_agent.py`  | lane `backend` | The back office, reached over A2A: one agent with two tools on the calendar.                        |
+| `adk_backend.py`    |                    | The same back office as a third-party A2A server: a Google ADK agent with no LiveKit code, on the same calendar. |
 | `calendar_api.py`   |                    | The calendar: a fake one seeded with a known week, or cal.com when `CAL_API_KEY` is set.              |
 | `main.py`           |                   | The one entrypoint: the server, the two handlers added to it.                         |
 | `scenarios/*.yaml`  |                    | Simulation scenarios: `booking`, `availability`.                                                      |
@@ -43,6 +44,13 @@ FRONTDESK_NOW=2026-06-12T09:00 uv run python main.py dev
 The console (`../../console`) lists this example and picks it once it is up; `../../dev.sh`
 starts both. `FRONTDESK_NOW` pins the practice's clock, so the seeded openings and the
 scenarios' dates stay put. `CAL_API_KEY` swaps the fake calendar for cal.com.
+
+`BACKEND_URL` points the front desk at another back office. The ADK one runs in an
+environment of its own, since its packages clash with the project's: `uv run adk_backend.py`
+serves it on port 8001 (`BACKEND_PORT`), then the agent starts with
+`BACKEND_URL=http://localhost:8001`; `../../dev.sh frontdesk adk` does both. It asks its
+questions as plain answers, since ADK's own `input-required` carries no text, and flags its
+progress `livekit/progress`.
 
 ## Try it
 

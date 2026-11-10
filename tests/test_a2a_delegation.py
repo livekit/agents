@@ -168,6 +168,11 @@ class _Reasoner(AgentExecutor):
             parts=[pb.Part(text="looking that up")],
         )
         await updater.update_status(pb.TaskState.TASK_STATE_WORKING, message=progress)
+        flagged = pb.Message(
+            message_id="p2", role=pb.Role.ROLE_AGENT, parts=[pb.Part(text="checking the ledger")]
+        )
+        flagged.metadata.update({"livekit/progress": True})
+        await updater.update_status(pb.TaskState.TASK_STATE_WORKING, message=flagged)
         text = context.get_user_input()
         if text == "fail":
             await updater.update_status(
@@ -240,8 +245,8 @@ def stock_http(app: Starlette) -> httpx.AsyncClient:
 
 
 async def test_a2a_delegate_speaks_plain_a2a_to_a_stock_server() -> None:
-    """A stock server gets a stock request, and its stock answer is enough: the working
-    statuses are the progress, the artifact is the answer, failed is a failure. Nothing of the
+    """A stock server gets a stock request, and its stock answer is enough: the artifact is the
+    answer, failed is a failure, and only its flagged working status is progress. Nothing of the
     extension is sent: no header, no LiveKit session header, no metadata, no chat_ctx part."""
     plain = _Reasoner()
     seen_headers: list[dict[str, str]] = []
@@ -270,7 +275,7 @@ async def test_a2a_delegate_speaks_plain_a2a_to_a_stock_server() -> None:
                 await delegate.run("fail", context_id="AT_caller")
             assert delegate.extension_active is False
             await delegate.aclose()
-    assert progress == ["looking that up"]
+    assert progress == ["checking the ledger"]
     assert result.output == "Your balance is forty dollars."
     assert result.state == "completed"
     assert result.profile == "a2a"

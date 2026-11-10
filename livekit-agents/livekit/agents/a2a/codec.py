@@ -24,6 +24,7 @@ from .extension import (
     ANSWER_ARTIFACT_NAME,
     KIND,
     KIND_CHAT_CTX,
+    PROGRESS,
     VERBATIM,
     Extensions,
     Metadata,
@@ -358,9 +359,11 @@ def working_event(
     exts: Extensions,
     verbatim: bool = False,
 ) -> pb.TaskStatusUpdateEvent:
-    """``ctx.update(text)``: a ``working`` status with the progress as its message; with
-    ``verbatim``, ``ctx.say(text)``, its text part flagged."""
+    """``ctx.update(text)``: a ``working`` status with the progress as its message, flagged; with
+    ``verbatim``, ``ctx.say(text)``, its text part flagged; a stock client gets a plain one."""
     msg: StoredMessage = {"messageId": shortuuid("msg_"), "role": "agent", "parts": []}
+    if not verbatim and _active(exts):
+        msg["metadata"] = {PROGRESS: True}
     if text:
         msg["parts"].append({"kind": "text", "text": text})
 
@@ -482,6 +485,8 @@ class TaskUpdate:
     metadata: Metadata = field(default_factory=dict)
     verbatim: bool = False
     """The text reaches the person exactly as written: every text part of it is flagged."""
+    progress: bool = False
+    """A ``working`` text the server flagged as progress, on its message or on the update."""
 
 
 @dataclass
@@ -572,6 +577,8 @@ def _status_update(
             context_id=ids.context_id,
             metadata=metadata,
             verbatim=_all_verbatim(event.status.message.parts),
+            progress=metadata.get(PROGRESS) is True
+            or _meta(event.status.message).get(PROGRESS) is True,
         )
 
     if state == "input-required" and text:
