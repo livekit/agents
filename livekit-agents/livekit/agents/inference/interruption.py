@@ -34,7 +34,7 @@ from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics.base import InterruptionMetrics, Metadata
 from ..telemetry import trace_types
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import (
     AudioArrayBuffer,
     BoundedDict,
@@ -55,6 +55,9 @@ DETECTION_INTERVAL = 0.1  # 0.1 second
 AUDIO_PREFIX_DURATION = 1.0  # 1.0 second
 REMOTE_INFERENCE_TIMEOUT = 0.7  # 700ms
 _FRAMES_PER_SECOND = 40
+# Do not reconnect after an error. The session falls back to VAD-based
+# interruption instead, which is faster than a reconnect to a slow backend.
+DEFAULT_INTERRUPTION_CONN_OPTIONS = APIConnectOptions(max_retry=0)
 
 
 class InterruptionDetectionError(BaseModel):
@@ -388,7 +391,7 @@ class AdaptiveInterruptionDetector(
         return self._session
 
     def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, *, conn_options: APIConnectOptions = DEFAULT_INTERRUPTION_CONN_OPTIONS
     ) -> InterruptionWebSocketStream:
         try:
             stream = InterruptionWebSocketStream(model=self, conn_options=conn_options)

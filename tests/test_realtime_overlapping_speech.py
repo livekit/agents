@@ -188,7 +188,8 @@ async def test_the_model_speaks_over_a_caller_who_is_still_talking() -> None:
     async with AgentSession(llm=model, aec_warmup_duration=None) as session:
         session.output.audio = audio_out
         await session.start(Agent(instructions="be concise"))
-        assert (activity := session._activity) is not None
+        activity = session._activity
+        assert activity is not None
 
         # what a configured VAD reports when the caller starts talking, and keeps talking
         activity.on_start_of_speech(None, speech_start_time=time.time())
@@ -211,7 +212,8 @@ async def test_a_model_that_cannot_overlap_still_waits_the_caller_out() -> None:
     async with AgentSession(llm=model, aec_warmup_duration=None) as session:
         session.output.audio = _TracingAudioOutput(can_pause=True)
         await session.start(Agent(instructions="be concise"))
-        assert (activity := session._activity) is not None
+        activity = session._activity
+        assert activity is not None
 
         activity.on_start_of_speech(None, speech_start_time=time.time())
         session.generate_reply()
@@ -240,7 +242,8 @@ async def test_client_side_turn_taking_takes_the_floor_back() -> None:
     ) as session:
         session.output.audio = _TracingAudioOutput(can_pause=True)
         await session.start(Agent(instructions="be concise"))
-        assert (activity := session._activity) is not None
+        activity = session._activity
+        assert activity is not None
         assert activity._rt_turn_detection_enabled is False
         assert activity._rt_overlapping_speech_enabled is False
 

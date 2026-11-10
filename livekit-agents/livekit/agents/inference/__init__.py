@@ -1,12 +1,16 @@
 from typing import TYPE_CHECKING, Any
 
 from ._realtime_models import (
+    DuplexModels,
     OpenAIRealtimeModels,
     RealtimeModels,
+    RimeRealtimeModels,
     XAIRealtimeModels,
+    is_duplex_model,
     is_realtime_model,
 )
 from ._utils import InferenceClass
+from .decision_model import DecisionModel, DecisionModels
 from .eot import TurnDetector, TurnDetectorModels, TurnDetectorVersions
 from .interruption import (
     AdaptiveInterruptionDetector,
@@ -15,13 +19,15 @@ from .interruption import (
     OverlappingSpeechEvent,
 )
 from .llm import LLM, LLMModels, LLMStream, llm_from_model_string
+
+from . import responses  # isort: skip  # must follow .llm
 from .stt import STT, STTModels
 from .tts import TTS, TTSModels
 from .vad import VAD, VADModels
 
 if TYPE_CHECKING:
     from .avatar import AvatarSession, LemonSliceOptions
-    from .realtime import RealtimeModel, RealtimeSession
+    from .realtime import DuplexModel, DuplexSession, RealtimeModel, RealtimeSession
 
 
 # AvatarSession subclasses voice.avatar.AvatarSession. Because this package is
@@ -34,7 +40,7 @@ def __getattr__(name: str) -> Any:
         from . import avatar
 
         return getattr(avatar, name)
-    if name in ("RealtimeModel", "RealtimeSession"):
+    if name in ("RealtimeModel", "RealtimeSession", "DuplexModel", "DuplexSession"):
         from . import realtime
 
         return getattr(realtime, name)
@@ -47,6 +53,8 @@ __all__ = [
     "LLM",
     "VAD",
     "AvatarSession",
+    "DecisionModel",
+    "DecisionModels",
     "LemonSliceOptions",
     "LLMStream",
     "STTModels",
@@ -63,9 +71,15 @@ __all__ = [
     "TurnDetectorVersions",
     "RealtimeModel",
     "RealtimeSession",
+    "DuplexModel",
+    "DuplexSession",
     "RealtimeModels",
     "OpenAIRealtimeModels",
     "XAIRealtimeModels",
+    "RimeRealtimeModels",
+    "DuplexModels",
     "is_realtime_model",
+    "is_duplex_model",
     "llm_from_model_string",
+    "responses",
 ]

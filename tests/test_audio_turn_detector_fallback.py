@@ -287,6 +287,20 @@ class TestLocalFailureRetry:
         assert stream._transport is transport
         await stream.aclose()
 
+    async def test_failed_prediction_resolves_the_positive_default(self) -> None:
+        class _FailingEOT:
+            def predict(self, pcm: Any) -> float:
+                raise RuntimeError("native boom")
+
+        with patch("livekit.agents.inference.eot.transports._EOT", _FailingEOT):
+            transport = _LocalTransport(opts=_make_opts(model="turn-detector-v1-mini"))
+        stream = MagicMock()
+        transport.attach(stream)
+        transport.run_inference("request")
+        await asyncio.gather(*transport._tasks)
+
+        assert stream._resolve_prediction.call_args.args == ("request", 1.0)
+
 
 class TestWarningDedupe:
     async def test_warning_logged_once_per_session_cloud_to_local(

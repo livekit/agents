@@ -33,7 +33,7 @@ from .utils import WorkflowInstructions
 if TYPE_CHECKING:
     import aiohttp
 
-    from ...voice.turn import TurnDetectionMode
+    from ...voice.turn import TurnDetectionMode, TurnHandlingOptions
 
 
 @dataclass
@@ -55,6 +55,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
@@ -88,6 +89,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 with a ``ToolError`` and the caller conversation resumes.
             hold_audio: Audio played to the caller while they are on hold during the
                     transfer.
+            turn_handling: Turn handling options for the conversation with the human agent.
             extra_instructions: Extra instructions to append to the base instructions
                 that are used to summarize the conversation history.
         """
@@ -109,6 +111,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         super().__init__(
             instructions=instructions,
             chat_ctx=NOT_GIVEN,  # don't pass the chat_ctx
+            turn_handling=turn_handling,
             turn_detection=turn_detection,
             tools=tools or [],
             stt=stt,
@@ -320,24 +323,32 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             "connecting to human agent room",
             extra={"ws_url": ws_url, "human_agent_room_name": human_agent_room_name},
         )
+        agent_turn_handling = self._turn_handling.copy()
+        if is_given(self.turn_detection):
+            agent_turn_handling["turn_detection"] = self.turn_detection
+        session_turn_handling = agent_turn_handling.copy()
+        if "turn_detection" not in session_turn_handling:
+            caller_turn_detection = self.session.turn_detection
+            if caller_turn_detection is not None:
+                session_turn_handling["turn_detection"] = caller_turn_detection
+
         human_agent_sess: AgentSession = AgentSession(
             vad=self.session.vad or NOT_GIVEN,
             llm=self.session.llm or NOT_GIVEN,
             stt=self.session.stt or NOT_GIVEN,
             tts=self.session.tts or NOT_GIVEN,
-            turn_detection=self.session.turn_detection or NOT_GIVEN,
+            turn_handling=session_turn_handling,
         )
         # create a copy of this AgentTask
         human_agent_agent = Agent(
             instructions=self.instructions,
-            turn_detection=self.turn_detection,
+            turn_handling=agent_turn_handling,
             stt=self.stt,
             vad=self.vad,
             llm=self.llm,
             tts=self.tts,
             tools=self.tools,
             chat_ctx=self.chat_ctx,
-            allow_interruptions=self.allow_interruptions,
         )
         try:
             await room.connect(ws_url, token)
@@ -462,6 +473,7 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
@@ -525,6 +537,7 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
             hold_audio=hold_audio,
             instructions=instructions,
             chat_ctx=chat_ctx,
+            turn_handling=turn_handling,
             turn_detection=turn_detection,
             tools=tools,
             stt=stt,

@@ -206,15 +206,13 @@ def _stream(session: _FakeSession) -> simplismart_stt.SpeechStream:
 
 
 @pytest.mark.asyncio
-async def test_socket_is_opened_with_a_heartbeat() -> None:
-    """aiohttp defaults `heartbeat` to None, so without it the read side of a
-    half-open socket parks forever and the reconnect in `_run`, which only fires
-    when `recv_task` ends, never gets a turn."""
+async def test_socket_exposes_control_frames_to_monitor() -> None:
+    """Control frames must reach the shared monitor to reset its silence deadline."""
     session = _FakeSession(_ParkedSocket)
     stream = _stream(session)
     try:
         await _wait_until(lambda: len(session.kwargs) == 1)
-        assert session.kwargs[0].get("heartbeat") == 30.0
+        assert session.kwargs[0].get("autoping") is False
     finally:
         await stream.aclose()
 
@@ -232,3 +230,26 @@ async def test_heartbeat_timeout_reconnects_without_spinning() -> None:
         assert session.sockets[0].receives == 1
     finally:
         await stream.aclose()
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.simplismart.stt import STT
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+    provider = STT(api_key="test-key", streaming=True, http_session=clock)
+    stream = simplismart_stt.SpeechStream(
+        stt=provider,
+        opts=provider._opts,
+        api_key="test-key",
+        http_session=clock,
+        conn_options=APIConnectOptions(max_retry=0),
+    )
+    try:
+        await clock.check(stream, lambda: stream._reconnect_event.set())
+    finally:
+        await stream.aclose()
+        await provider.aclose()

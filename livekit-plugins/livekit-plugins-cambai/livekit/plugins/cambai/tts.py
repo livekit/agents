@@ -63,6 +63,7 @@ class TTS(tts.TTS):
         user_instructions: str | None = None,
         output_format: OutputFormat = DEFAULT_OUTPUT_FORMAT,
         enhance_named_entities: bool = False,
+        speaking_rate: float | None = None,
         sample_rate: int | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -83,6 +84,8 @@ class TTS(tts.TTS):
             user_instructions: Style/tone guidance (3-1000 chars, requires mars-instruct).
             output_format: Audio output format (default: 'pcm_s16le').
             enhance_named_entities: Enhanced pronunciation for named entities.
+            speaking_rate: Speech speed multiplier (1.0 is normal speed). If None, the API
+                default is used.
             sample_rate: Audio sample rate in Hz. If None, auto-detected from model.
             http_session: Optional aiohttp.ClientSession to reuse.
         """
@@ -116,6 +119,7 @@ class TTS(tts.TTS):
             output_format=output_format,
             user_instructions=user_instructions,
             enhance_named_entities=enhance_named_entities,
+            speaking_rate=speaking_rate,
         )
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -138,8 +142,12 @@ class TTS(tts.TTS):
         language: str | None = None,
         model: SpeechModel | None = None,
         user_instructions: str | None = None,
+        speaking_rate: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
-        """Update TTS options dynamically."""
+        """Update TTS options dynamically.
+
+        Pass ``speaking_rate=None`` to go back to the API default speaking rate.
+        """
         if voice_id is not None:
             self._opts.voice_id = voice_id
         if language is not None:
@@ -149,6 +157,8 @@ class TTS(tts.TTS):
             self._sample_rate = MODEL_SAMPLE_RATES.get(model, 22050)
         if user_instructions is not None:
             self._opts.user_instructions = user_instructions
+        if is_given(speaking_rate):
+            self._opts.speaking_rate = speaking_rate
 
     def synthesize(
         self,
@@ -203,6 +213,8 @@ class ChunkedStream(tts.ChunkedStream):
         }
         if self._opts.user_instructions:
             payload["user_instructions"] = self._opts.user_instructions
+        if self._opts.speaking_rate is not None:
+            payload["voice_settings"] = {"speaking_rate": self._opts.speaking_rate}
 
         try:
             headers: dict[str, str] = {"Content-Type": "application/json"}
