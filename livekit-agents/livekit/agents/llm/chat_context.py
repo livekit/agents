@@ -712,6 +712,17 @@ class ChatContext:
         ]:
             new_items.pop(0)
 
+        # Drop function_call_output items whose call was truncated away.
+        # This can happen when an interruption message sits between a call
+        # and its output, and the truncation boundary cuts the call from the
+        # tail while the output survives.
+        present_call_ids = {item.call_id for item in new_items if isinstance(item, FunctionCall)}
+        new_items = [
+            item
+            for item in new_items
+            if not isinstance(item, FunctionCallOutput) or item.call_id in present_call_ids
+        ]
+
         for item in reversed(instructions):
             if not any(existing.id == item.id for existing in new_items):
                 new_items.insert(0, item)
