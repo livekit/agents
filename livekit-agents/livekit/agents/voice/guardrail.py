@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar
 from pydantic import BaseModel
 
 from .. import inference, llm
-from ..llm.decisions import Decision, DecisionModel, DecisionResponse
+from ..llm.decisions import Decision, DecisionModel, DecisionResponse, _format_transcript
 from ..log import logger
 from ..tokenize.blingfire import SentenceTokenizer
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
@@ -88,7 +88,7 @@ class _Check:
 
 @dataclass
 class _EagerEvaluation:
-    text: str
+    input: str  # the text the model received, so reuse can check it is still the same
     task: asyncio.Task[DecisionResponse]
 
 
@@ -295,12 +295,12 @@ class DecisionGuardrail:
             # only the newest transcript matters: drop the evaluation still running
             if (previous := self._eager.get(id(check))) is not None:
                 previous.task.cancel()
-            evaluate_input = self._user_turn_input(check, self._turn_text, self._session.history)
+            evaluate_input = self._user_turn_input(check, self._turn_text, self._agent_history())
             task = asyncio.ensure_future(
                 self._model.evaluate(input=evaluate_input, decisions=check.decisions)
             )
             task.add_done_callback(_retrieve_exception)
-            self._eager[id(check)] = _EagerEvaluation(text=self._turn_text, task=task)
+            self._eager[id(check)] = _EagerEvaluation(input=_as_text(evaluate_input), task=task)
 
     def _on_conversation_item_added(self, ev: ConversationItemAddedEvent) -> None:
         if self._closed or not isinstance(ev.item, llm.ChatMessage):
@@ -313,6 +313,13 @@ class DecisionGuardrail:
                 self._spawn(
                     self._run_check(check, evaluate_input, input_text=text, speech_id=ev.item.id)
                 )
+
+    def _agent_history(self) -> llm.ChatContext:
+        # the context the reply is generated from, before on_user_turn_completed edits it
+        try:
+            return self._session.current_agent.chat_ctx
+        except RuntimeError:
+            return self._session.history
 
     @staticmethod
     def _user_turn_input(
@@ -335,19 +342,17 @@ class DecisionGuardrail:
 
         pending: list[Awaitable[_Verdict]] = []
         for check in checks:
+            evaluate_input = self._user_turn_input(check, transcript, chat_ctx)
             evaluation: asyncio.Task[DecisionResponse] | None = None
             if (prior := eager.pop(id(check), None)) is not None:
-                if _normalize(prior.text) == _normalize(transcript):
+                # reuse only if the model saw the same input, including any changes the
+                # agent's on_user_turn_completed made to the context
+                if _normalize(prior.input) == _normalize(_as_text(evaluate_input)):
                     evaluation = prior.task
                 else:
                     prior.task.cancel()
             pending.append(
-                self._run_check(
-                    check,
-                    self._user_turn_input(check, transcript, chat_ctx),
-                    input_text=transcript,
-                    evaluation=evaluation,
-                )
+                self._run_check(check, evaluate_input, input_text=transcript, evaluation=evaluation)
             )
         for leftover in eager.values():
             leftover.task.cancel()
@@ -381,6 +386,8 @@ class DecisionGuardrail:
             evaluation = asyncio.ensure_future(
                 self._model.evaluate(input=evaluate_input, decisions=check.decisions)
             )
+        # the timeout covers the evaluation and the handler together
+        deadline = asyncio.get_running_loop().time() + check.timeout
         try:
             response = await asyncio.wait_for(evaluation, timeout=check.timeout)
         except Exception as e:
@@ -390,13 +397,32 @@ class DecisionGuardrail:
             )
             return failed
 
+        if response.errors:
+            # a decision without a result fails the whole check: a handler reading its
+            # default could otherwise let through what on_error="block" should stop
+            logger.warning(
+                "guardrail check failed",
+                extra={
+                    "hook": check.hook,
+                    "handler": check.name,
+                    "failed_decisions": sorted(response.errors),
+                },
+            )
+            return failed
+
         ev = DecisionEvaluated(
             hook=check.hook, response=response, input_text=input_text, speech_id=speech_id
         )
         try:
             verdict = check.handler(ev)
             if inspect.isawaitable(verdict):
-                verdict = await verdict
+                remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+                verdict = await asyncio.wait_for(asyncio.ensure_future(verdict), remaining)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "guardrail handler timed out", extra={"hook": check.hook, "handler": check.name}
+            )
+            return failed
         except Exception:
             logger.exception(
                 "error in guardrail handler", extra={"hook": check.hook, "handler": check.name}
@@ -409,9 +435,14 @@ class DecisionGuardrail:
             return verdict
         if isinstance(verdict, Steer) and check.hook == "user_turn":
             return verdict
+        # only the type: Block/Steer carry text that may quote the conversation
         logger.warning(
             "guardrail handler returned a result its hook doesn't support, ignoring it",
-            extra={"hook": check.hook, "handler": check.name, "result": repr(verdict)},
+            extra={
+                "hook": check.hook,
+                "handler": check.name,
+                "result_type": type(verdict).__name__,
+            },
         )
         return None
 
@@ -536,6 +567,13 @@ async def gate_agent_sentences(
 
 def _normalize(text: str) -> str:
     return " ".join(text.split())
+
+
+def _as_text(evaluate_input: str | llm.ChatContext) -> str:
+    """The text a decision model receives for this input."""
+    if isinstance(evaluate_input, str):
+        return evaluate_input
+    return _format_transcript(evaluate_input)
 
 
 def _retrieve_exception(task: asyncio.Task[Any]) -> None:

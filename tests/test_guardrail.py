@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Mapping
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -62,6 +63,13 @@ class StubSession(utils.EventEmitter[Any]):
         super().__init__()
         self._guardrails: list[DecisionGuardrail] = []
         self.history = ChatContext()
+        self.agent_chat_ctx: ChatContext | None = None
+
+    @property
+    def current_agent(self) -> Any:
+        if self.agent_chat_ctx is None:
+            raise RuntimeError("VoiceAgent isn't running")
+        return SimpleNamespace(chat_ctx=self.agent_chat_ctx)
 
 
 def _contains(word: str) -> Callable[[str], float]:
@@ -154,6 +162,79 @@ async def test_user_turn_timeout_and_handler_error_follow_on_error() -> None:
         raise ValueError("bug")
 
     assert await _run_user_turn(session, "hello") == Block()
+    await guardrail.aclose()
+
+
+async def test_slow_async_handler_counts_against_the_timeout() -> None:
+    session = StubSession()
+    guardrail = DecisionGuardrail(session, model=ScriptedModel(lambda _: 0.0))  # type: ignore[arg-type]
+
+    @guardrail.on_user_turn(decisions=ABUSIVE, on_error="block", timeout=0.05, eager=False)
+    async def stalls(ev: DecisionEvaluated) -> None:
+        await asyncio.Event().wait()
+
+    assert await asyncio.wait_for(_run_user_turn(session, "hello"), timeout=1.0) == Block()
+    await guardrail.aclose()
+
+
+class PartialModel(ScriptedModel):
+    async def _evaluate_impl(self, **kwargs: Any) -> DecisionResponse:  # type: ignore[override]
+        return DecisionResponse(results={}, errors=dict.fromkeys(kwargs["decisions"], "no answer"))
+
+
+@pytest.mark.parametrize("on_error, expected", [("allow", None), ("block", Block())])
+async def test_failed_decision_fails_the_check(on_error: Any, expected: Any) -> None:
+    session = StubSession()
+    guardrail = DecisionGuardrail(session, model=PartialModel(lambda _: 0.0))  # type: ignore[arg-type]
+    called = False
+
+    @guardrail.on_user_turn(decisions=ABUSIVE, on_error=on_error, eager=False)
+    def before_reply(ev: DecisionEvaluated) -> None:
+        nonlocal called
+        called = True
+
+    assert await _run_user_turn(session, "hello") == expected
+    assert not called
+    await guardrail.aclose()
+
+
+async def test_eager_history_is_reevaluated_when_the_context_changed() -> None:
+    session = StubSession()
+    session.agent_chat_ctx = ChatContext()
+    session.agent_chat_ctx.add_message(role="assistant", content="Your order number?")
+    model = ScriptedModel(lambda _: 0.0)
+    guardrail = DecisionGuardrail(session, model=model)  # type: ignore[arg-type]
+
+    @guardrail.on_user_turn(decisions=ABUSIVE, input="history")
+    def before_reply(ev: DecisionEvaluated) -> None:
+        return None
+
+    session.emit(
+        "user_input_transcribed", UserInputTranscribedEvent(transcript="it is 42", is_final=True)
+    )
+    await asyncio.sleep(0)
+
+    # unchanged context: the eager evaluation is reused
+    await run_user_turn_guardrails(
+        session._guardrails,
+        chat_ctx=session.agent_chat_ctx.copy(),
+        user_message=_user_message("it is 42"),
+    )
+    assert len(model.inputs) == 1
+
+    session.emit(
+        "user_input_transcribed", UserInputTranscribedEvent(transcript="it is 42", is_final=True)
+    )
+    await asyncio.sleep(0)
+
+    # on_user_turn_completed added a message: same transcript, different input
+    edited = session.agent_chat_ctx.copy()
+    edited.add_message(role="user", content="(order 42 was corrected to 43)")
+    await run_user_turn_guardrails(
+        session._guardrails, chat_ctx=edited, user_message=_user_message("it is 42")
+    )
+    assert len(model.inputs) == 3
+    assert "corrected to 43" in model.inputs[-1]
     await guardrail.aclose()
 
 

@@ -1445,9 +1445,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._amd = None
             self._turn_hooks = None
 
-        for guardrail in list(self._guardrails):
-            await guardrail.aclose()
-
         activity = self._activity
         cancelled = False
         while activity and isinstance(agent_task := activity.agent, AgentTask):
@@ -1511,6 +1508,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # asyncio.wait, unlike gather, never cancels a provider's own close
         if self._rt_closing:
             await asyncio.wait(list(self._rt_closing))
+
+        # after the drain: speech still playing out keeps its guardrail checks
+        for guardrail in list(self._guardrails):
+            await guardrail.aclose()
 
         if self._agent_speaking_span:
             self._agent_speaking_span.end()

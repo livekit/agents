@@ -3167,14 +3167,24 @@ class AgentActivity(RecognitionHooks):
                     self._session.say(verdict.say)
                 return
             if isinstance(verdict, Steer):
-                # changes the context, so a preemptive reply is regenerated below
-                temp_mutable_chat_ctx.add_message(role="system", content=[verdict.instructions])
+                if isinstance(self.llm, llm.RealtimeModel):
+                    # a realtime reply ignores the chat context: pass the instructions as
+                    # generate_reply(instructions=...) does
+                    reply_instructions = verdict.instructions
+                else:
+                    # changes the context, so a preemptive reply is regenerated below
+                    temp_mutable_chat_ctx.add_message(role="system", content=[verdict.instructions])
 
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
             user_message = None  # type: ignore
-            if turn_hooks is not None:
-                reply_instructions = turn_hooks.reply_instructions or NOT_GIVEN
+            if turn_hooks is not None and (hook_instructions := turn_hooks.reply_instructions):
+                # keep a guardrail steer next to the hooks' instructions
+                reply_instructions = (
+                    "\n".join((reply_instructions, hook_instructions))
+                    if is_given(reply_instructions)
+                    else hook_instructions
+                )
         elif self.llm is None:
             return  # skip response if no llm is set
 
