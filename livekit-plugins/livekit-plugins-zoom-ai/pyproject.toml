@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-zoom-ai"
 dynamic = ["version"]
-description = "Agent Framework plugin for speech-to-text with Zoom Scribe."
+description = "Agent Framework plugin for Zoom Voice Agent (speech-to-speech) and Zoom Scribe (speech-to-text)."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
 authors = [{ name = "Zoom" }]
-keywords = ["webrtc", "realtime", "audio", "livekit", "zoom", "scribe", "speech-to-text", "stt"]
+keywords = ["webrtc", "realtime", "audio", "livekit", "zoom", "scribe", "speech-to-text", "stt", "voice-agent", "realtime"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
