@@ -12,16 +12,11 @@ from os import PathLike
 from pathlib import Path
 from typing import Any, Literal
 
-import grpc
 import riva.client
 from riva.client.proto.riva_audio_pb2 import AudioEncoding
 
 from livekit.agents import (
-    APIConnectionError,
     APIConnectOptions,
-    APIError,
-    APIStatusError,
-    APITimeoutError,
     tokenize,
     tts,
     utils,
@@ -30,6 +25,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 
 from . import auth
+from .utils import to_api_error
 
 InferenceMode = Literal["online", "offline"]
 
@@ -59,7 +55,7 @@ class TTS(tts.TTS):
         language_code: str = "en-US",
         sample_rate: int = 16000,
         use_ssl: bool = True,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str | None] = NOT_GIVEN,
         audio_prompt_file: str | PathLike[str] | None = None,
         quality: int | None = None,
         word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer | None = None,
@@ -76,7 +72,8 @@ class TTS(tts.TTS):
             language_code: Synthesis language code, such as ``"en-US"``.
             sample_rate: Output PCM sample rate in Hz.
             use_ssl: Whether to use TLS for the gRPC connection.
-            api_key: NVIDIA API key. When omitted, reads ``NVIDIA_API_KEY``.
+            api_key: NVIDIA API key. When omitted, ``None``, or empty, reads
+                ``NVIDIA_API_KEY``.
             audio_prompt_file: Reference-audio path for models supporting zero-shot
                 voice prompting.
             quality: Zero-shot synthesis quality accepted by compatible clients.
@@ -100,16 +97,15 @@ class TTS(tts.TTS):
             num_channels=1,
         )
 
-        if is_given(api_key):
-            self.nvidia_api_key = api_key
-        else:
-            self.nvidia_api_key = os.getenv("NVIDIA_API_KEY")
-            if use_ssl and not self.nvidia_api_key:
-                raise ValueError(
-                    "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, "
-                    "set NVIDIA_API_KEY environment variable or disable SSL and use a locally "
-                    "hosted NVIDIA Speech service."
-                )
+        self.nvidia_api_key = (
+            api_key if is_given(api_key) and api_key else os.getenv("NVIDIA_API_KEY")
+        )
+        if use_ssl and not self.nvidia_api_key:
+            raise ValueError(
+                "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, "
+                "set NVIDIA_API_KEY environment variable or disable SSL and use a locally "
+                "hosted NVIDIA Speech service."
+            )
 
         self._opts = TTSOptions(
             voice=voice,
@@ -125,6 +121,10 @@ class TTS(tts.TTS):
             inference_mode=inference_mode,
         )
         self._tts_service: riva.client.SpeechSynthesisService | None = None
+
+    @property
+    def model(self) -> str:
+        return self._opts.voice.split(".", 1)[0]
 
     @property
     def provider(self) -> str:
@@ -347,22 +347,29 @@ class SynthesizeStream(tts.SynthesizeStream):
             asyncio.create_task(_process_segments()),
         ]
 
+        input_done = asyncio.gather(*tasks)
         try:
-            await asyncio.gather(*tasks)
+            await asyncio.wait([input_done, done_fut], return_when=asyncio.FIRST_COMPLETED)
+            if done_fut.done():
+                done_fut.result()
+            await input_done
+            await done_fut
         finally:
+            for task in tasks:
+                task.cancel()
+            input_done.cancel()
+            await asyncio.gather(input_done, *tasks, return_exceptions=True)
+            done_fut.cancel()
             token_q.put(None)
-            try:
-                await done_fut
-            finally:
-                output_emitter.end_segment()
-                await sent_tokenizer_stream.aclose()
+            output_emitter.end_segment()
+            await sent_tokenizer_stream.aclose()
 
 
 def _complete_future(fut: asyncio.Future[None], error: Exception | None) -> None:
     if fut.done():
         return
     if error is not None:
-        fut.set_exception(_to_tts_api_error(error, operation="NVIDIA Speech TTS request"))
+        fut.set_exception(to_api_error(error, operation="NVIDIA Speech TTS request"))
     else:
         fut.set_result(None)
 
@@ -387,45 +394,3 @@ def _set_compatible_option(
     raise ValueError(
         f"The installed nvidia-riva-client does not support the TTS {option_name} option"
     )
-
-
-def _to_tts_api_error(error: Exception, *, operation: str) -> APIError:
-    if isinstance(error, APIError):
-        return error
-
-    if isinstance(error, grpc.RpcError):
-        code = error.code()
-        details = error.details() or str(error)
-        if code == grpc.StatusCode.DEADLINE_EXCEEDED:
-            return APITimeoutError(f"{operation} timed out: {details}")
-        if code == grpc.StatusCode.CANCELLED:
-            return APIConnectionError(f"{operation} was cancelled by NVIDIA Speech")
-
-        status_codes = {
-            grpc.StatusCode.INVALID_ARGUMENT: 400,
-            grpc.StatusCode.NOT_FOUND: 404,
-            grpc.StatusCode.PERMISSION_DENIED: 403,
-            grpc.StatusCode.RESOURCE_EXHAUSTED: 429,
-            grpc.StatusCode.FAILED_PRECONDITION: 400,
-            grpc.StatusCode.OUT_OF_RANGE: 400,
-            grpc.StatusCode.UNIMPLEMENTED: 501,
-            grpc.StatusCode.INTERNAL: 500,
-            grpc.StatusCode.UNAVAILABLE: 503,
-            grpc.StatusCode.UNAUTHENTICATED: 401,
-        }
-        return APIStatusError(
-            f"{operation} failed: {details}",
-            status_code=status_codes.get(code, -1),
-            retryable=code
-            in {
-                grpc.StatusCode.UNKNOWN,
-                grpc.StatusCode.RESOURCE_EXHAUSTED,
-                grpc.StatusCode.INTERNAL,
-                grpc.StatusCode.UNAVAILABLE,
-            },
-        )
-
-    if isinstance(error, (TypeError, ValueError)):
-        return APIStatusError(f"{operation} failed: {error}", status_code=400, retryable=False)
-
-    return APIConnectionError(f"{operation} failed: {error}")
