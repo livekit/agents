@@ -272,3 +272,29 @@ def test_input_anchor_reads_through_to_pipeline() -> None:
     ar._stt_pipeline = pipeline  # type: ignore[attr-defined]
 
     assert ar._input_started_at == 1234.5  # read-only view of the pipeline's anchor
+
+
+async def test_dead_reused_pipeline_is_replaced() -> None:
+    reused = object.__new__(_STTPipeline)
+    reused.input_started_at = 1000.0  # type: ignore[attr-defined]
+    reused._stt_node = MagicMock(name="dead_node")  # type: ignore[attr-defined]
+    reused._rebind_node = MagicMock()  # type: ignore[attr-defined]
+    pump = MagicMock()
+    pump.done.return_value = True
+    reused._pump_task = pump  # type: ignore[attr-defined]
+    ch = aio.Chan()  # type: ignore[var-annotated]
+    ch.close()
+    reused._event_ch = ch  # type: ignore[attr-defined]
+
+    new_node = MagicMock(name="current_agent_node")
+    ar = _stub_recognition()
+    ar._session = MagicMock()  # type: ignore[attr-defined]
+    ar._session._is_closing = MagicMock(return_value=False)
+    ar._transcript_buffer = MagicMock()  # type: ignore[attr-defined]
+    ar._update_stt(new_node, pipeline=reused)
+
+    assert ar._stt_pipeline is not reused
+    assert ar._stt_pipeline is not None
+    await ar._stt_pipeline.aclose()
+    if ar._stt_consumer_atask is not None:
+        await ar._stt_consumer_atask
