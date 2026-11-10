@@ -1779,6 +1779,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         transcript_timeout: float = 2.0,
         stt_flush_duration: float = 2.0,
         skip_reply: bool = False,
+        wait_for_final: bool = False,
     ) -> asyncio.Future[str]:
         """Commit the user turn and generate a reply.
 
@@ -1794,6 +1795,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 detached and STT does not support manual flushing. STT with manual flush
                 support receives a flush request instead. Default ``2.0`` s.
             skip_reply (bool, optional): Whether to skip the reply generation after committing the user turn.
+            wait_for_final (bool, optional): Commit only final transcripts. STT with manual
+                flush support receives a flush request; any other STT stream gets
+                ``stt_flush_duration`` of silence, has its input ended and is drained within
+                ``transcript_timeout``, while a new stream takes the audio that follows (a
+                custom ``stt_node`` must end its stream when its audio input ends). Interim
+                text is never committed in place of a final. Until the turn is delivered,
+                automatic end-of-turn detection cannot take it over. With a realtime model
+                this applies to the transcript from the session STT. Default ``False``.
 
         Returns:
             asyncio.Future[str]: A future that resolves with the audio transcript.
@@ -1808,6 +1817,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             transcript_timeout=transcript_timeout,
             stt_flush_duration=stt_flush_duration,
             skip_reply=skip_reply,
+            wait_for_final=wait_for_final,
         )
 
     def update_agent(self, agent: Agent) -> None:

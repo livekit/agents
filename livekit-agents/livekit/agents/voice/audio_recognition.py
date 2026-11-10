@@ -83,6 +83,11 @@ class _EndOfTurnInfo:
     user_turn_span_adopted: bool = False
 
 
+def _resolve(fut: asyncio.Future[None]) -> None:
+    if not fut.done():
+        fut.set_result(None)
+
+
 def _compute_end_of_turn_metrics(
     *,
     speech_start_time: float | None,
@@ -209,6 +214,10 @@ class _STTPipeline:
         self._audio_ch.send_nowait(stt.RecognizeStream._FlushSentinel())
         return True
 
+    def end_input(self) -> None:
+        """Stop the audio input; the stream finalizes the audio it already received."""
+        self._audio_ch.close()
+
     async def _audio_input(self) -> AsyncIterator[rtc.AudioFrame]:
         """Apply flushes in audio order without exposing sentinels to custom STT nodes."""
         async for data in self._audio_ch:
@@ -324,6 +333,8 @@ class AudioRecognition:
 
         # used for manual commit_user_turn
         self._final_transcript_received = asyncio.Event()
+        # resolved once a commit_user_turn(wait_for_final=True) has delivered its turn
+        self._final_commit: asyncio.Future[None] | None = None
         self._final_transcript_confidence: list[float] = []
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
@@ -1055,6 +1066,8 @@ class AudioRecognition:
     def _clear_user_turn(self) -> None:
         if self._end_of_turn_task is not None:
             self._end_of_turn_task.cancel()
+        if self._final_commit is not None:
+            _resolve(self._final_commit)
         self._stt_flush_requested = False
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
@@ -1091,6 +1104,7 @@ class AudioRecognition:
         transcript_timeout: float,
         stt_flush_duration: float = 2.0,
         skip_reply: bool = False,
+        wait_for_final: bool = False,
     ) -> asyncio.Future[str]:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[str] = loop.create_future()
@@ -1099,9 +1113,25 @@ class AudioRecognition:
             fut.set_result("")
             return fut
 
+        final_commit: asyncio.Future[None] | None = None
+        if wait_for_final:
+            # hold automatic end-of-turn detection until this commit has delivered the turn;
+            # one already running would deliver part of it without skip_reply
+            if self._end_of_turn_task is not None:
+                self._end_of_turn_task.cancel()
+            if self._final_commit is not None:
+                _resolve(self._final_commit)
+            self._final_commit = final_commit = loop.create_future()
+
         async def _commit_user_turn() -> None:
             can_flush = self._stt_pipeline is not None and self._stt_pipeline.manual_flush
-            if (
+            if final_commit is not None and not can_flush:
+                await self._drain_stt(
+                    timeout=transcript_timeout,
+                    flush_duration=stt_flush_duration,
+                    next_turn=final_commit,
+                )
+            elif (
                 can_flush
                 or self._last_final_transcript_time is None
                 or (time.time() - self._last_final_transcript_time > 0.5)
@@ -1132,7 +1162,7 @@ class AudioRecognition:
                             },
                         )
 
-            if self._audio_interim_transcript:
+            if self._audio_interim_transcript and final_commit is None:
                 # emit interim transcript as final for frontend display
                 self._hooks.on_final_transcript(
                     stt.SpeechEvent(
@@ -1153,16 +1183,25 @@ class AudioRecognition:
             transcript = self._audio_transcript
             self._audio_interim_transcript = ""
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+            previous_eou_task = self._end_of_turn_task
             self._run_eou_detection(
                 chat_ctx,
                 skip_reply=skip_reply,
                 trigger="manual",
             )
             self._user_turn_committed = True
+            if final_commit is not None:
+                eou_task = self._end_of_turn_task
+                if eou_task is not None and eou_task is not previous_eou_task:
+                    eou_task.add_done_callback(lambda _: _resolve(final_commit))
+                else:
+                    _resolve(final_commit)
             if not fut.done():
                 fut.set_result(transcript)
 
         def _on_task_done(task: asyncio.Task[None]) -> None:
+            if final_commit is not None and (task.cancelled() or task.exception()):
+                _resolve(final_commit)
             if fut.done():
                 return
             if task.cancelled():
@@ -1176,6 +1215,47 @@ class AudioRecognition:
         self._commit_user_turn_atask = asyncio.create_task(_commit_user_turn())
         self._commit_user_turn_atask.add_done_callback(_on_task_done)
         return fut
+
+    async def _drain_stt(
+        self, *, timeout: float, flush_duration: float, next_turn: asyncio.Future[None]
+    ) -> None:
+        """End the STT input and consume every event the stream still emits for it.
+
+        Without a manual flush, only the end of the stream proves that every final
+        transcript was delivered. Audio pushed from now on goes to a fresh stream whose
+        events are held until ``next_turn`` resolves, so they cannot join this turn.
+        """
+        pipeline, consumer = self._stt_pipeline, self._stt_consumer_atask
+        if self._stt is None or pipeline is None or consumer is None:
+            return
+
+        if self._sample_rate:
+            # a VAD-segmented STT drops an open segment when its input ends
+            silence = utils.audio.silence_frame(0.2, self._sample_rate)
+            for _ in range(max(0, math.ceil(flush_duration / silence.duration))):
+                pipeline.audio_ch.send_nowait(silence)
+        pipeline.end_input()
+        self._stt_pipeline = _STTPipeline(self._stt, is_closing=self._session._is_closing)
+        self._stt_consumer_atask = asyncio.create_task(
+            self._stt_consumer(
+                event_ch=self._stt_pipeline.event_ch,
+                old_pipeline=pipeline,
+                old_consumer=consumer,
+                after=next_turn,
+                drain_timeout=timeout,
+            )
+        )
+        # a clear or handoff cancels the drained consumer; that ends the wait, not the commit
+        await asyncio.wait([consumer], timeout=timeout)
+        if not consumer.done():
+            logger.warning(
+                "STT did not finish the committed audio before the timeout",
+                extra={"transcript_timeout": timeout},
+            )
+
+    @property
+    def _final_commit_pending(self) -> bool:
+        return self._final_commit is not None and not self._final_commit.done()
 
     @property
     def _current_transcript(self) -> str:
@@ -1458,7 +1538,7 @@ class AudioRecognition:
             self._stt_turn_ended = False
             self._last_speaking_time = stt_last_speaking_time
 
-            if self._end_of_turn_task is not None:
+            if self._end_of_turn_task is not None and not self._final_commit_pending:
                 self._end_of_turn_task.cancel()
 
     @utils.log_exceptions(logger=logger)
@@ -1484,7 +1564,7 @@ class AudioRecognition:
             self._turn_detector_prediction_fut = None
             self._turn_detector_flushed = False
 
-            if self._end_of_turn_task is not None:
+            if self._end_of_turn_task is not None and not self._final_commit_pending:
                 self._end_of_turn_task.cancel()
 
             if self._session.amd is not None:
@@ -1588,6 +1668,10 @@ class AudioRecognition:
         trigger: Literal["vad", "stt", "manual"],
         skip_reply: bool = False,
     ) -> None:
+        if trigger != "manual" and self._final_commit_pending:
+            # commit_user_turn(wait_for_final=True) owns this turn and delivers it
+            return
+
         auto_flush = (
             self._vad_base_turn_detection
             and self._stt_pipeline is not None
@@ -1976,14 +2060,26 @@ class AudioRecognition:
         event_ch: aio.Chan[stt.SpeechEvent],
         old_pipeline: _STTPipeline | None,
         old_consumer: asyncio.Task[None] | None,
+        after: asyncio.Future[None] | None = None,
+        drain_timeout: float = 0.0,
     ) -> None:
-        """Consume STT events from the pump. Swapped on handoff."""
+        """Consume STT events from the pump. Swapped on handoff.
 
-        if old_pipeline is not None:
-            await old_pipeline.aclose()
+        With ``after``, the old pipeline is draining: let it finish, then hold this
+        pipeline's events until the turn it belongs to is delivered.
+        """
 
-        if old_consumer is not None:
-            await aio.cancel_and_wait(old_consumer)
+        try:
+            if after is not None:
+                if old_consumer is not None:
+                    await asyncio.wait([old_consumer], timeout=drain_timeout)
+                await asyncio.wait([after])
+        finally:
+            if old_pipeline is not None:
+                await old_pipeline.aclose()
+
+            if old_consumer is not None:
+                await aio.cancel_and_wait(old_consumer)
 
         async for ev in event_ch:
             await self._on_stt_event(ev)

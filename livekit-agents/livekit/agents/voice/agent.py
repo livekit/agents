@@ -568,6 +568,8 @@ class Agent:
                         async for frame in audio:
                             stream.push_frame(frame)
 
+                        stream.end_input()
+
                     forward_task = asyncio.create_task(_forward_input())
                     try:
                         async for event in stream:

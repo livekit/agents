@@ -2007,7 +2007,12 @@ class AgentActivity(RecognitionHooks):
             self._session._unanswered_user_metrics = None
 
     def commit_user_turn(
-        self, *, transcript_timeout: float, stt_flush_duration: float, skip_reply: bool = False
+        self,
+        *,
+        transcript_timeout: float,
+        stt_flush_duration: float,
+        skip_reply: bool = False,
+        wait_for_final: bool = False,
     ) -> asyncio.Future[str]:
         if self._rt_session is not None:
             # commit audio buffer and conditionally trigger response generation
@@ -2027,6 +2032,7 @@ class AgentActivity(RecognitionHooks):
             transcript_timeout=transcript_timeout,
             stt_flush_duration=stt_flush_duration,
             skip_reply=skip_reply,
+            wait_for_final=wait_for_final,
         )
 
     def _schedule_speech(self, speech: SpeechHandle, priority: int, force: bool = False) -> None:
