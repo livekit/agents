@@ -285,7 +285,17 @@ class _JobProc:
             # unblock any pending do_inference() calls
             self._inf_client.close()
 
+        def _on_read_done(t: asyncio.Task[None]) -> None:
+            if t.cancelled() or t.exception() is None:
+                return
+            # the reader died (e.g. _start_job raised): no ShutdownRequest can be read
+            # anymore, so nothing else would end this runner
+            if not self._shutdown_fut.done():
+                self.failed = True
+            self._exit_proc_flag.set()
+
         read_task = asyncio.create_task(_read_ipc_task(), name="job_ipc_read")
+        read_task.add_done_callback(_on_read_done)
         try:
             await self._exit_proc_flag.wait()
         finally:
@@ -343,7 +353,10 @@ class _JobProc:
         # Reachable from SessionHost (via get_job_context) when a simulation finalizes.
         self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
 
-        def _exit_proc_cb(_: asyncio.Task[None]) -> None:
+        def _exit_proc_cb(t: asyncio.Task[None]) -> None:
+            # a crash before the entrypoint task exists never reaches _on_entry_done
+            if not t.cancelled() and t.exception() and not self._shutdown_fut.done():
+                self.failed = True
             self._exit_proc_flag.set()
 
         self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
