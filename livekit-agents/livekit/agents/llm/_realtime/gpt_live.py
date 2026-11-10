@@ -471,6 +471,9 @@ class GPTLiveSession(
         self._backend_open_calls: set[str] = set()
         self._backend_response_pending = False
 
+        # a response.create was sent and its response.created has not arrived yet
+        self._backend_response_requested = False
+
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
 
@@ -663,6 +666,7 @@ class GPTLiveSession(
         self._backend_running_responses.clear()
         self._backend_open_calls.clear()
         self._backend_response_pending = False
+        self._backend_response_requested = False
         self._usage_total = types.Usage()
         self._session_id = None
 
@@ -970,6 +974,7 @@ class GPTLiveSession(
 
         if event.type == "response.created":
             self._backend_running_responses[d_id] = set()
+            self._backend_response_requested = False
 
         elif event.type == "response.output_item.done":
             # only the completed item carries the name, call id and arguments together
@@ -1063,7 +1068,18 @@ class GPTLiveSession(
         ):
             return
         self._backend_response_pending = False
+        self._backend_response_requested = True
         self.send_event(types.ResponseCreateEvent(event_id=utils.shortuuid("response_create_")))
+
+    @property
+    def background_work_running(self) -> bool:
+        # client work is the application's, so nothing here knows whether it still runs
+        return bool(
+            self._backend_running_responses
+            or self._backend_open_calls
+            or self._backend_response_pending
+            or self._backend_response_requested
+        )
 
     # metrics and errors
 

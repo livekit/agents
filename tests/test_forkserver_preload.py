@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import multiprocessing as mp
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -69,6 +70,28 @@ def test_forkserver_preload_preserves_child_gc() -> None:
 
     assert outcome["freeze_count"] > 0
     assert outcome["child_cycle_collected"] is True
+
+
+def test_preload_resolves_every_inference_export() -> None:
+    # a fresh interpreter, as a job process is: the first job imports nothing for these
+    code = (
+        "import sys\n"
+        "import livekit.agents.ipc._preload\n"
+        "from livekit.agents import inference\n"
+        "before = set(sys.modules)\n"
+        "for name in inference.__all__: getattr(inference, name)\n"
+        "print('\\n'.join(sorted(set(sys.modules) - before)))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={**os.environ, "LIVEKIT_AGENTS_PRELOAD_LOCAL_INFERENCE": "0"},
+    )
+
+    assert result.stdout.split() == []
 
 
 @pytest.mark.skipif(
