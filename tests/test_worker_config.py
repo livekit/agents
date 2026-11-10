@@ -16,7 +16,7 @@ import pytest
 
 from livekit.agents.cli import proto
 from livekit.agents.cli.cli import _run_worker
-from livekit.agents.worker import AgentServer
+from livekit.agents.worker import AgentServer, ServerOptions
 
 pytestmark = pytest.mark.unit
 
@@ -138,6 +138,37 @@ class TestAgentNamePrecedence:
             server = _TestableServer()
             config = _run_and_capture(server, proto.CliArgs(log_level="INFO"))
             assert config["agent_name"] == ""
+
+
+class TestEntrypointShutdownTimeout:
+    @staticmethod
+    async def _entrypoint(_ctx):
+        pass
+
+    def test_server_options_default_is_preserved(self):
+        options = ServerOptions(entrypoint_fnc=self._entrypoint)
+
+        server = AgentServer.from_server_options(options)
+
+        assert options.entrypoint_shutdown_timeout == 15.0
+        assert server._entrypoint_shutdown_timeout == 15.0
+
+    def test_server_options_zero_is_forwarded(self):
+        options = ServerOptions(
+            entrypoint_fnc=self._entrypoint,
+            entrypoint_shutdown_timeout=0.0,
+        )
+
+        server = AgentServer.from_server_options(options)
+
+        assert server._entrypoint_shutdown_timeout == 0.0
+
+    def test_update_options_sets_timeout(self):
+        server = _TestableServer()
+
+        server.update_options(entrypoint_shutdown_timeout=0.5)
+
+        assert server._entrypoint_shutdown_timeout == 0.5
 
 
 class TestFullPrecedenceChain:

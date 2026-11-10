@@ -32,6 +32,7 @@ class ProcJobExecutor(SupervisedProc):
         inference_executor: InferenceExecutor | None,
         initialize_timeout: float,
         close_timeout: float,
+        entrypoint_shutdown_timeout: float,
         session_end_timeout: float,
         memory_warn_mb: float,
         memory_limit_mb: float,
@@ -63,6 +64,7 @@ class ProcJobExecutor(SupervisedProc):
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._session_end_fnc = session_end_fnc
         self._simulation_end_fnc = simulation_end_fnc
+        self._entrypoint_shutdown_timeout = entrypoint_shutdown_timeout
         self._session_end_timeout = session_end_timeout
         self._inference_executor = inference_executor
         self._on_join_timing = on_join_timing
@@ -110,6 +112,7 @@ class ProcJobExecutor(SupervisedProc):
             job_entrypoint_fnc=self._job_entrypoint_fnc,
             session_end_fnc=self._session_end_fnc,
             simulation_end_fnc=self._simulation_end_fnc,
+            entrypoint_shutdown_timeout=self._entrypoint_shutdown_timeout,
             session_end_timeout=self._session_end_timeout,
             log_cch=log_cch,
             mp_cch=cch,
