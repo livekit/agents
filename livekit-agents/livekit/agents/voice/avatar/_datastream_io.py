@@ -13,12 +13,15 @@ from livekit import rtc
 from ... import utils
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
+from ..events import UserStateChangedEvent
 from ..io import AudioOutput, AudioOutputCapabilities, PlaybackFinishedEvent, _CaptureCancelledEvent
 from ._types import AudioReceiver, AudioSegmentEnd
 
 RPC_CLEAR_BUFFER = "lk.clear_buffer"
 RPC_PLAYBACK_FINISHED = "lk.playback_finished"
 RPC_PLAYBACK_STARTED = "lk.playback_started"
+# agent -> avatar: the user's speaking state (payload: UserStateChangedEvent as JSON)
+RPC_USER_STATE = "lk.user_state"
 AUDIO_STREAM_TOPIC = "lk.audio_stream"
 
 # Fallback for the last segment: with no chunk or trailer for this long, assume the
@@ -72,6 +75,11 @@ class DataStreamAudioOutput(AudioOutput):
         self._clear_buffer_timeout = clear_buffer_timeout
         # Also includes completion of captures canceled behind the clear.
         self._clear_buffer_atask: asyncio.Task[None] | None = None
+
+        # The latest user state not yet sent to the avatar: sent once the remote
+        # participant is ready. Set to unsupported when the avatar has no handler.
+        self._pending_user_state: UserStateChangedEvent | None = None
+        self._user_state_unsupported = False
 
         def _on_room_connected(fut: asyncio.Future[None]) -> None:
             if not self._start_atask and not fut.cancelled() and not fut.exception():
@@ -136,6 +144,51 @@ class DataStreamAudioOutput(AudioOutput):
             logger.debug("remote participant ready", extra={"identity": self._destination_identity})
 
             self._started = True
+            self._send_pending_user_state()
+
+    def notify_user_state(self, ev: UserStateChangedEvent) -> None:
+        """Forward the user's speaking state to the remote avatar worker.
+
+        Sent as the ``lk.user_state`` RPC so the avatar can render listening
+        reactions while the user speaks. Only the latest state is kept while the
+        remote participant is not ready yet. An avatar that does not register the
+        method is detected on the first call and not sent any further states; the
+        audio path is unaffected either way.
+        """
+        if self._user_state_unsupported:
+            return
+        self._pending_user_state = ev
+        if self._started:
+            self._send_pending_user_state()
+
+    def _send_pending_user_state(self) -> None:
+        ev = self._pending_user_state
+        if ev is None:
+            return
+        self._pending_user_state = None
+        task = asyncio.create_task(self._user_state_task(ev))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _user_state_task(self, ev: UserStateChangedEvent) -> None:
+        try:
+            await self._room.local_participant.perform_rpc(
+                destination_identity=self._destination_identity,
+                method=RPC_USER_STATE,
+                payload=ev.model_dump_json(),
+            )
+        except rtc.RpcError as e:
+            if e.code == rtc.RpcError.ErrorCode.UNSUPPORTED_METHOD:
+                self._user_state_unsupported = True
+                self._pending_user_state = None
+                logger.debug(
+                    "remote avatar didn't register lk.user_state RPC, user state not forwarded",
+                    extra={"identity": self._destination_identity},
+                )
+                return
+            logger.warning("failed to perform user state rpc", exc_info=e)
+        except Exception as e:
+            logger.warning("failed to perform user state rpc", exc_info=e)
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         """Capture and stream audio frame to remote worker"""
@@ -367,6 +420,7 @@ class DataStreamAudioReceiver(AudioReceiver):
     """
 
     _clear_buffer_handlers: dict[str, Callable[[rtc.RpcInvocationData], str]] = {}
+    _user_state_handlers: dict[str, Callable[[rtc.RpcInvocationData], str]] = {}
 
     def __init__(
         self,
@@ -449,10 +503,36 @@ class DataStreamAudioReceiver(AudioReceiver):
                 self._current_reader_superseded.set()
             self._stream_reader_changed.set()
 
+        def _handle_user_state(data: rtc.RpcInvocationData) -> str:
+            assert self._remote_participant is not None
+            if data.caller_identity != self._remote_participant.identity:
+                logger.warning(
+                    "user state event received from unexpected participant",
+                    extra={
+                        "caller_identity": data.caller_identity,
+                        "expected_identity": self._remote_participant.identity,
+                    },
+                )
+                return "reject"
+
+            try:
+                ev = UserStateChangedEvent.model_validate_json(data.payload)
+            except ValueError:
+                logger.warning("invalid user state event payload")
+                return "reject"
+
+            self.emit("user_state_changed", ev)
+            return "ok"
+
         self._register_clear_buffer_rpc(
             self._room,
             caller_identity=self._remote_participant.identity,
             handler=_handle_clear_buffer,
+        )
+        self._register_user_state_rpc(
+            self._room,
+            caller_identity=self._remote_participant.identity,
+            handler=_handle_user_state,
         )
         self._room.register_byte_stream_handler(AUDIO_STREAM_TOPIC, _handle_stream_received)
 
@@ -670,3 +750,33 @@ class DataStreamAudioReceiver(AudioReceiver):
             )
             return "reject"
         return cls._clear_buffer_handlers[data.caller_identity](data)
+
+    @classmethod
+    def _register_user_state_rpc(
+        cls,
+        room: rtc.Room,
+        *,
+        caller_identity: str,
+        handler: Callable[[rtc.RpcInvocationData], str],
+    ) -> None:
+        cls._user_state_handlers[caller_identity] = handler
+
+        if (
+            rpc_handler := room.local_participant._rpc_handlers.get(RPC_USER_STATE)
+        ) and rpc_handler == cls._user_state_rpc_handler:
+            return
+
+        room.local_participant.register_rpc_method(RPC_USER_STATE, cls._user_state_rpc_handler)
+
+    @classmethod
+    def _user_state_rpc_handler(cls, data: rtc.RpcInvocationData) -> str:
+        if data.caller_identity not in cls._user_state_handlers:
+            logger.warning(
+                "user state event received from unexpected participant",
+                extra={
+                    "caller_identity": data.caller_identity,
+                    "expected_identities": list(cls._user_state_handlers.keys()),
+                },
+            )
+            return "reject"
+        return cls._user_state_handlers[data.caller_identity](data)
