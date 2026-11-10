@@ -1810,6 +1810,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def update_agent(self, agent: Agent) -> None:
+        # reject before touching state: a failed handoff would leave turns blocked
+        if agent._activity is not None and agent._activity is not self._activity:
+            raise RuntimeError("cannot update agent: the agent is already running")
+
         self._agent = agent
 
         if self._started:
