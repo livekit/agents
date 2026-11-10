@@ -539,17 +539,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if ev_utt is not None and not ours:
                         # a late error of an utterance that is not ours (pooled socket leftover)
                         continue
-                    err = _status_error(
-                        int(data.get("status") or 500),
-                        str(data.get("error", "unknown error")),
-                        request_id=ev_utt or request_id,
-                        retry_after=data.get("retry_after"),
+                    # the server ends only the failed utterance and keeps the session;
+                    # _run decides whether the socket can go back to the pool
+                    raise _UtteranceError(
+                        _status_error(
+                            int(data.get("status") or 500),
+                            str(data.get("error", "unknown error")),
+                            request_id=ev_utt or request_id,
+                            retry_after=data.get("retry_after"),
+                        )
                     )
-                    if len(pending) <= 1:
-                        # the server ends only the failed utterance and keeps the session, so
-                        # with nothing else in flight the socket goes back to the pool
-                        raise _UtteranceError(err)
-                    raise err
 
                 if not ours:
                     # an event of an utterance that is not ours (left over on a pooled socket)
@@ -615,6 +614,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                 try:
                     await asyncio.gather(*tasks)
                 except _UtteranceError as e:
+                    # stop the sender first: a sentence it sent meanwhile is still owed an
+                    # answer on this socket, which then must not serve the next stream
+                    await utils.aio.gracefully_cancel(*tasks)
+                    if len(pending) > 1:
+                        raise e.error from None
                     utterance_error = e.error
                 finally:
                     sent_or_done.set()

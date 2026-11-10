@@ -159,6 +159,7 @@ class _FakeWS:
         stale_error: bool = False,
         silent_from: int | None = None,
         error_after_sends: int = 1,
+        hang_sends_from: int | None = None,
     ) -> None:
         self.sent: list[dict] = []
         # utterances from this index on get no answer at all (a stalled server)
@@ -183,11 +184,15 @@ class _FakeWS:
         self._error = error
         # the error of the first utterance is held until this many utterances were sent
         self._error_after_sends = error_after_sends
+        # send_str of this utterance (1-based) and later never returns
+        self._hang_sends_from = hang_sends_from
 
     async def send_str(self, data: str) -> None:
         body = json.loads(data)
         self.sent.append(body)
         rid = body["request_id"]
+        if self._hang_sends_from is not None and len(self.sent) >= self._hang_sends_from:
+            await asyncio.Event().wait()
         if self._silent_from is not None and len(self.sent) > self._silent_from:
             return
         if self._error is not None:
@@ -311,6 +316,29 @@ async def test_stream_server_error_with_other_utterances_in_flight_drops_the_soc
     assert exc_info.value.status_code == 503
     assert len(ws.sent) == 2
     # the second utterance would still answer on that socket: it is not reused
+    assert pool.removed is True
+
+
+@pytest.mark.asyncio
+async def test_a_sentence_sent_while_the_error_arrives_drops_the_socket():
+    from livekit.plugins.vartaloop import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY)
+    # the first utterance fails at once; the sender is still inside the send of the second
+    ws = _FakeWS(error={"status": 503, "error": "busy"}, hang_sends_from=2)
+    pool = _FakePool(ws)
+    tts._pool = pool  # type: ignore[assignment]
+
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5.0))
+    stream.push_text("Hello there, how are you doing today? ")
+    stream.push_text("I hope the weather is nice where you are. ")
+    stream.end_input()
+
+    with pytest.raises(APIStatusError) as exc_info:
+        async for _ in stream:
+            pass
+    assert exc_info.value.status_code == 503
+    assert len(ws.sent) == 2
     assert pool.removed is True
 
 
