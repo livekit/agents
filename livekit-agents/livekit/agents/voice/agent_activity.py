@@ -3197,7 +3197,7 @@ class AgentActivity(RecognitionHooks):
         return not self._speech_q and (not self._current_speech or self._current_speech.done())
 
     @property
-    def _speech_follows(self) -> bool:
+    def _has_followup_work(self) -> bool:
         """Whether another speech is already committed to follow the current one."""
         if self._background_speeches:
             return True
@@ -3213,7 +3213,9 @@ class AgentActivity(RecognitionHooks):
         if self._no_pending_speech:
             # a speech awaiting its tool executions keeps the agent busy: stay in
             # "thinking" so the user-away timer isn't armed mid-tool (#6904)
-            self._session._update_agent_state("thinking" if self._speech_follows else "listening")
+            self._session._update_agent_state(
+                "thinking" if self._has_followup_work else "listening"
+            )
             self._on_end_of_agent_speech(ended_at=time.time())
             if self.interruption_enabled:
                 self.interruption_by_audio_activity_enabled = True
@@ -3467,7 +3469,9 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(spoken_msg)
 
         if self._session.agent_state == "speaking":
-            self._session._update_agent_state("thinking" if self._speech_follows else "listening")
+            self._session._update_agent_state(
+                "thinking" if self._has_followup_work else "listening"
+            )
             self._on_end_of_agent_speech(ended_at=time.time())
             if self.interruption_enabled:
                 self.interruption_by_audio_activity_enabled = True
@@ -4044,7 +4048,7 @@ class AgentActivity(RecognitionHooks):
             # a running tool keeps the agent busy; "listening" would arm the away timer
             tool_running = not speech_handle.interrupted and not exe_task.done()
             self._session._update_agent_state(
-                "thinking" if tool_running or self._speech_follows else "listening"
+                "thinking" if tool_running or self._has_followup_work else "listening"
             )
             self._on_end_of_agent_speech(ended_at=time.time())
             if self.interruption_enabled:
@@ -4707,7 +4711,7 @@ class AgentActivity(RecognitionHooks):
         # the tool calls outlive the preamble, so it ends on "thinking" (#6904)
         if function_calls and not speech_handle.interrupted:
             self._background_speeches.add(speech_handle)
-        self._session._update_agent_state("thinking" if self._speech_follows else "listening")
+        self._session._update_agent_state("thinking" if self._has_followup_work else "listening")
         self._on_end_of_agent_speech(ended_at=time.time())
         if self.interruption_enabled:
             self.interruption_by_audio_activity_enabled = True
@@ -5013,7 +5017,9 @@ class AgentActivity(RecognitionHooks):
 
         # no reply follows, so nothing else clears the "thinking" the tool asserted
         if not tool_reply_expected and self._no_pending_speech:
-            self._session._update_agent_state("thinking" if self._speech_follows else "listening")
+            self._session._update_agent_state(
+                "thinking" if self._has_followup_work else "listening"
+            )
 
     def _disallow_interruptions(self, speech_handle: SpeechHandle) -> None:
         speech_handle.allow_interruptions = False

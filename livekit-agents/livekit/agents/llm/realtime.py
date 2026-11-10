@@ -251,8 +251,8 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     def background_work_running(self) -> bool:
         """Whether the model works on something it will speak about when done, without new input.
 
-        Speech the user can already hear is not background work. The user-away timer does not
-        start while it runs.
+        Speech the user can already hear is not background work. The user is not marked away
+        while it runs.
         """
         return False
 

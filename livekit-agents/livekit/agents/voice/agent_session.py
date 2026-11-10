@@ -722,7 +722,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
-        # count of active `_hold_user_away` holds, by the activity that owns them
+        # count of active `_create_away_timer_hold` holds, by the activity that owns them
         self._user_away_holds: dict[AgentActivity | None, int] = {}
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
@@ -2126,23 +2126,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # a paused agent's work can't speak now, so it doesn't hold the window (#6883)
             return
 
-        if (
-            self._activity is not None
-            and (rt_session := self._activity.realtime_llm_session) is not None
-            and rt_session.background_work_running
-        ):
-            # the answer speaks when the work lands, and that speech restarts the window
-            return
-
         if (room_io := self._room_io) and (
             room_io.linked_participant is None
             or (room_io.subscribed_fut is not None and not room_io.subscribed_fut.done())
         ):
             return
 
-        self._user_away_timer = self._loop.call_later(
-            self._opts.user_away_timeout, self._update_user_state, "away"
-        )
+        def _on_timeout() -> None:
+            if (
+                self._activity is not None
+                and (rt_session := self._activity.realtime_llm_session) is not None
+                and rt_session.background_work_running
+            ):
+                # the model still works on an answer, so the window starts again
+                self._set_user_away_timer()
+                return
+
+            self._update_user_state("away")
+
+        self._user_away_timer = self._loop.call_later(self._opts.user_away_timeout, _on_timeout)
 
     def _cancel_user_away_timer(self) -> None:
         if self._user_away_timer is not None:
@@ -2387,7 +2389,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # a call recorded when its execution started must not be inserted a second time
             self._chat_ctx._upsert_item(item)
 
-    def _hold_user_away(self, owner: AgentActivity | None) -> None:
+    def _create_away_timer_hold(self, owner: AgentActivity | None) -> None:
         """Keep the user from going away while work that will speak when it lands runs.
 
         ``owner`` is the activity that will speak, or None when any current agent can; only the
@@ -2397,7 +2399,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if owner in (None, self._activity):
             self._cancel_user_away_timer()
 
-    def _release_user_away(self, owner: AgentActivity | None) -> None:
+    def _release_away_timer_hold(self, owner: AgentActivity | None) -> None:
         if (count := self._user_away_holds.get(owner, 0) - 1) > 0:
             self._user_away_holds[owner] = count
             return

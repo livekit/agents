@@ -1072,7 +1072,7 @@ class GPTLiveSession(
         self.send_event(types.ResponseCreateEvent(event_id=utils.shortuuid("response_create_")))
 
     @property
-    def _backend_busy(self) -> bool:
+    def background_work_running(self) -> bool:
         # client work is the application's, so nothing here knows whether it still runs
         return bool(
             self._backend_running_responses
@@ -1080,10 +1080,6 @@ class GPTLiveSession(
             or self._backend_response_pending
             or self._backend_response_requested
         )
-
-    @property
-    def background_work_running(self) -> bool:
-        return self._backend_busy
 
     # metrics and errors
 
