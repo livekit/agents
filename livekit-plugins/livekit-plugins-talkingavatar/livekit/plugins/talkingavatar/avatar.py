@@ -373,13 +373,14 @@ class _AvatarAudioOutput(AudioOutput):
     def _finish_heard(self) -> None:
         while self._segments:
             seg = self._segments[0]
+            if seg.heard > 0 and not seg.started:
+                # it played back to back with the segment before it, in the same run, so the
+                # avatar sent no speech_started of its own: it started `heard` seconds before now
+                seg.started = True
+                self.on_playback_started(created_at=time.time() - seg.heard)
             if seg.clearing or not seg.flushed or seg.heard < seg.pushed - _PLAYED_TOLERANCE:
                 return
             self._finish(seg, interrupted=False)
-            # a segment queued back to back with it starts playing now
-            if self._segments and self._segments[0].pushed and not self._segments[0].started:
-                self._segments[0].started = True
-                self.on_playback_started(created_at=time.time())
 
     def _finish_all(self) -> None:
         self._clears.clear()

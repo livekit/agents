@@ -1,6 +1,7 @@
 import asyncio
 import json
 import struct
+import time
 from types import SimpleNamespace
 
 import aiohttp
@@ -83,6 +84,34 @@ async def test_heard_before_flush_finishes_at_flush():
     out._on_event({"type": "speech_ended", "playedMs": 200})
     out.flush()
     assert finished == [(0.2, False)]
+
+
+async def test_next_segment_waits_for_its_own_start():
+    out, _, started, finished = _output()
+    await out.capture_frame(_frame(0.2))
+    out.flush()
+    out._on_event({"type": "speech_started"})
+    await out.capture_frame(_frame(0.2))  # sent while the avatar's run ends: a run of its own
+    out.flush()
+    out._on_event({"type": "speech_ended", "playedMs": 200})
+    assert (len(started), finished) == (1, [(0.2, False)])
+
+    out._on_event({"type": "speech_started"})
+    assert len(started) == 2
+    out._on_event({"type": "speech_ended", "playedMs": 200})
+    assert finished == [(0.2, False), (0.2, False)]
+
+
+async def test_back_to_back_segments_share_one_run():
+    out, _, started, finished = _output()
+    for _ in range(2):
+        await out.capture_frame(_frame(0.3))
+        out.flush()
+    out._on_event({"type": "speech_started"})
+    out._on_event({"type": "speech_ended", "playedMs": 600})  # one run for both
+    assert finished == [(0.3, False), (0.3, False)]
+    assert len(started) == 2
+    assert abs(started[1].created_at - (time.time() - 0.3)) < 0.05  # it began 0.3 s before the end
 
 
 async def test_interruption_reports_what_was_heard():
