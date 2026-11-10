@@ -415,6 +415,11 @@ class STT(stt.STT):
             raise ValueError(f'mode must be "live" or "fast", got {mode!r}')
         if turn_detection not in ("server", "none"):
             raise ValueError(f'turn_detection must be "server" or "none", got {turn_detection!r}')
+        if mode == "fast" and turn_detection == "none":
+            logger.warning(
+                'turn_detection="none" is ignored with mode="fast": Scribe Fast transcribes '
+                "one utterance per request"
+            )
         if extra_kwargs is not None and not isinstance(extra_kwargs, dict):
             raise ValueError(f"extra_kwargs must be a dict, got {type(extra_kwargs).__name__}")
         extra_kwargs = dict(extra_kwargs or {})
@@ -688,6 +693,8 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
         self._zoom = stt
         self._opts = opts
+        # turn_detection can't change after the stream starts (see update_options).
+        self._manual_commit = opts.turn_detection == "none"
         # What the current session was configured with (options plus extra_kwargs).
         self._view = _RequestView.of(self._session_update())
         self._reconnect_event = asyncio.Event()
@@ -818,18 +825,11 @@ class SpeechStream(stt.SpeechStream):
         self._report_connection_acquired(time.perf_counter() - started_at, False)
         return ws
 
-    @property
-    def _manual_commit(self) -> bool:
-        return self._opts.turn_detection == "none"
-
-    @property
-    def _commits_pending(self) -> int:
-        """Commits sent whose final hasn't arrived yet."""
-        return sum(1 for kind in self._flushes if kind != "silent")
-
     def _turn_open(self) -> bool:
         """A turn whose final transcript a reconnect would lose."""
-        return self._commits_pending > 0 if self._manual_commit else self._speech_started
+        if self._manual_commit:
+            return any(kind != "silent" for kind in self._flushes)
+        return self._speech_started
 
     def _send_final(self, data: stt.SpeechData, request_id: str = "") -> None:
         """Emit a final transcript event with the supplied speech data."""

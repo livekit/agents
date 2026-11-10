@@ -1062,6 +1062,16 @@ def commit_replies(transcripts: list[str]) -> LiveScript:
     return reply
 
 
+def test_turn_detection_none_with_fast_mode_warns(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING):
+        zoom_ai.STT(api_key=API_KEY, mode="fast", turn_detection="none")
+    assert 'turn_detection="none" is ignored with mode="fast"' in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        zoom_ai.STT(api_key=API_KEY, turn_detection="none")
+    assert "ignored" not in caplog.text
+
+
 def test_turn_detection_none_capabilities() -> None:
     assert not zoom_ai.STT(api_key=API_KEY).capabilities.manual_flush
     assert zoom_ai.STT(api_key=API_KEY, turn_detection="none").capabilities.manual_flush
@@ -1227,7 +1237,7 @@ async def test_live_turn_detection_none_update_options_waits_for_the_commit(scri
     for f in speech(0.3):
         stream.push_frame(f)
     stream.flush()
-    await wait_until(lambda: stream._commits_pending == 1, "commit sent")
+    await wait_until(lambda: commits_pending(stream) == 1, "commit sent")
     stt.update_options(language="fr-FR")  # while the commit's final is outstanding
     await asyncio.sleep(0.3)
     assert len(fake.sessions) == 1  # held until the final arrives
@@ -1292,6 +1302,11 @@ async def collect_events(stream: zoom_stt.SpeechStream) -> tuple[list[SpeechEven
             events.append(ev)
 
     return events, asyncio.create_task(collect())
+
+
+def commits_pending(stream: zoom_stt.SpeechStream) -> int:
+    """Commits sent whose final hasn't arrived yet."""
+    return sum(1 for kind in stream._flushes if kind != "silent")
 
 
 def final_texts(events: list[SpeechEvent]) -> list[str]:
@@ -1501,10 +1516,10 @@ async def test_live_turn_detection_none_options_change_waits_for_every_commit(sc
         for f in speech(0.2):
             stream.push_frame(f)
         stream.flush()
-    await wait_until(lambda: stream._commits_pending == 2, "two commits")
+    await wait_until(lambda: commits_pending(stream) == 2, "two commits")
     stt.update_options(language="fr-FR")
     gates[(1, 1)].set()
-    await wait_until(lambda: stream._commits_pending == 1, "first final")
+    await wait_until(lambda: commits_pending(stream) == 1, "first final")
     await asyncio.sleep(0.2)
     assert len(fake.sessions) == 1  # the second commit's final is still outstanding
     gates[(1, 2)].set()
@@ -1570,7 +1585,7 @@ async def test_live_turn_detection_none_hold_timeout_answers_the_commit(
     for f in speech(0.2):
         stream.push_frame(f)
     stream.flush()
-    await wait_until(lambda: stream._commits_pending == 1, "commit sent")
+    await wait_until(lambda: commits_pending(stream) == 1, "commit sent")
     stt.update_options(language="fr-FR")
     await wait_until(lambda: len(fake.sessions) == 2, "reconnect after the hold")
     await wait_until(lambda: final_texts(events) == [""], "empty final")
