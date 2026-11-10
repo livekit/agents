@@ -6,13 +6,14 @@ from unittest.mock import patch
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, llm, utils, vad
+from livekit.agents import Agent, AgentSession, LanguageCode, llm, stt, utils, vad
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.voice import SpeechHandle
 from livekit.agents.voice.events import MetricsCollectedEvent, SpeechCreatedEvent
 
 from .fake_io import FakeAudioOutput
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
+from .fake_stt import FakeSTT
 from .fake_vad import FakeVAD
 
 pytestmark = pytest.mark.unit
@@ -23,6 +24,25 @@ async def realtime() -> AsyncIterator[tuple[AgentSession, FakeRealtimeModel]]:
     model = FakeRealtimeModel(capabilities=fake_capabilities(supports_overlapping_speech=True))
     async with AgentSession(llm=model, vad=FakeVAD()) as session:
         session.output.audio = FakeAudioOutput()
+        await session.start(Agent(instructions="test"))
+        yield session, model
+
+
+@pytest.fixture
+async def manual_realtime() -> AsyncIterator[tuple[AgentSession, FakeRealtimeModel]]:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(turn_detection=False, user_transcription=False)
+    )
+    async with AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        vad=FakeVAD(),
+        turn_handling={
+            "turn_detection": "manual",
+            "endpointing": {"min_delay": 0.5, "max_delay": 3.0},
+        },
+    ) as session:
+        session.output.audio = FakeAudioOutput(can_pause=True)
         await session.start(Agent(instructions="test"))
         yield session, model
 
@@ -307,6 +327,84 @@ async def test_realtime_manual_commit_preserves_speech_timing(
         session, *_start_reply(session, model, requested=speeches[0].speech_handle)
     )
     assert reply.metrics["e2e_latency"] == pytest.approx(reply.metrics["started_speaking_at"] - now)
+
+
+@pytest.mark.parametrize("phase", ["pending_delivery", "delivered"])
+@pytest.mark.parametrize("next_speech", ["none", "before_clear", "after_clear"])
+async def test_realtime_manual_clear_preserves_latest_speech_timing(
+    manual_realtime: tuple[AgentSession, FakeRealtimeModel], phase: str, next_speech: str
+) -> None:
+    session, model = manual_realtime
+    assert session._activity is not None
+    recognition = session._activity._audio_recognition
+    assert recognition is not None
+
+    async def final(text: str) -> None:
+        await recognition._on_stt_event(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[stt.SpeechData(text=text, language=LanguageCode("en"))],
+            )
+        )
+
+    now = time.time()
+    await _vad(session, vad.VADEventType.START_OF_SPEECH, at=now - 0.2)
+    await _vad(session, vad.VADEventType.END_OF_SPEECH, at=now)
+    await final("weather")
+    speeches: list[SpeechCreatedEvent] = []
+    session.on("speech_created", speeches.append)
+    assert await session.commit_user_turn() == "weather"
+    assert recognition._end_of_turn_task is not None
+    assert not recognition._end_of_turn_task.done()
+    if next_speech == "before_clear":
+        await _vad(session, vad.VADEventType.INFERENCE_DONE, at=time.time(), speech=0.03)
+        await final("next turn")
+    stopped_speaking_at = recognition.last_speaking_time
+    assert stopped_speaking_at is not None
+    session.clear_user_turn()
+    if next_speech == "after_clear":
+        await _vad(session, vad.VADEventType.INFERENCE_DONE, at=time.time(), speech=0.03)
+        await final("next turn")
+        stopped_speaking_at = recognition.last_speaking_time
+        assert stopped_speaking_at is not None
+
+    if phase == "delivered":
+        await recognition._end_of_turn_task
+    for _ in range(100):
+        if model.active_session._reply_futs:
+            break
+        await asyncio.sleep(0)
+    assert model.active_session._reply_futs
+    assert len(speeches) == 1
+    reply = await _finish_reply(
+        session, *_start_reply(session, model, requested=speeches[0].speech_handle)
+    )
+
+    assert reply.metrics["e2e_latency"] == pytest.approx(
+        reply.metrics["started_speaking_at"] - stopped_speaking_at
+    )
+
+
+async def test_realtime_manual_clear_does_not_restore_skipped_speech_timing(
+    manual_realtime: tuple[AgentSession, FakeRealtimeModel],
+) -> None:
+    session, model = manual_realtime
+    assert session._activity is not None
+    recognition = session._activity._audio_recognition
+    assert recognition is not None
+    now = time.time()
+    await _vad(session, vad.VADEventType.START_OF_SPEECH, at=now - 0.2)
+    await _vad(session, vad.VADEventType.END_OF_SPEECH, at=now)
+    await recognition._on_stt_event(
+        stt.SpeechEvent(
+            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[stt.SpeechData(text="weather", language=LanguageCode("en"))],
+        )
+    )
+    assert await session.commit_user_turn(skip_reply=True) == "weather"
+    session.clear_user_turn()
+    reply = await _finish_reply(session, *_start_reply(session, model))
+    assert "e2e_latency" not in reply.metrics
 
 
 async def test_realtime_e2e_is_reported_only_on_first_played_message(

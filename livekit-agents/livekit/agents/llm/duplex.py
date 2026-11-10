@@ -144,6 +144,11 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
     @abstractmethod
     def tools(self) -> ToolContext: ...
 
+    @property
+    def background_work_running(self) -> bool:
+        """Whether the model works on something it will speak about when done."""
+        return False
+
     @abstractmethod
     def push_audio(self, frame: rtc.AudioFrame) -> None: ...
 

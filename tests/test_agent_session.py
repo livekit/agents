@@ -49,9 +49,10 @@ from livekit.agents.voice.agent_activity import AgentActivity, _transcripts_equi
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
 from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.agents.voice.events import AgentState, FunctionToolsExecutedEvent, UserState
-from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.io import AudioOutput, AudioOutputCapabilities, PlaybackFinishedEvent
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 
+from .fake_llm import FakeLLM
 from .fake_session import FakeActions, create_session, run_session
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -868,6 +869,49 @@ async def test_interrupt_before_speaking_with_pausable_audio() -> None:
     assert not any(
         item.type == "message" and item.role == "assistant" for item in agent.chat_ctx.items
     )
+
+
+async def test_forced_interrupt_of_unplayed_speeches_returns_to_listening() -> None:
+    """A reply cancelled while still queued must not leave the agent in "thinking" (#8469)."""
+
+    class StalledAudioOutput(AudioOutput):
+        def __init__(self) -> None:
+            super().__init__(
+                label="Stalled",
+                capabilities=AudioOutputCapabilities(pause=False),
+                sample_rate=24000,
+            )
+
+        async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+            await super().capture_frame(frame)
+            await asyncio.Event().wait()
+
+        def flush(self) -> None:
+            super().flush()
+
+        def clear_buffer(self) -> None:
+            pass
+
+    async def frames() -> AsyncIterable[rtc.AudioFrame]:
+        yield rtc.AudioFrame(b"\x00\x00" * 480, 24000, 1, 480)
+
+    session = AgentSession[None](llm=FakeLLM(), aec_warmup_duration=None)
+    session.output.audio = audio = StalledAudioOutput()
+    await session.start(Agent(instructions="test"))
+
+    said = session.say("One moment.", audio=frames(), add_to_chat_ctx=False)
+    reply = session.generate_reply(user_input="A question.")
+    await asyncio.sleep(0.5)
+    session.interrupt(force=True)
+    await asyncio.sleep(10.0)
+
+    assert said.done() and reply.done()
+    assert session.agent_state == "listening"
+
+    # release the playout waiters the stalled output never finishes
+    for _ in range(audio._pending_playback_count):
+        audio.on_playback_finished(playback_position=0.0, interrupted=True)
+    await session.aclose()
 
 
 async def test_false_interruption_before_speaking_resumes() -> None:
