@@ -697,7 +697,7 @@ class SpeechStream(stt.SpeechStream):
                     self._zoom._live_url,
                     protocols=("live-asr",),
                     headers=self._zoom._headers(tracking_id),
-                    heartbeat=30.0,  # notice a dead connection; audio keeps Scribe's session alive
+                    autoping=False,  # WebSocketMonitor in recv_task notices a dead connection
                 ),
                 self._conn_options.timeout,
             )
@@ -814,8 +814,11 @@ class SpeechStream(stt.SpeechStream):
                 raise APIConnectionError("Zoom Scribe Live connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -837,6 +840,11 @@ class SpeechStream(stt.SpeechStream):
                 except json.JSONDecodeError:
                     logger.warning("ignoring non-JSON message from Zoom Scribe")
                     continue
+                if ev.get("type") in (
+                    "input_audio_buffer.speech_started",
+                    "transcription.completed",
+                ):
+                    self._mark_provider_progress()
                 if ev.get("type") == "session.closed" and not closing:
                     # Server-side end (session time limit, idle timeout):
                     # raise a retryable error so the base class reconnects with a new session.
