@@ -99,9 +99,9 @@ class RealtimeModel(_RealtimeModel):
     ) -> None:
         """
         Args:
-            provider (str, optional): Host that must serve the model, e.g. ``"azure"`` or
-                ``"openai"`` for OpenAI models. The session is refused if no host in the
-                region matches.
+            provider: Deprecated. Provider pinning will no longer be supported on
+                March 1, 2027. Omit this argument to let LiveKit route requests and
+                use fallback providers.
         """
         if "/" not in model:
             raise ValueError("model must be provider-prefixed, for example 'openai/gpt-realtime'")

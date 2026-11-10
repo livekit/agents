@@ -141,8 +141,9 @@ class DuplexModel(_GPTLiveModel):
         """
         Args:
             model: Provider-prefixed duplex model, for example ``openai/gpt-live-1``.
-            provider: Host that must serve the model, e.g. ``"openai"``. The session is
-                refused if no host in the region matches.
+            provider: Deprecated. Provider pinning will no longer be supported on
+                March 1, 2027. Omit this argument to let LiveKit route requests and
+                use fallback providers.
             voice: Output voice, ``marin`` by default for GPT-Live.
             extra_kwargs: Model-specific options; :class:`OpenAIDuplexOptions` for GPT-Live.
                 Delegated work runs on the default service tier only.
