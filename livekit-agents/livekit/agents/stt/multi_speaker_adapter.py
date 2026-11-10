@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -13,7 +13,13 @@ from livekit import rtc
 from .. import utils
 from ..language import LanguageCode
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+    TimedString,
+)
 from ..utils.audio import AudioByteStream
 from .stt import STT, RecognizeStream, SpeechData, SpeechEvent, SpeechEventType
 
@@ -160,6 +166,46 @@ class MultiSpeakerAdapterWrapper(RecognizeStream):
             async for ev in stream:
                 updated_ev = self._detector.on_stt_event(ev)
                 if updated_ev is not None:
+                    origin = self._input_ch.input_started_at
+                    inner_origin = stream._input_ch.input_started_at
+                    if origin is not None and inner_origin is not None and inner_origin != origin:
+                        # RMS lookup uses audio-relative times. Translate only the output,
+                        # copying data that the provider may share between FINAL and EOS.
+                        offset = inner_origin - origin
+                        updated_ev = replace(
+                            updated_ev,
+                            alternatives=[
+                                replace(
+                                    alt,
+                                    start_time=alt.start_time + offset
+                                    if alt.start_time != 0 or alt.end_time > 0
+                                    else alt.start_time,
+                                    end_time=alt.end_time + offset
+                                    if alt.end_time > 0
+                                    else alt.end_time,
+                                    words=[
+                                        TimedString(
+                                            word,
+                                            start_time=word.start_time + offset
+                                            if utils.is_given(word.start_time)
+                                            else NOT_GIVEN,
+                                            end_time=word.end_time + offset
+                                            if utils.is_given(word.end_time)
+                                            else NOT_GIVEN,
+                                            start_time_offset=word.start_time_offset + offset
+                                            if utils.is_given(word.start_time_offset)
+                                            else NOT_GIVEN,
+                                            confidence=word.confidence,
+                                            speaker_id=word.speaker_id,
+                                        )
+                                        for word in alt.words
+                                    ]
+                                    if alt.words is not None
+                                    else None,
+                                )
+                                for alt in updated_ev.alternatives
+                            ],
+                        )
                     self._event_ch.send_nowait(updated_ev)
                 elif ev.type == SpeechEventType.FINAL_TRANSCRIPT:
                     # send an empty final transcript to clear the interim results

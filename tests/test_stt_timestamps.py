@@ -34,10 +34,12 @@ NodeKind = Literal["default", "delegate", "custom"]
 @pytest.mark.parametrize("node_kind", ["default", "delegate", "custom"])
 @pytest.mark.parametrize("handoff_after", [0.0, 300.0])
 @pytest.mark.parametrize("audio_delay", [0.0, 20.0])
+@pytest.mark.parametrize("multi_speaker", [False, True])
 async def test_speech_timestamps_follow_first_audio(
     node_kind: NodeKind,
     handoff_after: float,
     audio_delay: float,
+    multi_speaker: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``stopped_speaking_at`` is the wall-clock end of the last word on every stream.
@@ -49,6 +51,8 @@ async def test_speech_timestamps_follow_first_audio(
     now = 1000.0
     monkeypatch.setattr(time, "time", lambda: now)
     provider = FakeSTT()
+    provider.capabilities.diarization = True
+    recognizer = stt.MultiSpeakerAdapter(stt=provider) if multi_speaker else provider
 
     class DelegatingAgent(Agent):
         async def stt_node(
@@ -61,7 +65,7 @@ async def test_speech_timestamps_follow_first_audio(
         async def stt_node(
             self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
         ) -> AsyncIterator[stt.SpeechEvent]:
-            async with provider.stream() as stream:
+            async with recognizer.stream() as stream:
 
                 async def forward() -> None:
                     async for frame in audio:
@@ -76,7 +80,7 @@ async def test_speech_timestamps_follow_first_audio(
 
     agent_cls = {"default": Agent, "delegate": DelegatingAgent, "custom": CustomAgent}[node_kind]
     session = AgentSession(
-        stt=provider,
+        stt=recognizer,
         llm=FakeLLM(),
         vad=None,
         turn_handling={"turn_detection": "stt"},
@@ -151,8 +155,11 @@ async def test_speech_timestamps_follow_first_audio(
         )
         await asyncio.wait_for(recognition._final_transcript_received.wait(), timeout=1.0)
 
-        # the event reaches the session untouched: consumers keep the timeline they had
-        assert received[0].alternatives[0].end_time == provider_end_time
+        # Adapter output uses the caller's timeline, like a directly configured provider.
+        assert recognition._input_started_at is not None
+        assert received[0].alternatives[0].end_time == pytest.approx(
+            first_audio_at + 0.6 - recognition._input_started_at
+        )
         if node_kind == "custom":
             # no offset was declared: the stream's timeline starts with its first audio
             assert stream.start_time_offset == 0.0
@@ -169,6 +176,7 @@ async def test_speech_timestamps_follow_first_audio(
         assert metrics.end_of_turn_delay == pytest.approx(0.6)
     finally:
         await session.aclose()
+        await recognizer.aclose()
 
 
 async def test_node_without_a_stream_counts_from_its_first_audio(

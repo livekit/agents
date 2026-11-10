@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from typing import Any
 
 import pytest
@@ -29,11 +30,12 @@ from livekit.agents.stt import (
 )
 from livekit.agents.stt.multi_speaker_adapter import PrimarySpeakerDetectionOptions
 from livekit.agents.stt.stt import RecognitionUsage
-from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr, TimedString
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.voice.events import ConversationItemAddedEvent
 from livekit.agents.voice.keyterm_detection import KeytermDetector
 
+from .fake_stt import FakeSTT
 from .test_transcription_delay_anchor import _make_recognition
 
 pytestmark = pytest.mark.unit
@@ -182,6 +184,88 @@ def _metrics(label: str) -> STTMetrics:
 def test_wrapped_stt_exposed() -> None:
     adapter, wrapped = _adapter()
     assert adapter.wrapped_stt is wrapped
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("declared_offset", [None, 7.0])
+async def test_output_timeline_preserves_speaker_detection_and_shared_endpoints(
+    monkeypatch: pytest.MonkeyPatch, declared_offset: float | None
+) -> None:
+    now = 1000.0
+    monkeypatch.setattr(time, "time", lambda: now)
+    inner = FakeSTT()
+    inner.capabilities.diarization = True
+    adapter = MultiSpeakerAdapter(stt=inner)
+    stream = adapter.stream()
+    if declared_offset is not None:
+        stream.start_time_offset = declared_offset
+    wrapped = await asyncio.wait_for(inner.stream_ch.recv(), 1.0)
+
+    try:
+        for turn, speaker in enumerate(("A", "B")):
+            # A new connection restarts provider time; caller audio stays contiguous.
+            wrapped._input_ch.restart_provider_clock()
+            now = 1021.0 + turn
+            volume = 1000 if turn == 0 else 100
+            stream.push_frame(
+                rtc.AudioFrame(
+                    data=volume.to_bytes(2, "little", signed=True) * 16000,
+                    sample_rate=16000,
+                    num_channels=1,
+                    samples_per_channel=16000,
+                )
+            )
+            async with asyncio.timeout(1.0):
+                while wrapped._input_ch._first_frame_at != 1020.0 + turn:
+                    await asyncio.sleep(0)
+
+            word = TimedString(
+                "hello",
+                start_time=float(turn),
+                end_time=turn + 0.6,
+                start_time_offset=wrapped.start_time_offset,
+                confidence=0.9,
+                speaker_id=speaker,
+            )
+            data = SpeechData(
+                language="en",
+                text="hello",
+                speaker_id=speaker,
+                start_time=float(turn),
+                end_time=turn + 0.6,
+                words=[word, TimedString("untimed")],
+            )
+            offset = 20.0 + declared_offset if declared_offset is not None else 0.0
+            for event_type in (SpeechEventType.FINAL_TRANSCRIPT, SpeechEventType.END_OF_SPEECH):
+                wrapped._event_ch.send_nowait(
+                    SpeechEvent(
+                        type=event_type,
+                        alternatives=[data, SpeechData(language="en", text="")],
+                        speech_start_time=1020.0 + turn,
+                        speech_end_time=1020.6 + turn,
+                    )
+                )
+                event = await asyncio.wait_for(stream.__anext__(), 1.0)
+                output = event.alternatives[0]
+                assert output.start_time == pytest.approx(turn + offset)
+                assert output.end_time == pytest.approx(turn + 0.6 + offset)
+                assert output.is_primary_speaker == (speaker == "A")
+                assert event.speech_start_time == 1020.0 + turn
+                assert event.speech_end_time == 1020.6 + turn
+                assert event.alternatives[1].start_time == event.alternatives[1].end_time == 0.0
+                assert output.words is not None
+                assert output.words[0].start_time == pytest.approx(turn + offset)
+                assert output.words[0].end_time == pytest.approx(turn + 0.6 + offset)
+                assert output.words[0].start_time_offset == pytest.approx(turn + offset)
+                assert output.words[0].confidence == 0.9
+                assert output.words[0].speaker_id == speaker
+                assert output.words[1].start_time is NOT_GIVEN
+                assert output.words[1].end_time is NOT_GIVEN
+                assert output.words[1].start_time_offset is NOT_GIVEN
+                assert data.end_time == word.end_time == turn + 0.6
+    finally:
+        await stream.aclose()
+        await adapter.aclose()
 
 
 @pytest.mark.parametrize("timed_endpoint", [False, True])
