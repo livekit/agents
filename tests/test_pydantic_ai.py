@@ -113,6 +113,29 @@ async def test_tools_run_inside_pydantic_ai():
     assert all(not c.delta.tool_calls for c in chunks if c.delta)
 
 
+async def test_tool_choice_none_is_forwarded_to_pydantic_ai():
+    """generate_reply(tool_choice="none") must reach the model, keeping the adapter's settings."""
+    seen_settings: list[dict | None] = []
+
+    async def stream_fn(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+        seen_settings.append(dict(info.model_settings) if info.model_settings else None)
+        yield "Sorry, let me keep this short."
+
+    adapter = LLMAdapter(
+        Agent(FunctionModel(stream_function=stream_fn)), model_settings={"temperature": 0.2}
+    )
+
+    texts, _ = await collect(adapter.chat(chat_ctx=user_ctx(), tool_choice="none"))
+    await collect(adapter.chat(chat_ctx=user_ctx()))
+
+    assert "".join(texts) == "Sorry, let me keep this short."
+    assert seen_settings[0] is not None
+    assert seen_settings[0].get("tool_choice") == "none"
+    assert seen_settings[0].get("temperature") == 0.2
+    assert seen_settings[1] is not None
+    assert "tool_choice" not in seen_settings[1]
+
+
 async def test_history_and_deps_reach_the_model():
     seen: list[list[ModelMessage]] = []
     seen_instructions: list[str | None] = []

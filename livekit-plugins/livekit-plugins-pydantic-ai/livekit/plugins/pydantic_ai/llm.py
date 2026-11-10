@@ -96,8 +96,9 @@ class LLMAdapter(llm.LLM, Generic[AgentDepsT]):
         chat_ctx: ChatContext,
         tools: list[llm.Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        # these are unused, since tool execution takes place in Pydantic AI
+        # unused, since tool execution takes place in Pydantic AI
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        # only "none" is honored: it disables the Pydantic AI agent's function tools for this run
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> PydanticAIStream[AgentDepsT]:
@@ -107,6 +108,13 @@ class LLMAdapter(llm.LLM, Generic[AgentDepsT]):
                 "register tools on the Pydantic AI agent instead",
                 extra={"tool_count": len(tools)},
             )
+        model_settings = self._model_settings
+        if tool_choice == "none":
+            # Pydantic AI runs its tools itself, so LiveKit's executor cannot refuse them;
+            # forward the policy so the model is asked for a text-only reply instead.
+            model_settings = ModelSettings(**model_settings) if model_settings else ModelSettings()
+            model_settings["tool_choice"] = "none"
+
         return PydanticAIStream(
             self,
             chat_ctx=chat_ctx,
@@ -114,7 +122,7 @@ class LLMAdapter(llm.LLM, Generic[AgentDepsT]):
             conn_options=conn_options,
             agent=self._agent,
             deps=self._deps,
-            model_settings=self._model_settings,
+            model_settings=model_settings,
         )
 
 
