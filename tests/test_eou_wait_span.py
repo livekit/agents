@@ -100,6 +100,7 @@ def _make_recognition(*, min_delay: float, with_detector: bool = False) -> Audio
     ar._last_speaking_time = None
     ar._last_final_transcript_time = None
     ar._speech_start_time = None
+    ar._first_interim_time = None
     ar._vad_speech_started = False
     ar._user_silence_ev = asyncio.Event()  # backs the _speaking setter
     ar._speaking = False
