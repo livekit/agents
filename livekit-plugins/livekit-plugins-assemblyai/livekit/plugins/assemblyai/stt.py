@@ -262,13 +262,6 @@ class STT(stt.STT):
                 Leave unset to use the server default. Only supported with the Universal-3 Pro
                 family models. Set at construction (connect) time only.
         """
-        if is_given(language_code) and is_given(language_codes):
-            raise ValueError(
-                "language_code and language_codes are mutually exclusive; "
-                "use language_codes (it accepts a single code directly)"
-            )
-        if is_given(language_code):
-            logger.warning("'language_code' is deprecated, use 'language_codes' instead.")
         # An explicit empty value ([], "", or None) is equivalent to unset at
         # construction — the param is omitted from the connect query either
         # way — so it is not subject to the U3-Pro-family gate below.
@@ -276,6 +269,13 @@ class STT(stt.STT):
             language_code = NOT_GIVEN
         if is_given(language_codes) and not language_codes:
             language_codes = NOT_GIVEN
+        if is_given(language_code) and is_given(language_codes):
+            raise ValueError(
+                "language_code and language_codes are mutually exclusive; "
+                "use language_codes (it accepts a single code directly)"
+            )
+        if is_given(language_code):
+            logger.warning("'language_code' is deprecated, use 'language_codes' instead.")
         if is_given(agent_context):
             _validate_agent_context(agent_context)
 
