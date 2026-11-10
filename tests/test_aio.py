@@ -1,4 +1,6 @@
 import asyncio
+import gc
+import weakref
 
 import pytest
 
@@ -62,6 +64,41 @@ async def test_channel_close_with_blocked_senders(wait_for_senders):
         for sender in senders:
             sender.cancel()
         await asyncio.gather(*senders, return_exceptions=True)
+
+
+async def _blocked_receiver(channel: aio.Chan[int]) -> None:
+    with pytest.raises(aio.ChanClosed):
+        await channel.recv()
+
+
+async def _blocked_sender(channel: aio.Chan[int]) -> None:
+    channel.send_nowait(1)
+    with pytest.raises(aio.ChanClosed):
+        await channel.send(2)
+
+
+async def _iterating_receiver(channel: aio.Chan[int]) -> None:
+    async for _ in channel:
+        pass
+
+
+@pytest.mark.parametrize("waiter", [_blocked_receiver, _blocked_sender, _iterating_receiver])
+async def test_closed_channel_is_freed_without_the_cyclic_gc(waiter):
+    # the ChanClosed error of a waiter must not keep the waiting frame, and with it the channel
+    channel = aio.Chan[int](maxsize=1)
+    channel_ref = weakref.ref(channel)
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        task = asyncio.create_task(waiter(channel))
+        await asyncio.sleep(0)
+        channel.close()
+        await task
+        del task, channel
+        assert channel_ref() is None
+    finally:
+        if gc_was_enabled:
+            gc.enable()
 
 
 async def test_interval():
