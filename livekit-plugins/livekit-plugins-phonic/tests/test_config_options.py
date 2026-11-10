@@ -25,17 +25,8 @@ async def test_external_id_is_omitted_when_not_given() -> None:
         await session.aclose()
 
 
-async def test_reconnect_on_abnormal_disconnect_is_off_by_default() -> None:
+async def test_session_reconnects_on_abnormal_disconnect() -> None:
     model = RealtimeModel(api_key="test")
-    session = model.session()
-    try:
-        assert not session._client._client_wrapper._reconnect_conversation_on_abnormal_disconnect
-    finally:
-        await session.aclose()
-
-
-async def test_reconnect_on_abnormal_disconnect_is_passed_to_client() -> None:
-    model = RealtimeModel(api_key="test", reconnect_conversation_on_abnormal_disconnect=True)
     session = model.session()
     try:
         assert session._client._client_wrapper._reconnect_conversation_on_abnormal_disconnect

@@ -170,7 +170,6 @@ class _RealtimeOptions:
     configs_for_tools: NotGivenOr[list[PhonicToolConfig]]
     forbid_speech_after_tool_call: NotGivenOr[list[str]]
     conn_options: APIConnectOptions
-    reconnect_conversation_on_abnormal_disconnect: bool = False
     instructions: NotGivenOr[str] = NOT_GIVEN
 
 
@@ -247,7 +246,6 @@ class RealtimeModel(llm.RealtimeModel):
         configs_for_tools: NotGivenOr[list[PhonicToolConfig]] = NOT_GIVEN,
         forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        reconnect_conversation_on_abnormal_disconnect: bool = False,
     ) -> None:
         """
         Initialize a RealtimeModel for Phonic's Realtime API.
@@ -316,10 +314,6 @@ class RealtimeModel(llm.RealtimeModel):
                 merged into ``configs_for_tools`` as ``forbid_speech_after_tool_call=True`` (an
                 explicit ``configs_for_tools`` entry for the same tool takes precedence).
             conn_options: Retry/backoff and connection settings.
-            reconnect_conversation_on_abnormal_disconnect: Experimental. When True, the session
-                reconnects and resumes the same Phonic conversation after a non-deliberate
-                websocket disconnect (close code 1006, 1012, or 1001 "restarting"). Messages
-                sent while reconnecting are dropped.
         """
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -398,7 +392,6 @@ class RealtimeModel(llm.RealtimeModel):
             configs_for_tools=configs_for_tools,
             forbid_speech_after_tool_call=forbid_speech_after_tool_call,
             conn_options=conn_options,
-            reconnect_conversation_on_abnormal_disconnect=reconnect_conversation_on_abnormal_disconnect,
         )
 
         if is_given(forbid_speech_after_tool_call):
@@ -532,7 +525,8 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._client = AsyncPhonic(
             api_key=self._opts.api_key,
-            reconnect_conversation_on_abnormal_disconnect=self._opts.reconnect_conversation_on_abnormal_disconnect,
+            # resume the same conversation after an abnormal disconnect (1006/1012)
+            reconnect_conversation_on_abnormal_disconnect=True,
         )
 
         self._socket: AsyncConversationsSocketClient | None = None
