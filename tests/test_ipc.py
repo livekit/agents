@@ -701,6 +701,70 @@ async def test_entrypoint_error_reports_failure(executor_type: job.JobExecutorTy
         await proc.aclose()
 
 
+@pytest.mark.parametrize("executor_type", [job.JobExecutorType.PROCESS, job.JobExecutorType.THREAD])
+async def test_job_setup_error_reports_failure(executor_type: job.JobExecutorType):
+    """A job that crashes in its setup, before the entrypoint task exists, is a failed job."""
+    if executor_type == job.JobExecutorType.PROCESS:
+        proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp.get_context("spawn"))
+    else:
+        proc, start_args = _create_thread_proc(close_timeout=10.0)
+
+    fake_job = _generate_fake_job()
+    fake_job.received_at = float("inf")  # the job's root span cannot start at this time
+
+    try:
+        await proc.start()
+        await proc.initialize()
+        await proc.launch_job(fake_job)
+        await asyncio.wait_for(proc.join(), timeout=20.0)
+
+        assert start_args.entrypoint_counter.value == 0
+        assert proc.status == ipc.job_executor.JobStatus.FAILED
+        if executor_type == job.JobExecutorType.THREAD:
+            # the thread shares the root logger: the failed job must not leave its filter on it
+            assert not [
+                f
+                for handler in logging.getLogger().handlers
+                for f in handler.filters
+                if isinstance(f, job._ContextLogFieldsFilter)
+                and f.job_ctx.job.id == fake_job.job.id
+            ]
+    finally:
+        await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+
+async def test_start_job_error_reports_failure_and_exits():
+    """A StartJobRequest that cannot be started fails the job and ends the runner, instead of
+    leaving it without a reader for the ShutdownRequest."""
+    from livekit.agents.ipc import job_proc_lazy_main, proto
+
+    class _FailingJobProc(job_proc_lazy_main._JobProc):
+        def _start_job(self, msg: proto.StartJobRequest) -> None:
+            raise RuntimeError("cannot start the job")
+
+    class _Client:
+        async def send(self, msg: object) -> None:
+            pass
+
+    job_proc = _FailingJobProc(
+        _initialize_proc,
+        _job_entrypoint,
+        None,
+        session_end_timeout=300.0,
+        executor_type=job.JobExecutorType.THREAD,
+    )
+    job_proc._client = _Client()  # type: ignore[assignment]
+    job_proc._inf_client = job_proc_lazy_main._InfClient(job_proc._client)
+
+    start_req = proto.StartJobRequest()
+    start_req.running_job = _generate_fake_job()
+    cch = utils.aio.Chan[ipc.channel.Message]()
+    cch.send_nowait(start_req)
+
+    await asyncio.wait_for(job_proc.entrypoint(cch), timeout=5.0)
+    assert job_proc.failed
+
+
 async def test_job_graceful_shutdown():
     mp_ctx = mp.get_context("spawn")
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
