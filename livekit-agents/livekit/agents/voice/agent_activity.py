@@ -4924,15 +4924,21 @@ class AgentActivity(RecognitionHooks):
             if len(new_fnc_outputs) > 0:
                 # wait all speeches played before updating the tool output and generating the response
                 # most realtime models don't support generating multiple responses at the same time
-                while self._current_speech or self._speech_q:
-                    if (
-                        self._current_speech
-                        and not self._current_speech.done()
-                        and self._current_speech is not speech_handle
-                    ):
-                        await self._current_speech
-                    else:
-                        await asyncio.sleep(0)
+                wait_cancel: asyncio.CancelledError | None = None
+                try:
+                    while self._current_speech or self._speech_q:
+                        if (
+                            self._current_speech
+                            and not self._current_speech.done()
+                            and self._current_speech is not speech_handle
+                        ):
+                            await self._current_speech
+                        else:
+                            await asyncio.sleep(0)
+                except asyncio.CancelledError as e:
+                    # the interruption timeout ended this wait, but the tools have returned
+                    # and the model holds their calls open: send the results before leaving
+                    wait_cancel = e
 
                 # if the realtime model auto-generates the tool reply, install a
                 # placeholder so the active RunResult waits for that reply
@@ -4982,6 +4988,9 @@ class AgentActivity(RecognitionHooks):
                         if self._pending_auto_tool_reply_fut is auto_reply_fut:
                             self._pending_auto_tool_reply_fut = None
                         auto_reply_fut.set_result(None)
+
+                if wait_cancel is not None:
+                    raise wait_cancel
 
             tool_reply_expected = fnc_executed_ev.has_tool_reply
             if tool_reply_expected and not self._rt_session.capabilities.auto_tool_reply_generation:

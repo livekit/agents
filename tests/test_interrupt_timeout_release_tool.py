@@ -108,6 +108,59 @@ async def test_interrupt_timeout_releases_the_running_tool() -> None:
         assert "the fee is 10 dollars" in final[0].output
 
 
+async def test_interrupt_timeout_keeps_the_result_of_a_returned_tool() -> None:
+    """A speech interrupted while its tool ran in the background waits for the current speech
+    before it sends the result. The timeout must not drop a result the tool has returned (#8489).
+    """
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def lookup(self) -> str:
+            """Look something up."""
+            await asyncio.sleep(2.0)
+            return "the fee is 10 dollars"
+
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+
+    async with AgentSession(llm=model) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(ToolAgent())
+        rt_session = model.active_session
+
+        handle = session.generate_reply()
+        while not rt_session._reply_futs:
+            await asyncio.sleep(0)
+
+        message_ch = utils.aio.Chan[llm.MessageGeneration]()
+        function_ch = utils.aio.Chan[llm.FunctionCall]()
+        message_ch.close()
+        function_ch.send_nowait(llm.FunctionCall(call_id="1", name="lookup", arguments="{}"))
+        function_ch.close()
+        rt_session._reply_futs[0].set_result(
+            llm.GenerationCreatedEvent(
+                message_stream=message_ch,
+                function_stream=function_ch,
+                user_initiated=True,
+                response_id="response-id",
+            )
+        )
+
+        # the turn has played out and waits for the tool in the background
+        await asyncio.sleep(0.5)
+        session.interrupt()
+        # another speech is current when the tool returns, and still is at the timeout
+        session.generate_reply()
+        await asyncio.sleep(INTERRUPTION_TIMEOUT + 0.5)
+
+        assert handle.done()
+        outputs = _outputs(rt_session.chat_ctx, "1")
+        assert len(outputs) == 1
+        assert "the fee is 10 dollars" in outputs[0].output
+
+
 async def test_interrupt_timeout_releases_the_running_pipeline_tool() -> None:
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Look up my order")
