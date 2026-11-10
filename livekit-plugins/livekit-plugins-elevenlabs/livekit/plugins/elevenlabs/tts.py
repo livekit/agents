@@ -310,7 +310,6 @@ class TTS(tts.TTS):
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
             changed = True
-            self._warn_if_model_ignores_options()
 
         if is_given(voice_id) and voice_id != self._opts.voice_id:
             self._opts.voice_id = voice_id
@@ -319,6 +318,9 @@ class TTS(tts.TTS):
         if is_given(voice_settings):
             self._opts.voice_settings = voice_settings
             changed = True
+
+        if is_given(model) or is_given(voice_settings):
+            self._warn_if_model_ignores_options()
 
         if is_given(language):
             language = LanguageCode(language)

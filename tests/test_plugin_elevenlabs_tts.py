@@ -756,6 +756,21 @@ def test_clone_strength_ignored_for_non_v4_model(
     assert "clone_strength" not in packet["voice_settings"]
 
 
+def test_update_options_warns_when_clone_strength_ignored(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_flash_v2_5", voice_id="voice-1")
+
+    with caplog.at_level(logging.WARNING):
+        tts.update_options(
+            voice_settings=elevenlabs_tts.VoiceSettings(
+                stability=0.5, similarity_boost=0.75, clone_strength=0.3
+            )
+        )
+
+    assert any("voice_settings.clone_strength" in r.getMessage() for r in caplog.records)
+
+
 def test_clone_strength_sent_again_after_switching_back_to_v4() -> None:
     tts = elevenlabs_tts.TTS(
         api_key="test-key",
