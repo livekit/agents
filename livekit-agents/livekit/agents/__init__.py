@@ -141,6 +141,7 @@ from .voice.amd import (
     AMDReason,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
+from .voice.guardrail import Block, DecisionEvaluated, DecisionGuardrail, Steer
 from .voice.keyterm_detection import (
     KeytermDetectionOptions,
     KeytermsOptions,
@@ -308,6 +309,10 @@ __all__ = [
     "AMDMenuObservedEvent",
     "AMDPredictionEvent",
     "AMDReason",
+    "Block",
+    "DecisionEvaluated",
+    "DecisionGuardrail",
+    "Steer",
     "TurnHandlingOptions",
     "EndpointingOptions",
     "InterruptionOptions",

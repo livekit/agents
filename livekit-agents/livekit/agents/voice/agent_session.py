@@ -80,6 +80,7 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
+from .guardrail import DecisionGuardrail
 from .ivr import IVRActivity
 from .keyterm_detection import (
     KeytermDetector,
@@ -790,6 +791,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._amd: AMD | None = None
         self._turn_hooks: TurnHooks | None = None
 
+        # decision guardrails register themselves here
+        self._guardrails: list[DecisionGuardrail] = []
+
     @property
     def amd(self) -> AMD | None:
         """The Answering Machine Detection (AMD) instance, or ``None`` if AMD is disabled."""
@@ -1440,6 +1444,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             await self._amd.aclose()
             self._amd = None
             self._turn_hooks = None
+
+        for guardrail in list(self._guardrails):
+            await guardrail.aclose()
 
         activity = self._activity
         cancelled = False
