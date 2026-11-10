@@ -15,7 +15,7 @@ from livekit.agents.voice.events import ConversationItemAddedEvent, UserInputTra
 from livekit.agents.voice.guardrail import (
     _combine,
     gate_agent_sentences,
-    run_user_turn_guardrails,
+    run_user_turn_checks,
 )
 
 pytestmark = pytest.mark.unit
@@ -61,7 +61,7 @@ class StubSession(utils.EventEmitter[Any]):
 
     def __init__(self) -> None:
         super().__init__()
-        self._guardrails: list[DecisionGuardrail] = []
+        self._guardrail: DecisionGuardrail | None = None
         self.history = ChatContext()
         self.agent_chat_ctx: ChatContext | None = None
 
@@ -81,8 +81,8 @@ def _user_message(text: str) -> ChatMessage:
 
 
 async def _run_user_turn(session: StubSession, text: str) -> Block | Steer | None:
-    return await run_user_turn_guardrails(
-        session._guardrails, chat_ctx=ChatContext(), user_message=_user_message(text)
+    return await run_user_turn_checks(
+        session._guardrail, chat_ctx=ChatContext(), user_message=_user_message(text)
     )
 
 
@@ -106,7 +106,7 @@ async def test_user_turn_block_and_steer() -> None:
     assert await _run_user_turn(session, "you idiot") == Block(say="Goodbye.")
     assert await _run_user_turn(session, "hello there") == Steer(instructions="Be brief.")
     await guardrail.aclose()
-    assert session._guardrails == []
+    assert session._guardrail is None
 
 
 async def test_user_turn_history_input_includes_conversation() -> None:
@@ -120,8 +120,8 @@ async def test_user_turn_history_input_includes_conversation() -> None:
 
     chat_ctx = ChatContext()
     chat_ctx.add_message(role="assistant", content="How can I help?")
-    await run_user_turn_guardrails(
-        session._guardrails, chat_ctx=chat_ctx, user_message=_user_message("my order")
+    await run_user_turn_checks(
+        session._guardrail, chat_ctx=chat_ctx, user_message=_user_message("my order")
     )
     assert model.inputs == ["assistant: How can I help?\nuser: my order"]
     await guardrail.aclose()
@@ -215,8 +215,8 @@ async def test_eager_history_is_reevaluated_when_the_context_changed() -> None:
     await asyncio.sleep(0)
 
     # unchanged context: the eager evaluation is reused
-    await run_user_turn_guardrails(
-        session._guardrails,
+    await run_user_turn_checks(
+        session._guardrail,
         chat_ctx=session.agent_chat_ctx.copy(),
         user_message=_user_message("it is 42"),
     )
@@ -230,8 +230,8 @@ async def test_eager_history_is_reevaluated_when_the_context_changed() -> None:
     # on_user_turn_completed added a message: same transcript, different input
     edited = session.agent_chat_ctx.copy()
     edited.add_message(role="user", content="(order 42 was corrected to 43)")
-    await run_user_turn_guardrails(
-        session._guardrails, chat_ctx=edited, user_message=_user_message("it is 42")
+    await run_user_turn_checks(
+        session._guardrail, chat_ctx=edited, user_message=_user_message("it is 42")
     )
     assert len(model.inputs) == 3
     assert "corrected to 43" in model.inputs[-1]
@@ -252,7 +252,7 @@ async def test_user_turn_ignores_results_its_hook_does_not_support() -> None:
     out = [
         c
         async for c in gate_agent_sentences(
-            session._guardrails, text(), chat_ctx=ChatContext(), speech_id="s", on_block=_no_block
+            session._guardrail, text(), chat_ctx=ChatContext(), speech_id="s", on_block=_no_block
         )
     ]
     assert out == ["This is the first sentence of the reply."]
@@ -318,7 +318,7 @@ async def test_sentence_gate_releases_the_reply_unchanged() -> None:
     out = [
         c
         async for c in gate_agent_sentences(
-            session._guardrails,
+            session._guardrail,
             _stream(*chunks),
             chat_ctx=ChatContext(),
             speech_id="speech_1",
@@ -350,7 +350,7 @@ async def test_sentence_gate_blocks_from_the_failing_sentence() -> None:
     out = [
         c
         async for c in gate_agent_sentences(
-            session._guardrails,
+            session._guardrail,
             _stream(
                 "Thanks for waiting on the line. ",
                 FlushSentinel(),
@@ -385,7 +385,7 @@ async def test_sentence_gate_on_error_block() -> None:
     out = [
         c
         async for c in gate_agent_sentences(
-            session._guardrails,
+            session._guardrail,
             _stream("Nothing gets through when the check fails."),
             chat_ctx=ChatContext(),
             speech_id="s",
@@ -431,3 +431,18 @@ def test_a_check_needs_decisions() -> None:
         @guardrail.on_user_turn(decisions={})
         def before_reply(ev: DecisionEvaluated) -> None:
             return None
+
+
+async def test_one_guardrail_per_session() -> None:
+    session = StubSession()
+    first = DecisionGuardrail(session, model=ScriptedModel(lambda _: 0.0))  # type: ignore[arg-type]
+    assert session._guardrail is first
+    with pytest.raises(RuntimeError, match="already has a DecisionGuardrail"):
+        DecisionGuardrail(session, model=ScriptedModel(lambda _: 0.0))  # type: ignore[arg-type]
+    assert session._guardrail is first
+
+    # closing frees the slot for a new one
+    await first.aclose()
+    second = DecisionGuardrail(session, model=ScriptedModel(lambda _: 0.0))  # type: ignore[arg-type]
+    assert session._guardrail is second
+    await second.aclose()

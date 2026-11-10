@@ -109,7 +109,7 @@ from .guardrail import (
     Steer,
     gate_agent_sentences,
     has_sentence_checks,
-    run_user_turn_guardrails,
+    run_user_turn_checks,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, InterruptionSource, SpeechHandle
 from .tool_executor import (
@@ -3151,9 +3151,9 @@ class AgentActivity(RecognitionHooks):
             return
 
         reply_instructions: NotGivenOr[str] = NOT_GIVEN
-        if self._session._guardrails:
-            verdict = await run_user_turn_guardrails(
-                self._session._guardrails,
+        if (guardrail := self._session._guardrail) is not None:
+            verdict = await run_user_turn_checks(
+                guardrail,
                 chat_ctx=temp_mutable_chat_ctx,
                 user_message=user_message,
             )
@@ -4020,10 +4020,11 @@ class AgentActivity(RecognitionHooks):
 
             text_source: AsyncIterable[str | FlushSentinel] = llm_gen_data.text_ch
             sentence_gate: AsyncGenerator[str | FlushSentinel, None] | None = None
-            if has_sentence_checks(self._session._guardrails):
-                # sentences reach the TTS and the transcript only once guardrails allow them
+            guardrail = self._session._guardrail
+            if guardrail is not None and has_sentence_checks(guardrail):
+                # sentences reach the TTS and the transcript only once the guardrail allows them
                 text_source = sentence_gate = gate_agent_sentences(
-                    self._session._guardrails,
+                    guardrail,
                     llm_gen_data.text_ch,
                     chat_ctx=chat_ctx,
                     speech_id=speech_handle.id,
