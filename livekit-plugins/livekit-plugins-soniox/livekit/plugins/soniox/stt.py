@@ -341,6 +341,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
                 self._ws = ws
                 self._drain_started.clear()
                 prepare = asyncio.create_task(self._prepare_audio_task())
@@ -488,9 +489,14 @@ class SpeechStream(stt.SpeechStream):
                         ],
                     )
                 )
+                # Translation tokens can omit timing; the source tokens carry the speech span.
+                endpoint_tokens = final_original if final_original.end_time > 0 else final
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=SpeechEventType.END_OF_SPEECH,
+                        alternatives=[endpoint_tokens.to_speech_data(self.start_time_offset)]
+                        if endpoint_tokens.end_time > 0
+                        else [],
                     )
                 )
 

@@ -988,7 +988,12 @@ class SpeechStream(stt.SpeechStream):
                             self._pool.remove(client)
                             if self._speaking:
                                 self._event_ch.send_nowait(
-                                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                                    stt.SpeechEvent(
+                                        type=stt.SpeechEventType.END_OF_SPEECH,
+                                        alternatives=[speech_data]
+                                        if speech_data.end_time > self.start_time_offset
+                                        else [],
+                                    )
                                 )
                                 self._speaking = False
                                 self._on_end_of_speech()
@@ -1000,8 +1005,24 @@ class SpeechStream(stt.SpeechStream):
                     if self._config.version == 2
                     else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
                 ):
+                    end_time = _duration_to_seconds(
+                        resp.speech_event_offset
+                        if isinstance(resp, cloud_speech_v2.StreamingRecognizeResponse)
+                        else resp.speech_event_time
+                    )
                     self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.END_OF_SPEECH,
+                            alternatives=[
+                                stt.SpeechData(
+                                    language=LanguageCode(""),
+                                    text="",
+                                    end_time=end_time + self.start_time_offset,
+                                )
+                            ]
+                            if end_time > 0
+                            else [],
+                        )
                     )
                     self._speaking = False
                     self._on_end_of_speech()
@@ -1028,6 +1049,7 @@ class SpeechStream(stt.SpeechStream):
 
                     should_stop = asyncio.Event()
                     input_done = asyncio.get_running_loop().create_future()
+                    self._input_ch.restart_provider_clock()
                     stream = await client.streaming_recognize(
                         requests=input_generator(client, should_stop),
                     )

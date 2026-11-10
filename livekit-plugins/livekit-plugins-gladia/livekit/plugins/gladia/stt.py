@@ -757,8 +757,6 @@ class SpeechStream(stt.SpeechStream):
             else:
                 self._audio_energy_filter = AudioEnergyFilter()
 
-        self._pushed_audio_duration = 0.0
-        self._session_time_offset = 0.0
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -879,8 +877,6 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
-        self._pushed_audio_duration = 0.0
-
         while True:
             # Initialize the Gladia session
             session_info = await self._init_live_session()
@@ -891,8 +887,8 @@ class SpeechStream(stt.SpeechStream):
             async with self._session.ws_connect(session_url, autoping=False) as ws:
                 self._ws = ws
                 self._drain_started.clear()
-                self._session_time_offset = self._pushed_audio_duration
                 logger.info(f"Connected to Gladia session {self._request_id}")
+                self._input_ch.restart_provider_clock()
 
                 try:
                     reconnect = await self._run_connection_tasks(
@@ -983,7 +979,6 @@ class SpeechStream(stt.SpeechStream):
                     chunk_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
                     message = json.dumps({"type": "audio_chunk", "data": {"chunk": chunk_b64}})
                     await self._ws.send_str(message)
-                    self._pushed_audio_duration += frame.duration
 
                 if has_ended:
                     break
@@ -1023,7 +1018,6 @@ class SpeechStream(stt.SpeechStream):
 
     def _process_gladia_message(self, data: dict) -> None:
         """Process messages from Gladia WebSocket."""
-        time_offset = self.start_time_offset + self._session_time_offset
         if data["type"] == "transcript":
             is_final = data["data"]["is_final"]
             utterance = data["data"]["utterance"]
@@ -1050,16 +1044,16 @@ class SpeechStream(stt.SpeechStream):
 
                 speech_data = stt.SpeechData(
                     language=language,
-                    start_time=utterance.get("start", 0) + time_offset,
-                    end_time=utterance.get("end", 0) + time_offset,
+                    start_time=utterance.get("start", 0) + self.start_time_offset,
+                    end_time=utterance.get("end", 0) + self.start_time_offset,
                     confidence=utterance.get("confidence", 1.0),
                     text=text,
                     words=[
                         TimedString(
                             text=word.get("word", ""),
-                            start_time=word.get("start", 0) + time_offset,
-                            end_time=word.get("end", 0) + time_offset,
-                            start_time_offset=time_offset,
+                            start_time=word.get("start", 0) + self.start_time_offset,
+                            end_time=word.get("end", 0) + self.start_time_offset,
+                            start_time_offset=self.start_time_offset,
                         )
                         for word in words
                     ],
@@ -1083,6 +1077,9 @@ class SpeechStream(stt.SpeechStream):
                                 stt.SpeechEvent(
                                     type=stt.SpeechEventType.END_OF_SPEECH,
                                     request_id=self._request_id,
+                                    alternatives=[speech_data]
+                                    if utterance.get("end", 0) > 0
+                                    else [],
                                 )
                             )
                     # If translation *is* enabled, we suppress this final event
@@ -1132,16 +1129,16 @@ class SpeechStream(stt.SpeechStream):
                         if original_language
                         else None,
                         source_texts=[original_text or ""] if original_language else None,
-                        start_time=translated_utterance.get("start", 0) + time_offset,
-                        end_time=translated_utterance.get("end", 0) + time_offset,
+                        start_time=translated_utterance.get("start", 0) + self.start_time_offset,
+                        end_time=translated_utterance.get("end", 0) + self.start_time_offset,
                         confidence=translated_utterance.get("confidence", 1.0),
                         text=translated_text,  # Use the translated text
                         words=[
                             TimedString(
                                 text=word.get("word", ""),
-                                start_time=word.get("start", 0) + time_offset,
-                                end_time=word.get("end", 0) + time_offset,
-                                start_time_offset=time_offset,
+                                start_time=word.get("start", 0) + self.start_time_offset,
+                                end_time=word.get("end", 0) + self.start_time_offset,
+                                start_time_offset=self.start_time_offset,
                             )
                             for word in words
                         ],
@@ -1158,9 +1155,20 @@ class SpeechStream(stt.SpeechStream):
                     # Emit END_OF_SPEECH after the final *translated* transcript
                     if self._speaking:
                         self._speaking = False
+                        end_time = original_utterance.get("end", 0)
                         self._event_ch.send_nowait(
                             stt.SpeechEvent(
-                                type=stt.SpeechEventType.END_OF_SPEECH, request_id=self._request_id
+                                type=stt.SpeechEventType.END_OF_SPEECH,
+                                request_id=self._request_id,
+                                alternatives=[
+                                    stt.SpeechData(
+                                        language=LanguageCode(original_language),
+                                        text="",
+                                        end_time=end_time + self.start_time_offset,
+                                    )
+                                ]
+                                if end_time > 0
+                                else [],
                             )
                         )
 

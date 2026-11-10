@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from typing import Any
 
 import pytest
@@ -27,11 +28,15 @@ from livekit.agents.stt import (
     SpeechEventType,
     STTCapabilities,
 )
+from livekit.agents.stt.multi_speaker_adapter import PrimarySpeakerDetectionOptions
 from livekit.agents.stt.stt import RecognitionUsage
-from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr, TimedString
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.voice.events import ConversationItemAddedEvent
 from livekit.agents.voice.keyterm_detection import KeytermDetector
+
+from .fake_stt import FakeSTT
+from .test_transcription_delay_anchor import _make_recognition
 
 pytestmark = pytest.mark.unit
 
@@ -179,6 +184,154 @@ def _metrics(label: str) -> STTMetrics:
 def test_wrapped_stt_exposed() -> None:
     adapter, wrapped = _adapter()
     assert adapter.wrapped_stt is wrapped
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("declared_offset", [None, 7.0])
+async def test_output_timeline_preserves_speaker_detection_and_shared_endpoints(
+    monkeypatch: pytest.MonkeyPatch, declared_offset: float | None
+) -> None:
+    now = 1000.0
+    monkeypatch.setattr(time, "time", lambda: now)
+    inner = FakeSTT()
+    inner.capabilities.diarization = True
+    adapter = MultiSpeakerAdapter(stt=inner)
+    stream = adapter.stream()
+    if declared_offset is not None:
+        stream.start_time_offset = declared_offset
+    wrapped = await asyncio.wait_for(inner.stream_ch.recv(), 1.0)
+
+    try:
+        for turn, speaker in enumerate(("A", "B")):
+            # A new connection restarts provider time; caller audio stays contiguous.
+            wrapped._input_ch.restart_provider_clock()
+            now = 1021.0 + turn
+            volume = 1000 if turn == 0 else 100
+            stream.push_frame(
+                rtc.AudioFrame(
+                    data=volume.to_bytes(2, "little", signed=True) * 16000,
+                    sample_rate=16000,
+                    num_channels=1,
+                    samples_per_channel=16000,
+                )
+            )
+            async with asyncio.timeout(1.0):
+                while wrapped._input_ch._first_frame_at != 1020.0 + turn:
+                    await asyncio.sleep(0)
+
+            word = TimedString(
+                "hello",
+                start_time=float(turn),
+                end_time=turn + 0.6,
+                start_time_offset=wrapped.start_time_offset,
+                confidence=0.9,
+                speaker_id=speaker,
+            )
+            data = SpeechData(
+                language="en",
+                text="hello",
+                speaker_id=speaker,
+                start_time=float(turn),
+                end_time=turn + 0.6,
+                words=[word, TimedString("untimed")],
+            )
+            offset = 20.0 + declared_offset if declared_offset is not None else 0.0
+            for event_type in (SpeechEventType.FINAL_TRANSCRIPT, SpeechEventType.END_OF_SPEECH):
+                wrapped._event_ch.send_nowait(
+                    SpeechEvent(
+                        type=event_type,
+                        alternatives=[data, SpeechData(language="en", text="")],
+                        speech_start_time=1020.0 + turn,
+                        speech_end_time=1020.6 + turn,
+                    )
+                )
+                event = await asyncio.wait_for(stream.__anext__(), 1.0)
+                output = event.alternatives[0]
+                assert output.start_time == pytest.approx(turn + offset)
+                assert output.end_time == pytest.approx(turn + 0.6 + offset)
+                assert output.is_primary_speaker == (speaker == "A")
+                assert event.speech_start_time == 1020.0 + turn
+                assert event.speech_end_time == 1020.6 + turn
+                assert event.alternatives[1].start_time == event.alternatives[1].end_time == 0.0
+                assert output.words is not None
+                assert output.words[0].start_time == pytest.approx(turn + offset)
+                assert output.words[0].end_time == pytest.approx(turn + 0.6 + offset)
+                assert output.words[0].start_time_offset == pytest.approx(turn + offset)
+                assert output.words[0].confidence == 0.9
+                assert output.words[0].speaker_id == speaker
+                assert output.words[1].start_time is NOT_GIVEN
+                assert output.words[1].end_time is NOT_GIVEN
+                assert output.words[1].start_time_offset is NOT_GIVEN
+                assert data.end_time == word.end_time == turn + 0.6
+    finally:
+        await stream.aclose()
+        await adapter.aclose()
+
+
+@pytest.mark.parametrize("timed_endpoint", [False, True])
+async def test_mixed_speaker_turn_ends_after_suppressed_final(timed_endpoint: bool) -> None:
+    primary = SpeechData(
+        language="en", text="primary speech", speaker_id="A", start_time=0.0, end_time=0.2
+    )
+    background = SpeechData(
+        language="en", text="background speech", speaker_id="B", start_time=0.2, end_time=0.4
+    )
+    events = [
+        SpeechEvent(type=SpeechEventType.START_OF_SPEECH),
+        SpeechEvent(type=SpeechEventType.FINAL_TRANSCRIPT, alternatives=[primary]),
+        SpeechEvent(type=SpeechEventType.FINAL_TRANSCRIPT, alternatives=[background]),
+        SpeechEvent(
+            type=SpeechEventType.END_OF_SPEECH,
+            alternatives=[background] if timed_endpoint else [],
+        ),
+    ]
+
+    class _TurnStream(RecognizeStream):
+        async def _run(self) -> None:
+            async for _ in self._input_ch:
+                pass
+            for event in events:
+                self._event_ch.send_nowait(event)
+
+    class _TurnSTT(_RecordingSTT):
+        def stream(self, *, language=NOT_GIVEN, conn_options=_CONN):
+            return _TurnStream(stt=self, conn_options=conn_options)
+
+    adapter = MultiSpeakerAdapter(
+        stt=_TurnSTT(),
+        suppress_background_speaker=True,
+        primary_detection_options=PrimarySpeakerDetectionOptions(min_rms_samples=1),
+    )
+    stream = adapter.stream(conn_options=_CONN)
+    recognition = _make_recognition(vad=None, input_started_at=100.0, mode="stt")
+    recognition._eou_wait_not_committed = 0
+    try:
+        for amplitude in [3000, 3000, 50, 50]:
+            stream.push_frame(
+                rtc.AudioFrame(
+                    data=amplitude.to_bytes(2, "little", signed=True) * 1600,
+                    sample_rate=16000,
+                    num_channels=1,
+                    samples_per_channel=1600,
+                )
+            )
+        stream.end_input()
+        forwarded = [event async for event in stream]
+        finals = [
+            e.alternatives[0].text for e in forwarded if e.type == SpeechEventType.FINAL_TRANSCRIPT
+        ]
+        assert finals == ["primary speech", ""]
+
+        for event in forwarded:
+            await recognition._on_stt_event(event)
+
+        assert recognition._audio_transcript == "primary speech"
+        assert recognition._user_turn_committed
+        assert not recognition._speaking
+        recognition._run_eou_detection.assert_called_once()
+    finally:
+        await stream.aclose()
+        await adapter.aclose()
 
 
 def test_keyterms_reach_the_wrapped_stt() -> None:

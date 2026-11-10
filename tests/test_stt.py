@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 from livekit import agents, rtc
 from livekit.agents import inference, stt
-from livekit.agents.stt.stt import STT, RecognizeStream, SpeechData, SpeechEvent
+from livekit.agents.stt.stt import STT, SpeechData, SpeechEvent
 from livekit.plugins import (
     assemblyai,
     aws,
@@ -25,16 +25,21 @@ from livekit.plugins import (
     gladia,
     google,
     gradium,
+    inworld,
     mistralai,
     nvidia,
     openai,
     reson8,
+    rtzr,
     sarvam,
+    silero,
     soniox,
     speechmatics,
+    xai,
 )
 
 from .utils import make_test_speech, wer
+from .utils.stt import assert_speech_end_time, collect_stream_events
 
 pytestmark = pytest.mark.stt
 
@@ -43,6 +48,23 @@ WER_THRESHOLD = 0.25
 MAX_RETRIES = 2
 STREAM_CHUNK_DURATION_MS = 10
 TRAILING_SILENCE_DURATION_MS = 2000
+# The last spoken word in tests/long.mp3 ends at approximately 44.4 seconds.
+SPEECH_END_TIME = 44.4
+
+UNTIMED_EOS_REASONS = {
+    "livekit.plugins.aws": "AWS EOS timing is deferred until live validation",
+    "livekit.plugins.cartesia": "Cartesia turns does not provide speech-end timestamps",
+    "livekit.plugins.fireworksai": "Fireworks emits an untimed EOS during connection cleanup",
+    "livekit.agents.inference": "The gateway-selected model has no verified endpoint timing",
+    "livekit.agents.inference.cartesia": "Cartesia gateway duration measures billed audio",
+    "livekit.plugins.mistralai.realtime_v3": (
+        "Voxtral 3 server turn timing includes the endpointing delay"
+    ),
+    "livekit.plugins.sarvam": "Sarvam saaras:v4 sends no speech or word timestamps",
+    "livekit.plugins.sarvam.realtime": "Sarvam can emit EOS before its timed final arrives",
+    "livekit.plugins.nvidia": "NVIDIA EOS timing is deferred until live validation",
+    "livekit.plugins.reson8": "Reson8 emits EOS without a provider speech-end timestamp",
+}
 
 
 def parameter_factory(plugin):
@@ -59,16 +81,12 @@ STTs: list[Callable[[], stt.STT]] = [
         fireworksai,
         gladia,
         fal,
-        mistralai,
         nvidia,
         openai,
-        cartesia,
         soniox,
-        google,
         inference,
         azure,
         aws,
-        sarvam,
         reson8,
         # rtzr,
         # TODO: only Business account allowed outside South Korea
@@ -77,6 +95,15 @@ STTs: list[Callable[[], stt.STT]] = [
         # spitch,
     ]
 ] + [
+    pytest.param(
+        lambda: mistralai.STT(model="voxtral-mini-transcribe-realtime-3"),
+        id="livekit.plugins.mistralai.realtime_v3",
+    ),
+    pytest.param(lambda: cartesia.STT(model="ink-2"), id="livekit.plugins.cartesia"),
+    pytest.param(lambda: sarvam.STT(model="saaras:v4"), id="livekit.plugins.sarvam"),
+    pytest.param(
+        lambda: google.STT(enable_voice_activity_events=True), id="livekit.plugins.google"
+    ),
     pytest.param(lambda: cartesia.STT(model="ink-whisper"), id="livekit.plugins.cartesia._legacy"),
     pytest.param(lambda: deepgram.STTv2(), id="livekit.plugins.deepgram.STTv2"),
     pytest.param(
@@ -87,6 +114,32 @@ STTs: list[Callable[[], stt.STT]] = [
 
 # Additional model configurations used only by streaming tests.
 STREAM_ONLY_STTs: list[Callable[[], stt.STT]] = [
+    parameter_factory(xai),
+    parameter_factory(inworld),
+] + [
+    pytest.param(
+        lambda: rtzr.STT(sample_rate=16000),
+        id="livekit.plugins.rtzr",
+    ),
+    pytest.param(
+        lambda: elevenlabs.STT(
+            model="scribe_v2_realtime",
+            include_timestamps=True,
+            server_vad={"vad_silence_threshold_secs": 0.5},
+        ),
+        id="livekit.plugins.elevenlabs.realtime",
+    ),
+    pytest.param(
+        lambda: mistralai.STT(model="voxtral-mini-transcribe-realtime-2602", vad=silero.VAD.load()),
+        id="livekit.plugins.mistralai.realtime",
+    ),
+    pytest.param(
+        lambda: mistralai.STT(model="voxtral-mini-transcribe-realtime-3", vad=silero.VAD.load()),
+        id="livekit.plugins.mistralai.realtime_v3_vad",
+    ),
+    pytest.param(
+        lambda: sarvam.STTRealtime(language="en-IN"), id="livekit.plugins.sarvam.realtime"
+    ),
     pytest.param(lambda: openai.STT(use_realtime=True), id="livekit.plugins.openai.realtime"),
     pytest.param(
         lambda: inference.STT(model="deepgram/nova-3"), id="livekit.agents.inference.deepgram"
@@ -102,6 +155,18 @@ STREAM_ONLY_STTs: list[Callable[[], stt.STT]] = [
         id="livekit.agents.inference.assemblyai",
     ),
     pytest.param(lambda: inference.STT(model="xai/stt-1"), id="livekit.agents.inference.xai"),
+    pytest.param(
+        lambda: assemblyai.STT(
+            model="universal-3-5-pro",
+            language_detection=True,
+            min_turn_silence=75,
+            max_turn_silence=1000,
+            mode="balanced",
+            interruption_delay=400,
+            vad_threshold=0.3,
+        ),
+        id="livekit.plugins.assemblyai.u3_pro",
+    ),
 ]
 
 
@@ -199,11 +264,16 @@ async def test_recognize(stt_factory: Callable[[], stt.STT], request):
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("stt_factory", STTs + STREAM_ONLY_STTs)
 async def test_stream(stt_factory: Callable[[], STT], request):
-    sample_rate = SAMPLE_RATE
-    plugin_id = request.node.callspec.id.split("-")[0]
+    plugin_id = request.node.callspec.id
     frames, transcript, _ = await make_test_speech(
-        chunk_duration_ms=STREAM_CHUNK_DURATION_MS, sample_rate=sample_rate
+        chunk_duration_ms=STREAM_CHUNK_DURATION_MS, sample_rate=SAMPLE_RATE
     )
+    silence = rtc.AudioFrame.create(
+        sample_rate=SAMPLE_RATE,
+        num_channels=1,
+        samples_per_channel=SAMPLE_RATE * STREAM_CHUNK_DURATION_MS // 1000,
+    )
+    frames.extend([silence] * (TRAILING_SILENCE_DURATION_MS // STREAM_CHUNK_DURATION_MS))
 
     # TODO: differentiate missing key vs other errors
     try:
@@ -218,111 +288,55 @@ async def test_stream(stt_factory: Callable[[], STT], request):
 
         for attempt in range(MAX_RETRIES):
             try:
-                state = {"closing": False}
+                started_at = time.monotonic()
+                async with stt.stream() as stream:
+                    async with asyncio.timeout(120):
+                        events, audio_started_at = await collect_stream_events(stream, frames)
 
-                async def _stream_input(
-                    frames: list[rtc.AudioFrame], stream: RecognizeStream, state: dict = state
-                ):
-                    for frame in frames:
-                        stream.push_frame(frame)
-                        await asyncio.sleep(frame.duration)
+                text = ""
+                recv_start, recv_end = False, True
+                got_final_transcript = False
+                for event in events:
+                    if event.type == agents.stt.SpeechEventType.START_OF_SPEECH:
+                        assert recv_end, (
+                            "START_OF_SPEECH recv but no END_OF_SPEECH has been sent before"
+                        )
+                        assert not recv_start
+                        recv_end = False
+                        recv_start = True
+                    elif event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
+                        if text:
+                            text += " "
+                        text += event.alternatives[0].text
+                        language = event.alternatives[0].language
+                        # Voxtral realtime can omit its detected language.
+                        if stt.provider not in {"FireworksAI", "RTZR", "livekit"} and (
+                            language or stt.provider != "MistralAI"
+                        ):
+                            assert language is not None
+                            assert language.lower().startswith("en")
+                        got_final_transcript = True
+                    elif event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
+                        recv_start = False
+                        recv_end = True
 
-                    silence = rtc.AudioFrame.create(
-                        sample_rate=sample_rate,
-                        num_channels=1,
-                        samples_per_channel=sample_rate * STREAM_CHUNK_DURATION_MS // 1000,
-                    )
-                    for _ in range(TRAILING_SILENCE_DURATION_MS // STREAM_CHUNK_DURATION_MS):
-                        stream.push_frame(silence)
-                        await asyncio.sleep(silence.duration)
-
-                    stream.end_input()
-                    state["closing"] = True
-
-                async def _stream_output(stream: RecognizeStream, state: dict = state):
-                    text = ""
-                    # make sure the events are sent in the right order
-                    recv_start, recv_end = False, True
-                    start_time = time.time()
-                    got_final_transcript = False
-                    sos_count, final_count = 0, 0
-
-                    async for event in stream:
-                        if event.type == agents.stt.SpeechEventType.START_OF_SPEECH:
-                            assert recv_end, (
-                                "START_OF_SPEECH recv but no END_OF_SPEECH has been sent before"
-                            )
-                            assert not recv_start
-                            recv_end = False
-                            recv_start = True
-                            sos_count += 1
-                            continue
-
-                        if event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
-                            if text != "":
-                                text += " "
-                            text += event.alternatives[0].text
-                            # ensure STT is tagging languages correctly
-                            language = event.alternatives[0].language
-                            if stt.provider not in {"FireworksAI", "RTZR", "livekit"}:
-                                assert language is not None
-                                assert language.lower().startswith("en")
-                            got_final_transcript = True
-                            final_count += 1
-                            # Some providers don't send END_OF_SPEECH, break after final transcript
-                            if state["closing"] and not isinstance(stt, inference.STT):
-                                break
-
-                        if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
-                            recv_start = False
-                            recv_end = True
-                            await asyncio.sleep(1)
-                            # some providers emit END_OF_SPEECH before the segment's final transcript
-                            if (
-                                state["closing"]
-                                and final_count >= sos_count
-                                and not isinstance(stt, inference.STT)
-                            ):
-                                break
-
-                    dt = time.time() - start_time
-                    print(f"WER: {wer(text, transcript)} for streamed {stt} in {dt:.2f}s")
-                    # Relaxed WER threshold for some providers
-                    if stt.provider in {
-                        "RTZR",  # RTZR defaults to Korean
-                        "Deepgram",
-                        "Sarvam",
-                        "FireworksAI",
-                    }:
-                        assert len(text) > 0 and wer(text, transcript) <= 1.0
-                    else:
-                        assert got_final_transcript, "No FINAL_TRANSCRIPT received"
-                        assert wer(text, transcript) <= WER_THRESHOLD
-
-                timed_out = False
-
-                async def _run_test():
-                    nonlocal timed_out
-                    stream = None
-                    try:
-                        async with asyncio.timeout(120):
-                            stream = stt.stream()
-                            await asyncio.gather(
-                                _stream_input(frames, stream), _stream_output(stream)
-                            )
-                    except TimeoutError:
-                        timed_out = True
-                    finally:
-                        if stream is not None:
-                            await stream.aclose()
-
-                await _run_test()
-                if timed_out:
-                    pytest.fail(f"{label} streaming timed out after 120 seconds")
+                speech_end = assert_speech_end_time(
+                    events,
+                    audio_started_at=audio_started_at,
+                    expected_end=SPEECH_END_TIME,
+                    untimed_reason=UNTIMED_EOS_REASONS.get(plugin_id),
+                )
+                dt = time.monotonic() - started_at
+                print(f"EOS: {speech_end}s; WER: {wer(text, transcript)} for {label} in {dt:.2f}s")
+                # RTZR's native streaming model recognizes Korean.
+                if stt.provider in {"Deepgram", "Sarvam", "FireworksAI", "RTZR"}:
+                    assert text and wer(text, transcript) <= 1.0
+                else:
+                    assert got_final_transcript, "No FINAL_TRANSCRIPT received"
+                    assert wer(text, transcript) <= WER_THRESHOLD
                 return
-            except (AssertionError, Exception):
+            except Exception:
                 if attempt < MAX_RETRIES - 1:
                     print(f"Attempt {attempt + 1} failed for {label}, retrying...")
-                    continue
                 else:
                     raise
