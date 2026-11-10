@@ -75,8 +75,9 @@ work server-side.
 
 Leave `language` unset to **auto-detect** the spoken language, or pin recognition
 to one or more supported codes. You can pass a single code, a comma-string, or a
-list — a list is normalized to Reson8's comma-joined form and any unsupported code
-raises `ValueError` locally, before a request is made.
+list - a list is normalized to Reson8's comma-joined form and any code the
+selected `model` does not support raises `ValueError` locally, before a request
+is made.
 
 ```python
 reson8.STT(model="rumble-2")                         # auto-detects the spoken language
@@ -88,7 +89,7 @@ reson8.STT(model="rumble-2", language=["nl", "de"])  # same, as a list
 `rumble-2` supports `af` `ar` `az` `be` `bg` `bn` `bs` `ca` `ceb` `cs` `da` `de`
 `el` `en` `es` `et` `eu` `fa` `fi` `fil` `fr` `fy` `gl` `hi` `hr` `hu` `id` `is`
 `it` `ja` `jv` `ko` `lt` `lv` `mk` `mr` `ms` `mt` `nb` `nl` `pl` `pt` `ro` `ru`
-`sk` `sl` `sq` `sr` `sv` `ta` `th` `tr` `uk` `vi` `yue` `zh` — available as the
+`sk` `sl` `sq` `sr` `sv` `ta` `th` `tr` `uk` `vi` `yue` `zh` - available as the
 `reson8.SupportedLanguage` type and the `reson8.SUPPORTED_LANGUAGES` tuple. See
 [Languages](https://docs.reson8.dev/speech-to-text/features/languages/).
 
@@ -135,7 +136,7 @@ rather than being relabelled.
 Use `phrases` for a handful of terms on a single request, a `custom_model_id`
 for a vocabulary that is larger or reused across requests, and `patterns` for
 structured tokens whose shape you know up front. `rumble-2` does not support
-`patterns`.
+`patterns` and caps `strength` at `1`; either raises `ValueError` locally.
 
 Biasing is not free: phrases and patterns can *degrade* transcription of audio
 that does not contain them, and stronger biasing introduces irrelevant terms.

@@ -19,7 +19,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Protocol, cast
+from typing import Protocol, cast, get_args
 
 import aiohttp
 import pytest
@@ -40,6 +40,7 @@ from livekit.plugins.reson8 import stt as reson8_stt
 from livekit.plugins.reson8._utils import (
     ERROR_MESSAGE_HEADER,
     INTEGRATION_HEADER,
+    MODEL_LANGUAGES,
     PRERECORDED_PATH,
     TURNS_PATH,
     _confidence,
@@ -501,6 +502,41 @@ def test_every_advertised_language_is_accepted() -> None:
         assert normalize_languages(code) == code
 
 
+def test_every_model_language_is_advertised() -> None:
+    """With no model set, codes are checked against the advertised list alone."""
+
+    assert set(MODEL_LANGUAGES) == set(get_args(reson8.STTModel))
+    for languages in MODEL_LANGUAGES.values():
+        assert set(languages) <= set(reson8.SUPPORTED_LANGUAGES)
+
+
+def test_resonant_1_rejects_a_rumble_2_only_language() -> None:
+    with pytest.raises(ValueError, match="resonant-1 supports"):
+        reson8.STT(api_key="k", model="resonant-1", language="ja")
+
+
+@pytest.mark.parametrize("model", [None, "rumble-2"])
+def test_a_rumble_2_language_is_accepted_without_resonant_1(model: reson8.STTModel | None) -> None:
+    reson8.STT(api_key="k", model=model, language="ja")
+
+
+def test_a_language_override_is_checked_against_the_model() -> None:
+    instance = reson8.STT(api_key="k", model="resonant-1")
+
+    with pytest.raises(ValueError, match="unsupported language"):
+        instance.update_options(language="ja")
+
+    with pytest.raises(ValueError, match="unsupported language"):
+        instance.stream(language="ja")
+
+
+async def test_a_recognize_language_is_checked_before_any_request() -> None:
+    instance = reson8.STT(api_key="k", model="resonant-1")
+
+    with pytest.raises(ValueError, match="unsupported language"):
+        await instance.recognize(_frame(), language="ja", conn_options=NO_RETRY)
+
+
 # ---------------------------------------------------------------------------
 # option validation, all before any request
 # ---------------------------------------------------------------------------
@@ -705,6 +741,35 @@ async def test_a_mutated_sequence_still_triggers_a_reconnect(
 def test_negative_strength_raises() -> None:
     with pytest.raises(ValueError, match="must be non-negative"):
         BiasingOptions(strength=-0.1)
+
+
+@pytest.mark.parametrize(
+    ("biasing", "message"),
+    [
+        pytest.param(BiasingOptions(patterns=["AMZ[0-9]{6}"]), "patterns", id="patterns"),
+        pytest.param(BiasingOptions(strength=1.2), "at most 1", id="strength"),
+    ],
+)
+def test_rumble_2_rejects_biasing_it_cannot_apply(biasing: BiasingOptions, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        reson8.STT(api_key="k", model="rumble-2", biasing=biasing)
+
+    instance = reson8.STT(api_key="k", model="rumble-2")
+    with pytest.raises(ValueError, match=message):
+        instance.update_options(biasing=biasing)
+
+    with pytest.raises(ValueError, match=message):
+        STTOptions(model="rumble-2", biasing=biasing)
+
+
+def test_rumble_2_accepts_a_strength_of_1() -> None:
+    reson8.STT(api_key="k", model="rumble-2", biasing=BiasingOptions(strength=1))
+
+
+@pytest.mark.parametrize("model", [None, "resonant-1"])
+def test_patterns_and_a_strong_bias_pass_without_rumble_2(model: reson8.STTModel | None) -> None:
+    biasing = BiasingOptions(patterns=["AMZ[0-9]{6}"], strength=1.2)
+    reson8.STT(api_key="k", model=model, biasing=biasing)
 
 
 def test_an_unsupported_filler_mode_raises() -> None:

@@ -66,6 +66,11 @@ See https://docs.reson8.dev/speech-to-text/features/languages/.
 SUPPORTED_LANGUAGES: tuple[str, ...] = get_args(SupportedLanguage)
 """``SupportedLanguage`` as a runtime tuple, for validation and error messages."""
 
+MODEL_LANGUAGES: dict[str, tuple[str, ...]] = {
+    "resonant-1": ("de", "en", "es", "fr", "fy", "it", "nl", "pl", "pt", "sv"),
+    "rumble-2": SUPPORTED_LANGUAGES,
+}
+
 Encoding = Literal["pcm_s16le"]
 """
 The only encoding this plugin can send.
@@ -97,15 +102,16 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "::1", "[::1]"})
 _IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 
-def normalize_languages(value: str | Sequence[str] | None) -> str | None:
+def normalize_languages(value: str | Sequence[str] | None, model: str | None = None) -> str | None:
     """
     Normalize and validate a language selection into Reson8's query form.
 
     ``"nl"`` -> ``"nl"``; ``"nl,de"`` -> ``"nl,de"``; ``["nl", "de"]`` ->
     ``"nl,de"``; ``None``/``""``/``[]`` -> ``None`` (auto-detect).
 
-    Raises ``ValueError`` if any code is not a :data:`SupportedLanguage`, so
-    invalid selections fail locally rather than after a request to the API.
+    Raises ``ValueError`` if any code is not supported by ``model``, or not a
+    :data:`SupportedLanguage` when no model is set, so invalid selections fail
+    locally rather than after a request to the API.
     """
 
     if value is None:
@@ -116,11 +122,13 @@ def normalize_languages(value: str | Sequence[str] | None) -> str | None:
     if not codes:
         return None
 
-    unsupported = [c for c in codes if c not in SUPPORTED_LANGUAGES]
+    allowed = MODEL_LANGUAGES[model] if model else SUPPORTED_LANGUAGES
+    unsupported = [c for c in codes if c not in allowed]
     if unsupported:
-        supported = ", ".join(sorted(SUPPORTED_LANGUAGES))
+        supported = ", ".join(sorted(allowed))
         raise ValueError(
-            f"unsupported language(s): {', '.join(unsupported)}. Reson8 supports: {supported}."
+            f"unsupported language(s): {', '.join(unsupported)}. "
+            f"{model or 'Reson8'} supports: {supported}."
         )
 
     return ",".join(codes)

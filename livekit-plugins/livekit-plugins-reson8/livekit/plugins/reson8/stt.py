@@ -287,6 +287,18 @@ class STTOptions:
     transcript: TranscriptOptions = field(default_factory=TranscriptOptions)
     biasing: BiasingOptions = field(default_factory=BiasingOptions)
 
+    def __post_init__(self) -> None:
+        check_model(self.model)
+        object.__setattr__(self, "language", normalize_languages(self.language, self.model))
+
+        if self.model == "rumble-2":
+            if self.biasing.patterns:
+                raise ValueError("patterns are not supported by rumble-2")
+
+            strength = self.biasing.strength
+            if strength is not None and strength > 1:
+                raise ValueError(f"rumble-2 accepts a strength of at most 1, got {strength}")
+
     def merged(
         self,
         *,
@@ -304,7 +316,7 @@ class STTOptions:
 
         changes: dict[str, Any] = {}
         if is_given(language):
-            changes["language"] = normalize_languages(language)
+            changes["language"] = normalize_languages(language, self.model)
 
         if is_given(turn):
             changes["turn"] = turn
@@ -400,7 +412,9 @@ class STT(stt.STT):
             base_url: Reson8 API base URL. Falls back to ``RESON8_BASE_URL``,
                 then ``https://api.reson8.dev``.
             model: Reson8 model, e.g. ``"rumble-2"``. Fixed for the lifetime of
-                the instance. Raises ``ValueError`` for an unknown model.
+                the instance. Raises ``ValueError`` for an unknown model, or
+                for a language or biasing option the model does not support,
+                here and in :meth:`update_options`.
             language: One or more :data:`SupportedLanguage` codes to pin
                 recognition to. Pass a single code (``"nl"``), a comma-string
                 (``"nl,de"``), or a list (``["nl", "de"]``). Leave as ``None`` to
@@ -437,7 +451,7 @@ class STT(stt.STT):
         self._base_url = resolve_base_url(base_url)
         self._opts = STTOptions(
             model=model,
-            language=normalize_languages(language),
+            language=normalize_languages(language, model),
             turn=turn or TurnOptions(),
             audio=audio or AudioOptions(),
             transcript=transcript,
@@ -543,7 +557,11 @@ class STT(stt.STT):
         language: NotGivenOr[str | Sequence[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        lang = normalize_languages(language) if is_given(language) else self._opts.language
+        lang = (
+            normalize_languages(language, self._opts.model)
+            if is_given(language)
+            else self._opts.language
+        )
         frames = rtc.combine_audio_frames(buffer)
 
         opts = replace(
