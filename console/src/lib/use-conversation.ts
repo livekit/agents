@@ -275,7 +275,8 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
    * Once a turn is over the history knows what the wire did not say about its
    * delegations: the call, the expert's task id, where it was reached and how,
    * the request as sent, the answer as returned. Each card without a call
-   * takes the next unclaimed delegating call's, in order.
+   * takes the next unclaimed delegating call of its turn; a call that sent no
+   * progress, and so has no card, gets one after its turn's message.
    */
   const settleDelegations = useCallback(async () => {
     const id = sessionRef.current;
@@ -286,39 +287,58 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
     } catch {
       return;
     }
-    const calls = new Map<string, { call: HistoryItem; extra: ReturnType<typeof recorded>; output?: HistoryItem }>();
+    type Call = { call: HistoryItem; extra: ReturnType<typeof recorded>; output?: HistoryItem; turn: number };
+    const calls = new Map<string, Call>();
+    /* the person's message a call follows, counted from 1: a background call's last frames come turns later */
+    const turnOf = new Map<string, number>();
+    let turn = 0;
     for (const item of items) {
+      if (item.type === "message" && item.role === "user") turn += 1;
       if (typeof item.call_id !== "string") continue;
       const callId = baseCall(item.call_id);
+      if (item.type === "function_call" && !turnOf.has(callId)) turnOf.set(callId, turn);
       const known = calls.get(callId);
       if (item.type === "function_call") {
         if (known) Object.assign(known.extra, recorded(item));
-        else if (delegated(item)) calls.set(callId, { call: item, extra: recorded(item) });
+        else if (delegated(item)) calls.set(callId, { call: item, extra: recorded(item), turn: turnOf.get(callId) ?? turn });
       } else if (item.type === "function_call_output" && known && toolUpdate(text(item.output)) === undefined) known.output = item;
     }
     if (!calls.size) return;
+    const settle = (entry: Extract<Entry, { kind: "delegation" }>, [callId, { call, extra, output }]: [string, Call]) => ({
+      ...entry,
+      ...extra,
+      callId,
+      name: String(call.name ?? entry.name),
+      task: requestOf(call.arguments) || entry.task,
+      answer: output ? text(output.output) : entry.answer,
+      failed: output ? Boolean(output.is_error) || undefined : entry.failed,
+      endedAt: output && typeof output.created_at === "number" ? output.created_at * 1000 : (entry.endedAt ?? Date.now()),
+    });
     setEntries((list) => {
       const claimed = new Set(list.flatMap((entry) => (entry.kind === "delegation" && entry.callId ? [entry.callId] : [])));
       const unclaimed = [...calls].filter(([callId]) => !claimed.has(callId));
-      let changed = false;
-      const next = list.map((entry) => {
+      if (!unclaimed.length) return list;
+      let users = 0;
+      const next: Entry[] = list.map((entry) => {
+        if (entry.kind === "user") users += 1;
         if (entry.kind !== "delegation" || entry.callId) return entry;
-        const claim = unclaimed.shift();
-        if (!claim) return entry;
-        const [callId, { call, extra, output }] = claim;
-        changed = true;
-        return {
-          ...entry,
-          ...extra,
-          callId,
-          name: String(call.name ?? entry.name),
-          task: requestOf(call.arguments) || entry.task,
-          answer: output ? text(output.output) : entry.answer,
-          failed: output ? Boolean(output.is_error) || undefined : entry.failed,
-          endedAt: output && typeof output.created_at === "number" ? output.created_at * 1000 : (entry.endedAt ?? Date.now()),
-        };
+        const same = unclaimed.findIndex(([, c]) => c.turn === users);
+        const claim = same >= 0 ? unclaimed.splice(same, 1)[0] : unclaimed.shift();
+        return claim ? settle(entry, claim) : entry;
       });
-      return changed ? next : list;
+      for (const claim of unclaimed) {
+        const { call, turn: of } = claim[1];
+        const at = typeof call.created_at === "number" ? call.created_at * 1000 : Date.now();
+        const card = settle({ kind: "delegation", id: nextId(), at, name: "", task: "", progress: [] }, claim);
+        /* after its turn's message and the cards already there, before the reply */
+        let place = next.length;
+        for (let index = 0, seen = 0; index < next.length; index++) {
+          if (next[index].kind === "user" && ++seen === of) place = index + 1;
+        }
+        while (place < next.length && next[place].kind === "delegation") place += 1;
+        next.splice(place, 0, card);
+      }
+      return next;
     });
   }, []);
 

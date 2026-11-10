@@ -2,8 +2,9 @@
 
 A stock A2A client with the Live extension on top, JSON-RPC over HTTP+SSE. The caller degrades
 from what the card offers: with the extension, ``livekit/kind: delegation`` and, outside the
-caller's session, the conversation as a ``chat_ctx`` part; without it, the request as text, the
-expert's ``working`` status messages as progress, the artifact text as the result.
+caller's session, the conversation as a ``chat_ctx`` part; without it, the request as text. Either
+way the artifact text is the result, and a ``working`` message is progress only when flagged
+``livekit/progress``, which any server can set.
 
 Attached to an ``Agent`` as ``tools=[A2ADelegate(url)]`` it is one tool, named and described
 from the expert's card, the same in a text run and on a call (docs/multi-agent.md).
@@ -14,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Callable, Sequence
+from functools import partial
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
@@ -311,10 +313,12 @@ class A2ADelegate(Delegate, Toolset):
         # a caller that stops waiting leaves the expert's task running: it ends on its own
         update, text = await _answer(
             reply,
-            progress,
-            say or progress,
-            lambda: client.resubscribe(reply.task_id, thread_id=reply.thread_id or None),
-            self._conn_options,
+            progress=progress,
+            say=say or progress,
+            resubscribe=partial(
+                client.resubscribe, reply.task_id, thread_id=reply.thread_id or None
+            ),
+            conn_options=self._conn_options,
         )
 
         if update.state == "failed":
@@ -475,7 +479,8 @@ async def _answer(
                 if update.state not in ("working", "submitted"):
                     return update, update.text
 
-                if not update.text:
+                # plain A2A gives a `working` text no meaning: only a flagged one is told
+                if not update.text or not (update.verbatim or update.progress):
                     continue
                 if skip > 0:
                     skip -= 1

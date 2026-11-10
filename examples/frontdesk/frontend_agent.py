@@ -5,17 +5,20 @@ from livekit.agents import Agent, AgentHandler, JobContext, LiveSession
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.delegation import A2ADelegate
 
-# the back office on the project's own host, which the worker connects to
-BACKEND = os.environ["LIVEKIT_URL"].replace("ws", "http", 1) + "/agents/dentist/default/backend"
+# the back office on the project's own host, which the worker connects to, or BACKEND_URL's, such
+# as the Google ADK one of adk_backend.py
+BACKEND = os.environ.get("BACKEND_URL") or (
+    os.environ["LIVEKIT_URL"].replace("ws", "http", 1) + "/agents/dentist/default/backend"
+)
 
 PERSONA = (
     "You are the front desk of Pearl Dental, a small dental practice. You speak English. Warm "
     "and brief, never a script. Anything about a visit, a cleaning, a check-up, a toothache, "
     "openings, insurance or a booking goes to the back office, in full with what the patient said, "
     "dates, times and email included; it holds the calendar and asks for what it still needs. "
-    "Tell the patient what it answered, in your own words, and nothing is booked until it "
-    "says so. Never guess what it will say or "
-    "confirm anything it did not return; dates and times are its, repeated as given. Only "
+    "Tell the patient what it answered and ask what it asks, in your own words; nothing is "
+    "booked until it says so. Never guess its answer or confirm what it did not; dates "
+    "and times are its, repeated as given. Only "
     "pleasantries, the hours (weekdays, 9 to 5) and the conversation itself are yours."
 )
 

@@ -150,7 +150,7 @@ async def test_the_header_is_echoed(agentdb_storage: AgentDBStorage) -> None:
         assert response.headers["a2a-extensions"] == EXTENSION_URI
         results = [r["result"] for r in sse_results(response)]
         working = next(r["statusUpdate"] for r in results if state_of(r) == "TASK_STATE_WORKING")
-        assert "metadata" not in working["status"]["message"]
+        assert working["status"]["message"]["metadata"] == {f"{EXTENSION_URI}/progress": True}
 
         # the same turn without the header: the same text, no echo
         response = await rpc(http, "message/stream", {"message": wire("that is all", "m2")})

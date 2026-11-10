@@ -233,13 +233,17 @@ what it gets:
 
 | The expert implements | What the caller sends and does |
 |---|---|
-| A2A only, over JSON-RPC with SSE | the request as text, with no `contextId` and nothing of the extension; its `working` status messages are the progress; the artifact text is the result; `failed` is a failure |
+| A2A only, over JSON-RPC with SSE | the request as text, with no `contextId` and nothing of the extension; the artifact text is the result; `failed` is a failure |
 | the extension, listed on its card | `livekit/kind: delegation` and the caller's thread id as `contextId`; with no thread to share, the caller's conversation as a `chat_ctx` data part |
 
 The caller never depends on a `livekit/` key coming back: with or without
-the extension, the working statuses are the progress, the artifact is the
-answer, `input-required` is a question for the person, and the terminal
-states end the task.
+the extension, the artifact is the answer, `input-required` is a question
+for the person, and the terminal states end the task. A2A gives a `working`
+status message no meaning, and a server such as ADK's sends its answer
+there before the artifact, so the caller tells the person only a `working`
+message flagged `livekit/progress: true`, on the message's metadata or the
+update's. Any server can set the flag without the rest of the extension;
+`ctx.update()` sets it.
 
 ## Errors
 

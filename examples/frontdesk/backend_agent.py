@@ -70,7 +70,7 @@ async def list_available_slots(
         if until
         else start + datetime.timedelta(days=14)
     )
-    await ctx.update("Checking the calendar.")
+    # await ctx.update("Checking the calendar.")
     slots = await ctx.deps.available(start, end)
     lines = []
     for slot in slots:
@@ -134,19 +134,24 @@ async def schedule_appointment(
 
 INSURANCE_CHECK_SECONDS = 8
 """How long an insurance check takes: it stands in for a slow payer system."""
-ACCEPTED_INSURERS = ("aetna", "cigna", "delta dental", "metlife")
+ACCEPTED_INSURERS = ("Aetna", "Cigna", "Delta Dental", "MetLife")
 
 
 @backend.tool(flags=ToolFlag.CANCELLABLE)
-async def check_insurance(ctx: RunContext[Calendar, Patient], provider: str) -> str:
-    """Whether the practice takes the patient's dental insurance; it takes a while.
+async def check_insurance(
+    ctx: RunContext[Calendar, Patient], provider: str | None = None
+) -> str | InputRequired:
+    """Whether the practice takes the patient's dental insurance; it takes a while, and it asks
+    which insurance they have when they named none.
 
     Args:
-        provider: the insurance company, as the patient named it
+        provider: the insurance company, as the patient named it; left out when they named none
     """
+    if not provider:
+        return InputRequired("Which dental insurance do you have?")
     await ctx.update(f"Checking with {provider}.")
     await asyncio.sleep(INSURANCE_CHECK_SECONDS)
-    if any(name in provider.lower() for name in ACCEPTED_INSURERS):
+    if any(name.lower() in provider.lower() for name in ACCEPTED_INSURERS):
         return f"{provider} is accepted"
     return f"{provider} is not accepted; visits are self-pay"
 
