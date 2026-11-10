@@ -100,7 +100,12 @@ class TaskGroup(AgentTask[TaskGroupResult]):
             self._current_task = factory_info.task_factory()
 
             shared_chat_ctx = self.chat_ctx.copy()
-            await self._current_task.update_chat_ctx(shared_chat_ctx)
+            # keep prior tasks' tool calls in the shared context: filtering them to
+            # the next task's own tools would drop the calls that completed earlier
+            # tasks, hiding their results from the rest of the group (#8307)
+            await self._current_task.update_chat_ctx(
+                shared_chat_ctx, exclude_invalid_function_calls=False
+            )
 
             if out_of_scope_tool := self._build_out_of_scope_tool(active_task_id=task_id):
                 current_tools = self._current_task.tools
