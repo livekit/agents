@@ -19,6 +19,7 @@ import pytest
 from livekit.agents import JobContext, JobProcess, ipc, job, utils
 from livekit.agents.ipc.log_queue import LogQueueHandler, LogQueueListener
 from livekit.agents.utils.aio import duplex_unix
+from livekit.agents.voice.events import CloseReason
 from livekit.protocol import agent
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
@@ -211,7 +212,7 @@ async def _job_entrypoint_session_aclose_hangs(job_ctx: JobContext) -> None:
     job_ctx.add_shutdown_callback(_job_shutdown)
 
     class _HangingSession:
-        async def aclose(self) -> None:
+        async def _aclose_impl(self, *, reason: CloseReason) -> None:
             await asyncio.Event().wait()  # never resolves
 
     job_ctx._primary_agent_session = _HangingSession()  # type: ignore[assignment]
@@ -259,6 +260,17 @@ async def _job_entrypoint_raises_after_shutdown(job_ctx: JobContext) -> None:
         await fut
     finally:
         trigger_task.cancel()
+
+
+async def _job_entrypoint_raises(job_ctx: JobContext) -> None:
+    start_args: _StartArgs = job_ctx.proc.user_arguments
+
+    async def _job_shutdown() -> None:
+        with start_args.shutdown_counter.get_lock():
+            start_args.shutdown_counter.value += 1
+
+    job_ctx.add_shutdown_callback(_job_shutdown)
+    raise RuntimeError("entrypoint failed before connecting")
 
 
 async def _poll_until(
@@ -660,6 +672,99 @@ async def test_shutdown_callback_runs_when_entrypoint_raises():
     )
 
 
+@pytest.mark.parametrize("executor_type", [job.JobExecutorType.PROCESS, job.JobExecutorType.THREAD])
+async def test_entrypoint_error_reports_failure(executor_type: job.JobExecutorType):
+    if executor_type == job.JobExecutorType.PROCESS:
+        proc, start_args = _create_proc(
+            close_timeout=10.0,
+            mp_ctx=mp.get_context("spawn"),
+            job_entrypoint_fnc=_job_entrypoint_raises,
+        )
+    else:
+        proc, start_args = _create_thread_proc(
+            close_timeout=10.0,
+            job_entrypoint_fnc=_job_entrypoint_raises,
+        )
+
+    try:
+        await proc.start()
+        await proc.initialize()
+        await proc.launch_job(_generate_fake_job())
+        await asyncio.wait_for(proc.join(), timeout=20.0)
+
+        assert start_args.shutdown_counter.value == 1
+        assert proc.status == ipc.job_executor.JobStatus.FAILED
+        if executor_type == job.JobExecutorType.PROCESS:
+            assert proc.exitcode != 0
+            assert not proc.killed
+    finally:
+        await proc.aclose()
+
+
+@pytest.mark.parametrize("executor_type", [job.JobExecutorType.PROCESS, job.JobExecutorType.THREAD])
+async def test_job_setup_error_reports_failure(executor_type: job.JobExecutorType):
+    """A job that crashes in its setup, before the entrypoint task exists, is a failed job."""
+    if executor_type == job.JobExecutorType.PROCESS:
+        proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp.get_context("spawn"))
+    else:
+        proc, start_args = _create_thread_proc(close_timeout=10.0)
+
+    fake_job = _generate_fake_job()
+    fake_job.received_at = float("inf")  # the job's root span cannot start at this time
+
+    try:
+        await proc.start()
+        await proc.initialize()
+        await proc.launch_job(fake_job)
+        await asyncio.wait_for(proc.join(), timeout=20.0)
+
+        assert start_args.entrypoint_counter.value == 0
+        assert proc.status == ipc.job_executor.JobStatus.FAILED
+        if executor_type == job.JobExecutorType.THREAD:
+            # the thread shares the root logger: the failed job must not leave its filter on it
+            assert not [
+                f
+                for handler in logging.getLogger().handlers
+                for f in handler.filters
+                if isinstance(f, job._ContextLogFieldsFilter)
+                and f.job_ctx.job.id == fake_job.job.id
+            ]
+    finally:
+        await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+
+async def test_start_job_error_reports_failure_and_exits():
+    """A StartJobRequest that cannot be started fails the job and ends the runner, instead of
+    leaving it without a reader for the ShutdownRequest."""
+    from livekit.agents.ipc import job_proc_lazy_main, proto
+
+    class _FailingJobProc(job_proc_lazy_main._JobProc):
+        def _start_job(self, msg: proto.StartJobRequest) -> None:
+            raise RuntimeError("cannot start the job")
+
+    class _Client:
+        async def send(self, msg: object) -> None:
+            pass
+
+    job_proc = _FailingJobProc(
+        _initialize_proc,
+        _job_entrypoint,
+        None,
+        session_end_timeout=300.0,
+        executor_type=job.JobExecutorType.THREAD,
+    )
+    job_proc._client = _Client()  # type: ignore[assignment]
+    job_proc._inf_client = job_proc_lazy_main._InfClient(job_proc._client)
+
+    start_req = proto.StartJobRequest()
+    start_req.running_job = _generate_fake_job()
+    cch = utils.aio.Chan[ipc.channel.Message]()
+    cch.send_nowait(start_req)
+
+    await asyncio.wait_for(job_proc.entrypoint(cch), timeout=5.0)
+    assert job_proc.failed
+
+
 async def test_job_graceful_shutdown():
     mp_ctx = mp.get_context("spawn")
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
@@ -756,6 +861,49 @@ _job_loops: list[asyncio.AbstractEventLoop] = []
 async def _job_entrypoint_records_loop(job_ctx: JobContext) -> None:
     _job_loops.append(asyncio.get_running_loop())
     await _job_entrypoint(job_ctx)
+
+
+_close_reasons: list[CloseReason] = []
+
+
+async def _job_entrypoint_records_close_reason(job_ctx: JobContext) -> None:
+    start_args: _StartArgs = job_ctx.proc.user_arguments
+
+    class _Session:
+        async def aclose(self) -> None:
+            await self._aclose_impl(reason=CloseReason.USER_INITIATED)
+
+        async def _aclose_impl(self, *, reason: CloseReason) -> None:
+            _close_reasons.append(reason)
+
+    job_ctx._primary_agent_session = _Session()  # type: ignore[assignment]
+
+    async def _noop_session_end() -> None:
+        return None
+
+    job_ctx._on_session_end = _noop_session_end  # type: ignore[method-assign]
+
+    with start_args.entrypoint_counter.get_lock():
+        start_args.entrypoint_counter.value += 1
+
+    job_ctx.shutdown("close the session from the job shutdown")
+
+
+async def test_thread_job_shutdown_closes_session_as_job_shutdown():
+    """_shutdown_job must close the session with JOB_SHUTDOWN, not aclose()'s USER_INITIATED."""
+    _close_reasons.clear()
+    proc, start_args = _create_thread_proc(
+        close_timeout=10.0, job_entrypoint_fnc=_job_entrypoint_records_close_reason
+    )
+    await proc.start()
+    await proc.initialize()
+
+    await proc.launch_job(_generate_fake_job())
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert _close_reasons == [CloseReason.JOB_SHUTDOWN]
 
 
 async def test_thread_job_loop_is_closed_after_the_runner_exits():
