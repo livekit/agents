@@ -719,6 +719,25 @@ async def test_a_function_call_joins_the_speech_in_flight(duplex) -> None:
     assert [c async for c in generations[0].function_stream] == [call]
 
 
+async def test_a_function_call_after_an_interrupt_gets_its_own_generation(duplex) -> None:
+    """The framework stops reading an interrupted generation, so a late call must not join it."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=3)
+    await _settle()
+    assert len(generations) == 1 and session._burst is not None
+
+    session.interrupt()
+    fake.push(0.3, count=3)  # the model talks on, so the interrupted burst stays open
+    await _settle()
+    call = llm.FunctionCall(call_id="c1", name="save_outcome", arguments="{}")
+    fake.emit("function_call", call)
+    await _settle()
+
+    assert len(generations) == 2
+    assert [c async for c in generations[1].function_stream] == [call]
+
+
 async def test_a_function_call_alone_is_a_generation_over_at_once(duplex) -> None:
     """Nothing speech-shaped exists to end it, so it never waits on the gate."""
     fake, session, generations = duplex
