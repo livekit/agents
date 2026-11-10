@@ -720,6 +720,15 @@ async def test_job_setup_error_reports_failure(executor_type: job.JobExecutorTyp
 
         assert start_args.entrypoint_counter.value == 0
         assert proc.status == ipc.job_executor.JobStatus.FAILED
+        if executor_type == job.JobExecutorType.THREAD:
+            # the thread shares the root logger: the failed job must not leave its filter on it
+            assert not [
+                f
+                for handler in logging.getLogger().handlers
+                for f in handler.filters
+                if isinstance(f, job._ContextLogFieldsFilter)
+                and f.job_ctx.job.id == fake_job.job.id
+            ]
     finally:
         await asyncio.wait_for(proc.aclose(), timeout=30.0)
 

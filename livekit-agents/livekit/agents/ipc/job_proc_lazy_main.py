@@ -364,18 +364,24 @@ class _JobProc:
 
     @log_exceptions(logger=logger)
     async def _run_job_task(self) -> None:
-        self._job_ctx._on_setup()
-        self._job_ctx._start_log_buffering()
-        # before the first span: without a provider the job's root would not record
-        self._job_ctx._prepare_telemetry()
-
         job_ctx_token = _JobContextVar.set(self._job_ctx)
-        http_context._new_session_ctx()
+        try:
+            self._job_ctx._on_setup()
+            self._job_ctx._start_log_buffering()
+            # before the first span: without a provider the job's root would not record
+            self._job_ctx._prepare_telemetry()
 
-        self._entrypoint_started_mono = time.monotonic()
-        # the job's root span, from the availability request to the end of shutdown; the
-        # entrypoint returning is an event on it
-        job_span = _start_job_span(self._job_ctx)
+            http_context._new_session_ctx()
+
+            self._entrypoint_started_mono = time.monotonic()
+            # the job's root span, from the availability request to the end of shutdown; the
+            # entrypoint returning is an event on it
+            job_span = _start_job_span(self._job_ctx)
+        except BaseException:
+            # the setup installs log filters and a log buffer on the root logger, which a
+            # thread runner shares with the worker: do not leave them behind
+            await self._cleanup_job(job_ctx_token)
+            raise
         self._entrypoint_span_context = trace.set_span_in_context(job_span)
 
         async def _traceable_entrypoint(job_ctx: JobContext) -> None:
@@ -455,13 +461,15 @@ class _JobProc:
             # whatever happened above (a cancel while waiting, a close that raised), the job
             # ends: root span, temp dir, per-job telemetry state
             job_span.end()
+            await self._cleanup_job(job_ctx_token)
 
-            if tasks := self._job_ctx._pending_tasks:
-                await aio.cancel_and_wait(*tasks)
+    async def _cleanup_job(self, job_ctx_token: contextvars.Token[JobContext]) -> None:
+        if tasks := self._job_ctx._pending_tasks:
+            await aio.cancel_and_wait(*tasks)
 
-            await self._job_ctx._on_cleanup()
-            await http_context._close_http_ctx()
-            _JobContextVar.reset(job_ctx_token)
+        await self._job_ctx._on_cleanup()
+        await http_context._close_http_ctx()
+        _JobContextVar.reset(job_ctx_token)
 
     async def _shutdown_job(
         self, job_entry_task: asyncio.Task[None], shutdown_info: _ShutdownInfo
