@@ -775,13 +775,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._ivr_activity: IVRActivity | None = None
         self._amd: AMD | None = None
 
-        # decision guardrails register themselves here
-        self._guardrails: list[DecisionGuardrail] = []
+        # a DecisionGuardrail registers itself here; one per session
+        self._guardrail: DecisionGuardrail | None = None
 
     @property
     def amd(self) -> AMD | None:
         """The Answering Machine Detection (AMD) instance, or ``None`` if AMD is disabled."""
         return self._amd
+
+    @property
+    def guardrail(self) -> DecisionGuardrail | None:
+        """The session's :class:`DecisionGuardrail`, or ``None`` if there is none."""
+        return self._guardrail
 
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
         if event == "metrics_collected" and callback is not None:
@@ -1475,8 +1480,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity = None
 
         # after the drain: speech still playing out keeps its guardrail checks
-        for guardrail in list(self._guardrails):
-            await guardrail.aclose()
+        if self._guardrail is not None:
+            await self._guardrail.aclose()
 
         if self._agent_speaking_span:
             self._agent_speaking_span.end()

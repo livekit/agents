@@ -95,7 +95,8 @@ class _EagerEvaluation:
 class DecisionGuardrail:
     """Runs decision-model checks on a session and lets them block or steer replies.
 
-    Register handlers with the decorators:
+    A session has at most one guardrail. Register all its checks on it with the
+    decorators; each check can evaluate any mix of decisions:
 
     - :meth:`on_user_turn` runs before the agent replies to a user turn. Its handlers can
       return :class:`Block` (no reply for this turn) or :class:`Steer` (extra instructions
@@ -129,6 +130,11 @@ class DecisionGuardrail:
         model: str | DecisionModel,
         timeout: float = 1.0,
     ) -> None:
+        if session._guardrail is not None:
+            # a second guardrail would run unnoticed next to the first: add its checks there
+            raise RuntimeError(
+                "this session already has a DecisionGuardrail, register the checks on it"
+            )
         self._session = session
         self._owns_model = isinstance(model, str)
         self._model: DecisionModel = (
@@ -145,7 +151,7 @@ class DecisionGuardrail:
 
         session.on("user_input_transcribed", self._on_user_input_transcribed)
         session.on("conversation_item_added", self._on_conversation_item_added)
-        session._guardrails.append(self)
+        session._guardrail = self
 
     @property
     def model(self) -> DecisionModel:
@@ -235,8 +241,8 @@ class DecisionGuardrail:
         self._closed = True
         self._session.off("user_input_transcribed", self._on_user_input_transcribed)
         self._session.off("conversation_item_added", self._on_conversation_item_added)
-        if self in self._session._guardrails:
-            self._session._guardrails.remove(self)
+        if self._session._guardrail is self:
+            self._session._guardrail = None
         self._reset_turn()
         await aio.cancel_and_wait(*self._tasks)
         if self._owns_model:
@@ -458,25 +464,21 @@ def _combine(verdicts: list[_Verdict]) -> Block | Steer | None:
     return Steer(instructions="\n".join(steers)) if steers else None
 
 
-async def run_user_turn_guardrails(
-    guardrails: list[DecisionGuardrail],
+async def run_user_turn_checks(
+    guardrail: DecisionGuardrail,
     *,
     chat_ctx: llm.ChatContext,
     user_message: llm.ChatMessage,
 ) -> Block | Steer | None:
     """Run every ``on_user_turn`` check and combine their results."""
-    results = await asyncio.gather(
-        *(
-            g._user_turn_verdicts(chat_ctx=chat_ctx, user_message=user_message)
-            for g in list(guardrails)
-            if g._checks_for("user_turn")
-        )
-    )
-    return _combine([verdict for verdicts in results for verdict in verdicts])
+    if not guardrail._checks_for("user_turn"):
+        return None
+    verdicts = await guardrail._user_turn_verdicts(chat_ctx=chat_ctx, user_message=user_message)
+    return _combine(verdicts)
 
 
-def has_sentence_checks(guardrails: list[DecisionGuardrail]) -> bool:
-    return any(g._checks_for("agent_sentence") for g in guardrails)
+def has_sentence_checks(guardrail: DecisionGuardrail) -> bool:
+    return bool(guardrail._checks_for("agent_sentence"))
 
 
 # a sentence with its pending check (None for whitespace, which isn't checked), or a
@@ -485,7 +487,7 @@ _SentenceItem = tuple[str, "asyncio.Task[Block | None] | None"] | FlushSentinel
 
 
 async def gate_agent_sentences(
-    guardrails: list[DecisionGuardrail],
+    guardrail: DecisionGuardrail,
     text: AsyncIterable[str | FlushSentinel],
     *,
     chat_ctx: llm.ChatContext,
@@ -498,20 +500,16 @@ async def gate_agent_sentences(
     while earlier ones are spoken. Sentences are released in order. When one is blocked,
     nothing from it onwards is released and ``on_block`` is awaited.
     """
-    guardrails = [g for g in guardrails if g._checks_for("agent_sentence")]
     tokenizer = SentenceTokenizer(retain_format=True)
     queue = aio.Chan[_SentenceItem]()
     checks: set[asyncio.Task[Block | None]] = set()
     reply = ""
 
     async def _check(reply_so_far: str) -> Block | None:
-        results = await asyncio.gather(
-            *(
-                g._sentence_verdicts(reply=reply_so_far, chat_ctx=chat_ctx, speech_id=speech_id)
-                for g in guardrails
-            )
+        verdicts = await guardrail._sentence_verdicts(
+            reply=reply_so_far, chat_ctx=chat_ctx, speech_id=speech_id
         )
-        verdict = _combine([v for verdicts in results for v in verdicts])
+        verdict = _combine(verdicts)
         return verdict if isinstance(verdict, Block) else None
 
     def _submit(text: str) -> None:
