@@ -3194,7 +3194,10 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def _no_pending_speech(self) -> bool:
-        return not self._speech_q and (not self._current_speech or self._current_speech.done())
+        # an interrupted speech stays queued until the scheduler pops it, but is no longer pending
+        return all(speech.done() for _, _, speech in self._speech_q) and (
+            not self._current_speech or self._current_speech.done()
+        )
 
     @property
     def _has_followup_work(self) -> bool:
