@@ -158,6 +158,7 @@ class _FakeWS:
         error: dict | None = None,
         stale_error: bool = False,
         silent_from: int | None = None,
+        error_after_sends: int = 1,
     ) -> None:
         self.sent: list[dict] = []
         # utterances from this index on get no answer at all (a stalled server)
@@ -180,6 +181,8 @@ class _FakeWS:
             self._queue.append(_FakeMsg.text({"type": "end", "request_id": "stale"}))
             self._has_msg.set()
         self._error = error
+        # the error of the first utterance is held until this many utterances were sent
+        self._error_after_sends = error_after_sends
 
     async def send_str(self, data: str) -> None:
         body = json.loads(data)
@@ -188,7 +191,11 @@ class _FakeWS:
         if self._silent_from is not None and len(self.sent) > self._silent_from:
             return
         if self._error is not None:
-            self._queue.append(_FakeMsg.text({"type": "error", "request_id": rid, **self._error}))
+            if len(self.sent) == self._error_after_sends:
+                first = self.sent[0]["request_id"]
+                self._queue.append(
+                    _FakeMsg.text({"type": "error", "request_id": first, **self._error})
+                )
         else:
             n = len(self.sent)
             self._queue.append(_FakeMsg.text({"type": "start", "request_id": rid, "chunks": 1}))
@@ -264,7 +271,7 @@ async def test_stream_sends_one_utterance_per_sentence_and_plays_them_in_order()
 
 
 @pytest.mark.asyncio
-async def test_stream_server_error_is_an_api_status_error_and_drops_the_socket():
+async def test_stream_server_error_is_an_api_status_error_and_keeps_the_socket():
     from livekit.plugins.vartaloop import TTS
 
     tts = TTS(api_key=SECRET_API_KEY)
@@ -280,6 +287,30 @@ async def test_stream_server_error_is_an_api_status_error_and_drops_the_socket()
             pass
     assert exc_info.value.status_code == 503
     assert exc_info.value.retryable is True
+    # the server ended only that utterance: the healthy socket goes back to the pool
+    assert pool.removed is False
+
+
+@pytest.mark.asyncio
+async def test_stream_server_error_with_other_utterances_in_flight_drops_the_socket():
+    from livekit.plugins.vartaloop import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY)
+    ws = _FakeWS(error={"status": 503, "error": "busy"}, error_after_sends=2)
+    pool = _FakePool(ws)
+    tts._pool = pool  # type: ignore[assignment]
+
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5.0))
+    stream.push_text("Hello there, how are you doing today? ")
+    stream.push_text("I hope the weather is nice where you are. ")
+    stream.end_input()
+
+    with pytest.raises(APIStatusError) as exc_info:
+        async for _ in stream:
+            pass
+    assert exc_info.value.status_code == 503
+    assert len(ws.sent) == 2
+    # the second utterance would still answer on that socket: it is not reused
     assert pool.removed is True
 
 

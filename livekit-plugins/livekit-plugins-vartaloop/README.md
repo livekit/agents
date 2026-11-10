@@ -2,7 +2,7 @@
 
 Support for [Vartaloop](https://vartaloop.ai/)'s Hinglish and Indian-language text-to-speech in LiveKit Agents.
 
-More information is available in the docs for the [TTS](https://docs.livekit.io/agents/integrations/tts/vartaloop/) integration and in the [Vartaloop API reference](https://docs.vartaloop.ai).
+See the [Vartaloop integration docs](https://docs.livekit.io/agents/models/tts/vartaloop/) for more information, and the [Vartaloop API reference](https://docs.vartaloop.ai) for the API and voices.
 
 ## Installation
 
