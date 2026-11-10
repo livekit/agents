@@ -539,16 +539,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if ev_utt is not None and not ours:
                         # a late error of an utterance that is not ours (pooled socket leftover)
                         continue
+                    err = _status_error(
+                        int(data.get("status") or 500),
+                        str(data.get("error", "unknown error")),
+                        request_id=ev_utt or request_id,
+                        retry_after=data.get("retry_after"),
+                    )
+                    if not ours:
+                        raise err  # untagged: the session itself failed, drop the socket
                     # the server ends only the failed utterance and keeps the session;
                     # _run decides whether the socket can go back to the pool
-                    raise _UtteranceError(
-                        _status_error(
-                            int(data.get("status") or 500),
-                            str(data.get("error", "unknown error")),
-                            request_id=ev_utt or request_id,
-                            retry_after=data.get("retry_after"),
-                        )
-                    )
+                    raise _UtteranceError(err)
 
                 if not ours:
                     # an event of an utterance that is not ours (left over on a pooled socket)

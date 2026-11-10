@@ -198,9 +198,9 @@ class _FakeWS:
         if self._error is not None:
             if len(self.sent) == self._error_after_sends:
                 first = self.sent[0]["request_id"]
-                self._queue.append(
-                    _FakeMsg.text({"type": "error", "request_id": first, **self._error})
-                )
+                tagged = {} if self._error.get("untagged") else {"request_id": first}
+                body = {k: v for k, v in self._error.items() if k != "untagged"}
+                self._queue.append(_FakeMsg.text({"type": "error", **tagged, **body}))
         else:
             n = len(self.sent)
             self._queue.append(_FakeMsg.text({"type": "start", "request_id": rid, "chunks": 1}))
@@ -316,6 +316,26 @@ async def test_stream_server_error_with_other_utterances_in_flight_drops_the_soc
     assert exc_info.value.status_code == 503
     assert len(ws.sent) == 2
     # the second utterance would still answer on that socket: it is not reused
+    assert pool.removed is True
+
+
+@pytest.mark.asyncio
+async def test_an_untagged_error_drops_the_socket():
+    from livekit.plugins.vartaloop import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY)
+    # an error without request_id is the session's, not one utterance's
+    pool = _FakePool(_FakeWS(error={"status": 500, "error": "upstream closed", "untagged": True}))
+    tts._pool = pool  # type: ignore[assignment]
+
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5.0))
+    stream.push_text("Hello there, how are you doing today?")
+    stream.end_input()
+
+    with pytest.raises(APIStatusError) as exc_info:
+        async for _ in stream:
+            pass
+    assert exc_info.value.status_code == 500
     assert pool.removed is True
 
 
