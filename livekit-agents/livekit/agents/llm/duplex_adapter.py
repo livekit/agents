@@ -572,6 +572,10 @@ class _DuplexRealtimeSession(RealtimeSession):
     def tools(self) -> ToolContext:
         return self._duplex.tools
 
+    @property
+    def background_work_running(self) -> bool:
+        return self._duplex.background_work_running
+
     async def _update_session(
         self,
         *,
