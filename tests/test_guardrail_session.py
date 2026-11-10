@@ -54,9 +54,7 @@ FLAG = {"flag": decisions.Probability("Flag this.")}
 
 def _messages(events: list[ConversationItemAddedEvent]) -> list[tuple[str, str]]:
     return [
-        (ev.item.role, ev.item.text_content or "")
-        for ev in events
-        if ev.item.type == "message"
+        (ev.item.role, ev.item.text_content or "") for ev in events if ev.item.type == "message"
     ]
 
 

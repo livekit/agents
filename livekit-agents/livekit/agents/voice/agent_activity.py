@@ -2953,6 +2953,7 @@ class AgentActivity(RecognitionHooks):
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
+        steer_instructions: NotGivenOr[str] = NOT_GIVEN
         if self._session._guardrails:
             verdict = await run_user_turn_guardrails(
                 self._session._guardrails,
@@ -2969,8 +2970,13 @@ class AgentActivity(RecognitionHooks):
                     self._session.say(verdict.say)
                 return
             if isinstance(verdict, Steer):
-                # changes the context, so a preemptive reply is regenerated below
-                temp_mutable_chat_ctx.add_message(role="system", content=[verdict.instructions])
+                if isinstance(self.llm, llm.RealtimeModel):
+                    # a realtime reply ignores the chat context: pass the instructions as
+                    # generate_reply(instructions=...) does
+                    steer_instructions = verdict.instructions
+                else:
+                    # changes the context, so a preemptive reply is regenerated below
+                    temp_mutable_chat_ctx.add_message(role="system", content=[verdict.instructions])
 
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
@@ -3030,6 +3036,7 @@ class AgentActivity(RecognitionHooks):
             speech_handle = self._generate_reply(
                 user_message=user_message,
                 chat_ctx=temp_mutable_chat_ctx,
+                instructions=steer_instructions,
                 input_details=InputDetails(modality="audio"),
             )
             # the invalidated preemptive attempt answered this same turn: one agent_turn

@@ -1415,9 +1415,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             await self._amd.aclose()
             self._amd = None
 
-        for guardrail in list(self._guardrails):
-            await guardrail.aclose()
-
         activity = self._activity
         cancelled = False
         while activity and isinstance(agent_task := activity.agent, AgentTask):
@@ -1476,6 +1473,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             await activity.aclose()
         self._activity = None
+
+        # after the drain: speech still playing out keeps its guardrail checks
+        for guardrail in list(self._guardrails):
+            await guardrail.aclose()
 
         if self._agent_speaking_span:
             self._agent_speaking_span.end()
