@@ -42,8 +42,23 @@ _STATUS_HINTS = {
 }
 
 
-SupportedLanguage = Literal["de", "en", "es", "fr", "fy", "it", "nl", "pl", "pt", "sv"]
-"""The languages Reson8 can recognize, as ISO 639-1 codes.
+STTModel = Literal["resonant-1", "rumble-2"]
+"""Reson8 speech-to-text models.
+
+See https://docs.reson8.dev/speech-to-text/models/.
+"""
+
+STT_MODELS: tuple[str, ...] = get_args(STTModel)
+
+# fmt: off
+SupportedLanguage = Literal[
+    "af", "ar", "az", "be", "bg", "bn", "bs", "ca", "ceb", "cs", "da", "de", "el", "en",
+    "es", "et", "eu", "fa", "fi", "fil", "fr", "fy", "gl", "hi", "hr", "hu", "id", "is",
+    "it", "ja", "jv", "ko", "lt", "lv", "mk", "mr", "ms", "mt", "nb", "nl", "pl", "pt",
+    "ro", "ru", "sk", "sl", "sq", "sr", "sv", "ta", "th", "tr", "uk", "vi", "yue", "zh",
+]
+# fmt: on
+"""The languages ``rumble-2`` can recognize, as language codes.
 
 See https://docs.reson8.dev/speech-to-text/features/languages/.
 """
@@ -109,6 +124,13 @@ def normalize_languages(value: str | Sequence[str] | None) -> str | None:
         )
 
     return ",".join(codes)
+
+
+def check_model(model: str | None) -> None:
+    if model is not None and model not in STT_MODELS:
+        raise ValueError(
+            f"unsupported model: {model}. Reson8 accepts: {', '.join(sorted(STT_MODELS))}."
+        )
 
 
 def check_comma_joined(

@@ -455,8 +455,15 @@ def test_an_unrelated_update_leaves_the_capability_alone() -> None:
 def test_model_and_provider() -> None:
     assert reson8.STT(api_key="k").provider == "Reson8"
     assert reson8.STT(api_key="k").model == "default"
+    assert reson8.STT(api_key="k", model="rumble-2").model == "rumble-2"
+
     biasing = BiasingOptions(custom_model_id="m1")
-    assert reson8.STT(api_key="k", biasing=biasing).model == "m1"
+    assert reson8.STT(api_key="k", biasing=biasing).model == "default"
+
+
+def test_an_unsupported_model_raises() -> None:
+    with pytest.raises(ValueError, match="unsupported model"):
+        reson8.STT(api_key="k", model="rumble-2-flash")  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +483,7 @@ def test_model_and_provider() -> None:
         (["nl", "de"], "nl,de"),
         (" nl , de ", "nl,de"),
         (["nl", "", "de"], "nl,de"),
+        ("ja,yue", "ja,yue"),
     ],
 )
 def test_normalize_languages(value: str | list[str] | None, expected: str | None) -> None:
@@ -544,32 +552,32 @@ def test_an_out_of_range_probability_raises(value: float) -> None:
     [
         (0.5, 0.4),
         (0.9, 0.7),
-        (0.95, None),  # above the server's 0.92 default
     ],
 )
-def test_inverted_thresholds_raise(eager: float, final: float | None) -> None:
+def test_inverted_thresholds_raise(eager: float, final: float) -> None:
     with pytest.raises(ValueError, match="must be below"):
         TurnOptions(eager_probability=eager, final_probability=final)
+
+
+def test_equal_thresholds_warn(caplog: pytest.LogCaptureFixture) -> None:
+    """Equal thresholds are legal but pointless: the preflight gets no lead."""
+
+    with caplog.at_level("WARNING"):
+        TurnOptions(eager_probability=0.5, final_probability=0.5)
+    assert caplog.records
 
 
 @pytest.mark.parametrize(
     ("eager", "final"),
     [
-        (0.5, 0.5),  # both explicit, identical
-        (None, 0.5),  # 0.5 == the server's default eager
+        (None, None),
+        (0.35, 0.7),
+        # defaults differ per model, so a lone threshold is not checked against one
+        (0.95, None),
+        (None, 0.4),
+        (None, 0.5),
     ],
 )
-def test_equal_thresholds_warn(
-    eager: float | None, final: float, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Equal thresholds are legal but pointless: the preflight gets no lead."""
-
-    with caplog.at_level("WARNING"):
-        TurnOptions(eager_probability=eager, final_probability=final)
-    assert caplog.records
-
-
-@pytest.mark.parametrize(("eager", "final"), [(None, None), (0.35, 0.7)])
 def test_sane_thresholds_are_quiet(
     eager: float | None, final: float | None, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -730,6 +738,12 @@ def test_a_pinned_language_reaches_the_query_string(language: str, expected: str
 
 def test_language_is_omitted_for_auto_detection() -> None:
     assert "language" not in STTOptions().query_params(streaming=True)
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+def test_the_model_reaches_both_endpoints(streaming: bool) -> None:
+    params = STTOptions(model="rumble-2").query_params(streaming=streaming)
+    assert params["model"] == "rumble-2"
 
 
 def test_confidence_is_batch_only() -> None:

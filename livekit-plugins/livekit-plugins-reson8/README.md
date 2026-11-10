@@ -31,7 +31,7 @@ from livekit.agents import AgentSession
 from livekit.plugins import openai, reson8
 
 session = AgentSession(
-    stt=reson8.STT(),          # streaming + turn detection, language auto-detected
+    stt=reson8.STT(model="rumble-2"),  # streaming + turn detection, language auto-detected
     llm=openai.LLM(),
     tts=openai.TTS(),
     # "stt" hands turn detection to Reson8 and lets the agent start
@@ -49,24 +49,24 @@ hand turn-taking to Reson8 instead.
 ### Transcribing a file
 
 ```python
-event = await reson8.STT().recognize(audio_buffer)
+event = await reson8.STT(model="rumble-2").recognize(audio_buffer)
 print(event.alternatives[0].text)
 ```
 
-## Turn detection
+## Model
 
-Reson8 decides turn boundaries by confidence: it emits the preflight transcript
-at `turn.eager_probability` and commits the turn at `turn.final_probability`.
-The server default of `0.92` is tuned for conversational speech and is slow to
-commit a one-word answer; lower it to commit sooner, at the risk of cutting off
-longer utterances.
+Use `rumble-2`, Reson8's latest model:
 
 ```python
-stt = reson8.STT(turn=reson8.TurnOptions(final_probability=0.7))
+reson8.STT(model="rumble-2")
 ```
 
-`SpeechStream.flush()` commits the current turn immediately, keeping
-`final_probability` intact. LiveKit never calls it for you.
+See [Models](https://docs.reson8.dev/speech-to-text/models/).
+
+## Turn detection
+
+`SpeechStream.flush()` commits the current turn immediately. LiveKit never calls
+it for you.
 
 See [Turns](https://docs.reson8.dev/speech-to-text/turns/) for how turn events
 work server-side.
@@ -79,15 +79,17 @@ list — a list is normalized to Reson8's comma-joined form and any unsupported 
 raises `ValueError` locally, before a request is made.
 
 ```python
-reson8.STT()                        # auto-detects the spoken language
-reson8.STT(language="en")           # English only
-reson8.STT(language="nl,de")        # Dutch or German
-reson8.STT(language=["nl", "de"])   # same, as a list
+reson8.STT(model="rumble-2")                         # auto-detects the spoken language
+reson8.STT(model="rumble-2", language="en")          # English only
+reson8.STT(model="rumble-2", language="nl,de")       # Dutch or German
+reson8.STT(model="rumble-2", language=["nl", "de"])  # same, as a list
 ```
 
-Reson8 supports `de`, `en`, `es`, `fr`, `fy` (Frisian), `it`, `nl`, `pl`, `pt`
-and `sv` — available as the `reson8.SupportedLanguage` type and the
-`reson8.SUPPORTED_LANGUAGES` tuple. See
+`rumble-2` supports `af` `ar` `az` `be` `bg` `bn` `bs` `ca` `ceb` `cs` `da` `de`
+`el` `en` `es` `et` `eu` `fa` `fi` `fil` `fr` `fy` `gl` `hi` `hr` `hu` `id` `is`
+`it` `ja` `jv` `ko` `lt` `lv` `mk` `mr` `ms` `mt` `nb` `nl` `pl` `pt` `ro` `ru`
+`sk` `sl` `sq` `sr` `sv` `ta` `th` `tr` `uk` `vi` `yue` `zh` — available as the
+`reson8.SupportedLanguage` type and the `reson8.SUPPORTED_LANGUAGES` tuple. See
 [Languages](https://docs.reson8.dev/speech-to-text/features/languages/).
 
 ## Configuration
@@ -98,22 +100,13 @@ construction:
 ```python
 stt = reson8.STT(
     api_key="your-api-key",   # or set RESON8_API_KEY
+    model="rumble-2",
     language="nl",
-    turn=reson8.TurnOptions(final_probability=0.7),
     audio=reson8.AudioOptions(sample_rate=16000),
     transcript=reson8.TranscriptOptions(words=True),
     biasing=reson8.BiasingOptions(custom_model_id="my-model"),
 )
 ```
-
-### `TurnOptions`
-
-The main lever on end-of-turn latency. `None` leaves the server's default.
-
-| Field | Default | |
-|---|---|---|
-| `eager_probability` | `None` (server: `0.5`) | confidence at which the preflight transcript is emitted |
-| `final_probability` | `None` (server: `0.92`) | confidence at which the turn commits |
 
 ### `AudioOptions`
 
@@ -141,7 +134,8 @@ rather than being relabelled.
 
 Use `phrases` for a handful of terms on a single request, a `custom_model_id`
 for a vocabulary that is larger or reused across requests, and `patterns` for
-structured tokens whose shape you know up front.
+structured tokens whose shape you know up front. `rumble-2` does not support
+`patterns`.
 
 Biasing is not free: phrases and patterns can *degrade* transcription of audio
 that does not contain them, and stronger biasing introduces irrelevant terms.
@@ -150,7 +144,7 @@ that does not contain them, and stronger biasing introduces irrelevant terms.
 |---|---|---|
 | `custom_model_id` | `None` | a custom model to bias toward, for a vocabulary too large for `phrases` or reused across requests |
 | `phrases` | `None` | terms to bias toward, at most 250; needs no custom model |
-| `strength` | `None` (server: `0.45`) | additive boost on the model's trained calibration. Raise only when expected terminology is not being recovered |
+| `strength` | `None` (server: `0.45`) | additive boost on the model's trained calibration, at most `1` on `rumble-2`. Raise only when expected terminology is not being recovered |
 | `patterns` | `None` | shapes for short alphanumeric tokens to recover, e.g. `"AMZ[0-9]{6}"` or `"[0-9]{4,6}"` |
 
 ```python
