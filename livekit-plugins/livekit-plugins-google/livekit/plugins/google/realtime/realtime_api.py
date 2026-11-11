@@ -133,10 +133,15 @@ def _warn_model_api_mismatch(model: str, use_vertexai: bool) -> None:
         )
 
 
-def _warn_vertex_scheduling_unsupported() -> None:
+def _supports_tool_response_scheduling(model: str, *, vertexai: bool) -> bool:
+    # Extended Thinking requires async tools but rejects all function-response scheduling.
+    return not vertexai and "gemini-3.8-live-extended" not in model
+
+
+def _warn_scheduling_unsupported(target: str) -> None:
     logger.warning(
-        "tool_response_scheduling is not supported by Vertex AI and will be ignored; "
-        "tool responses use the default scheduling there."
+        f"tool_response_scheduling is not supported by {target} and will be ignored; "
+        "tool responses will omit scheduling."
     )
 
 
@@ -206,6 +211,21 @@ class _RealtimeOptions:
     session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
     labels: NotGivenOr[dict[str, str]] = NOT_GIVEN
     credentials: google.auth.credentials.Credentials | None = None
+
+    @property
+    def effective_tool_response_scheduling(self) -> NotGivenOr[types.FunctionResponseScheduling]:
+        """Omit explicit scheduling when the model or API does not support it."""
+        if _supports_tool_response_scheduling(self.model, vertexai=self.vertexai):
+            return self.tool_response_scheduling
+        return NOT_GIVEN
+
+    @property
+    def supports_silent_scheduling(self) -> bool:
+        """Whether a result can suppress a reply through SILENT scheduling."""
+        return (
+            _supports_tool_response_scheduling(self.model, vertexai=self.vertexai)
+            and self.tool_behavior == types.Behavior.NON_BLOCKING
+        )
 
 
 @dataclass
@@ -348,14 +368,18 @@ class RealtimeModel(llm.RealtimeModel):
             if is_given(vertexai)
             else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
         )
-        if use_vertexai and is_given(tool_response_scheduling):
-            _warn_vertex_scheduling_unsupported()
         if not is_given(model):
             model = (
                 "gemini-live-2.5-flash-native-audio"
                 if use_vertexai
                 else "gemini-2.5-flash-native-audio-preview-12-2025"
             )
+
+        if is_given(tool_response_scheduling) and not _supports_tool_response_scheduling(
+            model, vertexai=use_vertexai
+        ):
+            target = "Vertex AI" if use_vertexai else "Gemini 3.8 Live Extended Thinking"
+            _warn_scheduling_unsupported(target)
 
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -658,8 +682,11 @@ class RealtimeSession(llm.RealtimeSession):
             and self._opts.tool_response_scheduling != tool_response_scheduling
         ):
             self._opts.tool_response_scheduling = tool_response_scheduling
-            if self._opts.vertexai:
-                _warn_vertex_scheduling_unsupported()
+            if not _supports_tool_response_scheduling(
+                self._opts.model, vertexai=self._opts.vertexai
+            ):
+                target = "Vertex AI" if self._opts.vertexai else "Gemini 3.8 Live Extended Thinking"
+                _warn_scheduling_unsupported(target)
             # no need to restart
 
         if is_given(tool_choice):
@@ -767,10 +794,7 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            # vertex drops `scheduling`, and Gemini reads it only on NON_BLOCKING tools
-            supports_silent_scheduling = (
-                not self._opts.vertexai and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
-            )
+            supports_silent_scheduling = self._opts.supports_silent_scheduling
             if not supports_silent_scheduling and (
                 silenced := [
                     item.name
@@ -779,8 +803,8 @@ class RealtimeSession(llm.RealtimeSession):
                 ]
             ):
                 logger.warning(
-                    "a tool result wants no reply, but Gemini will answer it anyway; pass "
-                    "tool_behavior=NON_BLOCKING to keep it silent. Sending it regardless, "
+                    "a tool result wants no reply, but this model/API configuration does not "
+                    "support SILENT scheduling. Sending it regardless, "
                     "since an unanswered call blocks the session.",
                     extra={"functions": silenced},
                 )
@@ -788,7 +812,7 @@ class RealtimeSession(llm.RealtimeSession):
             tool_results = get_tool_results_for_realtime(
                 append_ctx,
                 vertexai=self._opts.vertexai,
-                tool_response_scheduling=self._opts.tool_response_scheduling,
+                tool_response_scheduling=self._opts.effective_tool_response_scheduling,
                 supports_silent_scheduling=supports_silent_scheduling,
                 synthetic_call_ids=self._synthetic_call_ids,
             )
@@ -1188,9 +1212,8 @@ class RealtimeSession(llm.RealtimeSession):
                                     ]
                                 ),
                                 vertexai=self._opts.vertexai,
-                                tool_response_scheduling=self._opts.tool_response_scheduling,
-                                supports_silent_scheduling=not self._opts.vertexai
-                                and self._opts.tool_behavior == types.Behavior.NON_BLOCKING,
+                                tool_response_scheduling=self._opts.effective_tool_response_scheduling,
+                                supports_silent_scheduling=self._opts.supports_silent_scheduling,
                                 synthetic_call_ids=self._synthetic_call_ids,
                             ):
                                 await session.send_tool_response(
@@ -1757,7 +1780,7 @@ class RealtimeSession(llm.RealtimeSession):
                     is_error=True,
                 ),
                 vertexai=self._opts.vertexai,
-                tool_response_scheduling=self._opts.tool_response_scheduling,
+                tool_response_scheduling=self._opts.effective_tool_response_scheduling,
                 send_id=bool(fnc_call.id),
             )
             for fnc_call in function_calls

@@ -417,10 +417,10 @@ def _tool_output(
 
 @asynccontextmanager
 async def _make_connected_session(
-    monkeypatch: pytest.MonkeyPatch, *, non_blocking_tools: bool = False
+    monkeypatch: pytest.MonkeyPatch, *, non_blocking_tools: bool = False, **options: Any
 ) -> AsyncIterator[RealtimeSession]:
     """A session that believes it is connected; client events queue in `_msg_ch`."""
-    async with _make_session(monkeypatch) as session:
+    async with _make_session(monkeypatch, **options) as session:
         if non_blocking_tools:
             session._opts.tool_behavior = types.Behavior.NON_BLOCKING
         session._msg_ch = utils.aio.Chan[ClientEvents]()
@@ -443,13 +443,27 @@ async def _drain_sent(session: RealtimeSession) -> list[object]:
     "reply_required, scheduling",
     [(False, types.FunctionResponseScheduling.SILENT), (True, None)],
 )
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-3.8-live",
+        "gemini-3.8-live-extended-thinking",
+        "models/gemini-3.8-live-extended-thinking-preview",
+    ],
+)
+@pytest.mark.parametrize("explicit", [None, types.FunctionResponseScheduling.INTERRUPT])
 async def test_tool_response_scheduling_follows_the_output(
     monkeypatch: pytest.MonkeyPatch,
     reply_required: bool,
     scheduling: types.FunctionResponseScheduling | None,
+    model: str,
+    explicit: types.FunctionResponseScheduling | None,
 ) -> None:
-    """A result owed by an interrupted turn goes out SILENT; a normal one keeps the default."""
-    async with _make_connected_session(monkeypatch, non_blocking_tools=True) as session:
+    """Only models with scheduling support send interrupted results SILENT."""
+    options = {"tool_response_scheduling": explicit} if explicit is not None else {}
+    async with _make_connected_session(
+        monkeypatch, non_blocking_tools=True, model=model, **options
+    ) as session:
         session._start_new_generation()
         session._handle_tool_calls(_tool_call())
         await _drain_sent(session)
@@ -463,7 +477,17 @@ async def test_tool_response_scheduling_follows_the_output(
         assert len(responses) == 1, f"expected the tool response to be sent, got {sent}"
         assert responses[0].function_responses is not None
         assert responses[0].function_responses[0].id == "fc_1"
-        assert responses[0].function_responses[0].scheduling == scheduling
+        if "live-extended" in model:
+            expected = None
+        elif reply_required:
+            expected = explicit
+        else:
+            expected = scheduling
+        assert responses[0].function_responses[0].scheduling == expected
+        if expected is None:
+            assert "scheduling" not in responses[0].function_responses[0].model_dump(
+                exclude_unset=True
+            )
 
 
 async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
@@ -575,13 +599,15 @@ async def test_tool_response_omits_a_locally_made_call_id(
 
 
 @pytest.mark.parametrize("vertexai", [False, True])
-def test_scheduling_warns_only_on_vertex(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, vertexai: bool
+@pytest.mark.parametrize("model", ["gemini-3.8-live", "gemini-3.8-live-extended-thinking"])
+def test_scheduling_warns_only_when_unsupported(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, vertexai: bool, model: str
 ) -> None:
-    """Vertex AI drops an explicit scheduling, so it says so instead of ignoring it."""
+    """Unsupported explicit scheduling is omitted with a warning."""
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     with caplog.at_level(logging.WARNING):
         RealtimeModel(
+            model=model,
             vertexai=vertexai,
             project="p",
             location="us-central1",
@@ -589,7 +615,7 @@ def test_scheduling_warns_only_on_vertex(
         )
 
     warned = any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
-    assert warned is vertexai
+    assert warned is (vertexai or "live-extended" in model)
 
 
 class _FakeLiveSession:
@@ -631,6 +657,8 @@ async def _connected_session(
     sent_after_handle: llm.ChatContext | None = None,
     pending: llm.ChatContext | None = None,
     caller_handle: bool = False,
+    open_call_ids: set[str] | None = None,
+    **options: Any,
 ) -> AsyncIterator[tuple[RealtimeSession, _FakeLiveSession]]:
     """Connect once onto a fake socket, resuming `handle` whose state is `known`."""
     from google.genai.live import AsyncLive
@@ -645,14 +673,16 @@ async def _connected_session(
     monkeypatch.setattr(AsyncLive, "connect", _connect)
     if caller_handle:
         session = RealtimeModel(
-            session_resumption=types.SessionResumptionConfig(handle=handle)
+            session_resumption=types.SessionResumptionConfig(handle=handle), **options
         ).session()
     else:
-        session = RealtimeModel().session()
+        session = RealtimeModel(**options).session()
         session._session_resumption_handle = handle
     if known is not None:
         session._resumption_chat_ctx = known
         session._chat_ctx = sent_after_handle if sent_after_handle is not None else known
+    if open_call_ids is not None:
+        session._open_call_ids = open_call_ids
     if pending is not None:
         await session.update_chat_ctx(pending)
     try:
@@ -1353,3 +1383,52 @@ async def test_failed_resume_context_update_keeps_pending_chat_ctx(
         assert session._chat_ctx.get_by_id(msg.id) is not None
     finally:
         await session.aclose()
+
+
+@pytest.mark.parametrize("model", ["gemini-3.8-live", "gemini-3.8-live-extended-thinking"])
+async def test_replayed_tool_results_use_model_scheduling_support(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    context = llm.ChatContext(
+        [
+            llm.FunctionCall(call_id="fc_1", name="lookup", arguments="{}"),
+            _tool_output(reply_required=False),
+        ]
+    )
+    async with _connected_session(
+        monkeypatch,
+        handle=None,
+        pending=context,
+        open_call_ids={"fc_1"},
+        model=model,
+        tool_response_scheduling=types.FunctionResponseScheduling.INTERRUPT,
+    ) as (_, fake):
+        responses = [payload for kind, payload in fake.sent if kind == "tool_response"]
+        assert len(responses) == 1
+        response = responses[0][0]  # type: ignore[index]
+        assert response.id == "fc_1"
+        assert response.response == {"output": "42"}
+        expected = None if "live-extended" in model else types.FunctionResponseScheduling.SILENT
+        assert response.scheduling == expected
+
+
+@pytest.mark.parametrize("model", ["gemini-3.8-live", "gemini-3.8-live-extended-thinking"])
+async def test_rejected_tool_results_use_model_scheduling_support(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    async with _make_connected_session(
+        monkeypatch,
+        model=model,
+        tool_response_scheduling=types.FunctionResponseScheduling.INTERRUPT,
+    ) as session:
+        session._reject_tool_calls(_tool_call().function_calls or [])
+        responses = [
+            event
+            for event in await _drain_sent(session)
+            if isinstance(event, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1
+        assert responses[0].function_responses is not None
+        response = responses[0].function_responses[0]
+        expected = None if "live-extended" in model else types.FunctionResponseScheduling.INTERRUPT
+        assert response.scheduling == expected
