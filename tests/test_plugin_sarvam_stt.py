@@ -305,6 +305,7 @@ async def _expect_audio(ws: _WebSocket, frame: rtc.AudioFrame) -> None:
     assert received == frame.data.tobytes()
 
 
+@pytest.mark.virtual_time
 @pytest.mark.parametrize("flush_signal", [True, False, None])
 @pytest.mark.parametrize(("first_ms", "sample_rate"), [(30, 8000), (75, 16000)])
 async def test_flush_preserves_audio_and_accepts_next_segment(
@@ -335,6 +336,7 @@ async def test_flush_preserves_audio_and_accepts_next_segment(
         assert session.connections == 1
 
 
+@pytest.mark.virtual_time
 @pytest.mark.parametrize("tail_ms", [0, 10])
 @pytest.mark.parametrize("flush_signal", [True, False, None])
 async def test_end_input_drains_audio_before_terminating(
@@ -356,6 +358,7 @@ async def test_end_input_drains_audio_before_terminating(
         assert session.ws.closed
 
 
+@pytest.mark.virtual_time
 async def test_end_input_waits_for_the_open_utterance(session: _Session) -> None:
     """Speech still open at end of input gets its final transcript before the close."""
     async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
@@ -385,6 +388,7 @@ async def test_end_input_waits_for_the_open_utterance(session: _Session) -> None
         assert session.ws.closed
 
 
+@pytest.mark.virtual_time
 async def test_end_input_times_out_when_the_utterance_never_finishes(session: _Session) -> None:
     async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
         stream = model.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.2))
@@ -399,6 +403,7 @@ async def test_end_input_times_out_when_the_utterance_never_finishes(session: _S
                 pass
 
 
+@pytest.mark.virtual_time
 async def test_end_input_grace_does_not_count_against_timeout(
     session: _Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
