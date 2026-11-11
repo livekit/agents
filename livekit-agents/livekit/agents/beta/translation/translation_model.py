@@ -4,11 +4,14 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
+
+if TYPE_CHECKING:
+    from ...llm import AudioGate
 
 
 @dataclass
@@ -166,6 +169,15 @@ class TranslationModel(ABC):
         provider only serves when ``capabilities.retargetable``.
         """
         self._target_language = target_language
+
+    def audio_gate(self) -> AudioGate | None:
+        """The gate that tells this model's speech from its silence, or None for the default.
+
+        A provider can stream audio without pause, its silence included; the session ends a
+        translation once the gate hears it go quiet, rather than once frames stop arriving.
+        Return a gate measured on the provider's own silence, as a duplex model does.
+        """
+        return None
 
     @abstractmethod
     def session(self) -> TranslationModelSession:

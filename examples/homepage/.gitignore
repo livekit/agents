@@ -1,0 +1,7 @@
+# deploy-homepage-examples.yml writes these at deploy time.
+livekit.toml
+
+# Install with `lk skills install`.
+.agents/
+**/.claude/skills/
+skills-lock.json

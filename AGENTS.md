@@ -55,10 +55,13 @@ uv run pytest --plugin openai           # only the openai provider tests
 uv run pytest --list-categories         # list every module grouped by category, then exit
 ```
 
-**Adding a test:** give the new module a category marker (`pytestmark =
-pytest.mark.unit`, etc.) — collection fails with a hint if it lacks one. Run
-pytest with the `--allow-uncategorized` option to temporarily disable this rule
-(CI keeps it on by default).
+**Adding a test:** put it in the module that already tests the same source module or feature (mirror
+the source: `voice/agent_task.py` → `tests/test_agent_task.py`, plugins → `test_plugin_<name>.py`),
+named after the behavior, not the issue; create a new file only for code with no test module yet,
+and give a new module a category marker (`pytestmark = pytest.mark.unit`, etc.) — collection fails
+with a hint if it lacks one (`--allow-uncategorized` disables this locally). A unit test must not
+make network calls or wait in real time: mark timing-driven async tests `pytest.mark.virtual_time`
+(`tests/virtual_time.py`) and keep each test well under 0.2s.
 
 ### Running Agents
 ```bash
