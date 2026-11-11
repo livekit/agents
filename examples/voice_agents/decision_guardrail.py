@@ -28,11 +28,44 @@ from livekit.agents import (
     cli,
     inference,
 )
-from livekit.agents.llm import Choice, Probability, Score
+from livekit.agents.llm import Choice, Decision, Probability, Score
 
 logger = logging.getLogger("decision-guardrail")
 
 load_dotenv()
+
+# evaluated together on each user turn, before the agent replies
+USER_TURN_DECISIONS: dict[str, Decision] = {
+    "abusive": Probability("The user is abusive, threatening or harassing."),
+    "topic": Choice(
+        "What is the user's message about?",
+        options={
+            "travel": "flights, bookings, baggage, refunds or the airline",
+            "smalltalk": "greetings, thanks or other small talk",
+            "off_topic": "anything unrelated to air travel",
+        },
+    ),
+    "frustration": Score(
+        "How frustrated does the user sound?",
+        levels=["calm", "annoyed", "frustrated", "furious"],
+    ),
+}
+
+# evaluated on the reply so far, each time a sentence is complete
+SENTENCE_DECISIONS: dict[str, Decision] = {
+    "promises_refund": Probability(
+        "The last sentence promises or guarantees the customer a refund, "
+        "compensation or money back."
+    ),
+}
+
+# evaluated on each complete agent message
+REPLY_DECISIONS: dict[str, Decision] = {
+    "politeness": Score(
+        "How polite is the agent's message?",
+        levels=["rude", "neutral", "polite", "very polite"],
+    ),
+}
 
 
 class SupportAgent(Agent):
@@ -73,23 +106,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     # runs before each reply. With eager=True (the default) it re-evaluates on every final
     # transcript, so the result is usually ready when the user stops speaking
-    @guardrail.on_user_turn(
-        decisions={
-            "abusive": Probability("The user is abusive, threatening or harassing."),
-            "topic": Choice(
-                "What is the user's message about?",
-                options={
-                    "travel": "flights, bookings, baggage, refunds or the airline",
-                    "smalltalk": "greetings, thanks or other small talk",
-                    "off_topic": "anything unrelated to air travel",
-                },
-            ),
-            "frustration": Score(
-                "How frustrated does the user sound?",
-                levels=["calm", "annoyed", "frustrated", "furious"],
-            ),
-        },
-    )
+    @guardrail.on_user_turn(decisions=USER_TURN_DECISIONS)
     def check_user_turn(ev: DecisionEvaluated) -> Block | Steer | None:
         _log(ev)
         if ev.value("abusive", 0.0) > 0.8:
@@ -105,15 +122,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     # runs on each sentence before it is spoken. on_error="block" keeps a sentence back
     # if it couldn't be checked in time
-    @guardrail.on_agent_sentence(
-        decisions={
-            "promises_refund": Probability(
-                "The last sentence promises or guarantees the customer a refund, "
-                "compensation or money back."
-            ),
-        },
-        on_error="block",
-    )
+    @guardrail.on_agent_sentence(decisions=SENTENCE_DECISIONS, on_error="block")
     def check_sentence(ev: DecisionEvaluated) -> Block | None:
         _log(ev)
         if ev.value("promises_refund", 0.0) > 0.6:
@@ -124,14 +133,7 @@ async def entrypoint(ctx: JobContext) -> None:
         return None
 
     # runs after each agent message; it can only observe
-    @guardrail.on_agent_turn(
-        decisions={
-            "politeness": Score(
-                "How polite is the agent's message?",
-                levels=["rude", "neutral", "polite", "very polite"],
-            ),
-        },
-    )
+    @guardrail.on_agent_turn(decisions=REPLY_DECISIONS)
     def score_reply(ev: DecisionEvaluated) -> None:
         _log(ev)
 
