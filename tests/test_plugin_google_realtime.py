@@ -481,6 +481,7 @@ async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
 ) -> None:
     """BLOCKING calls ignore scheduling, so each response is sent anyway and reported."""
     async with _make_connected_session(monkeypatch) as session:
+        session._opts.tool_behavior = types.Behavior.BLOCKING
         session._start_new_generation()
         session._handle_tool_calls(
             types.LiveServerToolCall(
@@ -1063,6 +1064,7 @@ async def test_update_instructions_role_for_api(
 ) -> None:
     """Vertex AI replaces the instruction with role="system"; the Gemini API rejects it."""
     async with _make_connected_session(monkeypatch) as session:
+        session._opts.model = "gemini-2.5-flash-native-audio-preview-12-2025"
         session._opts.vertexai = vertexai
         await session.update_instructions("replacement instructions")
 
