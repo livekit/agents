@@ -190,6 +190,9 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         self._history: list[TranscriptSegment] = []
         # kept past a participant leaving: their last words are attributed after they've gone
         self._track_sids: dict[str, str] = {}
+        # a muted track is out of the mix, so nobody waits on it and a room where everyone is
+        # muted stops its clock and its STT stream, as an empty one does
+        self._muted_tracks: set[str] = set()
 
     @property
     def history(self) -> list[TranscriptSegment]:
@@ -226,6 +229,8 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         room.on("track_subscribed", self._on_track_subscribed)
         room.on("track_unsubscribed", self._on_track_unsubscribed)
         room.on("participant_disconnected", self._on_participant_disconnected)
+        room.on("track_muted", self._on_track_muted)
+        room.on("track_unmuted", self._on_track_unmuted)
         for participant in room.remote_participants.values():
             for publication in participant.track_publications.values():
                 if isinstance(publication.track, rtc.RemoteAudioTrack) and publication.subscribed:
@@ -284,6 +289,8 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
             self._room.off("track_subscribed", self._on_track_subscribed)
             self._room.off("track_unsubscribed", self._on_track_unsubscribed)
             self._room.off("participant_disconnected", self._on_participant_disconnected)
+            self._room.off("track_muted", self._on_track_muted)
+            self._room.off("track_unmuted", self._on_track_unmuted)
 
         await aio.cancel_and_wait(*self._input_atasks.values())
         self._input_atasks.clear()
@@ -322,6 +329,11 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
     ) -> None:
         try:
             async for frame in frames:
+                if track_input.track_sid in self._muted_tracks:
+                    continue  # whatever a muted track still delivers is silence
+                if track_input.ended:
+                    # unmuted: back in the mix, its gate learning the floor afresh
+                    track_input = self._new_input(track_input.identity, track_input.track_sid)
                 track_input.push(frame)
                 self._data_ev.set()
         finally:
@@ -581,8 +593,12 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         ):
             return
 
+        if publication.muted:
+            self._muted_tracks.add(publication.sid)
         stream = rtc.AudioStream.from_track(track=track, sample_rate=_SAMPLE_RATE, num_channels=1)
         self.add_input(participant.identity, _track_frames(stream), track_sid=publication.sid)
+        if publication.muted:
+            self._mute_input(participant.identity, publication.sid)
 
     def _on_track_unsubscribed(
         self,
@@ -590,12 +606,36 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ) -> None:
-        track_input = self._mixer.inputs.get(participant.identity)
-        if track_input is not None and track_input.track_sid == publication.sid:
+        self._muted_tracks.discard(publication.sid)
+        # the sid of the track last read, which a mute may have taken out of the mix
+        if self._track_sids.get(participant.identity) == publication.sid:
             self._end_input(participant.identity)
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         self._end_input(participant.identity)
+
+    def _on_track_muted(
+        self, participant: rtc.RemoteParticipant, publication: rtc.RemoteTrackPublication
+    ) -> None:
+        if (
+            publication.kind == rtc.TrackKind.KIND_AUDIO
+            and publication.source == rtc.TrackSource.SOURCE_MICROPHONE
+        ):
+            self._muted_tracks.add(publication.sid)
+            self._mute_input(participant.identity, publication.sid)
+
+    def _on_track_unmuted(
+        self, participant: rtc.RemoteParticipant, publication: rtc.RemoteTrackPublication
+    ) -> None:
+        # the track's next frame brings the participant back
+        self._muted_tracks.discard(publication.sid)
+
+    def _mute_input(self, identity: str, track_sid: str) -> None:
+        """Take a participant out of the mix once what they already sent has played."""
+        track_input = self._mixer.inputs.get(identity)
+        if track_input is not None and track_input.track_sid == track_sid:
+            track_input.ended = True
+            self._data_ev.set()
 
     def _end_input(self, identity: str) -> None:
         """Stop reading a participant's track; what they already sent is still mixed."""

@@ -679,6 +679,36 @@ async def test_diarization_labels_are_learned_per_stream() -> None:
     assert hi.participant_identity in {"bob", "carol"} and hi.attribution == "word"
 
 
+async def test_a_fully_muted_room_stops_sending_audio_to_the_stt() -> None:
+    stt = _ScriptedSTT([])
+    session = TranscriptionSession(stt=stt, publish_transcriptions=False)
+    await session.start()
+    # a muted track can keep delivering silent frames; none of them reach the STT
+    session.add_input("alice", _paced(_track((3.0, _QUIET))), track_sid="TR_a")
+    alice = SimpleNamespace(identity="alice")
+    mic = SimpleNamespace(
+        sid="TR_a", kind=rtc.TrackKind.KIND_AUDIO, source=rtc.TrackSource.SOURCE_MICROPHONE
+    )
+
+    await asyncio.sleep(0.4)
+    session._on_track_muted(alice, mic)  # type: ignore[arg-type]
+    while session.participants:
+        await asyncio.sleep(0.01)
+    heard = sum(f.duration for f in stt.pushed)
+    await asyncio.sleep(0.4)
+    assert sum(f.duration for f in stt.pushed) == heard
+    assert len(stt.offsets) == 1
+
+    session._on_track_unmuted(alice, mic)  # type: ignore[arg-type]
+    await asyncio.sleep(0.3)
+    assert session.participants == ["alice"]
+    await session.aclose()
+
+    # back on a new stream, on the mix's clock: the muted stretch isn't in it
+    assert len(stt.offsets) == 2
+    assert stt.offsets[1] == pytest.approx(heard, abs=0.045)
+
+
 async def test_session_mixes_what_a_departing_participant_already_sent() -> None:
     stt = _ScriptedSTT([])
     session = TranscriptionSession(stt=stt, publish_transcriptions=False)
