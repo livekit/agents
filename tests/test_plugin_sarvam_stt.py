@@ -682,6 +682,32 @@ async def test_sarvam_stt_reconnect_closes_the_open_utterance_on_the_old_connect
     await stt.aclose()
 
 
+async def test_sarvam_stt_reconnect_waits_for_the_flushed_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transcript from earlier in the utterance doesn't end the wait for the flush."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    await stream._handle_transcript_data({"data": {"transcript": "पहला", "language_code": "hi-IN"}})
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    old = session.sockets[0]
+    await _wait_until(lambda: {"type": "flush"} in old.sent)
+    await asyncio.sleep(0.05)
+    assert not old.closed  # still waiting on the flushed audio's transcript
+    await stream._handle_transcript_data({"data": {"transcript": "दूसरा", "language_code": "hi-IN"}})
+
+    await _wait_until(lambda: len(session.sockets) == 2)
+    events = await _next_events(stream, 6)
+    texts = [e.alternatives[0].text for e in events if e.alternatives]
+    assert texts == ["पहला", "दूसरा"]
+    assert events[-1].type == sarvam_stt.stt.SpeechEventType.END_OF_SPEECH
+    await stream.aclose()
+    await stt.aclose()
+
+
 async def test_sarvam_stt_reconnect_ends_the_turn_when_no_transcript_arrives(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
