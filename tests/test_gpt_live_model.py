@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import contextvars
 import json
 import logging
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -16,13 +17,24 @@ import aiohttp
 import numpy as np
 import pytest
 from aiohttp import web
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, APIError, inference, llm
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    APIConnectionError,
+    APIConnectOptions,
+    APIError,
+    inference,
+    llm,
+)
 from livekit.agents.inference.realtime import gpt_live as inference_gpt_live
 from livekit.agents.llm._realtime import gpt_live as gpt_live_model
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
-from livekit.agents.telemetry import pii
+from livekit.agents.telemetry import pii, set_tracer_provider, trace_types, tracer
 from livekit.plugins.openai.realtime.gpt_live_model import (
     GPTLiveDelegation,
     GPTLiveModel,
@@ -30,6 +42,8 @@ from livekit.plugins.openai.realtime.gpt_live_model import (
 )
 from livekit.plugins.openai.realtime.gpt_live_types import ServiceTier
 from livekit.plugins.openai.tools import WebSearch
+
+from .trace_schema import assert_trace_well_formed
 
 pytestmark = pytest.mark.unit
 
@@ -1600,6 +1614,61 @@ async def test_a_delegated_model_is_billed_under_its_own_name(
     finally:
         await session.aclose()
         await model.aclose()
+
+
+@pytest.fixture
+def span_exporter() -> Iterator[InMemorySpanExporter]:
+    original_provider = tracer._tracer_provider
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    set_tracer_provider(provider)
+    try:
+        yield exporter
+    finally:
+        set_tracer_provider(original_provider)
+        provider.shutdown()
+
+
+@pytest.mark.no_concurrent
+async def test_the_voice_models_usage_is_on_a_span_under_the_session(
+    monkeypatch: pytest.MonkeyPatch, span_exporter: InMemorySpanExporter
+) -> None:
+    """The voice model is billed by the second: its usage must reach a span, or a tracing
+    backend cannot price the call. The events are handled in an empty
+    context, as the plugin's own task may run in any: the spans still hang off the session."""
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+        await session.start(Agent(instructions="Be concise."))
+        for _ in range(100):
+            if ws.session is not None and ws.session.session_id == "live_test":
+                break
+            await asyncio.sleep(0.01)
+        live = ws.session
+        assert live is not None and live.session_id == "live_test"
+
+        for event in (
+            {"type": "session.usage.updated", "usage": {"seconds": 14.0}},
+            _response_event("item_d1", _completed("resp_1")),
+        ):
+            contextvars.Context().run(live._handle_event, event)
+
+    spans = span_exporter.get_finished_spans()
+    (agent_session,) = [s for s in spans if s.name == "agent_session"]
+    usage = [s for s in spans if s.name == "realtime_metrics"]
+    assert agent_session.context is not None
+
+    # the update carries 14 seconds; the fake service closes the session with no more
+    assert [
+        json.loads(str(s.attributes[trace_types.ATTR_REALTIME_MODEL_METRICS]))["session_duration"]
+        for s in usage
+    ] == [14.0, 0.0]
+    assert [s.parent.span_id if s.parent else None for s in usage] == [
+        agent_session.context.span_id
+    ] * 2
+    assert usage[0].attributes[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == "gpt-live-1"
+    assert_trace_well_formed(spans)
 
 
 def _user_events(session: GPTLiveSession) -> list[tuple[str, Any]]:
