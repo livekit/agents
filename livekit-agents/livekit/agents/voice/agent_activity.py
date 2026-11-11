@@ -74,6 +74,7 @@ from .events import (
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
+    UserStateChangedEvent,
     UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
     _AgentBackchannelOpportunityEvent,
@@ -341,6 +342,12 @@ class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
         self._rt_session: llm.RealtimeSession | None = None
+        # a turn the model did not delegate waits to be judged until the agent has stopped speaking
+        # for the grace period; the options are read per turn, since a fallback swap changes them
+        # the detector whose usage this activity reports, since it is what calls it
+        self._delegation_detector: llm.DelegationDetector | None = None
+        self._delegation_check_pending = False
+        self._delegation_check_atask: asyncio.Task[None] | None = None
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
         self._realtime_user_input_answered_at: float = 0.0
         self._audio_recognition: AudioRecognition | None = None
@@ -1170,6 +1177,15 @@ class AgentActivity(RecognitionHooks):
                     self._rt_session.off("metrics_collected", self._on_metrics_collected)
                     self._rt_session.off("remote_item_added", self._on_remote_item_added)
                     self._rt_session.off("error", self._on_error)
+                    self._rt_session.off("delegation_created", self._on_delegation_created)
+                    self._session.off("agent_state_changed", self._on_speaking_for_delegation)
+                    self._session.off("user_state_changed", self._on_speaking_for_delegation)
+                    self._cancel_delegation_check()
+                    if self._delegation_detector is not None:
+                        self._delegation_detector.off(
+                            "metrics_collected", self._on_metrics_collected
+                        )
+                        self._delegation_detector = None
                     if isinstance(self._rt_session, _FallbackRealtimeSession):
                         self._rt_session._agent_session = None
                     resources.rt_session = self._rt_session
@@ -1291,6 +1307,9 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.on("metrics_collected", self._on_metrics_collected)
             self._rt_session.on("remote_item_added", self._on_remote_item_added)
             self._rt_session.on("error", self._on_error)
+            self._rt_session.on("delegation_created", self._on_delegation_created)
+            self._session.on("agent_state_changed", self._on_speaking_for_delegation)
+            self._session.on("user_state_changed", self._on_speaking_for_delegation)
 
             # the fallback adapter's session needs the AgentSession to drive interrupt/generate_reply on swap
             if isinstance(self._rt_session, _FallbackRealtimeSession):
@@ -1620,6 +1639,13 @@ class AgentActivity(RecognitionHooks):
             )
             self._rt_session.off("remote_item_added", self._on_remote_item_added)
             self._rt_session.off("error", self._on_error)
+            self._rt_session.off("delegation_created", self._on_delegation_created)
+            self._session.off("agent_state_changed", self._on_speaking_for_delegation)
+            self._session.off("user_state_changed", self._on_speaking_for_delegation)
+            self._cancel_delegation_check()
+            if self._delegation_detector is not None:
+                self._delegation_detector.off("metrics_collected", self._on_metrics_collected)
+                self._delegation_detector = None
             if isinstance(self._rt_session, _FallbackRealtimeSession):
                 self._rt_session._agent_session = None
 
@@ -2285,6 +2311,8 @@ class AgentActivity(RecognitionHooks):
         self._interruption_detected = False
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
+        # a new turn: the pending judgment is stale, and the new turn's judgment covers it
+        self._cancel_delegation_check()
         if self.vad is None or self.using_default_vad:
             self._session._update_user_state("speaking")
             if self._audio_recognition:
@@ -2350,6 +2378,80 @@ class AgentActivity(RecognitionHooks):
                 msg.metrics = {"started_speaking_at": ev.turn_started_at}
             self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
+            if (
+                ev.delegated is False
+                and self._rt_session is not None
+                and self._rt_session._delegation_detection is not None
+            ):
+                self._delegation_check_pending = True
+                self._schedule_delegation_check()
+
+    def _on_delegation_created(self, _: llm.DelegationCreatedEvent) -> None:
+        self._cancel_delegation_check()
+
+    def _on_speaking_for_delegation(
+        self, ev: AgentStateChangedEvent | UserStateChangedEvent
+    ) -> None:
+        # either side speaking holds the judgment back without dropping it: the agent's reply belongs
+        # in it, and the caller's speech may be noise rather than a new turn
+        if ev.new_state == "speaking":
+            if self._delegation_check_atask is not None:
+                self._delegation_check_atask.cancel()
+        elif ev.old_state == "speaking":
+            self._schedule_delegation_check()
+
+    def _cancel_delegation_check(self) -> None:
+        self._delegation_check_pending = False
+        if self._delegation_check_atask is not None:
+            self._delegation_check_atask.cancel()
+
+    def _schedule_delegation_check(self) -> None:
+        if (
+            not self._delegation_check_pending
+            or self._session.agent_state == "speaking"
+            or self._session.user_state == "speaking"
+        ):
+            return
+        if self._delegation_check_atask is not None:
+            self._delegation_check_atask.cancel()
+        self._delegation_check_atask = asyncio.create_task(
+            self._delegation_check_task(), name="AgentActivity._delegation_check_task"
+        )
+
+    async def _delegation_check_task(self) -> None:
+        assert self._rt_session is not None
+        if (opts := self._rt_session._delegation_detection) is None:
+            # a fallback swapped to a model without delegation recovery
+            self._delegation_check_pending = False
+            return
+        await asyncio.sleep(opts["grace_period"])
+        detector = opts["detector"]
+        if detector is not self._delegation_detector:
+            # a fallback swap brings the new model's detector
+            if self._delegation_detector is not None:
+                self._delegation_detector.off("metrics_collected", self._on_metrics_collected)
+            detector.on("metrics_collected", self._on_metrics_collected)
+            self._delegation_detector = detector
+        check = llm.DelegationCheck(
+            chat_ctx=self._agent.chat_ctx.copy(),
+            tools=self._rt_session.tools.flatten(),
+            # the instructions as the realtime model has them, audio and dynamic sections included
+            instructions=self._render_realtime_instructions(self._agent.instructions),
+        )
+        try:
+            verdict = await detector.detect(check)
+        except Exception:
+            logger.exception("delegation detector failed")
+            verdict = False
+        self._delegation_check_pending = False
+        if verdict is False:
+            return
+        logger.info("the realtime model did not delegate a turn that needs it; delegating it")
+        try:
+            self._rt_session.delegate(verdict if isinstance(verdict, str) else None)
+        except llm.RealtimeError as e:
+            # a fallback swap during the check can leave a model that cannot delegate
+            logger.warning(f"could not start the delegation the detector asked for: {e}")
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
         if ev.user_initiated:
