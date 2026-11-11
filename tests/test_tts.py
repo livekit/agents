@@ -36,6 +36,7 @@ from livekit.plugins import (
     elevenlabs,
     google,
     groq,
+    heygen,
     hume,
     inworld,
     lmnt,
@@ -161,6 +162,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.bland.ai:443",
         },
         id="bland",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": heygen.TTS(),
+            "proxy-upstream": "api.heygen.com:443",
+        },
+        id="heygen",
     ),
     pytest.param(
         lambda: {
