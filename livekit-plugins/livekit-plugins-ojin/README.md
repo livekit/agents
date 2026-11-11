@@ -3,8 +3,8 @@
 Add Ojin avatars to LiveKit Agents. The plugin uses the agent's speech to
 animate the avatar and publishes its audio and video on the agent's participant.
 
-For a complete browser-based example, see the
-[Ojin LiveKit demo integration guide](https://github.com/ojinai/livekit-demo/blob/main/docs/livekit-integration-guide.md).
+See the [LiveKit Ojin avatar plugin documentation](https://docs.livekit.io/agents/models/avatar/plugins/ojin/)
+for setup and usage details.
 
 ## Installation
 

@@ -131,8 +131,6 @@ class _FrameSink:
                 )
             return
 
-        if is_silence(frame):
-            return
         if self._muting:
             if time.monotonic() < self._mute_deadline:
                 return
@@ -359,15 +357,22 @@ class OjinVideoGenerator(VideoGenerator):
     audio, close) is reported to the sink, whose segment-end rule needs it.
     """
 
-    def __init__(self, client: OjinSTVClient, sink: _FrameSink) -> None:
+    def __init__(
+        self,
+        client: OjinSTVClient,
+        sink: _FrameSink,
+        *,
+        fade_s: float = _DEFAULT_FADE_S,
+        sample_rate: int = SAMPLE_RATE,
+    ) -> None:
         self._client = client
         self._sink = sink
         self._turn_started = False
         self._turn_had_real_audio = False
         self._gap_interrupt_logged = False
         self._last_interrupt_true = 0.0
-        self._fade_s = sink._fade_s
-        self._sample_rate = sink._audio_sample_rate
+        self._fade_s = fade_s
+        self._sample_rate = sample_rate
         self._resampler: rtc.AudioResampler | None = None
         self._resampler_input_rate = 0
 
@@ -508,6 +513,9 @@ class OjinVideoGenerator(VideoGenerator):
         """
         turn_was_open = self._turn_started
         self._turn_started = False
+        # Do not let samples buffered by the cancelled turn lead the next one.
+        self._resampler = None
+        self._resampler_input_rate = 0
         self._sink.begin_clear()
         try:
             if await self._client.interrupt():
@@ -650,6 +658,12 @@ class AvatarSession(BaseAvatarSession):
         self._ws_url = ws_url if utils.is_given(ws_url) else os.getenv("OJIN_WS_URL")
         self._stv_config = stv_config if utils.is_given(stv_config) else None
         self._audio_sample_rate = audio_sample_rate
+        self._fps = int(self._stv_config.fps) if self._stv_config is not None else VIDEO_FPS
+        self._fade_s = (
+            float(self._stv_config.interrupt_audio_fade_s)
+            if self._stv_config is not None
+            else _DEFAULT_FADE_S
+        )
         self._session_ready_timeout = session_ready_timeout
         self._first_frame_timeout = first_frame_timeout
         self._watchdog_timeout = watchdog_timeout
@@ -658,6 +672,7 @@ class AvatarSession(BaseAvatarSession):
         self._client: OjinSTVClient | None = None
         self._sink: _FrameSink | None = None
         self._audio_output: QueueAudioOutput | None = None
+        self._agent_session: AgentSession | None = None
         self._avatar_runner: AvatarRunner | None = None
 
         self._ready = asyncio.Event()
@@ -691,17 +706,9 @@ class AvatarSession(BaseAvatarSession):
         """The provider name reported in avatar metrics."""
         return "ojin"
 
-    def _effective_fps(self) -> int:
-        return int(self._stv_config.fps) if self._stv_config is not None else VIDEO_FPS
-
-    def _effective_fade_s(self) -> float:
-        if self._stv_config is not None:
-            return float(self._stv_config.interrupt_audio_fade_s)
-        return _DEFAULT_FADE_S
-
     def _build_sink(self) -> _FrameSink:
         return _FrameSink(
-            fade_s=self._effective_fade_s(),
+            fade_s=self._fade_s,
             turn_render_timeout=self._turn_render_timeout,
             audio_sample_rate=self._audio_sample_rate,
         )
@@ -809,7 +816,7 @@ class AvatarSession(BaseAvatarSession):
         options = _build_avatar_options(
             first_frame,
             audio_sample_rate=self._audio_sample_rate,
-            video_fps=self._effective_fps(),
+            video_fps=self._fps,
         )
         logger.debug(
             "starting ojin avatar runner",
@@ -824,11 +831,17 @@ class AvatarSession(BaseAvatarSession):
         receiver: AudioReceiver = audio_output
         receiver.on("clear_buffer", lambda *_: sink.note_clear_pending())
         self._audio_output = audio_output
+        self._agent_session = agent_session
 
         assert self._client is not None
         self._avatar_runner = AvatarRunner(
             room=room,
-            video_gen=OjinVideoGenerator(self._client, sink),
+            video_gen=OjinVideoGenerator(
+                self._client,
+                sink,
+                fade_s=self._fade_s,
+                sample_rate=self._audio_sample_rate,
+            ),
             audio_recv=audio_output,
             options=options,
         )
@@ -951,8 +964,8 @@ class AvatarSession(BaseAvatarSession):
             # was suspended; starting the drain now would leak it.
             return
 
-        audio_output = self._audio_output
-        if audio_output is None:
+        previous_output = self._audio_output
+        if previous_output is None:
             return
 
         if owed:
@@ -963,7 +976,21 @@ class AvatarSession(BaseAvatarSession):
             # zero: the runner tracked the real one and has just been closed, and
             # the avatar carried the only audio track, so nothing was still
             # audible to account for.
-            audio_output.notify_playback_finished(playback_position=0.0, interrupted=False)
+            previous_output.notify_playback_finished(playback_position=0.0, interrupted=False)
+
+        # The runner remains registered for clear_buffer on its original output.
+        # Give the drain a fresh tail so future interruptions cannot notify both
+        # the closed runner and this drain for the same event.
+        audio_output = QueueAudioOutput(
+            sample_rate=self._audio_sample_rate, wait_playback_start=True
+        )
+        if self._agent_session is not None:
+            self._agent_session.output.replace_audio_tail(audio_output)
+        else:
+            # Defensive fallback for teardown paths before the output chain was
+            # installed; normal runtime degradation always has an agent session.
+            audio_output = previous_output
+        self._audio_output = audio_output
 
         if self._null_drain_task is None:
             self._null_drain_task = asyncio.create_task(self._null_drain(audio_output))
@@ -973,25 +1000,31 @@ class AvatarSession(BaseAvatarSession):
         started = False
 
         def on_clear(*_: object) -> None:
-            # The runner's stale clear handler cannot be relied on: its
-            # _audio_playing gate froze at teardown (typically False at idle).
+            # Core may emit clear_buffer more than once for one interruption.
+            # Report only if this drain has actually started a segment.
             nonlocal position, started
+            if not started:
+                return
             audio_output.notify_playback_finished(playback_position=position, interrupted=True)
             position, started = 0.0, False
 
         receiver: AudioReceiver = audio_output
         receiver.on("clear_buffer", on_clear)
+        try:
+            async for frame in audio_output:
+                if isinstance(frame, AudioSegmentEnd):
+                    audio_output.notify_playback_finished(
+                        playback_position=position, interrupted=False
+                    )
+                    position, started = 0.0, False
+                    continue
 
-        async for frame in audio_output:
-            if isinstance(frame, AudioSegmentEnd):
-                audio_output.notify_playback_finished(playback_position=position, interrupted=False)
-                position, started = 0.0, False
-                continue
-
-            if not started:
-                started = True
-                audio_output.notify_playback_started()
-            position += frame.duration
+                if not started:
+                    started = True
+                    audio_output.notify_playback_started()
+                position += frame.duration
+        finally:
+            receiver.off("clear_buffer", on_clear)
 
     async def aclose(self) -> None:
         """Tear the avatar down. Safe to call more than once."""
