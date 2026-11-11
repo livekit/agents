@@ -478,7 +478,9 @@ class STT(stt.STT):
             as "New Delhi" in one item. Sarvam accepts up to 50 terms of at most 64
             characters, within about 8 KB URL-encoded (15 full-length Devanagari terms).
             Terms the agent session adds (``stt_context_options`` and keyterm detection)
-            are appended and reach open streams by reconnecting between utterances.
+            are appended and reach open streams by reconnecting between utterances. The
+            session only adds terms when ``model`` is saaras:v4, so create the STT with
+            saaras:v4 rather than overriding the model per stream if you want them.
             Passing keyterms with a model other than saaras:v4 raises ``ValueError``.
     """
 
@@ -1244,7 +1246,17 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_with_keyterms(merged)
 
     def _merge_keyterms(self, session_keyterms: list[str]) -> list[str] | None:
-        # the user's terms are kept across model switches but only sent to a v4 model
+        """Merge the session keyterms into this stream's own keyterms for its current model.
+
+        The stream's own keyterms survive model switches but are sent only to saaras:v4;
+        on any other model both sets are dropped, since Sarvam rejects keyterms there.
+
+        Args:
+            session_keyterms: Keyterms set by the agent session.
+
+        Returns:
+            The keyterms to send on the next connection, or ``None`` for none.
+        """
         user_keyterms = self._user_keyterms if self._opts.model in KEYTERMS_MODELS else None
         return merge_keyterms(user_keyterms, session_keyterms, self._opts.model)
 

@@ -333,6 +333,7 @@ def ws_session(monkeypatch: pytest.MonkeyPatch) -> _Session:
     return session
 
 
+@pytest.mark.virtual_time
 async def test_stt_stream_reconnects_with_new_session_keyterms(ws_session: _Session) -> None:
     async with sarvam_stt.STT(api_key="sk_test", keyterms=["Sarvam"]) as stt:
         stream = stt.stream()
@@ -352,6 +353,7 @@ async def test_stt_stream_reconnects_with_new_session_keyterms(ws_session: _Sess
         await stream.aclose()
 
 
+@pytest.mark.virtual_time
 async def test_stt_stream_waits_for_the_utterance_to_end(ws_session: _Session) -> None:
     async with sarvam_stt.STT(api_key="sk_test") as stt:
         stream = stt.stream()
@@ -372,6 +374,7 @@ async def test_stt_stream_waits_for_the_utterance_to_end(ws_session: _Session) -
         await stream.aclose()
 
 
+@pytest.mark.virtual_time
 async def test_stt_stream_drops_removed_session_keyterms(ws_session: _Session) -> None:
     """With no user terms, session terms the framework removes don't stick around."""
     async with sarvam_stt.STT(api_key="sk_test") as stt:
@@ -387,6 +390,7 @@ async def test_stt_stream_drops_removed_session_keyterms(ws_session: _Session) -
         await stream.aclose()
 
 
+@pytest.mark.virtual_time
 async def test_stt_stream_restores_keyterms_when_switching_back_to_v4(
     ws_session: _Session,
 ) -> None:
@@ -405,6 +409,7 @@ async def test_stt_stream_restores_keyterms_when_switching_back_to_v4(
         await stream.aclose()
 
 
+@pytest.mark.virtual_time
 async def test_stt_stream_on_v3_ignores_session_keyterms(ws_session: _Session) -> None:
     async with sarvam_stt.STT(api_key="sk_test", keyterms=["Sarvam"]) as stt:
         stream = stt.stream()
