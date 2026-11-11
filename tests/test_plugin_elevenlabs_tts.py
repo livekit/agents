@@ -6,6 +6,7 @@ import contextlib
 import json
 import logging
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
@@ -124,8 +125,9 @@ async def test_prewarm_opens_connection(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("dialogue", "prewarm"), [(False, False), (True, False), (True, True)])
 async def test_option_update_during_connect_discards_stale_socket(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, dialogue: bool, prewarm: bool
 ) -> None:
     connect_started = asyncio.Event()
     resume_connect = asyncio.Event()
@@ -151,81 +153,35 @@ async def test_option_update_during_connect_discards_stale_socket(
             self.is_current = False
 
     monkeypatch.setattr(elevenlabs_tts, "_Connection", _StubConnection)
+    monkeypatch.setattr(elevenlabs_tts, "_DialogueConnection", _StubConnection)
 
     async with aiohttp.ClientSession() as session:
         tts = elevenlabs_tts.TTS(api_key="test-key", voice_id="old", http_session=session)
-        connection_task = asyncio.create_task(tts._current_connection())
+        if prewarm:
+            tts.prewarm()
+            connection_task = tts._prewarm_task
+            assert connection_task is not None
+        else:
+            connection_task = asyncio.create_task(tts._current_connection())
         await asyncio.wait_for(connect_started.wait(), timeout=1)
 
-        tts.update_options(voice_id="new")
+        if dialogue:
+            tts.update_options(model="eleven_v4")
+        else:
+            tts.update_options(voice_id="new")
         resume_connect.set()
-        connection, _, _ = await asyncio.wait_for(connection_task, timeout=1)
+        await asyncio.wait_for(connection_task, timeout=1)
 
+        # Prewarm must close the stale handshake without opening a dialogue socket.
+        assert len(connections) == (1 if prewarm else 2)
+        connection, _, _ = await tts._current_connection()
         assert len(connections) == 2
         assert connections[0]._closed  # pyright: ignore[reportAttributeAccessIssue]
         assert connection is connections[1]
-        assert connection._opts.voice_id == "new"
+        assert connection._opts.voice_id == ("old" if dialogue else "new")
+        assert connection._opts.model == ("eleven_v4" if dialogue else "eleven_turbo_v2_5")
 
         await tts.aclose()
-
-
-@pytest.mark.parametrize(
-    "model", ["eleven_v3", "eleven_v3_conversational", "eleven_v4", "eleven_v4_turbo"]
-)
-@pytest.mark.parametrize("prewarm", [True, False])
-async def test_model_switch_during_connect_defers_dialogue_only_for_prewarm(
-    monkeypatch: pytest.MonkeyPatch, model: str, prewarm: bool
-) -> None:
-    started = asyncio.Event()
-    resume = asyncio.Event()
-
-    class _StubConnection:
-        def __init__(self, opts: elevenlabs_tts._TTSOptions, session: object) -> None:
-            self.model = opts.model
-            self._closed = False
-            self.is_current = True
-            connections.append(self)
-
-        async def connect(self) -> None:
-            if len(connections) == 1:
-                started.set()
-                await resume.wait()
-
-        async def aclose(self) -> None:
-            self._closed = True
-
-        def mark_non_current(self) -> None:
-            self.is_current = False
-
-    connections: list[_StubConnection] = []
-    monkeypatch.setattr(elevenlabs_tts, "_Connection", _StubConnection)
-    monkeypatch.setattr(elevenlabs_tts, "_DialogueConnection", _StubConnection)
-    async with aiohttp.ClientSession() as session:
-        tts = elevenlabs_tts.TTS(api_key="test-key", http_session=session)
-        if prewarm:
-            tts.prewarm()
-            acquisition = tts._prewarm_task
-            assert acquisition is not None
-        else:
-            acquisition = asyncio.create_task(tts._current_connection())
-
-        try:
-            await asyncio.wait_for(started.wait(), timeout=1)
-            tts.update_options(model=model)
-            resume.set()
-            await asyncio.wait_for(acquisition, timeout=1)
-
-            assert connections[0]._closed
-            assert [conn.model for conn in connections] == (
-                ["eleven_turbo_v2_5"] if prewarm else ["eleven_turbo_v2_5", model]
-            )
-
-            # A real synthesis acquisition must still connect after prewarm stops.
-            await tts._current_connection()
-            assert [conn.model for conn in connections] == ["eleven_turbo_v2_5", model]
-        finally:
-            resume.set()
-            await tts.aclose()
 
 
 @pytest.mark.asyncio
@@ -291,94 +247,16 @@ async def test_prewarm_retries_with_exponential_backoff(
 @pytest.mark.parametrize(
     "model", ["eleven_v3", "eleven_v3_conversational", "eleven_v4", "eleven_v4_turbo"]
 )
-async def test_dialogue_prewarm_defers_connection_until_synthesis(
+async def test_dialogue_prewarm_does_not_open_unused_connection(
     monkeypatch: pytest.MonkeyPatch, model: str
 ) -> None:
-    acquisitions = 0
-    sent: list[str] = []
-    pcm = b"\x00\x01" * 2400
-
-    class _StubConnection:
-        def register_stream(
-            self, stream: object, emitter: agents_tts.AudioEmitter, waiter: asyncio.Future[None]
-        ) -> None:
-            self.emitter = emitter
-            self.waiter = waiter
-
-        def send_content(self, content: elevenlabs_tts._SynthesizeContent) -> None:
-            if content.text:
-                sent.append(content.text)
-                self.emitter.push(pcm)
-
-        def close_context(self, context_id: str) -> None:
-            if not self.waiter.done():
-                self.waiter.set_result(None)
-
-        def unregister_stream(self, context_id: str) -> None:
-            pass
-
-    connection = _StubConnection()
-
-    async def _current_connection(
-        self: object, *, allow_dialogue: bool = True
-    ) -> tuple[_StubConnection, float, bool]:
-        nonlocal acquisitions
-        acquisitions += 1
-        return connection, 0.0, False
-
-    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
-
-    tts = elevenlabs_tts.TTS(api_key="test-key", model=model, encoding="pcm_24000")
+    connect = AsyncMock()
+    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", connect)
+    tts = elevenlabs_tts.TTS(api_key="test-key", model=model)
     try:
-        tts.prewarm()
         tts.prewarm()
         await asyncio.sleep(0)
-        assert acquisitions == 0
-
-        async with tts.stream() as stream:
-            stream.push_text("Hello world.")
-            stream.end_input()
-            chunks = [bytes(event.frame.data) async for event in stream]
-
-        assert acquisitions == 1
-        assert sent == ["Hello world. "]
-        assert b"".join(chunks) == pcm
-    finally:
-        await tts.aclose()
-
-
-async def test_prewarm_stops_retrying_after_switch_to_dialogue(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    attempts = 0
-    retrying = asyncio.Event()
-    resume = asyncio.Event()
-    sleep = asyncio.sleep
-
-    async def _current_connection(
-        self: object, *, allow_dialogue: bool = True
-    ) -> tuple[SimpleNamespace, float, bool]:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise ConnectionError("temporary failure")
-        return SimpleNamespace(_recv_task=None), 0.0, False
-
-    async def _sleep(_delay: float) -> None:
-        retrying.set()
-        await resume.wait()
-
-    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
-    monkeypatch.setattr(elevenlabs_tts.asyncio, "sleep", _sleep)
-    tts = elevenlabs_tts.TTS(api_key="test-key")
-    try:
-        tts.prewarm()
-        await asyncio.wait_for(retrying.wait(), timeout=1)
-        tts.update_options(model="eleven_v4_turbo")
-        resume.set()
-        await sleep(0)
-        await sleep(0)
-        assert attempts == 1
+        connect.assert_not_awaited()
     finally:
         await tts.aclose()
 
@@ -671,9 +549,7 @@ async def test_interrupted_stream_unregisters_before_ending_the_segment(
 
     connection = _StubConnection()
 
-    async def _current_connection(
-        self: object, *, allow_dialogue: bool = True
-    ) -> tuple[object, float, bool]:
+    async def _current_connection(self: object) -> tuple[object, float, bool]:
         return connection, 0.0, True
 
     original_end_segment = agents_tts.AudioEmitter.end_segment
