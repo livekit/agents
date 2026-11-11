@@ -33,7 +33,8 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.tts._provider_format import drop_bracket_cues
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import is_given
 
 from .log import logger
@@ -46,6 +47,68 @@ XAI_WEBSOCKET_URL = "wss://api.x.ai/v1/tts"
 DEFAULT_VOICE = "ara"
 
 
+def _char_timings(data: dict) -> list[tuple[str, float, float]]:
+    """(chars, start, end) entries of an `audio.delta` frame, or [] if absent or malformed."""
+    try:
+        ts = data["audio_timestamps"]
+        timings = [
+            (c, float(start), float(end))
+            for c, (start, end) in zip(ts["graph_chars"], ts["graph_times"], strict=True)
+        ]
+    except (KeyError, TypeError, ValueError):
+        return []
+    return timings if all(isinstance(c, str) for c, _, _ in timings) else []
+
+
+class _WordMerger:
+    """Folds the per-character timings of xAI `audio.delta` frames into word-level TimedStrings.
+
+    Words are split with the shared word splitter, so scripts without spaces (zh, ja) get
+    one word per character. Each word keeps its trailing whitespace and spans its first
+    char's start to its last char's end. A word is emitted once the next word starts (or on
+    `flush()`), so words may span `audio.delta` frames. With `drop_cues` (expressive mode),
+    the bracket cues the markup conversion inserted, such as `[pause]`, are echoed in the
+    timings but never spoken, so they are dropped.
+    """
+
+    def __init__(self, *, drop_cues: bool) -> None:
+        self._drop_cues = drop_cues
+        self._text = ""
+        self._times: list[tuple[float, float]] = []
+        self._held: list[TimedString] = []
+
+    def push(self, data: dict) -> list[TimedString]:
+        for chars, start, end in _char_timings(data):
+            self._text += chars
+            self._times += [(start, end)] * len(chars)
+        return self._take_words(flush=False)
+
+    def flush(self) -> list[TimedString]:
+        return self._take_words(flush=True)
+
+    def _take_words(self, *, flush: bool) -> list[TimedString]:
+        bounds = [
+            i
+            for _, i, _ in tokenize.basic.split_words(
+                self._text, ignore_punctuation=False, split_character=True
+            )
+        ]
+        if flush:
+            bounds.append(len(self._text))
+        words = [
+            TimedString(
+                text=self._text[a:b], start_time=self._times[a][0], end_time=self._times[b - 1][1]
+            )
+            for a, b in zip(bounds, bounds[1:], strict=False)
+        ]
+        # the last word may still be growing, so keep it for the next frame
+        keep = len(self._text) if flush or not bounds else bounds[-1]
+        self._text, self._times = self._text[keep:], self._times[keep:]
+        if not self._drop_cues:
+            return words
+        return drop_bracket_cues(words, self._held, final=flush)
+
+
 @dataclass
 class _TTSOptions:
     voice: GrokVoices | str
@@ -54,6 +117,7 @@ class _TTSOptions:
     optimize_streaming_latency: NotGivenOr[int]
     speed: NotGivenOr[float]
     text_normalization: NotGivenOr[bool]
+    word_timestamps: bool
 
 
 class TTS(tts.TTS):
@@ -66,6 +130,7 @@ class TTS(tts.TTS):
         optimize_streaming_latency: NotGivenOr[int] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
+        word_timestamps: bool = True,
         tokenizer: tokenize.WordTokenizer | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -80,11 +145,12 @@ class TTS(tts.TTS):
             optimize_streaming_latency (int, optional): Latency optimization level for the xAI TTS websocket.
             speed (float, optional): Speaking-rate multiplier for the generated audio.
             text_normalization (bool, optional): Whether to normalize text before synthesis.
+            word_timestamps (bool, optional): Request per-character timings from xAI and emit them as word-level aligned transcripts. Defaults to True.
             api_key (str | None, optional): The xAI API key. If not provided, it will be read from the xAI environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
         """  # noqa: E501
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=word_timestamps),
             sample_rate=SAMPLE_RATE,
             num_channels=NUM_CHANNELS,
         )
@@ -105,6 +171,7 @@ class TTS(tts.TTS):
             optimize_streaming_latency=optimize_streaming_latency,
             speed=speed,
             text_normalization=text_normalization,
+            word_timestamps=word_timestamps,
         )
 
         self._session = http_session
@@ -146,6 +213,8 @@ class TTS(tts.TTS):
             params["speed"] = opts.speed
         if is_given(opts.text_normalization):
             params["text_normalization"] = str(opts.text_normalization).lower()
+        if opts.word_timestamps:
+            params["with_timestamps"] = "true"
 
         url = f"{XAI_WEBSOCKET_URL}?{urlencode(params)}"
         try:
@@ -265,6 +334,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
+        # snapshot now: the framework sets expressive before stream(), and the next turn may
+        # change it on the shared TTS instance
+        self._expressive = tts._expressive
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -323,13 +395,15 @@ class SynthesizeStream(tts.SynthesizeStream):
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
         input_ended = False
+        merger = _WordMerger(drop_cues=self._expressive)
 
         async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal input_ended
 
             async for word in input_stream:
                 self._mark_started()
-                await ws.send_str(json.dumps({"type": "text.delta", "delta": word.token}))
+                # xAI joins deltas verbatim, so each word carries its own space
+                await ws.send_str(json.dumps({"type": "text.delta", "delta": f"{word.token} "}))
             await ws.send_str(json.dumps({"type": "text.done"}))
             input_ended = True
 
@@ -354,9 +428,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 data = json.loads(msg.data)
                 msg_type = data.get("type")
                 if msg_type == "audio.delta":
+                    # timings go first so they ride this chunk's first frame, not the next one
+                    if self._opts.word_timestamps and (words := merger.push(data)):
+                        output_emitter.push_timed_transcript(words)
                     output_emitter.push(base64.b64decode(data["delta"]))
                 elif msg_type == "audio.done":
                     if input_ended:
+                        if words := merger.flush():
+                            output_emitter.push_timed_transcript(words)
                         output_emitter.end_segment()
                         break
                 elif msg_type == "error":
