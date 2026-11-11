@@ -125,6 +125,8 @@ async def test_prewarm_opens_connection(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.virtual_time
 @pytest.mark.parametrize(("dialogue", "prewarm"), [(False, False), (True, False), (True, True)])
 async def test_option_update_during_connect_discards_stale_socket(
     monkeypatch: pytest.MonkeyPatch, dialogue: bool, prewarm: bool
@@ -244,6 +246,8 @@ async def test_prewarm_retries_with_exponential_backoff(
     assert delays == [1.0, 2.0, 4.0]
 
 
+@pytest.mark.unit
+@pytest.mark.virtual_time
 @pytest.mark.parametrize(
     "model", ["eleven_v3", "eleven_v3_conversational", "eleven_v4", "eleven_v4_turbo"]
 )
@@ -528,6 +532,7 @@ def test_unregister_stream_keeps_the_context_closable() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.virtual_time
 async def test_interrupted_stream_unregisters_before_ending_the_segment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -980,6 +985,7 @@ async def test_dialogue_send_loop_sends_close_context_without_waiting() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.virtual_time
 async def test_dialogue_send_loop_sends_keep_alive_for_idle_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1006,6 +1012,7 @@ async def test_dialogue_send_loop_sends_keep_alive_for_idle_context(
 
 
 @pytest.mark.asyncio
+@pytest.mark.virtual_time
 async def test_dialogue_send_loop_keeps_idle_context_alive_during_other_traffic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1037,6 +1044,7 @@ async def test_dialogue_send_loop_keeps_idle_context_alive_during_other_traffic(
 
 
 @pytest.mark.asyncio
+@pytest.mark.virtual_time
 async def test_dialogue_send_loop_stops_keep_alive_once_context_closes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
