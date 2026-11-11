@@ -1458,7 +1458,7 @@ async def test_streaming_connect_logs_handshake_failure(
     ]
     assert len(records) == 1
     assert records[0].status_code == 403
-    assert "API-SUBSCRIPTION-KEY" not in records[0].url
+    assert "API-SUBSCRIPTION-KEY" not in getattr(records[0], "lk.pii.url")
 
 
 @pytest.mark.asyncio

@@ -514,7 +514,8 @@ class STT(stt.STT):
                 interim_results=True,
                 # chunk timestamps don't seem to work despite the docs saying they do
                 aligned_transcript=False,
-                keyterms=True,
+                # framework keyterms (session config + detection) only reach saaras:v4
+                keyterms=model in KEYTERMS_MODELS,
             )
         )
 
@@ -999,7 +1000,7 @@ class SpeechStream(stt.SpeechStream):
         self._utterance_settled = asyncio.Event()
         self._utterance_settled.set()
         # the user's own keyterms, kept apart so session updates can be re-merged
-        self._user_keyterms = user_keyterms if user_keyterms is not None else opts.keyterms
+        self._user_keyterms = user_keyterms
         # merged keyterms waiting for the open utterance to end before reconnecting
         self._pending_keyterms: NotGivenOr[list[str] | None] = NOT_GIVEN
 
@@ -1204,15 +1205,17 @@ class SpeechStream(stt.SpeechStream):
         self._opts.language = LanguageCode(language)
         self._opts.model = model
         self._opts.base_url, self._opts.streaming_url = _get_urls_for_model(model)
-        if self._opts.keyterms and model not in KEYTERMS_MODELS:
+        if self._user_keyterms and model not in KEYTERMS_MODELS:
             # Sarvam rejects the connection outright when keyterms meet another model
             self._logger.warning(
-                "Dropping keyterms: they are only supported by saaras:v4",
+                "Dropping keyterms while on a model other than saaras:v4",
                 extra={**self._build_log_context(), "model": model},
             )
-            self._opts.keyterms = None
-            self._user_keyterms = None
-            self._pending_keyterms = NOT_GIVEN
+        # re-merge on every switch, so going back to v4 restores the current terms
+        stt = self._stt
+        session_keyterms = stt._session_keyterms if isinstance(stt, STT) else []
+        self._opts.keyterms = self._merge_keyterms(session_keyterms)
+        self._pending_keyterms = NOT_GIVEN
         if prompt is not None:
             self._opts.prompt = prompt
 
@@ -1228,7 +1231,7 @@ class SpeechStream(stt.SpeechStream):
 
     def _apply_session_keyterms(self, session_keyterms: list[str]) -> None:
         """Reconnect with new session keyterms, waiting for the open utterance to end."""
-        merged = merge_keyterms(self._user_keyterms, session_keyterms, self._opts.model)
+        merged = self._merge_keyterms(session_keyterms)
         if merged == self._opts.keyterms:
             self._pending_keyterms = NOT_GIVEN
             return
@@ -1240,6 +1243,11 @@ class SpeechStream(stt.SpeechStream):
             self._pending_keyterms = merged
             return
         self._reconnect_with_keyterms(merged)
+
+    def _merge_keyterms(self, session_keyterms: list[str]) -> list[str] | None:
+        # the user's terms are kept across model switches but only sent to a v4 model
+        user_keyterms = self._user_keyterms if self._opts.model in KEYTERMS_MODELS else None
+        return merge_keyterms(user_keyterms, session_keyterms, self._opts.model)
 
     def _reconnect_with_keyterms(self, keyterms: list[str] | None) -> None:
         self._pending_keyterms = NOT_GIVEN
@@ -1326,7 +1334,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._logger.info(
             "Connecting to STT WebSocket",
-            extra={**self._build_log_context(), "url": ws_url, "user-agent": USER_AGENT},
+            extra={**self._build_log_context(), "lk.pii.url": ws_url, "user-agent": USER_AGENT},
         )
 
         ws = await asyncio.wait_for(

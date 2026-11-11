@@ -370,3 +370,56 @@ async def test_stt_stream_waits_for_the_utterance_to_end(ws_session: _Session) -
         await ws_session.wait_for_connections(2)
         assert ws_session.keyterms(1) == ["Vistaar"]
         await stream.aclose()
+
+
+async def test_stt_stream_drops_removed_session_keyterms(ws_session: _Session) -> None:
+    """With no user terms, session terms the framework removes don't stick around."""
+    async with sarvam_stt.STT(api_key="sk_test") as stt:
+        stt._update_session_keyterms(["Alice"])
+        stream = stt.stream()
+        await ws_session.wait_for_connections(1)
+        assert ws_session.keyterms(0) == ["Alice"]
+
+        stt._update_session_keyterms([])
+
+        await ws_session.wait_for_connections(2)
+        assert ws_session.keyterms(1) is None
+        await stream.aclose()
+
+
+async def test_stt_stream_restores_keyterms_when_switching_back_to_v4(
+    ws_session: _Session,
+) -> None:
+    async with sarvam_stt.STT(api_key="sk_test", keyterms=["Sarvam"]) as stt:
+        stt._update_session_keyterms(["Vistaar"])
+        stream = stt.stream()
+        await ws_session.wait_for_connections(1)
+
+        stream.update_options(language="en-IN", model="saaras:v3")
+        await ws_session.wait_for_connections(2)
+        assert ws_session.keyterms(1) is None
+
+        stream.update_options(language="en-IN", model="saaras:v4")
+        await ws_session.wait_for_connections(3)
+        assert ws_session.keyterms(2) == ["Sarvam", "Vistaar"]
+        await stream.aclose()
+
+
+async def test_stt_stream_on_v3_ignores_session_keyterms(ws_session: _Session) -> None:
+    async with sarvam_stt.STT(api_key="sk_test", keyterms=["Sarvam"]) as stt:
+        stream = stt.stream()
+        await ws_session.wait_for_connections(1)
+        stream.update_options(language="en-IN", model="saaras:v3")
+        await ws_session.wait_for_connections(2)
+
+        stt._update_session_keyterms(["Vistaar"])
+        await asyncio.sleep(0.05)
+        assert len(ws_session.sockets) == 2  # nothing to send on v3, so no reconnect
+        await stream.aclose()
+
+
+def test_keyterms_capability_follows_the_model() -> None:
+    assert sarvam_stt.STT(api_key="sk_test").capabilities.keyterms
+    assert not sarvam_stt.STT(api_key="sk_test", model="saaras:v3").capabilities.keyterms
+    assert not stt_streaming.STTRealtime(api_key="sk_test").capabilities.keyterms
+    assert stt_streaming.STTRealtime(api_key="sk_test", model="saaras:v4").capabilities.keyterms

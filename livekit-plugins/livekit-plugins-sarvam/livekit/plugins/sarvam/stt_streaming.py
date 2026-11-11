@@ -43,7 +43,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
-from ._utils import PeriodicCollector, merge_keyterms, validate_keyterms
+from ._utils import KEYTERMS_MODELS, PeriodicCollector, merge_keyterms, validate_keyterms
 from .log import logger
 from .stt import _looks_like_error_text
 
@@ -299,7 +299,8 @@ class STTRealtime(stt.STT):
                 interim_results=True,
                 aligned_transcript=False,
                 offline_recognize=False,
-                keyterms=True,
+                # framework keyterms (session config + detection) only reach saaras:v4
+                keyterms=model in KEYTERMS_MODELS,
             )
         )
 
@@ -951,7 +952,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             self._logger.error(
                 "Failed to connect to Sarvam realtime STT WebSocket",
-                extra={**self._build_log_context(), "error": str(e), "url": ws_url},
+                extra={**self._build_log_context(), "error": str(e), "lk.pii.url": ws_url},
                 exc_info=True,
             )
             raise
@@ -962,7 +963,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                     **self._build_log_context(),
                     "error": e.message,
                     "status_code": e.status,
-                    "url": ws_url,
+                    "lk.pii.url": ws_url,
                 },
                 exc_info=True,
             )
@@ -970,7 +971,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         except Exception as e:
             self._logger.error(
                 "Unexpected Sarvam realtime STT WebSocket connection error",
-                extra={**self._build_log_context(), "error": str(e), "url": ws_url},
+                extra={**self._build_log_context(), "error": str(e), "lk.pii.url": ws_url},
                 exc_info=True,
             )
             raise APIConnectionError("failed to connect to Sarvam realtime STT") from e
