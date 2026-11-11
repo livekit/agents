@@ -178,6 +178,9 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         self._stream_state: _StreamState | None = None
         self._data_ev = asyncio.Event()
         self._input_atasks: dict[str, asyncio.Task[None]] = {}
+        # the track each input task reads, which a mute doesn't change; None for frames that
+        # aren't a room track
+        self._input_sids: dict[str, str | None] = {}
         self._mix_atask: asyncio.Task[None] | None = None
         self._recv_atasks: set[asyncio.Task[None]] = set()
         self._publish_ch: aio.Chan[TranscriptSegment] | None = None
@@ -253,10 +256,12 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         track_input = self._new_input(identity, track_sid)
         task = asyncio.create_task(self._forward_input(track_input, frames))
         self._input_atasks[identity] = task
+        self._input_sids[identity] = track_sid
 
         def _on_done(_: asyncio.Task[None]) -> None:
             if self._input_atasks.get(identity) is task:
                 del self._input_atasks[identity]
+                self._input_sids.pop(identity, None)
 
         task.add_done_callback(_on_done)
 
@@ -276,6 +281,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         """Stop transcribing a participant, discarding audio of theirs not yet mixed."""
         if task := self._input_atasks.pop(identity, None):
             task.cancel()
+        self._input_sids.pop(identity, None)
         self._mixer.remove(identity)
 
     async def aclose(self) -> None:
@@ -332,8 +338,12 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
                 if track_input.track_sid in self._muted_tracks:
                     continue  # whatever a muted track still delivers is silence
                 if track_input.ended:
-                    # unmuted: back in the mix, its gate learning the floor afresh
-                    track_input = self._new_input(track_input.identity, track_input.track_sid)
+                    # unmuted: back in the mix. Still in it, what it sent before the mute plays
+                    # on ahead of this; once drained and gone, a new input learns the floor afresh
+                    if self._mixer.inputs.get(track_input.identity) is track_input:
+                        track_input.ended = False
+                    else:
+                        track_input = self._new_input(track_input.identity, track_input.track_sid)
                 track_input.push(frame)
                 self._data_ev.set()
         finally:
@@ -607,8 +617,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         participant: rtc.RemoteParticipant,
     ) -> None:
         self._muted_tracks.discard(publication.sid)
-        # the sid of the track last read, which a mute may have taken out of the mix
-        if self._track_sids.get(participant.identity) == publication.sid:
+        if self._input_sids.get(participant.identity) == publication.sid:
             self._end_input(participant.identity)
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
@@ -633,7 +642,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
     def _mute_input(self, identity: str, track_sid: str) -> None:
         """Take a participant out of the mix once what they already sent has played."""
         track_input = self._mixer.inputs.get(identity)
-        if track_input is not None and track_input.track_sid == track_sid:
+        if track_input is not None and self._input_sids.get(identity) == track_sid:
             track_input.ended = True
             self._data_ev.set()
 
@@ -641,6 +650,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         """Stop reading a participant's track; what they already sent is still mixed."""
         if task := self._input_atasks.pop(identity, None):
             task.cancel()
+        self._input_sids.pop(identity, None)
 
 
 def _segment_id(state: _StreamState, index: int, identity: str | None) -> str:

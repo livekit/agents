@@ -153,6 +153,16 @@ async def _paced(frames: list[rtc.AudioFrame]) -> AsyncIterator[rtc.AudioFrame]:
         yield frame
 
 
+async def _drained(session: TranscriptionSession, timeout: float = 5.0) -> None:
+    """Wait until nobody is left in the mix."""
+
+    async def wait() -> None:
+        while session.participants:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(wait(), timeout)
+
+
 async def _run_session(
     stt: _ScriptedSTT, tracks: dict[str, list[rtc.AudioFrame]]
 ) -> list[TranscriptSegment]:
@@ -558,13 +568,11 @@ async def test_session_reopens_the_stt_on_the_mix_clock_after_the_room_empties()
     await session.start()
 
     session.add_input("alice", _paced(_track((0.6, _QUIET), (0.2, _LOUD))))
-    while session.participants:
-        await asyncio.sleep(0.01)
+    await _drained(session)
     await asyncio.sleep(0.1)  # the room stays empty a while; the wall clock runs on
 
     session.add_input("bob", _paced(_track((0.2, _QUIET), (0.4, _LOUD))))
-    while session.participants:
-        await asyncio.sleep(0.01)
+    await _drained(session)
     await session.aclose()
 
     # the second stream picks up where the mix's clock stopped, not where the wall clock is
@@ -600,11 +608,9 @@ async def test_late_untimed_final_stays_within_its_own_stream() -> None:
     await session.start()
 
     session.add_input("alice", _paced(_track((0.6, _QUIET), (0.4, 0.1))))
-    while session.participants:
-        await asyncio.sleep(0.01)
+    await _drained(session)
     session.add_input("bob", _paced(_track((0.2, _QUIET), (0.8, 0.6))))
-    while session.participants:
-        await asyncio.sleep(0.01)
+    await _drained(session)
     await session.aclose()
 
     assert [(s.participant_identity, s.text) for s in segments] == [("alice", "from alice")]
@@ -666,12 +672,10 @@ async def test_diarization_labels_are_learned_per_stream() -> None:
     await session.start()
 
     session.add_input("alice", _paced(_track((0.4, _QUIET), (0.8, _LOUD))))
-    while session.participants:
-        await asyncio.sleep(0.01)
+    await _drained(session)
     session.add_input("bob", _paced(_track((0.2, _QUIET), (0.6, _LOUD))))
     session.add_input("carol", _paced(_track((0.2, _QUIET), (0.6, _LOUD))))
-    while session.participants:
-        await asyncio.sleep(0.01)
+    await _drained(session)
     await session.aclose()
 
     assert len(stt.offsets) == 2
@@ -692,8 +696,7 @@ async def test_a_fully_muted_room_stops_sending_audio_to_the_stt() -> None:
 
     await asyncio.sleep(0.4)
     session._on_track_muted(alice, mic)  # type: ignore[arg-type]
-    while session.participants:
-        await asyncio.sleep(0.01)
+    await _drained(session)
     heard = sum(f.duration for f in stt.pushed)
     await asyncio.sleep(0.4)
     assert sum(f.duration for f in stt.pushed) == heard
@@ -709,6 +712,51 @@ async def test_a_fully_muted_room_stops_sending_audio_to_the_stt() -> None:
     assert stt.offsets[1] == pytest.approx(heard, abs=0.045)
 
 
+async def test_a_quick_unmute_keeps_what_was_sent_before_the_mute() -> None:
+    stt = _ScriptedSTT([])
+    session = TranscriptionSession(stt=stt, publish_transcriptions=False)
+    await session.start()
+    resumed = asyncio.Event()
+
+    async def track() -> AsyncIterator[rtc.AudioFrame]:
+        for frame in _track((0.2, _LOUD)):  # arrives all at once, then plays out in real time
+            yield frame
+        await resumed.wait()
+        async for frame in _paced(_track((0.2, _LOUD))):
+            yield frame
+
+    session.add_input("alice", track(), track_sid="TR_a")
+    alice = SimpleNamespace(identity="alice")
+    mic = SimpleNamespace(
+        sid="TR_a", kind=rtc.TrackKind.KIND_AUDIO, source=rtc.TrackSource.SOURCE_MICROPHONE
+    )
+    await asyncio.sleep(0.01)
+    session._on_track_muted(alice, mic)  # type: ignore[arg-type]
+    await asyncio.sleep(0.04)
+    session._on_track_unmuted(alice, mic)  # type: ignore[arg-type]
+    resumed.set()
+    await _drained(session)
+    await session.aclose()
+
+    assert sum(f.duration for f in stt.pushed) == pytest.approx(0.4, abs=0.021)
+
+
+async def test_unsubscribing_a_replaced_microphone_leaves_its_replacement() -> None:
+    stt = _ScriptedSTT([])
+    session = TranscriptionSession(stt=stt, publish_transcriptions=False)
+    await session.start()
+
+    session.add_input("alice", _paced(_track((2.0, _QUIET))), track_sid="TR_old")
+    await asyncio.sleep(0.05)
+    session.add_input("alice", _paced(_track((0.6, _QUIET))))  # not a room track
+    old_mic, alice = SimpleNamespace(sid="TR_old"), SimpleNamespace(identity="alice")
+    session._on_track_unsubscribed(None, old_mic, alice)  # type: ignore[arg-type]
+    await _drained(session)
+    await session.aclose()
+
+    assert sum(f.duration for f in stt.pushed) == pytest.approx(0.65, abs=0.045)
+
+
 async def test_session_mixes_what_a_departing_participant_already_sent() -> None:
     stt = _ScriptedSTT([])
     session = TranscriptionSession(stt=stt, publish_transcriptions=False)
@@ -722,8 +770,7 @@ async def test_session_mixes_what_a_departing_participant_already_sent() -> None
     session.add_input("alice", live(_track((0.5, _LOUD))))
     await asyncio.sleep(0.05)
     session._on_participant_disconnected(SimpleNamespace(identity="alice"))  # type: ignore[arg-type]
-    while session.participants:
-        await asyncio.sleep(0.01)
+    await _drained(session)
     await session.aclose()
 
     assert sum(f.duration for f in stt.pushed) == pytest.approx(0.5, abs=0.021)
