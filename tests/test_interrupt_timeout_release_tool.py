@@ -109,9 +109,7 @@ async def test_interrupt_timeout_releases_the_running_tool() -> None:
 
 
 async def test_interrupt_timeout_keeps_the_result_of_a_returned_tool() -> None:
-    """A speech interrupted while its tool ran in the background waits for the current speech
-    before it sends the result. The timeout must not drop a result the tool has returned (#8489).
-    """
+    """A speech interrupted while its tool runs sends the result without waiting for the floor."""
 
     class ToolAgent(Agent):
         def __init__(self) -> None:
