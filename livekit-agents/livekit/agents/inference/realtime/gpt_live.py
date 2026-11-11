@@ -46,6 +46,7 @@ _FATAL_ERROR_CODES = frozenset(
         "invalid_triggers",
         "decisions_not_enabled",
         "decisions_not_available",
+        "invalid_prompt_cache_ttl",
     }
 )
 

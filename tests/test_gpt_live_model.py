@@ -2239,6 +2239,23 @@ async def test_inference_does_not_retry_a_session_the_gateway_refused(
         await model.aclose()
 
 
+async def test_inference_does_not_retry_an_invalid_prompt_cache_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _connect_hook(monkeypatch)
+    model = _inference_model()
+    session = model.session()
+    try:
+        refusal = gpt_live_model.types.ErrorBody(
+            type="invalid_request_error", code="invalid_prompt_cache_ttl"
+        )
+        # the gateway refuses the same session.start on every reconnect
+        assert session._is_fatal_error(refusal)
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 def test_inference_realtime_model_points_gpt_live_at_duplex_model() -> None:
     with pytest.raises(ValueError, match="inference.DuplexModel"):
         inference.RealtimeModel("openai/gpt-live-1", api_key="lk-key", api_secret=_LK_SECRET)
