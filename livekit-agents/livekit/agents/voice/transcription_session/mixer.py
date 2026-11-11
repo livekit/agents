@@ -38,13 +38,14 @@ class _TrackInput:
         self._resampler: rtc.AudioResampler | None = None
         self._resampler_rate = 0
         self._overrun_logged = False
-        self._started = False
-        self._missed = 0
-        """Blocks mixed without this input since it last caught up."""
 
     @property
     def ready(self) -> bool:
         return bool(self._blocks)
+
+    @property
+    def queued(self) -> int:
+        return len(self._blocks)
 
     def push(self, frame: rtc.AudioFrame) -> None:
         if frame.num_channels > 1:
@@ -69,25 +70,16 @@ class _TrackInput:
             self._append(np.frombuffer(resampled.data, dtype=np.int16))
 
     def pop(self) -> np.ndarray | None:
-        if not self._blocks:
-            if self._started:
-                self._missed += 1
-            return None
+        return self._blocks.popleft() if self._blocks else None
 
-        # a block that arrived after the mix went on without it is dropped once newer audio is
-        # waiting, so a participant who was late once doesn't stay behind the others for good
-        while self._missed and len(self._blocks) > 1:
+    def trim(self, max_blocks: int) -> None:
+        """Drop the oldest blocks past ``max_blocks``."""
+        while len(self._blocks) > max_blocks:
             self._blocks.popleft()
-            self._missed -= 1
-        block = self._blocks.popleft()
-        if not self._blocks:
-            self._missed = 0  # caught up: whatever it missed was a gap, not lag
-        return block
 
     def _append(self, samples: np.ndarray) -> None:
         self._pending = np.concatenate([self._pending, samples])
         while self._pending.size >= self._block_size:
-            self._started = True
             self._blocks.append(self._pending[: self._block_size])
             self._pending = self._pending[self._block_size :]
 
@@ -105,10 +97,18 @@ class _TrackInput:
 class _Mixer:
     """Sums every participant into one block at a time and records who was audible in it."""
 
-    def __init__(self, *, sample_rate: int, block_size: int, timeline: ActivityTimeline) -> None:
+    def __init__(
+        self, *, sample_rate: int, block_size: int, timeline: ActivityTimeline, max_skew: int
+    ) -> None:
+        """Create a mixer.
+
+        Args:
+            max_skew: How many blocks one participant's queued audio can exceed the others' by.
+        """
         self._sample_rate = sample_rate
         self._block_size = block_size
         self._timeline = timeline
+        self._max_skew = max_skew
         self._inputs: dict[str, _TrackInput] = {}
 
     @property
@@ -141,6 +141,16 @@ class _Mixer:
     def mix(self) -> rtc.AudioFrame:
         mixed = np.zeros(self._block_size, dtype=np.float32)
         activity: dict[str, TrackActivity] = {}
+
+        # audio that arrived after the mix went on without it is mixed behind the others' for
+        # as long as it stays queued. Past the allowance its oldest goes, so overlapping speech
+        # stays in step; a participant with nobody to fall behind (or leaving) keeps it all, and
+        # one who has sent nothing yet is behind nobody
+        live = [inp for inp in self._inputs.values() if inp.ready and not inp.ended]
+        if len(live) > 1:
+            limit = min(inp.queued for inp in live) + self._max_skew
+            for inp in live:
+                inp.trim(limit)
 
         for inp in self._inputs.values():
             # a participant whose audio hasn't arrived is silent in this block, and the gate

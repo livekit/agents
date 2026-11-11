@@ -84,14 +84,14 @@ class _ScriptedSTT(STT):
         script: list[tuple[float, SpeechEvent]],
         *,
         late: list[tuple[float, SpeechEvent]] | None = None,
-        fail_at: float | None = None,
+        fail_at: list[float] | None = None,
     ) -> None:
         super().__init__(capabilities=STTCapabilities(streaming=True, interim_results=True))
         self.script = sorted(script, key=lambda item: item[0])
         self.late = late or []
         """Events the first stream returns this many seconds after its input ends."""
-        self.fail_at = fail_at
-        """Session time at which the stream hearing it fails for good."""
+        self.fail_at = fail_at or []
+        """Session times at which the stream hearing them fails for good."""
         self.pushed: list[rtc.AudioFrame] = []
         self.offsets: list[float] = []
         """Each stream's ``start_time_offset``, once its first frame was read."""
@@ -129,8 +129,8 @@ class _ScriptedStream(RecognizeStream):
             # an event past what this stream heard belongs to a later stream
             while pending and pending[0][0] <= self.start_time_offset + heard + 1e-9:
                 self._event_ch.send_nowait(pending.pop(0)[1])
-            if stt.fail_at is not None and self.start_time_offset + heard >= stt.fail_at:
-                stt.fail_at = None
+            if stt.fail_at and self.start_time_offset + heard >= stt.fail_at[0]:
+                stt.fail_at = stt.fail_at[1:]
                 raise APIConnectionError("scripted failure", retryable=False)
         late, stt.late = stt.late, []
         for delay, ev in late:
@@ -305,7 +305,7 @@ def test_diarization_never_overrides_a_clear_energy_margin() -> None:
 
 def _mixer() -> tuple[_Mixer, ActivityTimeline]:
     timeline = ActivityTimeline(block_duration=_BLOCK, retention=60.0)
-    mixer = _Mixer(sample_rate=_SR, block_size=int(_SR * _BLOCK), timeline=timeline)
+    mixer = _Mixer(sample_rate=_SR, block_size=int(_SR * _BLOCK), timeline=timeline, max_skew=5)
     return mixer, timeline
 
 
@@ -368,32 +368,38 @@ def test_underrun_is_silence_and_leaves_the_clock_alone() -> None:
     assert timeline.scores(0.8, 1.0).keys() == {"a"}
 
 
-def test_track_input_drops_what_arrived_after_the_mix_went_on_without_it() -> None:
-    inp = _input("b")
-    # the tone frames are 20 ms, one block each, told apart by level
-    [one, two, three, four, five, six] = [_tone(0.025, n / 10)[0] for n in range(1, 7)]
-
-    inp.push(one)
-    inp.pop()
-    assert inp.pop() is None  # late: the mix goes on without it
-    inp.push(two)  # the late block, then the one now due
-    inp.push(three)
-    assert _rms_of(inp.pop()) == pytest.approx(0.3, rel=0.05)
-    assert not inp.ready
-
-    # a gap followed by audio in real time is not lag: nothing is dropped
-    for _ in range(5):
-        assert inp.pop() is None
-    inp.push(four)
-    assert _rms_of(inp.pop()) == pytest.approx(0.4, rel=0.05)
-    inp.push(five)
-    inp.push(six)
-    assert _rms_of(inp.pop()) == pytest.approx(0.5, rel=0.05)
+def test_mixer_keeps_a_late_participant_within_the_skew_of_the_others() -> None:
+    mixer, timeline = _mixer()
+    a, b = _input("a"), _input("b")
+    mixer.add(a)
+    mixer.add(b)
+    # b fell 11 blocks behind a; its oldest are dropped to keep it within 5
+    for frame in _track((0.24, _QUIET)):
+        b.push(frame)
+    a.push(_tone(_BLOCK, _QUIET)[0])
+    mixer.mix()
+    assert (a.queued, b.queued) == (0, 5)
 
 
-def _rms_of(block: np.ndarray | None) -> float:
-    assert block is not None
-    return float(np.sqrt(np.mean((block.astype(np.float64) / 32767) ** 2)))
+def test_mixer_keeps_a_burst_nobody_is_ahead_of() -> None:
+    # a participant alone, or one whose speech resumes in a long frame, loses nothing
+    mixer, _ = _mixer()
+    a, b = _input("a"), _input("b")
+    mixer.add(a)
+    mixer.add(b)
+    for frame in _tone(0.08, _LOUD):
+        b.push(frame)
+    a.push(_tone(_BLOCK, _QUIET)[0])
+    mixer.mix()
+    assert b.queued == 3
+
+    solo, _ = _mixer()
+    c = _input("c")
+    solo.add(c)
+    for frame in _track((0.5, _QUIET)):
+        c.push(frame)
+    solo.mix()
+    assert c.queued == 24
 
 
 def test_track_input_resamples_and_downmixes() -> None:
@@ -597,18 +603,40 @@ async def test_session_recovers_from_a_failed_stt_stream() -> None:
         ],
     )
     final = _final("again", [_word("again", 1.5, 1.7)])
-    stt = _ScriptedSTT([(1.0, interim), (1.8, final)], fail_at=1.1)
+    stt = _ScriptedSTT([(1.0, interim), (1.8, final)], fail_at=[1.1])
     segments = await _run_session(
         stt, {"alice": _track((0.6, _QUIET), (1.4, _LOUD), (0.2, _QUIET))}
     )
 
-    # the failed stream's open interim stands, and a new stream carries on
+    # the failed stream's open interim stands, and a new stream carries on at once
     assert len(stt.offsets) == 2
+    assert sum(f.duration for f in stt.pushed) == pytest.approx(2.2, abs=0.005)
     assert [(s.participant_identity, s.text, s.final) for s in segments] == [
         ("alice", "hello", False),
         ("alice", "hello", True),
         ("alice", "again", True),
     ]
+
+
+async def test_an_stt_that_keeps_failing_is_reopened_less_often() -> None:
+    # every stream fails on its first block
+    stt = _ScriptedSTT([], fail_at=[i * 0.02 + 0.01 for i in range(100)])
+    await _run_session(stt, {"alice": _track((1.0, _QUIET))})
+    # once at once, then a second later: nowhere near a stream per block
+    assert len(stt.offsets) <= 3
+
+
+def test_utterance_speaker_label_is_learned_when_words_have_none() -> None:
+    timeline = _timeline([{"a": (0.3, True)}] * 50 + [{"a": (0.3, True), "b": (0.3, True)}] * 50)
+    attributor = _Attributor(timeline, overlap_ratio=0.5)
+    for i in range(3):
+        words = [_word("hi", 0.1 + i * 0.3, 0.3 + i * 0.3)]
+        attributor.attribute(_final("hi", words, speaker_id="S0").alternatives[0], fallback=(0, 1))
+    [run] = attributor.attribute(
+        _final("mine", start_time=1.2, end_time=1.8, speaker_id="S0").alternatives[0],
+        fallback=(1, 2),
+    )
+    assert (run.identity, run.method) == ("a", "diarization")
 
 
 async def test_diarization_labels_are_learned_per_stream() -> None:

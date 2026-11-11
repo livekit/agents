@@ -84,10 +84,12 @@ class _Attributor:
         identity, overlap, scores = self._choose(start, end)
         if len(scores) == 1:
             if identity is not None:
-                labels = [word.text.speaker_id for word in words or []] or [alt.speaker_id]
+                # the words' own labels when the STT gives them, else the utterance's
+                labels = [w.text.speaker_id for w in words or [] if w.text.speaker_id is not None]
+                if not labels and alt.speaker_id is not None:
+                    labels = [alt.speaker_id]
                 for speaker_id in labels:
-                    if speaker_id is not None:
-                        self._speakers.observe(speaker_id, identity)
+                    self._speakers.observe(speaker_id, identity)
             return [_Run(identity, alt.text, start, end, alt.words, False, "single")]
 
         if words:

@@ -48,6 +48,12 @@ _MAX_BUFFER = 1.0
 # the mix falls this far behind real time (a stalled loop) before it stops trying to catch up
 _MAX_LAG = 1.0
 
+# an STT that keeps failing is reopened at most this often
+_MAX_REOPEN_DELAY = 30.0
+
+# how far one participant's audio can run behind the others' before its oldest is dropped
+_MAX_SKEW = 0.1
+
 # on close, how long the STT gets to return what it heard in the last of the audio
 _CLOSE_TIMEOUT = 2.0
 
@@ -158,7 +164,10 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
 
         self._timeline = ActivityTimeline(block_duration=_BLOCK_DURATION, retention=_RETENTION)
         self._mixer = _Mixer(
-            sample_rate=_SAMPLE_RATE, block_size=self._block_size, timeline=self._timeline
+            sample_rate=_SAMPLE_RATE,
+            block_size=self._block_size,
+            timeline=self._timeline,
+            max_skew=round(_MAX_SKEW / _BLOCK_DURATION),
         )
 
         self._room: rtc.Room | None = None
@@ -172,6 +181,8 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         self._publish_atask: asyncio.Task[None] | None = None
         self._started = False
         self._closing = False
+        self._stt_failures = 0
+        self._reopen_at = 0.0
 
         self._history: list[TranscriptSegment] = []
         # kept past a participant leaving: their last words are attributed after they've gone
@@ -314,12 +325,12 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
             track_input.ended = True
             self._data_ev.set()
 
-    def _open_stream(self) -> RecognizeStream:
+    def _open_stream(self, *, rewind: float = 0.0) -> RecognizeStream:
         stream = self._stt.stream()
         # the stream dates audio by the wall clock since this anchor, first frame and reconnects
         # alike; the mix never runs ahead of real time, so that stays on the mix's clock. The
         # anchor is a block on, since the stream dates a frame from its push minus its duration
-        start = self._timeline.duration
+        start = self._timeline.duration - rewind
         stream.start_time_offset = start + _BLOCK_DURATION
         state = _StreamState(
             start=start,
@@ -379,12 +390,20 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
                 await asyncio.sleep(slot - now)
                 continue
 
-            stream = self._stream or self._open_stream()
-            try:
-                stream.push_frame(self._mixer.mix())
-            except RuntimeError:
-                # the STT failed past its retries; the next block opens a new stream
-                self._end_stream()
+            # after a failure the STT is left alone a while; the mix's clock runs on meanwhile
+            stream = self._stream
+            if stream is None and now >= self._reopen_at:
+                stream = self._open_stream()
+            frame = self._mixer.mix()
+            if stream is not None:
+                try:
+                    stream.push_frame(frame)
+                except RuntimeError:
+                    # the STT failed past its retries since the last block. A first failure
+                    # reconnects at once: a new stream, dated a block back, takes this one
+                    self._end_stream()
+                    if not self._stt_failures:
+                        self._open_stream(rewind=_BLOCK_DURATION).push_frame(frame)
 
             behind = time.monotonic() - (anchor + self._mixer.index * _BLOCK_DURATION)
             if behind > _MAX_LAG:
@@ -393,6 +412,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
     async def _recv_task(self, stream: RecognizeStream, state: _StreamState) -> None:
         try:
             async for ev in stream:
+                self._stt_failures = 0
                 if not ev.alternatives:
                     continue
                 if ev.type == SpeechEventType.INTERIM_TRANSCRIPT:
@@ -400,7 +420,16 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
                 elif ev.type == SpeechEventType.FINAL_TRANSCRIPT:
                     self._on_transcript(ev.alternatives[0], state, final=True)
         except Exception:
-            logger.exception("transcription STT stream failed")
+            # the first failure reconnects at once, since the stream already retried what it
+            # could; a failure that keeps coming back (a bad key) is retried less and less often
+            self._stt_failures += 1
+            delay = (
+                min(2.0 ** (self._stt_failures - 2), _MAX_REOPEN_DELAY)
+                if self._stt_failures > 1
+                else 0.0
+            )
+            self._reopen_at = time.monotonic() + delay
+            logger.exception("transcription STT stream failed, reopening in %.0fs", delay)
         finally:
             if self._stream is stream:
                 # it failed while the mix was feeding it; the next block opens a new one
