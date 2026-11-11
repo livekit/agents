@@ -1344,14 +1344,13 @@ class SpeechStream(stt.SpeechStream):
         return False
 
     async def _settle_utterance_for_reconnect(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        """Close an open utterance on the old connection before it is replaced.
+        """Hand the old connection everything it was sent for before it is replaced.
 
-        Only the old connection can transcribe speech it has started on, so its buffered
-        audio and a flush go there, and the turn ends with END_OF_SPEECH either way.
+        Audio read but not yet sent goes to the old connection, so the new one starts clean
+        and its clock lines up with the first frame it reads. Only the old connection can
+        transcribe speech it has started on, so an open utterance is flushed there too, and
+        the turn ends with END_OF_SPEECH either way.
         """
-        if not self._speaking:
-            return
-
         import base64
 
         import numpy as np
@@ -1373,15 +1372,19 @@ class SpeechStream(stt.SpeechStream):
                         }
                     )
                 )
+            if not self._speaking:
+                return
             # a transcript from earlier in the utterance doesn't cover the flushed audio
             self._utterance_resolved.clear()
             await ws.send_str(json.dumps({"type": "flush"}))
             await asyncio.wait_for(self._utterance_resolved.wait(), RECONNECT_SETTLE_TIMEOUT)
         except (asyncio.TimeoutError, aiohttp.ClientError) as e:
             self._logger.warning(
-                f"Open utterance not transcribed before reconnect: {e!r}",
+                f"Audio not transcribed before reconnect: {e!r}",
                 extra=self._build_log_context(),
             )
+            if not self._speaking:
+                return
 
         self._speaking = False
         self._try_commit_utterance()
