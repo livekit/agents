@@ -10,20 +10,20 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils.misc import is_given
 
 LOCAL_LANGUAGES: dict[str, float] = {
-    "ar": 0.3300,
-    "de": 0.3600,
-    "en": 0.5100,
-    "es": 0.4800,
-    "fr": 0.3400,
-    "hi": 0.4600,
-    "id": 0.5600,
-    "it": 0.5400,
-    "ja": 0.2000,
-    "ko": 0.3400,
-    "nl": 0.4700,
-    "pt": 0.6200,
-    "tr": 0.5800,
-    "zh": 0.4800,
+    "ar": 0.2596,
+    "de": 0.1812,
+    "en": 0.2499,
+    "es": 0.3000,
+    "fr": 0.2284,
+    "hi": 0.2464,
+    "id": 0.1396,
+    "it": 0.1918,
+    "ja": 0.2185,
+    "ko": 0.3109,
+    "nl": 0.1503,
+    "pt": 0.3074,
+    "tr": 0.2123,
+    "zh": 0.2900,
 }
 
 TurnDetectorModels = Literal["turn-detector-v1", "turn-detector-v1-mini"]
