@@ -860,7 +860,8 @@ def _split_utf8(text: str, limit: int) -> list[str]:
     pieces: list[str] = []
     start = size = 0
     for i, ch in enumerate(text):
-        n = len(ch.encode())
+        # An unpaired surrogate (valid in JSON-decoded text) must not raise here.
+        n = len(ch.encode(errors="surrogatepass"))
         if size + n > limit:
             pieces.append(text[start:i])
             start, size = i, 0

@@ -1642,6 +1642,15 @@ async def test_assistant_reply_is_not_sent_twice_with_echo_cancellation() -> Non
     assert _sent(stream) == []
 
 
+def test_agent_text_with_an_unpaired_surrogate_is_still_sent() -> None:
+    stream = _make_stream()
+    text = json.loads('"Hi \\ud800"')
+
+    stream._push_agent_text(text, end_of_segment=True)
+
+    assert _sent(stream) == [{"type": "agent_text", "text": text, "end_of_segment": True}]
+
+
 def test_agent_text_over_the_byte_limit_is_split_and_ends_the_segment_once() -> None:
     stream = _make_stream()
     text = "é" * 600 + "ok"  # 1202 bytes, 602 characters
