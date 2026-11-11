@@ -1,0 +1,19 @@
+livekit-agents/livekit/agents/inference/eot/languages.py
+  s_b6ebb92b33ee85::t_5993a7eebb2487 13-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f77a0fd5d08e120d398ef00efa4d21f71cec13cb",
+  "prompts": {},
+  "sessions": {
+    "s_b6ebb92b33ee85": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ffd5347-5f1e-4331-bcb5-8dce87ae0dd4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
