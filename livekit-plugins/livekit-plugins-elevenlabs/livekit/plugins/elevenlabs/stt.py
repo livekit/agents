@@ -82,7 +82,16 @@ class VADOptions(TypedDict, total=False):
 
 
 # https://elevenlabs.io/docs/overview/models#models-overview
-ElevenLabsSTTModels = Literal["scribe_v1", "scribe_v2", "scribe_v2_realtime"]
+ElevenLabsSTTModels = Literal[
+    "scribe_v1",
+    "scribe_v2",
+    "scribe_v2_realtime",
+    "scribe_v3",
+    "scribe_v3_live",
+]
+
+# Models served over the realtime WebSocket endpoint instead of the batch API.
+_REALTIME_MODELS = ("scribe_v2_realtime", "scribe_v3_live")
 
 
 @dataclass
@@ -202,7 +211,7 @@ class STT(stt.STT):
                 )
                 model = "scribe_v2_realtime" if use_realtime else "scribe_v1"
         model = model if is_given(model) else "scribe_v1"
-        use_realtime = model == "scribe_v2_realtime"
+        use_realtime = model in _REALTIME_MODELS
 
         if not use_realtime and is_given(server_vad):
             logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
@@ -421,7 +430,7 @@ class STT(stt.STT):
             self._opts.keyterms = keyterms
 
         if is_given(secondary_languages):
-            if self._opts.model_id == "scribe_v2_realtime":
+            if self._opts.model_id in _REALTIME_MODELS:
                 self._opts.secondary_languages = [
                     LanguageCode(language) for language in secondary_languages
                 ]
@@ -557,7 +566,7 @@ class SpeechStream(stt.SpeechStream):
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
                 while True:
-                    # scribe_v2_realtime model requires a keepalive message instead of a ping
+                    # realtime models require a keepalive message instead of a ping
                     await asyncio.sleep(10)
                     await ws.send_str(
                         json.dumps(
@@ -730,7 +739,7 @@ class SpeechStream(stt.SpeechStream):
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        """Establish WebSocket connection to ElevenLabs Scribe v2 API"""
+        """Establish WebSocket connection to the ElevenLabs Scribe realtime API"""
         commit_strategy = "vad" if self._server_vad is not None else "manual"
         params = [
             f"model_id={self._opts.model_id}",
