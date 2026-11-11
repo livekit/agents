@@ -90,6 +90,8 @@ class _ScriptedSTT(STT):
         self.script = sorted(script, key=lambda item: item[0])
         self.late = late or []
         """Events the first stream returns this many seconds after its input ends."""
+        self.speech_start = False
+        """Each stream reports speech starting on its first frame, before anything else."""
         self.fail_at = fail_at or []
         """Session times at which the stream hearing them fails for good."""
         self.pushed: list[rtc.AudioFrame] = []
@@ -124,6 +126,10 @@ class _ScriptedStream(RecognizeStream):
             if isinstance(data, rtc.AudioFrame):
                 if not heard:
                     stt.offsets.append(self.start_time_offset)
+                    if stt.speech_start:
+                        self._event_ch.send_nowait(
+                            SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
+                        )
                 stt.pushed.append(data)
                 heard += data.duration
             # an event past what this stream heard belongs to a later stream
@@ -305,7 +311,13 @@ def test_diarization_never_overrides_a_clear_energy_margin() -> None:
 
 def _mixer() -> tuple[_Mixer, ActivityTimeline]:
     timeline = ActivityTimeline(block_duration=_BLOCK, retention=60.0)
-    mixer = _Mixer(sample_rate=_SR, block_size=int(_SR * _BLOCK), timeline=timeline, max_skew=5)
+    mixer = _Mixer(
+        sample_rate=_SR,
+        block_size=int(_SR * _BLOCK),
+        timeline=timeline,
+        max_backlog=5,
+        backlog_window=50,
+    )
     return mixer, timeline
 
 
@@ -368,38 +380,41 @@ def test_underrun_is_silence_and_leaves_the_clock_alone() -> None:
     assert timeline.scores(0.8, 1.0).keys() == {"a"}
 
 
-def test_mixer_keeps_a_late_participant_within_the_skew_of_the_others() -> None:
-    mixer, timeline = _mixer()
-    a, b = _input("a"), _input("b")
-    mixer.add(a)
-    mixer.add(b)
-    # b fell 11 blocks behind a; its oldest are dropped to keep it within 5
-    for frame in _track((0.24, _QUIET)):
-        b.push(frame)
-    a.push(_tone(_BLOCK, _QUIET)[0])
-    mixer.mix()
-    assert (a.queued, b.queued) == (0, 5)
-
-
-def test_mixer_keeps_a_burst_nobody_is_ahead_of() -> None:
-    # a participant alone, or one whose speech resumes in a long frame, loses nothing
+def test_mixer_drops_a_backlog_that_never_drains() -> None:
     mixer, _ = _mixer()
     a, b = _input("a"), _input("b")
     mixer.add(a)
     mixer.add(b)
-    for frame in _tone(0.08, _LOUD):
+    # b came in 12 blocks late and keeps sending in real time: it never catches up by itself
+    for frame in _track((0.24, _QUIET)):
         b.push(frame)
-    a.push(_tone(_BLOCK, _QUIET)[0])
+    block = _tone(_BLOCK, _QUIET)[0]
+    for _ in range(49):
+        a.push(block)
+        b.push(block)
+        mixer.mix()
+    assert b.queued == 12
+    a.push(block)
+    b.push(block)
     mixer.mix()
-    assert b.queued == 3
+    assert b.queued == 4
 
-    solo, _ = _mixer()
-    c = _input("c")
-    solo.add(c)
-    for frame in _track((0.5, _QUIET)):
-        c.push(frame)
-    solo.mix()
-    assert c.queued == 24
+
+def test_mixer_keeps_long_frames_that_drain() -> None:
+    # 200 ms at a time queues 10 blocks at once, but all of it is mixed
+    mixer, timeline = _mixer()
+    a, b = _input("a"), _input("b")
+    mixer.add(a)
+    mixer.add(b)
+    block = _tone(_BLOCK, _QUIET)[0]
+    for i in range(100):
+        if i % 10 == 0:
+            for frame in _tone(0.2, _QUIET):
+                b.push(frame)
+        a.push(block)
+        mixer.mix()
+    assert b.queued == 0
+    assert all("b" in activity for activity in timeline._blocks)
 
 
 def test_track_input_resamples_and_downmixes() -> None:
@@ -621,6 +636,7 @@ async def test_session_recovers_from_a_failed_stt_stream() -> None:
 async def test_an_stt_that_keeps_failing_is_reopened_less_often() -> None:
     # every stream fails on its first block
     stt = _ScriptedSTT([], fail_at=[i * 0.02 + 0.01 for i in range(100)])
+    stt.speech_start = True  # which isn't a sign the STT works
     await _run_session(stt, {"alice": _track((1.0, _QUIET))})
     # once at once, then a second later: nowhere near a stream per block
     assert len(stt.offsets) <= 3

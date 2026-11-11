@@ -38,6 +38,10 @@ class _TrackInput:
         self._resampler: rtc.AudioResampler | None = None
         self._resampler_rate = 0
         self._overrun_logged = False
+        # the backlog over the current window of mixes: at its start, and at its lowest
+        self._window_mixes = 0
+        self._window_first = 0
+        self._window_low = 0
 
     @property
     def ready(self) -> bool:
@@ -45,6 +49,7 @@ class _TrackInput:
 
     @property
     def queued(self) -> int:
+        """Number of complete blocks waiting to be mixed."""
         return len(self._blocks)
 
     def push(self, frame: rtc.AudioFrame) -> None:
@@ -72,10 +77,25 @@ class _TrackInput:
     def pop(self) -> np.ndarray | None:
         return self._blocks.popleft() if self._blocks else None
 
-    def trim(self, max_blocks: int) -> None:
-        """Drop the oldest blocks past ``max_blocks``."""
-        while len(self._blocks) > max_blocks:
-            self._blocks.popleft()
+    def settle(self, max_backlog: int, window: int) -> None:
+        """Drop the oldest blocks past ``max_backlog`` when more stayed queued for ``window``
+        mixes without shrinking.
+
+        A long frame or a burst queues a lot at once but drains; audio that came in late and is
+        followed in real time never does, and is mixed that far behind everyone else's for good.
+        """
+        queued = len(self._blocks)
+        if not self._window_mixes:
+            self._window_first = self._window_low = queued
+        self._window_low = min(self._window_low, queued)
+        self._window_mixes += 1
+        if self._window_mixes < window:
+            return
+
+        self._window_mixes = 0
+        if self._window_low > max_backlog and queued >= self._window_first:
+            while len(self._blocks) > max_backlog:
+                self._blocks.popleft()
 
     def _append(self, samples: np.ndarray) -> None:
         self._pending = np.concatenate([self._pending, samples])
@@ -98,17 +118,25 @@ class _Mixer:
     """Sums every participant into one block at a time and records who was audible in it."""
 
     def __init__(
-        self, *, sample_rate: int, block_size: int, timeline: ActivityTimeline, max_skew: int
+        self,
+        *,
+        sample_rate: int,
+        block_size: int,
+        timeline: ActivityTimeline,
+        max_backlog: int,
+        backlog_window: int,
     ) -> None:
         """Create a mixer.
 
         Args:
-            max_skew: How many blocks one participant's queued audio can exceed the others' by.
+            max_backlog: How many blocks a participant can keep queued without draining.
+            backlog_window: How many mixes in a row a backlog must last before it is dropped.
         """
         self._sample_rate = sample_rate
         self._block_size = block_size
         self._timeline = timeline
-        self._max_skew = max_skew
+        self._max_backlog = max_backlog
+        self._backlog_window = backlog_window
         self._inputs: dict[str, _TrackInput] = {}
 
     @property
@@ -142,15 +170,12 @@ class _Mixer:
         mixed = np.zeros(self._block_size, dtype=np.float32)
         activity: dict[str, TrackActivity] = {}
 
-        # audio that arrived after the mix went on without it is mixed behind the others' for
-        # as long as it stays queued. Past the allowance its oldest goes, so overlapping speech
-        # stays in step; a participant with nobody to fall behind (or leaving) keeps it all, and
-        # one who has sent nothing yet is behind nobody
-        live = [inp for inp in self._inputs.values() if inp.ready and not inp.ended]
-        if len(live) > 1:
-            limit = min(inp.queued for inp in live) + self._max_skew
-            for inp in live:
-                inp.trim(limit)
+        # audio that arrived after the mix went on without it stays queued, mixed behind the
+        # others' for good; a backlog that never drains is dropped so speech stays in step. A
+        # participant who is leaving keeps everything they sent
+        for inp in self._inputs.values():
+            if not inp.ended:
+                inp.settle(self._max_backlog, self._backlog_window)
 
         for inp in self._inputs.values():
             # a participant whose audio hasn't arrived is silent in this block, and the gate

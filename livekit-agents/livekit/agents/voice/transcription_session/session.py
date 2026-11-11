@@ -51,8 +51,10 @@ _MAX_LAG = 1.0
 # an STT that keeps failing is reopened at most this often
 _MAX_REOPEN_DELAY = 30.0
 
-# how far one participant's audio can run behind the others' before its oldest is dropped
-_MAX_SKEW = 0.1
+# a participant's audio queued past this for all of _BACKLOG_WINDOW without shrinking (it came
+# in late and never drained, unlike a long frame or a burst) has its oldest dropped
+_MAX_BACKLOG = 0.1
+_BACKLOG_WINDOW = 1.0
 
 # on close, how long the STT gets to return what it heard in the last of the audio
 _CLOSE_TIMEOUT = 2.0
@@ -167,7 +169,8 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
             sample_rate=_SAMPLE_RATE,
             block_size=self._block_size,
             timeline=self._timeline,
-            max_skew=round(_MAX_SKEW / _BLOCK_DURATION),
+            max_backlog=round(_MAX_BACKLOG / _BLOCK_DURATION),
+            backlog_window=round(_BACKLOG_WINDOW / _BLOCK_DURATION),
         )
 
         self._room: rtc.Room | None = None
@@ -412,13 +415,16 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
     async def _recv_task(self, stream: RecognizeStream, state: _StreamState) -> None:
         try:
             async for ev in stream:
-                self._stt_failures = 0
                 if not ev.alternatives:
                     continue
                 if ev.type == SpeechEventType.INTERIM_TRANSCRIPT:
                     self._on_transcript(ev.alternatives[0], state, final=False)
                 elif ev.type == SpeechEventType.FINAL_TRANSCRIPT:
                     self._on_transcript(ev.alternatives[0], state, final=True)
+                else:
+                    continue
+                # only a transcript shows the STT works; a speech-start or usage event may not
+                self._stt_failures = 0
         except Exception:
             # the first failure reconnects at once, since the stream already retried what it
             # could; a failure that keeps coming back (a bad key) is retried less and less often
