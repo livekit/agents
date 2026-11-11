@@ -1478,6 +1478,8 @@ class SpeechStream(stt.SpeechStream):
                         }
                     )
                 )
+            # a transcript from earlier in the utterance doesn't cover the flushed audio
+            self._utterance_resolved.clear()
             await ws.send_str(json.dumps({"type": "flush"}))
             await asyncio.wait_for(self._utterance_resolved.wait(), RECONNECT_SETTLE_TIMEOUT)
         except (asyncio.TimeoutError, aiohttp.ClientError) as e:
