@@ -371,7 +371,13 @@ class TTS(tts.TTS):
         return stream
 
     def prewarm(self) -> None:
-        """Open the websocket connection before the first synthesis request."""
+        """Preconnect regular TTS models; dialogue models connect on first synthesis.
+
+        A dialogue socket without a synthesis context times out after 20 seconds.
+        Context keep-alives cannot keep an unused prewarmed socket open.
+        """
+        if is_dialogue_model(self._opts.model):
+            return
         if self._prewarm_task is None or self._prewarm_task.done():
             self._prewarm_task = asyncio.create_task(self._run_prewarm())
 
@@ -380,18 +386,10 @@ class TTS(tts.TTS):
         max_retry_delay = 30.0
 
         try:
-            while True:
+            while not is_dialogue_model(self._opts.model):
                 try:
-                    conn, _, _ = await self._current_connection()
-                    retry_delay = 1.0
-
-                    if not is_dialogue_model(self._opts.model) or conn._recv_task is None:
-                        return
-
-                    # Text-to-dialogue sockets are closed by the server after an idle period.
-                    # Wait for that closure and reconnect immediately so the next turn remains warm.
-                    # asyncio.wait() does not propagate cancellation from the receive task.
-                    await asyncio.wait({conn._recv_task})
+                    await self._current_connection()
+                    return
                 except asyncio.CancelledError:
                     raise
                 except APIStatusError as exc:

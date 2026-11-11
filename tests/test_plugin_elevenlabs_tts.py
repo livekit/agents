@@ -170,10 +170,13 @@ async def test_option_update_during_connect_discards_stale_socket(
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_prewarm_stops_on_non_retryable_api_error(monkeypatch: pytest.MonkeyPatch) -> None:
     attempts = 0
     finished = asyncio.Event()
+    sleep = asyncio.sleep
+
+    async def _sleep(_delay: float) -> None:
+        finished.set()
 
     async def _current_connection(self: object) -> tuple[SimpleNamespace, float, bool]:
         nonlocal attempts
@@ -181,16 +184,12 @@ async def test_prewarm_stops_on_non_retryable_api_error(monkeypatch: pytest.Monk
         raise elevenlabs_tts.APIStatusError("Unauthorized", status_code=401)
 
     monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
-    monkeypatch.setattr(
-        elevenlabs_tts.asyncio,
-        "sleep",
-        lambda _delay: finished.set(),
-    )
+    monkeypatch.setattr(elevenlabs_tts.asyncio, "sleep", _sleep)
 
     tts = elevenlabs_tts.TTS(api_key="test-key")
     tts.prewarm()
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await sleep(0)
+    await sleep(0)
     assert attempts == 1
     assert not finished.is_set()
     await tts.aclose()
@@ -228,34 +227,97 @@ async def test_prewarm_retries_with_exponential_backoff(
     assert delays == [1.0, 2.0, 4.0]
 
 
-async def test_dialogue_prewarm_reconnects_when_idle_socket_closes(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "model", ["eleven_v3", "eleven_v3_conversational", "eleven_v4", "eleven_v4_turbo"]
+)
+async def test_dialogue_prewarm_defers_connection_until_synthesis(
+    monkeypatch: pytest.MonkeyPatch, model: str
 ) -> None:
-    connections: list[asyncio.Future[None]] = []
-    reconnected = asyncio.Event()
+    acquisitions = 0
+    sent: list[str] = []
+    pcm = b"\x00\x01" * 2400
+
+    class _StubConnection:
+        def register_stream(
+            self, stream: object, emitter: agents_tts.AudioEmitter, waiter: asyncio.Future[None]
+        ) -> None:
+            self.emitter = emitter
+            self.waiter = waiter
+
+        def send_content(self, content: elevenlabs_tts._SynthesizeContent) -> None:
+            if content.text:
+                sent.append(content.text)
+                self.emitter.push(pcm)
+
+        def close_context(self, context_id: str) -> None:
+            if not self.waiter.done():
+                self.waiter.set_result(None)
+
+        def unregister_stream(self, context_id: str) -> None:
+            pass
+
+    connection = _StubConnection()
 
     async def _current_connection(
         self: object,
-    ) -> tuple[SimpleNamespace, float, bool]:
-        recv_task = asyncio.get_running_loop().create_future()
-        connections.append(recv_task)
-        if len(connections) == 2:
-            reconnected.set()
-        return SimpleNamespace(_recv_task=recv_task), 0.0, False
+    ) -> tuple[_StubConnection, float, bool]:
+        nonlocal acquisitions
+        acquisitions += 1
+        return connection, 0.0, False
 
     monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
 
-    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v4")
-    tts.prewarm()
-    while not connections:
+    tts = elevenlabs_tts.TTS(api_key="test-key", model=model, encoding="pcm_24000")
+    try:
+        tts.prewarm()
+        tts.prewarm()
         await asyncio.sleep(0)
+        assert acquisitions == 0
 
-    connections[0].cancel()
-    await asyncio.wait_for(reconnected.wait(), timeout=1)
-    await tts.aclose()
+        async with tts.stream() as stream:
+            stream.push_text("Hello world.")
+            stream.end_input()
+            chunks = [bytes(event.frame.data) async for event in stream]
 
-    assert len(connections) == 2
-    assert not connections[1].cancelled()
+        assert acquisitions == 1
+        assert sent == ["Hello world. "]
+        assert b"".join(chunks) == pcm
+    finally:
+        await tts.aclose()
+
+
+async def test_prewarm_stops_retrying_after_switch_to_dialogue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    retrying = asyncio.Event()
+    resume = asyncio.Event()
+    sleep = asyncio.sleep
+
+    async def _current_connection(self: object) -> tuple[SimpleNamespace, float, bool]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ConnectionError("temporary failure")
+        return SimpleNamespace(_recv_task=None), 0.0, False
+
+    async def _sleep(_delay: float) -> None:
+        retrying.set()
+        await resume.wait()
+
+    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
+    monkeypatch.setattr(elevenlabs_tts.asyncio, "sleep", _sleep)
+    tts = elevenlabs_tts.TTS(api_key="test-key")
+    try:
+        tts.prewarm()
+        await asyncio.wait_for(retrying.wait(), timeout=1)
+        tts.update_options(model="eleven_v4_turbo")
+        resume.set()
+        await sleep(0)
+        await sleep(0)
+        assert attempts == 1
+    finally:
+        await tts.aclose()
 
 
 def test_build_context_init_packet_includes_generation_config() -> None:

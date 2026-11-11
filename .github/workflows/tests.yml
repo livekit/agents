@@ -64,6 +64,9 @@ jobs:
       - name: Run tests
         run: make unit-tests
 
+      - name: Run hermetic ElevenLabs TTS tests
+        run: uv run pytest tests/test_plugin_elevenlabs_tts.py --plugin elevenlabs
+
   evaluation:
     # don't run tests for PRs on forks
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
