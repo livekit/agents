@@ -17,8 +17,142 @@ class _ACloseable(Protocol):
 T = TypeVar("T")
 
 
+class _TeeSource(Generic[T]):
+    """Own upstream iteration and cleanup in one task, without prefetching."""
+
+    def __init__(self, iterator: AsyncIterator[T]) -> None:
+        """Initialize a lazy producer for the shared upstream iterator."""
+        self._iterator = iterator
+        self._request = asyncio.Event()
+        self._response: asyncio.Future[T] | None = None
+        self._task: asyncio.Task[None] | None = None
+        self._supervisor: asyncio.Task[None] | None = None
+        self._started = False
+        self._closing = False
+        self._cleaning_up = False
+
+    async def next(self) -> T:
+        """Read on demand, retaining the result if its waiting peer is cancelled."""
+        if self._closing:
+            raise StopAsyncIteration
+        if self._response is None:
+            self._response = asyncio.get_running_loop().create_future()
+            self._request.set()
+        if self._task is None:
+            self._task = asyncio.create_task(self._run())
+            # A source may fail cleanup while other peers still have buffered
+            # items. Observe the failure now; aclose still re-raises it later.
+            self._task.add_done_callback(
+                lambda task: task.exception() if not task.cancelled() else None
+            )
+            self._supervisor = asyncio.create_task(self._supervise())
+
+        # A cancelled peer relinquishes its wait, not the shared upstream read.
+        # Keep the response for the next peer until its item has been delivered.
+        response = self._response
+        try:
+            item = await asyncio.shield(response)
+        except asyncio.CancelledError:
+            # Upstream cancellation belongs to this read. A custom iterator
+            # may remain usable, so another peer must get a fresh response.
+            # Peer cancellation alone leaves the shared response intact.
+            if response.cancelled():
+                self._response = None
+            raise
+        except BaseException:
+            # Finish terminal cleanup before releasing the peer lock. Otherwise
+            # a consumer can finish while another peer is still closing the
+            # producer's tasks (for example, a stream's metrics monitor).
+            pending = [
+                task
+                for task in (self._task, self._supervisor)
+                if task is not None and not task.done()
+            ]
+            if pending:
+                await asyncio.shield(asyncio.gather(*pending, return_exceptions=True))
+            raise
+        self._response = None
+        return item
+
+    async def _supervise(self) -> None:
+        """Stop retrying reads when loop shutdown cancels the producer's tasks."""
+        task = self._task
+        assert task is not None
+        try:
+            await asyncio.shield(asyncio.gather(task, return_exceptions=True))
+        except asyncio.CancelledError:
+            # Loop shutdown cancels both tasks. Mark the cancellation as final
+            # even if the producer has already handled it as a cancelled read.
+            # Do not cancel it again: its iterator may be awaiting cleanup.
+            self._closing = True
+            self._request.set()
+            await asyncio.shield(asyncio.gather(task, return_exceptions=True))
+            raise
+
+    async def _run(self) -> None:
+        """Serve requested reads and clean up the iterator in one context."""
+        self._started = True
+        try:
+            while not self._closing:
+                await self._request.wait()
+                self._request.clear()
+                if self._closing:
+                    break
+                response = self._response
+                assert response is not None
+                try:
+                    item = await self._iterator.__anext__()
+                except asyncio.CancelledError:
+                    response.cancel()
+                    if self._closing:
+                        raise
+                except BaseException as error:
+                    response.set_exception(error)
+                    return
+                else:
+                    response.set_result(item)
+        finally:
+            self._cleaning_up = True
+            if self._response is not None and not self._response.done():
+                self._response.cancel()
+            if isinstance(self._iterator, _ACloseable):
+                await self._iterator.aclose()
+
+    async def aclose(self) -> None:
+        """Stop the producer and await upstream cleanup in its original context."""
+        task = self._task
+        if task is None:
+            self._closing = True
+            if isinstance(self._iterator, _ACloseable):
+                await self._iterator.aclose()
+            return
+
+        if not self._closing:
+            self._closing = True
+            # A task cancelled before its first step never enters its finally
+            # block. Let an unstarted producer run just its cleanup instead.
+            if self._started and not self._cleaning_up:
+                task.cancel()
+        # Only cancel the producer once. A second close or a cancelled close
+        # caller must not interrupt an upstream finally block already running.
+        if task.done():
+            result = None if task.cancelled() else task.exception()
+        else:
+            (result,) = await asyncio.shield(asyncio.gather(task, return_exceptions=True))
+        supervisor = self._supervisor
+        if supervisor is not None and not supervisor.done():
+            await asyncio.shield(asyncio.gather(supervisor, return_exceptions=True))
+        if self._response is not None:
+            if not self._response.done():
+                self._response.cancel()
+            elif not self._response.cancelled():
+                self._response.exception()
+        if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+            raise result
+
+
 async def tee_peer(
-    iterator: AsyncIterator[T],
+    source: _TeeSource[T],
     buffer: deque[T],
     peers: list[deque[T]],
     lock: AsyncContextManager[Any],
@@ -42,7 +176,7 @@ async def tee_peer(
                     if exception[0] is not None:
                         raise exception[0]
                     try:
-                        item = await iterator.__anext__()
+                        item = await source.next()
                     except StopAsyncIteration:
                         break
                     except asyncio.CancelledError:
@@ -62,26 +196,26 @@ async def tee_peer(
                 peers.pop(idx)
                 break
 
-        if not peers and isinstance(iterator, _ACloseable):
-            await iterator.aclose()
+        if not peers:
+            await source.aclose()
 
 
 class Tee(Generic[T]):
-    __slots__ = ("_iterator", "_buffers", "_children")
+    __slots__ = ("_source", "_buffers", "_children")
 
     def __init__(
         self,
         iterator: AsyncIterable[T],
         n: int = 2,
     ):
-        self._iterator = iterator.__aiter__()
+        self._source = _TeeSource(iterator.__aiter__())
         self._buffers: list[deque[T]] = [deque() for _ in range(n)]
 
         lock = asyncio.Lock()
         exception: list[BaseException | None] = [None]
         self._children = tuple(
             tee_peer(
-                iterator=self._iterator,
+                source=self._source,
                 buffer=buffer,
                 peers=self._buffers,
                 lock=lock,
@@ -112,15 +246,15 @@ class Tee(Generic[T]):
         await self.aclose()
 
     async def aclose(self) -> None:
+        # Cancel/await an in-flight read before closing its consumer generators.
+        try:
+            await self._source.aclose()
+        except Exception:
+            pass
+
         for child in self._children:
             try:
                 await child.aclose()
-            except Exception:
-                pass
-
-        if isinstance(self._iterator, _ACloseable):
-            try:
-                await self._iterator.aclose()
             except Exception:
                 pass
 
