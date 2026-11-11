@@ -132,15 +132,51 @@ def to_turn_detection(
     return turn_detection
 
 
-_MAX_CALL_ID_LEN = 32
+_MAX_ID_LEN = 32
 
 
-def _shorten_call_id(call_id: str) -> str:
-    # OpenAI caps call_id at 32 chars; deterministically shorten longer ids (e.g. from another
-    # provider replayed after a fallback swap) so a call and its output still map to the same id
-    if len(call_id) <= _MAX_CALL_ID_LEN:
-        return call_id
-    return hashlib.sha256(call_id.encode()).hexdigest()[:_MAX_CALL_ID_LEN]
+def _shorten_id(id: str) -> str:
+    # OpenAI caps call and item ids at 32 chars; deterministically shorten longer ids (e.g. from
+    # another provider replayed after a fallback swap) so every reference maps to the same id
+    if len(id) <= _MAX_ID_LEN:
+        return id
+    return hashlib.sha256(id.encode()).hexdigest()[:_MAX_ID_LEN]
+
+
+class _ItemIdMap:
+    """Shortens over-long item ids in client events and restores them in server events, so the
+    session keeps the ids the agent chose while the wire stays within the API's limit."""
+
+    def __init__(self) -> None:
+        self._original: dict[str, str] = {}
+
+    def _shorten(self, id: Any) -> Any:
+        if not isinstance(id, str) or len(id) <= _MAX_ID_LEN:
+            return id
+        short = _shorten_id(id)
+        self._original[short] = id
+        return short
+
+    def shorten(self, event: dict[str, Any]) -> None:
+        items = [event.get("item")]
+        if isinstance(response := event.get("response"), dict):
+            items.extend(response.get("input") or [])
+        for item in items:
+            if isinstance(item, dict) and "id" in item:
+                item["id"] = self._shorten(item["id"])
+        for key in ("previous_item_id", "item_id"):
+            if key in event:
+                event[key] = self._shorten(event[key])
+
+    def restore(self, event: dict[str, Any]) -> None:
+        if not self._original:
+            return
+        item = event.get("item")
+        if isinstance(item, dict) and (id := item.get("id")) in self._original:
+            item["id"] = self._original[id]
+        for key in ("previous_item_id", "item_id"):
+            if (id := event.get(key)) in self._original:
+                event[key] = self._original[id]
 
 
 def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem:
@@ -150,7 +186,7 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
         conversation_item = realtime.RealtimeConversationItemFunctionCall(
             id=item.id,
             type="function_call",
-            call_id=_shorten_call_id(item.call_id),
+            call_id=_shorten_id(item.call_id),
             name=item.name,
             arguments=item.arguments,
         )
@@ -159,11 +195,11 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
         conversation_item = realtime.RealtimeConversationItemFunctionCallOutput(
             id=item.id,
             type="function_call_output",
-            call_id=_shorten_call_id(item.call_id),
+            call_id=_shorten_id(item.call_id),
             output=item.output,
         )
         conversation_item.type = "function_call_output"
-        conversation_item.call_id = _shorten_call_id(item.call_id)
+        conversation_item.call_id = _shorten_id(item.call_id)
         conversation_item.output = item.output
 
     elif item.type == "message":

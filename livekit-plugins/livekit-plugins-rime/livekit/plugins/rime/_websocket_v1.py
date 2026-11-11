@@ -38,7 +38,7 @@ from livekit.agents import (
     tts,
 )
 
-from .models import is_mist_model
+from .models import CustomLexiconEntry, is_mist_model
 
 WebSocketProtocol = Literal["binary", "json"]
 RimeAudioFormat = Literal[
@@ -77,6 +77,7 @@ class SynthesisOptions:
     time_scale_factor: float | None = None
     pause_between_brackets: bool | None = None
     phonemize_between_brackets: bool | None = None
+    custom_lexicon: tuple[CustomLexiconEntry, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -554,6 +555,8 @@ def _start_payload(options: SynthesisOptions) -> proto.SynthesisRequest:
             request.mist_parameters.pause_between_brackets = options.pause_between_brackets
         if options.phonemize_between_brackets is not None:
             request.mist_parameters.phonemize_between_brackets = options.phonemize_between_brackets
+    for entry in options.custom_lexicon:
+        request.custom_lexicon.add(spelling=entry["spelling"], pronunciation=entry["pronunciation"])
     return request
 
 

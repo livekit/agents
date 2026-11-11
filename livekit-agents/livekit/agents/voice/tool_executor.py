@@ -48,11 +48,19 @@ UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
 The task is still running, so DON'T make up or give information not included in the message above."""
 
 DUPLICATE_REJECT = """Same tool `{function_name}` is already running:
+{fnc_calls_text}"""
+
+DUPLICATE_REJECT_WITH_CANCEL = """Same tool `{function_name}` is already running:
 {fnc_calls_text}
 If you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.
 Only do this when user explicitly requests it."""
 
 DUPLICATE_CONFIRM = """Same tool `{function_name}` is already running:
+{fnc_calls_text}
+Re-call with confirm duplicate True to run a duplicate if needed.
+Only run a duplicate when the user explicitly requests it."""
+
+DUPLICATE_CONFIRM_WITH_CANCEL = """Same tool `{function_name}` is already running:
 {fnc_calls_text}
 Re-call with confirm duplicate True to run a duplicate if needed,
 or if you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.
@@ -300,6 +308,10 @@ class _ToolExecutor:
         self._tool_options: AsyncToolOptions = _resolve_async_tool_options(async_tool_options)
 
     def set_owning_activity(self, activity: AgentActivity | None) -> None:
+        for task in self._running_tasks.values():
+            # a running tool's hold moves with the activity that will speak its result
+            task.ctx.session._release_away_timer_hold(self._owning_activity)
+            task.ctx.session._create_away_timer_hold(activity)
         self._owning_activity = activity
 
     def set_tool_options(self, options: AsyncToolOptions) -> None:
@@ -445,6 +457,7 @@ class _ToolExecutor:
 
         session = run_ctx.session
         _RunningTasks.setdefault(session, {})[call_id] = running_task
+        session._create_away_timer_hold(self._owning_activity)
 
         session._tool_execution_updated(
             ToolExecutionUpdatedEvent(update=ToolCallStarted(function_call=run_ctx.function_call)),
@@ -454,6 +467,7 @@ class _ToolExecutor:
             self._running_tasks.pop(call_id, None)
             if (session_tasks := _RunningTasks.get(session)) is not None:
                 session_tasks.pop(call_id, None)
+            session._release_away_timer_hold(self._owning_activity)
             # detach so a stashed RunContext can't drive the executor post-completion
             run_ctx._detach_executor()
 
@@ -769,11 +783,25 @@ class _ToolExecutor:
                 "fnc_calls_json": fnc_calls_json,
                 "fnc_calls_text": "\n".join(fnc_calls_json),
             }
+            # Only mention lk_agents_cancel_task when an in-flight duplicate is
+            # cancellable — that tool is exposed only for ToolFlag.CANCELLABLE
+            # tools (see AgentActivity.tools), so non-cancellable reject/confirm
+            # must not instruct the model to call a missing function.
+            can_cancel = any(
+                self._running_tasks[fnc_call.call_id].allow_cancellation
+                for fnc_call in running_fnc_calls
+            )
             if on_duplicate == "reject":
-                return _render(self._tool_options["duplicate_reject_template"], dict(args))
+                template = self._tool_options["duplicate_reject_template"]
+                if template is DUPLICATE_REJECT and can_cancel:
+                    template = DUPLICATE_REJECT_WITH_CANCEL
+                return _render(template, dict(args))
 
             if on_duplicate == "confirm" and not confirm_duplicate:
-                return _render(self._tool_options["duplicate_confirm_template"], dict(args))
+                template = self._tool_options["duplicate_confirm_template"]
+                if template is DUPLICATE_CONFIRM and can_cancel:
+                    template = DUPLICATE_CONFIRM_WITH_CANCEL
+                return _render(template, dict(args))
 
         return None
 
