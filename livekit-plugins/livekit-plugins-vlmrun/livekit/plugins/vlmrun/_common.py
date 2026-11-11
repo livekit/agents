@@ -29,8 +29,9 @@ def gateway_url(base_url: str | None = None) -> str:
         or os.environ.get("VLMRUN_GATEWAY_URL")
         or DEFAULT_GATEWAY_URL
     )
-    # VLM Run's docs give the gateway URL with the /v1 suffix; accept either form.
-    return url.rstrip("/").removesuffix("/v1")
+    # VLM Run's docs give the gateway URL with the /v1 suffix, and an openai SDK user has it
+    # with /openai; accept the root or either form.
+    return url.rstrip("/").removesuffix("/v1").removesuffix("/openai")
 
 
 def openai_base_url(base_url: str | None = None) -> str:

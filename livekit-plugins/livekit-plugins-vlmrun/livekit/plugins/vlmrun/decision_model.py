@@ -47,6 +47,10 @@ class DecisionModel(llm.DecisionModel):
             ``VLMRUN_GATEWAY_URL``, then ``https://gateway.vlm.run``.
         http_session: Optional caller-owned aiohttp session. Defaults to the job's HTTP
             session; outside a job, use ``async with utils.http_context.open()``.
+
+    Each attempt times out after ``conn_options.timeout`` (10 s by default). The gateway allows
+    ``qwen/qwen3.8-27b`` up to 60 s, so pass ``conn_options=APIConnectOptions(timeout=70)`` to
+    ``evaluate()`` to wait for it.
     """
 
     def __init__(
@@ -70,7 +74,10 @@ class DecisionModel(llm.DecisionModel):
         self._url = f"{root}/typesafe/v1/systemone"
         # Host and port only: netloc would carry user:password@ into telemetry.
         parts = urlsplit(root)
-        self._provider = f"{parts.hostname}:{parts.port}" if parts.port else (parts.hostname or "")
+        host = parts.hostname or ""
+        if ":" in host:
+            host = f"[{host}]"
+        self._provider = f"{host}:{parts.port}" if parts.port else host
         self._headers = client_headers(key)
         self._session = http_session
 

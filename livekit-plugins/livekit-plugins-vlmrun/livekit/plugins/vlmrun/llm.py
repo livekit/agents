@@ -35,10 +35,10 @@ from ._common import client_headers, openai_base_url, resolve_api_key
 from .models import SUPPORTED_SAMPLING, ChatModels
 
 # The gateway can hold a streamed reply until the first token, and allows qwen/qwen3.8-27b up to
-# 60 s for it (https://docs.vlm.run/gateway/error-codes). The openai plugin's 5 s read timeout
-# failed about 1 in 10 turns on that model, so wait past the gateway's own deadline and let its
-# 504 arrive first.
-_DEFAULT_TIMEOUT = httpx.Timeout(connect=15.0, read=70.0, write=5.0, pool=5.0)
+# 60 s for it (https://docs.vlm.run/gateway/error-codes). The framework's 10 s default cut those
+# turns off and retried them, so wait past the gateway's own deadline and let its 504 arrive
+# first. The request timeout comes from conn_options; a timeout on the client is never used.
+_DEFAULT_CONN_OPTIONS = APIConnectOptions(timeout=70.0)
 
 
 class LLM(OpenAILLM):
@@ -55,7 +55,6 @@ class LLM(OpenAILLM):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
         max_retries: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         """Create a new instance of a VLM Run gateway LLM.
@@ -64,7 +63,10 @@ class LLM(OpenAILLM):
         OpenAI-compatible Chat Completions API. Images in the chat context (``ImageContent``,
         including an ``rtc.VideoFrame``) are sent to the model. An ``AgentSession`` forwards
         live video only to realtime models, so the agent must add camera frames to the chat
-        context itself; see the plugin README.
+        context itself.
+
+        Requests time out after 70 s by default, above the gateway's first-token deadline. Pass
+        ``conn_options`` to ``chat()``, or ``AgentSession(conn_options=...)``, to change it.
 
         ``api_key`` defaults to the ``VLMRUN_API_KEY`` environment variable and is required.
         ``base_url`` defaults to ``VLMRUN_GATEWAY_BASE_URL``, then
@@ -80,15 +82,13 @@ class LLM(OpenAILLM):
             model: Gateway model id. Defaults to ``qwen/qwen3.8-27b``.
             api_key: VLM Run API key. Defaults to ``VLMRUN_API_KEY``.
             base_url: Gateway root URL, without the ``/openai`` suffix.
-            client: A preconfigured ``openai.AsyncClient``; overrides key, URL and timeout.
+            client: A preconfigured ``openai.AsyncClient``; overrides key and URL.
             temperature: Sampling temperature.
             top_p: Nucleus sampling.
             parallel_tool_calls: Allow parallel tool calls.
             tool_choice: Tool choice strategy.
             max_completion_tokens: Maximum tokens per reply.
             extra_body: Gateway-specific fields, such as ``method`` or ``method_params``.
-            timeout: HTTP timeout. The default read timeout is 70 s, above the gateway's
-                first-token deadline.
             max_retries: Retries made by the openai client.
         """
         _check_sampling(model, temperature=temperature, top_p=top_p)
@@ -106,7 +106,6 @@ class LLM(OpenAILLM):
                 default_headers=client_headers(None),
                 max_retries=max_retries if is_given(max_retries) else 0,
                 http_client=httpx.AsyncClient(
-                    timeout=timeout if timeout else _DEFAULT_TIMEOUT,
                     follow_redirects=True,
                     limits=httpx.Limits(
                         max_connections=50,
@@ -137,12 +136,16 @@ class LLM(OpenAILLM):
         *,
         chat_ctx: ChatContext,
         tools: list[Tool] | None = None,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        conn_options: APIConnectOptions = _DEFAULT_CONN_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         response_format: NotGivenOr[Any] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
+        # AgentSession always passes its llm_conn_options, which is this same object unless the
+        # user set their own. Identity, not equality, so an explicit APIConnectOptions() is kept.
+        if conn_options is DEFAULT_API_CONNECT_OPTIONS:
+            conn_options = _DEFAULT_CONN_OPTIONS
         return super().chat(
             chat_ctx=_gateway_chat_ctx(chat_ctx),
             tools=tools,
