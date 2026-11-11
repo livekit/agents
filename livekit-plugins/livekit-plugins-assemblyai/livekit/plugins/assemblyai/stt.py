@@ -90,18 +90,16 @@ _U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "univers
 
 # Server-side cap on the number of steering codes, mirrored client-side so bad
 # input fails at construction/update time instead of as a websocket error.
-# Universal-3.6 Pro has no documented cap.
+# AssemblyAI accepts at most 10 codes across all models (including Universal-3.6 Pro).
 _MAX_LANGUAGE_CODES = 10
-_UNCAPPED_LANGUAGE_CODES_MODELS = ("universal-3-6-pro",)
 
 
-def _normalize_language_codes(language_codes: str | list[str], model: str) -> list[str]:
+def _normalize_language_codes(language_codes: str | list[str], model: str = "") -> list[str]:
     """Normalize code(s) to bare ISO 639-1 and dedup preserving order.
 
     Accepts a single code or a list, mirroring the server, which takes either.
-    Mirrors the AssemblyAI streaming API's validation rules: at most 10 codes
-    (except on Universal-3.6 Pro), and 'multi' (the unsteered multilingual
-    default) must be sent alone.
+    Mirrors the AssemblyAI streaming API's validation rules: at most 10 codes,
+    and 'multi' (the unsteered multilingual default) must be sent alone.
     """
     if isinstance(language_codes, str):
         # A bare code is shorthand for a one-element list; wrapping here (the
@@ -109,7 +107,7 @@ def _normalize_language_codes(language_codes: str | list[str], model: str) -> li
         # being iterated per-character. "" means "no codes", like [].
         language_codes = [language_codes] if language_codes else []
     normalized = list(dict.fromkeys(LanguageCode(code).language for code in language_codes))
-    if model not in _UNCAPPED_LANGUAGE_CODES_MODELS and len(normalized) > _MAX_LANGUAGE_CODES:
+    if len(normalized) > _MAX_LANGUAGE_CODES:
         raise ValueError(
             f"language_codes accepts at most {_MAX_LANGUAGE_CODES} codes "
             f"(got {len(normalized)} after normalization)"
