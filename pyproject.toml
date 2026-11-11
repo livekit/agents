@@ -110,7 +110,7 @@ dev = [
     "python-dotenv>=1.0.1",
     "mypy",
     "scikit-learn",
-    "pytest>=9.1.1,<9.2",
+    "pytest>=9.2,<9.3",
     { include-group = "lint" },
     "pytest-asyncio>=0.25.3",
     "pytest-asyncio-concurrent==0.5.2",
