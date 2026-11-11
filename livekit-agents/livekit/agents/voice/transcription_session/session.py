@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import time
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from livekit import rtc
@@ -98,6 +98,8 @@ class _StreamState:
     """
 
     start: float
+    attributor: _Attributor
+    """Its own, since a new connection numbers its diarization labels afresh."""
     end: float | None = None
     """Where the stream's audio ended on the mix's clock; None while it is open."""
     last_final_end: float = 0.0
@@ -158,7 +160,6 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         self._mixer = _Mixer(
             sample_rate=_SAMPLE_RATE, block_size=self._block_size, timeline=self._timeline
         )
-        self._attributor = _Attributor(self._timeline, overlap_ratio=_OVERLAP_RATIO)
 
         self._room: rtc.Room | None = None
         self._stream: RecognizeStream | None = None
@@ -320,7 +321,11 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         # anchor is a block on, since the stream dates a frame from its push minus its duration
         start = self._timeline.duration
         stream.start_time_offset = start + _BLOCK_DURATION
-        state = _StreamState(start=start, last_final_end=start)
+        state = _StreamState(
+            start=start,
+            attributor=_Attributor(self._timeline, overlap_ratio=_OVERLAP_RATIO),
+            last_final_end=start,
+        )
         task = asyncio.create_task(self._recv_task(stream, state))
         self._recv_atasks.add(task)
         task.add_done_callback(self._recv_atasks.discard)
@@ -375,13 +380,16 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
                 continue
 
             stream = self._stream or self._open_stream()
-            stream.push_frame(self._mixer.mix())
+            try:
+                stream.push_frame(self._mixer.mix())
+            except RuntimeError:
+                # the STT failed past its retries; the next block opens a new stream
+                self._end_stream()
 
             behind = time.monotonic() - (anchor + self._mixer.index * _BLOCK_DURATION)
             if behind > _MAX_LAG:
                 anchor = time.monotonic() - self._mixer.index * _BLOCK_DURATION
 
-    @log_exceptions(logger=logger)
     async def _recv_task(self, stream: RecognizeStream, state: _StreamState) -> None:
         try:
             async for ev in stream:
@@ -391,7 +399,18 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
                     self._on_transcript(ev.alternatives[0], state, final=False)
                 elif ev.type == SpeechEventType.FINAL_TRANSCRIPT:
                     self._on_transcript(ev.alternatives[0], state, final=True)
+        except Exception:
+            logger.exception("transcription STT stream failed")
         finally:
+            if self._stream is stream:
+                # it failed while the mix was feeding it; the next block opens a new one
+                self._end_stream()
+            # what it last showed and never finalized stands as said
+            open_segments = [replace(segment, final=True) for segment in state.segments.values()]
+            state.segments = {}
+            for segment in open_segments:
+                self._emit(segment)
+            self._history.extend(open_segments)
             await stream.aclose()
 
     def _on_transcript(self, alt: SpeechData, state: _StreamState, *, final: bool) -> None:
@@ -400,7 +419,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
 
         # untimed results are placed within what their own stream heard
         end = state.end if state.end is not None else self._timeline.duration
-        runs = self._attributor.attribute(alt, fallback=(state.last_final_end, end))
+        runs = state.attributor.attribute(alt, fallback=(state.last_final_end, end))
 
         segments = [
             self._segment(_segment_id(state, i, run.identity), run, alt, final)
@@ -413,9 +432,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         stale = [_cleared(segment) for id, segment in state.segments.items() if id not in current]
 
         for segment in [*stale, *segments]:
-            self.emit("transcript_segment", segment)
-            if self._publish_ch is not None and segment.participant_identity is not None:
-                self._publish_ch.send_nowait(segment)
+            self._emit(segment)
 
         if final:
             self._history.extend(segments)
@@ -425,6 +442,11 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
             state.segment_ids = {}
         else:
             state.segments = {segment.id: segment for segment in segments}
+
+    def _emit(self, segment: TranscriptSegment) -> None:
+        self.emit("transcript_segment", segment)
+        if self._publish_ch is not None and segment.participant_identity is not None:
+            self._publish_ch.send_nowait(segment)
 
     def _segment(self, id: str, run: _Run, alt: SpeechData, final: bool) -> TranscriptSegment:
         track_sid: str | None = None
@@ -535,10 +557,15 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
     ) -> None:
         track_input = self._mixer.inputs.get(participant.identity)
         if track_input is not None and track_input.track_sid == publication.sid:
-            self.remove_input(participant.identity)
+            self._end_input(participant.identity)
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
-        self.remove_input(participant.identity)
+        self._end_input(participant.identity)
+
+    def _end_input(self, identity: str) -> None:
+        """Stop reading a participant's track; what they already sent is still mixed."""
+        if task := self._input_atasks.pop(identity, None):
+            task.cancel()
 
 
 def _segment_id(state: _StreamState, index: int, identity: str | None) -> str:

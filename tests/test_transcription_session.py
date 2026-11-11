@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, LanguageCode, NotGivenOr
+from livekit.agents import NOT_GIVEN, APIConnectionError, LanguageCode, NotGivenOr
 from livekit.agents.stt import (
     STT,
     RecognizeStream,
@@ -83,11 +84,14 @@ class _ScriptedSTT(STT):
         script: list[tuple[float, SpeechEvent]],
         *,
         late: list[tuple[float, SpeechEvent]] | None = None,
+        fail_at: float | None = None,
     ) -> None:
         super().__init__(capabilities=STTCapabilities(streaming=True, interim_results=True))
         self.script = sorted(script, key=lambda item: item[0])
         self.late = late or []
         """Events the first stream returns this many seconds after its input ends."""
+        self.fail_at = fail_at
+        """Session time at which the stream hearing it fails for good."""
         self.pushed: list[rtc.AudioFrame] = []
         self.offsets: list[float] = []
         """Each stream's ``start_time_offset``, once its first frame was read."""
@@ -125,6 +129,9 @@ class _ScriptedStream(RecognizeStream):
             # an event past what this stream heard belongs to a later stream
             while pending and pending[0][0] <= self.start_time_offset + heard + 1e-9:
                 self._event_ch.send_nowait(pending.pop(0)[1])
+            if stt.fail_at is not None and self.start_time_offset + heard >= stt.fail_at:
+                stt.fail_at = None
+                raise APIConnectionError("scripted failure", retryable=False)
         late, stt.late = stt.late, []
         for delay, ev in late:
             await asyncio.sleep(delay)
@@ -361,6 +368,34 @@ def test_underrun_is_silence_and_leaves_the_clock_alone() -> None:
     assert timeline.scores(0.8, 1.0).keys() == {"a"}
 
 
+def test_track_input_drops_what_arrived_after_the_mix_went_on_without_it() -> None:
+    inp = _input("b")
+    # the tone frames are 20 ms, one block each, told apart by level
+    [one, two, three, four, five, six] = [_tone(0.025, n / 10)[0] for n in range(1, 7)]
+
+    inp.push(one)
+    inp.pop()
+    assert inp.pop() is None  # late: the mix goes on without it
+    inp.push(two)  # the late block, then the one now due
+    inp.push(three)
+    assert _rms_of(inp.pop()) == pytest.approx(0.3, rel=0.05)
+    assert not inp.ready
+
+    # a gap followed by audio in real time is not lag: nothing is dropped
+    for _ in range(5):
+        assert inp.pop() is None
+    inp.push(four)
+    assert _rms_of(inp.pop()) == pytest.approx(0.4, rel=0.05)
+    inp.push(five)
+    inp.push(six)
+    assert _rms_of(inp.pop()) == pytest.approx(0.5, rel=0.05)
+
+
+def _rms_of(block: np.ndarray | None) -> float:
+    assert block is not None
+    return float(np.sqrt(np.mean((block.astype(np.float64) / 32767) ** 2)))
+
+
 def test_track_input_resamples_and_downmixes() -> None:
     inp = _input("a")
     stereo = rtc.AudioFrame(
@@ -552,6 +587,72 @@ async def test_late_untimed_final_stays_within_its_own_stream() -> None:
     await session.aclose()
 
     assert [(s.participant_identity, s.text) for s in segments] == [("alice", "from alice")]
+
+
+async def test_session_recovers_from_a_failed_stt_stream() -> None:
+    interim = SpeechEvent(
+        type=SpeechEventType.INTERIM_TRANSCRIPT,
+        alternatives=[
+            SpeechData(language=LanguageCode("en"), text="hello", words=[_word("hello", 0.7, 0.9)])
+        ],
+    )
+    final = _final("again", [_word("again", 1.5, 1.7)])
+    stt = _ScriptedSTT([(1.0, interim), (1.8, final)], fail_at=1.1)
+    segments = await _run_session(
+        stt, {"alice": _track((0.6, _QUIET), (1.4, _LOUD), (0.2, _QUIET))}
+    )
+
+    # the failed stream's open interim stands, and a new stream carries on
+    assert len(stt.offsets) == 2
+    assert [(s.participant_identity, s.text, s.final) for s in segments] == [
+        ("alice", "hello", False),
+        ("alice", "hello", True),
+        ("alice", "again", True),
+    ]
+
+
+async def test_diarization_labels_are_learned_per_stream() -> None:
+    learn = [_word(f"a{i}", 0.45 + i * 0.15, 0.55 + i * 0.15, "S0") for i in range(4)]
+    # the next connection's S0 is someone else; bob and carol are equally loud
+    overlapped = _final("hi", [_word("hi", 1.5, 1.7, "S0")])
+    stt = _ScriptedSTT([(1.15, _final(" ".join(map(str, learn)), learn)), (1.9, overlapped)])
+    session = TranscriptionSession(stt=stt, publish_transcriptions=False)
+    segments: list[TranscriptSegment] = []
+    session.on("transcript_segment", segments.append)
+    await session.start()
+
+    session.add_input("alice", _paced(_track((0.4, _QUIET), (0.8, _LOUD))))
+    while session.participants:
+        await asyncio.sleep(0.01)
+    session.add_input("bob", _paced(_track((0.2, _QUIET), (0.6, _LOUD))))
+    session.add_input("carol", _paced(_track((0.2, _QUIET), (0.6, _LOUD))))
+    while session.participants:
+        await asyncio.sleep(0.01)
+    await session.aclose()
+
+    assert len(stt.offsets) == 2
+    [hi] = [s for s in segments if s.text == "hi"]
+    assert hi.participant_identity in {"bob", "carol"} and hi.attribution == "word"
+
+
+async def test_session_mixes_what_a_departing_participant_already_sent() -> None:
+    stt = _ScriptedSTT([])
+    session = TranscriptionSession(stt=stt, publish_transcriptions=False)
+    await session.start()
+
+    async def live(frames: list[rtc.AudioFrame]) -> AsyncIterator[rtc.AudioFrame]:
+        for frame in frames:
+            yield frame
+        await asyncio.Event().wait()  # a track stays open until it is unsubscribed
+
+    session.add_input("alice", live(_track((0.5, _LOUD))))
+    await asyncio.sleep(0.05)
+    session._on_participant_disconnected(SimpleNamespace(identity="alice"))  # type: ignore[arg-type]
+    while session.participants:
+        await asyncio.sleep(0.01)
+    await session.aclose()
+
+    assert sum(f.duration for f in stt.pushed) == pytest.approx(0.5, abs=0.021)
 
 
 class _FakeWriter:

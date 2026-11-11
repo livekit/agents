@@ -38,6 +38,9 @@ class _TrackInput:
         self._resampler: rtc.AudioResampler | None = None
         self._resampler_rate = 0
         self._overrun_logged = False
+        self._started = False
+        self._missed = 0
+        """Blocks mixed without this input since it last caught up."""
 
     @property
     def ready(self) -> bool:
@@ -66,11 +69,25 @@ class _TrackInput:
             self._append(np.frombuffer(resampled.data, dtype=np.int16))
 
     def pop(self) -> np.ndarray | None:
-        return self._blocks.popleft() if self._blocks else None
+        if not self._blocks:
+            if self._started:
+                self._missed += 1
+            return None
+
+        # a block that arrived after the mix went on without it is dropped once newer audio is
+        # waiting, so a participant who was late once doesn't stay behind the others for good
+        while self._missed and len(self._blocks) > 1:
+            self._blocks.popleft()
+            self._missed -= 1
+        block = self._blocks.popleft()
+        if not self._blocks:
+            self._missed = 0  # caught up: whatever it missed was a gap, not lag
+        return block
 
     def _append(self, samples: np.ndarray) -> None:
         self._pending = np.concatenate([self._pending, samples])
         while self._pending.size >= self._block_size:
+            self._started = True
             self._blocks.append(self._pending[: self._block_size])
             self._pending = self._pending[self._block_size :]
 
