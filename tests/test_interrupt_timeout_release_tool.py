@@ -108,8 +108,11 @@ async def test_interrupt_timeout_releases_the_running_tool() -> None:
         assert "the fee is 10 dollars" in final[0].output
 
 
-async def test_interrupt_timeout_keeps_the_result_of_a_returned_tool() -> None:
-    """A speech interrupted while its tool runs sends the result without waiting for the floor."""
+@pytest.mark.parametrize("interrupt_during_wait", [False, True])
+async def test_interrupt_timeout_keeps_the_result_of_a_returned_tool(
+    interrupt_during_wait: bool,
+) -> None:
+    """An interrupted speech sends a returned tool's result without waiting for the floor."""
 
     class ToolAgent(Agent):
         def __init__(self) -> None:
@@ -148,9 +151,14 @@ async def test_interrupt_timeout_keeps_the_result_of_a_returned_tool() -> None:
 
         # the turn has played out and waits for the tool in the background
         await asyncio.sleep(0.5)
-        session.interrupt()
+        if not interrupt_during_wait:
+            session.interrupt()
         # another speech is current when the tool returns, and still is at the timeout
         session.generate_reply()
+        if interrupt_during_wait:
+            # the tool has returned and the speech already waits for the floor
+            await asyncio.sleep(2.0)
+            handle.interrupt()
         await asyncio.sleep(INTERRUPTION_TIMEOUT + 0.5)
 
         assert handle.done()

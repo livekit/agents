@@ -4930,7 +4930,10 @@ class AgentActivity(RecognitionHooks):
                         and not self._current_speech.done()
                         and self._current_speech is not speech_handle
                     ):
-                        await self._current_speech
+                        # an interrupt during the wait also ends it, before the timeout can
+                        await speech_handle.wait_if_not_interrupted(
+                            [self._current_speech._done_fut]
+                        )
                     else:
                         await asyncio.sleep(0)
 
