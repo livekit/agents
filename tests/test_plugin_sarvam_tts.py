@@ -104,11 +104,11 @@ def test_v4_rejects_v3_speaker_names() -> None:
 def test_v4_request_fields() -> None:
     tts = _make_tts(model="bulbul:v4-flash", dict_id="dict-1")
 
+    # no temperature: bulbul:v4-flash ignores it server-side
     assert sarvam_tts._model_extra_fields(tts._opts) == {
         "pitch": 0.0,
         "loudness": 1.0,
         "enable_preprocessing": False,
-        "temperature": 0.6,
         "dict_id": "dict-1",
     }
 
@@ -130,8 +130,6 @@ def test_v4_parameter_bounds() -> None:
         _make_tts(model="bulbul:v4-flash", loudness=3.0)
     with pytest.raises(ValueError, match="pace"):
         _make_tts(model="bulbul:v4-flash", pace=0.3)
-    with pytest.raises(ValueError, match="temperature"):
-        _make_tts(model="bulbul:v4-flash", temperature=1.5)
 
     # v3 keeps the wider ranges
     v3 = _make_tts(model="bulbul:v3", pace=0.3, temperature=1.5)
@@ -189,14 +187,14 @@ def test_rejected_update_options_leaves_live_options_untouched() -> None:
 
 
 def test_update_options_revalidates_stored_params_against_the_new_model() -> None:
-    # pace 0.3 and temperature 1.5 are valid on v3 but out of range on v4-flash
-    tts = _make_tts(model="bulbul:v3", pace=0.3, temperature=1.5)
+    # pace 0.3 is valid on v3 but out of range on v4-flash
+    tts = _make_tts(model="bulbul:v3", pace=0.3)
 
     with pytest.raises(ValueError, match="pace"):
         tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
     assert tts._opts.model == "bulbul:v3"
 
-    tts.update_options(pace=1.0, temperature=0.6)
+    tts.update_options(pace=1.0)
     tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
     assert tts._opts.model == "bulbul:v4-flash"
 
@@ -571,6 +569,54 @@ def test_update_options_v4_flash_only_arg_on_v3_warns(caplog: pytest.LogCaptureF
     assert any("`loudness`" in w for w in _warnings(caplog))
 
 
+@pytest.mark.parametrize(
+    "configure",
+    [
+        lambda: _make_tts(model="bulbul:v4-flash", temperature=0.3),
+        lambda: _with_update(_make_tts(model="bulbul:v4-flash"), temperature=0.3),
+        lambda: _with_update(
+            _make_tts(model="bulbul:v3", speaker="ritu"),
+            model="bulbul:v4-flash",
+            speaker="ritu_hi_medical",
+            temperature=0.3,
+        ),
+    ],
+    ids=["init", "update_options", "update_options_model_switch"],
+)
+def test_v4_flash_temperature_warns_and_is_not_sent(
+    configure: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """bulbul:v4-flash serves its own tuned sampling and drops temperature server-side."""
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        tts = configure()
+
+    assert "temperature" not in sarvam_tts._model_extra_fields(tts._opts)
+    assert any("`temperature`" in w and "bulbul:v4-flash" in w for w in _warnings(caplog))
+
+
+def test_v4_flash_does_not_bound_the_temperature_it_ignores() -> None:
+    # 1.5 is outside the API's 0.01-1.0, but it is never sent, so it cannot be rejected
+    tts = _make_tts(model="bulbul:v4-flash", temperature=1.5)
+    assert "temperature" not in sarvam_tts._model_extra_fields(tts._opts)
+
+    tts.update_options(temperature=1.5)
+    assert tts._opts.temperature == 1.5
+
+
+def test_v3_temperature_is_still_sent_without_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        tts = _make_tts(model="bulbul:v3", temperature=0.3)
+        tts.update_options(temperature=0.4)
+
+    assert _warnings(caplog) == []
+    assert sarvam_tts._model_extra_fields(tts._opts)["temperature"] == 0.4
+
+
+def _with_update(tts: sarvam_tts.TTS, **options: Any) -> sarvam_tts.TTS:
+    tts.update_options(**options)
+    return tts
+
+
 def test_v3_defaults_do_not_warn(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
         _make_tts(model="bulbul:v3")
@@ -748,6 +794,16 @@ async def test_ws_config_carries_codec_and_v3_fields() -> None:
     assert "pitch" not in data and "loudness" not in data
     # the keepalive is paused while the socket is in use
     assert all(frame["type"] in {"config", "text", "flush"} for frame in ws.sent)
+
+
+async def test_ws_config_v4_flash_sends_pitch_but_not_temperature() -> None:
+    ws = _FakeWS([_AUDIO, _FINAL])
+    stream = await _run_on(ws, model="bulbul:v4-flash", temperature=0.3)
+    await stream._tts._stop_keepalive(ws)  # type: ignore[arg-type]
+
+    data = ws.sent[0]["data"]
+    assert {"pitch", "loudness"} <= set(data)
+    assert "temperature" not in data
 
 
 @pytest.mark.parametrize(

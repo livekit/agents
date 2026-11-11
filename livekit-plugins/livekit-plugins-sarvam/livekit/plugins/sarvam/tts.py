@@ -186,8 +186,9 @@ def validate_model_speaker_compatibility(model: str, speaker: str) -> bool:
     return True
 
 
-# Accepted [min, max] per synthesis parameter. bulbul:v4-flash is stricter than v3, and it is
-# the only model that applies pitch and loudness, so other models place no bound on them.
+# Accepted [min, max] per synthesis parameter. bulbul:v4-flash is stricter than v3. A model
+# places no bound on a parameter it ignores: only bulbul:v4-flash applies pitch and loudness,
+# and bulbul:v4-flash ignores temperature.
 _PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "pace": (0.3, 3.0),
     "temperature": (0.01, 2.0),
@@ -196,7 +197,6 @@ _V4_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "pitch": (-0.5, 0.5),
     "pace": (0.5, 2.0),
     "loudness": (0.1, 2.5),
-    "temperature": (0.01, 1.0),
 }
 
 
@@ -276,6 +276,18 @@ def _warn_ignored_v4_flash_args(model: str, **args: object) -> None:
             )
 
 
+def _warn_if_v4_flash_ignores_temperature(model: str, temperature: float | None) -> None:
+    """Warn when the caller sets a temperature for bulbul:v4-flash, which never applies it.
+
+    Sarvam serves bulbul:v4-flash with its own tuned sampling and drops the request's
+    temperature server-side, so the plugin does not send it.
+    """
+    if model == "bulbul:v4-flash" and temperature is not None:
+        logger.warning(
+            "`temperature` is ignored by bulbul:v4-flash, which uses its own tuned sampling"
+        )
+
+
 @dataclass
 class SarvamTTSOptions:
     """Options for the Sarvam.ai TTS service.
@@ -288,9 +300,8 @@ class SarvamTTSOptions:
         pitch: Voice pitch adjustment (-0.5 to 0.5), bulbul:v4-flash only
         pace: Speech rate multiplier (0.3 to 3.0; 0.5 to 2.0 for bulbul:v4-flash)
         loudness: Volume multiplier (0.1 to 2.5), bulbul:v4-flash only
-        temperature: Sampling temperature (0.01 to 2.0; 0.01 to 1.0 for bulbul:v4-flash).
-            bulbul:v4-flash accepts the value then forces it to 0.6 server-side, so
-            setting it there has no effect.
+        temperature: Sampling temperature (0.01 to 2.0). Not sent for bulbul:v4-flash,
+            which ignores it and uses its own tuned sampling.
         output_audio_bitrate: Output audio bitrate
         min_buffer_size: Minimum character length for flushing
         max_chunk_length: Maximum chunk length for sentence splitting
@@ -334,11 +345,14 @@ _V4_STREAM_OPUS_SAMPLE_RATES = (8000, 16000, 24000)
 
 def _model_extra_fields(opts: SarvamTTSOptions) -> dict[str, object]:
     """Model-specific fields shared by the REST body and the websocket config."""
-    extra: dict[str, object] = {"temperature": opts.temperature}
+    extra: dict[str, object] = {}
     if opts.model == "bulbul:v4-flash":
         extra["pitch"] = opts.pitch
         extra["loudness"] = opts.loudness
         extra["enable_preprocessing"] = opts.enable_preprocessing
+    else:
+        # bulbul:v4-flash drops temperature server-side, so it is only sent to other models
+        extra["temperature"] = opts.temperature
     if opts.dict_id is not None:
         extra["dict_id"] = opts.dict_id
     return extra
@@ -407,9 +421,9 @@ class TTS(tts.TTS):
         pace: Speech rate multiplier (0.3 to 3.0; 0.5 to 2.0 for bulbul:v4-flash)
         loudness: Volume multiplier (0.1 to 2.5, default 1.0). bulbul:v4-flash only;
             other models log a warning and ignore it.
-        temperature: Sampling temperature (0.01 to 2.0; 0.01 to 1.0 for bulbul:v4-flash).
-            bulbul:v4-flash accepts the value then forces it to 0.6 server-side, so
-            setting it there has no effect.
+        temperature: Sampling temperature (0.01 to 2.0, default 0.6). Ignored by
+            bulbul:v4-flash, which uses its own tuned sampling: setting it there logs a
+            warning and the value is not sent.
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 and bulbul:v4-flash)
         output_audio_bitrate: Output audio bitrate (default 128k)
         min_buffer_size: Minimum character length for flushing (30 to 200)
@@ -437,7 +451,7 @@ class TTS(tts.TTS):
         pitch: float | None = None,
         pace: float = 1.0,
         loudness: float | None = None,
-        temperature: float = 0.6,
+        temperature: float | None = None,
         output_audio_bitrate: SarvamTTSOutputAudioBitrate | str = "128k",
         min_buffer_size: int = 50,
         max_chunk_length: int = 150,
@@ -474,8 +488,10 @@ class TTS(tts.TTS):
         _warn_ignored_v4_flash_args(
             model, pitch=pitch, loudness=loudness, enable_preprocessing=enable_preprocessing
         )
+        _warn_if_v4_flash_ignores_temperature(model, temperature)
         pitch = 0.0 if pitch is None else pitch
         loudness = 1.0 if loudness is None else loudness
+        temperature = 0.6 if temperature is None else temperature
         enable_preprocessing = bool(enable_preprocessing)
         if speaker is None:
             speaker = "shubh_en_narration_gentle" if model == "bulbul:v4-flash" else "shubh"
@@ -818,6 +834,7 @@ class TTS(tts.TTS):
         _warn_ignored_v4_flash_args(
             opts.model, pitch=pitch, loudness=loudness, enable_preprocessing=enable_preprocessing
         )
+        _warn_if_v4_flash_ignores_temperature(opts.model, temperature)
 
         # model and send_completion_event are pinned in the handshake URL (and v4-flash
         # is served on a different path), so a pooled socket would keep synthesising
