@@ -67,6 +67,7 @@ livekit-plugins-respeecher = { workspace = true }
 livekit-plugins-rime = { workspace = true }
 livekit-plugins-runway = { workspace = true }
 livekit-plugins-rtzr = { workspace = true }
+livekit-plugins-saidwire = { workspace = true }
 livekit-plugins-sarvam = { workspace = true }
 livekit-plugins-silero = { workspace = true }
 livekit-plugins-simli = { workspace = true }
