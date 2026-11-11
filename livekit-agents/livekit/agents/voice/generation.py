@@ -459,6 +459,11 @@ def perform_tts_inference(
             # set before the audio channel closes, so the forwarder sees why it ended
             data.error = task.exception()
 
+        if not timed_texts_fut.done():
+            # the inference ended before the node published (or refused) the aligned
+            # transcript: resolve the waiters so they don't hang forever
+            timed_texts_fut.set_result(None)
+
         if timed_texts_fut.done() and (timed_text_ch := timed_texts_fut.result()):
             timed_text_ch.close()
 
