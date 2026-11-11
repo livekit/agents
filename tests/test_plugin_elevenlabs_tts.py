@@ -15,7 +15,7 @@ from livekit.agents import tts as agents_tts, utils
 from livekit.agents.voice.io import TimedString
 from livekit.plugins.elevenlabs import tts as elevenlabs_tts
 
-pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
+pytestmark = pytest.mark.plugin("elevenlabs")
 
 
 class _FakeWebSocket:
