@@ -7,7 +7,7 @@ import os
 import time
 import weakref
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from pydantic import Field
@@ -467,10 +467,22 @@ class RealtimeModel(llm.RealtimeModel):
         else:
             return "Gemini"
 
-    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+    def session(
+        self,
+        *,
+        turn_detection_disabled: bool = False,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> RealtimeSession:
         # Gemini drives manual turns via activity_start/activity_end, not commit_audio/clear_audio,
         # so the pipeline can't gatekeep turns yet; keep can_disable_turn_detection=False for now
-        sess = RealtimeSession(self)
+        sess = RealtimeSession(
+            self,
+            instructions=instructions,
+            chat_ctx=chat_ctx,
+            tools=tools,
+        )
         self._sessions.add(sess)
         return sess
 
@@ -504,10 +516,10 @@ class RealtimeModel(llm.RealtimeModel):
 
         for sess in self._sessions:
             sess.update_options(
-                voice=self._opts.voice,
-                temperature=self._opts.temperature,
-                tool_behavior=self._opts.tool_behavior,
-                tool_response_scheduling=self._opts.tool_response_scheduling,
+                voice=voice,
+                temperature=temperature,
+                tool_behavior=tool_behavior,
+                tool_response_scheduling=tool_response_scheduling,
             )
 
     async def aclose(self) -> None:
@@ -515,11 +527,21 @@ class RealtimeModel(llm.RealtimeModel):
 
 
 class RealtimeSession(llm.RealtimeSession):
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(
+        self,
+        realtime_model: RealtimeModel,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> None:
         super().__init__(realtime_model)
-        self._opts = realtime_model._opts
-        self._tools = llm.ToolContext.empty()
-        self._chat_ctx = llm.ChatContext.empty()
+        self._google_model = realtime_model
+        self._opts = replace(realtime_model._opts)
+        if is_given(instructions):
+            self._opts.instructions = instructions
+        self._tools = llm.ToolContext(tools) if is_given(tools) else llm.ToolContext.empty()
+        self._chat_ctx = chat_ctx.copy() if is_given(chat_ctx) else llm.ChatContext.empty()
         self._msg_ch = utils.aio.Chan[ClientEvents]()
         self._input_resampler: rtc.AudioResampler | None = None
 
@@ -557,6 +579,7 @@ class RealtimeSession(llm.RealtimeSession):
         )
 
         self._main_atask = asyncio.create_task(self._main_task(), name="gemini-realtime-session")
+        self._main_atask.add_done_callback(lambda _: self._google_model._sessions.discard(self))
 
         self._current_generation: _ResponseGeneration | None = None
         self._active_session: AsyncSession | None = None
@@ -1017,6 +1040,7 @@ class RealtimeSession(llm.RealtimeSession):
         pass
 
     async def aclose(self) -> None:
+        self._google_model._sessions.discard(self)
         self._msg_ch.close()
         self._session_should_close.set()
 

@@ -139,8 +139,21 @@ class RealtimeModelFallbackAdapter(
         """Metadata of the model currently serving sessions (the primary until a swap)."""
         return self._active_instance.metrics_metadata
 
-    def session(self, *, turn_detection_disabled: bool = False) -> _FallbackRealtimeSession:
-        sess = _FallbackRealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
+    def session(
+        self,
+        *,
+        turn_detection_disabled: bool = False,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> _FallbackRealtimeSession:
+        sess = _FallbackRealtimeSession(
+            self,
+            turn_detection_disabled=turn_detection_disabled,
+            instructions=instructions,
+            chat_ctx=chat_ctx,
+            tools=tools,
+        )
         self._sessions.add(sess)
         return sess
 
@@ -163,7 +176,13 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
     """Bound once by AgentActivity; swaps the inner child session internally."""
 
     def __init__(
-        self, adapter: RealtimeModelFallbackAdapter, *, turn_detection_disabled: bool = False
+        self,
+        adapter: RealtimeModelFallbackAdapter,
+        *,
+        turn_detection_disabled: bool = False,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> None:
         super().__init__(adapter)
         self._adapter = adapter
@@ -171,8 +190,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         self._turn_detection_disabled = turn_detection_disabled
 
         # session state replayed onto a new child on swap
-        self._instructions: NotGivenOr[str] = NOT_GIVEN
-        self._tools: NotGivenOr[list[Tool]] = NOT_GIVEN
+        self._instructions: NotGivenOr[str] = instructions
+        self._tools: NotGivenOr[list[Tool]] = tools
         self._tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
 
         # stable per-event forwarders so they can be detached on swap
@@ -203,7 +222,10 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         self._active_index = 0
         self._active_bound = False
         self._active = adapter._models[0].session(
-            turn_detection_disabled=self._turn_detection_disabled
+            turn_detection_disabled=self._turn_detection_disabled,
+            instructions=instructions,
+            chat_ctx=chat_ctx,
+            tools=tools,
         )
         # a fresh session always starts on the primary, even after an earlier failover
         adapter._active_instance = adapter._models[0]
@@ -335,7 +357,10 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
             async def _bring_up(index: int) -> Exception | None:
                 try:
                     self._active = self._adapter._models[index].session(
-                        turn_detection_disabled=self._turn_detection_disabled
+                        turn_detection_disabled=self._turn_detection_disabled,
+                        instructions=self._instructions,
+                        chat_ctx=chat_ctx,
+                        tools=self._tools,
                     )
                     self._active_index = index
                     self._bind(self._active)

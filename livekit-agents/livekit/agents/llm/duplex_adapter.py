@@ -299,7 +299,14 @@ class DuplexRealtimeAdapter(RealtimeModel):
     def provider(self) -> str:
         return self._duplex_model.provider
 
-    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+    def session(
+        self,
+        *,
+        turn_detection_disabled: bool = False,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> RealtimeSession:
         # turn detection is inherent to a duplex model, so it is never asked to be off
         gate = (
             self._gate() if self._gate else self._duplex_model.audio_gate()

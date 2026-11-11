@@ -4,8 +4,9 @@ import logging
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, TurnHandlingOptions, inference
+from livekit.agents import Agent, AgentSession, TurnHandlingOptions, inference, llm
 from livekit.agents.llm import RealtimeModelFallbackAdapter
+from livekit.agents.utils import is_given
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.turn import TurnDetectionMode
 
@@ -352,6 +353,37 @@ def test_fallback_adapter_support_is_conservative_and() -> None:
     adapter = RealtimeModelFallbackAdapter([m1, m2])
 
     assert adapter.capabilities.can_disable_turn_detection is False
+
+
+async def test_agent_configuration_is_passed_to_new_realtime_session() -> None:
+    @llm.function_tool(name="lookup_order", description="x")
+    async def lookup_order() -> str:
+        return "ships tomorrow"
+
+    model = FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True))
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="earlier question")
+    agent = Agent(
+        instructions="test instructions",
+        chat_ctx=chat_ctx,
+        tools=[lookup_order],
+    )
+
+    async with AgentSession(
+        llm=model,
+        vad=None,
+        turn_handling=TurnHandlingOptions(turn_detection="manual"),
+    ) as session:
+        await session.start(agent)
+        created = model.active_session
+        assert is_given(created.initial_tools)
+        assert is_given(created.initial_chat_ctx)
+        assert created.initial_instructions == "test instructions"
+        assert [tool.info.name for tool in created.initial_tools] == ["lookup_order"]
+        assert [item.id for item in created.initial_chat_ctx.items] == [
+            item.id for item in chat_ctx.items
+        ]
+        assert created.turn_detection_disabled is True
 
 
 # --------------------------------------------------------------------------- #

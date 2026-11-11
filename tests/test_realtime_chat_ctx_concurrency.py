@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from livekit.agents import Agent, AgentSession, ToolResult, function_tool, llm, utils
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from .fake_realtime import FakeRealtimeModel, FakeRealtimeSession, fake_capabilities
 
@@ -38,7 +39,14 @@ class _DelayedModel(FakeRealtimeModel):
             capabilities=fake_capabilities(audio_output=False, auto_tool_reply_generation=False)
         )
 
-    def session(self, *, turn_detection_disabled: bool = False) -> _DelayedSession:
+    def session(
+        self,
+        *,
+        turn_detection_disabled: bool = False,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> _DelayedSession:
         session = _DelayedSession(self)
         self.created_sessions.append(session)
         return session

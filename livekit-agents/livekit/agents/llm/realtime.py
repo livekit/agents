@@ -138,11 +138,20 @@ class RealtimeModel:
         return self._label
 
     @abstractmethod
-    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
-        """Create a new session, optionally with server-side turn detection disabled.
+    def session(
+        self,
+        *,
+        turn_detection_disabled: bool = False,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> RealtimeSession:
+        """Create a new session with its initial configuration.
 
         ``turn_detection_disabled`` is honored only by plugins reporting
-        ``can_disable_turn_detection``; the model itself is left unchanged and reusable."""
+        ``can_disable_turn_detection``; the model itself is left unchanged and reusable.
+        Providers that send instructions or tools in their connection handshake can apply
+        those values before the first connection."""
         ...
 
     @abstractmethod

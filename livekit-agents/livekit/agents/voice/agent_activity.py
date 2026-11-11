@@ -1278,6 +1278,8 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self.llm, llm.RealtimeModel):
             rt_reused = reuse_resources is not None and reuse_resources.rt_session is not None
+            remove_instructions(self._agent._chat_ctx)
+
             if rt_reused:
                 assert reuse_resources and reuse_resources.rt_session is not None
                 logger.debug("reusing realtime session from previous activity")
@@ -1294,7 +1296,12 @@ class AgentActivity(RecognitionHooks):
                     not self._rt_turn_detection_enabled
                     and self.llm.capabilities.can_disable_turn_detection
                 )
-                self._rt_session = self.llm.session(turn_detection_disabled=turn_detection_disabled)
+                self._rt_session = self.llm.session(
+                    turn_detection_disabled=turn_detection_disabled,
+                    instructions=self._render_realtime_instructions(self._agent.instructions),
+                    chat_ctx=self._agent.chat_ctx,
+                    tools=llm.ToolContext(self.tools).flatten(),
+                )
                 logger.debug("created new realtime session for activity, id=%s", self._rt_session)
 
             self._rt_session.on("generation_created", self._on_generation_created)
@@ -1314,8 +1321,6 @@ class AgentActivity(RecognitionHooks):
             # the fallback adapter's session needs the AgentSession to drive interrupt/generate_reply on swap
             if isinstance(self._rt_session, _FallbackRealtimeSession):
                 self._rt_session._agent_session = self._session
-
-            remove_instructions(self._agent._chat_ctx)
 
             capabilities = self.llm.capabilities
             reset_instructions = reset_chat_ctx = reset_tools = True

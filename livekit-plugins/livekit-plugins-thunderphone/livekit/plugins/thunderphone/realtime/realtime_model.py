@@ -207,13 +207,25 @@ class RealtimeModel(_openai.RealtimeModel):
     def provider(self) -> str:
         return "ThunderPhone"
 
-    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+    def session(
+        self,
+        *,
+        turn_detection_disabled: bool = False,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> RealtimeSession:
         if turn_detection_disabled:
             logger.warning(
                 "ThunderPhone turn detection is server-side and always on; "
                 "turn_detection_disabled is ignored"
             )
-        sess = RealtimeSession(self)
+        sess = RealtimeSession(
+            self,
+            instructions=instructions,
+            chat_ctx=chat_ctx,
+            tools=tools,
+        )
         self._sessions.add(sess)
         return sess
 
@@ -232,7 +244,14 @@ class RealtimeSession(_openai.RealtimeSession):
     fetching the recording, transcript and grade afterwards.
     """
 
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(
+        self,
+        realtime_model: RealtimeModel,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> None:
         self._tp_model = realtime_model
         self._tp_agent_mode = realtime_model._tp_agent_id is not None
         # Inline sessions: hold session.update until the agent has supplied its
@@ -246,7 +265,12 @@ class RealtimeSession(_openai.RealtimeSession):
         # expects on the function_call_output.
         self._tp_call_ids: dict[str, str] = {}
         self.call_id: int | None = None
-        super().__init__(realtime_model)
+        super().__init__(
+            realtime_model,
+            instructions=instructions,
+            chat_ctx=chat_ctx,
+            tools=tools,
+        )
         self.on("openai_server_event_received", self._tp_on_server_event)
 
     # ----------------------------------------------------------- outgoing
